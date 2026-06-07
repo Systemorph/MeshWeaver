@@ -423,10 +423,13 @@ internal static class NodeTypeCompilationHelpers
             .Select(node =>
             {
                 var def = (NodeTypeDefinition)node!.Content!;
-                // Discover paths via the synced query's Initial emission.
-                // .Take(1) so we only consume the first list, then drop the
-                // synced query — we don't need its change-detection layer.
-                // The per-path streams (below) handle live updates.
+                // Live source set via the SHARED synced query
+                // (NodeSources.GetSources → workspace.GetQuery). It RECEIVES
+                // source changes and re-emits the FULL current set on every
+                // edit / add / remove — so CurrentSourceVersions (and therefore
+                // IsDirty) gets dirty on its own simply by observing the query.
+                // NO .Take(1) (which freezes on the Replay(1) cached snapshot and
+                // misses the edit) and no ad-hoc per-path stream plumbing.
                 //
                 // 🚨 Read the source set as System. Source-set discovery is
                 // framework infrastructure, NOT a user-scoped read. Without this
@@ -436,56 +439,29 @@ internal static class NodeTypeCompilationHelpers
                 // UNDER this NodeType, resolving the ancestor's Read routes a
                 // GetPermissionRequest BACK to this very grain, forming a
                 // call-chain cycle that deadlocks the single-threaded,
-                // non-reentrant activation (Orleans request-scheduling: "a grain
-                // that calls back into itself deadlocks unless reentrant").
-                // Reading as System makes WrapWithPerUserRls short-circuit — no
-                // CheckPermission, no self-call, no cycle. Mirrors the first-
-                // build kickoff and the compile body, which already run under
-                // ImpersonateAsSystem. Repro: OrleansSourcesWatcherDeadlockTest.
-                IObservable<IReadOnlyList<MeshNode>> sourceSet;
-                using (accessService?.ImpersonateAsSystem())
-                    sourceSet = NodeSources.GetSources(workspace, def, hubPath);
-                return sourceSet
-                    .Take(1)
-                    .SelectMany(initial =>
-                    {
-                        var initialPaths = initial
-                            .Where(n => !string.IsNullOrEmpty(n.Path))
-                            .Select(n => n.Path!)
-                            .Distinct()
-                            .ToArray();
-                        if (initialPaths.Length == 0)
-                        {
-                            // No sources → emit an empty snapshot ONCE so
-                            // CurrentSourceVersions can settle to empty and
-                            // IsDirty resolves correctly (false when
-                            // CompiledSources is also empty/null).
-                            return Observable.Return(
-                                System.Collections.Immutable.ImmutableDictionary<string, long>.Empty
-                                    as IReadOnlyDictionary<string, long>);
-                        }
-
-                        // Subscribe to each per-path stream. CombineLatest
-                        // re-emits whenever ANY path emits — the combined
-                        // emission carries the full current set, so we
-                        // always have a coherent snapshot.
-                        return initialPaths
-                            .Select(p => workspace.GetMeshNodeStream(p)
-                                .Where(n => n is not null))
-                            .CombineLatest()
-                            .Select(nodes =>
-                            {
-                                var snap = System.Collections.Immutable.ImmutableDictionary<string, long>.Empty;
-                                foreach (var n in nodes)
-                                {
-                                    if (!string.IsNullOrEmpty(n.Path))
-                                        snap = snap.SetItem(n.Path, n.LastModified.UtcTicks);
-                                }
-                                return (IReadOnlyDictionary<string, long>)snap;
-                            });
-                    });
+                // non-reentrant activation. Reading as System makes
+                // WrapWithPerUserRls short-circuit — no CheckPermission, no
+                // self-call, no cycle. Observable.Using keeps the System scope
+                // alive for the LIVE subscription, not just the GetSources build
+                // call. Repro: OrleansSourcesWatcherDeadlockTest.
+                return Observable.Using(
+                    () => accessService?.ImpersonateAsSystem()
+                          ?? System.Reactive.Disposables.Disposable.Empty,
+                    _ => NodeSources.GetSources(workspace, def, hubPath));
             })
             .Switch()
+            .Select(sources =>
+            {
+                // Fold the full current set → path → LastModified.UtcTicks. Same
+                // version field CompiledSources is keyed on, so IsDirty compares
+                // like-for-like (empty set → empty snapshot → IsDirty=false when
+                // CompiledSources is also empty).
+                var snap = System.Collections.Immutable.ImmutableDictionary<string, long>.Empty;
+                foreach (var n in sources)
+                    if (!string.IsNullOrEmpty(n.Path))
+                        snap = snap.SetItem(n.Path!, n.LastModified.UtcTicks);
+                return (IReadOnlyDictionary<string, long>)snap;
+            })
             .Subscribe(
                 snapshot =>
                 {
@@ -827,33 +803,24 @@ internal static class NodeTypeCompilationHelpers
                         return;
                     }
 
-                    var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-                    logger.LogInformation(
-                        "[COMPILE-TRACE] HandleDispatchCompile: starting activity for {HubPath}",
-                        hubPath);
-                    var activityEmitted = false;
                     var snapshot = compilingSnapshot ?? pendingNode;
-                    NodeTypeCompilationActivity.Start(hub, hubPath, logger)
-                        .Subscribe(
-                            activityPath =>
-                            {
-                                activityEmitted = true;
-                                logger.LogInformation(
-                                    "[COMPILE-TRACE] HandleDispatchCompile: activity created at {ActivityPath} for {HubPath} — posting RunCompileRequest",
-                                    activityPath, hubPath);
-                                hub.Post(new RunCompileRequest(hubPath, snapshot),
-                                    o => o.WithTarget(new Address(activityPath)));
-                            },
-                            ex => logger.LogWarning(ex,
-                                "[COMPILE-TRACE] HandleDispatchCompile: activity start faulted for {HubPath}", hubPath),
-                            () =>
-                            {
-                                if (activityEmitted) return;
-                                logger.LogWarning(
-                                    "[COMPILE-TRACE] HandleDispatchCompile: activity start emitted EMPTY for {HubPath} — running compile inline",
-                                    hubPath);
-                                RunCompile(workspace, hub, compilationService, pendingNode, request: null);
-                            });
+                    logger.LogInformation(
+                        "[COMPILE-TRACE] HandleDispatchCompile: running compile INLINE (reactive) for {HubPath}",
+                        hubPath);
+                    // Run the compile INLINE on this NodeType hub — fully reactive, no
+                    // waiting. The previous shape created an _Activity node and posted
+                    // a cross-hub RunCompileRequest to its address; RouteMessage resolves
+                    // a path ONCE with no retry/fallback, so a just-created _Activity hub
+                    // is not yet routable → the request is dropped → the compile never
+                    // runs → status stuck Compiling → HandleCreateRelease's
+                    // AwaitCompilationSettled never settles → CreateReleaseRequest hangs.
+                    // RunCompile writes the terminal parent status on OWN (no routing)
+                    // and creates the activity MeshNode complete in one shot (no patch
+                    // to a not-yet-routable node), so there is no cross-hub dispatch to
+                    // race. Roslyn itself runs on the Compile IoPool inside
+                    // CompileAndGetConfigurations, so the hub action block stays
+                    // responsive.
+                    RunCompile(workspace, hub, compilationService, snapshot, request: null);
                 },
                 ex => logger.LogWarning(ex,
                     "[COMPILE-TRACE] HandleDispatchCompile: Pending→Compiling Update faulted for {HubPath}",
@@ -873,6 +840,39 @@ internal static class NodeTypeCompilationHelpers
         var hubPath = hub.Address.Path;
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.CompileWatcher");
+        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+
+        // Activity Control Plane — THE official progress mechanism. Create the
+        // compile activity UP FRONT (canonical uppercase _Activity, satellite
+        // routing + Releases query) and stamp its path on the NodeType, so compile
+        // progress is observable via the activity node's stream
+        // (workspace.GetMeshNodeStream(activityPath)) — the GUI Releases pane and
+        // any diagnosis read it there, NOT logs. The compile runs on THIS hub;
+        // activity writes are best-effort + non-blocking — the compile never waits
+        // on them. Seed with the Running log so even a stalled compile leaves a
+        // "started / invoking compiler" trail to read.
+        var activityId = $"compile-{DateTime.UtcNow:yyyyMMddHHmmssfff}{Guid.NewGuid():N}";
+        var activityNamespace = $"{hubPath}/_Activity";
+        var activityPath = $"{activityNamespace}/{activityId}";
+        meshService?.CreateNode(new MeshNode(activityId, activityNamespace)
+        {
+            Name = $"Compile {hubPath}",
+            NodeType = ActivityNodeType.NodeType,
+            MainNode = hubPath,
+            State = MeshNodeState.Active,
+            Content = new ActivityLog(ActivityCategory.Compilation)
+            {
+                Id = activityId,
+                HubPath = hubPath,
+                Status = ActivityStatus.Running,
+                Messages = System.Collections.Immutable.ImmutableList.Create(
+                    new LogMessage($"Compile started for {hubPath}", LogLevel.Information),
+                    new LogMessage("Invoking compiler…", LogLevel.Information))
+            }
+        }).Subscribe(
+            _ => { },
+            ex => logger?.LogDebug(ex,
+                "Compile: activity create failed for {HubPath} (best-effort)", hubPath));
 
         workspace.GetMeshNodeStream().Update(curr =>
             curr.Content is NodeTypeDefinition def
@@ -881,7 +881,8 @@ internal static class NodeTypeCompilationHelpers
                     Content = def with
                     {
                         CompilationStatus = CompilationStatus.Compiling,
-                        LastCompileStartedAt = DateTimeOffset.UtcNow
+                        LastCompileStartedAt = DateTimeOffset.UtcNow,
+                        LastCompilationActivityPath = activityPath
                     }
                 }
                 : curr)
@@ -901,16 +902,39 @@ internal static class NodeTypeCompilationHelpers
             .Subscribe(
                 outcome =>
                 {
-                    var activityPath = outcome.Result?.Log is { } compileLog
-                        ? $"{hubPath}/_activity/{compileLog.Id}"
-                        : null;
+                    var ok = outcome.Error is null
+                        && !string.IsNullOrEmpty(outcome.Result?.AssemblyLocation);
 
                     string? newReleasePath = null;
-                    if (outcome.Error is null && !string.IsNullOrEmpty(outcome.Result?.AssemblyLocation))
+                    if (ok)
                     {
                         newReleasePath = MeshDataSourceExtensions.TryCreateReleaseNode(
                             hub, hubPath, outcome.Result!, outcome.PendingNode, activityPath, logger);
                     }
+
+                    // Write the FULL compile log + terminal status to the activity
+                    // node (the official progress surface) in ONE atomic update:
+                    // CompileCore's diagnostics, the Roslyn produced/failed line, and
+                    // the release outcome. Cross-hub, best-effort from this hub — the
+                    // GUI Releases pane / diagnosis read it via the activity stream.
+                    var activityMessages =
+                        System.Collections.Immutable.ImmutableList.CreateBuilder<LogMessage>();
+                    if (outcome.Result?.Log is { } compileLog && compileLog.Messages.Count > 0)
+                        activityMessages.AddRange(compileLog.Messages);
+                    if (ok)
+                        activityMessages.Add(new LogMessage(
+                            $"Roslyn produced assembly at: {outcome.Result!.AssemblyLocation}",
+                            LogLevel.Information));
+                    else
+                        activityMessages.Add(new LogMessage(
+                            $"Roslyn failed: {outcome.Error?.Message ?? (outcome.Result?.Log?.Errors() is { Count: > 0 } errs ? string.Join("; ", errs.Select(m => m.Message)) : "Compilation produced no assembly")}",
+                            LogLevel.Error));
+                    if (newReleasePath is not null)
+                        activityMessages.Add(new LogMessage(
+                            $"Release created: {newReleasePath}", LogLevel.Information));
+                    NodeTypeCompilationActivity.Complete(hub, activityPath,
+                        ok ? ActivityStatus.Succeeded : ActivityStatus.Failed,
+                        activityMessages.ToImmutable(), logger!);
 
                     workspace.GetMeshNodeStream().Update(curr =>
                     {
