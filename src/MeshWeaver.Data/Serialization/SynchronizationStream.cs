@@ -277,7 +277,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     /// (<c>ToDataChangeRequest</c>, which keys off <c>Updates</c>) persists the overwrite — the
     /// ONLY difference from <see cref="BuildChangeItem"/> is that <c>ChangeType</c> is forced to
     /// <see cref="ChangeType.Full"/>, which makes the change land on every mirror unconditionally
-    /// (the monotonicity guard bypasses version for Fulls). See <see cref="SetFull"/>.
+    /// (the monotonicity guard bypasses version for Fulls). See
+    /// <see cref="SetFull(System.Func{TStream,TStream},System.Action{System.Exception})"/>.
     /// </summary>
     private ChangeItem<TStream> BuildFullChangeItem(TStream? current, TStream updated)
     {
