@@ -105,6 +105,17 @@ This has three practical consequences:
 - **`Version` is monotonic per node but not contiguous.** A node updated under message 3 and again under message 47 jumps `3 → 47`. Never assert `newVersion == oldVersion + 1`; always assert `newVersion > oldVersion`.
 - **Subscribers rely on monotonicity, not contiguity.** The `UpdateOwn` baseline check and `DistinctUntilChanged(n => n.Version)` both work correctly under non-contiguous version sequences.
 
+## Every Change Is Stamped — Including Updates — and Only by the Owner
+
+The stamp is not optional and not add-only. The owning hub's data source (`MeshNodeTypeSource`) re-stamps `Version = _workspace.Hub.Version` on **every** change it emits — a freshly *added* node **and** an *update* to an existing one. Both branches must stamp, because the stamp is what advances the version on the emitted frame, and that advance is what makes the change propagate:
+
+- the change feed and every subscriber's **monotonicity guard** key off `Version`; a frame whose version did **not** advance is indistinguishable from a duplicate and is dropped, so it never reaches subscribers' mirrors;
+- a node that an UPDATE left at its incoming version therefore emits a "nothing-new" frame and the reconciled value is silently lost — **the read-your-writes-after-update bug**. Create worked (adds were stamped); update/patch did not. The fix stamps the update branch too. Pinned by `MeshNodeStreamEmissionTest` (a node-stream re-emit + replay regression).
+
+**Only the owner mints a version.** A client/subscriber writing a node it does not own (a cross-hub `GetMeshNodeStream(path).Update(...)`) **carries the base version it last observed** and lets the owner assign the fresh value on apply — it never increments client-side. A pre-incremented client version (the old `Math.Max(existing, …) + 1`) ships a frame whose base is already out of date by the time it lands, and the owner's version-guarded merge mishandles it. See [DataSyncAndCrdt](DataSyncAndCrdt.md) §2 ("a subscriber never mints a version").
+
+**Write through the live lambda parameter.** `stream.Update(node => node with { … })` must transform the node it is handed — the live, owner-reconciled value — never discard it and slam a separately-read full node (`_ => fetchedNode`). The owner computes the diff it applies against that live value; a discarded parameter bases the diff on a stale snapshot and can clobber a concurrent edit.
+
 ## Never-Mutated Nodes Keep Their Seed Version
 
 A node loaded from persistence — or seeded via `AddMeshNodes` / `IStaticNodeProvider` — and **never** written through `Update` keeps whatever `Version` it was created with, typically `0`. The `HandleSaveMeshNode` path persists the node's `Version` verbatim; it does **not** synthesise a bump on save. So a static config node legitimately reads back as `Version == 0`.
