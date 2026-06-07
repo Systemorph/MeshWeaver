@@ -170,6 +170,7 @@
     [Parameter] public GlobalState Content { get; set; } = default!;
 
     private IReadOnlyList<MeshNode> notifications = Array.Empty<MeshNode>();
+    private bool markedOnOpen;
     private IDisposable? subscription;
 
     protected override void OnInitialized()
@@ -179,6 +180,15 @@
             .Subscribe(change =>
             {
                 notifications = (IReadOnlyList<MeshNode>?)change.Items?.ToList() ?? Array.Empty<MeshNode>();
+                // Opening the panel counts as seeing the notifications: flip the
+                // displayed set to read so the bell badge clears. Gate on the first
+                // populated load so notifications that arrive live while the panel
+                // is open still surface as unread.
+                if (!markedOnOpen && notifications.Count > 0)
+                {
+                    markedOnOpen = true;
+                    MarkAllRead();
+                }
                 InvokeAsync(StateHasChanged);
             });
     }
