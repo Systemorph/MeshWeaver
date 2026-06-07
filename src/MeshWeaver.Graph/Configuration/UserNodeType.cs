@@ -236,19 +236,31 @@ public static class UserNodeType
         var permsChannel = System.Threading.Channels.Channel.CreateBounded<Permission>(
             new System.Threading.Channels.BoundedChannelOptions(1) { FullMode = System.Threading.Channels.BoundedChannelFullMode.DropOldest });
 
-        using var sub = host.Hub.GetEffectivePermissions("", viewerId)
-            .FirstAsync()
+        // Match the platform-admin model: admin lives at the "Admin" scope
+        // (AccessAssignment namespace Admin/_Access → scope Admin). Filter for the
+        // POSITIVE All grant with a bounded wait — NOT FirstAsync, which captures the
+        // premature empty static seed emitted before the synced AccessAssignment query
+        // lands (same bug class as AdminMenuGate). A non-admin never emits a positive,
+        // so the timeout fires and the tab stays hidden.
+        using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var sub = host.Hub.GetEffectivePermissions("Admin", viewerId)
+            .Where(perm => perm.HasFlag(Permission.All))
+            .Take(1)
             .Subscribe(
                 perm => { permsChannel.Writer.TryWrite(perm); permsChannel.Writer.TryComplete(); },
                 _ => permsChannel.Writer.TryComplete(),
                 () => permsChannel.Writer.TryComplete());
 
         Permission rootPerms = Permission.None;
-        await foreach (var perm in permsChannel.Reader.ReadAllAsync())
+        try
         {
-            rootPerms = perm;
-            break;
+            await foreach (var perm in permsChannel.Reader.ReadAllAsync(cts.Token))
+            {
+                rootPerms = perm;
+                break;
+            }
         }
+        catch (OperationCanceledException) { }
 
         if (!rootPerms.HasFlag(Permission.All))
             yield break;
@@ -271,15 +283,25 @@ public static class UserNodeType
             "<p style=\"color: var(--neutral-foreground-hint); margin-bottom: 16px;\">Manage who has administrative access across the platform.</p>"));
 
         stack = stack.WithView(Controls.MeshSearch
-            .WithHiddenQuery("namespace:_Access nodeType:AccessAssignment")
+            .WithHiddenQuery("namespace:Admin/_Access nodeType:AccessAssignment")
             .WithShowSearchBox(false)
             .WithShowEmptyMessage(true)
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithCollapsibleSections(false)
             .WithSectionCounts(false)
-            .WithCreateNodeType("AccessAssignment")
-            .WithCreateNamespace("_Access")
+            .WithItemArea(MeshNodeLayoutAreas.ThumbnailArea)
+            .WithDisableNavigation()
+            .WithReactiveMode(true)
             .WithMaxColumns(2));
+
+        // + Add Admin — reuse the Access Control area's Subject/Role picker dialog,
+        // scoped to the "Admin" space so a new grant lands at
+        // Admin/_Access/{subject}_Access (MainNode = "Admin"), the platform-admin shape.
+        stack = stack.WithView(Controls.Button("+ Add Admin")
+            .WithAppearance(Appearance.Accent)
+            .WithStyle("align-self: flex-start; margin-top: 8px;")
+            .WithClickAction((Action<UiActionContext>)(addCtx =>
+                AccessControlLayoutArea.ShowAddAssignmentDialog(addCtx, "Admin"))));
 
         // Data Sources section
         stack = stack.WithView(Controls.Html(
