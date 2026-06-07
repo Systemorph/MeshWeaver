@@ -146,6 +146,7 @@ public static class DataExtensions
                 typeof(DataChangedEvent),
                 typeof(DataChangeRequest),
                 typeof(DataChangeResponse),
+                typeof(EntityDeltaUpdate),
                 typeof(SubscribeRequest),
                 typeof(SubscribeAck),
                 typeof(UnsubscribeRequest),

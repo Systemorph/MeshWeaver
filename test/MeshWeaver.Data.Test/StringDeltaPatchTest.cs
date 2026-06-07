@@ -88,4 +88,37 @@ public class StringDeltaPatchTest
         d.ContainsKey("Opt").Should().BeTrue();
         d["Opt"].Should().BeNull("a removed field is an explicit null in the delta");
     }
+
+    [Fact]
+    public void NestedStringField_ShipsOnlyTheSplice_Recursively()
+    {
+        // A big string buried one level deep — like MeshNode.Content.Content.
+        var b = new JsonObject { ["Id"] = "x", ["Content"] = new JsonObject { ["Body"] = "The quick brown fox", ["Lang"] = "en" } };
+        var u = new JsonObject { ["Id"] = "x", ["Content"] = new JsonObject { ["Body"] = "The quick RED brown fox", ["Lang"] = "en" } };
+
+        var d = StringDeltaPatch.Compute(b, u);
+
+        var nested = d["Content"]!.AsObject()[StringDeltaPatch.NestedMarker]!.AsObject();
+        nested.ContainsKey("Lang").Should().BeFalse("unchanged nested field is omitted");
+        var splice = nested["Body"]!.AsObject()[StringDeltaPatch.Marker]!.AsArray();
+        splice[2]!.GetValue<string>().Should().Be("RED ", "only the inserted fragment travels — even nested");
+
+        JsonNode.DeepEquals(StringDeltaPatch.Apply(b, d), u).Should().BeTrue(
+            "applying the recursive delta onto its base reproduces the updated object");
+    }
+
+    [Fact]
+    public void NestedDisjointConcurrentEdit_BothSurvive()
+    {
+        var b = new JsonObject { ["Content"] = new JsonObject { ["Body"] = "The quick brown fox jumps" } };
+        var incoming = new JsonObject { ["Content"] = new JsonObject { ["Body"] = "The VERY quick brown fox jumps" } };
+        var delta = StringDeltaPatch.Compute(b, incoming);
+
+        // The owner's CURRENT already changed the END of the nested string (disjoint).
+        var current = new JsonObject { ["Content"] = new JsonObject { ["Body"] = "The quick brown fox leaps" } };
+        var merged = StringDeltaPatch.Apply(current, delta);
+
+        merged["Content"]!.AsObject()["Body"]!.GetValue<string>().Should().Be("The VERY quick brown fox leaps",
+            "the nested splice replays onto current's text, so disjoint edits merge");
+    }
 }
