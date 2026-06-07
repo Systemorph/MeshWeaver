@@ -55,7 +55,10 @@ internal sealed class HubNodePersistence(
         // Canonical write via the mesh-node stream (UpdateNodeRequest retired). The owning
         // hub applies the RFC 7396 patch and re-validates RLS + stamps auditing; emits the
         // optimistic snapshot. See MeshService.UpdateNode for the full rationale.
-        => Observable.Defer(() => hub.GetMeshNodeStream(node.Path).Update(_ => node))
+        // Use the live lambda parameter as the write base and carry ITS version — a
+        // subscriber never mints a version; the owner assigns the fresh one on apply.
+        => Observable.Defer(() => hub.GetMeshNodeStream(node.Path)
+                .Update(live => node with { Version = live.Version }))
             .CarryAccessContext(hub.ServiceProvider);
 
     public IObservable<bool> DeleteNode(string path)
