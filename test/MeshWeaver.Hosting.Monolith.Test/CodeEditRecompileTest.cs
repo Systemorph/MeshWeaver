@@ -107,6 +107,23 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             Content = new CodeConfiguration { Code = CodeV1, Language = "csharp" }
         }).Should().Within(30.Seconds()).Emit();
 
+        // DIAGNOSTIC — read kickoff compile progress via THE official surface: the
+        // activity node stream. The first-build kickoff creates a {…}/_Activity node
+        // and stamps LastCompilationActivityPath; reading its ActivityLog shows how
+        // far the compile got (Running + "invoking compiler" with no terminal status
+        // ⇒ stuck in the compiler; Succeeded ⇒ it completed).
+        var kickoffNt = Mesh.GetMeshNodeStream(NodeTypePath)
+            .Should().Within(25.Seconds())
+            .Match(n => n?.Content is NodeTypeDefinition d
+                && !string.IsNullOrEmpty(d.LastCompilationActivityPath));
+        var kickoffActivityPath = ((NodeTypeDefinition)kickoffNt.Content!).LastCompilationActivityPath!;
+        var kickoffActivity = Mesh.GetMeshNodeStream(kickoffActivityPath)
+            .Should().Within(15.Seconds()).Match(n => n?.Content is ActivityLog);
+        var kickoffLog = (ActivityLog)kickoffActivity.Content!;
+        Output.WriteLine($"=== KICKOFF ACTIVITY {kickoffActivityPath} status={kickoffLog.Status} ===");
+        foreach (var m in kickoffLog.Messages)
+            Output.WriteLine($"    {m.Message}");
+
         // 3. Trigger V1 compilation. The per-NodeType hub's
         // InstallCompileWatcher kickoff also flips Pending â†’ Compile on first
         // activation when HasUsableBuild is false; either path is acceptable so
@@ -143,6 +160,16 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         {
             Content = new CodeConfiguration { Code = CodeV2, Language = "csharp" }
         }).Should().Within(30.Seconds()).Emit();
+
+        // 6b. Observe the NodeType getting DIRTY from the source change BEFORE
+        // triggering the release. InstallSourcesWatcher receives the V2 edit through
+        // its live GetSources() query and flips IsDirty (CurrentSourceVersions vs
+        // CompiledSources). Waiting on it guarantees the recompile decision
+        // (HandleCreateRelease → IsDirty) sees the change and the compile reads V2
+        // from the same shared query — no synced-query lag, no AlreadyUpToDate race.
+        Mesh.GetMeshNodeStream(NodeTypePath)
+            .Should().Within(30.Seconds())
+            .Match(n => n?.Content is NodeTypeDefinition d && d.IsDirty);
 
         // 7. Explicitly trigger V2 compilation â€” sources changed, should recompile.
         var v2Response = SendCreateRelease(NodeTypePath, force: false);

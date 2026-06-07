@@ -779,7 +779,6 @@ public static class MeshDataSourceExtensions
         }
 
         var workspace = hub.GetWorkspace();
-        var meshService = hub.ServiceProvider.GetService<IMeshService>();
         var force = request.Message.Force;
 
         // Wait for any in-progress compile (Compiling or Pending) to settle
@@ -804,26 +803,22 @@ public static class MeshDataSourceExtensions
                     return;
                 }
 
-                if (!force && meshService is not null)
+                // Decide AlreadyUpToDate off the OBSERVED dirty state
+                // (CurrentSourceVersions vs CompiledSources) — written
+                // authoritatively by InstallSourcesWatcher off each source's LIVE
+                // per-node stream. A fresh meshService.Query here reads the
+                // synced/index layer, which lags a just-landed source edit and
+                // falsely reports "up to date" → the recompile is skipped (the V2
+                // build never happens). IsDirty is the documented
+                // edit→dirty→recompile→clean signal and AwaitCompilationSettled
+                // already handed us the live def, so this needs no re-query.
+                if (!force && !def.IsDirty && !string.IsNullOrEmpty(def.LatestReleasePath))
                 {
-                    meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
-                            $"namespace:{hub.Address.Path}/Source nodeType:Code"))
-                        .Take(1)
-                        .Subscribe(sources =>
-                        {
-                            if (IsSourcesUpToDate(def, sources.Items))
-                            {
-                                hub.Post(new CreateReleaseResponse(true, AlreadyUpToDate: true),
-                                    o => o.ResponseFor(request));
-                                return;
-                            }
-                            DispatchPendingFlip(workspace, hub, request);
-                        });
+                    hub.Post(new CreateReleaseResponse(true, AlreadyUpToDate: true),
+                        o => o.ResponseFor(request));
+                    return;
                 }
-                else
-                {
-                    DispatchPendingFlip(workspace, hub, request);
-                }
+                DispatchPendingFlip(workspace, hub, request);
             });
 
         return request.Processed();
