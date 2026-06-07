@@ -894,7 +894,18 @@ internal static class NodeTypeCompilationHelpers
         if (request is not null)
             hub.Post(new CreateReleaseResponse(true), o => o.ResponseFor(request));
 
+        // 🚨 Subscribe the compile OFF the NodeType hub's action block. RunCompile is
+        // invoked inline (HandleDispatchCompile → flip-Compiling Update → Subscribe), so
+        // without this the compile pipeline's source GetSources / GetMeshNodeStream
+        // SYNCED subscriptions open on the action-block thread that is mid-handler — the
+        // subscribe-on-the-blocked-hub race (see synced-query-thread-hub note). The
+        // compile leaf is provably sound when subscribed off-hub (CompileLeafStabilityTest:
+        // 8/8 emit); the kickoff stall ("Invoking compiler", no outcome) only appears on
+        // the inline path. SubscribeOn moves the whole subscribe to the pool so the action
+        // block stays free to service those synced handshakes. Order isn't a concern here
+        // — this is a single self-contained compile, not cross-message FIFO.
         var sub = compilationService.CompileAndGetConfigurations(pendingNode, sourcesOverride)
+            .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default)
             .Take(1)
             .Select(result => new CompileOutcome(result, null, pendingNode))
             .Catch<CompileOutcome, Exception>(ex =>
