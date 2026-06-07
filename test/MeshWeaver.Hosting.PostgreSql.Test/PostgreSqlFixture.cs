@@ -189,87 +189,46 @@ public class PostgreSqlFixture : IAsyncLifetime
             """);
         await cmd.ExecuteNonQueryAsync();
 
-        // Per-partition schemas (orga, orgb, testorg, …) carry their own
-        // mesh_nodes + satellite tables that survive prior tests in the same
-        // collection. Without this, threads in `orga.threads` leak from
-        // ThreadPathResolutionTest into UserActivityCrossPartitionTests,
-        // throwing off cross-schema UNION counts. Discover every non-system
-        // schema and DELETE from any data tables it carries.
-        await using (var listSchemas = DataSource.CreateCommand(
+        // Per-partition schemas (orga, orgb, testorg, …) carry their own mesh_nodes +
+        // satellite tables that survive prior tests in the same collection (threads in
+        // `orga.threads` would otherwise leak across tests and skew cross-schema UNION
+        // counts). The previous shape ran ~10 information_schema existence-probes PER
+        // schema PER test inside a DO block; since test partition schemas accumulate
+        // through the collection (they are never dropped), cleanup was O(10 × schemas)
+        // and every test got slower as the suite progressed — QuerySyntaxTests measured
+        // 0.12s/test early vs 2.5s/test late (20×), which is most of the full suite's
+        // wall-clock. Instead: ONE catalog query resolves all (schema, data-table) pairs,
+        // then a single batched DELETE. Same tables, same isolation, O(1) catalog probing.
+        // DELETE on the tiny/empty tables is ~free — the per-schema probing was the cost.
+        var perSchemaTables = new[]
+        {
+            "mesh_nodes", "threads", "activities", "user_activities", "access",
+            "annotations", "notifications", "code", "partition_objects",
+            "user_effective_permissions"
+        };
+        var targets = new List<(string Schema, string Table)>();
+        await using (var listTables = DataSource.CreateCommand(
             """
-            SELECT schema_name FROM information_schema.schemata
-            WHERE schema_name NOT IN ('public', 'pg_catalog', 'information_schema',
-                                       'pg_toast', 'pg_temp_1', 'pg_toast_temp_1')
-              AND schema_name NOT LIKE 'pg\_%'
+            SELECT table_schema, table_name
+            FROM information_schema.tables
+            WHERE table_name = ANY($1)
+              AND table_schema NOT IN ('public', 'pg_catalog', 'information_schema', 'pg_toast')
+              AND table_schema NOT LIKE 'pg\_%'
             """))
         {
-            var schemas = new List<string>();
-            await using (var rdr = await listSchemas.ExecuteReaderAsync())
-            {
-                while (await rdr.ReadAsync())
-                    schemas.Add(rdr.GetString(0));
-            }
-            foreach (var schema in schemas)
-            {
-                var qs = "\"" + schema.Replace("\"", "\"\"") + "\"";
-                // Each per-partition schema MAY have these tables — IF EXISTS
-                // (via DO blocks) keeps the cleanup tolerant of partial schemas.
-                await using var schemaCmd = DataSource.CreateCommand($"""
-                    DO $$ BEGIN
-                      IF EXISTS (SELECT 1 FROM information_schema.tables
-                                 WHERE table_schema = '{schema.Replace("'", "''")}'
-                                   AND table_name = 'mesh_nodes')
-                      THEN EXECUTE 'DELETE FROM {qs}.mesh_nodes';
-                      END IF;
-                      IF EXISTS (SELECT 1 FROM information_schema.tables
-                                 WHERE table_schema = '{schema.Replace("'", "''")}'
-                                   AND table_name = 'threads')
-                      THEN EXECUTE 'DELETE FROM {qs}.threads';
-                      END IF;
-                      IF EXISTS (SELECT 1 FROM information_schema.tables
-                                 WHERE table_schema = '{schema.Replace("'", "''")}'
-                                   AND table_name = 'activities')
-                      THEN EXECUTE 'DELETE FROM {qs}.activities';
-                      END IF;
-                      IF EXISTS (SELECT 1 FROM information_schema.tables
-                                 WHERE table_schema = '{schema.Replace("'", "''")}'
-                                   AND table_name = 'user_activities')
-                      THEN EXECUTE 'DELETE FROM {qs}.user_activities';
-                      END IF;
-                      IF EXISTS (SELECT 1 FROM information_schema.tables
-                                 WHERE table_schema = '{schema.Replace("'", "''")}'
-                                   AND table_name = 'access')
-                      THEN EXECUTE 'DELETE FROM {qs}.access';
-                      END IF;
-                      IF EXISTS (SELECT 1 FROM information_schema.tables
-                                 WHERE table_schema = '{schema.Replace("'", "''")}'
-                                   AND table_name = 'annotations')
-                      THEN EXECUTE 'DELETE FROM {qs}.annotations';
-                      END IF;
-                      IF EXISTS (SELECT 1 FROM information_schema.tables
-                                 WHERE table_schema = '{schema.Replace("'", "''")}'
-                                   AND table_name = 'notifications')
-                      THEN EXECUTE 'DELETE FROM {qs}.notifications';
-                      END IF;
-                      IF EXISTS (SELECT 1 FROM information_schema.tables
-                                 WHERE table_schema = '{schema.Replace("'", "''")}'
-                                   AND table_name = 'code')
-                      THEN EXECUTE 'DELETE FROM {qs}.code';
-                      END IF;
-                      IF EXISTS (SELECT 1 FROM information_schema.tables
-                                 WHERE table_schema = '{schema.Replace("'", "''")}'
-                                   AND table_name = 'partition_objects')
-                      THEN EXECUTE 'DELETE FROM {qs}.partition_objects';
-                      END IF;
-                      IF EXISTS (SELECT 1 FROM information_schema.tables
-                                 WHERE table_schema = '{schema.Replace("'", "''")}'
-                                   AND table_name = 'user_effective_permissions')
-                      THEN EXECUTE 'DELETE FROM {qs}.user_effective_permissions';
-                      END IF;
-                    END $$;
-                    """);
-                await schemaCmd.ExecuteNonQueryAsync();
-            }
+            listTables.Parameters.AddWithValue(perSchemaTables);
+            await using var rdr = await listTables.ExecuteReaderAsync();
+            while (await rdr.ReadAsync())
+                targets.Add((rdr.GetString(0), rdr.GetString(1)));
+        }
+        if (targets.Count > 0)
+        {
+            var sb = new System.Text.StringBuilder(targets.Count * 48);
+            foreach (var (schema, table) in targets)
+                sb.Append("DELETE FROM \"").Append(schema.Replace("\"", "\"\""))
+                  .Append("\".\"").Append(table.Replace("\"", "\"\"")).Append("\";\n");
+            await using var del = DataSource.CreateCommand(sb.ToString());
+            await del.ExecuteNonQueryAsync();
         }
     }
 }
