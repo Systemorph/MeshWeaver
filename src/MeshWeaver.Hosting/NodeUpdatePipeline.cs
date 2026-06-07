@@ -70,13 +70,14 @@ internal static class NodeUpdatePipeline
                 ? accessService.SwitchAccessContext(ctx)
                 : Disposable.Empty,
             // 🚨 Use the lambda parameter (the LIVE owner-reconciled node) as the write
-            // base — never discard it (`_ => node`). The cross-hub write ships a diff
-            // computed against this fresh current; bumping Version off the live node
-            // (rather than a stale separately-read snapshot) keeps the change strictly
-            // ahead of the owner's monotonic-version guard, which otherwise drops the
-            // out-of-date write silently → the read-your-writes-after-update regression.
+            // base — never discard it (`_ => node`). A client/subscriber NEVER mints a
+            // version: it carries the BASE version it just observed (the live node's),
+            // and the OWNER assigns the fresh monotonic version on apply. Bumping the
+            // version client-side (the old `Math.Max(existing,…) + 1`) ships a frame
+            // whose base is out of date by the time it lands, so the owner's
+            // version-guarded merge mishandles it — the read-your-writes-after-update bug.
             _ => hub.GetMeshNodeStream(node.Path)
-                .Update(live => node with { Version = live.Version + 1 }));
+                .Update(live => node with { Version = live.Version }));
 
     // 2. Run client-side Update validators sequentially (Concat preserves short-circuit:
     //    the chain stops at the first failure). Returns the mapped exception or null.
