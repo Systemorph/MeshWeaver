@@ -237,12 +237,35 @@ public static class MeshNodeExtensions
                     Content = record
                 };
 
+                // 🚨 Fold the increment onto the LIVE node INSIDE the Update lambda, not a
+                // separately-read snapshot. The owner serializes Updates, so each lambda sees
+                // the freshest AccessCount and two concurrent tracks can't lose an increment —
+                // the old discard-lambda `_ => saveNode` slammed a count computed from the
+                // pre-Update probe read. Carry the live version; the owner mints the fresh one.
+                MeshNode FoldOntoLive(MeshNode live)
+                {
+                    var liveRec = live.Content as UserActivityRecord;
+                    return live with
+                    {
+                        NodeType = "UserActivity",
+                        Name = req.NodeName ?? encodedPath,
+                        MainNode = req.UserId,
+                        State = MeshNodeState.Active,
+                        Content = record with
+                        {
+                            AccessCount = (liveRec?.AccessCount ?? 0) + 1,
+                            FirstAccessedAt = liveRec?.FirstAccessedAt ?? record.FirstAccessedAt,
+                        },
+                        Version = live.Version,
+                    };
+                }
+
                 if (existing != null)
                 {
                     logger?.LogDebug(
                         "TrackActivity UPDATE: {Path} count={Count}",
                         activityPath, record.AccessCount);
-                    return stream.Update(_ => saveNode);
+                    return stream.Update(FoldOntoLive);
                 }
 
                 // First-time creation: per-node hub isn't activated yet, RemoteStream
@@ -310,7 +333,7 @@ public static class MeshNodeExtensions
                                 logger?.LogDebug(
                                     "TrackActivity CREATE to UPDATE race for {Path}: another concurrent track won; folding via Update.",
                                     activityPath);
-                                return stream.Update(_ => saveNode);
+                                return stream.Update(FoldOntoLive);
                             });
                     }
 

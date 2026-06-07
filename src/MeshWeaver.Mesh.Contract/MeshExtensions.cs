@@ -1532,13 +1532,16 @@ public static class MeshExtensions
             // Update() call so its eager AccessContext capture (for both the merge
             // lambda and the outbound patch's WithAccessContext) sees the originating
             // user rather than null.
-            var merged = UpdateAccordingToSourceNode(existing, node);
             var accessService = hub.ServiceProvider.GetService<AccessService>();
             using (inboundCtx is not null && accessService is not null
                 ? accessService.SwitchAccessContext(inboundCtx)
                 : null)
             {
-                hub.GetMeshNodeStream(node.Path).Update(_ => merged)
+                // Apply the source-node update onto the LIVE node (the lambda parameter),
+                // not a separately-read `existing` snapshot — avoids clobbering a concurrent
+                // edit; carry the live version (the owner mints the fresh one on apply).
+                hub.GetMeshNodeStream(node.Path)
+                    .Update(live => UpdateAccordingToSourceNode(live, node) with { Version = live.Version })
                     .Subscribe(
                         saved => PostOk(saved, isCreate: false, $"Updated node at '{node.Path}'"),
                         ex =>
