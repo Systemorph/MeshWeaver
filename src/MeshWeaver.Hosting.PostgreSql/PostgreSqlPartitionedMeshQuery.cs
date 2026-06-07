@@ -103,18 +103,28 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
     }
 
     /// <summary>
-    /// The scoped delegate for a parsed query, or null when the query must fan out.
-    /// Delegates ONLY scoped primary-content (<c>mesh_nodes</c>) queries — i.e. exactly the
-    /// shapes <see cref="NeedsFanOut"/> classifies as NOT fan-out (concrete first segment,
-    /// not a satellite table, not a cross-partition activity/accessed JOIN, not wildcard).
-    /// Scoped SATELLITE queries (<c>NeedsFanOut</c> true via <c>ResolveTable != mesh_nodes</c>)
-    /// fall through to the partition-pinned cross-schema fan-out, whose UNION serves the
-    /// satellite table correctly — the per-schema delegate's satellite serving is reserved for
-    /// a follow-up (its <c>MeshQuery.Query</c> Initial under-returned pre-existing satellite
-    /// rows). The pedestrian is retired either way.
+    /// The scoped delegate for a parsed query, or null when the query must fan out across
+    /// partitions. Routes to the per-schema <see cref="PostgreSqlMeshQuery"/> — which serves
+    /// primary content AND satellites with LIVE deltas under the same access filter — for any
+    /// query pinned to a single concrete partition, INCLUDING scoped satellite reads
+    /// (<c>namespace:Systemorph/_Thread</c>, <c>nodeType:Thread namespace:Systemorph</c>,
+    /// <c>_Access</c>-style globals resolved via the registered-partition cache). This retires
+    /// the pedestrian <see cref="StorageAdapterMeshQueryProvider"/> for scoped satellites — it
+    /// could only ever walk <c>mesh_nodes</c>, never the satellite tables. Verified by
+    /// <c>SatelliteSyncedInitialTests</c>: a permitted user's pre-existing satellite rows land
+    /// in the delegate's Initial (the historical "Initial under-returns satellite rows" claim
+    /// was the access filter correctly dropping rows for an unpermitted Anonymous caller).
+    ///
+    /// <para>Two cases still fan out (→ null here): <c>source:activity</c> /
+    /// <c>source:accessed</c> are cross-partition satellite JOINs (the dashboard feeds span
+    /// every partition — a scoped one still runs on the fan-out's single-element schema list);
+    /// and unscoped / wildcard-first paths (<see cref="GetDelegateForPath"/> returns null), the
+    /// genuine cross-partition broadcasts.</para>
     /// </summary>
     private PostgreSqlMeshQuery? GetScopedDelegate(ParsedQuery parsed)
-        => NeedsFanOut(parsed) ? null : GetDelegateForPath(parsed.Path);
+        => parsed.Source is QuerySource.Activity or QuerySource.Accessed
+            ? null
+            : GetDelegateForPath(parsed.Path);
 
     /// <inheritdoc/>
     /// <remarks>
