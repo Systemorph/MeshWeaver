@@ -129,10 +129,16 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 threadPath = value.ThreadPath ?? threadPath;
                 initialContext = value.InitialContext ?? initialContext;
 
-                // Restore the user's sticky agent / model selection from the
-                // Thread node so dropdowns survive a reload. Only fires when
+                // Restore the user's sticky harness / agent / model selection from
+                // the Thread node so the picker survives a reload. Only fires when
                 // we actually have new values — won't clobber an in-progress
                 // user pick that hasn't yet been persisted.
+                if (!string.IsNullOrEmpty(value.SelectedHarness) &&
+                    value.SelectedHarness != selectedHarness &&
+                    Harnesses.All.Contains(value.SelectedHarness))
+                {
+                    selectedHarness = value.SelectedHarness;
+                }
                 if (!string.IsNullOrEmpty(value.SelectedAgentName) &&
                     selectedAgentInfo?.Name != value.SelectedAgentName)
                 {
@@ -223,11 +229,59 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// longer available. Deliberately does NOT touch the server-side <c>IsDefault</c>
     /// orchestration entry agent — that stays the MeshWeaver entry agent (Assistant).
     /// </summary>
+    // Preferred agent / harness remembered from the per-user chat template
+    // ({userHome}/_ThreadTemplate). Matched against the agent list once it loads
+    // (see ApplySelections). Replaces the old browser-localStorage "sticky" values.
     private string? _stickyAgentName;
-    private bool _stickyRead;
-    private const string StickyAgentKey = "mw.chat.lastAgent";
     private IReadOnlyList<ModelInfo> availableModels = [];
     private readonly Dictionary<string, string> agentModelPreferences = new();
+
+    /// <summary>
+    /// The selected harness (<see cref="Harnesses"/>). The single top-level
+    /// chat choice; agent + model selectors only show when this is
+    /// <see cref="Harnesses.MeshWeaver"/>. Defaults to MeshWeaver but is
+    /// restored from the thread (<see cref="ThreadViewModel.SelectedHarness"/>)
+    /// then the per-user chat template (<see cref="_templatePath"/>).
+    /// </summary>
+    private string selectedHarness = Harnesses.MeshWeaver;
+    private string? _stickyHarness;
+
+    // ─── Per-user chat template (_ThreadTemplate) ───
+    // The composer's draft text + harness/agent/model selection persist on a single
+    // stable Thread node at {userHome}/_ThreadTemplate (server-side, no browser
+    // storage) so they survive a reboot. On submit a new thread is cloned from it
+    // and the draft cleared. _userHome == AccessContext.ObjectId == the user's home
+    // partition (dev login stamps ObjectId = username).
+    private const string TemplateNodeId = "_ThreadTemplate";
+    private string? _userHome;
+    private string? _templatePath;
+    private readonly System.Reactive.Subjects.Subject<string> _draftChanges = new();
+    private IDisposable? _draftSaveSub;
+    private string? _pendingDraft;
+    private bool _templateLoaded;
+
+    /// <summary>
+    /// Agents shown in the agent dropdown when the MeshWeaver harness is active —
+    /// only those in the MeshWeaver group (the other harnesses are represented by
+    /// the harness selector itself).
+    /// </summary>
+    private IReadOnlyList<AgentDisplayInfo> MeshWeaverAgents =>
+        agentDisplayInfos
+            .Where(a => (a.GroupName ?? Harnesses.MeshWeaver) == Harnesses.MeshWeaver)
+            .ToList();
+
+    /// <summary>
+    /// True when viewing an existing thread created by another user. Threads are
+    /// editable only by their owner, so in this case the chat input and all
+    /// thread-modifying ops (stop, edit, resubmit, delete) are hidden — the thread
+    /// renders read-only. The new-thread composer (no <c>threadPath</c>) is always
+    /// editable, as are the current user's own threads.
+    /// </summary>
+    private bool IsReadOnlyThread =>
+        !string.IsNullOrEmpty(threadPath)
+        && !string.IsNullOrEmpty(_userHome)
+        && !string.IsNullOrEmpty(ThreadViewModel?.CreatedBy)
+        && !string.Equals(ThreadViewModel.CreatedBy, _userHome, StringComparison.OrdinalIgnoreCase);
 
     private IEnumerable<IChatClientFactory> ChatClientFactories => Hub.ServiceProvider.GetServices<IChatClientFactory>();
 
@@ -265,6 +319,24 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         // Set initial title
         UpdateSidePanelTitle();
+
+        // Per-user chat template: resolve {userHome}/_ThreadTemplate and load the
+        // saved draft + selection. Debounced draft auto-save runs in composer mode
+        // only (a real thread never carries a template draft).
+        var accessSvc = Hub.ServiceProvider.GetService<AccessService>();
+        _userHome = accessSvc?.Context?.ObjectId ?? accessSvc?.CircuitContext?.ObjectId;
+        if (!string.IsNullOrEmpty(_userHome))
+            _templatePath = $"{_userHome}/{TemplateNodeId}";
+
+        _draftSaveSub = _draftChanges
+            .Throttle(TimeSpan.FromMilliseconds(600))
+            .Subscribe(text => InvokeAsync(() =>
+            {
+                if (_isDisposed || !string.IsNullOrEmpty(threadPath)) return;
+                WriteTemplate(t => t with { DraftText = string.IsNullOrEmpty(text) ? null : text });
+            }));
+
+        LoadTemplate();
 
         // Seed initial context attachment from NavigationService (already resolved, no query).
         if (string.IsNullOrEmpty(initialContext))
@@ -312,57 +384,132 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     }
 
     /// <summary>
-    /// First render only: restore the user's last-used agent from localStorage and apply
-    /// it as the picker default ("last used stays") — unless the thread already carries an
-    /// explicit selection, or the user already changed the agent this session. Best-effort:
-    /// any failure leaves the configuration default in place. localStorage isn't reachable
-    /// during prerender, so this runs once the interactive circuit is established.
+    /// Pushes a pending template draft into the Monaco editor once the editor ref
+    /// exists (it isn't available during <see cref="LoadTemplate"/>'s async emission
+    /// if that lands before the first render). The selection + draft themselves are
+    /// restored reactively in <see cref="LoadTemplate"/>.
     /// </summary>
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!firstRender || _stickyRead || _isDisposed)
+        if (_isDisposed || _pendingDraft is null || monacoEditor is null)
             return;
-        _stickyRead = true;
-
-        try
-        {
-            var last = await JSRuntime.InvokeAsync<string?>("localStorage.getItem", StickyAgentKey);
-            if (string.IsNullOrEmpty(last))
-                return;
-
-            _stickyAgentName = last;
-
-            // Never override a selection the thread already persisted — only seed the
-            // auto-picked default for a fresh thread.
-            if (!string.IsNullOrEmpty(ThreadViewModel?.SelectedAgentName))
-                return;
-
-            var match = agentDisplayInfos.FirstOrDefault(a =>
-                string.Equals(a.Name, last, StringComparison.OrdinalIgnoreCase));
-            if (match != null && match.Name != selectedAgentInfo?.Name)
-            {
-                selectedAgentInfo = match;
-                selectedModelInfo = GetPreferredModelInfoForAgent(match.Name);
-                await InvokeAsync(StateHasChanged);
-            }
-        }
+        var draft = _pendingDraft;
+        _pendingDraft = null;
+        try { await monacoEditor.SetValueAsync(draft); }
         catch (Exception ex)
         {
-            Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] sticky agent restore failed", _instanceId);
+            Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] draft restore into editor failed", _instanceId);
         }
     }
 
-    private async Task PersistStickyAgentAsync(string agentName)
+    // ─── Per-user chat template (_ThreadTemplate) ─────────────────────────────
+
+    /// <summary>
+    /// One-shot read of the per-user chat template node. Restores the saved
+    /// harness/agent/model selection (always — the picker default) and, in the
+    /// new-thread composer only, the in-progress draft text. Best-effort: if the
+    /// template doesn't exist yet the stream never emits and the timeout leaves the
+    /// configuration defaults in place.
+    /// </summary>
+    private void LoadTemplate()
     {
-        try
+        if (string.IsNullOrEmpty(_templatePath) || _templateLoaded)
+            return;
+        Hub.GetMeshNodeStream(_templatePath)
+            .Select(n => n?.Content as MeshWeaver.AI.Thread)
+            .Where(t => t is not null)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(3))
+            .Subscribe(
+                t => InvokeAsync(() =>
+                {
+                    if (_isDisposed || _templateLoaded) return;
+                    _templateLoaded = true;
+                    ApplyTemplate(t!);
+                }),
+                _ => _templateLoaded = true);
+    }
+
+    private void ApplyTemplate(MeshWeaver.AI.Thread t)
+    {
+        if (!string.IsNullOrEmpty(t.SelectedHarness) && Harnesses.All.Contains(t.SelectedHarness))
         {
-            await JSRuntime.InvokeVoidAsync("localStorage.setItem", StickyAgentKey, agentName);
+            selectedHarness = t.SelectedHarness;
+            _stickyHarness = t.SelectedHarness;
         }
+        if (!string.IsNullOrEmpty(t.SelectedAgentName))
+            _stickyAgentName = t.SelectedAgentName;
+
+        // Draft restore: composer mode only, and never clobber text the user has
+        // already begun typing this session.
+        if (string.IsNullOrEmpty(threadPath) && !string.IsNullOrEmpty(t.DraftText)
+            && string.IsNullOrEmpty(MessageText))
+        {
+            MessageText = t.DraftText;
+            if (monacoEditor != null)
+                _ = SafeSetMonacoAsync(t.DraftText!);
+            else
+                _pendingDraft = t.DraftText; // applied in OnAfterRenderAsync
+        }
+
+        ApplySelections();
+        StateHasChanged();
+    }
+
+    private async Task SafeSetMonacoAsync(string text)
+    {
+        try { if (monacoEditor != null) await monacoEditor.SetValueAsync(text); }
         catch (Exception ex)
         {
-            Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] sticky agent persist failed", _instanceId);
+            Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] draft restore into editor failed", _instanceId);
         }
     }
+
+    /// <summary>
+    /// Mutates the per-user chat template node, creating it on first write. Replaces
+    /// the old browser-localStorage persistence so the draft + selection survive a
+    /// reboot server-side.
+    /// </summary>
+    private void WriteTemplate(Func<MeshWeaver.AI.Thread, MeshWeaver.AI.Thread> mutate)
+    {
+        if (string.IsNullOrEmpty(_templatePath) || string.IsNullOrEmpty(_userHome))
+            return;
+        Hub.GetMeshNodeStream(_templatePath).Update(node =>
+        {
+            var t = node?.Content as MeshWeaver.AI.Thread ?? new MeshWeaver.AI.Thread();
+            var updated = mutate(t);
+            return node != null
+                ? node with { Content = updated }
+                : new MeshNode(TemplateNodeId, _userHome)
+                {
+                    NodeType = MeshWeaver.AI.ThreadNodeType.NodeType,
+                    Content = updated
+                };
+        }).Subscribe(
+            _ => { },
+            ex => Logger.LogDebug(ex,
+                "[ThreadChat:{InstanceId}] template write failed for {Path}", _instanceId, _templatePath));
+    }
+
+    /// <summary>
+    /// Persists the composer's current selection: onto the chat template when
+    /// composing a new thread, or onto the thread node when inside an existing one.
+    /// </summary>
+    private void PersistSelection()
+    {
+        if (string.IsNullOrEmpty(threadPath))
+            PersistTemplateSelection();
+        else
+            PersistSelectionOnThread(selectedAgentInfo?.Name, selectedModelInfo?.Name, selectedHarness);
+    }
+
+    private void PersistTemplateSelection() =>
+        WriteTemplate(t => t with
+        {
+            SelectedHarness = selectedHarness,
+            SelectedAgentName = selectedAgentInfo?.Name ?? t.SelectedAgentName,
+            SelectedModelName = selectedModelInfo?.Name ?? t.SelectedModelName
+        });
 
     /// <summary>
     /// Resolves the display name of a node at the given path via the
@@ -505,10 +652,27 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     private void ApplySelections()
     {
-        if (selectedAgentInfo != null &&
-            agentDisplayInfos.Any(a => a.Path == selectedAgentInfo.Path))
+        // Non-MeshWeaver harness pins its single agent (matched by GroupName) now
+        // that the agent list is loaded. If that agent isn't available yet, fall
+        // through to MeshWeaver-style resolution so the picker isn't left empty.
+        if (selectedHarness != Harnesses.MeshWeaver)
         {
-            selectedAgentInfo = agentDisplayInfos.First(a => a.Path == selectedAgentInfo.Path);
+            var harnessAgent = agentDisplayInfos.FirstOrDefault(a =>
+                string.Equals(a.GroupName, selectedHarness, StringComparison.OrdinalIgnoreCase));
+            if (harnessAgent != null)
+            {
+                selectedAgentInfo = harnessAgent;
+                selectedModelInfo = GetPreferredModelInfoForAgent(harnessAgent.Name);
+                return;
+            }
+        }
+
+        // MeshWeaver harness — resolve among the MeshWeaver-group agents only.
+        var pool = MeshWeaverAgents;
+        if (selectedAgentInfo != null &&
+            pool.Any(a => a.Path == selectedAgentInfo.Path))
+        {
+            selectedAgentInfo = pool.First(a => a.Path == selectedAgentInfo.Path);
         }
         else
         {
@@ -521,10 +685,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             selectedAgentInfo =
                 (string.IsNullOrEmpty(_stickyAgentName)
                     ? null
-                    : agentDisplayInfos.FirstOrDefault(a =>
+                    : pool.FirstOrDefault(a =>
                         string.Equals(a.Name, _stickyAgentName, StringComparison.OrdinalIgnoreCase)))
-                ?? agentDisplayInfos.FirstOrDefault(a => a.AgentConfiguration?.IsDefault == true)
-                ?? agentDisplayInfos.FirstOrDefault();
+                ?? pool.FirstOrDefault(a => a.AgentConfiguration?.IsDefault == true)
+                ?? pool.FirstOrDefault();
         }
 
         if (selectedAgentInfo != null)
@@ -714,6 +878,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     attachments: capturedAttachments,
                     createdBy: createdBy,
                     authorName: authorName,
+                    harness: selectedHarness,
                     onCreated: node => InvokeAsync(() =>
                     {
                         if (_isDisposed) return;
@@ -735,6 +900,11 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                         StateHasChanged();
                     }),
                     onError: onError);
+
+                // New thread cloned from the template — clear the template draft.
+                // The selection (harness/agent/model) stays so the next new thread
+                // inherits it.
+                WriteTemplate(t => t with { DraftText = null });
             }
             else
             {
@@ -748,7 +918,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     attachments: capturedAttachments,
                     createdBy: createdBy,
                     authorName: authorName,
-                    onError: onError);
+                    onError: onError,
+                    harness: selectedHarness);
             }
 
             // Claude-Code-style queue: input stays enabled so the user can keep typing while
@@ -1022,6 +1193,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private void OnMessageTextChanged(string value)
     {
         MessageText = value;
+        // Composer mode: debounce-save the draft onto the per-user chat template so
+        // it survives a reload/reboot. Existing-thread input stays transient.
+        if (string.IsNullOrEmpty(threadPath))
+            _draftChanges.OnNext(value ?? string.Empty);
         // Fire-and-forget reference extraction — may touch Monaco via JS interop.
         _ = UpdateExtractedReferencesAsync();
         StateHasChanged();
@@ -1148,7 +1323,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// gets stamped onto the thread by ThreadInput.AppendUserInput when
     /// the first message is submitted).
     /// </summary>
-    private void PersistSelectionOnThread(string? agentName, string? modelName)
+    private void PersistSelectionOnThread(string? agentName, string? modelName, string? harness = null)
     {
         var cache = EnsureCache();
         if (cache is null || string.IsNullOrEmpty(threadPath)) return;
@@ -1157,21 +1332,23 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             Hub.GetMeshNodeStream(threadPath).Update(node =>
             {
                 var thread = node.Content as MeshWeaver.AI.Thread ?? new MeshWeaver.AI.Thread();
-                if (thread.SelectedAgentName == agentName && thread.SelectedModelName == modelName)
+                if (thread.SelectedAgentName == agentName && thread.SelectedModelName == modelName
+                    && (harness is null || thread.SelectedHarness == harness))
                     return node; // no-op
                 return node with
                 {
                     Content = thread with
                     {
                         SelectedAgentName = agentName ?? thread.SelectedAgentName,
-                        SelectedModelName = modelName ?? thread.SelectedModelName
+                        SelectedModelName = modelName ?? thread.SelectedModelName,
+                        SelectedHarness = harness ?? thread.SelectedHarness
                     }
                 };
             }).Subscribe(
                 _ => { },
                 ex => Logger.LogWarning(ex,
-                    "[ThreadChat:{InstanceId}] Persisting selection {Agent}/{Model} on {Thread} failed",
-                    _instanceId, agentName, modelName, threadPath));
+                    "[ThreadChat:{InstanceId}] Persisting selection {Agent}/{Model}/{Harness} on {Thread} failed",
+                    _instanceId, agentName, modelName, harness, threadPath));
         }
         catch (Exception ex)
         {
@@ -1195,15 +1372,11 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             selectedModelInfo = preferredModel;
         }
 
-        // Persist the user's sticky choice on the thread so it survives a
-        // reload. Distinct from PendingAgentName which is transient (the
-        // server clears it after the round runs).
-        PersistSelectionOnThread(newAgent.Name, selectedModelInfo?.Name);
-
-        // Remember as the user's last-used agent across threads/sessions (sticky,
-        // per-browser via localStorage). New threads will land on this agent.
+        // Remember as the preferred agent (matched again when the agent list
+        // reloads) and persist: onto the chat template when composing, onto the
+        // thread node when inside an existing thread.
         _stickyAgentName = newAgent.Name;
-        _ = PersistStickyAgentAsync(newAgent.Name);
+        PersistSelection();
 
         StateHasChanged();
     }
@@ -1215,8 +1388,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         selectedModelInfo = newModel;
 
-        // Persist the model choice too (sticky, distinct from PendingModelName).
-        PersistSelectionOnThread(selectedAgentInfo?.Name, newModel.Name);
+        // Persist the model choice (template when composing, thread otherwise).
+        PersistSelection();
 
         if (selectedAgentInfo != null)
         {
@@ -1224,6 +1397,65 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         }
 
         StateHasChanged();
+    }
+
+    /// <summary>
+    /// User picked a harness. Claude Code / GitHub Copilot each resolve to a
+    /// single built-in agent (matched by <see cref="AgentDisplayInfo.GroupName"/>);
+    /// MeshWeaver re-applies the preferred / default MeshWeaver agent and reveals
+    /// the agent + model selectors. Persists the selection onto the chat template
+    /// (composer) or the thread node (existing thread).
+    /// </summary>
+    private void OnHarnessChanged(string? harness)
+    {
+        if (string.IsNullOrEmpty(harness) || harness == selectedHarness)
+            return;
+
+        selectedHarness = harness;
+        _stickyHarness = harness;
+
+        if (harness == Harnesses.MeshWeaver)
+        {
+            ApplyMeshWeaverDefaultAgent();
+        }
+        else
+        {
+            var agent = agentDisplayInfos.FirstOrDefault(a =>
+                string.Equals(a.GroupName, harness, StringComparison.OrdinalIgnoreCase));
+            if (agent != null)
+            {
+                selectedAgentInfo = agent;
+                selectedModelInfo = GetPreferredModelInfoForAgent(agent.Name);
+            }
+        }
+
+        PersistSelection();
+
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Selects a MeshWeaver-group agent (sticky → IsDefault → first), keeping the
+    /// current agent if it already belongs to the group. Used when switching to the
+    /// MeshWeaver harness.
+    /// </summary>
+    private void ApplyMeshWeaverDefaultAgent()
+    {
+        var pool = MeshWeaverAgents;
+        if (selectedAgentInfo != null && pool.Any(a => a.Path == selectedAgentInfo.Path))
+            return;
+        var agent =
+            (string.IsNullOrEmpty(_stickyAgentName)
+                ? null
+                : pool.FirstOrDefault(a =>
+                    string.Equals(a.Name, _stickyAgentName, StringComparison.OrdinalIgnoreCase)))
+            ?? pool.FirstOrDefault(a => a.AgentConfiguration?.IsDefault == true)
+            ?? pool.FirstOrDefault();
+        if (agent != null)
+        {
+            selectedAgentInfo = agent;
+            selectedModelInfo = GetPreferredModelInfoForAgent(agent.Name);
+        }
     }
 
     // --- Side panel title and action handling ---
@@ -1453,7 +1685,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         IReadOnlyList<ToolCallEntry>? ToolCalls,
         IReadOnlyList<NodeChangeEntry>? UpdatedNodes,
         string? Status = null,
-        DateTime? CompletedAt = null);
+        DateTime? CompletedAt = null,
+        string? Harness = null,
+        int? InputTokens = null,
+        int? OutputTokens = null);
 
     private readonly Dictionary<string, MessageBubbleState> messageStates = new();
     private readonly Dictionary<string, IDisposable> messageSubs = new();
@@ -1624,8 +1859,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         DateTime? completedAt = je.TryGetProperty("completedAt", out var caProp)
             && caProp.ValueKind == JsonValueKind.String
             && DateTime.TryParse(caProp.GetString(), out var ca) ? ca : null;
+        // Harness + token usage drive the assistant meta line "Harness · time · N in / M out".
+        var harness = je.TryGetProperty("harness", out var hProp) && hProp.ValueKind == JsonValueKind.String
+            ? hProp.GetString() : null;
+        int? inputTokens = je.TryGetProperty("inputTokens", out var itProp) && itProp.ValueKind == JsonValueKind.Number
+            ? itProp.GetInt32() : null;
+        int? outputTokens = je.TryGetProperty("outputTokens", out var otProp) && otProp.ValueKind == JsonValueKind.Number
+            ? otProp.GetInt32() : null;
 
-        var newState = new MessageBubbleState(role, author, modelName, timestamp, text, toolCalls, updatedNodes, status, completedAt);
+        var newState = new MessageBubbleState(role, author, modelName, timestamp, text, toolCalls, updatedNodes, status, completedAt, harness, inputTokens, outputTokens);
         var prev = messageStates.GetValueOrDefault(id);
         if (Equals(prev, newState)) return;
 
@@ -1825,7 +2067,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 Type = ThreadMessageType.AgentResponse
             }
         }), o => o.WithTarget(new Address(threadPath)));
-        Hub.ResubmitMessage(threadPath, id, newUserText: state.Text ?? "");
+        Hub.ResubmitMessage(threadPath, id, newUserText: state.Text ?? "",
+            agentName: selectedAgentInfo?.Name, modelName: selectedModelInfo?.Name, harness: selectedHarness);
     }
 
     private void DeleteFromMessage(string id)
@@ -1986,6 +2229,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             _isDisposed = true;
             elapsedTicker?.Dispose();
             _navContextSubscription?.Dispose();
+            _draftSaveSub?.Dispose();
+            _draftChanges.Dispose();
             agentSubscription?.Dispose();
             modelSubscription?.Dispose();
             submissionHandler.Dispose();

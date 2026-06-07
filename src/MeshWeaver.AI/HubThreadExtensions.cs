@@ -59,7 +59,8 @@ public static class HubThreadExtensions
         Action<MeshNode>? onCreated = null,
         Action<string>? onError = null,
         string? mainNode = null,
-        string? speakingId = null)
+        string? speakingId = null,
+        string? harness = null)
     {
         ArgumentNullException.ThrowIfNull(hub);
         if (string.IsNullOrEmpty(namespacePath))
@@ -81,7 +82,8 @@ public static class HubThreadExtensions
             agentName: agentName,
             modelName: modelName,
             contextPath: contextPath,
-            attachments: attachments);
+            attachments: attachments,
+            harness: harness);
 
         var seededThread = (threadNode.Content as MeshThread ?? new MeshThread()) with
         {
@@ -91,6 +93,7 @@ public static class HubThreadExtensions
                 .SetItem(firstMessageId, firstMessage),
             PendingAgentName = agentName,
             PendingModelName = modelName,
+            PendingHarness = harness,
             PendingContextPath = contextPath,
             PendingAttachments = attachments
         };
@@ -141,7 +144,8 @@ public static class HubThreadExtensions
         IReadOnlyList<string>? attachments = null,
         string? createdBy = null,
         string? authorName = null,
-        Action<string>? onError = null)
+        Action<string>? onError = null,
+        string? harness = null)
     {
         ArgumentNullException.ThrowIfNull(hub);
         if (string.IsNullOrEmpty(threadPath))
@@ -157,7 +161,8 @@ public static class HubThreadExtensions
             agentName: agentName,
             modelName: modelName,
             contextPath: contextPath,
-            attachments: attachments);
+            attachments: attachments,
+            harness: harness);
         try
         {
             ThreadInput.AppendUserInput(hub.GetWorkspace(), threadPath, userMessage);
@@ -193,7 +198,8 @@ public static class HubThreadExtensions
         string? newUserText = null,
         string? agentName = null,
         string? modelName = null,
-        Action<string>? onError = null)
+        Action<string>? onError = null,
+        string? harness = null)
     {
         ArgumentNullException.ThrowIfNull(hub);
         if (string.IsNullOrEmpty(threadPath) || string.IsNullOrEmpty(userMessageId))
@@ -228,7 +234,8 @@ public static class HubThreadExtensions
                 Timestamp = DateTime.UtcNow,
                 Type = ThreadMessageType.ExecutedInput,
                 AgentName = agentName,
-                ModelName = modelName
+                ModelName = modelName,
+                Harness = harness
             };
             var pending = t.PendingUserMessages.SetItem(userMessageId, replayMessage);
 
@@ -244,7 +251,8 @@ public static class HubThreadExtensions
                     ActiveMessageId = null,
                     ExecutionStartedAt = null,
                     PendingAgentName = agentName ?? t.PendingAgentName,
-                    PendingModelName = modelName ?? t.PendingModelName
+                    PendingModelName = modelName ?? t.PendingModelName,
+                    PendingHarness = harness ?? t.PendingHarness
                 }
             };
         }).Subscribe(

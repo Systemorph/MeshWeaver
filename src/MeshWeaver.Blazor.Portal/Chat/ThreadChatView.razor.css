@@ -184,6 +184,17 @@
     word-break: break-word;
 }
 
+/* Bottom bar: groups the execution status ("where we are"), the runtime panel,
+   and the input footer (harness selector + editor + send) into one block pinned
+   to the bottom of the screen. The chat history above (flex:1) scrolls under it. */
+.thread-chat-bottom {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    max-width: 100%;
+}
+
 /* Footer: progress + input pinned at bottom */
 .thread-chat-footer {
     flex-shrink: 0;
@@ -750,6 +761,19 @@
     border: 1px solid var(--neutral-stroke-rest);
     border-radius: 8px;
     background: var(--neutral-layer-1);
+    color: var(--neutral-foreground-hint);
+}
+
+/* Harness name leads the assistant meta row — slightly emphasized vs the
+   muted time/token siblings so the harness reads as the headline identity. */
+.thread-msg-harness {
+    font-weight: 600;
+    color: var(--neutral-foreground-rest);
+}
+
+.thread-msg-tokens {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-variant-numeric: tabular-nums;
     color: var(--neutral-foreground-hint);
 }
 

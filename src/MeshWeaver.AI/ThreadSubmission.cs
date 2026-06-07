@@ -105,6 +105,7 @@ internal static class ThreadSubmission
             responseMessageId,
             thread.PendingAgentName,
             thread.PendingModelName,
+            thread.PendingHarness,
             thread.PendingContextPath,
             thread.PendingAttachments);
     }
@@ -171,6 +172,7 @@ internal sealed record RoundDispatch(
     string ResponseMessageId,
     string? AgentName,
     string? ModelName,
+    string? Harness,
     string? ContextPath,
     IReadOnlyList<string>? Attachments);
 
@@ -365,6 +367,7 @@ internal static class ThreadSubmissionServer
                     thread.ActiveMessageId!,
                     thread.PendingAgentName,
                     thread.PendingModelName,
+                    thread.PendingHarness,
                     thread.PendingContextPath,
                     thread.PendingAttachments);
                 DispatchRound(hub, threadNode, resumeDispatch, logger, onFailure, isResume: true);
@@ -432,6 +435,7 @@ internal static class ThreadSubmissionServer
             thread.ActiveMessageId!,
             thread.PendingAgentName,
             thread.PendingModelName,
+            thread.PendingHarness,
             thread.PendingContextPath,
             thread.PendingAttachments);
         DispatchRound(threadHub, threadNode, resumeDispatch, logger, onFailure: null, isResume: true);
@@ -656,6 +660,7 @@ internal static class ThreadSubmissionServer
                             UserMessageText: roundUserText,
                             AgentName: dispatch.AgentName,
                             ModelName: dispatch.ModelName,
+                            Harness: dispatch.Harness,
                             ContextPath: dispatch.ContextPath,
                             Attachments: dispatch.Attachments),
                         userCtx);

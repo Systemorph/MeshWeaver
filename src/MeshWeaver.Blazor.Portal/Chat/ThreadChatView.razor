@@ -76,12 +76,15 @@ else
                     else
                     {
                         <div class="thread-msg-author @(isUser ? "thread-msg-author-user" : "")">@state.AuthorName</div>
-                        @if (!isUser && (!string.IsNullOrEmpty(state.ModelName) || state.Timestamp.HasValue))
+                        @* Assistant meta row: Harness · time · duration · in/out tokens.
+                           Model name intentionally dropped — the harness is the headline
+                           identity; for Claude Code / Copilot the model is implied. *@
+                        @if (!isUser && (!string.IsNullOrEmpty(state.Harness) || state.Timestamp.HasValue))
                         {
                             <div class="thread-msg-meta">
-                                @if (!string.IsNullOrEmpty(state.ModelName))
+                                @if (!string.IsNullOrEmpty(state.Harness))
                                 {
-                                    <span>@state.ModelName</span>
+                                    <span class="thread-msg-harness">@state.Harness</span>
                                 }
                                 @if (state.Timestamp.HasValue)
                                 {
@@ -98,6 +101,10 @@ else
                                 else if (state.Timestamp.HasValue && state.CompletedAt.HasValue)
                                 {
                                     <span class="thread-msg-elapsed" title="Stream duration">@FormatElapsed(state.Timestamp, state.CompletedAt)</span>
+                                }
+                                @if (state.InputTokens.HasValue || state.OutputTokens.HasValue)
+                                {
+                                    <span class="thread-msg-tokens" title="Token usage">@($"{state.InputTokens ?? 0:N0} in / {state.OutputTokens ?? 0:N0} out")</span>
                                 }
                             </div>
                         }
@@ -117,7 +124,7 @@ else
                                 <MarkdownView ViewModel="@(new MarkdownControl(state.Text).WithStyle("background: transparent;"))"
                                               Stream="@Stream" Area="@($"md-{msgId}")" />
                             }
-                            @if (isUser)
+                            @if (isUser && !IsReadOnlyThread)
                             {
                                 <div class="thread-msg-inline-actions">
                                     <button class="thread-msg-action-btn" @onclick="() => StartEdit(msgId)" title="Edit">&#9998;</button>
@@ -230,6 +237,13 @@ else
         </div>
     }
 
+    @* ─── Bottom bar ───────────────────────────────────────────────────
+       Everything pinned to the bottom of the screen, top-down: execution
+       status ("where we are"), the runtime panel, then the input footer
+       (harness selector + editor + send button). Grouped in one flex
+       column so the chat history above scrolls and this block stays put. *@
+    <div class="thread-chat-bottom">
+
     <!-- Execution status bar — shows when thread is executing -->
     @if (ThreadViewModel?.IsExecuting == true)
     {
@@ -244,10 +258,13 @@ else
                 {
                     <span class="thread-exec-elapsed" title="Elapsed since round started">@FormatElapsed(started)</span>
                 }
-                <button class="thread-exec-cancel" @onclick="CancelExecution">
-                    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="opacity: 0.7;"><rect x="3" y="3" width="10" height="10" rx="1"/></svg>
-                    Stop
-                </button>
+                @if (!IsReadOnlyThread)
+                {
+                    <button class="thread-exec-cancel" @onclick="CancelExecution">
+                        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="opacity: 0.7;"><rect x="3" y="3" width="10" height="10" rx="1"/></svg>
+                        Stop
+                    </button>
+                }
             </div>
             @if (!string.IsNullOrEmpty(ThreadViewModel.StreamingText))
             {
@@ -283,8 +300,10 @@ else
              "waiting to be picked up" below. When the round completes
              and the inbox drains, they get promoted to real messages in
              the history. *@
-    var runningSubThreads = GetRunningSubThreads().ToList();
-    var runtimeScheduled = ThreadViewModel?.PendingMessageTexts ?? Array.Empty<string>();
+    @{
+        var runningSubThreads = GetRunningSubThreads().ToList();
+        var runtimeScheduled = ThreadViewModel?.PendingMessageTexts ?? Array.Empty<string>();
+    }
     @if (runningSubThreads.Count > 0 || runtimeScheduled.Count > 0)
     {
         <div class="thread-runtime-panel">
@@ -345,6 +364,10 @@ else
          dimmed + non-interactive). Without this the chat shrinks to a
          small panel during thread allocation and snaps back when the
          thread is ready, which the user noticed. -->
+    @* Input footer — only for editable threads. Other users' threads are
+       read-only (threads are editable only by their owner). *@
+    @if (!IsReadOnlyThread)
+    {
     <div class="thread-chat-footer">
         <div class="thread-chat-input-area @(showSubmissionProgress ? "is-allocating" : "")">
         @if (showSubmissionProgress)
@@ -369,49 +392,71 @@ else
            /model still work (ChatCommandRegistry) and update the same
            selection state. *@
         <div class="thread-chat-selectors">
-            <SimpleDropdown TOption="AgentDisplayInfo"
-                            SelectedItem="@selectedAgentInfo"
-                            SelectedItemChanged="@OnAgentChanged"
-                            Items="@agentDisplayInfos"
-                            GetDisplayText="@(a => a?.Name ?? "Agent…")"
-                            GetGroupKey="@(a => a.GroupName ?? "MeshWeaver")"
-                            Placeholder="Agent…"
-                            Tooltip="@(selectedAgentInfo?.Path ?? "Pick an agent (or type /agent)")"
-                            PanelWidth="420px"
-                            Class="selector-agent">
-                <ItemTemplate Context="agent">
+            @* Harness selector — the single top-level choice. Claude Code and
+               GitHub Copilot each resolve to one built-in agent, so the agent +
+               model selectors only appear for the MeshWeaver harness. *@
+            <SimpleDropdown TOption="string"
+                            SelectedItem="@selectedHarness"
+                            SelectedItemChanged="@OnHarnessChanged"
+                            Items="@Harnesses.All"
+                            GetDisplayText="@(h => h)"
+                            Placeholder="Harness…"
+                            Tooltip="@($"Harness: {selectedHarness}")"
+                            ShowSearch="false"
+                            PanelWidth="220px"
+                            Class="selector-harness">
+                <ItemTemplate Context="harness">
                     <div class="dropdown-icon-name">
-                        <FluentIcon Value="@(new Icons.Regular.Size16.Bot())" />
-                        <span class="simple-dropdown-item-name">@agent.Name</span>
+                        <span class="simple-dropdown-item-name">@harness</span>
                     </div>
-                    @if (!string.IsNullOrEmpty(agent.Description))
-                    {
-                        <div class="simple-dropdown-item-description">@TruncateText(agent.Description, 80)</div>
-                    }
                 </ItemTemplate>
             </SimpleDropdown>
 
-            <SimpleDropdown TOption="ModelInfo"
-                            SelectedItem="@selectedModelInfo"
-                            SelectedItemChanged="@OnModelChanged"
-                            Items="@availableModels"
-                            GetDisplayText="@(m => m?.Name ?? (availableModels.Count == 0 ? "(no models)" : "Model…"))"
-                            GetGroupKey="@(m => m.Provider)"
-                            Placeholder="Model…"
-                            Tooltip="@(selectedModelInfo != null ? $"{selectedModelInfo.Provider}: {selectedModelInfo.Name}" : "Pick a model (or type /model)")"
-                            ShowSearch="false"
-                            PanelWidth="360px"
-                            Class="selector-model">
-                <ItemTemplate Context="model">
-                    <div class="dropdown-icon-name">
-                        @{
-                            var brand = ModelBadge(model);
+            @if (selectedHarness == Harnesses.MeshWeaver)
+            {
+                <SimpleDropdown TOption="AgentDisplayInfo"
+                                SelectedItem="@selectedAgentInfo"
+                                SelectedItemChanged="@OnAgentChanged"
+                                Items="@MeshWeaverAgents"
+                                GetDisplayText="@(a => a?.Name ?? "Agent…")"
+                                Placeholder="Agent…"
+                                Tooltip="@(selectedAgentInfo?.Path ?? "Pick an agent (or type /agent)")"
+                                PanelWidth="420px"
+                                Class="selector-agent">
+                    <ItemTemplate Context="agent">
+                        <div class="dropdown-icon-name">
+                            <FluentIcon Value="@(new Icons.Regular.Size16.Bot())" />
+                            <span class="simple-dropdown-item-name">@agent.Name</span>
+                        </div>
+                        @if (!string.IsNullOrEmpty(agent.Description))
+                        {
+                            <div class="simple-dropdown-item-description">@TruncateText(agent.Description, 80)</div>
                         }
-                        <span class="model-badge @brand.Class" title="@brand.Tooltip">@brand.Label</span>
-                        <span class="simple-dropdown-item-name">@model.Name</span>
-                    </div>
-                </ItemTemplate>
-            </SimpleDropdown>
+                    </ItemTemplate>
+                </SimpleDropdown>
+
+                <SimpleDropdown TOption="ModelInfo"
+                                SelectedItem="@selectedModelInfo"
+                                SelectedItemChanged="@OnModelChanged"
+                                Items="@availableModels"
+                                GetDisplayText="@(m => m?.Name ?? (availableModels.Count == 0 ? "(no models)" : "Model…"))"
+                                GetGroupKey="@(m => m.Provider)"
+                                Placeholder="Model…"
+                                Tooltip="@(selectedModelInfo != null ? $"{selectedModelInfo.Provider}: {selectedModelInfo.Name}" : "Pick a model (or type /model)")"
+                                ShowSearch="false"
+                                PanelWidth="360px"
+                                Class="selector-model">
+                    <ItemTemplate Context="model">
+                        <div class="dropdown-icon-name">
+                            @{
+                                var brand = ModelBadge(model);
+                            }
+                            <span class="model-badge @brand.Class" title="@brand.Tooltip">@brand.Label</span>
+                            <span class="simple-dropdown-item-name">@model.Name</span>
+                        </div>
+                    </ItemTemplate>
+                </SimpleDropdown>
+            }
 
             @if (!string.IsNullOrEmpty(lastCommandStatus))
             {
@@ -536,6 +581,8 @@ else
         </div> @* /thread-chat-input-content *@
     </div>
     </div>
+    }
+    </div> @* /thread-chat-bottom *@
 }
 
 </div>

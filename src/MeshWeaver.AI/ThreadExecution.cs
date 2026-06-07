@@ -650,6 +650,7 @@ internal static class ThreadExecution
         string UserMessageText,
         string? AgentName,
         string? ModelName,
+        string? Harness,
         string? ContextPath,
         IReadOnlyList<string>? Attachments);
 
@@ -703,7 +704,8 @@ internal static class ThreadExecution
             int? inputTokens = null, int? outputTokens = null, int? totalTokens = null,
             DateTime? completedAt = null,
             ThreadMessageStatus? status = null,
-            string? summary = null)
+            string? summary = null,
+            string? harness = null)
         {
             // Re-read the segment's CURRENT target + text baseline on every push so
             // writes follow a mid-round check_inbox split to the new cell. The cell
@@ -791,6 +793,7 @@ internal static class ThreadExecution
                     UpdatedNodes = mergedNodes,
                     AgentName = agentName ?? current.AgentName,
                     ModelName = modelName ?? current.ModelName,
+                    Harness = harness ?? current.Harness,
                     InputTokens = inputTokens ?? current.InputTokens,
                     OutputTokens = outputTokens ?? current.OutputTokens,
                     TotalTokens = totalTokens ?? current.TotalTokens,
@@ -1222,7 +1225,7 @@ internal static class ThreadExecution
                 // Push progress: generating
                 PushToResponseMessage("Generating response...", ImmutableList<ToolCallEntry>.Empty,
                     ImmutableList<NodeChangeEntry>.Empty, request.AgentName, request.ModelName,
-                    status: ThreadMessageStatus.Streaming);
+                    status: ThreadMessageStatus.Streaming, harness: request.Harness);
 
                 // Streaming loop runs on the thread pool via Task.Run — the grain
                 // scheduler stays FREE to process tool-call responses, delegation
@@ -1252,6 +1255,10 @@ internal static class ThreadExecution
                     int? inputTokens = null;
                     int? outputTokens = null;
                     int? totalTokens = null;
+                    // Actual model the harness reports using (e.g. Claude Code resolves
+                    // "sonnet" → a concrete id). Captured from the response updates so
+                    // the output cell records what really ran, not just what was asked.
+                    string? actualModel = null;
 
                     // No time-limit watchdog. A streaming session blocked on an
                     // unresponsive AI endpoint, a long-running delegation, or a
@@ -1298,6 +1305,10 @@ internal static class ThreadExecution
                     logger.LogDebug("[ThreadExec] STREAM_UPDATE kinds=[{Kinds}]",
                         string.Join(",", update.Contents.Select(c => c.GetType().Name)));
                 }
+
+                // Record the actual model the harness used (last non-empty wins).
+                if (!string.IsNullOrEmpty(update.ModelId))
+                    actualModel = update.ModelId;
 
                 // Capture function call / delegation activity for execution status
                 foreach (var content in update.Contents)
@@ -1538,11 +1549,11 @@ internal static class ThreadExecution
                     // Single push: writes Text=finalText, Summary=summaryText,
                     // Status=Completed atomically to the response cell.
                     PushToResponseMessage(finalText, finalToolCalls, aggregatedChanges,
-                        request.AgentName, request.ModelName,
+                        request.AgentName, actualModel ?? request.ModelName,
                         inputTokens: inputTokens, outputTokens: outputTokens,
                         totalTokens: totalTokens, completedAt: DateTime.UtcNow,
                         status: ThreadMessageStatus.Completed,
-                        summary: summaryText).Subscribe(
+                        summary: summaryText, harness: request.Harness).Subscribe(
                         _ => { },
                         ex => execLogger?.LogWarning(ex,
                             "PushToResponseMessage(Completed) failed for {ThreadPath}", threadPath));

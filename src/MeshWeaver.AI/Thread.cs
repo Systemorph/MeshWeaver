@@ -337,6 +337,9 @@ public record Thread
     /// <summary>Model name for pending execution.</summary>
     public string? PendingModelName { get; init; }
 
+    /// <summary>Harness (<see cref="Harnesses"/>) for pending execution.</summary>
+    public string? PendingHarness { get; init; }
+
     /// <summary>
     /// Agent name selected on this thread (sticky across reloads). The
     /// chat picker reads this on resume so the user's choice survives a
@@ -352,6 +355,23 @@ public record Thread
     /// inherit the selected agent's PreferredModel (or first available).
     /// </summary>
     public string? SelectedModelName { get; init; }
+
+    /// <summary>
+    /// Harness selected on this thread (sticky across reloads). One of
+    /// <see cref="Harnesses"/>. Same resume semantics as
+    /// <see cref="SelectedAgentName"/>. Null → the chat falls back to the
+    /// user's last-used harness (localStorage) then <see cref="Harnesses.MeshWeaver"/>.
+    /// </summary>
+    public string? SelectedHarness { get; init; }
+
+    /// <summary>
+    /// In-progress composer draft text. Used by the per-user chat template node
+    /// (<c>{userHome}/_ThreadTemplate</c>) so the text the user is typing survives
+    /// a reload/reboot without browser storage. Never set on a real conversation
+    /// thread — only the template carries it; submitting clones the template into a
+    /// new thread and clears this. Inert: it does not feed the submission watcher.
+    /// </summary>
+    public string? DraftText { get; init; }
 
     /// <summary>Context path for pending execution.</summary>
     public string? PendingContextPath { get; init; }
@@ -448,6 +468,13 @@ public record ThreadMessage
     /// The model used to generate this response (for AgentResponse messages).
     /// </summary>
     public string? ModelName { get; init; }
+
+    /// <summary>
+    /// The harness (<see cref="Harnesses"/>) this round ran under. Stamped onto
+    /// the assistant cell so the output cell can show the harness alongside
+    /// time + tokens.
+    /// </summary>
+    public string? Harness { get; init; }
 
     /// <summary>
     /// The user who created this message. Set from the delivery's AccessContext.

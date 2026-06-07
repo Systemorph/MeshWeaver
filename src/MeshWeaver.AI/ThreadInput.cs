@@ -34,7 +34,8 @@ public static class ThreadInput
         string? agentName = null,
         string? modelName = null,
         string? contextPath = null,
-        IReadOnlyList<string>? attachments = null) =>
+        IReadOnlyList<string>? attachments = null,
+        string? harness = null) =>
         new()
         {
             Role = "user",
@@ -43,6 +44,7 @@ public static class ThreadInput
             CreatedBy = createdBy,
             AgentName = agentName,
             ModelName = modelName,
+            Harness = harness,
             ContextPath = contextPath,
             Attachments = attachments,
             Timestamp = DateTime.UtcNow,
@@ -131,6 +133,7 @@ public static class ThreadInput
                     PendingUserMessages = pending,
                     PendingAgentName = message.AgentName ?? thread.PendingAgentName,
                     PendingModelName = message.ModelName ?? thread.PendingModelName,
+                    PendingHarness = message.Harness ?? thread.PendingHarness,
                     PendingContextPath = message.ContextPath ?? thread.PendingContextPath,
                     PendingAttachments = message.Attachments ?? thread.PendingAttachments
                 }

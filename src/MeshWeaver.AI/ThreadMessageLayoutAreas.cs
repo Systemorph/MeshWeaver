@@ -291,12 +291,12 @@ public static class ThreadMessageLayoutAreas
                     .Select(m => (
                         Started: m!.Timestamp,
                         Completed: m.CompletedAt,
-                        Model: m.ModelName,
+                        Harness: m.Harness,
                         In: m.InputTokens,
                         Out: m.OutputTokens,
                         Total: m.TotalTokens))
                     .DistinctUntilChanged()
-                    .Select(meta => BuildAssistantMetaRow(meta.Started, meta.Completed, meta.Model,
+                    .Select(meta => BuildAssistantMetaRow(meta.Started, meta.Completed, meta.Harness,
                         meta.In, meta.Out, meta.Total));
             });
         }
@@ -329,18 +329,18 @@ public static class ThreadMessageLayoutAreas
 
     /// <summary>
     /// Builds the muted one-line metadata row shown below an assistant cell:
-    /// <c>HH:mm:ss · model · 1.8s · 1,247 in / 392 out (1,639 total)</c>. Returns
-    /// null when there's nothing to show (e.g. response still streaming and no model
-    /// yet known).
+    /// <c>Claude Code · HH:mm:ss · 1.8s · 1,247 in / 392 out (1,639 total)</c>. Leads
+    /// with the harness (the headline identity); model is intentionally dropped.
+    /// Returns null when there's nothing to show (e.g. response still streaming).
     /// </summary>
     private static UiControl? BuildAssistantMetaRow(
-        DateTime started, DateTime? completed, string? model,
+        DateTime started, DateTime? completed, string? harness,
         int? input, int? output, int? total)
     {
         var parts = new List<string>();
+        if (!string.IsNullOrEmpty(harness))
+            parts.Add(System.Web.HttpUtility.HtmlEncode(harness));
         parts.Add(started.ToLocalTime().ToString("HH:mm:ss"));
-        if (!string.IsNullOrEmpty(model))
-            parts.Add(System.Web.HttpUtility.HtmlEncode(model));
         if (completed.HasValue)
         {
             parts.Add(FormatDurationHms(completed.Value - started));

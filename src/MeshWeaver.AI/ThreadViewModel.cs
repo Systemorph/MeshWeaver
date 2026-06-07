@@ -70,6 +70,19 @@ public record ThreadViewModel
     /// </summary>
     public string? SelectedModelName { get; init; }
 
+    /// <summary>
+    /// Sticky harness selection from <see cref="Thread.SelectedHarness"/>.
+    /// Same persistence shape as <see cref="SelectedAgentName"/>.
+    /// </summary>
+    public string? SelectedHarness { get; init; }
+
+    /// <summary>
+    /// Identity (ObjectId / email) of the user who created the thread, from
+    /// <see cref="MeshNode.CreatedBy"/>. The chat view shows the input + edit ops
+    /// only when this matches the current user — other users' threads are read-only.
+    /// </summary>
+    public string? CreatedBy { get; init; }
+
     public virtual bool Equals(ThreadViewModel? other)
     {
         if (other is null) return false;
@@ -86,6 +99,8 @@ public record ThreadViewModel
                && ExecutionStartedAt == other.ExecutionStartedAt
                && SelectedAgentName == other.SelectedAgentName
                && SelectedModelName == other.SelectedModelName
+               && SelectedHarness == other.SelectedHarness
+               && CreatedBy == other.CreatedBy
                && Messages.SequenceEqual(other.Messages)
                && (StreamingToolCalls ?? []).SequenceEqual(other.StreamingToolCalls ?? [])
                && PendingMessageTexts.SequenceEqual(other.PendingMessageTexts);
@@ -106,6 +121,8 @@ public record ThreadViewModel
         hash.Add(ExecutionStartedAt);
         hash.Add(SelectedAgentName);
         hash.Add(SelectedModelName);
+        hash.Add(SelectedHarness);
+        hash.Add(CreatedBy);
         foreach (var msg in Messages)
             hash.Add(msg);
         if (StreamingToolCalls != null)
