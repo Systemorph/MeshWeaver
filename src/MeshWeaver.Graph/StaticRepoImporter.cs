@@ -32,8 +32,11 @@ public static class StaticRepoImporter
     /// "Sync context init" — imports EVERY registered <see cref="IStaticRepoSource"/> resolved from
     /// the hub. No-op when none is registered (so a host that registers no source is untouched).
     /// Runs under <see cref="AccessService.ImpersonateAsSystem"/> so the import's overwrite / create /
-    /// prune are authorized on partitions whose <c>_Policy</c> is read-only to ordinary users
-    /// (System holds <see cref="MeshWeaver.Mesh.Security.Permission.Sync"/> via <c>Permission.All</c>).
+    /// prune are authorized on partitions whose <c>_Policy</c> is read-only to ordinary users:
+    /// <see cref="RlsNodeValidator"/> short-circuits to Valid for the well-known System identity
+    /// (it bypasses RLS entirely — it does NOT rely on a <see cref="MeshWeaver.Mesh.Security.Permission.Sync"/>
+    /// grant, which the read-only <c>_Policy</c> cap would strip anyway). System-based sync is the
+    /// intended mechanism for built-in static-repo content.
     /// Sources are imported sequentially (bounded boot load). Reactive — Subscribe to run.
     /// </summary>
     public static IObservable<StaticRepoImportResult> ImportAll(IMessageHub hub, ILogger? logger = null)
