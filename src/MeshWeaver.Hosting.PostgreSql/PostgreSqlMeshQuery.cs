@@ -665,11 +665,31 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                     // recursion through the live Subscribe.
                     if (backlog.Length > 0)
                     {
-                        Scheduler.Default.Schedule(() =>
+                        // Drain on a thread-pool tick to avoid stack recursion through
+                        // the live Subscribe (see above). This tick races subscription
+                        // teardown: an unsubscribe disposes the CompositeDisposable —
+                        // and changeBuffer with it — so a late OnNext would throw
+                        // ObjectDisposedException on a pool thread with no handler,
+                        // crashing the host. Register the schedule so a not-yet-run
+                        // tick is cancelled on dispose, skip per-item once disposed,
+                        // and swallow the unavoidable check-then-dispose race.
+                        disposables.Add(Scheduler.Default.Schedule(() =>
                         {
-                            foreach (var n in backlog)
-                                changeBuffer.OnNext(n);
-                        });
+                            try
+                            {
+                                foreach (var n in backlog)
+                                {
+                                    if (disposables.IsDisposed)
+                                        return;
+                                    changeBuffer.OnNext(n);
+                                }
+                            }
+                            catch (ObjectDisposedException)
+                            {
+                                // Subscription torn down mid-drain; the consumer is
+                                // gone, so the remaining backlog has nowhere to go.
+                            }
+                        }));
                     }
                 },
                 ex => observer.OnError(ex)));
