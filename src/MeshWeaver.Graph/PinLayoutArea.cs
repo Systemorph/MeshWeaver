@@ -88,7 +88,11 @@ public static class PinLayoutArea
 
     private static UiControl BuildPinnedCard(LayoutAreaHost host, MeshNode? node, string hubPath, string viewerId)
     {
-        var thumbnail = MeshNodeThumbnailControl.FromNode(node, hubPath);
+        // Use the responsive MeshSearch card (width:100%, min-width:200px) rather than
+        // MeshNodeThumbnailControl (fixed min-width:320px) so pinned cards reflow with the
+        // grid when the container narrows — e.g. when the side panel opens — exactly like
+        // the normal MeshSearch result cards do.
+        var thumbnail = MeshNodeCardControl.FromNode(node, hubPath);
 
         // The card is a self-contained box: a positioning context (position: relative)
         // with interior padding so content doesn't crowd the edges or the pin toggle.
