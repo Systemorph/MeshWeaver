@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Reflection;
@@ -896,7 +897,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
 
     /// <summary>
     /// Cadence at which we snapshot the hub's <see cref="IMessageHub.GetDisposalDiagnostics"/>
-    /// while waiting for <see cref="IMessageHub.Disposal"/> — every tick lands in
+    /// while waiting for <see cref="IMessageHub.DisposalCompleted"/> — every tick lands in
     /// <see cref="MeshWeaver.Fixture.TestBase.FileOutput"/> (xUnit test output) so a slow dispose shows
     /// progress incrementally instead of producing one giant snapshot at the timeout.
     /// </summary>
@@ -1095,7 +1096,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     }
 
     /// <summary>
-    /// Awaits <see cref="IMessageHub.Disposal"/> with periodic progress snapshots.
+    /// Awaits <see cref="IMessageHub.DisposalCompleted"/> with periodic progress snapshots.
     /// Every <see cref="DisposeProgressInterval"/>, dumps
     /// <see cref="IMessageHub.GetDisposalDiagnostics"/> to <see cref="MeshWeaver.Fixture.TestBase.FileOutput"/>
     /// so a hang shows up as a stream of snapshots converging on the offending hub
@@ -1103,7 +1104,12 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// </summary>
     private async Task WaitWithProgressAsync(string testName, Stopwatch sw, CancellationToken ct)
     {
-        var disposal = Mesh.Disposal!;
+        // Bridge the reactive completion to a Task once, at this test-teardown edge. Catch folds
+        // a disposal fault into completion (teardown only waits for "done", not why).
+        var disposal = Mesh.DisposalCompleted
+            .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
+            .FirstOrDefaultAsync()
+            .ToTask();
         while (!disposal.IsCompleted)
         {
             using var progressCts = CancellationTokenSource.CreateLinkedTokenSource(ct);

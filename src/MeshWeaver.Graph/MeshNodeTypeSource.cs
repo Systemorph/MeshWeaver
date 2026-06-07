@@ -129,11 +129,33 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             }
         });
 
-        // Hub-teardown hook — awaits any pending flushes so a per-node hub
-        // disposing mid-write doesn't lose data. Without it, the next test
-        // (shared mesh, new path) could race the previous hub's in-flight
-        // SaveNode subscription and the persistence read could miss it.
-        workspace.Hub.RegisterForDisposal((IAsyncDisposable)new FlushOnDispose(this));
+        // Hub-teardown hook — the final flush of any pending writes so a per-node hub
+        // disposing mid-write doesn't lose data. Registered as a REACTIVE dispose action:
+        // it RETURNS the flush IObservable (it does not bury a Subscribe inside a void
+        // Action), so the hub composes it with the other dispose actions and subscribes
+        // the chain on teardown. The flush composes IStorageAdapter.Write/Delete — the
+        // storage adapter is mesh-scoped (outlives this per-node hub) and runs its
+        // genuinely-async I/O on the mesh IO pool — so the writes land on the pool, not
+        // on the hub. The hub never awaits; nothing here is a Task.
+        workspace.Hub.RegisterForDisposal(_ =>
+        {
+            lock (_timerLock)
+            {
+                _disposed = true; // block any further ResetDebounceTimer re-arm
+                _debounceTimer?.Dispose();
+                _debounceTimer = null;
+            }
+            return FlushPendingWrites()
+                .Timeout(TimeSpan.FromSeconds(10))
+                .DefaultIfEmpty(System.Reactive.Unit.Default)
+                .Catch<System.Reactive.Unit, Exception>(ex =>
+                {
+                    _logger?.LogWarning(ex,
+                        "MeshNodeTypeSource: final flush failed for {HubPath}", _hubPath);
+                    return Observable.Return(System.Reactive.Unit.Default);
+                })
+                .Finally(() => _pendingFlushSubscriptions.Dispose());
+        });
     }
 
     protected override InstanceCollection UpdateImpl(InstanceCollection instances)
@@ -273,8 +295,9 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     /// Drains <see cref="_pendingSaves"/> and <see cref="_pendingDeletes"/> into
     /// a composed IObservable&lt;Unit&gt; — each save/delete becomes one step
     /// in a Concat chain that completes only after every op has acked. The
-    /// debounce timer subscribes for fire-and-forget; <see cref="FlushOnDispose"/>
-    /// awaits the same observable on hub teardown so no in-flight write is lost.
+    /// debounce timer subscribes for fire-and-forget; the reactive dispose action
+    /// registered in the ctor awaits the same observable on hub teardown so no
+    /// in-flight write is lost.
     /// </summary>
     private IObservable<System.Reactive.Unit> FlushPendingWrites()
     {
@@ -336,34 +359,6 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     /// mid-write loses the in-flight save — the next test reads the file
     /// before it landed on disk and reports "node not found".
     /// </summary>
-    private sealed class FlushOnDispose(MeshNodeTypeSource owner) : IAsyncDisposable
-    {
-        public async ValueTask DisposeAsync()
-        {
-            try
-            {
-                lock (owner._timerLock)
-                {
-                    owner._disposed = true; // block any further ResetDebounceTimer re-arm
-                    owner._debounceTimer?.Dispose();
-                    owner._debounceTimer = null;
-                }
-                await owner.FlushPendingWrites()
-                    .Timeout(TimeSpan.FromSeconds(10))
-                    .DefaultIfEmpty(System.Reactive.Unit.Default);
-            }
-            catch (Exception ex)
-            {
-                owner._logger?.LogWarning(ex,
-                    "MeshNodeTypeSource: final flush failed for {HubPath}", owner._hubPath);
-            }
-            finally
-            {
-                owner._pendingFlushSubscriptions.Dispose();
-            }
-        }
-    }
-
     private InstanceCollection MergePartialUpdates(InstanceCollection instances)
     {
         var mergedInstances = new Dictionary<object, object>(instances.Instances);

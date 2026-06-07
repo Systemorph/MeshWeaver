@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Microsoft.Extensions.DependencyInjection;
@@ -85,129 +86,99 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     }
 
     private readonly object locker = new();
-    private bool IsDisposing => Disposal is not null;
-    public Task? Disposal { get; private set; }
+    private bool IsDisposing => disposalStarted;
+    private volatile bool disposalStarted;
+
+    // Reactive completion source of truth — completed exactly once (CAS-guarded) when every
+    // hosted hub has finished disposing (or the 10 s cap elapses). ReplaySubject(1) so a late
+    // subscriber (the owning hub's ShutDown phase) still observes the terminal notification.
+    private readonly ReplaySubject<Unit> disposalCompleted = new(1);
+    private int disposalSignalled;
+    private IDisposable? disposalSubscription;
+
+    /// <summary>
+    /// Observable completion of the collection's disposal — fires <see cref="Unit"/> + completes
+    /// once ALL hosted hubs have finished disposing (or the 10 s cap elapses). Native reactive
+    /// surface (NOT bridged from a Task); the owning <see cref="MessageHub"/> subscribes to it to
+    /// advance its own ShutDown phase, never awaiting a Task on the action block.
+    /// </summary>
+    public IObservable<Unit> DisposalCompleted => disposalCompleted.AsObservable();
+
     public void Dispose()
     {
         lock (locker)
         {
-            if (IsDisposing) return;
-            Disposal = DisposeHubs();
+            if (disposalStarted) return;
+            disposalStarted = true;
         }
+        DisposeHubsReactive();
     }
-    private async Task DisposeHubs()
+
+    /// <summary>
+    /// Disposes each hosted hub SYNCHRONOUSLY (kicking off its own reactive disposal), then
+    /// OBSERVES their collective completion — no <c>async</c>/<c>await</c>, no
+    /// <c>Task.WhenAll</c>. Per-child <c>Catch</c> keeps one wedged/faulted child from stalling
+    /// the join (CombineLatest needs an emission from every input); the 10 s <c>Timeout</c> caps
+    /// the whole wait so the owning hub's ShutDown phase is never blocked.
+    /// </summary>
+    private void DisposeHubsReactive()
     {
         var totalStopwatch = Stopwatch.StartNew();
         var hubs = messageHubs.Values.ToArray();
         logger.LogDebug("Starting disposal of {count} hosted hubs: [{hubAddresses}]",
             hubs.Length, string.Join(", ", hubs.Select(h => h.Address.ToString())));
 
-        var disposalTasks = hubs.Select(DisposeHub).ToArray();
-        var hubAddresses = hubs.Select(h => h.Address.ToString()).ToArray();
-
-        try
+        var childCompletions = hubs.Select(h =>
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            logger.LogDebug("Waiting for all {count} hosted hubs to dispose with 10 second timeout", hubs.Length);
-            await Task.WhenAll(disposalTasks).WaitAsync(cts.Token);
-            logger.LogDebug("All {count} hosted hubs disposed successfully in {elapsed}ms",
-                hubs.Length, totalStopwatch.ElapsedMilliseconds);
-        }
-        catch (OperationCanceledException)
-        {
-            logger.LogError("Hosted hubs disposal timed out after 10 seconds ({elapsed}ms). Some hubs may not have disposed properly.",
-                totalStopwatch.ElapsedMilliseconds);
-
-            // Log detailed status of each hub
-            for (int i = 0; i < disposalTasks.Length; i++)
+            var address = h.Address;
+            try
             {
-                var task = disposalTasks[i];
-                var hubAddress = hubAddresses[i];
-
-                if (task.IsCompleted)
-                {
-                    if (task.IsCompletedSuccessfully)
-                    {
-                        logger.LogDebug("Hub {address} disposal completed successfully", hubAddress);
-                    }
-                    else if (task.IsFaulted)
-                    {
-                        logger.LogError("Hub {address} disposal failed with exception: {exception}",
-                            hubAddress, task.Exception?.GetBaseException());
-                    }
-                    else if (task.IsCanceled)
-                    {
-                        logger.LogWarning("Hub {address} disposal was canceled", hubAddress);
-                    }
-                }
-                else
-                {
-                    logger.LogError("Hub {address} disposal did not complete within timeout - HANGING", hubAddress);
-                }
+                h.Dispose();
             }
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Error during hosted hubs disposal after {elapsed}ms", totalStopwatch.ElapsedMilliseconds);
-
-            // Per-task diagnostic dump. Only the actually-failed tasks are
-            // logged at Error — the rest are noise (IsCompleted=True /
-            // IsFaulted=False is the *successful* outcome that just got
-            // dragged into this catch by the parent operation. Logging those
-            // at Error each per hub × per test was the largest single
-            // contributor to CI test-log bloat).
-            for (var i = 0; i < disposalTasks.Length; i++)
+            catch (Exception ex)
             {
-                var task = disposalTasks[i];
-                var hubAddress = hubAddresses[i];
-
-                if (task.IsFaulted && task.Exception != null)
-                {
-                    logger.LogError("Hub {address} disposal exception: {exception}",
-                        hubAddress, task.Exception.GetBaseException());
-                }
-                else if (task.IsCanceled)
-                {
-                    logger.LogWarning("Hub {address} disposal was canceled", hubAddress);
-                }
-                else
-                {
-                    logger.LogDebug(
-                        "Hub {address} disposal task status: IsCompleted={isCompleted}, IsFaulted={isFaulted}, IsCanceled={isCanceled}",
-                        hubAddress, task.IsCompleted, task.IsFaulted, task.IsCanceled);
-                }
+                logger.LogError(ex, "Error during disposal of hub {address}", address);
             }
-        }
+            return h.DisposalCompleted
+                .Take(1)
+                .Catch<Unit, Exception>(ex =>
+                {
+                    logger.LogError(ex, "Hub {address} disposal faulted", address);
+                    return Observable.Return(Unit.Default);
+                });
+        }).ToArray();
+
+        IObservable<Unit> all = childCompletions.Length == 0
+            ? Observable.Return(Unit.Default)
+            : Observable.CombineLatest(childCompletions).Select(_ => Unit.Default).Take(1);
+
+        disposalSubscription = all
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Subscribe(
+                _ =>
+                {
+                    logger.LogDebug("All {count} hosted hubs disposed successfully in {elapsed}ms",
+                        hubs.Length, totalStopwatch.ElapsedMilliseconds);
+                    SignalDone();
+                },
+                ex =>
+                {
+                    if (ex is TimeoutException)
+                        logger.LogError("Hosted hubs disposal timed out after 10 seconds ({elapsed}ms). Some hubs may not have disposed properly.",
+                            totalStopwatch.ElapsedMilliseconds);
+                    else
+                        logger.LogError(ex, "Error during hosted hubs disposal after {elapsed}ms", totalStopwatch.ElapsedMilliseconds);
+                    // Complete anyway — a wedged child must not block the owning hub's ShutDown.
+                    SignalDone();
+                });
     }
-    private Task DisposeHub(IMessageHub hub)
+
+    private void SignalDone()
     {
-        var address = hub.Address;
-        var hubStopwatch = Stopwatch.StartNew();
-        logger.LogDebug("Starting disposal of hub {address}", address);
-
-        try
-        {
-            var disposeCallStopwatch = Stopwatch.StartNew();
-            logger.LogDebug("Calling Dispose() on hub {address}", address);
-            hub.Dispose();
-            logger.LogDebug("Dispose() call completed for hub {address} in {elapsed}ms",
-                address, disposeCallStopwatch.ElapsedMilliseconds);
-
-            logger.LogDebug("Hub {address} disposed successfully in {elapsed}ms", address, hubStopwatch.ElapsedMilliseconds);
-        }
-        catch (OperationCanceledException)
-        {
-            logger.LogError("Hub {address} disposal was cancelled (total elapsed: {elapsed}ms)",
-                address, hubStopwatch.ElapsedMilliseconds);
-            throw;
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Error during disposal of hub {address} after {elapsed}ms", address, hubStopwatch.ElapsedMilliseconds);
-            throw;
-        }
-
-        return hub.Disposal ?? Task.CompletedTask;
+        if (Interlocked.CompareExchange(ref disposalSignalled, 1, 0) != 0)
+            return;
+        disposalCompleted.OnNext(Unit.Default);
+        disposalCompleted.OnCompleted();
     }
 
 }

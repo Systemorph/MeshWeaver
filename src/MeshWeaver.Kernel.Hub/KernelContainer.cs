@@ -124,7 +124,7 @@ public class KernelContainer(IServiceProvider serviceProvider)
                 {
                     IMessageHub? executor;
                     lock (executorHubLock) { executor = executorHub; }
-                    if (executor is not null && executor.Disposal is null)
+                    if (executor is not null && !executor.IsDisposing)
                         hub.Post(new CancelScriptRequest(), o => o.WithTarget(executor.Address));
                 }
             },
@@ -184,7 +184,7 @@ public class KernelContainer(IServiceProvider serviceProvider)
     {
         lock (executorHubLock)
         {
-            if (executorHub is not null && executorHub.Disposal is null) return executorHub;
+            if (executorHub is not null && !executorHub.IsDisposing) return executorHub;
             // Use the parent address as the executor's id so concurrent activity
             // hubs in the same process get distinct executor addresses
             // (HostedHubsCollection scopes by parent, but the child id still
@@ -229,7 +229,7 @@ public class KernelContainer(IServiceProvider serviceProvider)
     {
         IMessageHub? executor;
         lock (executorHubLock) { executor = executorHub; }
-        if (executor is not null && executor.Disposal is null)
+        if (executor is not null && !executor.IsDisposing)
             hub.Post(request.Message, o => o.WithTarget(executor.Address));
         return request.Processed();
     }

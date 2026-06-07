@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
@@ -45,6 +46,51 @@ internal class MeshNodeCompilationService(
     private readonly IIoPool _ioPool =
         hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Compile)
         ?? IoPool.Unbounded;
+
+    // 🚨 Offload the compile to the ThreadPool via Task.Run — NOT the IoPool. Two reasons the
+    // IoPool ("the correct abstraction") fails for this leaf:
+    //   1. Its SemaphoreSlim gate serialises the compile against itself (activity-driven +
+    //      GetCompilationPathRequest-driven compiles both acquire the Compile pool gate; the
+    //      synchronous single-flight in-memory compile re-enters / parks on WaitAsync — an idle
+    //      wait, the dotnet-stack signature).
+    //   2. SubscribeOn + ConfigureAwait(false) hop threads, which DROPS the AccessService
+    //      identity the same way Task.Run does — see below.
+    // Task.Run schedules on TaskScheduler.Default (ThreadPool): no gate, no re-entrancy, and the
+    // continuation never captures the action-block TaskScheduler the way Task.ToObservable() does.
+    //
+    // 🚨 RE-ESTABLISH THE LOGIN. The handler ran the compile under ImpersonateAsSystem so its
+    // source reads + WriteToParent bypass the caller's per-node permissions. Task.Run hops to a
+    // fresh ThreadPool thread where the AccessService identity (AsyncLocal) does NOT flow, and the
+    // handler's Impersonate scope is long disposed by the time this runs. Without re-impersonating,
+    // the source reads run unauthenticated and stall until the next 45s sync-stream heartbeat
+    // re-delivers the content — the ~42s freeze. Impersonate INSIDE the async lambda so the scope
+    // spans every await of the compile.
+    private IObservable<T> OnThreadPool<T>(Func<Task<T>> asyncWork)
+    {
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        return Observable.Create<T>(observer =>
+        {
+            Task.Run(async () =>
+            {
+                using (accessService?.ImpersonateAsSystem())
+                    return await asyncWork();
+            }).ContinueWith(
+                t =>
+                {
+                    if (t.IsFaulted) observer.OnError(t.Exception!.GetBaseException());
+                    else if (t.IsCanceled) observer.OnError(new OperationCanceledException());
+                    else { observer.OnNext(t.Result); observer.OnCompleted(); }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            return Disposable.Empty;
+        });
+    }
+
+    private IObservable<T> OnThreadPool<T>(Func<T> syncWork) =>
+        OnThreadPool(() => Task.FromResult(syncWork()));
+
     private JsonSerializerOptions JsonOptions => hub.JsonSerializerOptions;
     private readonly DynamicMeshNodeAttributeGenerator _attributeGenerator = new();
 
@@ -473,9 +519,16 @@ internal class MeshNodeCompilationService(
                         string.Join(", ", matchedCodePaths));
                 }
 
-                return Observable.Defer(() =>
-                        CompileAsync(codeFile, configuration, contentCollections, node, CancellationToken.None)
-                            .ToObservable())
+                // 🚨 Compile on the ThreadPool via Task.Run, never inline and never the IoPool.
+                // For in-memory compilation CompileAsyncCore has NO await before the synchronous
+                // Roslyn Emit (CompileToMemory), so CompileAsync() runs the ENTIRE compile
+                // synchronously — the old `CompileAsync(...).ToObservable()` ran it on whatever
+                // thread subscribed (the activity hub's action block), wedging the mesh; and
+                // `_ioPool.Run` re-entered/parked on the Compile pool's SemaphoreSlim gate (idle
+                // 40s wait). Task.Run (TaskScheduler.Default) has no gate and never captures the
+                // calling scheduler — see OnThreadPool.
+                return OnThreadPool(() =>
+                        CompileAsync(codeFile, configuration, contentCollections, node, CancellationToken.None))
                     .Select(actualPath =>
                     {
                         ActivityLog finalLog;
@@ -554,7 +607,12 @@ internal class MeshNodeCompilationService(
             var ntDef = node.Content as NodeTypeDefinition;
             var selfPath = ntDef != null ? node.Path : node.NodeType ?? node.Path;
             return DiscoverSourceVersionSnapshot(ntDef, selfPath ?? "", sourcesOverride)
-                .Select(snapshot => CompileResultFromAssembly(node, assemblyLocation, log, snapshot))
+                // 🚨 Assembly load + GetTypes() + MeshNodeProviderAttribute reflection +
+                // config instantiation is heavy, synchronous, blocking work. Run it on the
+                // ThreadPool (Task.Run), never inline (would wedge whatever hub action block
+                // emitted upstream) and never the IoPool's gated blocking factory.
+                .SelectMany(snapshot => OnThreadPool(() =>
+                    CompileResultFromAssembly(node, assemblyLocation, log, snapshot)))
                 // Re-Finish the log after CompileResultFromAssembly. CompileCore already
                 // Finished it Succeeded, but CompileResultFromAssembly's downstream steps
                 // (assembly load, MeshNodeProviderAttribute reflection) can append fresh

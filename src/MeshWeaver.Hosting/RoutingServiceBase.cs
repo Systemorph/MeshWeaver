@@ -31,7 +31,7 @@ namespace MeshWeaver.Hosting
         }
 
 
-        public abstract IAsyncDisposable RegisterStream(Address address, AsyncDelivery callback);
+        public abstract IDisposable RegisterStream(Address address, AsyncDelivery callback);
 
 
 

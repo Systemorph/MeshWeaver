@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
@@ -79,7 +81,11 @@ public class MeshHubDisposalLeakTest(ITestOutputHelper output) : MonolithMeshTes
 
         var hub = Mesh;
         hub.Dispose();
-        hub.Disposal?.Wait(TimeSpan.FromSeconds(30));
+        hub.DisposalCompleted
+            .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
+            .FirstOrDefaultAsync()
+            .ToTask()
+            .Wait(TimeSpan.FromSeconds(30));
 
         var sp = ServiceProvider;
         ServiceProvider = null!;

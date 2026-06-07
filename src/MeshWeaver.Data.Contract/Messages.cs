@@ -35,10 +35,15 @@ public record DataChangeRequest
 
 public record DataChangeResponse(long Version, ActivityLog Log)
 {
+    // 🚨 A WARNING is NOT a failure: the change committed, something just logged a warning
+    // (e.g. a benign sub-activity note during apply). Mapping Warning → Failed made every
+    // stream write-back that produced a warning OnError ("DataChangeRequest failed … status
+    // Warning"), which surfaced as a hard error to readers/tests. Only a genuine Failed (or
+    // Cancelled) status is a failure; Succeeded and Warning both commit.
     public DataChangeStatus Status { get; init; } =
         Log.Status switch
         {
-            ActivityStatus.Succeeded => DataChangeStatus.Committed,
+            ActivityStatus.Succeeded or ActivityStatus.Warning => DataChangeStatus.Committed,
             _ => DataChangeStatus.Failed
         };
 }

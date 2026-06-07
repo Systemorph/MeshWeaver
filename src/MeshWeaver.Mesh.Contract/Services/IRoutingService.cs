@@ -19,27 +19,28 @@ public interface IRoutingService
 
 
     /// <summary>
-    /// Registers a stream for the given address and returns immediately.
-    /// The returned <see cref="IAsyncDisposable"/> unsubscribes on DisposeAsync —
-    /// implementations that need genuinely-async subscription work (e.g. Orleans
-    /// memory-stream <c>SubscribeAsync</c>) fire it in the background and capture
-    /// the handle for clean unsubscribe.
+    /// Registers a stream for the given address and returns immediately. The returned
+    /// <see cref="IDisposable"/> unregisters on <c>Dispose</c> — purely synchronous to
+    /// the caller (the hub couples it to its lifetime via
+    /// <c>RegisterForDisposal(IDisposable)</c>). Implementations that need genuinely-async
+    /// teardown (e.g. an Orleans memory-stream <c>UnsubscribeAsync</c>) MUST bridge it onto
+    /// the mesh <c>IIoPool</c> inside <c>Dispose</c> — the async never leaks to the caller.
     /// </summary>
     /// <param name="address">Address to be registered for streaming.</param>
     /// <param name="callback">Callback to deliver messages from the stream.</param>
-    /// <returns>An async disposable which will unsubscribe when called.</returns>
-    IAsyncDisposable RegisterStream(Address address, AsyncDelivery callback);
+    /// <returns>A disposable which will unregister when disposed.</returns>
+    IDisposable RegisterStream(Address address, AsyncDelivery callback);
 
     /// <summary>
     /// Registers a stream for the given address and returns immediately.
     /// </summary>
-    IAsyncDisposable RegisterStream(Address address, SyncDelivery callback)
+    IDisposable RegisterStream(Address address, SyncDelivery callback)
         => RegisterStream(address, (d, _) => Observable.Return(callback(d)));
 
     /// <summary>
     /// Easy-access overload to register a hub as a stream sink.
     /// </summary>
-    IAsyncDisposable RegisterStream(IMessageHub hub)
+    IDisposable RegisterStream(IMessageHub hub)
         => RegisterStream(hub.Address, hub.DeliverMessage);
 
     /// <summary>

@@ -89,7 +89,11 @@ public record MessageHubConfiguration
     public IServiceProvider ServiceProvider { get; set; } = null!;
     private readonly Lock serviceProviderLock = new();
 
-    internal ImmutableList<Func<IMessageHub, CancellationToken, Task>> DisposeActions { get; init; } = [];
+    // Synchronous dispose actions seeded onto the hub at construction. Disposal at the
+    // hub level is purely synchronous (see MessageHub.DisposeImpl → disposables.Dispose)
+    // — nothing here is a Task or an IObservable. Anything genuinely async must be
+    // bridged onto the mesh IO pool by the layer that owns it.
+    internal ImmutableList<Action<IMessageHub>> DisposeActions { get; init; } = [];
 
     internal ImmutableList<MessageHandlerItem> MessageHandlers { get; init; } = ImmutableList<MessageHandlerItem>.Empty;
 
@@ -102,12 +106,7 @@ public record MessageHubConfiguration
     internal IMessageHub HubInstance { get; set; } = null!;
 
     public MessageHubConfiguration RegisterForDisposal(Action<IMessageHub> disposeAction)
-        => RegisterForDisposal((m, _) =>
-        {
-            disposeAction.Invoke(m);
-            return Task.CompletedTask;
-        });
-    public MessageHubConfiguration RegisterForDisposal(Func<IMessageHub, CancellationToken, Task> disposeAction) => this with { DisposeActions = DisposeActions.Add(disposeAction) };
+        => this with { DisposeActions = DisposeActions.Add(disposeAction) };
 
 
 

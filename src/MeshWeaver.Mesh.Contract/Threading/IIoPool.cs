@@ -1,3 +1,5 @@
+using System.Reactive;
+
 namespace MeshWeaver.Mesh.Threading;
 
 /// <summary>
@@ -26,6 +28,21 @@ public interface IIoPool
     /// threads while waiting.
     /// </summary>
     IObservable<T> Invoke<T>(Func<CancellationToken, Task<T>> io);
+
+    /// <summary>
+    /// Runs a genuinely-async I/O leaf that produces no value — e.g. an Orleans
+    /// stream <c>UnsubscribeAsync</c>, a final flush on dispose. Same bounded
+    /// async-gate semantics as <see cref="Invoke{T}"/>; emits a single
+    /// <see cref="Unit"/> when the work completes so callers can observe (or await,
+    /// in tests) teardown without inventing a dummy return value. The
+    /// <c>Unit.Default</c> bridge lives here, in the pool — never at the call site.
+    /// </summary>
+    IObservable<Unit> Invoke(Func<CancellationToken, Task> io)
+        => Invoke(async ct =>
+        {
+            await io(ct).ConfigureAwait(false);
+            return Unit.Default;
+        });
 
     /// <summary>
     /// Runs a sync-blocking / CPU-bound leaf (e.g. <c>File.ReadAllBytes</c>,

@@ -90,18 +90,6 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// </summary>
     private static readonly TimeSpan PermissionRequestTimeout = TimeSpan.FromSeconds(15);
 
-    /// <summary>Backoff between hydration retries when the node doesn't exist yet.</summary>
-    private static readonly TimeSpan MissingNodeRetryDelay = TimeSpan.FromMilliseconds(200);
-
-    /// <summary>
-    /// Max retries before propagating "no node found" as a terminal OnError on
-    /// the shared subject. With <see cref="MissingNodeRetryDelay"/>=200ms that's
-    /// a ~6s window — enough to absorb the create-roundtrip + per-node hub
-    /// activation race for newly-dispatched nodes, short enough that a genuinely
-    /// missing node surfaces promptly to subscribers.
-    /// </summary>
-    private const int MaxMissingNodeRetries = 30;
-
     private readonly IMessageHub meshHub;
     private readonly IMessageHub cacheHub;
     private readonly ILogger<MeshNodeStreamCache> logger;
@@ -279,14 +267,6 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         _access.Clear();
     }
 
-    /// <summary>
-    /// Recognises errors that mean "the node doesn't exist yet" — the hydration
-    /// path retries these instead of poisoning the shared subject.
-    /// </summary>
-    private static bool IsMissingNodeError(Exception err) =>
-        err is DeliveryFailureException
-        && err.Message.Contains("No node found", StringComparison.Ordinal);
-
     private Entry GetEntry(string path) =>
         _streams.GetOrAdd(path, p => new Lazy<Entry>(() =>
         {
@@ -336,42 +316,22 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             var synced = System.Reactive.Subjects.Subject.Synchronize(inner);
             var accessService = meshHub.ServiceProvider.GetService<AccessService>();
 
-            // 🚨 Retry hydration on "no node found" — a read-during-create
-            // race (typical for delegation sub-threads dispatched during a
-            // streaming agent turn, or any reader subscribing before the
-            // owner finishes its CreateNodeRequest commit) would otherwise
-            // OnError the inner ReplaySubject permanently, poisoning every
-            // future subscriber. Internal retry keeps the shared subject
-            // valid through the create-roundtrip window. Bounded so a
-            // genuinely missing node surfaces OnError after
-            // ~(MaxMissingNodeRetries × MissingNodeRetryDelay).
-            //
-            // Other error classes (permission denials, transient routing,
-            // corrupted content) are NOT retried — they propagate to
-            // subscribers as before so callers can decide what to do.
-            var retries = 0;
-            var hydrationObs = Observable.Defer(() => (IObservable<MeshNode>)handle)
-                .Catch<MeshNode, Exception>(ex =>
-                {
-                    if (!IsMissingNodeError(ex)
-                        || System.Threading.Interlocked.Increment(ref retries) > MaxMissingNodeRetries)
-                        return Observable.Throw<MeshNode>(ex);
-                    logger.LogDebug(
-                        "MeshNodeStreamCache: missing-node retry {Attempt}/{Max} for {Path}",
-                        retries, MaxMissingNodeRetries, p);
-                    return Observable.Empty<MeshNode>().Delay(MissingNodeRetryDelay);
-                })
-                .Repeat();
-
+            // Subscribe the upstream handle DIRECTLY to the shared subject — NO retry, NO Delay.
+            // The old missing-node retry looped `Observable.Empty().Delay(200ms).Repeat()` up to
+            // 30× on a transient "No node found" path-resolution lag; each Repeat re-ran the whole
+            // SubscribeRequest round-trip, so under load it burned tens of seconds of dead air per
+            // reader (the frozen-compile symptom: 30 × ~1.4s ≈ 42s). Reads are reactive end-to-end
+            // — the handle replays the node the instant it resolves; a genuinely missing node
+            // propagates OnError to subscribers immediately rather than after a polling budget.
             IDisposable hydrationSub;
             if (accessService is not null)
             {
                 using (accessService.SwitchAccessContext(MeshNodeCacheIdentity.Context))
-                    hydrationSub = hydrationObs.Subscribe(synced);
+                    hydrationSub = ((IObservable<MeshNode>)handle).Subscribe(synced);
             }
             else
             {
-                hydrationSub = hydrationObs.Subscribe(synced);
+                hydrationSub = ((IObservable<MeshNode>)handle).Subscribe(synced);
             }
             // Store hydrationSub on the Entry so the mesh hub's pre-Quiescing
             // disposal hook (registered in the ctor) can cancel it. Without

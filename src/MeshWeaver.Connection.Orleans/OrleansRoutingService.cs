@@ -1,10 +1,12 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net.Sockets;
+using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
@@ -48,7 +50,15 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     private readonly ILogger<OrleansRoutingService> logger;
     private readonly ConcurrentDictionary<Address, AsyncDelivery> streams = new();
     private readonly CompositeDisposable inFlight = new();
+    // Mesh-scoped IO pool for the genuinely-async stream UnsubscribeAsync. The hub's
+    // RegisterForDisposal(IDisposable) is synchronous; the async unsubscribe is bridged
+    // onto this pool so nothing async ever runs on the disposing hub/grain scheduler.
+    private readonly IIoPool ioPool;
     private volatile bool disposed;
+
+    // Stream-teardown is bounded by Default (ProcessorCount); the op is a quick Orleans
+    // UnsubscribeAsync, never a sustained fan-out.
+    private const string StreamPoolName = "RoutingStream";
 
     public OrleansRoutingService(
         IGrainFactory grainFactory,
@@ -58,6 +68,8 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         this.grainFactory = grainFactory;
         this.serviceProvider = serviceProvider;
         this.logger = logger;
+        ioPool = serviceProvider.GetService<IoPoolRegistry>()?.Get(StreamPoolName)
+                 ?? IoPool.Unbounded;
     }
 
     public IObservable<IMessageDelivery> DeliverMessage(IMessageDelivery delivery)
@@ -226,7 +238,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             || (ex.InnerException != null && IsTransientFailure(ex.InnerException));
     }
 
-    public IAsyncDisposable RegisterStream(Address address, AsyncDelivery callback)
+    public IDisposable RegisterStream(Address address, AsyncDelivery callback)
     {
         streams[address] = callback;
         OrleansRouteTrace.Write($"OrleansRoutingService.RegisterStream addr={address} streamName={address}");
@@ -256,18 +268,21 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                 OrleansRouteTrace.Write($"OrleansRoutingService.SubscribeAsync OK addr={address}");
         }, TaskScheduler.Default);
 
-        return new AnonymousAsyncDisposable(async () =>
+        // Synchronous to the caller: remove the local route immediately, then bridge the
+        // genuinely-async Orleans UnsubscribeAsync onto the mesh IO pool (never inline on the
+        // disposing hub/grain scheduler). Fire-and-forget on the pool — teardown is
+        // best-effort; errors are swallowed (the grain/silo may already be going away).
+        return Disposable.Create(() =>
         {
             streams.TryRemove(address, out _);
-            try
-            {
-                var subscription = await subscriptionTask;
-                await subscription.UnsubscribeAsync();
-            }
-            catch (Exception ex)
-            {
-                logger.LogDebug(ex, "Failed to unsubscribe Orleans stream for {Address}", address);
-            }
+            ioPool.Invoke(async _ =>
+                {
+                    var subscription = await subscriptionTask.ConfigureAwait(false);
+                    await subscription.UnsubscribeAsync().ConfigureAwait(false);
+                })
+                .Subscribe(
+                    _ => { },
+                    ex => logger.LogDebug(ex, "Failed to unsubscribe Orleans stream for {Address}", address));
         });
     }
 

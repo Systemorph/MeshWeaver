@@ -2,7 +2,9 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Reflection;
 using System.Threading.Tasks;
 using Microsoft.Agents.AI;
@@ -146,7 +148,7 @@ public class SharedOrleansFixture : IAsyncLifetime
     public async ValueTask DisposeAsync()
     {
         if (Cluster is not null)
-            await Cluster.DisposeAsync();
+            OrleansClusterDisposal.DisposeInBackground(Cluster);
     }
 
     /// <summary>
@@ -220,10 +222,17 @@ public class SharedOrleansFixture : IAsyncLifetime
 
         try { reg.Hub.Dispose(); }
         catch { /* same */ }
-        var disposal = reg.Hub.Disposal;
-        if (disposal != null)
+        if (reg.Hub.IsDisposing)
         {
-            try { await disposal.WaitAsync(TimeSpan.FromSeconds(10)); }
+            // Bridge reactive completion → Task at this teardown edge; swallow faults/timeout.
+            try
+            {
+                await reg.Hub.DisposalCompleted
+                    .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
+                    .FirstOrDefaultAsync()
+                    .ToTask()
+                    .WaitAsync(TimeSpan.FromSeconds(10));
+            }
             catch { /* timeout / already-faulted — don't block teardown */ }
         }
     }

@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
@@ -313,7 +314,13 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 // on silo shutdown. The previous 120 s window was the cause of the
                 // 20+ second inter-class gaps in OrleansClusterCollection runs and the
                 // catastrophic ObjectDisposedException at fixture-cleanup races.
-                var disposalTask = hub.Disposal!;
+                // Bridge the reactive completion to a Task once, at this genuine async edge
+                // (Orleans grain deactivation). Catch folds a disposal fault into completion —
+                // deactivation only cares that the hub is done, not why.
+                var disposalTask = hub.DisposalCompleted
+                    .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
+                    .FirstOrDefaultAsync()
+                    .ToTask(cancellationToken);
                 var completed = await Task.WhenAny(disposalTask, Task.Delay(TimeSpan.FromSeconds(5), cancellationToken));
                 if (completed != disposalTask)
                     logger.LogWarning("Grain {GrainId}: hub disposal exceeded 5 s — moving on", grainId);

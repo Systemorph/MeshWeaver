@@ -200,13 +200,11 @@ public static class JsonSynchronizationStream
                                     {
                                         if (response.Message is DataChangeResponse { Status: DataChangeStatus.Failed } failed)
                                         {
+                                            var reason = DescribeFailure(failed.Log);
                                             logger.LogError("Stream {streamId} DataChangeRequest failed: {Error}",
-                                                reduced.StreamId, failed.Log?.Messages
-                                                    .Where(m => m.LogLevel >= LogLevel.Error)
-                                                    .Select(m => m.Message)
-                                                    .FirstOrDefault() ?? "Unknown error");
+                                                reduced.StreamId, reason);
                                             reduced.OnError(new InvalidOperationException(
-                                                $"DataChangeRequest failed for stream {reduced.StreamId}"));
+                                                $"DataChangeRequest failed for stream {reduced.StreamId}: {reason}"));
                                         }
                                     },
                                     ex =>
@@ -292,11 +290,8 @@ public static class JsonSynchronizationStream
             impersonationScope?.Dispose();
         }
         reduced.RegisterForDisposal(observeSubscription);
-        hub.RegisterForDisposal((_, _) =>
-        {
-            observeSubscription.Dispose();
-            return Task.CompletedTask;
-        });
+        // Belt-and-suspenders: dispose the subscription when the HUB tears down too (idempotent).
+        hub.RegisterForDisposal(observeSubscription);
 
         reduced.RegisterForDisposal(
             reduced.Hub.Register<UnsubscribeRequest>(
@@ -431,7 +426,17 @@ public static class JsonSynchronizationStream
         // flow via RouteStreamMessage to the inner sync hub regardless of callback state.
         reduced.RegisterForDisposal(
             reduced
-                .ToDataChanged<TReduced, DataChangedEvent>(c => !reduced.ClientId.Equals(c.ChangedBy))
+                // 🚨 ALWAYS forward a FULL to the subscriber — a Full is the owner's complete
+                // authoritative snapshot (the initial subscribe state, or a re-assert/rollback),
+                // NEVER the subscriber's own echo (subscribers only ever send Patches via
+                // DataChangeRequest). The bare `!ClientId.Equals(ChangedBy)` echo-filter dropped
+                // the INITIAL Full whenever ChangedBy and the subscriber's ClientId collided —
+                // e.g. both empty (no StreamId on the SubscribeRequest) — leaving the subscriber
+                // dark until the next 45s heartbeat re-emitted. Only PATCHES are echo-suppressed.
+                // (The client side already applies Fulls unconditionally — UpdateStream's
+                // monotonicity guard is PATCHES-ONLY; this mirrors that contract on the owner.)
+                .ToDataChanged<TReduced, DataChangedEvent>(
+                    c => c.ChangeType == ChangeType.Full || !reduced.ClientId.Equals(c.ChangedBy))
                 .Synchronize()
                 .Where(x => x is not null)
                 .Select(x => x!)
@@ -860,6 +865,30 @@ public static class JsonSynchronizationStream
         var (updatedJson, patch) = ApplyPatchWithCorrectUnescaping(request.Change.Content, currentJson, options);
         var updated = updatedJson.Deserialize<InstanceCollection>(options);
         return (updated!, patch);
+    }
+
+    /// <summary>
+    /// Human-readable failure reason for a <see cref="DataChangeResponse"/> whose
+    /// <see cref="ActivityLog.Status"/> is Failed. The change-application path logs the real
+    /// error on a SUB-activity while the top-level status only rolls up — so this walks every
+    /// (sub-)activity, joins their error messages AND appends each one's activity path
+    /// (<c>{HubPath}/_activity/{Id}</c>) so the caller can open the persisted activity and
+    /// inspect the full detail instead of seeing a bare "Unknown error".
+    /// </summary>
+    private static string DescribeFailure(ActivityLog? log)
+    {
+        if (log is null)
+            return "Unknown error (no activity log)";
+        var failures = log.SelfAndDescendants()
+            .SelectMany(a => a.Messages
+                .Where(m => m.LogLevel >= LogLevel.Error)
+                .Select(m => string.IsNullOrEmpty(a.HubPath)
+                    ? $"{m.Message} [activity {a.Id}]"
+                    : $"{m.Message} [activity {a.HubPath}/_activity/{a.Id}]"))
+            .ToList();
+        return failures.Count > 0
+            ? string.Join("; ", failures)
+            : $"Failed with no error message (activity {log.Id}, status {log.Status})";
     }
 
     internal static IObservable<DataChangeRequest> ToDataChangeRequest<TStream>(

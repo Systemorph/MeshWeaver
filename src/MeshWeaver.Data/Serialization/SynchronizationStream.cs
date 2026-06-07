@@ -236,7 +236,21 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     /// </summary>
     private ChangeItem<TStream> BuildChangeItem(TStream? current, TStream updated)
     {
-        var changedBy = CaptureCallerAccessContext(Hub)?.ObjectId ?? ClientId;
+        // 🚨 ChangedBy is the stream-echo-suppression key — the identity of the STREAM that
+        // originated the change — and it must MATCH the value the echo-suppression filters
+        // compare against, which is `reduced.ClientId` (JsonSynchronizationStream's
+        // `reduced.ClientId.Equals(c.ChangedBy)` on the client→owner path, and
+        // `!reduced.ClientId.Equals(c.ChangedBy)` on the owner→subscriber path). So ChangedBy
+        // is ALWAYS ClientId — the stream's stable identity (what `WithClientId(streamId)`
+        // sets; "stream id" in our vocabulary). It is NEVER the per-instance `StreamId`
+        // property (a fresh Guid that never equals any ClientId): a StreamId here makes the
+        // client→owner filter `ClientId.Equals(StreamId)` permanently false, so a client's
+        // `stream.Update` write never becomes a PatchDataChangeRequest and silently drops.
+        // The AccessContext (RLS / LastModifiedBy auditing) is ORTHOGONAL and must not leak
+        // into it: deriving ChangedBy from `CaptureCallerAccessContext()?.ObjectId ?? ClientId`
+        // collapses to "" when ObjectId is "" (not null, so `?? ClientId` doesn't fire), and
+        // an empty ChangedBy breaks both filters. ClientId is a non-empty Guid by construction.
+        var changedBy = ClientId;
         // 🚨 ONLY the owning hub sets Version. Subscriber carries the base it read.
         var version = Owner.Equals(Host.Address) ? Hub.Version : (Current?.Version ?? 0L);
 
@@ -282,7 +296,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     /// </summary>
     private ChangeItem<TStream> BuildFullChangeItem(TStream? current, TStream updated)
     {
-        var changedBy = CaptureCallerAccessContext(Hub)?.ObjectId ?? ClientId;
+        // ChangedBy = ClientId always (never empty; matches the echo-suppression filters,
+        // never the per-instance StreamId). AccessContext is orthogonal. See BuildChangeItem.
+        var changedBy = ClientId;
         // 🚨 ONLY the owning hub sets Version. Subscriber carries the base it read.
         var version = Owner.Equals(Host.Address) ? Hub.Version : (Current?.Version ?? 0L);
 
@@ -746,7 +762,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         logger.LogDebug("[SYNC_STREAM] UpdateStream called for {StreamId}, ChangeType={ChangeType}, Version={Version}, MessageId={MessageId}",
             StreamId, delivery.Message.ChangeType, delivery.Message.Version, delivery.Id);
 
-        if (Hub is null || Hub.Disposal is not null)
+        if (Hub is null || Hub.IsDisposing)
         {
             logger.LogDebug("[SYNC_STREAM] UpdateStream skipped for {StreamId} - hub is disposing/dead", StreamId);
             return;

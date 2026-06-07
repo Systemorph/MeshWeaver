@@ -127,7 +127,7 @@ public class OrleansDocumentationTest(ITestOutputHelper output) : TestBase(outpu
     public override async ValueTask DisposeAsync()
     {
         if (Cluster is not null)
-            await Cluster.DisposeAsync();
+            OrleansClusterDisposal.DisposeInBackground(Cluster);
         await base.DisposeAsync();
     }
 }

@@ -182,6 +182,47 @@ The `SubscribeOn` at the cache layer does not widen this risk — upstream chang
 
 > This `SubscribeOn` offload is the **query-construction** half of keeping the grain free. Its leaf-execution counterpart is the [Controlled I/O Pooling](ControlledIoPooling) primitive (`IIoPool`), which applies the same `SubscribeOn(TaskPoolScheduler.Default)` move plus a concurrency bound so actual file / blob / HTTP leaf work both runs off the grain *and* cannot fan out unboundedly.
 
+## Offloading a CPU leaf off the action block — `Task.Run`, identity, and why the gated pool can wedge
+
+A long *synchronous* leaf (Roslyn `Emit`, a big reflection/type-load) that runs
+**inline on a hub handler** wedges that hub for its whole duration. The canonical
+trap: `CompileAsync(...).ToObservable()`. For an in-memory compile `CompileAsyncCore`
+has **no `await` before the synchronous `Emit`**, so `CompileAsync()` runs the *entire*
+compile synchronously, and `.ToObservable()` runs it on **whatever thread subscribed**
+— the activity hub's action block — freezing the mesh (≈50 s of trace silence). Three
+rules came out of fixing it:
+
+1. **Never `Task.ToObservable()` a leaf you want off the action block.** The Task's
+   continuation resumes on the **current** `TaskScheduler` (the action block when you
+   subscribed mid-handler), so it comes right back onto the blocked turn.
+
+2. **`Task.Run`, not the IoPool, for a CPU leaf that re-enters or must not gate.**
+   `_ioPool.Run` was *worse* here for two reasons: (a) its `SemaphoreSlim` gate
+   serialised the compile against itself — the activity-driven and request-driven
+   compiles both took the `Compile` pool slot and the synchronous single-flight
+   re-entered / parked on `WaitAsync` (an **idle** wait — `dotnet-stack` shows no
+   blocked thread, the missed-observation signature); (b) `SubscribeOn(TaskPoolScheduler.Default)
+   + ConfigureAwait(false)` hops threads and **drops the AccessContext** exactly like
+   `Task.Run`. `Task.Run` schedules on `TaskScheduler.Default` (the thread pool) with no
+   gate and no current-scheduler capture. Bridge it to `IObservable` with
+   `Observable.Create` + `Task.Run` + `ContinueWith(…, TaskScheduler.Default)` — never
+   `FromAsync`, never `Task.ToObservable`.
+
+3. **🚨 Re-establish the login *inside* the offload.** Whichever way you hop threads
+   (`Task.Run` or the IoPool), the `AccessService` identity (an `AsyncLocal`) does **not**
+   flow across the hop, and the handler's `ImpersonateAsSystem` scope is long disposed by
+   the time the offloaded work runs. So compile source-reads / write-backs run
+   **unauthenticated** off-thread. Wrap the offloaded body: `using (accessService.ImpersonateAsSystem())
+   return await work();` — inside the async lambda so the scope spans every await.
+   *"Why doesn't the IoPool just work — it's the correct abstraction?"* It is the correct
+   abstraction for **bounded async I/O**; for a **CPU leaf with grain-identity needs** it
+   adds a gate you don't want and still drops the identity. The pool offloads the work;
+   it does **not** carry the actor's `AccessContext` — that is the caller's job at the seam.
+
+> The flip side (per the section above): work that **touches hub state** after the
+> offload must `.ObserveOn(grainScheduler)` back onto the owning hub's turn — the CPU
+> runs off-grain, the state mutation runs on-grain.
+
 ## Cross-references
 
 - [Asynchronous Calls](AsynchronousCalls) — the actor-model rules this scheduling model implements.
