@@ -31,6 +31,14 @@ public static class StringDeltaPatch
     public const string Marker = "$sd";
 
     /// <summary>
+    /// Marker key identifying a recursive nested-object delta. A changed field whose
+    /// base and updated values are both objects is encoded as <c>{ "$nd": {…nested delta…} }</c>
+    /// so a big string buried inside (e.g. <c>MeshNode.Content.Content</c>) still ships as a
+    /// splice rather than re-sending the whole nested object.
+    /// </summary>
+    public const string NestedMarker = "$nd";
+
+    /// <summary>
     /// Computes the compact delta <paramref name="baseObj"/> → <paramref name="updatedObj"/>.
     /// Changed string fields are encoded as a <see cref="StringDelta"/> splice.
     /// </summary>
@@ -52,6 +60,12 @@ public static class StringDeltaPatch
                 {
                     [Marker] = new JsonArray(sd.Start, sd.RemovedLength, sd.Inserted)
                 };
+            }
+            else if (updatedVal is JsonObject updatedNested && baseVal is JsonObject baseNested)
+            {
+                // Both sides are objects → recurse, so a changed string nested inside
+                // (markdown content, prerendered html) ships as a splice not a full re-send.
+                delta[name] = new JsonObject { [NestedMarker] = Compute(baseNested, updatedNested) };
             }
             else
             {
@@ -90,6 +104,15 @@ public static class StringDeltaPatch
                     ? s
                     : string.Empty;
                 result[name] = JsonValue.Create(sd.Apply(currentStr));
+            }
+            else if (deltaVal is JsonObject nestedObj
+                && nestedObj.TryGetPropertyValue(NestedMarker, out var ndNode)
+                && ndNode is JsonObject nestedDelta)
+            {
+                // Recurse onto the target's CURRENT nested object so a disjoint concurrent
+                // edit deeper in the tree survives, same as the string-splice case.
+                var currentNested = result[name] as JsonObject ?? new JsonObject();
+                result[name] = Apply(currentNested, nestedDelta);
             }
             else
             {
