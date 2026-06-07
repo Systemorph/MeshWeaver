@@ -253,7 +253,7 @@ public static class AccessControlLayoutArea
     /// Shows a dialog to add a new access assignment.
     /// Captures both Subject (user/group) AND Role in one dialog.
     /// </summary>
-    private static void ShowAddAssignmentDialog(UiActionContext ctx, string nodePath)
+    internal static void ShowAddAssignmentDialog(UiActionContext ctx, string nodePath)
     {
         var formId = $"add_assignment_{Guid.NewGuid().AsString()}";
         ctx.Host.UpdateData(formId, new Dictionary<string, object?>

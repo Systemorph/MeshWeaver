@@ -30,7 +30,7 @@ public static class InboxSettingsTab
     private static async IAsyncEnumerable<GlobalSettingsMenuItemDefinition> GetInboxTabAsync(
         LayoutAreaHost host, RenderingContext ctx)
     {
-        if (!await AdminMenuGate.IsRootAdminAsync(host))
+        if (!await AdminMenuGate.IsPlatformAdminAsync(host))
             yield break;
 
         yield return new GlobalSettingsMenuItemDefinition(
