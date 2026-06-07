@@ -300,27 +300,28 @@ internal static class NodeTypeCompileActivityHandler
                     var ok = outcome.Error is null
                         && !string.IsNullOrEmpty(outcome.Result?.AssemblyLocation);
 
-                    // Propagate CompileCore's discovery + result log lines onto the
-                    // activity MeshNode so the GetCompilationPathRequest hydration
-                    // shortcut (NodeTypeContractHandler.BuildResponseFromLocal +
-                    // GetConfigurationsFromExistingAssembly) can surface them as
-                    // response.Log without re-running Roslyn. Without this, the
-                    // "Source query / matched N Code / Compiled assembly" lines
-                    // live only on the in-process NodeCompilationResult.Log and
-                    // are lost the moment the activity hub completes. Repro:
-                    // CompileActivityLogTest.SuccessfulCompile_ReportsActivityLog…
+                    // Accumulate EVERY activity-log line (CompileCore's discovery +
+                    // result lines, the Roslyn-produced/failed summary, the release
+                    // outcome) into ONE list, then write them WITH the terminal status
+                    // in a single atomic Update (NodeTypeCompilationActivity.Complete).
+                    // The old code emitted each line as an independent fire-and-forget
+                    // AppendLog and THEN a separate MarkSucceeded/MarkFailed — so a
+                    // reader (UI/test) that observed the terminal status could see it
+                    // before the diagnostic lines landed, surfacing a Failed activity
+                    // with an empty/partial log. One write makes "status is terminal"
+                    // and "every diagnostic line is present" the same observable event.
+                    var activityMessages = System.Collections.Immutable.ImmutableList.CreateBuilder<LogMessage>();
+
+                    // CompileCore's discovery + result log lines (the full Roslyn
+                    // diagnostics live here — see MeshNodeCompilationService.FormatCompileFailure).
                     if (outcome.Result?.Log is { } compileLog && compileLog.Messages.Count > 0)
-                    {
-                        foreach (var msg in compileLog.Messages)
-                            NodeTypeCompilationActivity.AppendLog(
-                                activityHub, activityPath, msg.Message, logger!, msg.LogLevel);
-                    }
+                        activityMessages.AddRange(compileLog.Messages);
 
                     if (ok)
                     {
-                        NodeTypeCompilationActivity.AppendLog(activityHub, activityPath,
+                        activityMessages.Add(new LogMessage(
                             $"Roslyn produced assembly at: {outcome.Result!.AssemblyLocation}",
-                            logger!);
+                            Microsoft.Extensions.Logging.LogLevel.Information));
                     }
                     else
                     {
@@ -328,55 +329,40 @@ internal static class NodeTypeCompileActivityHandler
                             ?? (outcome.Result?.Log?.Errors() is { Count: > 0 } errs
                                 ? string.Join("; ", errs.Select(m => m.Message))
                                 : "Compilation produced no assembly");
-                        NodeTypeCompilationActivity.AppendLog(activityHub, activityPath,
-                            $"Roslyn failed: {errMsg}", logger!,
-                            Microsoft.Extensions.Logging.LogLevel.Error);
+                        activityMessages.Add(new LogMessage(
+                            $"Roslyn failed: {errMsg}", Microsoft.Extensions.Logging.LogLevel.Error));
                     }
 
-                    // 2. Release MeshNode created BEFORE the parent's Ok write
-                    //    so the parent's LatestReleasePath points at an existing
-                    //    node. Release.CompilationActivityPath links back to
-                    //    this activity for full build-detail traceability —
-                    //    the UI can follow Release → Activity to see Roslyn
-                    //    diagnostics, source list, and timing.
+                    // Release MeshNode created BEFORE the parent's Ok write so the
+                    // parent's LatestReleasePath points at an existing node.
+                    // Release.CompilationActivityPath links back to this activity so
+                    // the UI can follow Release → Activity to see the full build detail.
                     string? newReleasePath = null;
                     if (ok)
                     {
                         newReleasePath = MeshDataSourceExtensions.TryCreateReleaseNode(
                             activityHub, parentPath, outcome.Result!, outcome.PendingNode, activityPath, logger);
-                        // Assert the Release was created AND linked correctly.
-                        // TryCreateReleaseNode returns the path on success or
-                        // null when CreateNode couldn't be dispatched (no
-                        // IMeshService — e.g. early bootstrap).
                         if (newReleasePath is not null)
                         {
-                            NodeTypeCompilationActivity.AppendLog(activityHub, activityPath,
+                            activityMessages.Add(new LogMessage(
                                 $"Release created: {newReleasePath} → assembly={outcome.Result!.AssemblyLocation}, activity={activityPath}",
-                                logger!);
+                                Microsoft.Extensions.Logging.LogLevel.Information));
                             logger?.LogInformation(
                                 "[NTCA] Release {ReleasePath} linked to activity {ActivityPath} + assembly {AssemblyLocation}",
                                 newReleasePath, activityPath, outcome.Result.AssemblyLocation);
                         }
                         else
                         {
-                            NodeTypeCompilationActivity.AppendLog(activityHub, activityPath,
+                            activityMessages.Add(new LogMessage(
                                 "Release node NOT created (no IMeshService available) — assembly still usable directly",
-                                logger!, Microsoft.Extensions.Logging.LogLevel.Warning);
+                                Microsoft.Extensions.Logging.LogLevel.Warning));
                         }
                     }
 
-                    // 3. Activity terminal state lands on its own ActivityLog
-                    //    AFTER the release-creation log so subscribers see
-                    //    "release linked" before the activity closes.
-                    if (ok)
-                        NodeTypeCompilationActivity.MarkSucceeded(activityHub, activityPath, logger!);
-                    else
-                        NodeTypeCompilationActivity.MarkFailed(activityHub, activityPath,
-                            outcome.Error?.Message
-                                ?? (outcome.Result?.Log?.Errors() is { Count: > 0 } errs
-                                    ? string.Join("; ", errs.Select(m => m.Message))
-                                    : "Compilation produced no assembly"),
-                            logger!);
+                    // ONE atomic write: terminal status + every diagnostic line.
+                    NodeTypeCompilationActivity.Complete(activityHub, activityPath,
+                        ok ? ActivityStatus.Succeeded : ActivityStatus.Failed,
+                        activityMessages.ToImmutable(), logger!);
 
                     // 4. Activity writes terminal state to parent MeshNode via
                     //    the shared cached stream. AssemblyLocation,

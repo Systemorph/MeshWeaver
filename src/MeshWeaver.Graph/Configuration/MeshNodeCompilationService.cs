@@ -575,6 +575,34 @@ internal class MeshNodeCompilationService(
             });
     }
 
+    /// <summary>
+    /// Formats a failed Roslyn <c>Emit</c>'s diagnostics into a complete, never-empty error
+    /// message — each line carries the diagnostic <c>CS####</c> id, severity, source line and
+    /// message. Falls back to Warning-severity diagnostics when there are no Errors, and to an
+    /// explanatory sentence when Emit failed with NO diagnostics at all (typically a missing
+    /// source file or a configuration lambda referencing a type that was never compiled). The
+    /// previous <c>Where(Severity == Error).Select(GetMessage)</c> produced a bare
+    /// "Compilation failed for 'X':" whenever the failure carried no Error-severity diagnostic.
+    /// </summary>
+    private static string FormatCompileFailure(string nodePath, IEnumerable<Diagnostic> diagnostics)
+    {
+        var joined = string.Join('\n', diagnostics
+            .Where(d => d.Severity is DiagnosticSeverity.Error or DiagnosticSeverity.Warning)
+            .OrderByDescending(d => d.Severity)
+            .Select(d =>
+            {
+                var loc = d.Location.IsInSource
+                    ? $" (line {d.Location.GetLineSpan().StartLinePosition.Line + 1})"
+                    : "";
+                return $"{d.Id} {d.Severity}{loc}: {d.GetMessage()}";
+            }));
+        return !string.IsNullOrEmpty(joined)
+            ? $"Compilation failed for '{nodePath}':\n{joined}"
+            : $"Compilation failed for '{nodePath}': Roslyn emit failed but produced no error/warning "
+              + "diagnostics — this usually means a source file was not found, or the configuration "
+              + "lambda references a type that was never compiled (see the source-discovery report below).";
+    }
+
     private static string BuildSourceDiscoveryReport(IReadOnlyList<string> executedQueries, IReadOnlyList<string> matchedCodePaths)
     {
         var sb = new System.Text.StringBuilder();
@@ -1102,12 +1130,7 @@ internal class MeshNodeCompilationService(
 
         if (!emitResult.Success)
         {
-            var errors = emitResult.Diagnostics
-                .Where(d => d.Severity == DiagnosticSeverity.Error)
-                .Select(d => d.GetMessage())
-                .ToList();
-
-            var errorMessage = $"Compilation failed for '{nodePath}':\n{string.Join('\n', errors)}";
+            var errorMessage = FormatCompileFailure(nodePath, emitResult.Diagnostics);
             logger.LogError("{ErrorMessage}", errorMessage);
             throw new CompilationException(nodePath, errorMessage);
         }
@@ -1135,12 +1158,7 @@ internal class MeshNodeCompilationService(
 
         if (!emitResult.Success)
         {
-            var errors = emitResult.Diagnostics
-                .Where(d => d.Severity == DiagnosticSeverity.Error)
-                .Select(d => d.GetMessage())
-                .ToList();
-
-            var errorMessage = $"Compilation failed for '{nodePath}':\n{string.Join('\n', errors)}";
+            var errorMessage = FormatCompileFailure(nodePath, emitResult.Diagnostics);
             logger.LogError("{ErrorMessage}", errorMessage);
             throw new CompilationException(nodePath, errorMessage);
         }
@@ -1243,12 +1261,7 @@ internal class MeshNodeCompilationService(
 
             try { Directory.Delete(releaseFolder, recursive: true); } catch { /* ignore */ }
 
-            var errors = emitResult.Diagnostics
-                .Where(d => d.Severity == DiagnosticSeverity.Error)
-                .Select(d => d.GetMessage())
-                .ToList();
-
-            var errorMessage = $"Compilation failed for '{node.Path}':\n{string.Join('\n', errors)}";
+            var errorMessage = FormatCompileFailure(node.Path, emitResult.Diagnostics);
             logger.LogError("{ErrorMessage}", errorMessage);
             throw new CompilationException(node.Path, errorMessage);
         }

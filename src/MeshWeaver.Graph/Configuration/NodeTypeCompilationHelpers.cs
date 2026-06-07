@@ -145,81 +145,46 @@ internal static class NodeTypeCompilationHelpers
         var ownStream = workspace.GetMeshNodeStream();
 
         var hubPath = hub.Address.Path;
-        // Single-flight gate: the watcher must NOT dispatch two activities for
-        // the same Pending burst. The Update-lambda's "if Status != Pending
-        // return curr" check IS atomic per call, but two concurrent calls
-        // can both run their lambdas against the framework's pre-commit `state`
-        // snapshot and BOTH observe Pending (each producing an
-        // EntityStoreAndUpdates the data source then accepts last-write-wins).
-        // Symptom: two NTCA Handles run in parallel, two Release MeshNodes
-        // land in the same millisecond, two WriteToParent DataChangeRequests
-        // pile up callbacks on the per-NodeType hub — every following request
-        // (SubscribeRequest, CreateReleaseRequest) times out 30-60 s later
-        // because the hub is wedged behind the doubled-up activity output.
-        // Repro before the gate: CodeEditRecompileTest +
-        // NodeTypeReleaseTest "left Observe subscriptions pending past
-        // Quiescing budget" (NodeTypeRelease local run 2026-05-18).
+        // Single-flight is STATUS-BASED, not an in-memory flag. The watcher posts a
+        // DispatchCompileTrigger on every transition INTO Pending; HandleDispatchCompile
+        // then atomically transitions Pending → Compiling inside the per-NodeType hub's
+        // serialized ActionBlock Update (`if Status != Pending return curr`), so only the
+        // FIRST trigger of a burst starts an activity — every later one no-ops.
         //
-        // The gate is reset when status leaves Compiling/Pending — i.e. when
-        // a real terminal state lands. That lets the next Pending burst fire
-        // a fresh activity, while collapsing duplicate Pending emissions
-        // within the same burst into one dispatch.
-        var dispatchInFlight = 0;
-        var resetSub = ownStream
-            .Where(node => node?.Content is NodeTypeDefinition def
-                && def.CompilationStatus is not CompilationStatus.Pending
-                                          and not CompilationStatus.Compiling)
-            .Subscribe(_ => System.Threading.Interlocked.Exchange(ref dispatchInFlight, 0));
-        // 🚨 The watcher's Subscribe callback fires on whatever scheduler
-        // ownStream emits on — typically the workspace's emission thread,
-        // which can coincide with the per-NodeType hub's ActionBlock when
-        // the originating Update ran there. Doing the dispatch work
-        // (workspace.Update + activity Start + GetQuery cold-cache wait)
-        // directly inside that callback can deadlock: the GetQuery
-        // upstream's Initial fires on the SyncedQueryProvider's thread-pool
-        // task, but downstream Subscribers wanting to call back into the
-        // same hub queue behind the ActionBlock that's still in this
-        // callback. Symptom: ACME/Project Status=Compiling, then 28 s of
-        // silence, then test timeout (Acme TodoDataChangeWorkflowTest
-        // layout-area renders pre-fix).
+        // `DistinctUntilChanged(status)` coalesces duplicate Pending emissions at the
+        // Subscribe layer so we don't flood the inbox; it fires once per Pending
+        // transition. The previous in-memory `dispatchInFlight` flag + a `resetSub` that
+        // cleared it on a settled emission was FRAGILE: when a terminal state (Error/Ok)
+        // was written cross-hub by the activity handler and didn't re-emit on this OWN
+        // stream as a status the reset filter recognised, the flag stuck at 1 and the
+        // NEXT Pending was coalesced away → the NodeType wedged at Compiling on the
+        // SECOND compile (CodeEditRecompileTest.FailedCompile / recompile). Status-based
+        // single-flight has no such latch.
         //
-        // Fix: the watcher does NOTHING but post `DispatchCompileTrigger`
-        // to the OWN hub. The handler (HandleDispatchCompile, registered
-        // on the per-NodeType hub via MeshDataSource) runs on the hub's
-        // ActionBlock — guaranteed single-threaded, no scheduler ambiguity,
-        // no deadlock window. Single-flight is now status-based: the
-        // handler checks `CompilationStatus == Pending` on the OWN
-        // MeshNode; if another DispatchCompileTrigger already transitioned
-        // to Compiling, the second one no-ops. The in-memory
-        // `dispatchInFlight` flag still coalesces post bursts at the
-        // Subscribe layer so we don't flood the inbox with redundant
-        // messages on rapid Pending re-emissions.
+        // 🚨 The watcher does NOTHING but post to the OWN hub — no Update / activity
+        // start / GetQuery wait inside the Subscribe callback (those can deadlock when
+        // the callback fires on the workspace emission thread that coincides with the
+        // ActionBlock). HandleDispatchCompile owns all the work on the hub's ActionBlock.
         var watcherSub = ownStream
-            .Where(node => node?.Content is NodeTypeDefinition def
-                && def.CompilationStatus == CompilationStatus.Pending
-                // Truly-static NodeTypes (HubConfiguration delegate set AND no
-                // source code) ship their assembly with the framework — even if
-                // something flips them Pending, there's nothing to compile.
-                // Symmetric with the kickoff: a dynamic NodeType whose source
-                // string compiled into a delegate at registration still needs a
-                // real assembly emit, so allow Pending through when source exists.
-                && !(node.HubConfiguration is not null
-                    && string.IsNullOrWhiteSpace(def.Configuration)
-                    && string.IsNullOrWhiteSpace(def.HubConfiguration)
-                    && (def.Sources is null || def.Sources.Count == 0)))
+            .Where(node => node?.Content is NodeTypeDefinition)
+            .DistinctUntilChanged(node => ((NodeTypeDefinition)node!.Content!).CompilationStatus)
+            .Where(node =>
+            {
+                var def = (NodeTypeDefinition)node!.Content!;
+                // Truly-static NodeTypes (HubConfiguration delegate set AND no source
+                // code) ship their assembly with the framework — nothing to compile even
+                // if something flips them Pending. A dynamic NodeType whose source string
+                // compiled into a delegate still needs a real assembly emit, so allow
+                // Pending through when source exists.
+                return def.CompilationStatus == CompilationStatus.Pending
+                    && !(node.HubConfiguration is not null
+                        && string.IsNullOrWhiteSpace(def.Configuration)
+                        && string.IsNullOrWhiteSpace(def.HubConfiguration)
+                        && (def.Sources is null || def.Sources.Count == 0));
+            })
             .Subscribe(
                 pendingNode =>
                 {
-                    // Coalesce duplicate Pending emissions into one ActionBlock
-                    // message. First post wins; followers no-op until status
-                    // transitions out of Pending/Compiling (handled by resetSub).
-                    if (System.Threading.Interlocked.CompareExchange(ref dispatchInFlight, 1, 0) != 0)
-                    {
-                        logger?.LogDebug(
-                            "Compile watcher: dispatch already in flight for {HubPath} — coalescing this Pending emission",
-                            hubPath);
-                        return;
-                    }
                     logger?.LogDebug(
                         "Compile watcher: saw Pending for {HubPath} — posting DispatchCompileTrigger to OWN hub (system identity)",
                         hubPath);
@@ -372,7 +337,7 @@ internal static class NodeTypeCompilationHelpers
             });
 
         return new CompositeDisposable(
-            watcherSub, resetSub, firstBuildKickoffSub, recoveryKickoffSub);
+            watcherSub, firstBuildKickoffSub, recoveryKickoffSub);
     }
 
     /// <summary>

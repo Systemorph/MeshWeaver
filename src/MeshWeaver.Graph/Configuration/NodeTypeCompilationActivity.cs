@@ -127,6 +127,47 @@ internal static class NodeTypeCompilationActivity
     }
 
     /// <summary>
+    /// Writes the terminal <paramref name="status"/> AND <paramref name="messages"/> to the
+    /// activity log in a SINGLE atomic Update. Use this instead of N separate
+    /// <see cref="AppendLog"/> calls followed by <see cref="MarkSucceeded"/>/<see cref="MarkFailed"/>:
+    /// those are independent fire-and-forget writes, so a reader observing the terminal status
+    /// could see it BEFORE the per-message appends land (or miss some entirely). One Update
+    /// guarantees that the moment the activity is Failed/Succeeded, every diagnostic line is
+    /// already present — so retrieving the activity log always shows the full compile output.
+    /// </summary>
+    public static void Complete(
+        IMessageHub hub, string? activityPath, ActivityStatus status,
+        IReadOnlyList<LogMessage> messages, ILogger logger)
+    {
+        if (string.IsNullOrEmpty(activityPath)) return;
+        try
+        {
+            hub.GetWorkspace().GetMeshNodeStream(activityPath!)
+                .Update(current =>
+                    current?.Content is ActivityLog log
+                        ? current with
+                        {
+                            Content = log with
+                            {
+                                Status = status,
+                                End = DateTime.UtcNow,
+                                Messages = log.Messages.AddRange(messages)
+                            }
+                        }
+                        : current!)
+                .Subscribe(
+                    _ => { },
+                    ex => logger.LogDebug(ex,
+                        "Compile-activity Complete failed for {Path} (best-effort, ignored)", activityPath));
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex,
+                "Compile-activity Complete threw for {Path} (best-effort, ignored)", activityPath);
+        }
+    }
+
+    /// <summary>
     /// Flip the activity content to <see cref="ActivityStatus.Succeeded"/>.
     /// No-op when <paramref name="activityPath"/> is <c>null</c>.
     /// </summary>
