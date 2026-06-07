@@ -350,7 +350,7 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         // exist in every partition that has primary `mesh_nodes` — if a row
         // lookup misses it returns no rows; UNION over zero rows is still
         // correct.
-        var pinned = ResolvePinnedPartition(parsed);
+        var pinned = ResolvePinnedPartition(parsed, ResolveGlobalSchema);
         List<string> schemas;
         if (pinned is not null)
         {
@@ -524,7 +524,8 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
     ///     across every searchable partition.</item>
     /// </list>
     /// </summary>
-    internal static string? ResolvePinnedPartition(ParsedQuery parsed)
+    internal static string? ResolvePinnedPartition(
+        ParsedQuery parsed, Func<string, string?>? resolveGlobalSchema = null)
     {
         // Concrete Path wins — e.g. `namespace:partition/doc/_Thread` lands here.
         if (!string.IsNullOrEmpty(parsed.Path))
@@ -533,13 +534,13 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
             if (string.IsNullOrEmpty(first) || first == "*") return null;
             // 🚨 GLOBAL SATELLITE NAMESPACES (`_Access`, `_Activity`,
             // `_UserActivity`, `_Thread`) are registered with explicit Schema
-            // names (`system_access`, `system_activity`, …) — the schema is
-            // NOT the lowercased namespace. We don't have the partition cache
-            // here to look up the actual schema, so fall through to the
-            // GetSchemasWithTableAsync fan-out path which discovers schemas
-            // via information_schema. Cost: one extra round-trip on these
-            // satellite queries; correctness wins.
-            if (first.StartsWith('_')) return null;
+            // names (`system_access`, `system_activity`, …) — the schema is NOT
+            // the lowercased namespace. Resolve them through the registered-
+            // partition lookup (the SAME source PostgreSqlPathRoutingAdapter.ResolveSchema
+            // uses for scoped reads) so the fan-out pins to the one real schema
+            // instead of a SyncSearchableSchemas + GetSchemasWithTableAsync discovery
+            // round-trip. Unregistered (or no resolver) → null → fan-out (correctness floor).
+            if (first.StartsWith('_')) return resolveGlobalSchema?.Invoke(first);
             return first.ToLowerInvariant();
         }
 
@@ -557,8 +558,8 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
             var first = stopIdx < 0 ? trimmed : trimmed[..stopIdx];
             if (!string.IsNullOrEmpty(first) && !first.Contains('*') && !first.Contains('%'))
             {
-                // Same satellite-namespace guard as the path-based path.
-                if (first.StartsWith('_')) return null;
+                // Same global-satellite resolution as the path-based branch.
+                if (first.StartsWith('_')) return resolveGlobalSchema?.Invoke(first);
                 return first.ToLowerInvariant();
             }
         }
@@ -584,6 +585,22 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         }
         return false;
     }
+
+    /// <summary>
+    /// Resolves a <c>_</c>-prefixed global-satellite namespace (<c>_Access</c>,
+    /// <c>_Activity</c>, <c>_Thread</c>, <c>_UserActivity</c>) to its real partition
+    /// schema (<c>system_access</c>, …) via the process-wide registered-partition cache —
+    /// the same lookup <see cref="PostgreSqlPathRoutingAdapter"/> uses for scoped reads.
+    /// Lets the fan-out pin these to the one real schema instead of an information_schema
+    /// discovery round-trip. <see langword="null"/> when no provider is wired or the
+    /// namespace isn't registered (→ caller falls back to the discovery fan-out).
+    /// </summary>
+    private string? ResolveGlobalSchema(string segment)
+        => _partitionProvider is not null
+           && _partitionProvider.TryGetRegisteredPartition(segment, out var def)
+           && !string.IsNullOrEmpty(def.Schema)
+            ? def.Schema
+            : null;
 
     private string GetEffectiveUserId(MeshQueryRequest request)
     {

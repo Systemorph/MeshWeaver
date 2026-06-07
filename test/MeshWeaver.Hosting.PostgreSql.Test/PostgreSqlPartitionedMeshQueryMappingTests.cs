@@ -232,6 +232,29 @@ public class PostgreSqlPartitionedMeshQueryMappingTests
         pinned.Should().BeNull("wildcard / unscoped queries fan out across every searchable partition");
     }
 
+    [Fact]
+    public void ResolvePinnedPartition_GlobalSatellite_PinsToRegisteredSchema()
+    {
+        // `_`-prefixed global namespaces have a schema name that differs from the namespace
+        // (`_Access` → `system_access`). With the registered-partition resolver supplied,
+        // the fan-out pins to that one real schema instead of discovering schemas via
+        // information_schema.
+        var parsed = _parser.Parse("namespace:_Access scope:children");
+        var pinned = PostgreSqlPartitionedMeshQuery.ResolvePinnedPartition(
+            parsed, seg => seg == "_Access" ? "system_access" : null);
+        pinned.Should().Be("system_access");
+    }
+
+    [Fact]
+    public void ResolvePinnedPartition_GlobalSatellite_NoResolverOrUnregistered_FansOut()
+    {
+        // No resolver, or a resolver that doesn't know the namespace → null → the discovery
+        // fan-out. This is the prior behaviour, preserved as the correctness floor.
+        var parsed = _parser.Parse("namespace:_Access scope:children");
+        PostgreSqlPartitionedMeshQuery.ResolvePinnedPartition(parsed).Should().BeNull();
+        PostgreSqlPartitionedMeshQuery.ResolvePinnedPartition(parsed, _ => null).Should().BeNull();
+    }
+
     // ─── NeedsFanOut ───────────────────────────────────────────────────
 
     [Theory]
