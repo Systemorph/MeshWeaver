@@ -993,11 +993,12 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         string? userId = null,
         string? namespacePath = null,
         int topK = 10,
+        string? lexicalTerm = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var generator = new PostgreSqlSqlGenerator { SchemaName = _schemaName };
         var (sql, parameters) = generator.GenerateVectorSearchQuery(
-            filter, queryVector, userId, topK);
+            filter, queryVector, userId, topK, lexicalTerm);
 
         if (!string.IsNullOrEmpty(namespacePath))
         {

@@ -142,7 +142,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
             yield break;
 
         await foreach (var node in _adapter.VectorSearchAsync(
-            vec, options, filter: null, userId, namespacePath, topK, ct).ConfigureAwait(false))
+            vec, options, filter: null, userId, namespacePath, topK, lexicalTerm: queryText, ct: ct).ConfigureAwait(false))
             yield return node;
     }
 
@@ -207,7 +207,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                 // WHERE clause has the structured predicates only.
                 var structuralFilter = parsedQuery with { TextSearch = null };
                 await foreach (var node in _adapter.VectorSearchAsync(
-                    vec, options, structuralFilter, vectorUserId, vectorNamespace, topK, ct).ConfigureAwait(false))
+                    vec, options, structuralFilter, vectorUserId, vectorNamespace, topK, lexicalTerm: parsedQuery.TextSearch, ct: ct).ConfigureAwait(false))
                     yield return node;
                 yield break;
             }

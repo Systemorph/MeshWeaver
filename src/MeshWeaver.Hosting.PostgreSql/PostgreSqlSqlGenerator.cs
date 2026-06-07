@@ -599,7 +599,8 @@ public class PostgreSqlSqlGenerator
         ParsedQuery? filterQuery,
         float[] queryVector,
         string? userId = null,
-        int topK = 10)
+        int topK = 10,
+        string? lexicalTerm = null)
     {
         var parameters = new Dictionary<string, object>();
 
@@ -632,7 +633,26 @@ public class PostgreSqlSqlGenerator
         sql.Append(string.Join(" AND ", clauses));
 
         parameters["@queryVector"] = new Vector(queryVector);
-        sql.Append(" ORDER BY n.embedding <=> @queryVector");
+        // Hybrid rank: when a lexical term is present, lexical exact/prefix matches outrank
+        // pure semantic neighbours and cosine distance breaks ties WITHIN a tier. A user
+        // typing an exact node name must get it first even if another node is semantically
+        // closer — without the tier, HNSW order could bury the exact match past the LIMIT.
+        // No term (pure semantic search) → cosine only, unchanged.
+        if (!string.IsNullOrEmpty(lexicalTerm))
+        {
+            parameters["@lexTerm"] = lexicalTerm;
+            sql.Append(
+                " ORDER BY (CASE " +
+                "WHEN LOWER(COALESCE(n.name,'')) = LOWER(@lexTerm) THEN 0 " +
+                "WHEN LOWER(COALESCE(n.name,'')) LIKE LOWER(@lexTerm) || '%' THEN 1 " +
+                "WHEN LOWER(COALESCE(n.id,'')) LIKE LOWER(@lexTerm) || '%' THEN 2 " +
+                "WHEN LOWER(COALESCE(n.name,'')) LIKE '%' || LOWER(@lexTerm) || '%' THEN 3 " +
+                "ELSE 4 END), n.embedding <=> @queryVector");
+        }
+        else
+        {
+            sql.Append(" ORDER BY n.embedding <=> @queryVector");
+        }
         sql.Append($" LIMIT {topK}");
 
         return (sql.ToString(), parameters);

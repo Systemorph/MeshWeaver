@@ -103,6 +103,37 @@ public class SqlGeneratorTests
     }
 
     [Fact]
+    public void GenerateVectorSearchQuery_WithLexicalTerm_BlendsLexicalTierThenCosine()
+    {
+        // Hybrid: an exact/prefix lexical match must outrank a closer semantic neighbour,
+        // with cosine distance breaking ties WITHIN a tier (so the exact match can't be
+        // buried past the LIMIT by a semantically-closer row).
+        var gen = new PostgreSqlSqlGenerator();
+        var (sql, parameters) = gen.GenerateVectorSearchQuery(
+            filterQuery: null, queryVector: new[] { 0.1f, 0.2f, 0.3f }, userId: null, topK: 5,
+            lexicalTerm: "laptop");
+
+        sql.Should().Contain("ORDER BY (CASE");
+        sql.Should().Contain("WHEN LOWER(COALESCE(n.name,'')) = LOWER(@lexTerm) THEN 0");
+        // Lexical tier first, cosine as the in-tier tiebreaker.
+        sql.Should().Contain("END), n.embedding <=> @queryVector");
+        parameters["@lexTerm"].Should().Be("laptop");
+    }
+
+    [Fact]
+    public void GenerateVectorSearchQuery_NoLexicalTerm_PureCosine()
+    {
+        // Pure semantic search (no lexical term) keeps cosine-only ordering, unchanged.
+        var gen = new PostgreSqlSqlGenerator();
+        var (sql, parameters) = gen.GenerateVectorSearchQuery(
+            filterQuery: null, queryVector: new[] { 0.1f, 0.2f, 0.3f }, userId: null, topK: 5);
+
+        sql.Should().Contain("ORDER BY n.embedding <=> @queryVector");
+        sql.Should().NotContain("CASE");
+        parameters.Should().NotContainKey("@lexTerm");
+    }
+
+    [Fact]
     public void GenerateSelectQuery_NoSelect_FetchesContent()
     {
         var gen = new PostgreSqlSqlGenerator();
