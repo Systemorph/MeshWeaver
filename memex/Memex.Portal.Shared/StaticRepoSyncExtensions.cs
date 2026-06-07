@@ -29,17 +29,10 @@ public static class StaticRepoSyncExtensions
         if (serveFromPartition.Count == 0)
             return builder; // sync disabled — in-memory serving everywhere, no import.
 
-        if (serveFromPartition.Contains("Agent"))
-            builder.AddMeshNodes(PartitionDefNode("Agent", "Built-in agents (DB-synced)"));
-        if (serveFromPartition.Contains("Model"))
-        {
-            builder.AddMeshNodes(PartitionDefNode("Model", "Model catalog (DB-synced)"));
-            // The model catalog's provider/model content lives under the "_Provider" partition.
-            builder.AddMeshNodes(PartitionDefNode(
-                ModelProviderNodeType.RootNamespace, "Model providers (DB-synced)"));
-        }
-        // "Doc" already declares its PartitionDefinition in AddDocumentation.
-
+        // NOTE: partition SCHEMAS are provisioned reactively by the importer itself, via the standard
+        // IPartitionStorageProvider.EnsurePartitionProvisioned (reactive + pooled). We do NOT declare
+        // PartitionDefinition nodes here to force a schema — that path provisioned the wrong-case
+        // schema. See StaticRepoImporter.Run + Doc/Architecture/StaticRepoImport.md.
         builder.ConfigureServices(services =>
         {
             if (serveFromPartition.Contains("Doc"))
@@ -56,23 +49,6 @@ public static class StaticRepoSyncExtensions
         });
         return builder;
     }
-
-    // Declares a partition so PostgreSqlPartitionSubscriptionHostedService provisions its PG schema.
-    // Mirrors the "Documentation" partition node AddDocumentation adds.
-    private static MeshNode PartitionDefNode(string @namespace, string description) =>
-        new($"StaticRepo_{@namespace.Trim('_')}", "Admin/Partition")
-        {
-            NodeType = "Partition",
-            Name = description,
-            State = MeshNodeState.Active,
-            Content = new PartitionDefinition
-            {
-                Namespace = @namespace,
-                DataSource = "PostgreSql",
-                Description = description,
-                Versioned = false
-            }
-        };
 }
 
 /// <summary>
@@ -96,7 +72,15 @@ internal sealed class StaticRepoImportHostedService(
 
         logger?.LogInformation(
             "[StaticRepoImport] starting sync-context init for {Count} source(s).", sources.Count());
+        // 🚨 SubscribeOn the thread pool — NOT the host-startup thread. The import's reactive chain
+        // (meshService.Query → CreateNode/Overwrite) round-trips the mesh + per-node hubs; running
+        // the subscription on the startup thread re-enters the hub schedulers mid-init and DEADLOCKS
+        // (it hung the whole import). The chain is pure IObservable (no FromAsync/await), so
+        // SubscribeOn moves the entire subscription cleanly off the startup thread. StartAsync
+        // returns immediately (Task.CompletedTask) — no async/await, no blocking. See
+        // Doc/Architecture/AsynchronousCalls.md.
         _subscription = StaticRepoImporter.ImportAll(hub, logger)
+            .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default)
             .Subscribe(
                 r => logger?.LogInformation(
                     "[StaticRepoImport] {Partition}: {Outcome} ({Count} node(s)).",

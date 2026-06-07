@@ -68,6 +68,12 @@ data:
   Social__LinkedIn__ClientId: "{{ .Values.config.memex_portal.Social__LinkedIn__ClientId | default "" }}"
   # ---- Onboarding: invitation-only gate (first user always bootstraps) ------
   Features__Onboarding__InvitationOnly: "{{ .Values.config.memex_portal.Features__Onboarding__InvitationOnly | default "false" }}"
+  # ---- Static-repo → DB sync: which partitions are materialized into + served from the DB
+  # (instead of the in-memory static provider). Default = Doc, Agent, Model. Override per-env by
+  # setting these keys (empty string disables a slot). See Doc/Architecture/StaticRepoImport.md.
+  Features__StaticRepoSync__Partitions__0: "{{ .Values.config.memex_portal.Features__StaticRepoSync__Partitions__0 | default "Doc" }}"
+  Features__StaticRepoSync__Partitions__1: "{{ .Values.config.memex_portal.Features__StaticRepoSync__Partitions__1 | default "Agent" }}"
+  Features__StaticRepoSync__Partitions__2: "{{ .Values.config.memex_portal.Features__StaticRepoSync__Partitions__2 | default "Model" }}"
   # ---- System email (Microsoft Graph) — BIDIRECTIONAL. Outbound invitations + notifications
   # (/sendMail, Mail.Send app permission) AND optional inbound email→agent channel (inbox
   # change-notification subscription, Mail.ReadWrite app permission). Non-secret here;

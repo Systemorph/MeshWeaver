@@ -59,6 +59,12 @@ Satellite table routing by path segment:
 
 **Never run raw `psql UPDATE` on a live portal** — bypasses the workspace cache. Use `MoveNodeRequest` or add a Repair vN migration. If you must SQL-edit, restart `Memex.Portal.Distributed`.
 
+**🚨 Partition schema: provision + existence are REACTIVE + POOLED — never declare a `PartitionDefinition` node to force a schema, never lowercase by hand.** The standard surface is on `IPartitionStorageProvider`:
+- `EnsurePartitionProvisioned(namespace) : IObservable<Unit>` — the ONE entry point that creates a partition's schema + tables. Reactive, idempotent (promise-cached), and **pooled** on the `pg:{adapter}` IoPool (the PG impl lowercases the schema correctly). Subscribe it; compose with `.SelectMany(_ => write…)` before writing to a not-yet-provisioned partition.
+- `PartitionExists(namespace) : IObservable<bool?>` — reactive existence check (`null` = indeterminate; OR-fold across providers as `PartitionWriteGuardValidator` does).
+
+The router maps a path's first segment to `seg.ToLowerInvariant()`; a `PartitionDefinition` with `Schema` left null provisions the schema **verbatim** (`"Agent"` capital) while writes hit `"agent"` → 42P01. So the way to make code that writes a not-yet-provisioned partition work is `EnsurePartitionProvisioned(p).SelectMany(_ => write…)` — **not** a partition-def node. The async schema DDL runs inside the IoPool, never `Observable.FromAsync` (see [ControlledIoPooling.md](src/MeshWeaver.Documentation/Data/Architecture/ControlledIoPooling.md)).
+
 Full reference: [PostgresSchemaArchitecture.md](src/MeshWeaver.Documentation/Data/Architecture/PostgresSchemaArchitecture.md)
 
 ## Documentation

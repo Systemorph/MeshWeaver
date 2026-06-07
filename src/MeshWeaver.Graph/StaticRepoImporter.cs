@@ -136,6 +136,21 @@ public static class StaticRepoImporter
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
+        // 🚨 Reactively ensure each touched partition's storage (PG schema) exists BEFORE reading or
+        // writing — via the STANDARD IPartitionStorageProvider.EnsurePartitionProvisioned, which is
+        // reactive + POOLED (the PG impl runs CREATE SCHEMA on the pg pool and promise-caches it; the
+        // schema name is lowercased correctly). Providers that don't own the partition no-op. This is
+        // the canonical provisioning entry point — never declare PartitionDefinition nodes to force a
+        // schema (that path used the namespace verbatim and provisioned the wrong CASE). No async,
+        // no FromAsync — all IObservable. See Doc/Architecture/ControlledIoPooling.md + StaticRepoImport.md.
+        var providers = hub.ServiceProvider.GetServices<IPartitionStorageProvider>().ToArray();
+        var provisionLeaves = partitions
+            .SelectMany(p => providers.Select(pr => pr.EnsurePartitionProvisioned(p)))
+            .ToArray();
+        var provision = provisionLeaves.Length == 0
+            ? Observable.Return(System.Reactive.Unit.Default)
+            : Observable.Merge(provisionLeaves).ToList().Select(_ => System.Reactive.Unit.Default);
+
         var existingSubtrees = partitions.Length == 0
             ? Observable.Return((IEnumerable<MeshNode>)Array.Empty<MeshNode>())
             : Observable.Zip(partitions.Select(p =>
@@ -145,7 +160,8 @@ public static class StaticRepoImporter
                         .Select(c => (IEnumerable<MeshNode>)c.Items)))
                 .Select(lists => lists.SelectMany(x => x));
 
-        return existingSubtrees
+        return provision
+            .SelectMany(_ => existingSubtrees)
             .Take(1)
             .SelectMany(existingItems =>
             {
