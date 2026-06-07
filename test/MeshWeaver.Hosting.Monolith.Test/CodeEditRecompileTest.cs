@@ -140,6 +140,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         // 4. CreateReleaseRequest again without changes â†’ AlreadyUpToDate.
         var dupResponse = SendCreateRelease(NodeTypePath, force: false);
         dupResponse.AlreadyUpToDate.Should().BeTrue("sources unchanged since V1 compile");
+        Output.WriteLine("=== STEP dup AlreadyUpToDate OK ===");
 
         // 5. Create an instance and verify it serves V1.
         NodeFactory.CreateNode(new MeshNode("instance1", $"{TestPartition}/CodeEditType")
@@ -147,8 +148,11 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             Name = "Instance 1",
             NodeType = NodeTypePath,
         }).Should().Within(30.Seconds()).Emit();
+        Output.WriteLine("=== STEP instance1 created ===");
         var v1Html = ReadOverview(InstancePath);
+        Output.WriteLine("=== STEP v1Html read ===");
         v1Html.Should().Contain("MARKER_V1", "V1 release must be served");
+        Output.WriteLine("=== STEP MARKER_V1 verified ===");
 
         // 6. Modify the source to V2. Live remote stream â€” path is known, no
         // index lag (per CqrsAndContentAccess.md).
@@ -167,12 +171,15 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         // CompiledSources). Waiting on it guarantees the recompile decision
         // (HandleCreateRelease → IsDirty) sees the change and the compile reads V2
         // from the same shared query — no synced-query lag, no AlreadyUpToDate race.
+        Output.WriteLine("=== STEP V2 source updated, waiting for IsDirty ===");
         Mesh.GetMeshNodeStream(NodeTypePath)
             .Should().Within(30.Seconds())
             .Match(n => n?.Content is NodeTypeDefinition d && d.IsDirty);
+        Output.WriteLine("=== STEP IsDirty observed ===");
 
         // 7. Explicitly trigger V2 compilation â€” sources changed, should recompile.
         var v2Response = SendCreateRelease(NodeTypePath, force: false);
+        Output.WriteLine($"=== STEP V2 SendCreateRelease returned (AlreadyUpToDate={v2Response.AlreadyUpToDate}) ===");
         v2Response.Success.Should().BeTrue("CreateReleaseRequest should succeed after source change");
         v2Response.AlreadyUpToDate.Should().BeFalse("source was modified, must recompile");
 

@@ -338,7 +338,20 @@ internal class MeshNodeCompilationService(
         // If the cache keys diverged, IsDirty could disagree with whatever
         // bytes the compile produced (the bug class CodeEditRecompileTest
         // catches). See NodeSources.GetSources / NodeSources.CacheId.
-        return NodeSources.GetSources(hub.GetWorkspace(), ntDef, selfPath);
+        //
+        // 🚨 Run the source GetQuery under System. Source-set discovery is
+        // framework infrastructure, NOT a user-scoped read. Under a user-triggered
+        // (or thread-hopped) compile the ambient identity can be lost, and the
+        // per-source RLS check then routes a CheckPermission back INTO this hub —
+        // a self-call that stalls the read until the ~45s sync-stream heartbeat
+        // (the ~42s compile freeze; kickoff activity stuck Running at "Invoking
+        // compiler…"). Observable.Using keeps the System scope alive for the live
+        // GetQuery subscription. Mirrors InstallSourcesWatcher.
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        return Observable.Using(
+            () => accessService?.ImpersonateAsSystem()
+                  ?? System.Reactive.Disposables.Disposable.Empty,
+            _ => NodeSources.GetSources(hub.GetWorkspace(), ntDef, selfPath));
     }
 
     /// <summary>
@@ -795,8 +808,10 @@ internal class MeshNodeCompilationService(
                     var pairs = CollectSourcePairs(matches);
                     return ResolveIncludesForPairs(pairs)
                         .SelectMany(resolvedPairs =>
-                            _ioPool.Run(ct =>
-                                AssembleCompilationInputsAsync(node, ntDef, resolvedPairs, ct)));
+                            // Reactive input assembly — NOT in the pool (see
+                            // AssembleCompilationInputs). Only the Roslyn Emit border
+                            // touches the pool.
+                            AssembleCompilationInputs(node, ntDef, resolvedPairs));
                 }));
     }
 
@@ -849,11 +864,10 @@ internal class MeshNodeCompilationService(
         return chain;
     }
 
-    private async Task<CompilationInputs?> AssembleCompilationInputsAsync(
+    private IObservable<CompilationInputs?> AssembleCompilationInputs(
         MeshNode node,
         NodeTypeDefinition? ntDef,
-        IReadOnlyList<(string Path, CodeConfiguration Config, long LastModifiedTicks)> resolvedPairs,
-        CancellationToken ct)
+        IReadOnlyList<(string Path, CodeConfiguration Config, long LastModifiedTicks)> resolvedPairs)
     {
         var nodeName = cacheService.SanitizeNodeName(node.Path);
 
@@ -875,40 +889,44 @@ internal class MeshNodeCompilationService(
             strippedSources.Add((p.Path, stripped, p.LastModifiedTicks));
         }
 
-        ImmutableArray<MetadataReference> references;
-        if (allNugetRefs.Count > 0)
+        // 🚨 100% reactive — NO await, and the input assembly is NOT wrapped in
+        // _ioPool.Run. The only async leaf is NuGet restore (network IO), and it runs
+        // ONLY when a `#r "nuget:"` directive is present — bridged through the IoPool
+        // reactively. The common case (no NuGet) is a pure Observable.Return, so the
+        // pipeline stays reactive end-to-end and never blocks/parks: only Roslyn's
+        // synchronous Emit touches the pool (see CompileCore → OnThreadPool/InvokeBlocking).
+        IObservable<ImmutableArray<MetadataReference>> referencesObs =
+            allNugetRefs.Count > 0
+                ? _ioPool.Run(ct => nugetResolver.ResolveAsync(allNugetRefs, targetFramework: null, ct))
+                    .Select(resolved => _references
+                        .Concat(resolved.AssemblyPaths.Select(p => (MetadataReference)MetadataReference.CreateFromFile(p)))
+                        .ToImmutableArray())
+                : Observable.Return(_references.ToImmutableArray());
+
+        return referencesObs.Select(references =>
         {
-            var resolved = await nugetResolver.ResolveAsync(allNugetRefs, targetFramework: null, ct).ConfigureAwait(false);
-            references = _references
-                .Concat(resolved.AssemblyPaths.Select(p => (MetadataReference)MetadataReference.CreateFromFile(p)))
+            var parseOptions = new CSharpParseOptions(documentationMode: DocumentationMode.Diagnose);
+            var compilationOptions = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+                .WithOptimizationLevel(OptimizationLevel.Debug)
+                .WithPlatform(Platform.AnyCpu);
+
+            var sourcesArray = strippedSources
+                .Select(s => (s.Path, s.Code))
                 .ToImmutableArray();
-        }
-        else
-        {
-            references = _references.ToImmutableArray();
-        }
 
-        var parseOptions = new CSharpParseOptions(documentationMode: DocumentationMode.Diagnose);
-        var compilationOptions = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
-            .WithOptimizationLevel(OptimizationLevel.Debug)
-            .WithPlatform(Platform.AnyCpu);
+            var versions = ImmutableDictionary<string, long>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase);
+            foreach (var s in strippedSources)
+                versions = versions.SetItem(s.Path, s.LastModifiedTicks);
 
-        var sourcesArray = strippedSources
-            .Select(s => (s.Path, s.Code))
-            .ToImmutableArray();
-
-        var versions = ImmutableDictionary<string, long>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase);
-        foreach (var s in strippedSources)
-            versions = versions.SetItem(s.Path, s.LastModifiedTicks);
-
-        return new CompilationInputs(
-            AssemblyName: $"DynamicNode_{nodeName}",
-            Sources: sourcesArray,
-            SkeletonSource: skeleton,
-            References: references,
-            ParseOptions: parseOptions,
-            CompilationOptions: compilationOptions,
-            SourceVersions: versions);
+            return (CompilationInputs?)new CompilationInputs(
+                AssemblyName: $"DynamicNode_{nodeName}",
+                Sources: sourcesArray,
+                SkeletonSource: skeleton,
+                References: references,
+                ParseOptions: parseOptions,
+                CompilationOptions: compilationOptions,
+                SourceVersions: versions);
+        });
     }
 
     private NodeCompilationResult? CompileResultFromAssembly(
