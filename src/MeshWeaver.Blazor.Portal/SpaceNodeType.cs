@@ -155,7 +155,7 @@ public static class SpaceNodeType
         Name = "Space",
         NodeType = "NodeType",
         Icon = "/static/NodeTypeIcons/organization.svg",
-        Content = new NodeTypeDefinition { DefaultNamespace = "", OwnsPartition = true },
+        Content = new NodeTypeDefinition { DefaultNamespace = "", RestrictedToNamespaces = [""], OwnsPartition = true },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<Space>())

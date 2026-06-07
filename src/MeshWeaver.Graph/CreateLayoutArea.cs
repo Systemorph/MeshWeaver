@@ -652,9 +652,12 @@ public static class CreateLayoutArea
         {
             // No restriction — full picker. Queries cover (a) root-level registered NodeTypes
             // and (b) any NodeType defined within the current namespace or its ancestors.
+            // context:create excludes NodeTypes that opt out of creation (e.g. Release,
+            // Notification) — the WHERE on Items already filters those, but the QUERY path
+            // must too or the excluded types leak back in via query results.
             var ancestorQuery = string.IsNullOrEmpty(parentPath)
-                ? "namespace: nodeType:NodeType"
-                : $"namespace:{parentPath} nodeType:NodeType scope:selfAndAncestors";
+                ? "namespace: nodeType:NodeType context:create"
+                : $"namespace:{parentPath} nodeType:NodeType scope:selfAndAncestors context:create";
             stack = stack.WithView(new MeshNodePickerControl(new JsonPointerReference("type"))
             {
                 Label = "Type *",
@@ -662,7 +665,7 @@ public static class CreateLayoutArea
                 Placeholder = "Select a type...",
                 DataContext = dataContext
             }.WithItems(creatableTypeNodes)
-             .WithQueries("namespace: nodeType:NodeType", ancestorQuery)
+             .WithQueries("namespace: nodeType:NodeType context:create", ancestorQuery)
              .WithMaxResults(15)
              .WithStyle("width: 100%; margin-bottom: 16px;"));
         }
@@ -697,14 +700,18 @@ public static class CreateLayoutArea
         }
         else
         {
-            // No restriction — full picker with root option
+            // Namespace autocomplete over existing Spaces (real namespaces / path
+            // resolution) — NOT creatable node types (the old "context:create" query
+            // returned the type catalogue). The empty "" root is intentionally NOT offered:
+            // only partition objects (Space, User) may live at root, and those restrict
+            // their namespace to [""] via NodeTypeDefinition, so they render the read-only
+            // "Root (top-level)" label above instead of reaching this picker.
             stack = stack.WithView(new MeshNodePickerControl(new JsonPointerReference("namespace"))
             {
                 Label = "Namespace",
-                Placeholder = "Root (leave empty for top-level)...",
+                Placeholder = "Search a space to nest under...",
                 DataContext = dataContext
-            }.WithQueries("context:create").WithMaxResults(15)
-             .WithEmptyOption("Root (top-level)")
+            }.WithQueries("nodeType:Space").WithMaxResults(15)
              .WithStyle("width: 100%; margin-bottom: 16px;"));
         }
 
