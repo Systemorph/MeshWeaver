@@ -79,7 +79,7 @@ public class SharedOrleansFixture : IAsyncLifetime
     /// </summary>
     private readonly ConcurrentDictionary<Address, ClientRegistration> _registrations = new();
 
-    private sealed record ClientRegistration(IMessageHub Hub, IReadOnlyList<IAsyncDisposable> Subscriptions);
+    private sealed record ClientRegistration(IMessageHub Hub, IReadOnlyList<IDisposable> Subscriptions);
 
     /// <summary>
     /// 🚨 Per-class isolation guard — call at the START of every cluster init (this

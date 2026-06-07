@@ -222,6 +222,46 @@ These four properties must hold for every leaf that uses `IIoPool`:
 
 ---
 
+## Disposal is reactive — `Dispose()` fires, the mesh drains
+
+There is **no `DisposeAsync()` and no `IAsyncDisposable`** anywhere — not in the public API, not on
+any hub or resource. The whole shape is deleted. An `await DisposeAsync()` inside hub-reachable code
+(or a shared-scheduler fixture) captures `TaskScheduler.Current` and queues its continuation back onto
+the very turn that is tearing down → the turn never drains → deadlock. Disposal is synchronous +
+reactive instead:
+
+- **`Dispose()` (`IDisposable`) fires and returns.** It does the synchronous unregister
+  (e.g. `IRoutingService.RegisterStream` returns a synchronous unregister handle) or *kicks off*
+  reactive teardown — it never blocks on it. `IDisposable` is the only disposal interface a hub
+  or resource implements.
+- **Asynchronous teardown is observed through `IObservable<Unit> DisposalCompleted`** (the shape
+  `IMessageHub` uses), not awaited. `Dispose()` triggers it; completion is a reactive emission.
+- **Someone has to subscribe.** `DisposalCompleted` is cold — with no subscriber the completion is
+  never observed. That subscriber is the **mesh teardown**, never the individual hub or call site:
+  the mesh's disposal merges its hubs'/resources' `DisposalCompleted` and waits for them all to emit
+  before it completes. Hub-reachable code only *exposes* `DisposalCompleted`; it never subscribes to
+  or drains its own.
+- **Let them all finish.** When the teardown owns several reactive completions, drain them together so
+  they all emit before it returns — never an awaited loop that serialises (and can deadlock on) each one.
+
+**The only sanctioned `await` is that single drain at the boundary** — the **mesh teardown**, which is
+the same in tests and in prod (the silo's mesh disposal at shutdown), not a test-only concern — where
+the reactive completion is bridged to a `Task` exactly once and bounded:
+
+```csharp
+// ✅ The one drain, at the mesh-teardown boundary (test mesh OR prod silo shutdown): bridge the
+//    reactive completion to a Task, bounded, faults swallowed. NOT inside hub-reachable code.
+await hub.DisposalCompleted
+    .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
+    .FirstOrDefaultAsync().ToTask().WaitAsync(TimeSpan.FromSeconds(10));
+```
+
+"Only drainage of async pipelines is allowed": the `await` lives at that one drain, the work stays
+reactive. Same principle as `IIoPool` — the async boundary is pushed to the edge and bounded; it is
+never an ambient `await` mid-flow. See [Asynchronous Calls](AsynchronousCalls).
+
+---
+
 ## Applied to (current scope)
 
 | Pool | Used by |
