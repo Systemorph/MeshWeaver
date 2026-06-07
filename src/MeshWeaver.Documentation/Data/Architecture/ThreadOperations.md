@@ -234,6 +234,69 @@ re-observation is guaranteed to fire. See
 [DebuggingMessageFlow → resurrection on init](DebuggingMessageFlow) for the trace
 signature: continuous work then silence = missed observation, not a lock.
 
+## Harness, agent, and model selection
+
+The chat composer's **single top-level choice is the harness** — the execution
+environment a round runs under. There are three (`MeshWeaver.AI.Harnesses`):
+
+| Harness | Constant | Resolves to |
+|---|---|---|
+| `MeshWeaver` | `Harnesses.MeshWeaver` | the user's chosen agent + model (the agent/model selectors are shown) |
+| `Claude Code` | `Harnesses.ClaudeCode` | the single built-in agent whose `GroupName == "Claude Code"` |
+| `GitHub Copilot` | `Harnesses.Copilot` | the single built-in agent whose `GroupName == "GitHub Copilot"` |
+
+"Harness" is **not a new execution concept** — it is a grouping over the existing
+agent selection (`AgentConfiguration.GroupName`). Picking a non-MeshWeaver harness
+resolves to that group's one agent and hides the agent/model dropdowns; picking
+MeshWeaver reveals them so the user can choose among the MeshWeaver-group agents +
+models. Routing to the concrete `IChatClientFactory` is unchanged — it still keys
+off the resolved agent's `PreferredModel`.
+
+Selection rides the **same path as everything else**: `StartThread` /
+`SubmitMessage` / `ResubmitMessage` take a `harness` argument →
+`Thread.PendingHarness` (via `ThreadInput.AppendUserInput`) → `RoundDispatch` →
+`RoundParams.Harness` → stamped onto the assistant cell as `ThreadMessage.Harness`,
+exactly mirroring `AgentName` / `ModelName`.
+
+The **output cell records what actually ran**: `ThreadExecution` captures the
+harness, the real model id the harness reports (`ChatResponseUpdate.ModelId` — e.g.
+Claude Code resolving `sonnet` to a concrete id), and the token usage
+(`UsageContent`). The chat renders one muted line per assistant cell:
+`Harness · HH:mm:ss · duration · N in / M out` (model dropped from the line; still
+stored on the cell).
+
+## The chat template (`{userHome}/_ThreadTemplate`)
+
+The composer's in-progress **draft text + harness/agent/model selection persist
+server-side** on a single stable per-user node at `{userHome}/_ThreadTemplate`
+(`userHome == AccessContext.ObjectId`). There is **no browser localStorage** — the
+template node is the source of truth, so the draft and selection survive a reload /
+reboot and are shared across every space the user composes in.
+
+- **Load**: the composer one-shot-reads the template on init and applies the saved
+  selection (always — the picker default) and, in the new-thread composer only, the
+  draft text into the Monaco editor.
+- **Save**: selection changes write through immediately; the draft text is debounced
+  (`Throttle(600ms)`). In an *existing* thread the selection writes onto the thread
+  node instead (`SelectedHarness` etc.); the draft there stays transient.
+- **Submit**: `StartThread` clones the template's selection into the new thread (and
+  the typed text becomes the first message); the template's `DraftText` is then
+  cleared while the selection stays, so the next new thread inherits it.
+
+The template is **inert**: it carries `Thread.DraftText` but never any
+`PendingUserMessages`, so the submission watcher never fires on it. Its namespace is
+`{userHome}` (not `{userHome}/_Thread`), so the namespace-scoped resume-thread query
+(`namespace:{ns}/_Thread`) never lists it.
+
+## Read-only threads (owner-only edit)
+
+**A thread is editable only by its owner.** When the chat view binds a thread whose
+`MeshNode.CreatedBy` (surfaced as `ThreadViewModel.CreatedBy`) differs from the
+current user, it renders **read-only**: the input footer, the Stop button, and the
+per-message edit / resubmit / delete actions are all hidden. The new-thread composer
+(no `threadPath`) and the user's own threads stay fully editable. This is a UI
+affordance on top of server-side access control — not a replacement for it.
+
 ## See also
 
 - [RequestViaStreamUpdate](RequestViaStreamUpdate) — the canonical "stream.Update + watcher" pattern this surface is built on
