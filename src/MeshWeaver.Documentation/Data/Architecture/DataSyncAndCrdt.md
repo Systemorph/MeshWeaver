@@ -166,11 +166,20 @@ what changed:
   for deltas (`ToJsonPatch`); a **Full** for the initial snapshot and roll-backs.
 - **Subscriber → owner:** a `DataChangeRequest` carrying the **changed entities
   only** (per `(Collection, Id)`), not the whole store.
-- **Big strings → `StringDeltaPatch`:** a changed string field travels as its
-  splice (`{ "$sd": [start, removed, "inserted"] }`), never the whole value — a
-  100 KB body that gained one character is a few bytes on the wire. The owner
-  replays the splice onto its current text (same merge semantics as §5).
-  (`StringDeltaPatch`, `StringDeltaPatchTest`.)
+- **Big strings → `EntityDeltaUpdate` (recursive string-delta):** a changed string
+  field travels as its splice (`{ "$sd": [start, removed, "inserted"] }`) —
+  *recursively*, so a string buried in a nested object splices too
+  (`{ "$nd": {…} }`, e.g. the markdown inside `MeshNode.Content.Content`) — never the
+  whole value. A 100 KB body that gained one character is a few bytes on the wire.
+  **Wiring:** the subscriber's `ToDataChangeRequest` emits an `EntityDeltaUpdate`
+  (carrying `Collection`, `Id`, `Partition`, and the splice) in place of the full
+  entity — **gated** to entities ≥ `EntityDelta.MinDeltaSize` whose delta is actually
+  smaller and whose **partition resolves** (so the owner routes it to the same stream;
+  otherwise it falls back to a full re-send, unchanged whole-replace). The owner
+  (`WorkspaceOperations.ResolveDelta`) replays the splice onto its CURRENT value
+  before the normal apply, so a disjoint concurrent edit on the owner survives (same
+  merge semantics as §5). (`StringDeltaPatch`, `EntityDelta`; tests
+  `StringDeltaPatchTest`, `EntityDeltaTest`, `StringDeltaTransportTest`.)
 
 ---
 
@@ -193,7 +202,9 @@ mirror and the convergence rules above hold.
 | A subscriber never mints a version | `UpdateStream` adopt-only; `StreamUpdateIdentityTest` |
 | Stale **patch** dropped; **Full** always applied | `SynchronizationStream.UpdateStream` guard |
 | Disjoint concurrent string edits merge | `StringDeltaTest`, `StreamConflictResolutionTest` |
-| Big string field ships only its splice | `StringDeltaPatchTest` |
+| A changed string field (incl. nested) ships only its splice | `StringDeltaPatchTest` |
+| Cross-hub: subscriber sends a delta, owner reconstructs the exact entity | `EntityDeltaTest`, `StringDeltaTransportTest` |
+| A value-equal **Full** still applies (no dedup) — rollback / resync lands | `SynchronizationStream.SetCurrent` Fulls-bypass |
 | Out-of-sync subscriber can request a Full | `RequestFreshSnapshot` |
 
 ---
