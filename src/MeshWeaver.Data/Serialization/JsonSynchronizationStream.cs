@@ -443,7 +443,22 @@ public static class JsonSynchronizationStream
                 .Subscribe(e =>
                 {
                     logger.LogDebug("Owner {owner} sending data to subscriber {subscriber}", reduced.Owner, request.Subscriber);
-                    hub.Post(e, o => o.WithTarget(request.Subscriber));
+                    // Attribute the fan-out to the SUBSCRIBER's subscribe-time identity, carried on
+                    // the SubscribeRequest delivery. The mesh-node cache hydrates every per-path
+                    // stream under MeshNodeCacheIdentity (Read-only) — so the owner's outbound
+                    // DataChangedEvent now carries that real principal instead of an empty
+                    // AccessContext that the PostPipeline would fail closed on and warn about
+                    // ("posted with no AccessContext"). A Blazor-client subscriber rides its own
+                    // user context the same way. A genuinely context-less subscribe still posts
+                    // unstamped and still warns — that correctly flags a missing identity rather
+                    // than inventing one (the deleted 2026-05-21 "stamp hub-self" prod bug).
+                    hub.Post(e, o =>
+                    {
+                        var opt = o.WithTarget(request.Subscriber);
+                        return delivery.AccessContext is not null
+                            ? opt.WithAccessContext(delivery.AccessContext)
+                            : opt;
+                    });
                 },
                 ex =>
                 {
