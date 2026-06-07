@@ -50,15 +50,10 @@ internal static class NodeUpdatePipeline
                 .SelectMany(error => error is not null
                     ? Observable.Throw<MeshNode>(error)
                     // 3. All validators passed → the canonical write, under the caller's
-                    //    identity (see DoUpdate). Bump the node version off the existing
-                    //    node (Math.Max(existing, incoming) + 1) exactly as the deleted
-                    //    UpdateNodeRequest handler did — stream.Update preserves whatever
-                    //    Version the caller passes (typically unchanged from the value they
-                    //    read), so without this each update would re-stamp the same version
-                    //    and the version-history snapshot writer (which dedupes by version)
-                    //    would never record V2/V3.
-                    : DoUpdate(hub, accessService, ctx,
-                        node with { Version = Math.Max(existing.Version, node.Version) + 1 })));
+                    //    identity (see DoUpdate). The version bump happens INSIDE the write
+                    //    lambda, off the live node it receives — not off this early `existing`
+                    //    read, which is already stale by the time the cross-hub write lands.
+                    : DoUpdate(hub, accessService, ctx, node)));
     }
 
     // The canonical write. 🚨 Re-establish the caller's identity at SUBSCRIBE: the
@@ -74,7 +69,14 @@ internal static class NodeUpdatePipeline
             () => accessService is not null && ctx is not null
                 ? accessService.SwitchAccessContext(ctx)
                 : Disposable.Empty,
-            _ => hub.GetMeshNodeStream(node.Path).Update(_ => node));
+            // 🚨 Use the lambda parameter (the LIVE owner-reconciled node) as the write
+            // base — never discard it (`_ => node`). The cross-hub write ships a diff
+            // computed against this fresh current; bumping Version off the live node
+            // (rather than a stale separately-read snapshot) keeps the change strictly
+            // ahead of the owner's monotonic-version guard, which otherwise drops the
+            // out-of-date write silently → the read-your-writes-after-update regression.
+            _ => hub.GetMeshNodeStream(node.Path)
+                .Update(live => node with { Version = live.Version + 1 }));
 
     // 2. Run client-side Update validators sequentially (Concat preserves short-circuit:
     //    the chain stops at the first failure). Returns the mapped exception or null.
