@@ -192,9 +192,14 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             .Select(x => (MeshNode)x.Value)
             .ToArray();
 
+        // Compare content IGNORING Version — a version-only difference is not a real
+        // content change. The owner re-stamps Version on every update (below), so without
+        // this guard each re-fire of the workspace pipeline would look like a fresh change
+        // (a new version per dispatch) and spin an infinite re-stamp loop.
         var updates = instances.Instances
             .Where(x => _lastSaved.Instances.TryGetValue(x.Key, out var existing)
-                        && !existing.Equals(x.Value))
+                        && existing is MeshNode ex && x.Value is MeshNode nv
+                        && !ex.Equals(nv with { Version = ex.Version }))
             .Select(x => (MeshNode)x.Value)
             .ToArray();
 
@@ -234,6 +239,28 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             }
             var nodeWithVersion = node with { Version = hubVersion };
             _pendingSaves[node.Path] = nodeWithVersion;
+        }
+
+        // 🚨 Stamp the owning hub's monotonic version onto every UPDATED node too.
+        // The owner is the single version clock (Host.Version == _workspace.Hub.Version,
+        // which initialises from the persisted node and increments once per dispatch).
+        // Adds are stamped above; updates were NOT, so an updated node kept its incoming
+        // (client-carried, deliberately-constant) version. The emitted frame then did not
+        // advance the version, so the change feed / subscriber monotonicity guard treated
+        // it as nothing-new and the reconciled update never reached subscribers' mirrors —
+        // the read-your-writes-after-update bug (create worked because adds were stamped).
+        // Re-emit the stamped nodes so propagation advances; the persistence subscriber
+        // then saves the bumped version.
+        if (updates.Length > 0)
+        {
+            var stampedUpdates = updates
+                .Select(n => n with { Version = hubVersion })
+                .ToArray();
+            instances = instances with
+            {
+                Instances = instances.Instances.SetItems(
+                    stampedUpdates.Select(n => new KeyValuePair<object, object>(n.Id, n)))
+            };
         }
 
         // Updates do NOT dispatch saves here — the persistence subscriber on
