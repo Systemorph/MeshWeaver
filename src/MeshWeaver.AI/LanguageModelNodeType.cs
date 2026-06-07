@@ -43,7 +43,8 @@ public static class LanguageModelNodeType
     /// the well-known catalog sources (Anthropic, AzureFoundry, OpenAI) so a
     /// stock deploy with those factories' configs Just Works.
     /// </summary>
-    public static TBuilder AddLanguageModelType<TBuilder>(this TBuilder builder)
+    public static TBuilder AddLanguageModelType<TBuilder>(this TBuilder builder,
+        IReadOnlySet<string>? serveFromPartition = null)
         where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
@@ -52,7 +53,10 @@ public static class LanguageModelNodeType
         // all child LanguageModel nodes. Registered together so a deployment
         // calling AddLanguageModelType wires the entire data shape (the
         // ChatClientCredentialResolver depends on both being available).
-        builder.AddModelProviderType();
+        builder.AddModelProviderType(serveFromPartition);
+        // DB-synced "Model" partition (static-repo import) → skip the read-only in-memory static
+        // provider so Postgres serves the catalog + accepts the import's writes. See AddAgentType.
+        var dbSynced = serveFromPartition?.Contains("Model") == true;
         builder.ConfigureServices(services =>
         {
             services.TryAddSingleton<LanguageModelCatalogOptions>();
@@ -82,12 +86,14 @@ public static class LanguageModelNodeType
             services.AddSingleton<IStaticNodeProvider>(sp => sp.GetRequiredService<BuiltInLanguageModelProvider>());
             // Partition routing â€” the same instance feeds the routing core's
             // "Model" partition. The partition's StaticNodeStorageAdapter is
-            // its storage of record; no SeedIfAbsent fan-in required.
-            services.AddSingleton<IPartitionStorageProvider>(sp =>
-                new StaticNodePartitionStorageProvider(
-                    RootNamespace,
-                    sp.GetRequiredService<BuiltInLanguageModelProvider>(),
-                    description: "Built-in language model catalog (read-only)."));
+            // its storage of record; no SeedIfAbsent fan-in required. Skipped when
+            // the partition is DB-synced (PG serves it instead).
+            if (!dbSynced)
+                services.AddSingleton<IPartitionStorageProvider>(sp =>
+                    new StaticNodePartitionStorageProvider(
+                        RootNamespace,
+                        sp.GetRequiredService<BuiltInLanguageModelProvider>(),
+                        description: "Built-in language model catalog (read-only)."));
             return services;
         });
 

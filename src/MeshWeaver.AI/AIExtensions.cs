@@ -20,14 +20,17 @@ public static class AIExtensions
     extension<TBuilder>(TBuilder builder)
     where TBuilder : MeshBuilder
     {
-        public TBuilder AddAI()
+        public TBuilder AddAI(IReadOnlySet<string>? serveFromPartition = null)
         {
-            // Register AI types in type registry and chat services
+            // Register AI types in type registry and chat services. serveFromPartition lists the
+            // partitions (e.g. "Agent", "Model") whose static content is DB-synced (static-repo
+            // import) — for those, the read-only in-memory partition provider is skipped so
+            // Postgres serves them. Null/empty = in-memory serving (current behaviour).
             return (TBuilder)builder
                     .AddThreadMessageType()
                     .AddThreadType()
-                    .AddAgentType()
-                    .AddLanguageModelType()
+                    .AddAgentType(serveFromPartition)
+                    .AddLanguageModelType(serveFromPartition)
                     .ConfigureServices(services => services.AddAgentChatServices())
                     // Register AI types on the MESH hub (for MeshQuery deserialization of Thread content)
                     .ConfigureHub(config =>

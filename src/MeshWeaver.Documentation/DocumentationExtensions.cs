@@ -22,13 +22,21 @@ public static class DocumentationExtensions
     /// dependency on <c>IMessageHub</c> re-entered the singleton
     /// factory.</para>
     /// </summary>
-    public static TBuilder AddDocumentation<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
+    public static TBuilder AddDocumentation<TBuilder>(this TBuilder builder,
+        IReadOnlySet<string>? serveFromPartition = null) where TBuilder : MeshBuilder
     {
-        builder.AddEmbeddedResourcePartition(
-            DocumentationNodeProvider.RootNamespace,
-            typeof(DocumentationExtensions).Assembly,
-            "MeshWeaver.Documentation.Data",
-            "Built-in MeshWeaver platform documentation");
+        // When "Doc" is DB-synced (static-repo import), DO NOT register the read-only embedded
+        // partition adapter — it would serve the markdown nodes from memory and shadow Postgres.
+        // The import materializes the doc pages into the partition; PG serves them. The embedded
+        // DocContent content-collection (icons/images) and the _Policy/_Access governance stay
+        // either way. See Doc/Architecture/StaticRepoImport.md.
+        var dbSynced = serveFromPartition?.Contains(DocumentationNodeProvider.RootNamespace) == true;
+        if (!dbSynced)
+            builder.AddEmbeddedResourcePartition(
+                DocumentationNodeProvider.RootNamespace,
+                typeof(DocumentationExtensions).Assembly,
+                "MeshWeaver.Documentation.Data",
+                "Built-in MeshWeaver platform documentation");
 
         // Surface the partition in Global Settings.
         // DefaultActivityParentPath = "{viewer}" — every script run kicked off

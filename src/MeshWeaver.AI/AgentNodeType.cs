@@ -28,19 +28,29 @@ public static class AgentNodeType
     /// consumers (StaticNodeQueryProvider, MeshDataSource fallback) that
     /// still iterate that DI collection directly.
     /// </summary>
-    public static TBuilder AddAgentType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
+    public static TBuilder AddAgentType<TBuilder>(this TBuilder builder,
+        IReadOnlySet<string>? serveFromPartition = null) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
         builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
+        // When the "Agent" partition is DB-synced (static-repo import), DO NOT register the
+        // read-only in-memory static partition provider — it would shadow Postgres (specific
+        // wins over the wildcard PG provider) and reject the import's writes. The import
+        // materializes the agents into the partition; PG serves them. Otherwise (monolith,
+        // un-synced deploys) keep the in-memory read-only provider. The BuiltInAgentProvider
+        // itself stays registered either way — the import source wraps it. See
+        // Doc/Architecture/StaticRepoImport.md.
+        var dbSynced = serveFromPartition?.Contains("Agent") == true;
         builder.ConfigureServices(services =>
         {
             services.TryAddSingleton<BuiltInAgentProvider>();
             services.AddSingleton<IStaticNodeProvider>(sp => sp.GetRequiredService<BuiltInAgentProvider>());
-            services.AddSingleton<IPartitionStorageProvider>(sp =>
-                new StaticNodePartitionStorageProvider(
-                    "Agent",
-                    sp.GetRequiredService<BuiltInAgentProvider>(),
-                    description: "Built-in agent definitions (read-only)."));
+            if (!dbSynced)
+                services.AddSingleton<IPartitionStorageProvider>(sp =>
+                    new StaticNodePartitionStorageProvider(
+                        "Agent",
+                        sp.GetRequiredService<BuiltInAgentProvider>(),
+                        description: "Built-in agent definitions (read-only)."));
             return services;
         });
         return builder;

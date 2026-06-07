@@ -424,6 +424,14 @@ public static class MemexConfiguration
                 .GetSection(MemexFeatureOptions.SectionName)
                 .Get<MemexFeatureOptions>() ?? new MemexFeatureOptions();
 
+            // Static-repo → DB sync: partitions to materialize into + serve from the DB. For a
+            // synced partition the read-only in-memory static provider is skipped (PG serves it)
+            // and the import runs on boot. Empty (default) = in-memory serving everywhere, no
+            // import — no regression. Default Helm sets ["Doc","Agent","Model"].
+            var syncPartitions = features.StaticRepoSync.Partitions
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            IReadOnlySet<string> serveFromPartition = syncPartitions;
+
             MeshBuilder mb = builder
                 // Configure persistence from Graph:Storage section.
                 // Skip if any IPartitionStorageProvider was already registered upstream
@@ -448,7 +456,7 @@ public static class MemexConfiguration
                 .AddMeshNodes(Authentication.GlobalAdminSeed.Build(configuration))
                 .AddSpaceType()
                 .AddPortalType()
-                .AddAI();
+                .AddAI(serveFromPartition);
 
             // Each AI provider self-registers everything (catalog source +
             // IOptions binding + IChatClientFactory) via one builder extension.
@@ -467,7 +475,8 @@ public static class MemexConfiguration
 
             return (TBuilder)mb
                 .AddSelfRegistry()
-                .AddDocumentation()
+                .AddDocumentation(serveFromPartition)
+                .AddStaticRepoSync(serveFromPartition)
                 .AddMarkdownExport()
                 // Register Azure Blob support for content collections.
                 .ConfigureServices(services => services.AddAzureBlob())

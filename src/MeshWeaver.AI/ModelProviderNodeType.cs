@@ -77,7 +77,8 @@ public static class ModelProviderNodeType
     /// <see cref="MeshWeaver.Mesh.Services.IMeshService"/> deserialise the
     /// content into the typed <see cref="ModelProviderConfiguration"/> record.
     /// </summary>
-    public static TBuilder AddModelProviderType<TBuilder>(this TBuilder builder)
+    public static TBuilder AddModelProviderType<TBuilder>(this TBuilder builder,
+        IReadOnlySet<string>? serveFromPartition = null)
         where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
@@ -95,14 +96,20 @@ public static class ModelProviderNodeType
         // User-partition ModelProvider nodes (rbuergi/_Provider/Anthropic
         // etc.) route through their owning partition's storage adapter —
         // no extra wiring needed for those.
+        // The model catalog's provider/model CONTENT lives under the "_Provider" partition;
+        // it is DB-synced together with "Model". When synced, skip the read-only in-memory
+        // provider so Postgres serves "_Provider" + accepts the import's writes. See AddAgentType.
+        var dbSynced = serveFromPartition is not null
+            && (serveFromPartition.Contains("Model") || serveFromPartition.Contains(RootNamespace));
         builder.ConfigureServices(services =>
         {
             services.TryAddSingleton<BuiltInLanguageModelProvider>();
-            services.AddSingleton<IPartitionStorageProvider>(sp =>
-                new StaticNodePartitionStorageProvider(
-                    RootNamespace,
-                    sp.GetRequiredService<BuiltInLanguageModelProvider>(),
-                    description: "Built-in model provider catalog (read-only)."));
+            if (!dbSynced)
+                services.AddSingleton<IPartitionStorageProvider>(sp =>
+                    new StaticNodePartitionStorageProvider(
+                        RootNamespace,
+                        sp.GetRequiredService<BuiltInLanguageModelProvider>(),
+                        description: "Built-in model provider catalog (read-only)."));
             return services;
         });
         return builder;

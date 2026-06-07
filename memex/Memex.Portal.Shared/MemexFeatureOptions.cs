@@ -18,6 +18,9 @@ public sealed record MemexFeatureOptions
 
     public AiFeatureOptions Ai { get; init; } = new();
 
+    /// <summary>Static-repo → DB sync: which partitions are materialized into and served from the DB.</summary>
+    public StaticRepoSyncFeatureOptions StaticRepoSync { get; init; } = new();
+
     /// <summary>User self-provisioning (open vs closed registration).</summary>
     public OnboardingFeatureOptions Onboarding { get; init; } = new();
 
@@ -31,6 +34,34 @@ public sealed record MemexFeatureOptions
     /// surfaced as a startup warning, not a hard failure.
     /// </summary>
     public bool HasAnyChatCapability => Ai.Providers.HasAny || Ai.Clis.HasAny;
+}
+
+/// <summary>
+/// Static-repo → DB synchronization. Selects which partitions' build-time static content
+/// (embedded docs, built-in agents, the model catalog) is <b>materialized into and served from
+/// the database partition</b> via the static-repo import on boot — instead of the in-memory
+/// read-only static provider. For a listed partition the import registers an
+/// <c>IStaticRepoSource</c>, the read-only <c>StaticNodePartitionStorageProvider</c> is NOT
+/// registered (so Postgres serves + accepts the import's writes), and <c>ImportAll</c> runs after
+/// schema provisioning. See <c>Doc/Architecture/StaticRepoImport.md</c>.
+///
+/// <para>Empty (default) = no sync: every partition keeps the in-memory static provider, no DB
+/// import — i.e. current behaviour, no regression. The default Helm deployment sets
+/// <c>["Doc","Agent","Model"]</c>. Gated, not global — the monolith (no Postgres) leaves this
+/// empty and keeps in-memory serving.</para>
+/// </summary>
+public sealed record StaticRepoSyncFeatureOptions
+{
+    /// <summary>
+    /// Partition names to materialize into + serve from the DB (e.g. <c>"Doc"</c>, <c>"Agent"</c>,
+    /// <c>"Model"</c>). Matching is case-insensitive. <c>"Model"</c> also covers the model
+    /// catalog's <c>_Provider</c> content partition. Empty = no sync.
+    /// </summary>
+    public string[] Partitions { get; init; } = [];
+
+    /// <summary>True when <paramref name="partition"/> is configured for DB sync.</summary>
+    public bool Includes(string partition) =>
+        Partitions.Any(p => string.Equals(p, partition, StringComparison.OrdinalIgnoreCase));
 }
 
 /// <summary>
