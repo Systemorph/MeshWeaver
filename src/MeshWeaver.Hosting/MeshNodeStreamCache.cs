@@ -538,18 +538,16 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
 
     /// <summary>
     /// Builds the per-path Concat pipeline that processes <see cref="UpdateRequest"/>s
-    /// serially: each request waits for its patch's echo from the owner before
-    /// the next inner observable subscribes. The echo wait closes the
-    /// concurrent-snapshot race on ImmutableList fields (see field comment on
-    /// <see cref="_updateQueues"/>). 3-second timeout — long enough for typical
-    /// hub action-block + routing roundtrip, short enough that a missing echo
-    /// doesn't dominate suite runtime. Per-stage timing logs (Debug/Trace) catch
-    /// hangs: ENQUEUE → START → LOCAL_EMIT → ECHO_CANDIDATE* → ECHO_RECEIVED →
-    /// COMPLETE. Missing ECHO_RECEIVED with FAILED warning = patch's echo never
-    /// arrived in 3s; missing LOCAL_EMIT = Handle.Update itself hung.
+    /// serially. Each request applies its patch through the local <see cref="Handle"/>
+    /// (LOCAL_EMIT) and completes immediately — it does NOT wait for the patch's echo
+    /// from the owner. The owning node hub's single-threaded action block already
+    /// serialises patches, so the next queued Update sees post-patch state via the
+    /// local Handle. The former 3-second echo wait DEADLOCKED when the echo could never
+    /// arrive (a write to a freshly-created node defers on the owner's [Initialize]
+    /// gate; or the writing hub's own action block is the one that would deliver the
+    /// echo) and otherwise serialised 3s per update. Per-stage timing logs:
+    /// ENQUEUE → START → LOCAL_EMIT → COMPLETE; missing LOCAL_EMIT = Handle.Update hung.
     /// </summary>
-    private static readonly TimeSpan EchoWaitTimeout = TimeSpan.FromSeconds(3);
-
     private IObservable<MeshNode> BuildUpdateQueueObservable(string path, Subject<UpdateRequest> subject) =>
         subject
             .Select(req => Observable.Defer<MeshNode>(() =>
@@ -574,33 +572,25 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                             path, req.Seq, updatedLastModified, (localEmittedAt - req.EnteredAt).TotalMilliseconds);
                         req.Result.OnNext(node);
                     })
-                    .SelectMany(_ => entry.Shared
-                        .Do(n => logger.LogTrace(
-                            "[UpdateQueue] ECHO_CANDIDATE path={Path} seq={Seq} candidateLastModified={CandidateLM} target={TargetLM} match={Match}",
-                            path, req.Seq, n?.LastModified, updatedLastModified,
-                            n is not null && updatedLastModified.HasValue && n.LastModified >= updatedLastModified.Value))
-                        .Where(n => updatedLastModified.HasValue
-                                    && n is not null
-                                    && n.LastModified >= updatedLastModified.Value)
-                        .Take(1)
-                        .Timeout(EchoWaitTimeout))
-                    .Do(_ => logger.LogDebug(
-                        "[UpdateQueue] ECHO_RECEIVED path={Path} seq={Seq} echoLatency={EchoMs}ms",
-                        path, req.Seq, (DateTimeOffset.UtcNow - localEmittedAt).TotalMilliseconds))
+                    // 🚨 DO NOT wait for the echo. The owning node hub's single-threaded
+                    // action block already serialises patches, so the next queued Update
+                    // sees post-patch state via the LOCAL Handle (which applied this patch
+                    // on LOCAL_EMIT above) — the echo wait bought nothing the owner's
+                    // ordering didn't already guarantee. Worse, waiting for entry.Shared
+                    // to re-emit the patch DEADLOCKS when that echo can never arrive: a
+                    // write to a FRESHLY-CREATED node DEFERS on the owner's [Initialize]
+                    // gate (so the patch isn't applied and never echoes), or the writing
+                    // hub's own action block is the very thread that would deliver the
+                    // echo. Either way the queue stalled up to 3s PER update — the inline
+                    // compile's activity/status writes pile several of these, accumulating
+                    // into the multi-second compile freeze. The Concat queue now completes
+                    // on LOCAL_EMIT so the next Update proceeds immediately.
                     .Catch<MeshNode, Exception>(ex =>
                     {
-                        if (ex is TimeoutException)
-                            logger.LogDebug(
-                                "[UpdateQueue] ECHO_TIMEOUT path={Path} seq={Seq} (proceeding without echo confirmation; next Update will still see post-patch state via the owner's action-block ordering)",
-                                path, req.Seq);
-                        else
-                            logger.LogWarning(ex,
-                                "[UpdateQueue] FAILED path={Path} seq={Seq} elapsedMs={ElapsedMs}",
-                                path, req.Seq, (DateTimeOffset.UtcNow - req.EnteredAt).TotalMilliseconds);
-                        // Don't propagate echo timeouts to the caller — the local
-                        // OnNext already fired and the caller has their value.
-                        if (ex is not TimeoutException)
-                            req.Result.OnError(ex);
+                        logger.LogWarning(ex,
+                            "[UpdateQueue] FAILED path={Path} seq={Seq} elapsedMs={ElapsedMs}",
+                            path, req.Seq, (DateTimeOffset.UtcNow - req.EnteredAt).TotalMilliseconds);
+                        req.Result.OnError(ex);
                         return Observable.Empty<MeshNode>();
                     })
                     .Finally(() =>
