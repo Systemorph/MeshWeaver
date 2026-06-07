@@ -1,4 +1,7 @@
-﻿using System.Text.Json;
+﻿using System.Reactive;
+using System.Reactive.Disposables;
+using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Domain;
 
 namespace MeshWeaver.Messaging;
@@ -88,10 +91,24 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     /// </summary>
     IMessageHub? GetHostedHub(Address address, Func<MessageHubConfiguration, MessageHubConfiguration> config, HostedHubCreation create);
 
-    IMessageHub RegisterForDisposal(IDisposable disposable) => RegisterForDisposal(_ => disposable.Dispose());
+    // Disposal at the hub level is reactive but never a Task — nothing here is async
+    // in the await sense. The first two overloads couple a SYNCHRONOUS cleanup to the
+    // hub's lifetime (held in a CompositeDisposable, disposed during ShutDown).
+    IMessageHub RegisterForDisposal(IDisposable disposable);
     IMessageHub RegisterForDisposal(Action<IMessageHub> disposeAction);
-    IMessageHub RegisterForDisposal(IAsyncDisposable disposable) => RegisterForDisposal((_, _) => disposable.DisposeAsync().AsTask());
-    IMessageHub RegisterForDisposal(Func<IMessageHub, CancellationToken, Task> disposeAction);
+
+    /// <summary>
+    /// Registers a REACTIVE dispose action — a cleanup that <b>returns
+    /// <see cref="IObservable{T}"/></b> (Unit). Use this (never a void
+    /// <see cref="Action{T}"/> that self-subscribes) whenever the cleanup itself does
+    /// I/O — a final flush, a remote unsubscribe — so it can be <b>chained</b> with the
+    /// other dispose actions and its genuinely-async leaves run on the mesh IO pool.
+    /// The hub composes the registered actions and subscribes the chain when it disposes;
+    /// it does not <c>await</c> — nothing on the hub surface is a <see cref="Task"/>. An
+    /// <see cref="Action"/> that buried a <c>Subscribe</c> inside itself would be opaque
+    /// and uncomposable, which is exactly what this overload exists to avoid.
+    /// </summary>
+    IMessageHub RegisterForDisposal(Func<IMessageHub, IObservable<Unit>> disposeAction);
     JsonSerializerOptions JsonSerializerOptions { get; }
     MessageHubRunLevel RunLevel { get; }
 
@@ -121,14 +138,30 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
         IMessageDelivery delivery,
         CancellationToken cancellationToken
     );
-    Task? Disposal { get; }
+    /// <summary>
+    /// True from the moment <see cref="IDisposable.Dispose"/> begins until the process is
+    /// dead. The reactive, Task-free "is this hub shutting down?" probe (replaces the old
+    /// <c>Disposal is not null</c> check). For *completion*, observe <see cref="DisposalCompleted"/>.
+    /// </summary>
+    bool IsDisposing { get; }
+
+    /// <summary>
+    /// Observable completion of disposal — fires <see cref="Unit"/> once, then completes, when
+    /// the hub has finished disposing (or OnError on a disposal fault). Hubs dispose
+    /// SYNCHRONOUSLY (only the mesh-level IO pools drain async), so disposal completion is
+    /// OBSERVED, never awaited on a hub thread. There is no <see cref="Task"/> on the disposal
+    /// surface. A subscriber that attaches after disposal has already finished still receives
+    /// the completion immediately. At a genuine async edge (test teardown, grain deactivation)
+    /// bridge once with <c>DisposalCompleted.FirstOrDefaultAsync()</c> / <c>.ToTask()</c>.
+    /// </summary>
+    IObservable<Unit> DisposalCompleted { get; }
     ITypeRegistry TypeRegistry { get; }
 
     /// <summary>
     /// Multi-line snapshot of the hub's disposal state for failure diagnostics.
-    /// Includes hub address, run-level, disposal-task status, hosted-hub addresses
-    /// (and whether each one's <see cref="Disposal"/> is still pending), and the
-    /// dataflow buffer counts on the underlying message service. Used by test
+    /// Includes hub address, run-level, disposal status, hosted-hub addresses
+    /// (and whether each one's disposal is still pending via <see cref="IsDisposing"/>),
+    /// and the dataflow buffer counts on the underlying message service. Used by test
     /// base classes when a dispose timeout fires so the failure says *why* it hung
     /// rather than just "operation was canceled".
     /// </summary>

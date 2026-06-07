@@ -1,4 +1,7 @@
 using System;
+using System.Reactive;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Fixture;
@@ -49,7 +52,11 @@ public class DeadStreamSafetyTest(ITestOutputHelper output) : HubTestBase(output
         host.Dispose();
         // RunLevel check in ctor compares against MessageHubRunLevel.Started.
         // Wait briefly for the dispose to begin so RunLevel is past Started.
-        host.Disposal!.Wait(2.Seconds()).Should().BeTrue("host should dispose within 2s");
+        host.DisposalCompleted
+            .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
+            .FirstOrDefaultAsync()
+            .ToTask()
+            .Wait(2.Seconds()).Should().BeTrue("host should dispose within 2s");
 
         var reduceManager = new ReduceManager<Empty>(host);
         return new SynchronizationStream<Empty>(

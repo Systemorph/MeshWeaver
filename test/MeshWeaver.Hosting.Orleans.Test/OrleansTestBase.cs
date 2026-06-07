@@ -107,7 +107,7 @@ public abstract class OrleansTestBase<TSiloConfigurator>(ITestOutputHelper outpu
         }
 
         if (Cluster is not null)
-            await Cluster.DisposeAsync();
+            OrleansClusterDisposal.DisposeInBackground(Cluster);
         await base.DisposeAsync();
     }
 

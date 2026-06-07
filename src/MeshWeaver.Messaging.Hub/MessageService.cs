@@ -901,7 +901,7 @@ public class MessageService : IMessageService
     }
     private readonly Lock locker = new();
 
-    public async ValueTask DisposeAsync()
+    public void Dispose()
     {
         var totalStopwatch = Stopwatch.StartNew();
         logger.LogDebug("Starting disposal of message service in {Address}", Address);
@@ -916,7 +916,7 @@ public class MessageService : IMessageService
         try
         {
             logger.LogDebug("Disposing hang detection timer for message service in {Address}", Address);
-            await hangDetectionCts.CancelAsync();
+            hangDetectionCts.Cancel();
             hangDetectionCts.Dispose();
             logger.LogDebug("Hang detection timer disposed successfully in {elapsed}ms for {Address}",
                 hangDetectionStopwatch.ElapsedMilliseconds, Address);

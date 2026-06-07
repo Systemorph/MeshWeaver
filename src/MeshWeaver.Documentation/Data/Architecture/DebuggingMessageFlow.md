@@ -280,3 +280,70 @@ analogous activity init) must obey:
 
 Don't "fix" this by bumping the test timeout — that hides a missed emission behind
 a longer wait. Find the observer that died and make it restart.
+
+---
+
+## The subscribe handshake that delivers `SubscribeAck` but never the initial `Full`
+
+A specific, high-value instance of the missed-observation class: a consumer
+`GetMeshNodeStream` / `GetQuery` / `GetRemoteStream` **never emits for ~one
+heartbeat interval, then recovers**. The fingerprint in the
+`MESHWEAVER_MSG_TRACE` file is unmistakable:
+
+```
+SubscribeRequest → HandleMessageAsync → SubscribeAck routed      (handshake acked)
+   … ~45 s of dead silence on the owner node …
+HeartBeatEvent HandleMessageAsync ENTER                          (the heartbeat fires)
+RawJson HUB.DeliverMessage ENTER                                 (content FINALLY arrives)
+```
+
+The owner **acknowledged** the subscription but **never sent the initial Full** —
+the subscriber sits dark until the next `SyncStreamOptions.HeartbeatInterval`
+(45 s) re-emits. `~42 s` between "subscribe" and "first data" ≈ one heartbeat is
+the tell.
+
+### Confirm it's idle, not a deadlock — `dotnet-stack`
+
+Before assuming a lock, **dump the managed stacks mid-freeze** — it settles
+deadlock-vs-missed-observation in one shot:
+
+```bash
+# launch the test, then mid-freeze (the compile/source-read window):
+pid=$(tasklist | grep -i testhost | awk '{print $2}')
+dotnet-stack report -p $pid > /tmp/stacks.txt
+grep -vE "System\.|Microsoft\.|xunit|testhost" /tmp/stacks.txt | sort -u   # any APP frame?
+```
+
+If **every** thread is parked on `LowLevelLifoSemaphore.Wait` / `Task.Wait` /
+`WaitOne` and there is **no MeshWeaver frame on any thread**, nothing is running —
+it's a *missed reactive emission*, not a blocking deadlock or CPU starvation.
+(8 cores + total trace silence + idle stacks ⇒ a dropped emission, never a hot loop.)
+
+### Two owner-side drops that cause it
+
+1. **`ChangedBy` collapsed to empty → echo-filter false-positive.** The owner
+   forwards changes through `reduced.ToDataChanged(c => !reduced.ClientId.Equals(c.ChangedBy))`
+   to suppress echoing the subscriber's *own* writes back. `ChangedBy` is the
+   **stream-echo-suppression key — the identity of the originating stream, always
+   the `StreamId`, never empty.** It is NOT the access identity: deriving it from
+   `CaptureCallerAccessContext()?.ObjectId ?? ClientId` collapses to `""` when there
+   is no `ObjectId` and `ClientId` is empty, and the filter becomes
+   `!"".Equals("")` == **false** → the **initial Full is dropped**. Fix: `ChangedBy = StreamId`
+   in `SynchronizationStream.BuildChangeItem` / `BuildFullChangeItem`. The AccessContext
+   (RLS / `LastModifiedBy`) flows **orthogonally** and must never leak into `ChangedBy`.
+
+2. **The echo-filter dropped FULLS.** A `ChangeType.Full` is the owner's complete
+   authoritative snapshot (initial subscribe state, or a re-assert/rollback) and is
+   **never** the subscriber's echo — subscribers only ever send Patches via
+   `DataChangeRequest`. So the owner-side filter must **always** forward Fulls:
+   `c => c.ChangeType == ChangeType.Full || !reduced.ClientId.Equals(c.ChangedBy)`.
+   This mirrors the client side, whose `UpdateStream` monotonicity guard is
+   **PATCHES-ONLY** ("a Full is always applied, no matter the version").
+
+### The heartbeat must NOT re-broadcast the Full
+
+The 45 s heartbeat is a **keepalive** (it keeps the remote owner grain alive). It
+must not be the mechanism that re-delivers content — relying on it both (a) masks
+the dropped-initial-Full bug above behind a 45 s stall, and (b) would re-ship every
+stream's **entire** content every 45 s, which is lethal at scale. Fix the handshake
+so the initial Full lands on subscribe; keep the heartbeat content-free.

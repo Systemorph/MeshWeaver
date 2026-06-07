@@ -1,9 +1,10 @@
 ﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Linq.Expressions;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
+using System.Reactive.Subjects;
 using System.Reflection;
 using System.Text.Json;
 using MeshWeaver.Domain;
@@ -192,8 +193,8 @@ public sealed class MessageHub : IMessageHub
     /// quiesce timeout to surface "we were stuck on X").
     ///
     /// <para>Cost: one timer tick per hub every 5 s + one dictionary scan;
-    /// negligible. Disposed in the dispose chain via the existing
-    /// <c>asyncDisposeActions</c>.</para>
+    /// negligible. Disposed explicitly at the start of the Quiescing phase
+    /// (and as a fallback via the <c>disposables</c> composite).</para>
     /// </summary>
     private void InstallStaleCallbackScanner()
     {
@@ -251,15 +252,18 @@ public sealed class MessageHub : IMessageHub
             serviceProvider.GetRequiredService<ILogger<MessageService>>(), this, parentHub);
 
         foreach (var disposeAction in configuration.DisposeActions)
-            asyncDisposeActions.Add(disposeAction);
+            RegisterForDisposal(disposeAction);
 
         JsonSerializerOptions = this.CreateJsonSerializationOptions(parentHub);
 
         TypeRegistry.WithType(typeof(PingRequest), nameof(PingRequest));
         TypeRegistry.WithType(typeof(PingResponse), nameof(PingResponse));
         Register<DisposeRequest>(HandleDispose);
-        // Disposal is a genuinely-async leaf → delegate to the pool; the rule chain stays reactive.
-        Register<ShutdownRequest>((request, ct) => DeliveryObservable.Run(_ => HandleShutdownCore(request, ct)));
+        // Disposal is fully SYNCHRONOUS + reactive — the handler returns immediately, kicks off
+        // the Quiescing poll / hosted-hub drain as Rx subscriptions (Observable.Interval/Timer,
+        // off the action block), and completes via the `disposalCompleted` ReplaySubject. No
+        // async leaf, no DeliveryObservable.Run, no FromAsync on the disposal path.
+        Register<ShutdownRequest>((request, _) => Observable.Return(HandleShutdownCore(request)));
         Register<PingRequest>(HandlePingRequest);
         // HandleInitialize already returns IObservable (buildup composed via Observable.Concat,
         // no await) — register it directly now that the rule chain is reactive.
@@ -913,23 +917,40 @@ public sealed class MessageHub : IMessageHub
         return messageHub;
     }
 
-    public IMessageHub RegisterForDisposal(Action<IMessageHub> disposeAction)
+    public IMessageHub RegisterForDisposal(IDisposable disposable)
     {
-        disposeActions.Add(disposeAction);
+        // Normal subscription logic: hold the IDisposable in the hub's
+        // CompositeDisposable. If disposal has already started the composite is
+        // disposed and Add disposes the registrant immediately — late registrants
+        // never leak. No bag, no imperative drain.
+        disposables.Add(disposable);
         return this;
     }
 
-    public IMessageHub RegisterForDisposal(Func<IMessageHub, CancellationToken, Task> disposeAction)
+    public IMessageHub RegisterForDisposal(Action<IMessageHub> disposeAction)
+        => RegisterForDisposal(System.Reactive.Disposables.Disposable.Create(() => disposeAction(this)));
+
+    public IMessageHub RegisterForDisposal(Func<IMessageHub, IObservable<Unit>> disposeAction)
     {
-        asyncDisposeActions.Add(disposeAction);
+        // Reactive dispose actions are kept in an immutable list (NOT a ConcurrentBag)
+        // and composed into one observable chain at dispose. Each returns
+        // IObservable<Unit> precisely so it can be chained here and its async leaves
+        // run on the mesh IO pool — see DisposeImpl.
+        lock (reactiveDisposeLock)
+            reactiveDisposeActions = reactiveDisposeActions.Add(disposeAction);
         return this;
     }
 
     public JsonSerializerOptions JsonSerializerOptions { get; }
 
-    public bool IsDisposing => Disposal != null;
+    public bool IsDisposing => disposalStarted;
+    private volatile bool disposalStarted;
 
-    public Task? Disposal { get; private set; }
+    /// <inheritdoc />
+    // Native reactive view of the completion subject — NOT bridged from a Task. Fires Unit +
+    // completes when disposal finishes (or OnError on a disposal fault); a subscriber attaching
+    // AFTER completion still observes the terminal notification immediately (ReplaySubject(1)).
+    public IObservable<Unit> DisposalCompleted => disposalCompleted.AsObservable();
 
     /// <summary>
     /// Set when the Quiescing-phase drain budget (<see cref="QuiesceTimeout"/>)
@@ -941,8 +962,39 @@ public sealed class MessageHub : IMessageHub
     /// <summary>One-line summary of the pending callbacks at the moment Quiescing
     /// timed out — empty if it didn't fire. Used by the test-base error message.</summary>
     public string? QuiescingTimeoutDetail { get; private set; }
-    private readonly TaskCompletionSource disposingTaskCompletionSource = new();
+
+    // Reactive disposal-completion source of truth. ReplaySubject(1): completed exactly once
+    // (guarded by `disposalSignalled` CAS) via SignalDisposalCompleted / SignalDisposalFaulted.
+    private readonly ReplaySubject<Unit> disposalCompleted = new(1);
+    private int disposalSignalled;
+    // Disposal-phase Rx subscriptions, held so the scheduler keeps them rooted; each self-
+    // completes (Take(1)/Timeout/TakeUntil) and is also disposed in the ShutDown finally.
+    private IDisposable? watchdogSubscription;
+    private IDisposable? quiescingSubscription;
+    private IDisposable? hostedHubsDisposalSubscription;
+    private static readonly TimeSpan DisposalWatchdogTimeout = TimeSpan.FromSeconds(8);
     private readonly Stopwatch disposalStopwatch = new();
+
+    private bool DisposalSignalled => Volatile.Read(ref disposalSignalled) != 0;
+
+    /// <summary>Completes <see cref="disposalCompleted"/> exactly once (idempotent CAS).
+    /// Reactive replacement for the old <c>disposingTaskCompletionSource.TrySetResult()</c>.</summary>
+    private void SignalDisposalCompleted()
+    {
+        if (Interlocked.CompareExchange(ref disposalSignalled, 1, 0) != 0)
+            return;
+        disposalCompleted.OnNext(Unit.Default);
+        disposalCompleted.OnCompleted();
+    }
+
+    /// <summary>Faults <see cref="disposalCompleted"/> exactly once (idempotent CAS).
+    /// Reactive replacement for the old <c>disposingTaskCompletionSource.TrySetException(e)</c>.</summary>
+    private void SignalDisposalFaulted(Exception error)
+    {
+        if (Interlocked.CompareExchange(ref disposalSignalled, 1, 0) != 0)
+            return;
+        disposalCompleted.OnError(error);
+    }
 
     private readonly Lock locker = new();
 
@@ -960,7 +1012,7 @@ public sealed class MessageHub : IMessageHub
                 Address, Version, hostedHubs.Hubs.Count());
 
             disposalStopwatch.Start();
-            Disposal = disposingTaskCompletionSource.Task;
+            disposalStarted = true;
 
         }
 
@@ -987,75 +1039,79 @@ public sealed class MessageHub : IMessageHub
             $"hostedHubsCount={hostedHubs.Hubs.Count()}");
         Post(new ShutdownRequest(MessageHubRunLevel.Quiescing, Version));
 
-        // Safety net: if the normal shutdown path ever deadlocks, force-complete the
-        // disposal task after a timeout so callers don't hang forever.
+        // Safety net: if the reactive shutdown path ever wedges, force-complete disposal after
+        // a timeout so callers (tests, grain deactivation) don't hang forever.
         //
-        // 🚨 LEAK FIX (ClrMD-confirmed): the watchdog's `Task.Delay` schedules a
-        // TimerQueueTimer rooted by the process-wide TimerQueue whose async continuation
-        // captures `this`. An UNCANCELLED 25 s delay pins the ENTIRE hub graph (cache,
-        // data sources, action block, subscriptions) for 25 s after EVERY disposal — even
-        // a fast, normal one (chain: TimerQueue → TimerQueueTimer → DelayPromise →
-        // <Dispose> state machine → hub). Disposal normally completes in well under a
-        // second, so the watchdog never fired in practice — it only leaked. Cancel the
-        // delay the instant disposal completes so the timer (and the hub it rooted) is
-        // released immediately; the safety net still fires on a genuine deadlock.
-        var watchdogCts = new CancellationTokenSource();
-        disposingTaskCompletionSource.Task.ContinueWith(
-            static (_, state) =>
-            {
-                var cts = (CancellationTokenSource)state!;
-                cts.Cancel();
-                cts.Dispose();
-            },
-            watchdogCts,
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await Task.Delay(TimeSpan.FromSeconds(25), watchdogCts.Token);
-                if (!disposingTaskCompletionSource.Task.IsCompleted)
+        // 🚨 Reactive, NOT a Task.Delay. `Observable.Timer` schedules on the DefaultScheduler
+        // (OFF the action block), and `TakeUntil(disposalCompleted)` cancels the timer the
+        // instant disposal finishes — so a normal fast disposal releases the TimerQueue entry
+        // immediately. (The original uncancelled `Task.Delay(25s)` rooted the ENTIRE hub graph
+        // — cache, data sources, action block, subscriptions — for 25 s after EVERY dispose,
+        // even a fast one: TimerQueue → TimerQueueTimer → DelayPromise → state machine → hub.)
+        watchdogSubscription = Observable
+            .Timer(DisposalWatchdogTimeout)
+            .TakeUntil(disposalCompleted)
+            .Subscribe(
+                _ =>
                 {
+                    if (DisposalSignalled)
+                        return;
                     logger.LogError(
-                        "DISPOSAL DEADLOCK DETECTED: Hub {Address} did not complete shutdown within 25 seconds. " +
+                        "DISPOSAL DEADLOCK DETECTED: Hub {Address} did not complete shutdown within {Timeout}. " +
                         "RunLevel={RunLevel}. Force-completing disposal to prevent hang.",
-                        Address, RunLevel);
-                    disposingTaskCompletionSource.TrySetResult();
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                // Normal path: disposal completed before the timeout; the watchdog was
-                // cancelled and its TimerQueue entry (+ the hub it rooted) is released.
-            }
-            catch (ObjectDisposedException)
-            {
-                // Benign race with the completion continuation above: disposal finished
-                // FIRST, so it already Cancel()+Dispose()d watchdogCts before this
-                // Task.Delay read its .Token. Disposal completing is the SUCCESS path —
-                // the watchdog isn't needed — so this must not be logged as an error
-                // (it was the noisy "Error in disposal safety timeout" fail at startup,
-                // common for short-lived sync/activity sub-hubs that dispose instantly).
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Error in disposal safety timeout for hub {Address}", Address);
-            }
-        });
+                        Address, DisposalWatchdogTimeout, RunLevel);
+                    SignalDisposalCompleted();
+                },
+                // disposalCompleted faulting (SignalDisposalFaulted) propagates through TakeUntil;
+                // the watchdog is no longer needed — swallow so it isn't an unobserved error.
+                _ => { });
     }
 
     private void DisposeImpl()
     {
+        // 1. Fire the REACTIVE dispose actions. Each returns IObservable<Unit>; we
+        //    compose them into one chain (Merge) and subscribe — fire-and-forget. Their
+        //    genuinely-async leaves (e.g. a final storage flush, a remote unsubscribe)
+        //    run on the mesh IO pool, which outlives this hub, so the work completes in
+        //    the background. The hub never awaits — nothing on this path is a Task. The
+        //    chain is NOT held in `disposables`, so the synchronous teardown below can't
+        //    cancel an in-flight pool leaf.
+        ImmutableList<Func<IMessageHub, IObservable<Unit>>> reactive;
+        lock (reactiveDisposeLock)
+        {
+            reactive = reactiveDisposeActions;
+            reactiveDisposeActions = ImmutableList<Func<IMessageHub, IObservable<Unit>>>.Empty;
+        }
+        if (!reactive.IsEmpty)
+        {
+            var legs = reactive.Select(action =>
+            {
+                try
+                {
+                    return action(this).Catch<Unit, Exception>(ex =>
+                    {
+                        TryLog(LogLevel.Warning, "[DISPOSE-ACTION] {Address}: dispose action faulted: {Type}: {Message}",
+                            Address, ex.GetType().Name, ex.Message);
+                        return Observable.Return(Unit.Default);
+                    });
+                }
+                catch (Exception ex)
+                {
+                    TryLog(LogLevel.Warning, "[DISPOSE-ACTION] {Address}: dispose action threw synchronously: {Type}: {Message}",
+                        Address, ex.GetType().Name, ex.Message);
+                    return Observable.Return(Unit.Default);
+                }
+            });
+            Observable.Merge(legs).Subscribe(_ => { }, _ => { });
+        }
 
-        while (disposeActions.TryTake(out var disposeAction))
-            disposeAction.Invoke(this);
-
+        // 2. Synchronous teardown of every registered subscription / Action cleanup —
+        //    normal Rx subscription logic, no bag.
+        disposables.Dispose();
     }
 
     /// <summary>
-    /// Multi-line snapshot of the hub's disposal state. Reports own RunLevel + Disposal-task
+    /// Multi-line snapshot of the hub's disposal state. Reports own RunLevel + disposal
     /// status, the message service's per-buffer counts (so a backlog from a handler that keeps
     /// re-posting shows up as a non-zero queue), and a one-line entry per hosted hub
     /// recursively. Test base classes call this when a dispose timeout fires; the returned
@@ -1133,8 +1189,8 @@ public sealed class MessageHub : IMessageHub
           .Append("Hub ").Append(Address)
           .Append(" RunLevel=").Append(RunLevel)
           .Append(" Disposal=")
-          .Append(Disposal == null ? "<not started>"
-              : Disposal.IsCompleted ? "Completed" : "Pending")
+          .Append(!disposalStarted ? "<not started>"
+              : DisposalSignalled ? "Completed" : "Pending")
           .Append(" Queue(buffer=").Append(snapshot.Buffer)
           .Append(",deferred=").Append(snapshot.Deferred)
           .Append(",exec=").Append(snapshot.Execution)
@@ -1171,44 +1227,22 @@ public sealed class MessageHub : IMessageHub
                 sb.Append(indent).Append("  Hub ").Append(child.Address).AppendLine();
         }
     }
-    // Kept as an async Task leaf (drains the async dispose-action queue); bridged
-    // into the reactive rule chain via DeliveryObservable.Run at the registration.
-    private async Task<IMessageDelivery> HandleShutdownCore(
-        IMessageDelivery<ShutdownRequest> request,
-        CancellationToken ct
+    // Fully SYNCHRONOUS. The phase handlers kick off their waits as Rx subscriptions
+    // (Observable.Interval / Timer / hostedHubs.DisposalCompleted) and return immediately —
+    // nothing on this path awaits, and the action block is never blocked. Completion is
+    // signalled through the `disposalCompleted` ReplaySubject.
+    private IMessageDelivery HandleShutdownCore(
+        IMessageDelivery<ShutdownRequest> request
     )
     {
         var phaseStopwatch = Stopwatch.StartNew();
         logger.LogDebug("STARTING HandleShutdown for hub {Address}, RunLevel={RunLevel}, RequestVersion={RequestVersion}, total disposal time so far: {totalElapsed}ms",
             Address, request.Message.RunLevel, request.Message.Version, disposalStopwatch.ElapsedMilliseconds);
 
+        // Registered cleanups (subscriptions, Action lambdas, pool-bridged disposables)
+        // are disposed synchronously later, in the ShutDown phase (DisposeImpl →
+        // disposables.Dispose). There is no async dispose-action drain phase.
 
-        // Process dispose actions first
-        var disposeActionsStopwatch = Stopwatch.StartNew();
-        var disposeActionCount = 0;
-        while (asyncDisposeActions.TryTake(out var configurationDisposeAction))
-        {
-            var actionStopwatch = Stopwatch.StartNew();
-            disposeActionCount++;
-            try
-            {
-                logger.LogDebug("Executing dispose action {actionNumber} for hub {address}", disposeActionCount, Address);
-                await configurationDisposeAction.Invoke(this, ct);
-                logger.LogDebug("Completed dispose action {actionNumber} for hub {address} in {elapsed}ms",
-                    disposeActionCount, Address, actionStopwatch.ElapsedMilliseconds);
-            }
-            catch (Exception e)
-            {
-                logger.LogError("Error in dispose action {actionNumber} for hub {address} after {elapsed}ms: {exception}",
-                    disposeActionCount, Address, actionStopwatch.ElapsedMilliseconds, e);
-                // Continue with other dispose actions
-            }
-        }
-        if (disposeActionCount > 0)
-        {
-            logger.LogDebug("Completed {actionCount} dispose actions for hub {address} in {elapsed}ms",
-                disposeActionCount, Address, disposeActionsStopwatch.ElapsedMilliseconds);
-        }
         if (request.Message.Version != Version - 1)
         {
             logger.LogDebug("Version mismatch for hub {Address}: received {RequestVersion}, expected {ExpectedVersion}, IsDisposing={IsDisposing}",
@@ -1247,78 +1281,36 @@ public sealed class MessageHub : IMessageHub
                     $"pending={initialPendingSnapshot.Length}");
 
                 // CRITICAL: do the wait OFF the action block. The action block processes
-                // messages serially (MaxDegreeOfParallelism = 1) — if we await Task.Delay
-                // on the action block thread, no other messages can be dequeued, including
-                // the very response messages we're waiting for. That's a self-deadlock that
-                // turns every dispose into a guaranteed QuiesceTimeout.
+                // messages serially (MaxDegreeOfParallelism = 1) — a blocking wait on the
+                // action-block thread would stop dequeuing the very response messages we're
+                // waiting to drain (a self-deadlock → guaranteed QuiesceTimeout).
                 //
-                // Fire-and-forget Task.Run mirrors how the DisposeHostedHubs branch (below)
-                // awaits hostedHubs.Disposal — the handler returns immediately, the action
-                // block stays free to dispatch responses into HandleCallbacks, and the
-                // continuation posts DisposeHostedHubs once we're done.
-#pragma warning disable CS4014
-                _ = Task.Run(async () =>
-#pragma warning restore CS4014
-                {
-                    try
-                    {
-                        var quiesceSw = Stopwatch.StartNew();
-                        while (quiesceSw.Elapsed < QuiesceTimeout)
-                        {
-                            bool empty;
-                            lock (responseSubjects) empty = responseSubjects.Count == 0;
-                            if (empty) break;
-                            try { await Task.Delay(QuiescePollInterval); }
-                            catch { break; }
-                        }
-
-                        int remainingCount;
-                        lock (responseSubjects) remainingCount = responseSubjects.Count;
-                        if (remainingCount == 0)
-                        {
-                            TryLog(LogLevel.Information,
-                                "[QUIESCE-OK] {Address}: drained {Count} callback(s) in {Elapsed}ms",
-                                Address, initialPendingSnapshot.Length, quiesceSw.ElapsedMilliseconds);
-                            DisposeTrace(Address, "QUIESCE_OK", quiesceSw.ElapsedMilliseconds,
-                                $"drained={initialPendingSnapshot.Length}");
-                        }
-                        else
-                        {
-                            var stuck = SnapshotPendingCallbacks();
-                            var detail = FormatPendingCallbacks(stuck);
-                            TryLog(LogLevel.Warning,
-                                "[QUIESCE-TIMEOUT] {Address}: {Count} callback(s) still pending after {Timeout}s — forcibly cancelling. Pending: {Pending}",
-                                Address, stuck.Length, QuiesceTimeout.TotalSeconds, detail);
-                            DisposeTrace(Address, "QUIESCE_TIMEOUT", quiesceSw.ElapsedMilliseconds,
-                                $"pending={stuck.Length}|{detail}");
-                            // Sticky flag — tests recursively inspect this and treat any
-                            // hub with QuiescingTimedOut=true as a dispose failure. Forces
-                            // visibility on leaked Observe subscriptions instead of letting
-                            // them silently extend dispose budgets across the suite.
-                            QuiescingTimedOut = true;
-                            QuiescingTimeoutDetail = $"{stuck.Length} pending callback(s) after {QuiesceTimeout.TotalSeconds:F2}s: {detail}";
-                            try { CancelCallbacks(); }
-                            catch (Exception cancelEx)
-                            {
-                                TryLog(LogLevel.Warning, "[QUIESCE-TIMEOUT] {Address}: CancelCallbacks threw {Type}: {Message}",
-                                    Address, cancelEx.GetType().Name, cancelEx.Message);
-                            }
-                        }
-                    }
-                    catch (Exception quiesceEx)
-                    {
-                        // Never let the Quiescing branch throw — that would leave the dispose
-                        // state machine wedged at Quiescing forever (worse than the original
-                        // hang). Log best-effort and fall through to the next phase post.
-                        TryLog(LogLevel.Error,
-                            "[QUIESCE-ERROR] {Address}: unexpected exception {Type}: {Message}; proceeding to DisposeHostedHubs anyway.",
-                            Address, quiesceEx.GetType().Name, quiesceEx.Message);
-                    }
-                    finally
-                    {
-                        Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
-                    }
-                });
+                // Reactive poll: `Observable.Interval` ticks on the DefaultScheduler (off the
+                // action block); each tick checks whether `responseSubjects` has drained. The
+                // leading StartWith(-1) probes ONCE inline (so an already-drained hub advances
+                // without a scheduler hop). `Amb` races the drain signal against a single
+                // `Observable.Timer(QuiesceTimeout)` deadline and takes whichever fires first —
+                // drained → true, budget exceeded → false. (Note: a between-emissions
+                // `.Timeout` would NOT work here — the interval emits every QuiescePollInterval,
+                // so the inter-emission gap never reaches QuiesceTimeout; the deadline must be a
+                // separate total-duration timer.) The result funnels into OnQuiesceComplete,
+                // which posts DisposeHostedHubs. No Task.Delay, no await — the handler returns
+                // immediately and the action block stays free.
+                var quiesceSw = Stopwatch.StartNew();
+                var drained = Observable
+                    .Interval(QuiescePollInterval)
+                    .StartWith(-1L)
+                    .Select(_ => { lock (responseSubjects) return responseSubjects.Count == 0; })
+                    .Where(empty => empty)
+                    .Take(1)
+                    .Select(_ => true);
+                var quiesceDeadline = Observable.Timer(QuiesceTimeout).Select(_ => false);
+                quiescingSubscription = drained
+                    .Amb(quiesceDeadline)
+                    .Take(1)
+                    .Subscribe(
+                        drainedOk => OnQuiesceComplete(drainedOk, quiesceSw, initialPendingSnapshot),
+                        _ => OnQuiesceComplete(drainedOk: false, quiesceSw, initialPendingSnapshot));
                 break;
             case MessageHubRunLevel.DisposeHostedHubs:
                 var disposeHostedHubsStopwatch = Stopwatch.StartNew();
@@ -1337,51 +1329,28 @@ public sealed class MessageHub : IMessageHub
 
                 DisposeTrace(Address, "HOSTED_DISPOSE_START", disposalStopwatch.ElapsedMilliseconds,
                     $"hostedHubsCount={hostedHubs.Hubs.Count()}");
+                // Dispose the hosted hubs (each disposes synchronously) and OBSERVE their
+                // collective completion via the collection's `DisposalCompleted` observable —
+                // no `await hostedHubs.Disposal`, no Task.Run. Each child hub completes its own
+                // reactive disposal and the collection completes once all have. On completion
+                // OR error (the collection caps the wait internally), advance to ShutDown.
                 hostedHubs.Dispose();
-#pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
-                Task.Run(async () =>
-#pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
-                {
-                    try
-                    {
-                        TryLog(LogLevel.Debug, "[DISPOSE-TRACE] {address}: Awaiting hostedHubs.Disposal (IsCompleted={isCompleted})",
-                            Address, hostedHubs.Disposal?.IsCompleted);
-                        await hostedHubs.Disposal!;
-                        TryLog(LogLevel.Debug, "[DISPOSE-TRACE] {address}: hostedHubs.Disposal completed in {elapsed}ms",
-                            Address, disposeHostedHubsStopwatch.ElapsedMilliseconds);
-                        DisposeTrace(Address, "HOSTED_DISPOSE_OK", disposeHostedHubsStopwatch.ElapsedMilliseconds);
-                    }
-                    catch (Exception e)
-                    {
-                        TryLog(LogLevel.Debug, "[DISPOSE-TRACE] {address}: hostedHubs.Disposal ERROR after {elapsed}ms: {error}",
-                            Address, disposeHostedHubsStopwatch.ElapsedMilliseconds, e.Message);
-                        DisposeTrace(Address, "HOSTED_DISPOSE_ERROR", disposeHostedHubsStopwatch.ElapsedMilliseconds,
-                            $"{e.GetType().Name}: {e.Message}");
-                    }
-                    finally
-                    {
-                        // Defensive: this finally runs even if the catch's logger
-                        // calls throw. The Post itself can throw if the hub is in
-                        // an unexpected state — wrap so the state machine still
-                        // tries to advance to ShutDown rather than wedging here.
-                        try
+                var hostedSw = disposeHostedHubsStopwatch;
+                hostedHubsDisposalSubscription = hostedHubs.DisposalCompleted
+                    .Take(1)
+                    .Subscribe(
+                        _ => { },
+                        ex =>
                         {
-                            TryLog(LogLevel.Debug, "[DISPOSE-TRACE] {address}: POSTING ShutDown request, Version={version}",
-                                Address, Version);
-                            Post(new ShutdownRequest(MessageHubRunLevel.ShutDown, Version));
-                            DisposeTrace(Address, "POSTED_SHUTDOWN", disposeHostedHubsStopwatch.ElapsedMilliseconds);
-                        }
-                        catch (Exception postEx)
+                            DisposeTrace(Address, "HOSTED_DISPOSE_ERROR", hostedSw.ElapsedMilliseconds,
+                                $"{ex.GetType().Name}: {ex.Message}");
+                            PostShutDownPhase(hostedSw);
+                        },
+                        () =>
                         {
-                            DisposeTrace(Address, "POSTED_SHUTDOWN_FAILED", disposeHostedHubsStopwatch.ElapsedMilliseconds,
-                                $"{postEx.GetType().Name}: {postEx.Message}");
-                            // Force-complete the disposal task so callers don't hang.
-                            try { disposingTaskCompletionSource.TrySetException(postEx); } catch { }
-                        }
-                    }
-                });
-
-
+                            DisposeTrace(Address, "HOSTED_DISPOSE_OK", hostedSw.ElapsedMilliseconds);
+                            PostShutDownPhase(hostedSw);
+                        });
                 break;
             case MessageHubRunLevel.ShutDown:
                 var shutdownStopwatch = Stopwatch.StartNew();
@@ -1402,42 +1371,34 @@ public sealed class MessageHub : IMessageHub
                     CancelCallbacks();
                     DisposeImpl();
 
-                    logger.LogDebug("[DISPOSE-TRACE] {address}: Awaiting messageService.DisposeAsync()...", Address);
-                    await messageService.DisposeAsync();
-                    logger.LogDebug("[DISPOSE-TRACE] {address}: messageService.DisposeAsync() done in {elapsed}ms",
+                    logger.LogDebug("[DISPOSE-TRACE] {address}: messageService.Dispose() (sync)...", Address);
+                    messageService.Dispose();
+                    logger.LogDebug("[DISPOSE-TRACE] {address}: messageService.Dispose() done in {elapsed}ms",
                         Address, shutdownStopwatch.ElapsedMilliseconds);
 
-                    try
-                    {
-                        disposingTaskCompletionSource.TrySetResult();
-                        logger.LogDebug("[DISPOSE-TRACE] {address}: Disposal COMPLETED in {elapsed}ms total",
-                            Address, disposalStopwatch.ElapsedMilliseconds);
-                    }
-                    catch (InvalidOperationException)
-                    {
-                        // Task completion source was already set, ignore
-                        logger.LogDebug("Disposal task completion source was already set for hub {address} (elapsed: {elapsed}ms)",
-                            Address, shutdownStopwatch.ElapsedMilliseconds);
-                    }
+                    // Signal completion through the reactive source (idempotent CAS — no
+                    // InvalidOperationException to guard, unlike TaskCompletionSource).
+                    SignalDisposalCompleted();
+                    logger.LogDebug("[DISPOSE-TRACE] {address}: Disposal COMPLETED in {elapsed}ms total",
+                        Address, disposalStopwatch.ElapsedMilliseconds);
                 }
                 catch (Exception e)
                 {
                     logger.LogError("Error during shutdown of hub {address} after {elapsed}ms (total disposal time: {totalElapsed}ms): {exception}",
                         Address, shutdownStopwatch.ElapsedMilliseconds, disposalStopwatch.ElapsedMilliseconds, e);
-                    try
-                    {
-                        disposingTaskCompletionSource.TrySetException(e);
-                    }
-                    catch (InvalidOperationException)
-                    {
-                        // Task completion source was already set, ignore
-                        logger.LogDebug("Disposal task completion source was already set for hub {address} during exception handling", Address);
-                    }
+                    SignalDisposalFaulted(e);
                 }
                 finally
                 {
                     RunLevel = MessageHubRunLevel.Dead;
                     disposalStopwatch.Stop();
+                    // Tidy the disposal-phase subscriptions (each has already self-completed:
+                    // the watchdog cancelled via TakeUntil when SignalDisposalCompleted fired,
+                    // the quiescing/dispose-action/hosted-hub subscriptions completed before
+                    // posting onward).
+                    watchdogSubscription?.Dispose();
+                    quiescingSubscription?.Dispose();
+                    hostedHubsDisposalSubscription?.Dispose();
                     //await ((IAsyncDisposable)ServiceProvider).DisposeAsync();
                     // Use parentAddress captured at construction — Configuration.ParentHub
                     // re-resolves from ParentServiceProvider, which is often disposed by the
@@ -1451,6 +1412,90 @@ public sealed class MessageHub : IMessageHub
         }
 
         return request.Processed();
+    }
+
+    /// <summary>
+    /// Terminal step of the reactive Quiescing poll (see the Quiescing branch of
+    /// <see cref="HandleShutdownCore"/>). Runs on the poll's scheduler thread when the
+    /// response subjects drain (<paramref name="drainedOk"/> = true) or the
+    /// <see cref="QuiesceTimeout"/> elapses (false). Logs the outcome, marks
+    /// <see cref="QuiescingTimedOut"/> on timeout, then advances the state machine by posting
+    /// the DisposeHostedHubs phase. Never throws — a wedged state machine is worse than a hang.
+    /// </summary>
+    private void OnQuiesceComplete(
+        bool drainedOk,
+        Stopwatch quiesceSw,
+        (string MessageId, string RequestType, Address? Target, long AgeMs)[] initialPendingSnapshot)
+    {
+        try
+        {
+            if (drainedOk)
+            {
+                TryLog(LogLevel.Information,
+                    "[QUIESCE-OK] {Address}: drained {Count} callback(s) in {Elapsed}ms",
+                    Address, initialPendingSnapshot.Length, quiesceSw.ElapsedMilliseconds);
+                DisposeTrace(Address, "QUIESCE_OK", quiesceSw.ElapsedMilliseconds,
+                    $"drained={initialPendingSnapshot.Length}");
+            }
+            else
+            {
+                var stuck = SnapshotPendingCallbacks();
+                var detail = FormatPendingCallbacks(stuck);
+                TryLog(LogLevel.Warning,
+                    "[QUIESCE-TIMEOUT] {Address}: {Count} callback(s) still pending after {Timeout}s — forcibly cancelling. Pending: {Pending}",
+                    Address, stuck.Length, QuiesceTimeout.TotalSeconds, detail);
+                DisposeTrace(Address, "QUIESCE_TIMEOUT", quiesceSw.ElapsedMilliseconds,
+                    $"pending={stuck.Length}|{detail}");
+                // Sticky flag — tests recursively inspect this and treat any hub with
+                // QuiescingTimedOut=true as a dispose failure. Forces visibility on leaked
+                // Observe subscriptions instead of silently extending dispose budgets.
+                QuiescingTimedOut = true;
+                QuiescingTimeoutDetail = $"{stuck.Length} pending callback(s) after {QuiesceTimeout.TotalSeconds:F2}s: {detail}";
+                try { CancelCallbacks(); }
+                catch (Exception cancelEx)
+                {
+                    TryLog(LogLevel.Warning, "[QUIESCE-TIMEOUT] {Address}: CancelCallbacks threw {Type}: {Message}",
+                        Address, cancelEx.GetType().Name, cancelEx.Message);
+                }
+            }
+        }
+        catch (Exception quiesceEx)
+        {
+            // Never let this branch throw — that would wedge the dispose state machine at
+            // Quiescing forever (worse than the original hang). Log best-effort and advance.
+            TryLog(LogLevel.Error,
+                "[QUIESCE-ERROR] {Address}: unexpected exception {Type}: {Message}; proceeding to DisposeHostedHubs anyway.",
+                Address, quiesceEx.GetType().Name, quiesceEx.Message);
+        }
+        finally
+        {
+            // Advance to DisposeHostedHubs. Registered subscriptions are disposed
+            // synchronously later, in the ShutDown phase (DisposeImpl →
+            // disposables.Dispose) — there is no async dispose-action drain to await.
+            Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
+        }
+    }
+
+    /// <summary>
+    /// Posts the ShutDown phase once the hosted hubs have drained. Wrapped so that a failed
+    /// Post (hub in an unexpected state) still force-faults disposal rather than wedging the
+    /// state machine — subscribers to <see cref="DisposalCompleted"/> never hang.
+    /// </summary>
+    private void PostShutDownPhase(Stopwatch sw)
+    {
+        try
+        {
+            TryLog(LogLevel.Debug, "[DISPOSE-TRACE] {address}: POSTING ShutDown request, Version={version}",
+                Address, Version);
+            Post(new ShutdownRequest(MessageHubRunLevel.ShutDown, Version));
+            DisposeTrace(Address, "POSTED_SHUTDOWN", sw.ElapsedMilliseconds);
+        }
+        catch (Exception postEx)
+        {
+            DisposeTrace(Address, "POSTED_SHUTDOWN_FAILED", sw.ElapsedMilliseconds,
+                $"{postEx.GetType().Name}: {postEx.Message}");
+            SignalDisposalFaulted(postEx);
+        }
     }
 
     /// <summary>
@@ -1557,8 +1602,20 @@ public sealed class MessageHub : IMessageHub
     private static readonly TimeSpan QuiescePollInterval = TimeSpan.FromMilliseconds(50);
 
 
-    private readonly ConcurrentBag<Func<IMessageHub, CancellationToken, Task>> asyncDisposeActions = new();
-    private readonly ConcurrentBag<Action<IMessageHub>> disposeActions = new();
+    // Every SYNCHRONOUS registered cleanup — subscriptions, Action<IMessageHub>
+    // lambdas, the pool-bridged IDisposable a routing service hands back — lives here.
+    // Disposed SYNCHRONOUSLY in the ShutDown phase (DisposeImpl). This is "normal
+    // subscription logic": no ConcurrentBag of callbacks, no imperative drain. A
+    // CompositeDisposable also disposes any registrant added after it is itself
+    // disposed, so late registrations during teardown can't leak.
+    private readonly System.Reactive.Disposables.CompositeDisposable disposables = new();
+
+    // REACTIVE dispose actions (Func returning IObservable<Unit>) — composed into one
+    // chain and subscribed at dispose so their async leaves run on the mesh IO pool
+    // (see DisposeImpl). Immutable list, NOT a ConcurrentBag; mutated under a lock.
+    private ImmutableList<Func<IMessageHub, IObservable<Unit>>> reactiveDisposeActions =
+        ImmutableList<Func<IMessageHub, IObservable<Unit>>>.Empty;
+    private readonly object reactiveDisposeLock = new();
 
 
 

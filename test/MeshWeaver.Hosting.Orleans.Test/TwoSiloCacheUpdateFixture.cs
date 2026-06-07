@@ -77,7 +77,7 @@ public class TwoSiloCacheUpdateFixture : IAsyncLifetime
     public async ValueTask DisposeAsync()
     {
         if (Cluster is not null)
-            await Cluster.DisposeAsync();
+            OrleansClusterDisposal.DisposeInBackground(Cluster);
     }
 
     /// <summary>

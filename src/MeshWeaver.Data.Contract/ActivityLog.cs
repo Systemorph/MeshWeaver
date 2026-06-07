@@ -91,5 +91,15 @@ public record ActivityLog(string Category)
     }
 
     public bool HasErrors() => Messages.Any(m => m.LogLevel == LogLevel.Error);
+
+    /// <summary>
+    /// This log plus, recursively, every <see cref="SubActivities"/> entry — flattened so a
+    /// consumer can find the (sub-)activity that actually failed. <see cref="Status"/> only rolls
+    /// the worst sub-status up to the top, so the real error message + its activity
+    /// <see cref="Id"/>/<see cref="HubPath"/> live on a descendant. Pair with
+    /// <c>ActivityLogExtensions.Errors()</c> to surface "what failed and where".
+    /// </summary>
+    public IEnumerable<ActivityLog> SelfAndDescendants() =>
+        new[] { this }.Concat(SubActivities.SelectMany(s => s.SelfAndDescendants()));
 }
 

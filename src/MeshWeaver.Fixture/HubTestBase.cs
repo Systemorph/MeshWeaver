@@ -1,4 +1,7 @@
-﻿using MeshWeaver.Messaging;
+﻿using System.Reactive;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using MeshWeaver.Messaging;
 using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -80,24 +83,25 @@ public class HubTestBase : TestBase
             var hostedHubsValue = hostedHubsProperty?.GetValue(Mesh)?.ToString() ?? "unknown";
             Logger.LogInformation("[{DisposalId}] Mesh has {HubCount} hosted hubs", disposalId, hostedHubsValue);
 
-            if (Mesh.Disposal is not null)
-                await Mesh.Disposal.WaitAsync(timeout.Token);
-
-            if (Mesh.Disposal is not null)
+            if (Mesh.IsDisposing)
             {
-                Logger.LogInformation("[{DisposalId}] Mesh.Disposal exists, waiting for completion", disposalId);
-                await Mesh.Disposal.WaitAsync(timeout.Token);
-                Logger.LogInformation("[{DisposalId}] Mesh.Disposal completed", disposalId);
+                Logger.LogInformation("[{DisposalId}] Mesh is disposing, waiting for completion", disposalId);
+                // Bridge the reactive completion to a Task once, at this test-teardown edge.
+                // Catch folds a disposal fault into completion (teardown waits for "done", not why).
+                await Mesh.DisposalCompleted
+                    .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
+                    .FirstOrDefaultAsync()
+                    .ToTask()
+                    .WaitAsync(timeout.Token);
+                Logger.LogInformation("[{DisposalId}] Mesh disposal completed", disposalId);
             }
         }
         catch (OperationCanceledException)
         {
             Logger.LogError("[{DisposalId}] HANG DETECTED: Mesh disposal timed out after {TimeoutSeconds}s", disposalId, 10);
             Logger.LogError("[{DisposalId}] Mesh address: {Address}", disposalId, Mesh.Address);
-            var disposalState = Mesh.Disposal?.IsCompleted == true ? "Completed" :
-                Mesh.Disposal?.IsFaulted == true ? "Faulted" :
-                Mesh.Disposal == null ? "Null" : "Pending";
-            Logger.LogError("[{DisposalId}] Mesh.Disposal state: {State}", disposalId, disposalState);
+            Logger.LogError("[{DisposalId}] Mesh disposal diagnostics:\n{Diagnostics}",
+                disposalId, SafeGetDisposalDiagnostics());
 
             // Don't fight symptoms - let it timeout and provide diagnostic info
             throw;
@@ -112,5 +116,11 @@ public class HubTestBase : TestBase
             await base.DisposeAsync();
             Mesh = null!;
         }
+    }
+
+    private string SafeGetDisposalDiagnostics()
+    {
+        try { return Mesh.GetDisposalDiagnostics(); }
+        catch (Exception ex) { return $"<failed to gather diagnostics: {ex.Message}>"; }
     }
 }

@@ -24,14 +24,13 @@ internal class MonolithRoutingService(
     }
 
 
-    public override IAsyncDisposable RegisterStream(Address address, AsyncDelivery callback)
+    public override IDisposable RegisterStream(Address address, AsyncDelivery callback)
     {
         streams[address] = callback;
-        return new AnonymousAsyncDisposable(() =>
-        {
-            streams.TryRemove(address, out _);
-            return Task.CompletedTask;
-        });
+        // Unregister is a synchronous dictionary removal — no actual async, so no
+        // IO-pool bridge needed. Hand back a plain IDisposable.
+        return System.Reactive.Disposables.Disposable.Create(
+            () => streams.TryRemove(address, out _));
     }
 
 
@@ -71,7 +70,7 @@ internal class MonolithRoutingService(
 
     private IMessageDelivery PostNotFound(IMessageDelivery delivery, MeshNode? node, Address address)
     {
-        var isShuttingDown = Mesh.Disposal is not null;
+        var isShuttingDown = Mesh.IsDisposing;
         string errorMessage;
         if (isShuttingDown)
             errorMessage = $"Mesh is shutting down, cannot route to {address}";
@@ -104,7 +103,7 @@ internal class MonolithRoutingService(
     /// </summary>
     private IObservable<IMessageHub?> CreateHub(MeshNode? node, Address address)
     {
-        if (Mesh.Disposal is not null || node is null)
+        if (Mesh.IsDisposing || node is null)
             return Observable.Return<IMessageHub?>(null);
 
         var hubFactory = Mesh.ServiceProvider.GetRequiredService<IMeshNodeHubFactory>();

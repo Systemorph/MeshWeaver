@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
 using MeshWeaver.Graph;
@@ -67,7 +69,20 @@ public class NodeTypeAssemblyLeakTest(ITestOutputHelper output) : MonolithMeshTe
             State = MeshNodeState.Active,
         };
 
-        var response = MeshService.CreateNode(typeNode)
+        // Create the NodeType + its Source Code node. NO GetCompilationPathRequest:
+        // that verb-shaped request/response is the deprecated mutation API. Its
+        // response is posted cross-hub and can simply never arrive — the 42-60 s
+        // freeze this test used to hang on was a never-delivered
+        // GetCompilationPathResponse, proven by a mid-freeze full dump: the test
+        // thread sat in WaitForFirst with ZERO held locks and NO thread doing
+        // compile work (the compile had run; only the response emission was lost).
+        //
+        // The compile RESULT is transferred the canonical way instead — the per-
+        // NodeType hub writes CompilationStatus (+ assembly refs) onto its OWN
+        // MeshNode via stream.Update, and we observe it through
+        // hub.GetMeshNodeStream(nodeTypePath). See RequestViaStreamUpdate.md /
+        // HubDisposalModel.md.
+        MeshService.CreateNode(typeNode)
             .SelectMany(_ => MeshService.CreateNode(new MeshNode("code", $"{nodeTypePath}/Source")
             {
                 NodeType = "Code",
@@ -79,15 +94,26 @@ public class NodeTypeAssemblyLeakTest(ITestOutputHelper output) : MonolithMeshTe
                 },
                 State = MeshNodeState.Active,
             }))
-            .SelectMany(_ => MessageHubExtensions.Observe(
-                Mesh,
-                (IRequest<GetCompilationPathResponse>)new GetCompilationPathRequest(),
-                o => o.WithTarget(new Address(nodeTypePath))))
-            .Select(d => d.Message)
-            .Should().Within(60.Seconds()).Emit();
+            .Should().Within(30.Seconds()).Emit();
 
-        response.Success.Should().BeTrue($"compile must succeed; error: {response.Error}");
-        response.AssemblyLocation.Should().NotBeNullOrEmpty();
+        // Subscribing to the NodeType's stream activates its per-node hub, whose
+        // first-build kickoff (NodeTypeCompilationHelpers.InstallCompileWatcher)
+        // flips CompilationStatus = Pending on a never-compiled type and drives
+        // Roslyn — the emitted assembly loads into a collectible DynamicNode_* ALC
+        // (exactly the context this test weak-refs). The compile watcher writes the
+        // terminal CompilationStatus back onto this same node via stream.Update; we
+        // wait on the stream for it to settle. No lost emission: the owning hub
+        // serialises the write and the node stream replays current state to late
+        // subscribers.
+        var stream = Mesh.GetMeshNodeStream(nodeTypePath);
+        var compiledNode = stream
+            .Should().Within(60.Seconds())
+            .Match(n => n?.Content is NodeTypeDefinition def
+                && def.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error);
+
+        var compiledDef = (NodeTypeDefinition)compiledNode.Content!;
+        compiledDef.CompilationStatus.Should().Be(CompilationStatus.Ok,
+            $"compile must succeed; error: {compiledDef.CompilationError}");
 
         var newContexts = AssemblyLoadContext.All
             .Where(a => a.Name?.StartsWith("DynamicNode_", StringComparison.Ordinal) == true
@@ -123,7 +149,11 @@ public class NodeTypeAssemblyLeakTest(ITestOutputHelper output) : MonolithMeshTe
         // Tear the mesh down: every hosted per-node hub disposes, firing the
         // SubscribeToOwnDeletion → UnloadNodeContexts hook that drops its ALC.
         Mesh.Dispose();
-        Mesh.Disposal?.Wait(TimeSpan.FromSeconds(30));
+        Mesh.DisposalCompleted
+            .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
+            .FirstOrDefaultAsync()
+            .ToTask()
+            .Wait(TimeSpan.FromSeconds(30));
 
         ForceCollect(weakRefs);
 

@@ -56,7 +56,7 @@ public class OrleansInteractiveMarkdownTest(ITestOutputHelper output) : TestBase
     public override async ValueTask DisposeAsync()
     {
         if (Cluster is not null)
-            await Cluster.DisposeAsync();
+            OrleansClusterDisposal.DisposeInBackground(Cluster);
         await base.DisposeAsync();
     }
 
