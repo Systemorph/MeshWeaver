@@ -551,6 +551,11 @@ public static class CreateLayoutArea
         string[]? restrictedNamespaces = namespacesParam != null
             ? namespacesParam.Split(',', StringSplitOptions.TrimEntries)
             : null;
+        // URL-param namespace restriction (if any), captured BEFORE the default type's
+        // RestrictedToNamespaces is folded in below. The reactive namespace field uses this as
+        // the fixed restriction and otherwise derives the restriction from the *selected* type,
+        // so partition objects lock to root regardless of how the type was chosen.
+        var urlRestrictedNamespaces = restrictedNamespaces;
 
         // If types restricted to single entry, use it as default
         if (restrictedTypes is { Length: 1 })
@@ -670,50 +675,25 @@ public static class CreateLayoutArea
              .WithStyle("width: 100%; margin-bottom: 16px;"));
         }
 
-        // 7. Namespace picker (or readonly label if restricted to single value)
-        if (restrictedNamespaces is { Length: 1 })
-        {
-            // Single namespace restriction — show readonly info
-            var nsLabel = string.IsNullOrEmpty(restrictedNamespaces[0]) ? "Root (top-level)" : restrictedNamespaces[0];
-            stack = stack.WithView(Controls.Stack
-                .WithWidth("100%")
-                .WithStyle("margin-bottom: 16px;")
-                .WithView(Controls.Body("Namespace").WithStyle("font-weight: 600; margin-bottom: 4px;"))
-                .WithView(Controls.Body(nsLabel).WithStyle("color: var(--neutral-foreground-rest);")));
-        }
-        else if (restrictedNamespaces is { Length: > 1 })
-        {
-            // Multiple namespace restriction — filtered picker with synthetic root node
-            var nsItems = restrictedNamespaces.Select(ns =>
-                string.IsNullOrEmpty(ns)
-                    ? new MeshNode("") { Name = "Root (top-level)", NodeType = "Namespace" }
-                    : new MeshNode(ns) { Name = ns, NodeType = "Namespace" }
-            ).ToArray();
-            stack = stack.WithView(new MeshNodePickerControl(new JsonPointerReference("namespace"))
+        // 7. Namespace — REACTIVE on the selected type. Partition objects (Space, User;
+        //    NodeTypeDefinition.RestrictedToNamespaces = [""]) live ONLY at root, so the field
+        //    locks to a read-only "Root (top-level)" label and can't be retargeted to a
+        //    user/space namespace — whether the type was preset or picked from the dropdown.
+        //    Keyed on the TYPE value only (DistinctUntilChanged) so it does NOT re-render while
+        //    the user types Name/Description.
+        stack = stack.WithView((h, _) => h.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+            .Select(form => form?.GetValueOrDefault("type")?.ToString() ?? "")
+            .DistinctUntilChanged()
+            .Select(selectedType =>
             {
-                Label = "Namespace",
-                Placeholder = "Select namespace...",
-                DataContext = dataContext
-            }.WithItems(nsItems)
-             .WithMaxResults(15)
-             .WithStyle("width: 100%; margin-bottom: 16px;"));
-        }
-        else
-        {
-            // Namespace autocomplete over existing Spaces (real namespaces / path
-            // resolution) — NOT creatable node types (the old "context:create" query
-            // returned the type catalogue). The empty "" root is intentionally NOT offered:
-            // only partition objects (Space, User) may live at root, and those restrict
-            // their namespace to [""] via NodeTypeDefinition, so they render the read-only
-            // "Root (top-level)" label above instead of reaching this picker.
-            stack = stack.WithView(new MeshNodePickerControl(new JsonPointerReference("namespace"))
-            {
-                Label = "Namespace",
-                Placeholder = "Search a space to nest under...",
-                DataContext = dataContext
-            }.WithQueries("nodeType:Space").WithMaxResults(15)
-             .WithStyle("width: 100%; margin-bottom: 16px;"));
-        }
+                // URL-param restriction wins; otherwise derive it from the SELECTED type.
+                var effective = urlRestrictedNamespaces;
+                if (effective == null && !string.IsNullOrEmpty(selectedType)
+                    && host.Hub.ServiceProvider.FindStaticNode(selectedType)?.Content is NodeTypeDefinition selDef
+                    && selDef.RestrictedToNamespaces is { Count: > 0 } r)
+                    effective = r.ToArray();
+                return (UiControl)BuildNamespaceControl(effective, dataContext);
+            }));
 
         // 8. Description — free-text context. Also used as the seed when regenerating an icon.
         stack = stack.WithView(new TextAreaControl(new JsonPointerReference("description"))
@@ -769,6 +749,13 @@ public static class CreateLayoutArea
                     {
                         var ns = formValues.GetValueOrDefault("namespace")?.ToString()?.Trim() ?? "";
                         var selectedType = formValues.GetValueOrDefault("type")?.ToString()?.Trim();
+                        // Partition objects (Space, User) live ONLY at root — force "" no matter
+                        // what the namespace field held. Mirrors OwnsPartitionProvisioningValidator,
+                        // which rejects a partition-owning create with a non-empty namespace.
+                        if (!string.IsNullOrEmpty(selectedType)
+                            && host.Hub.ServiceProvider.FindStaticNode(selectedType)?.Content is NodeTypeDefinition stDef
+                            && stDef.OwnsPartition)
+                            ns = "";
                         var name = formValues.GetValueOrDefault("name")?.ToString()?.Trim();
                         var id = formValues.GetValueOrDefault("id")?.ToString()?.Trim();
                         var description = formValues.GetValueOrDefault("description")?.ToString()?.Trim();
@@ -840,6 +827,50 @@ public static class CreateLayoutArea
 
         stack = stack.WithView(buttonRow);
         return stack;
+    }
+
+    /// <summary>
+    /// Builds the namespace input for the create form given an optional restriction:
+    /// a single restricted value (incl. "") renders a read-only label; multiple values render a
+    /// filtered picker; no restriction autocompletes existing Spaces (and never offers "").
+    /// </summary>
+    private static UiControl BuildNamespaceControl(string[]? restricted, string dataContext)
+    {
+        if (restricted is { Length: 1 })
+        {
+            var nsLabel = string.IsNullOrEmpty(restricted[0]) ? "Root (top-level)" : restricted[0];
+            return Controls.Stack
+                .WithWidth("100%")
+                .WithStyle("margin-bottom: 16px;")
+                .WithView(Controls.Body("Namespace").WithStyle("font-weight: 600; margin-bottom: 4px;"))
+                .WithView(Controls.Body(nsLabel).WithStyle("color: var(--neutral-foreground-rest);"));
+        }
+        if (restricted is { Length: > 1 })
+        {
+            var nsItems = restricted.Select(ns =>
+                string.IsNullOrEmpty(ns)
+                    ? new MeshNode("") { Name = "Root (top-level)", NodeType = "Namespace" }
+                    : new MeshNode(ns) { Name = ns, NodeType = "Namespace" }
+            ).ToArray();
+            return new MeshNodePickerControl(new JsonPointerReference("namespace"))
+            {
+                Label = "Namespace",
+                Placeholder = "Select namespace...",
+                DataContext = dataContext
+            }.WithItems(nsItems)
+             .WithMaxResults(15)
+             .WithStyle("width: 100%; margin-bottom: 16px;");
+        }
+        // No restriction — autocomplete existing Spaces (real namespaces). "" is intentionally
+        // NOT offered: only partition objects may live at root, and those restrict to [""].
+        return new MeshNodePickerControl(new JsonPointerReference("namespace"))
+        {
+            Label = "Namespace",
+            Placeholder = "Search a space to nest under...",
+            DataContext = dataContext
+        }.WithQueries("nodeType:Space")
+         .WithMaxResults(15)
+         .WithStyle("width: 100%; margin-bottom: 16px;");
     }
 
     /// <summary>
