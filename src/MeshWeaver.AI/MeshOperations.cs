@@ -328,62 +328,34 @@ public class MeshOperations
 
             try
             {
-                var delivery = hub.Post(
-                    new GetDataRequest(new MeshNodeReference()),
-                    o => o.WithTarget(new Address(resolvedPath)));
-                if (delivery == null)
-                {
-                    EmitOnce(null);
-                    return Disposable.Create(() => cts.Dispose());
-                }
-
-                innerSubscription = hub.Observe(delivery)
+                // 🚨 Read the LIVE node via GetMeshNodeStream (the shared in-memory cache
+                // mirror), NOT a one-shot GetDataRequest. A GetDataRequest activates a cold
+                // per-node hub that loads from PERSISTENCE — stale when a recent write's
+                // debounced save hasn't flushed: the in-memory mirror already holds the
+                // update, persistence does not. Paired with the read-your-writes wait in
+                // Patch/Update (which freshens this same mirror to the written version), a
+                // read immediately after a write sees the fresh value. GetMeshNodeStream also
+                // activates a cold hub on subscribe. See Doc/Architecture/CqrsAndContentAccess.md.
+                // The CTS timeout above maps a never-emitting (non-existent) node to null.
+                innerSubscription = hub.GetWorkspace().GetMeshNodeStream(resolvedPath)
+                    // Routing-fallback safety: a path with no per-node hub can route to the
+                    // closest ancestor, which returns ITS node. Filter by exact path so
+                    // callers (Patch / Update / Delete) never operate on an ancestor.
+                    .Where(n => n is not null
+                        && string.Equals(n.Path, resolvedPath, StringComparison.OrdinalIgnoreCase))
+                    .Take(1)
                     .Subscribe(
-                        d =>
-                        {
-                            try
-                            {
-                                if (d.Message is GetDataResponse resp)
-                                {
-                                    MeshNode? node = resp.Data as MeshNode;
-                                    if (node == null && resp.Data is JsonElement je)
-                                        node = je.Deserialize<MeshNode>(hub.JsonSerializerOptions);
-
-                                    // Routing-fallback safety: when no per-node hub
-                                    // exists for the requested path, monolith routing
-                                    // forwards GetDataRequest to the closest ancestor's
-                                    // hub, which returns ITS OWN MeshNode. Treat any
-                                    // path mismatch as not-found so callers (Patch,
-                                    // Update, Delete) don't accidentally operate on
-                                    // an ancestor.
-                                    if (node != null
-                                        && !string.Equals(node.Path, resolvedPath, StringComparison.OrdinalIgnoreCase))
-                                        node = null;
-
-                                    EmitOnce(node);
-                                }
-                                else
-                                {
-                                    // Unexpected response — node not found / no handler.
-                                    EmitOnce(null);
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                logger.LogWarning(ex, "FetchNode callback failed for {Path}", resolvedPath);
-                                EmitOnce(null);
-                            }
-                        },
+                        node => EmitOnce(node),
                         ex =>
                         {
-                            // DeliveryFailure or other error — node not found / no handler.
-                            logger.LogDebug(ex, "FetchNode delivery failed for {Path}", resolvedPath);
+                            // DeliveryFailure or other error — node not found / unreachable.
+                            logger.LogDebug(ex, "FetchNode read failed for {Path}", resolvedPath);
                             EmitOnce(null);
                         });
             }
             catch (Exception ex)
             {
-                logger.LogWarning(ex, "FetchNode post failed for {Path}", resolvedPath);
+                logger.LogWarning(ex, "FetchNode read setup failed for {Path}", resolvedPath);
                 EmitOnce(null);
             }
 
@@ -393,6 +365,25 @@ public class MeshOperations
                 cts.Dispose();
             });
         });
+
+    /// <summary>
+    /// Read-your-writes barrier: waits (bounded) for the live mesh-node mirror at
+    /// <paramref name="path"/> to advance PAST <paramref name="versionBefore"/> — the
+    /// version observed before the write. The owning hub stamps a fresh, higher Version
+    /// when it applies a change, so a mirror version strictly greater than the pre-write
+    /// value means the reconciled update has propagated and a subsequent read will see it.
+    /// Best-effort: on timeout it emits <c>null</c> so the caller falls back to the
+    /// optimistic node rather than failing the write. Subscribes to the cache mirror's
+    /// READ stream (never the per-path Update queue), so it cannot deadlock — unlike the
+    /// removed in-queue echo-wait.
+    /// </summary>
+    private IObservable<MeshNode?> WaitForReadYourWrites(string path, long versionBefore) =>
+        hub.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n is not null && n.Version > versionBefore)
+            .Take(1)
+            .Select(n => (MeshNode?)n)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null));
 
     /// <summary>
     /// Writes a full <see cref="MeshNode"/> to the node's own hub via
@@ -748,19 +739,24 @@ public class MeshOperations
                         validationError != null
                             ? Observable.Return(validationError)
                             : mesh.UpdateNode(nodeForCapture)
-                                .Select(updated =>
-                                {
-                                    OnNodeChange?.Invoke(new NodeChangeEntry
+                                // Read-your-writes barrier (see Patch): wait for the live
+                                // mirror to advance PAST the optimistic version before
+                                // returning, so a follow-up Get sees the reconciled update.
+                                .SelectMany(updated => WaitForReadYourWrites(currentPath, updated.Version)
+                                    .Select(confirmed =>
                                     {
-                                        Path = updated.Path,
-                                        Operation = "Updated",
-                                        VersionBefore = versionBefore,
-                                        VersionAfter = updated.Version,
-                                        NodeType = updated.NodeType,
-                                        NodeName = updated.Name
-                                    });
-                                    return $"Updated: {updated.Path}";
-                                })
+                                        var after = confirmed ?? updated;
+                                        OnNodeChange?.Invoke(new NodeChangeEntry
+                                        {
+                                            Path = after.Path,
+                                            Operation = "Updated",
+                                            VersionBefore = versionBefore,
+                                            VersionAfter = after.Version,
+                                            NodeType = after.NodeType,
+                                            NodeName = after.Name
+                                        });
+                                        return $"Updated: {after.Path}";
+                                    }))
                                 .Catch((Exception ex) =>
                                     Observable.Return($"Error updating {currentPath}: {ex.Message}"))));
             }
@@ -859,22 +855,31 @@ public class MeshOperations
                     validationError != null
                         ? Observable.Return(validationError)
                         : mesh.UpdateNode(merged)
-                            .Select(updated =>
-                            {
-                                OnNodeChange?.Invoke(new NodeChangeEntry
+                            // 🚨 Read-your-writes barrier. UpdateNode emits OPTIMISTICALLY —
+                            // the owner applies asynchronously and stamps a fresh, higher
+                            // Version on apply, so the emitted `updated` still carries the
+                            // pre-apply version. Without the wait, the immediately-following
+                            // Get races the propagation and reads the stale value. Wait
+                            // (bounded) for the live mirror to advance PAST versionBefore so
+                            // the reconciled update is observable before we return.
+                            .SelectMany(updated => WaitForReadYourWrites(resolvedPath, versionBefore)
+                                .Select(confirmed =>
                                 {
-                                    Path = updated.Path,
-                                    Operation = "Updated",
-                                    VersionBefore = versionBefore,
-                                    VersionAfter = updated.Version,
-                                    NodeType = updated.NodeType,
-                                    NodeName = updated.Name
-                                });
-                                var versionText = updated.Version > versionBefore
-                                    ? $" (v{versionBefore} → v{updated.Version})"
-                                    : "";
-                                return $"Patched: {updated.Path}{versionText}";
-                            })
+                                    var after = confirmed ?? updated;
+                                    OnNodeChange?.Invoke(new NodeChangeEntry
+                                    {
+                                        Path = after.Path,
+                                        Operation = "Updated",
+                                        VersionBefore = versionBefore,
+                                        VersionAfter = after.Version,
+                                        NodeType = after.NodeType,
+                                        NodeName = after.Name
+                                    });
+                                    var versionText = after.Version > versionBefore
+                                        ? $" (v{versionBefore} → v{after.Version})"
+                                        : "";
+                                    return $"Patched: {after.Path}{versionText}";
+                                }))
                             .Catch((Exception ex) =>
                                 Observable.Return($"Error patching {merged.Path}: {ex.Message}")));
             })
