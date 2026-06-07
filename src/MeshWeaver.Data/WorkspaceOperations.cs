@@ -2,6 +2,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.Data;
 using Json.Patch;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -111,17 +112,10 @@ public static class WorkspaceOperations
             .CreateLogger(typeof(WorkspaceOperations));
         logger.LogDebug("Updating streams for workspace {Address} with {Creations} creations, {Updates} updates, {Deletions} deletions", workspace.Hub.Address, change.Creations.Count(), change.Updates.Count(), change.Deletions.Count());
         foreach (var group in
-                 change.Creations.Select(i => (Instance: i, Op: OperationType.Add,
-                         TypeSource: workspace.DataContext.GetTypeSource(i.GetType()),
-                         DataSource: workspace.DataContext.GetDataSourceForType(i.GetType())))
-                     .Concat(change.Updates.Select(i => (Instance: i, Op: OperationType.Replace,
-                         TypeSource: workspace.DataContext.GetTypeSource(i.GetType()),
-                         DataSource: workspace.DataContext.GetDataSourceForType(i.GetType()))))
-                     .Concat(change.Deletions.Select(i => (Instance: i, Op: OperationType.Remove,
-                         TypeSource: workspace.DataContext.GetTypeSource(i.GetType()),
-                         DataSource: workspace.DataContext.GetDataSourceForType(i.GetType()))))
-                     .GroupBy(x => (x.DataSource,
-                         Partition: (x.TypeSource as IPartitionedTypeSource)?.GetPartition(x.Instance))))
+                 change.Creations.Select(i => ClassifyForRouting(workspace, i, OperationType.Add))
+                     .Concat(change.Updates.Select(i => ClassifyForRouting(workspace, i, OperationType.Replace)))
+                     .Concat(change.Deletions.Select(i => ClassifyForRouting(workspace, i, OperationType.Remove)))
+                     .GroupBy(x => (x.DataSource, x.Partition)))
         {
             if (group.Key.DataSource is null)
             {
@@ -155,9 +149,47 @@ public static class WorkspaceOperations
         }
     }
 
+    // Maps an instance to its routing tuple. An EntityDeltaUpdate (a minimal-bytes
+    // string-delta carrying no CLR entity) is routed by its declared Collection +
+    // Partition; a full entity by its CLR type + computed partition.
+    private static (object Instance, OperationType Op, ITypeSource? TypeSource, IDataSource? DataSource, object? Partition)
+        ClassifyForRouting(IWorkspace workspace, object instance, OperationType op)
+    {
+        if (instance is EntityDeltaUpdate d)
+        {
+            var ts = workspace.DataContext.GetTypeSource(d.Collection);
+            return (instance, op, ts,
+                ts is null ? null : workspace.DataContext.GetDataSourceForType(ts.TypeDefinition.Type),
+                d.Partition);
+        }
+        var typeSource = workspace.DataContext.GetTypeSource(instance.GetType());
+        return (instance, op, typeSource,
+            workspace.DataContext.GetDataSourceForType(instance.GetType()),
+            (typeSource as IPartitionedTypeSource)?.GetPartition(instance));
+    }
+
+    // Reconstructs the full entity from a minimal-bytes EntityDeltaUpdate by replaying the
+    // splice onto the owner's CURRENT value (so a disjoint concurrent edit on the owner
+    // survives). A full entity passes through untouched. A delta whose target no longer
+    // exists can't be applied — log + drop (the subscriber reconciles on next sync).
+    private static object? ResolveDelta(object instance, EntityStore currentStore,
+        ISynchronizationStream<EntityStore> stream, ILogger logger)
+    {
+        if (instance is not EntityDeltaUpdate d)
+            return instance;
+        var current = currentStore.GetCollection(d.Collection)?.Instances.GetValueOrDefault(d.Id);
+        if (current is null)
+        {
+            logger.LogWarning("[Delta] update for missing entity {Collection}/{Id} — dropping (no base to apply onto)",
+                d.Collection, d.Id);
+            return null;
+        }
+        return EntityDelta.Apply(current, d, stream.Host.JsonSerializerOptions);
+    }
+
     private static ChangeItem<EntityStore>? UpdateDataChangeRequest(EntityStore? store, DataChangeRequest change, ILogger logger, ISynchronizationStream<EntityStore> stream, Activity? subActivity,
         IGrouping<(IDataSource? DataSource, object? Partition), (object Instance, OperationType Op, ITypeSource?
-            TypeSource, IDataSource? DataSource)> group)
+            TypeSource, IDataSource? DataSource, object? Partition)> group)
     {
         logger.LogDebug("Starting update of {Stream} with {StreamId}", stream.StreamIdentity, stream.StreamId);
         // For sub-activity logging, we use the main activity as we don't have direct access to sub-activity
@@ -174,7 +206,8 @@ public static class WorkspaceOperations
                     {
                         if (g.Key.Op == OperationType.Add || g.Key.Op == OperationType.Replace)
                         {
-                            var allInstances = g.Select(x => x.Instance).ToList();
+                            var allInstances = g.Select(x => ResolveDelta(x.Instance, currentStore, stream, logger))
+                                .Where(x => x is not null).Select(x => x!).ToList();
                             var invalidInstances = allInstances
                                 .Where(x => g.Key.TypeSource!.TypeDefinition.GetKey(x) == null)
                                 .ToList();

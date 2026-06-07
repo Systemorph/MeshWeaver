@@ -17,7 +17,7 @@ namespace MeshWeaver.Data;
 /// resolves it against its current store before the normal apply. Registered in
 /// the TypeRegistry so it survives the cross-hub hop.</para>
 /// </summary>
-public record EntityDeltaUpdate(string Collection, object Id, RawJson Delta)
+public record EntityDeltaUpdate(string Collection, string Id, RawJson Delta)
 {
     /// <summary>
     /// The entity's partition, resolved by the subscriber from the full value, so the
