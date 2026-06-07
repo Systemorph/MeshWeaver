@@ -15,17 +15,49 @@ namespace MeshWeaver.Data.Serialization;
 public static class EntityDelta
 {
     /// <summary>
+    /// Below this serialised size a full re-send is cheaper than computing, shipping,
+    /// and re-applying a delta — so small entities stay on the full-entity path
+    /// (unchanged whole-entity-replace semantics). Only large, string-heavy entities
+    /// (markdown bodies, prerendered html) take the delta path.
+    /// </summary>
+    public const int MinDeltaSize = 1024;
+
+    /// <summary>
     /// SUBSCRIBER: compute the compact delta for one entity. The big string fields
     /// (including nested ones) become splices; everything unchanged is omitted.
     /// </summary>
     public static EntityDeltaUpdate Compute(
-        string collection, object id, object? partition,
+        string collection, string id, object? partition,
         object oldValue, object newValue, JsonSerializerOptions options)
     {
         var oldJson = (JsonObject)JsonSerializer.SerializeToNode(oldValue, oldValue.GetType(), options)!;
         var newJson = (JsonObject)JsonSerializer.SerializeToNode(newValue, newValue.GetType(), options)!;
         var delta = StringDeltaPatch.Compute(oldJson, newJson);
         return new EntityDeltaUpdate(collection, id, new RawJson(delta.ToJsonString())) { Partition = partition };
+    }
+
+    /// <summary>
+    /// SUBSCRIBER (gated): returns an <see cref="EntityDeltaUpdate"/> only when it is
+    /// worthwhile — the entity serialises to at least <see cref="MinDeltaSize"/> bytes
+    /// AND the delta is actually smaller than the full value. Otherwise returns
+    /// <c>null</c> so the caller ships the full entity (unchanged behaviour). This keeps
+    /// the field-merge semantics of the delta path scoped to big content.
+    /// </summary>
+    public static EntityDeltaUpdate? TryCompute(
+        string collection, string id, object? partition,
+        object oldValue, object newValue, JsonSerializerOptions options)
+    {
+        if (JsonSerializer.SerializeToNode(newValue, newValue.GetType(), options) is not JsonObject newJson)
+            return null;
+        var fullStr = newJson.ToJsonString();
+        if (fullStr.Length < MinDeltaSize)
+            return null; // small → full re-send is cheaper
+        if (JsonSerializer.SerializeToNode(oldValue, oldValue.GetType(), options) is not JsonObject oldJson)
+            return null;
+        var deltaStr = StringDeltaPatch.Compute(oldJson, newJson).ToJsonString();
+        if (deltaStr.Length >= fullStr.Length)
+            return null; // delta no smaller (e.g. a near-total rewrite) → ship full
+        return new EntityDeltaUpdate(collection, id, new RawJson(deltaStr)) { Partition = partition };
     }
 
     /// <summary>

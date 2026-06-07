@@ -867,13 +867,15 @@ public static class JsonSynchronizationStream
         => stream
             .Synchronize()
             .Where(predicate)
-            .Select(x => x.Updates.ToDataChangeRequest(stream.ClientId));
+            .Select(x => x.Updates.ToDataChangeRequest(stream.ClientId, stream.Host));
 
 
 
     internal static DataChangeRequest ToDataChangeRequest(this IEnumerable<EntityUpdate> updates,
-        string clientId)
+        string clientId, IMessageHub host)
     {
+        var options = host.JsonSerializerOptions;
+        var workspace = host.GetWorkspace();
         return updates
             .GroupBy(x => new { x.Collection, x.Id })
             .Aggregate(new DataChangeRequest() { ChangedBy = clientId }, (e, g) =>
@@ -885,6 +887,23 @@ public static class JsonSynchronizationStream
                     return e;
                 if (last == null)
                     return e.WithDeletions(first!);
+
+                // 🚨 Minimal-bytes: when we have a base (OldValue), a string key, and a
+                // matching type, ship a compact EntityDelta (the splice) instead of the
+                // whole entity for big string-heavy content (markdown / html). Only take
+                // the delta path when the PARTITION resolves the same way the owner will
+                // (non-partitioned type, or a resolved partition) — otherwise the owner
+                // would route the delta to the wrong stream and silently drop the update.
+                // EntityDelta.TryCompute also gates on size + only when the delta is
+                // smaller; any miss → fall through to the full whole-replace path.
+                if (first is not null && g.Key.Id is string idStr && first.GetType() == last.GetType())
+                {
+                    var partitioned = workspace.DataContext.GetTypeSource(last.GetType()) as IPartitionedTypeSource;
+                    var partition = partitioned?.GetPartition(last);
+                    if ((partitioned is null || partition is not null)
+                        && EntityDelta.TryCompute(g.Key.Collection, idStr, partition, first, last, options) is { } deltaUpdate)
+                        return e.WithUpdates(deltaUpdate);
+                }
 
                 // Treat as update regardless of OldValue — OldValue may be null
                 // when the change was deserialized from a remote stream (not serialized).
