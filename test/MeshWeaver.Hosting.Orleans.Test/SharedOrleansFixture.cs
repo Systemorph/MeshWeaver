@@ -174,7 +174,7 @@ public class SharedOrleansFixture : IAsyncLifetime
             Name = userId,
             Email = $"{userId.ToLowerInvariant()}@test.com"
         });
-        var subscriptions = new List<IAsyncDisposable>(2);
+        var subscriptions = new List<IDisposable>(2);
 
         // Register on BOTH client and silo routing services so responses can route back
         var clientSub = Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
@@ -216,7 +216,7 @@ public class SharedOrleansFixture : IAsyncLifetime
 
         foreach (var sub in reg.Subscriptions)
         {
-            try { await sub.DisposeAsync(); }
+            try { sub.Dispose(); }
             catch { /* tearing-down — swallow so other cleanups still run */ }
         }
 
