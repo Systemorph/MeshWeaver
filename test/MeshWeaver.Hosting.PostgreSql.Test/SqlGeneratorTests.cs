@@ -52,6 +52,57 @@ public class SqlGeneratorTests
     }
 
     [Fact]
+    public void GenerateSelectQuery_TextSearch_RanksByHybridRelevance()
+    {
+        // Parity with GenerateCrossSchemaSelectQuery (#20): a scoped text query with no
+        // explicit OrderBy must ORDER BY the hybrid relevance ladder so LIMIT keeps the
+        // most-relevant rows (exact-name=1000 > name-prefix=600 > id-prefix=500 > …),
+        // not arbitrary heap order.
+        var gen = new PostgreSqlSqlGenerator();
+        var query = ParsedQuery.Empty with { TextSearch = "laptop" };
+
+        var (sql, parameters) = gen.GenerateSelectQuery(query);
+
+        sql.Should().Contain("ORDER BY (CASE");
+        sql.Should().Contain("WHEN LOWER(COALESCE(n.name,'')) = LOWER(@scoreText) THEN 1000");
+        sql.Should().Contain("END) DESC, n.last_modified DESC NULLS LAST");
+        parameters["@scoreText"].Should().Be("laptop");
+    }
+
+    [Fact]
+    public void GenerateSelectQuery_NoTextSearch_NoRelevanceOrdering()
+    {
+        // A structured-only query must NOT get the relevance ladder — it would force an
+        // arbitrary score sort onto a non-text query.
+        var gen = new PostgreSqlSqlGenerator();
+        var query = new ParsedQuery(
+            Filter: new QueryComparison(new QueryCondition("nodeType", QueryOperator.Equal, ["Story"])),
+            TextSearch: null);
+
+        var (sql, parameters) = gen.GenerateSelectQuery(query);
+
+        sql.Should().NotContain("THEN 1000");
+        parameters.Should().NotContainKey("@scoreText");
+    }
+
+    [Fact]
+    public void GenerateSelectQuery_TextSearchWithExplicitOrderBy_OrderBySupersedesRelevance()
+    {
+        // An explicit sort wins over the relevance ladder — the ladder is only the default.
+        var gen = new PostgreSqlSqlGenerator();
+        var query = ParsedQuery.Empty with
+        {
+            TextSearch = "laptop",
+            OrderBy = new OrderByClause("name")
+        };
+
+        var (sql, _) = gen.GenerateSelectQuery(query);
+
+        sql.Should().Contain("ORDER BY n.name ASC");
+        sql.Should().NotContain("THEN 1000");
+    }
+
+    [Fact]
     public void GenerateSelectQuery_NoSelect_FetchesContent()
     {
         var gen = new PostgreSqlSqlGenerator();

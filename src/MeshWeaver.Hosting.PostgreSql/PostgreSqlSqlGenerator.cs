@@ -259,6 +259,26 @@ public class PostgreSqlSqlGenerator
             var direction = query.OrderBy.Descending ? "DESC" : "ASC";
             sql.Append($" ORDER BY {MapOrderBySelector(query.OrderBy.Property)} {direction}");
         }
+        else if (!string.IsNullOrEmpty(query.TextSearch))
+        {
+            // PG-side relevance parity with GenerateCrossSchemaSelectQuery (#20): rank by a
+            // hybrid score so the LIMIT keeps the most-RELEVANT rows, not arbitrary heap order
+            // (a relevant row could otherwise fall outside the LIMIT before any C#-side
+            // ComputeRowScores re-rank ever sees it). Same ladder: exact name > name-prefix >
+            // id-prefix > name-substring > id-substring > description-substring. An explicit
+            // OrderBy (handled above) supersedes. Single-schema keeps the `n` alias (no UNION
+            // wrap) and parameterises the term (unlike the inlined cross-schema generator).
+            parameters["@scoreText"] = query.TextSearch;
+            sql.Append(
+                " ORDER BY (CASE " +
+                "WHEN LOWER(COALESCE(n.name,'')) = LOWER(@scoreText) THEN 1000 " +
+                "WHEN LOWER(COALESCE(n.name,'')) LIKE LOWER(@scoreText) || '%' THEN 600 " +
+                "WHEN LOWER(COALESCE(n.id,'')) LIKE LOWER(@scoreText) || '%' THEN 500 " +
+                "WHEN LOWER(COALESCE(n.name,'')) LIKE '%' || LOWER(@scoreText) || '%' THEN 300 " +
+                "WHEN LOWER(COALESCE(n.id,'')) LIKE '%' || LOWER(@scoreText) || '%' THEN 200 " +
+                "WHEN LOWER(COALESCE(n.description,'')) LIKE '%' || LOWER(@scoreText) || '%' THEN 100 " +
+                "ELSE 0 END) DESC, n.last_modified DESC NULLS LAST");
+        }
 
         if (query.Limit.HasValue)
             sql.Append($" LIMIT {query.Limit.Value}");
