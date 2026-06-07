@@ -86,4 +86,64 @@ public class CompileLeafStabilityTest(ITestOutputHelper output) : MonolithMeshTe
             Output.WriteLine($"=== iteration {i}: OK ({result.AssemblyLocation}) ===");
         }
     }
+
+    /// <summary>
+    /// The DISPATCH counterpart: drive the compile through the actual first-build
+    /// KICKOFF (RunCompile inline on the NodeType hub action block) across 8 fresh
+    /// NodeTypes and assert each SETTLES to a terminal CompilationStatus. A stall
+    /// sticks at Compiling and times out the per-iteration wait. Paired with
+    /// <see cref="CompileAndGetConfigurations_FreshNodeTypes_AllEmitWithinBound"/>
+    /// (which proves the leaf is sound), a failure here localises the defect to the
+    /// inline-dispatch wiring; both green means the kickoff path is stable.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public void Kickoff_FreshNodeTypes_AllSettle_NoStall()
+    {
+        const int iterations = 8;
+
+        for (var i = 0; i < iterations; i++)
+        {
+            var nodeTypePath = $"type/DispatchStab{i}";
+            var typeNode = MeshNode.FromPath(nodeTypePath) with
+            {
+                Name = $"DispatchStab{i}",
+                NodeType = MeshNode.NodeTypePath,
+                // Self-contained config (no source-type reference) so the kickoff settles
+                // Ok regardless of whether the source create has propagated yet — we are
+                // testing that the dispatch SETTLES, not the source-freshness contract.
+                Content = new NodeTypeDefinition
+                {
+                    Configuration = "config => config.AddDefaultLayoutAreas()"
+                },
+                State = MeshNodeState.Active
+            };
+            MeshService.CreateNode(typeNode).Should().Within(30.Seconds()).Emit(
+                $"dispatch iteration {i}: NodeType create must emit");
+
+            MeshService.CreateNode(new MeshNode("code", $"{nodeTypePath}/Source")
+            {
+                NodeType = "Code",
+                Name = "code",
+                Content = new CodeConfiguration
+                {
+                    Code = $"public record DStab{i} {{ public string T {{ get; init; }} = string.Empty; }}",
+                    Language = "csharp"
+                },
+                State = MeshNodeState.Active
+            }).Should().Within(30.Seconds()).Emit($"dispatch iteration {i}: source create must emit");
+
+            Output.WriteLine($"=== dispatch iteration {i}: awaiting kickoff settle ===");
+
+            // The kickoff runs RunCompile INLINE on the NodeType hub. It must SETTLE to
+            // a terminal status; a stall sticks at Compiling and times out here.
+            var def = Mesh.GetMeshNodeStream(nodeTypePath)
+                .Should().Within(40.Seconds())
+                .Match(n => n?.Content is NodeTypeDefinition d
+                    && d.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error);
+            var status = ((NodeTypeDefinition)def.Content!).CompilationStatus;
+            Output.WriteLine($"=== dispatch iteration {i}: settled {status} ===");
+            status.Should().Be(CompilationStatus.Ok,
+                $"dispatch iteration {i}: the inline kickoff compile must settle to Ok (no stall)");
+        }
+    }
 }
