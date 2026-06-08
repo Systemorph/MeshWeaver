@@ -110,10 +110,10 @@ All docs embedded in `src/MeshWeaver.Documentation/` and served under `Doc/` at 
 ## Deployment
 
 **Two deploy routes, different targets — neither deprecated.** Pick by target, don't mix:
-- **AKS** — the shared cluster portals (`atioz`/`memex`). Full ref: [DeploymentAKS.md](src/MeshWeaver.Documentation/Data/Architecture/DeploymentAKS.md).
+- **AKS** — the shared cluster `memex` portal. Full ref: [DeploymentAKS.md](src/MeshWeaver.Documentation/Data/Architecture/DeploymentAKS.md).
 - **Azure Container Apps** — the Aspire `test`/`prod` modes, via `tools/deploy.sh prod|test`. Full ref: [DeploymentContainerApps.md](src/MeshWeaver.Documentation/Data/Architecture/DeploymentContainerApps.md).
 
-The `atioz`/`memex` portals run on the shared **AKS cluster** `memexaks-cluster` (RG `memex-aks-rg`, swedencentral) — namespaces `atioz` and `memex` — against the Postgres Flexible Server, images in ACR `meshweaver.azurecr.io`. **Private cluster: `kubectl` ONLY via `az aks command invoke -g memex-aks-rg -n memexaks-cluster --command "…"`.**
+The `memex` portal runs on the shared **AKS cluster** `memexaks-cluster` (RG `memex-aks-rg`, swedencentral) — namespace `memex` — against the Postgres Flexible Server, images in ACR `meshweaver.azurecr.io`. **Private cluster: `kubectl` ONLY via `az aks command invoke -g memex-aks-rg -n memexaks-cluster --command "…"`.**
 
 **On AKS a code update = build image → set image → restart** (the AKS route does NOT use `tools/deploy.sh` or `aspire deploy` — those are the Container Apps route):
 
@@ -127,7 +127,7 @@ dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.cs
 dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj -c Release \
   -t:PublishContainer -p:ContainerRegistry=meshweaver.azurecr.io \
   -p:ContainerRepository=memex-migration -p:ContainerImageTag=<tag>
-# Roll out (NS = atioz | memex):
+# Roll out (NS = memex):
 az aks command invoke -g memex-aks-rg -n memexaks-cluster --command "\
   kubectl -n <NS> set image deployment/memex-portal-deployment memex-portal=meshweaver.azurecr.io/memex-portal-ai:<tag>; \
   kubectl -n <NS> set image deployment/memex-migration-deployment memex-migration=meshweaver.azurecr.io/memex-migration:<tag>; \

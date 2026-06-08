@@ -6,6 +6,7 @@ using System.Text.Json;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Reactive;
 
 namespace MeshWeaver.Hosting.Cosmos;
@@ -22,16 +23,20 @@ public class CosmosMeshQuery : IMeshQueryProvider
     private readonly HashSet<string> _excludedNamespaces;
     private readonly QueryParser _parser = new();
     private long _version;
+    // Cosmos queries run inside the I/O pool (Invoke), never a bare _ioPool.Invoke.
+    private readonly IIoPool _ioPool;
 
     public static readonly TimeSpan DefaultDebounceInterval = TimeSpan.FromMilliseconds(100);
 
     public CosmosMeshQuery(
         CosmosStorageAdapter adapter,
         MeshConfiguration? meshConfiguration = null,
-        IEnumerable<string>? excludedNamespaces = null)
+        IEnumerable<string>? excludedNamespaces = null,
+        IIoPool? ioPool = null)
     {
         _adapter = adapter;
         _meshConfiguration = meshConfiguration;
+        _ioPool = ioPool ?? IoPool.Unbounded;
         _excludedNamespaces = (excludedNamespaces ?? Enumerable.Empty<string>())
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
@@ -186,7 +191,7 @@ public class CosmosMeshQuery : IMeshQueryProvider
     /// <summary>
     /// Native reactive autocomplete. The Cosmos execute-query (<c>_adapter.QueryNodesAsync</c> —
     /// the <c>await foreach</c> over the Cosmos feed iterator) is the I/O leaf: it runs inside
-    /// <see cref="Observable.FromAsync{TResult}(Func{CancellationToken, Task{TResult}})"/> and is
+    /// <see cref="_ioPool.Invoke{TResult}(Func{CancellationToken, Task{TResult}})"/> and is
     /// pushed to <see cref="System.Reactive.Concurrency.TaskPoolScheduler"/> so the calling hub's
     /// action block is never blocked. No <c>Task.Run</c> bridge, no async-enumerable on the surface.
     /// </summary>
@@ -209,7 +214,7 @@ public class CosmosMeshQuery : IMeshQueryProvider
             Path: basePath,
             Scope: QueryScope.Descendants);
 
-        return Observable.FromAsync(async cancel =>
+        return _ioPool.Invoke(async cancel =>
             {
                 var suggestions = new List<QuerySuggestion>();
                 await foreach (var node in _adapter.QueryNodesAsync(query, ct: cancel).ConfigureAwait(false))
@@ -219,7 +224,7 @@ public class CosmosMeshQuery : IMeshQueryProvider
                     if (context != null)
                     {
                         if (_meshConfiguration?.IsExcludedFromContext(node.NodeType, context) == true) continue;
-                        if (node.ExcludeFromContext?.Contains(context) == true) continue;
+                        if (node.IsExcludedFromContext(context)) continue;
                     }
 
                     var name = node.Name ?? node.Id ?? node.Path ?? "";
@@ -267,7 +272,7 @@ public class CosmosMeshQuery : IMeshQueryProvider
             Path: null,
             Scope: QueryScope.Exact);
 
-        return Observable.FromAsync<T?>(async cancel =>
+        return _ioPool.Invoke<T?>(async cancel =>
             {
                 await foreach (var node in _adapter.QueryNodesAsync(query, ct: cancel).ConfigureAwait(false))
                 {
@@ -460,7 +465,7 @@ public class CosmosMeshQuery : IMeshQueryProvider
         if (context == null) return false;
         if (_meshConfiguration?.IsExcludedFromContext(node.NodeType, context) == true)
             return true;
-        if (node.ExcludeFromContext?.Contains(context) == true)
+        if (node.IsExcludedFromContext(context))
             return true;
         return false;
     }

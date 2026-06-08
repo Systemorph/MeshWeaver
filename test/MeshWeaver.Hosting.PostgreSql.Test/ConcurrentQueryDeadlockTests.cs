@@ -72,7 +72,10 @@ public class ConcurrentQueryDeadlockTests
             .Should().Within(30.Seconds()).Emit();
     }
 
-    [Fact(Timeout = 120_000)]
+    [Fact(Timeout = 120_000,
+        Skip = "Heavy 48-way concurrent PG blocking-subscriber deadlock repro — skipped by request. "
+             + "Un-skip to guard the bare-Observable.FromAsync → IIoPool.Invoke migration in "
+             + "PostgreSqlMeshQuery against regressions (a wedge here = the deadlock returning).")]
     public void Query_ManyConcurrentBlockingSubscribers_AllComplete_NoDeadlock()
     {
         Seed();
@@ -112,7 +115,7 @@ public class ConcurrentQueryDeadlockTests
         // blocking join IS the test: it asserts the migrated path does NOT deadlock
         // under blocking subscribers. The timeout makes the block itself bounded.
 #pragma warning disable xUnit1031
-        var allDone = Task.WaitAll(tasks, TimeSpan.FromSeconds(90));
+        var allDone = Task.WaitAll(tasks, TimeSpan.FromSeconds(30));
 #pragma warning restore xUnit1031
 
         allDone.Should().BeTrue(

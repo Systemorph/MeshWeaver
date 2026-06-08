@@ -7,7 +7,7 @@ Icon: Cloud
 
 # Deploying to Azure Container Apps
 
-This is **one of two deploy routes**. Use it for the **.NET Aspire `test` / `prod` modes**, which provision and run on **Azure Container Apps** (Sweden Central) — the AppHost (`memex/aspire/Memex.AppHost`) is the single source of truth for every resource (PostgreSQL, Blob Storage, Orleans clustering, Application Insights). For the shared AKS-cluster portals (`atioz`, `memex` namespaces), see [DeploymentAKS.md](DeploymentAKS.md). These are **different routes to different targets** — choose by where you're deploying.
+This is **one of two deploy routes**. Use it for the **.NET Aspire `test` / `prod` modes**, which provision and run on **Azure Container Apps** (Sweden Central) — the AppHost (`memex/aspire/Memex.AppHost`) is the single source of truth for every resource (PostgreSQL, Blob Storage, Orleans clustering, Application Insights). For the shared AKS-cluster portal (`memex` namespace), see [DeploymentAKS.md](DeploymentAKS.md). These are **different routes to different targets** — choose by where you're deploying.
 
 ## Deployment Modes
 

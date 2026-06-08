@@ -1273,7 +1273,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         if (context == null) return false;
         if (meshConfiguration?.IsExcludedFromContext(node.NodeType, context) == true)
             return true;
-        if (node.ExcludeFromContext?.Contains(context) == true)
+        if (node.IsExcludedFromContext(context))
             return true;
         return false;
     }

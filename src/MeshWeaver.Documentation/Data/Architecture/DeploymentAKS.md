@@ -1,13 +1,13 @@
 ---
 Name: Deployment — AKS
 Category: Architecture
-Description: Deploying a code update to the shared AKS cluster (memexaks-cluster) that hosts the atioz and memex portals — build images, set image, roll out, verify
+Description: Deploying a code update to the shared AKS cluster (memexaks-cluster) that hosts the memex portal — build images, set image, roll out, verify
 Icon: Cloud
 ---
 
 # Deploying to AKS
 
-This is **one of two deploy routes** for MeshWeaver. Use it for the shared portals on the **AKS cluster `memexaks-cluster`** (resource group `memex-aks-rg`, region swedencentral) — the `atioz` and `memex` namespaces, backed by the Postgres Flexible Server, with container images in ACR `meshweaver.azurecr.io`. For the Azure Container Apps route (Aspire `test`/`prod` modes via `tools/deploy.sh`), see [DeploymentContainerApps.md](DeploymentContainerApps.md). These are **different routes to different targets**, not old-vs-new — pick the one that matches where you're deploying.
+This is **one of two deploy routes** for MeshWeaver. Use it for the shared portals on the **AKS cluster `memexaks-cluster`** (resource group `memex-aks-rg`, region swedencentral) — the `memex` namespace, backed by the Postgres Flexible Server, with container images in ACR `meshweaver.azurecr.io`. For the Azure Container Apps route (Aspire `test`/`prod` modes via `tools/deploy.sh`), see [DeploymentContainerApps.md](DeploymentContainerApps.md). These are **different routes to different targets**, not old-vs-new — pick the one that matches where you're deploying.
 
 > **The cluster is private.** `kubectl` is not reachable directly — every command runs through `az aks command invoke -g memex-aks-rg -n memexaks-cluster --command "…"`, which executes inside the cluster's API-server-side runner.
 
@@ -33,7 +33,7 @@ dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.cs
 
 Pick a `<tag>` that pins the change (e.g. `bugfix-2026-06-05`). CI also builds images on push, but it lags — check `az acr repository show-tags -n meshweaver --repository memex-portal-ai --orderby time_desc --top 5` before assuming your commit is built; if it isn't, build manually as above. If only portal code changed (no migration/schema change), you can reuse the live `memex-migration` tag and skip the migration build.
 
-## 2. Roll out (NS = `atioz` | `memex`)
+## 2. Roll out (NS = `memex`)
 
 ```bash
 az aks command invoke -g memex-aks-rg -n memexaks-cluster --command "\

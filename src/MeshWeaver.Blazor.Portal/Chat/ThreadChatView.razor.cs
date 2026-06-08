@@ -252,11 +252,18 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     // so they survive a reboot. On submit a new thread is cloned from it and the draft
     // cleared. _userHome == AccessContext.ObjectId == the user's home partition (dev
     // login stamps ObjectId = username).
-    // Path has NO leading underscore: ChatInput is a MAIN (non-satellite) node, so the
-    // write and the path-based read BOTH hit mesh_nodes. The old "_ThreadTemplate" id
-    // routed the write to the `threads` SATELLITE table but the read resolved by path to
-    // mesh_nodes — so the selection never persisted (the "doesn't save last harness" bug).
-    private const string TemplateNodeId = "ChatInput";
+    // ChatInput is a per-user SINGLETON main node living under the user's hidden _Memex
+    // defaults namespace: {userHome}/_Memex/ChatInput. `_Memex` is a "dotfile" namespace —
+    // hidden from search/create by convention (see MeshNodeVisibility) — but it is NOT a
+    // satellite suffix, so the write and the path-based read BOTH hit mesh_nodes. (The dead
+    // "_ThreadTemplate"/nodeType:Thread approach routed the write to the `threads` satellite
+    // table while the path-read hit mesh_nodes → the selection never persisted; never reuse it.)
+    // Single source of truth — the read path here MUST equal the seed path
+    // (ChatInputNodeType.ChatInputSeedHandler) and the type, or the singleton splits.
+    private const string TemplateNodeId = MeshWeaver.AI.ChatInputNodeType.NodeType;
+
+    /// <summary>The user's hidden Memex-defaults namespace (dotfile): <c>{userHome}/_Memex/…</c>.</summary>
+    private const string MemexDefaultsNamespace = MeshWeaver.AI.ChatInputNodeType.MemexDefaultsNamespace;
     private string? _userHome;
     private string? _templatePath;
     private readonly System.Reactive.Subjects.Subject<string> _draftChanges = new();
@@ -330,7 +337,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         var accessSvc = Hub.ServiceProvider.GetService<AccessService>();
         _userHome = accessSvc?.Context?.ObjectId ?? accessSvc?.CircuitContext?.ObjectId;
         if (!string.IsNullOrEmpty(_userHome))
-            _templatePath = $"{_userHome}/{TemplateNodeId}";
+            _templatePath = MeshWeaver.AI.ChatInputNodeType.PathFor(_userHome);
 
         _draftSaveSub = _draftChanges
             .Throttle(TimeSpan.FromMilliseconds(600))
@@ -484,7 +491,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             var updated = mutate(t);
             return node != null
                 ? node with { Content = updated }
-                : new MeshNode(TemplateNodeId, _userHome)
+                : new MeshNode(TemplateNodeId, $"{_userHome}/{MemexDefaultsNamespace}")
                 {
                     // NOT the Thread nodeType: nodeType:Thread routes the WRITE to the
                     // per-partition `threads` SATELLITE table, but GetMeshNodeStream resolves

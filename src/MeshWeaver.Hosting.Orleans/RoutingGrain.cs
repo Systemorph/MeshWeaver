@@ -90,6 +90,37 @@ internal class RoutingGrain(
                 }, TaskScheduler.Default);
         }
 
+        // Surface a failure back to the original sender as a DeliveryFailure MESSAGE so
+        // its hub.Observe(...) callback fires OnError instead of parking forever. Used for
+        // BOTH unresolvable paths (NotFound) AND a node that resolves but whose owning grain
+        // cannot service the delivery (Failed — an unmaterializable / unregistered node type,
+        // or an access/activation failure). The sender's hub matches the DeliveryFailure to
+        // its Observe(...) subject by RequestId and fires OnError. Without this the caller's
+        // callback parks until its client-side timeout and the GUI re-issues the request →
+        // the routing NotFound/Failed STORM (the 2026-06-08 atioz event storm).
+        void PostFailureToSender(string failureMessage, ErrorType errorType)
+        {
+            if (delivery.Sender == null) return;
+            var failureDelivery = new MessageDelivery<DeliveryFailure>(
+                new DeliveryFailure(delivery, failureMessage) { ErrorType = errorType },
+                new PostOptions(address)
+                    .WithTarget(delivery.Sender)
+                    .WithProperty(PostOptions.RequestId, delivery.Id),
+                System.Text.Json.JsonSerializerOptions.Default);
+            streamProvider.GetStream<IMessageDelivery>(delivery.Sender.ToString())
+                .OnNextAsync(failureDelivery)
+                .ContinueWith(t =>
+                {
+                    if (t.IsFaulted)
+                    {
+                        RoutingGrainTrace.Write($"RoutingGrain.RouteMessage FAILURE_DELIVER_FAIL id={delivery.Id} ex={t.Exception?.InnerException?.Message ?? t.Exception?.Message}");
+                        logger.LogWarning(t.Exception, "[ROUTE] Failed to deliver {ErrorType} failure to sender {Sender}", errorType, delivery.Sender);
+                    }
+                    else
+                        RoutingGrainTrace.Write($"RoutingGrain.RouteMessage FAILURE_DELIVER_OK id={delivery.Id} sender={delivery.Sender} errorType={errorType}");
+                }, TaskScheduler.Default);
+        }
+
         RoutingGrainTrace.Write($"RoutingGrain.RouteMessage RESOLVE_BEGIN id={delivery.Id} addr={addressPath}");
         pathResolver.ResolvePath(addressPath)
             .Take(1)
@@ -109,40 +140,7 @@ internal class RoutingGrain(
                         : $"No node found at '{addressPath}'. Closest ancestor is '{resolution.Prefix}' (remainder='{resolution.Remainder}').";
                     logger.LogWarning("[ROUTE] NotFound: {FailureMessage}", failureMessage);
                     RoutingGrainTrace.Write($"RoutingGrain.RouteMessage NOT_FOUND id={delivery.Id} addr={addressPath} sender={delivery.Sender}");
-                    // Surface the failure back to the sender as a DeliveryFailure
-                    // MESSAGE (not just delivery.Failed(...)) — the sender's hub
-                    // matches the DeliveryFailure to its Observe(...) subject by
-                    // RequestId and fires OnError. Without this, the sender's
-                    // GetRemoteStream / hub.Observe spins on a never-emitting
-                    // observable until its caller-side timeout. Wraps the failure
-                    // as a fresh delivery targeted at the original sender, with
-                    // RequestId stamped from the failed request so the response
-                    // matches the right callback. Mirrors what the old return-
-                    // observable path did via OrleansRoutingService.SendDeliveryFailure.
-                    if (delivery.Sender != null)
-                    {
-                        var failureDelivery = new MessageDelivery<DeliveryFailure>(
-                            new DeliveryFailure(delivery, failureMessage)
-                            {
-                                ErrorType = ErrorType.NotFound
-                            },
-                            new PostOptions(address)
-                                .WithTarget(delivery.Sender)
-                                .WithProperty(PostOptions.RequestId, delivery.Id),
-                            System.Text.Json.JsonSerializerOptions.Default);
-                        var failStream = streamProvider.GetStream<IMessageDelivery>(delivery.Sender.ToString());
-                        failStream.OnNextAsync(failureDelivery)
-                            .ContinueWith(t =>
-                            {
-                                if (t.IsFaulted)
-                                {
-                                    RoutingGrainTrace.Write($"RoutingGrain.RouteMessage NOT_FOUND_DELIVER_FAIL id={delivery.Id} ex={t.Exception?.InnerException?.Message ?? t.Exception?.Message}");
-                                    logger.LogWarning(t.Exception, "[ROUTE] Failed to deliver NotFound failure to sender {Sender}", delivery.Sender);
-                                }
-                                else
-                                    RoutingGrainTrace.Write($"RoutingGrain.RouteMessage NOT_FOUND_DELIVER_OK id={delivery.Id} sender={delivery.Sender}");
-                            }, TaskScheduler.Default);
-                    }
+                    PostFailureToSender(failureMessage, ErrorType.NotFound);
                     return;
                 }
 
@@ -162,8 +160,24 @@ internal class RoutingGrain(
                     else if (t.IsCompletedSuccessfully)
                     {
                         RoutingGrainTrace.Write($"RoutingGrain.RouteMessage GRAIN_CALL_OK id={delivery.Id} grainKey={grainKey} state={t.Result.State}");
-                        logger.LogDebug("[ROUTE] Grain {GrainKey} returned state={State} for {MessageType}",
-                            grainKey, t.Result.State, delivery.Message?.GetType().Name ?? "(null)");
+                        if (t.Result.State == MessageDeliveryState.Failed)
+                        {
+                            // The owning grain resolved but could NOT service the delivery
+                            // (unmaterializable / unregistered node type, failed activation,
+                            // access denial surfaced as a failed activation). Previously this
+                            // state was logged and dropped → the caller's callback parked
+                            // forever and the GUI re-issued → storm. Surface it as a
+                            // DeliveryFailure so the caller gets a fast, deterministic OnError.
+                            var failMsg = t.Result.Properties.TryGetValue("Error", out var errObj) && errObj is string errStr
+                                ? errStr
+                                : $"Delivery to '{addressPath}' failed at its owning hub.";
+                            logger.LogWarning("[ROUTE] Grain {GrainKey} returned Failed for {MessageType}: {Error}",
+                                grainKey, delivery.Message?.GetType().Name ?? "(null)", failMsg);
+                            PostFailureToSender(failMsg, ErrorType.Failed);
+                        }
+                        else
+                            logger.LogDebug("[ROUTE] Grain {GrainKey} returned state={State} for {MessageType}",
+                                grainKey, t.Result.State, delivery.Message?.GetType().Name ?? "(null)");
                     }
                 }, TaskScheduler.Default);
             },

@@ -271,7 +271,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
             await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, options, userId, activityUserId: activityUserId, excludedNodeTypes: excludedNodeTypes, ct: ct).ConfigureAwait(false))
             {
                 // Instance-level exclusion still checked in memory (node.ExcludeFromContext)
-                if (context != null && node.ExcludeFromContext?.Contains(context) == true)
+                if (node.IsExcludedFromContext(context))
                     continue;
                 var boost = PathProximity.ComputeBoost(request.ContextPath, node.Path);
                 buffered.Add((node, boost));
@@ -299,7 +299,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, options, effectiveUserId, activityUserId: activityUserId, excludedNodeTypes: excludedNodeTypes, ct: ct).ConfigureAwait(false))
         {
             // Instance-level exclusion still checked in memory (node.ExcludeFromContext)
-            if (context != null && node.ExcludeFromContext?.Contains(context) == true)
+            if (node.IsExcludedFromContext(context))
                 continue;
 
             if (skipOrig > 0)
@@ -377,7 +377,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
             parsedList, options, effectiveUserId, activityUserId: activityUserId,
             excludedNodeTypes: excludedNodeTypes, ct: ct).ConfigureAwait(false))
         {
-            if (context != null && node.ExcludeFromContext?.Contains(context) == true)
+            if (node.IsExcludedFromContext(context))
                 continue;
             if (skip > 0) { skip--; continue; }
 
@@ -452,7 +452,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                     if (context != null)
                     {
                         if (_meshConfiguration?.IsExcludedFromContext(node.NodeType, context) == true) continue;
-                        if (node.ExcludeFromContext?.Contains(context) == true) continue;
+                        if (node.IsExcludedFromContext(context)) continue;
                     }
 
                     var name = node.Name ?? node.Id ?? node.Path ?? "";
@@ -837,7 +837,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         if (context == null) return false;
         if (_meshConfiguration?.IsExcludedFromContext(node.NodeType, context) == true)
             return true;
-        if (node.ExcludeFromContext?.Contains(context) == true)
+        if (node.IsExcludedFromContext(context))
             return true;
         return false;
     }
