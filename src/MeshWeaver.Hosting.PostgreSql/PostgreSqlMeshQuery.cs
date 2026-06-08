@@ -8,6 +8,7 @@ using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Hosting.PostgreSql;
@@ -39,12 +40,33 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
     // closed loop. When null, ILIKE substring stays in effect.
     private readonly IEmbeddingProvider? _embeddingProvider;
 
+    // 🚨 Every async query leaf runs INSIDE this pool — never a bare
+    // Observable.FromAsync. A bare FromAsync runs the function's synchronous
+    // prologue on the SUBSCRIBING thread (the grain/hub ActionBlock when a
+    // routing query subscribes mid-handler) and applies no bound; under a
+    // blocking subscriber stacked beneath a CombineLatest provider fan-out it
+    // wedges — the "snapshot query hangs" failure that the now-deleted
+    // initial-Full watchdog was a band-aid over. pool.Invoke runs the leaf COLD
+    // (work on Subscribe, exactly like the FromAsync it replaces) inside the
+    // pool — offloaded to the ThreadPool with ConfigureAwait(false) on every
+    // await and the slot released on complete/error/unsubscribe — so the leaf
+    // never depends on the subscriber's thread to progress. (Not pool.Run: that
+    // is eager + ReplaySubject-cached, which would run the query before Subscribe
+    // and break the cold-observable / RequireSubscribe contract the live-query
+    // re-run relies on.) We use the shared storage-read pool (FileSystem cap =
+    // ProcessorCount, matching the pedestrian StorageAdapterMeshQueryProvider)
+    // — NOT the cap-1 pg:{adapter} write pool, which would serialize every
+    // read; the adapter's own ReadConcurrencyGate bounds the live connections.
+    // See Doc/Architecture/ControlledIoPooling.md + AsynchronousCalls.md.
+    private readonly IIoPool _ioPool;
+
     public PostgreSqlMeshQuery(
         PostgreSqlStorageAdapter adapter,
         AccessService? accessService = null,
         MeshConfiguration? meshConfiguration = null,
         IEnumerable<string>? excludedNamespaces = null,
-        IEmbeddingProvider? embeddingProvider = null)
+        IEmbeddingProvider? embeddingProvider = null,
+        IoPoolRegistry? ioPoolRegistry = null)
     {
         _adapter = adapter;
         _accessService = accessService;
@@ -52,6 +74,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         _excludedNamespaces = (excludedNamespaces ?? Enumerable.Empty<string>())
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         _embeddingProvider = embeddingProvider;
+        _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
     }
 
     /// <inheritdoc/>
@@ -418,7 +441,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         var acUserId = _accessService?.Context?.ObjectId;
         var effectiveAutocompleteUserId = string.IsNullOrEmpty(acUserId) ? WellKnownUsers.Anonymous : acUserId;
 
-        return Observable.FromAsync(async cancel =>
+        return _ioPool.Invoke(async cancel =>
             {
                 var suggestions = new List<QuerySuggestion>();
                 await foreach (var node in _adapter.QueryNodesAsync(query, options, effectiveAutocompleteUserId, ct: cancel).ConfigureAwait(false))
@@ -464,8 +487,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                     Score = s.Score,
                     ProviderName = providerName,
                 }).ToList();
-            })
-            .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default);
+            });
     }
 
     /// <inheritdoc />
@@ -480,8 +502,10 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         var acUserId = _accessService?.Context?.ObjectId;
         var effectiveSelectUserId = string.IsNullOrEmpty(acUserId) ? WellKnownUsers.Anonymous : acUserId;
 
-        // PG execute-query leaf wrapped in Observable.FromAsync + TaskPool — no ToTask on the surface.
-        return Observable.FromAsync<T?>(async cancel =>
+        // PG execute-query leaf run INSIDE the IIoPool — never a bare
+        // Observable.FromAsync (deadlocks under a blocking subscriber). Invoke
+        // (cold) preserves the original FromAsync's work-on-Subscribe semantics.
+        return _ioPool.Invoke<T?>(async cancel =>
             {
                 await foreach (var node in _adapter.QueryNodesAsync(query, options, effectiveSelectUserId, ct: cancel).ConfigureAwait(false))
                 {
@@ -490,8 +514,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                     return default;
                 }
                 return default;
-            })
-            .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default);
+            });
     }
 
     public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request, JsonSerializerOptions options)
@@ -546,11 +569,16 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
             var currentItems = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
             var disposables = new CompositeDisposable();
 
-            // Observable.FromAsync with Scheduler.Default defers all DB work to the
-            // ThreadPool — no custom TaskScheduler (Orleans) is ever captured.
-            // CollectQueryResultsAsync is the sole async boundary (persistence layer).
+            // The DB round-trip runs INSIDE the IIoPool: offloaded to the
+            // ThreadPool with ConfigureAwait(false) throughout, so no hub/Orleans
+            // scheduler is captured and a blocking subscriber beneath the
+            // CombineLatest provider fan-out can't wedge it. Invoke (cold) keeps
+            // the original FromAsync's work-on-Subscribe semantics — RunQuery is
+            // re-invoked per change-batch and each subscribe is one fresh query,
+            // never an eager replay. CollectQueryResultsAsync is the sole async
+            // boundary (persistence layer).
             IObservable<List<(string? Path, T Item)>> RunQuery()
-                => Observable.FromAsync(ct => CollectQueryResultsAsync<T>(request, options, ct), Scheduler.Default);
+                => _ioPool.Invoke(ct => CollectQueryResultsAsync<T>(request, options, ct));
 
             // Race-fix (mirrors StorageAdapterMeshQueryProvider): subscribe to
             // changeNotifier BEFORE running the initial query so that any

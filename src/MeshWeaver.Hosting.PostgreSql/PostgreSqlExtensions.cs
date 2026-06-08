@@ -4,6 +4,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -103,7 +104,8 @@ public static class PostgreSqlExtensions
                 sp.GetService<AccessService>(),
                 meshConfiguration: null,
                 excludedNamespaces: null,
-                embeddingProvider: sp.GetService<IEmbeddingProvider>());
+                embeddingProvider: sp.GetService<IEmbeddingProvider>(),
+                ioPoolRegistry: sp.GetService<IoPoolRegistry>());
         });
         services.AddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<PostgreSqlMeshQuery>());
         services.AddSingleton<IVectorSearchProvider>(sp => sp.GetRequiredService<PostgreSqlMeshQuery>());
@@ -139,7 +141,8 @@ public static class PostgreSqlExtensions
                 sp.GetService<AccessService>(),
                 meshConfiguration: null,
                 excludedNamespaces: null,
-                embeddingProvider: embeddingProvider));
+                embeddingProvider: embeddingProvider,
+                ioPoolRegistry: sp.GetService<IoPoolRegistry>()));
         services.AddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<PostgreSqlMeshQuery>());
         services.AddSingleton<IVectorSearchProvider>(sp => sp.GetRequiredService<PostgreSqlMeshQuery>());
 
@@ -180,7 +183,8 @@ public static class PostgreSqlExtensions
                 sp.GetService<AccessService>(),
                 meshConfiguration: null,
                 excludedNamespaces: null,
-                embeddingProvider: embeddingProvider));
+                embeddingProvider: embeddingProvider,
+                ioPoolRegistry: sp.GetService<IoPoolRegistry>()));
         services.AddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<PostgreSqlMeshQuery>());
         services.AddSingleton<IVectorSearchProvider>(sp => sp.GetRequiredService<PostgreSqlMeshQuery>());
 
@@ -287,7 +291,8 @@ public static class PostgreSqlExtensions
                 sp.GetRequiredService<ICrossSchemaQueryProvider>(),
                 sp.GetService<AccessService>(),
                 sp.GetService<ILogger<PostgreSqlPartitionedMeshQuery>>(),
-                sp.GetRequiredService<PostgreSqlPartitionStorageProvider>()));
+                sp.GetRequiredService<PostgreSqlPartitionStorageProvider>(),
+                sp.GetService<IoPoolRegistry>()));
 
         // pg_notify listener: register both the singleton and an IHostedService
         // wrapper so the LISTEN session opens at host startup. Without the
@@ -393,7 +398,8 @@ public static class PostgreSqlExtensions
                 sp.GetRequiredService<ICrossSchemaQueryProvider>(),
                 sp.GetService<AccessService>(),
                 sp.GetService<ILogger<PostgreSqlPartitionedMeshQuery>>(),
-                sp.GetRequiredService<PostgreSqlPartitionStorageProvider>()));
+                sp.GetRequiredService<PostgreSqlPartitionStorageProvider>(),
+                sp.GetService<IoPoolRegistry>()));
 
         // Start the Admin/Partition/* subscription so writes can route — see
         // the longer comment on the same registration in the connection-string

@@ -6,6 +6,7 @@ using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
@@ -60,6 +61,7 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
     private readonly AccessService? _accessService;
     private readonly ILogger<PostgreSqlPartitionedMeshQuery>? _logger;
     private readonly PostgreSqlPartitionStorageProvider? _partitionProvider;
+    private readonly IoPoolRegistry? _ioPoolRegistry;
     private readonly QueryParser _parser = new();
     private long _version;
 
@@ -75,12 +77,14 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         ICrossSchemaQueryProvider crossSchema,
         AccessService? accessService = null,
         ILogger<PostgreSqlPartitionedMeshQuery>? logger = null,
-        PostgreSqlPartitionStorageProvider? partitionProvider = null)
+        PostgreSqlPartitionStorageProvider? partitionProvider = null,
+        IoPoolRegistry? ioPoolRegistry = null)
     {
         _crossSchema = crossSchema;
         _accessService = accessService;
         _logger = logger;
         _partitionProvider = partitionProvider;
+        _ioPoolRegistry = ioPoolRegistry;
     }
 
     /// <summary>
@@ -99,7 +103,8 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         if (adapter is null) return null;
         return _scopedDelegates.GetOrAdd(adapter, a =>
             new PostgreSqlMeshQuery(a, _accessService, meshConfiguration: null,
-                excludedNamespaces: null, embeddingProvider: _partitionProvider.EmbeddingProvider));
+                excludedNamespaces: null, embeddingProvider: _partitionProvider.EmbeddingProvider,
+                ioPoolRegistry: _ioPoolRegistry));
     }
 
     /// <summary>
