@@ -1,8 +1,12 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
+using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Blazor.Portal.Authentication;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Authorization;
@@ -23,6 +27,9 @@ public partial class UserProfile : ComponentBase
 
     [Inject]
     public required AccessService AccessService { get; init; }
+
+    [Inject]
+    public required PortalApplication PortalApp { get; init; }
 
     [CascadingParameter]
     public required Task<AuthenticationState> AuthenticationState { get; set; }
@@ -57,8 +64,13 @@ public partial class UserProfile : ComponentBase
             username = name;
             initials = GetInitials(name);
 
-            // Check if the user has PlatformAdmin role
-            isPlatformAdmin = AccessService.Context?.Roles?.Contains("PlatformAdmin") == true;
+            // Canonical platform-admin check: admin on the Admin partition
+            // (hub.IsGlobalAdmin). Wait for the positive within a short window — the
+            // synced AccessAssignment query emits an empty seed first.
+            isPlatformAdmin = await PortalApp.Hub.IsGlobalAdmin()
+                .Where(x => x).Take(1)
+                .Timeout(TimeSpan.FromSeconds(5), Observable.Return(false))
+                .FirstAsync().ToTask();
         }
 
     }

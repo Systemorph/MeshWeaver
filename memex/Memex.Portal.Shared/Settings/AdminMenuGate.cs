@@ -56,8 +56,7 @@ internal static class AdminMenuGate
         // Only a POSITIVE (root All) completes the channel early — premature empty/None emissions
         // during the synced-query cold start are filtered out, so we never decide "not admin" off a
         // not-yet-loaded snapshot.
-        using var sub = host.Hub.GetEffectivePermissions(AdminScope, viewerId)
-            .Select(perm => perm.HasFlag(Permission.All))
+        using var sub = host.Hub.IsGlobalAdmin(viewerId)
             .Where(isAdmin => isAdmin)
             .Take(1)
             .Subscribe(

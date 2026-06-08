@@ -233,36 +233,36 @@ public static class UserNodeType
         // Check if the user has Admin permissions at root level. Bridge the IObservable to
         // an IAsyncEnumerable via a Channel — no .ToTask(), no await on a hub round-trip.
         // See Doc/Architecture/AsynchronousCalls.md.
-        var permsChannel = System.Threading.Channels.Channel.CreateBounded<Permission>(
+        var adminChannel = System.Threading.Channels.Channel.CreateBounded<bool>(
             new System.Threading.Channels.BoundedChannelOptions(1) { FullMode = System.Threading.Channels.BoundedChannelFullMode.DropOldest });
 
-        // Match the platform-admin model: admin lives at the "Admin" scope
-        // (AccessAssignment namespace Admin/_Access → scope Admin). Filter for the
-        // POSITIVE All grant with a bounded wait — NOT FirstAsync, which captures the
-        // premature empty static seed emitted before the synced AccessAssignment query
-        // lands (same bug class as AdminMenuGate). A non-admin never emits a positive,
-        // so the timeout fires and the tab stays hidden.
+        // Canonical platform-admin check: admin on the Admin partition
+        // (hub.IsGlobalAdmin → Permission.All at scope "Admin"). Filter for the
+        // POSITIVE with a bounded wait — NOT FirstAsync, which captures the premature
+        // empty static seed emitted before the synced AccessAssignment query lands. A
+        // non-admin never emits a positive, so the timeout fires and the tab stays
+        // hidden. See Doc/Architecture/AccessControl.md.
         using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5));
-        using var sub = host.Hub.GetEffectivePermissions("Admin", viewerId)
-            .Where(perm => perm.HasFlag(Permission.All))
+        using var sub = host.Hub.IsGlobalAdmin(viewerId)
+            .Where(isAdmin => isAdmin)
             .Take(1)
             .Subscribe(
-                perm => { permsChannel.Writer.TryWrite(perm); permsChannel.Writer.TryComplete(); },
-                _ => permsChannel.Writer.TryComplete(),
-                () => permsChannel.Writer.TryComplete());
+                _ => { adminChannel.Writer.TryWrite(true); adminChannel.Writer.TryComplete(); },
+                _ => adminChannel.Writer.TryComplete(),
+                () => adminChannel.Writer.TryComplete());
 
-        Permission rootPerms = Permission.None;
+        var isGlobalAdmin = false;
         try
         {
-            await foreach (var perm in permsChannel.Reader.ReadAllAsync(cts.Token))
+            await foreach (var ok in adminChannel.Reader.ReadAllAsync(cts.Token))
             {
-                rootPerms = perm;
+                isGlobalAdmin = ok;
                 break;
             }
         }
         catch (OperationCanceledException) { }
 
-        if (!rootPerms.HasFlag(Permission.All))
+        if (!isGlobalAdmin)
             yield break;
 
         yield return new SettingsMenuItemDefinition(

@@ -3,6 +3,8 @@ using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text.Json.Serialization;
+using MeshWeaver.Blazor.Infrastructure; // PortalApplication
+using MeshWeaver.Messaging;             // AccessService / AccessContext
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -23,6 +25,20 @@ public class OAuthConnectController(
 {
     private OAuthCodeStore CodeStore => serviceProvider.GetRequiredService<OAuthCodeStore>();
     private ApiTokenService TokenService => serviceProvider.GetRequiredService<ApiTokenService>();
+
+    /// <summary>
+    /// The mesh-resolved identity for this cookie request, as stamped on the
+    /// portal hub's <see cref="AccessService"/> by <c>UserContextMiddleware</c>.
+    /// 🚨 The OAuth token's userId MUST be the mesh User.Id (e.g. <c>rbuergi</c>),
+    /// NEVER the <c>preferred_username</c> claim — Entra fills that with the
+    /// email/UPN, and an email userId routes the token node + its <c>_Access</c>
+    /// self-scope into a non-existent <c>{email}</c> partition (401 on every
+    /// freshly-minted token once the router stopped lazy-creating schemas).
+    /// </summary>
+    private AccessContext? CurrentUser =>
+        serviceProvider.GetRequiredService<PortalApplication>()
+            .Hub.ServiceProvider.GetRequiredService<AccessService>()
+            .Context;
 
     /// <summary>
     /// RFC 8414 — OAuth Authorization Server Metadata.
@@ -136,7 +152,10 @@ public class OAuthConnectController(
             return Redirect(loginUrl);
         }
 
-        // Extract user identity from cookie claims
+        // Extract user identity from cookie claims (email/name are display
+        // fields). The token's userId is the MESH User.Id, resolved by
+        // UserContextMiddleware onto AccessService.Context for this cookie
+        // request — NOT preferred_username, which Entra fills with the email.
         var email = User.FindFirstValue(ClaimTypes.Email)
                     ?? User.FindFirstValue("email")
                     ?? User.FindFirstValue("preferred_username")
@@ -144,12 +163,25 @@ public class OAuthConnectController(
         var name = User.FindFirstValue(ClaimTypes.Name)
                    ?? User.FindFirstValue("name")
                    ?? email;
-        var userId = User.FindFirstValue("preferred_username")
-                     ?? email;
+        var userId = CurrentUser?.ObjectId;
 
         if (string.IsNullOrEmpty(email))
         {
             logger.LogWarning("OAuth /authorize rejected: authenticated principal has no email/preferred_username claim");
+            return BadRequest(new { error = "invalid_request", error_description = "Unable to determine user identity" });
+        }
+
+        // Refuse to issue a code with an unresolved or email-shaped userId — it
+        // would mint the token into a parallel {email} partition that owns none
+        // of the user's data (the original atioz 401). A missing mesh identity
+        // means the User node isn't provisioned yet; the user should retry after
+        // a normal browser login populates the identity cache.
+        if (string.IsNullOrEmpty(userId) || userId.Contains('@'))
+        {
+            logger.LogWarning(
+                "OAuth /authorize rejected: no resolved mesh identity for {Email} (userId='{UserId}'). "
+                + "Retry after a browser login provisions/loads the User node.",
+                email, userId ?? "(null)");
             return BadRequest(new { error = "invalid_request", error_description = "Unable to determine user identity" });
         }
 
