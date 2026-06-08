@@ -1,7 +1,8 @@
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
-using System.Security.Claims;
 using System.Threading;
+using MeshWeaver.Blazor.Infrastructure; // PortalApplication
+using MeshWeaver.Messaging;             // AccessService / AccessContext
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
@@ -18,24 +19,53 @@ namespace Memex.Portal.Shared.Authentication;
 public class ApiTokenController(IServiceProvider serviceProvider) : ControllerBase
 {
     private ApiTokenService tokenService => serviceProvider.GetRequiredService<ApiTokenService>();
+
+    /// <summary>
+    /// The mesh-resolved identity for this request, as stamped on the portal
+    /// hub's <see cref="AccessService"/> by <c>UserContextMiddleware</c>.
+    /// <para>
+    /// 🚨 We deliberately do NOT read <c>preferred_username</c> off the claims
+    /// principal here. Entra/OIDC fill that claim with the UPN, which is the
+    /// user's <b>email</b> (e.g. <c>rbuergi@systemorph.com</c>). The mesh
+    /// partition key is the User node's Id (e.g. <c>rbuergi</c>), and the
+    /// middleware already does the email→User resolution + normalisation (and
+    /// refuses email-shaped ids). Passing the raw email through as the token's
+    /// userId routed the token node AND its <c>_Access</c> self-scope into a
+    /// non-existent <c>{email}</c> partition — which 401'd every freshly-minted
+    /// token once the router stopped lazy-creating schemas. Reading the
+    /// already-resolved context guarantees the token lands in exactly the
+    /// partition the user's other data lives in.
+    /// </para>
+    /// </summary>
+    private AccessContext? CurrentUser =>
+        serviceProvider.GetRequiredService<PortalApplication>()
+            .Hub.ServiceProvider.GetRequiredService<AccessService>()
+            .Context;
+
+    /// <summary>
+    /// The mesh User.Id for the current request, or null if the request has no
+    /// resolved (non-email) mesh identity — in which case token operations must
+    /// be refused rather than routed to a parallel <c>{email}</c> partition.
+    /// </summary>
+    private static string? MeshUserId(AccessContext? user)
+    {
+        var id = user?.ObjectId;
+        return string.IsNullOrEmpty(id) || id.Contains('@') ? null : id;
+    }
+
     /// <summary>
     /// Creates a new API token. Returns the raw token once — it cannot be retrieved again.
     /// </summary>
     [HttpPost]
     public Task<IActionResult> CreateToken([FromBody] CreateTokenRequest request, CancellationToken ct)
     {
-        var userId = User.FindFirstValue("preferred_username")
-                     ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
-                     ?? "";
-        var userName = User.FindFirstValue(ClaimTypes.Name)
-                       ?? User.FindFirstValue("name")
-                       ?? "";
-        var userEmail = User.FindFirstValue(ClaimTypes.Email)
-                        ?? User.FindFirstValue("email")
-                        ?? "";
-
-        if (string.IsNullOrEmpty(userId))
+        var user = CurrentUser;
+        var userId = MeshUserId(user);
+        if (userId is null)
             return Task.FromResult<IActionResult>(Unauthorized("No user identity found"));
+
+        var userName = user!.Name ?? "";
+        var userEmail = user.Email ?? "";
 
         DateTimeOffset? expiresAt = request.ExpiresInDays > 0
             ? DateTimeOffset.UtcNow.AddDays(request.ExpiresInDays.Value)
@@ -66,11 +96,8 @@ public class ApiTokenController(IServiceProvider serviceProvider) : ControllerBa
     [HttpGet]
     public Task<IActionResult> ListTokens(CancellationToken ct)
     {
-        var userId = User.FindFirstValue("preferred_username")
-                     ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
-                     ?? "";
-
-        if (string.IsNullOrEmpty(userId))
+        var userId = MeshUserId(CurrentUser);
+        if (userId is null)
             return Task.FromResult<IActionResult>(Unauthorized("No user identity found"));
 
         return tokenService.GetTokensForUser(userId)
@@ -85,11 +112,8 @@ public class ApiTokenController(IServiceProvider serviceProvider) : ControllerBa
     [HttpDelete("{*nodePath}")]
     public Task<IActionResult> RevokeToken(string nodePath, CancellationToken ct)
     {
-        var userId = User.FindFirstValue("preferred_username")
-                     ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
-                     ?? "";
-
-        if (string.IsNullOrEmpty(userId))
+        var userId = MeshUserId(CurrentUser);
+        if (userId is null)
             return Task.FromResult<IActionResult>(Unauthorized("No user identity found"));
 
         return tokenService.GetTokensForUser(userId)

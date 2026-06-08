@@ -80,6 +80,15 @@ The router maps a path's first segment to `seg.ToLowerInvariant()`; a `Partition
 
 Full reference: [PostgresSchemaArchitecture.md](src/MeshWeaver.Documentation/Data/Architecture/PostgresSchemaArchitecture.md)
 
+## 🛡️ Global admin = admin on the Admin partition
+
+**"Global/platform admin" has ONE meaning: `Permission.All` at scope `Admin`** — an `AccessAssignment` granting the `Admin` role in the **`Admin/_Access`** namespace (`Admin` is a standard partition, schema `admin`, that holds platform-level data). `PermissionEvaluator` short-circuits this to a platform superuser: admin-on-the-Admin-partition ⇒ `All` on every path, like `System`.
+
+- **The one predicate is `hub.IsGlobalAdmin()` / `hub.IsGlobalAdmin(userId)`** (`HubPermissionExtensions`). Every gate goes through it — NEVER an ad-hoc role-name (`Roles.Contains("PlatformAdmin")`) or root-scope (`GetEffectivePermissions("")`) check.
+- **The grant lives in `Admin/_Access`, never root `_Access`.** Writers (`GlobalAdminSeed` from `Auth:GlobalAdmins`, `UserOnboardingService.GrantPlatformAdmin`) and readers (`AdminMenuGate`, `UserNodeType.GetGlobalAdminTabAsync`, `UserProfile`) must agree on the Admin partition — a writer/reader split (root vs Admin) silently locks admins out of every admin tab (2026-06-08).
+
+Full reference: [AccessControl.md](src/MeshWeaver.Documentation/Data/Architecture/AccessControl.md) → "The Admin partition".
+
 ## Documentation
 
 All docs embedded in `src/MeshWeaver.Documentation/` and served under `Doc/` at runtime.

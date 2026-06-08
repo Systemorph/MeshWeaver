@@ -49,12 +49,14 @@ public static class GlobalAdminSeed
                 DisplayName = userId,
                 Roles = [new RoleAssignment { Role = "Admin" }],
             };
-            // Root-scope assignments live at namespace "_Access" with id
-            // "{userId}_Access" → path "_Access/{userId}_Access".
-            // SecurityService.Consume maps this to scope = "" (global).
-            // Namespace "" would put them at path "{userId}_Access" with no
-            // scope mapping. See TestUsers.CreateAccessNode for the same shape.
-            nodes[i] = new MeshNode(userId + "_Access", "_Access")
+            // 🚨 Global admin = admin on the ADMIN PARTITION. The grant lives at
+            // namespace "Admin/_Access" (→ scope "Admin"); the global-admin
+            // short-circuit in PermissionEvaluator turns Permission.All at scope
+            // "Admin" into platform-superuser (All on every path). MainNode "" = the
+            // whole Admin scope. This IS the db-init seed for config-driven admins —
+            // a fresh DB with Auth:GlobalAdmins set comes up with each listed user
+            // already a platform admin. See Doc/Architecture/AccessControl.md.
+            nodes[i] = new MeshNode(userId + "_Access", "Admin/_Access")
             {
                 NodeType = "AccessAssignment",
                 Name = $"{userId} — Admin",

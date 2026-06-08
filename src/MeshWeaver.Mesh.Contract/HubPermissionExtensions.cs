@@ -80,6 +80,34 @@ public static class HubPermissionExtensions
     }
 
     /// <summary>
+    /// True when the current user (resolved from <see cref="AccessService.Context"/> /
+    /// <see cref="AccessService.CircuitContext"/>) is a <b>global admin</b> — i.e. an
+    /// admin on the <b>Admin partition</b> (<see cref="Permission.All"/> at scope
+    /// <c>Admin</c>, granted by an <c>AccessAssignment</c> in <c>Admin/_Access</c>).
+    /// <para>This is the ONE canonical platform-admin predicate — every "is this user a
+    /// global/platform admin?" check goes through here, never an ad-hoc role-name or
+    /// root-scope check. A global admin is a platform superuser (All on every path; see
+    /// the short-circuit in <see cref="PermissionEvaluator"/>). Doc/Architecture/AccessControl.md.</para>
+    /// </summary>
+    public static IObservable<bool> IsGlobalAdmin(this IMessageHub hub)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        return hub.IsGlobalAdmin(ResolveUserId(hub));
+    }
+
+    /// <summary>
+    /// True when <paramref name="userId"/> is a global admin — an admin on the Admin
+    /// partition (<see cref="Permission.All"/> at scope <c>Admin</c>). See
+    /// <see cref="IsGlobalAdmin(IMessageHub)"/>.
+    /// </summary>
+    public static IObservable<bool> IsGlobalAdmin(this IMessageHub hub, string userId)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        return hub.GetEffectivePermissions(PermissionEvaluator.AdminScope, userId)
+            .Select(p => p.HasFlag(Permission.All));
+    }
+
+    /// <summary>
     /// Resolve a role definition (built-in or custom) by id.
     /// </summary>
     public static IObservable<Role?> GetRole(this IMessageHub hub, string roleId)

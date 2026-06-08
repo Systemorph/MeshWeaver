@@ -44,6 +44,17 @@ internal static class PermissionEvaluator
     // identity here would require pulling internal Hosting types up.
     private const string MeshNodeCacheIdentityAddress = "cache/mesh-node-cache";
 
+    /// <summary>
+    /// The platform scope. A "global admin" is, canonically, an admin on the
+    /// <b>Admin partition</b> — <see cref="Permission.All"/> at this scope, granted
+    /// by an <c>AccessAssignment</c> in the <c>Admin/_Access</c> namespace. The
+    /// Admin partition is a standard partition that holds platform-level data; being
+    /// admin on it makes you a platform superuser (see the global-admin short-circuit
+    /// in <see cref="GetEffectivePermissions(IMessageHub,string,string)"/> and
+    /// <c>hub.IsGlobalAdmin()</c>). Documented in Doc/Architecture/AccessControl.md.
+    /// </summary>
+    internal const string AdminScope = "Admin";
+
     private const string RoleNodeType = "Role";
     private const string RoleQueryId = "$security-roles";
 
@@ -84,6 +95,31 @@ internal static class PermissionEvaluator
         if (userId == MeshNodeCacheIdentityAddress)
             return Observable.Return(Permission.Read);
 
+        // 🚨 Global-admin short-circuit. Canonically a "global admin" is an admin on
+        // the ADMIN PARTITION — Permission.All at scope "Admin" (an AccessAssignment
+        // in Admin/_Access). Such a user is a platform superuser with All on EVERY
+        // path, exactly like WellKnownUsers.System. We OR the Admin-scope grant into
+        // the per-path result so ONE source of truth (the Admin partition) drives
+        // both the platform gates (hub.IsGlobalAdmin) AND cross-partition power.
+        // No recursion: the probe uses EvaluateScopedPermissions (override-free),
+        // never GetEffectivePermissions. See Doc/Architecture/AccessControl.md.
+        var basePerms = EvaluateScopedPermissions(hub, nodePath, userId);
+        if (string.Equals(nodePath, AdminScope, StringComparison.Ordinal))
+            return basePerms;   // already the Admin scope — the grant is in-hierarchy
+        return EvaluateScopedPermissions(hub, AdminScope, userId)
+            .Select(p => p.HasFlag(Permission.All))
+            .CombineLatest(basePerms, (isGlobalAdmin, perm) => isGlobalAdmin ? Permission.All : perm)
+            .DistinctUntilChanged();
+    }
+
+    /// <summary>
+    /// Per-path RLS evaluation WITHOUT the global-admin override — the building block
+    /// for both <see cref="GetEffectivePermissions(IMessageHub,string,string)"/> and
+    /// the Admin-scope probe that backs it. Override-free so the probe (which
+    /// evaluates scope "Admin") can never recurse.
+    /// </summary>
+    private static IObservable<Permission> EvaluateScopedPermissions(IMessageHub hub, string nodePath, string userId)
+    {
         var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Mesh.Security.PermissionEvaluator");
@@ -156,7 +192,7 @@ internal static class PermissionEvaluator
                         (builtIn, custom) => builtIn | custom);
 
                 IObservable<Permission> withPublic = (userId != WellKnownUsers.Anonymous && userId != WellKnownUsers.Public)
-                    ? rolePerms.Zip(GetEffectivePermissions(hub, nodePath, WellKnownUsers.Public),
+                    ? rolePerms.Zip(EvaluateScopedPermissions(hub, nodePath, WellKnownUsers.Public),
                         (own, pub) => own | pub)
                     : rolePerms;
 

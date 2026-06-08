@@ -59,6 +59,37 @@ MeshWeaver implements row-level security through **AccessAssignment MeshNodes** 
 
 *Permissions flow top-down via reactive `RemoteStream` subscriptions; each hub's `EffectiveAssignments` merges inherited and local `_Access` nodes and is immediately visible to every descendant hub.*
 
+## 🛡️ The Admin partition — global / platform admin
+
+**"Global admin" has exactly one meaning: an admin on the `Admin` partition.** `Admin` is a standard partition (schema `admin`, created by the migration) that holds platform-level data — version tracking, global catalogs (agents / models / roles), and the platform-admin grants themselves.
+
+A user is a **global (platform) admin** iff they hold `Permission.All` at scope `Admin` — i.e. there is an `AccessAssignment` granting them the `Admin` role in the **`Admin/_Access`** namespace:
+
+```
+Admin/_Access/{user}_Access   →   AccessObject = {user}, Roles = [ Admin ],  MainNode = ""
+```
+
+Such a user is a **platform superuser**: `PermissionEvaluator` applies a *global-admin short-circuit* — admin-on-the-Admin-partition ⇒ `Permission.All` on **every** path, exactly like the `System` identity. One grant, in one partition, drives both the platform-feature gates **and** cross-partition power.
+
+### The one predicate: `hub.IsGlobalAdmin()`
+
+Every "is this user a global/platform admin?" check goes through the single canonical extension — **never** an ad-hoc role-name (`Roles.Contains("PlatformAdmin")`) or root-scope (`GetEffectivePermissions("")`) check:
+
+```csharp
+hub.IsGlobalAdmin()          // current user (resolved from AccessContext)
+hub.IsGlobalAdmin(userId)    // explicit user
+// ≡ hub.GetEffectivePermissions("Admin", userId).Select(p => p.HasFlag(Permission.All))
+```
+
+Readers that gate on it: `AdminMenuGate` (Invitations / Inbox tabs), `UserNodeType.GetGlobalAdminTabAsync` (Global Administration tab), `UserProfile`.
+
+### Where the grant comes from (db-init)
+
+- **Config-driven** — `Auth:GlobalAdmins: [ "rbuergi", … ]` → `GlobalAdminSeed` seeds a static `Admin/_Access/{user}_Access` grant at boot. A fresh DB with the config set comes up with each listed user already a platform admin.
+- **First user** — `UserOnboardingService.GrantPlatformAdmin` writes the same shape for the bootstrap user when the deployment has zero existing users.
+
+> 🚨 **The grant lives in `Admin/_Access`, never root `_Access`.** A root `_Access` grant gives "admin everywhere" via scope inheritance but is invisible to the Admin-scope gates; an `Admin/_Access` grant gives both (via the short-circuit). Writers (`GlobalAdminSeed`, `GrantPlatformAdmin`) and readers (`hub.IsGlobalAdmin`) must agree on the Admin partition — they did not before 2026-06-08, which silently locked configured admins out of every admin tab.
+
 ---
 
 # Public API — start here
