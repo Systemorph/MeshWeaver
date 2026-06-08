@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
@@ -36,49 +37,39 @@ public static class GlobalSettingsMenuItemsExtensions
         var providers = items.Select(item =>
         {
             var captured = item;
-            return new GlobalSettingsMenuItemProvider((_, _) => YieldSingle(captured));
+            return new GlobalSettingsMenuItemProvider((_, _) =>
+                Observable.Return<IReadOnlyList<GlobalSettingsMenuItemDefinition>>(new[] { captured }));
         }).ToArray();
         return config.AddGlobalSettingsMenuItems(providers);
     }
 
-    private static async IAsyncEnumerable<GlobalSettingsMenuItemDefinition> YieldSingle(
-        GlobalSettingsMenuItemDefinition item)
-    {
-        await Task.CompletedTask;
-        yield return item;
-    }
-
     /// <summary>
-    /// Evaluates all registered providers and returns items sorted by Order.
+    /// Evaluates all registered providers (subscribe-all-upfront via CombineLatest) and returns
+    /// items sorted by Order — reactive (<see cref="IObservable{T}"/>), re-emitting whenever a
+    /// provider's live check (e.g. platform-admin) resolves.
     /// </summary>
-    internal static async Task<IReadOnlyList<GlobalSettingsMenuItemDefinition>>
-        EvaluateGlobalSettingsMenuItemsAsync(
+    internal static IObservable<IReadOnlyList<GlobalSettingsMenuItemDefinition>>
+        EvaluateGlobalSettingsMenuItems(
             this MessageHubConfiguration config,
             LayoutAreaHost host,
             RenderingContext ctx)
     {
         var collection = config.Get<GlobalSettingsMenuProviderCollection>();
-        if (collection == null)
-            return [];
+        if (collection == null || collection.Providers.Count == 0)
+            return Observable.Return<IReadOnlyList<GlobalSettingsMenuItemDefinition>>([]);
 
-        var items = new List<GlobalSettingsMenuItemDefinition>();
-        foreach (var provider in collection.Providers)
-        {
-            try
-            {
-                await foreach (var item in provider(host, ctx))
-                {
-                    items.Add(item);
-                }
-            }
-            catch
-            {
-                // Skip failing providers to prevent one broken tab from crashing all settings
-            }
-        }
+        var streams = collection.Providers.Select(provider =>
+            // Skip failing providers so one broken tab can't crash all settings.
+            provider(host, ctx).Catch<IReadOnlyList<GlobalSettingsMenuItemDefinition>, Exception>(
+                _ => Observable.Return<IReadOnlyList<GlobalSettingsMenuItemDefinition>>([])));
 
-        items.Sort((a, b) => a.Order.CompareTo(b.Order));
-        return items;
+        return Observable.CombineLatest(streams)
+            .Select(lists =>
+            {
+                var items = lists.SelectMany(l => l).ToList();
+                items.Sort((a, b) => a.Order.CompareTo(b.Order));
+                return (IReadOnlyList<GlobalSettingsMenuItemDefinition>)items;
+            });
     }
 
     /// <summary>

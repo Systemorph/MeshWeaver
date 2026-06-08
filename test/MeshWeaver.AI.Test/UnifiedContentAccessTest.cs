@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.IO;
@@ -350,13 +350,13 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             .AddData(data => data
                 .AddSource(source => source
                     .WithType<TestPricing>(t => t
-                        .WithInitialData(_ => Task.FromResult(new List<TestPricing>
+                        .WithInitialData(_ => Observable.Return(new List<TestPricing>
                         {
                             new() { Id = TestPricingId, Name = "Test Pricing", Status = "Active" },
                             new() { Id = "test-company-2025", Name = "Test Pricing 2", Status = "Draft" }
                         }.AsEnumerable())))
                     .WithType<TestPropertyRisk>(t => t
-                        .WithInitialData(_ => Task.FromResult(new List<TestPropertyRisk>
+                        .WithInitialData(_ => Observable.Return(new List<TestPropertyRisk>
                         {
                             new() { Id = "risk1", PricingId = TestPricingId, Location = "NYC", Value = 1000000m },
                             new() { Id = "risk2", PricingId = TestPricingId, Location = "LA", Value = 2000000m }
@@ -398,7 +398,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     // MeshOperations.TryResolveUnifiedPathAsync splits the path into addressPart="PartnerRe/AIConsulting"
     // and remainder="content/Diskussion Thomas Final Report.docx", then posts
     //   GetDataRequest(new UnifiedReference("content/Diskussion Thomas Final Report.docx"))
-    // to the address. The user observed a 10-second AwaitResponse timeout — symptom said
+    // to the address. The user observed a 10-second AwaitResponse timeout â€” symptom said
     // "no response received". These tests pin down whether the GetDataRequest handler returns at
     // all for the slash-format default-collection lookup, with and without spaces.
 
@@ -414,7 +414,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             var host = GetHostWithFileProvider(testDir, defaultCollection: true);
             var client = GetClient();
 
-            // Slash format with NO collection segment — what the agent actually emits.
+            // Slash format with NO collection segment â€” what the agent actually emits.
             var response = client.Observe(new GetDataRequest(new UnifiedReference("content/report.txt")), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
             response.Message.Error.Should().BeNull();
@@ -479,7 +479,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     public void GetDataRequest_ContentSlashFormat_MissingDefaultCollection_ReturnsErrorNotTimeout()
     {
         // The prod hub for /PartnerRe/AIConsulting may not have AddContentCollections() registered
-        // under the default "content" name. The handler must return a clear error response — not
+        // under the default "content" name. The handler must return a clear error response â€” not
         // hang and force AwaitResponse to time out.
         GetHost(); // baseline host with NO file content provider configured
         var client = GetClient();
@@ -504,7 +504,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             .AddData(data => data
                 .AddSource(source => source
                     .WithType<TestPricing>(t => t
-                        .WithInitialData(_ => Task.FromResult(new List<TestPricing>
+                        .WithInitialData(_ => Observable.Return(new List<TestPricing>
                         {
                             new() { Id = TestPricingId, Name = "Test Pricing", Status = "Active" }
                         }.AsEnumerable()))))
@@ -525,13 +525,13 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             .AddData(data => data
                 .AddSource(source => source
                     .WithType<TestPricing>(t => t
-                        .WithInitialData(_ => Task.FromResult(new List<TestPricing>
+                        .WithInitialData(_ => Observable.Return(new List<TestPricing>
                         {
                             new() { Id = TestPricingId, Name = "Test Pricing", Status = "Active" },
                             new() { Id = "test-company-2025", Name = "Test Pricing 2", Status = "Draft" }
                         }.AsEnumerable())))
                     .WithType<TestPropertyRisk>(t => t
-                        .WithInitialData(_ => Task.FromResult(new List<TestPropertyRisk>
+                        .WithInitialData(_ => Observable.Return(new List<TestPropertyRisk>
                         {
                             new() { Id = "risk1", PricingId = TestPricingId, Location = "NYC", Value = 1000000m },
                             new() { Id = "risk2", PricingId = TestPricingId, Location = "LA", Value = 2000000m }

@@ -280,9 +280,8 @@ public static class NodeTypeLayoutAreas
                 if (node == null || meshQuery == null)
                     return Observable.Return(Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>);
                 var def = node.Content as NodeTypeDefinition;
-                return Observable.FromAsync(token => RunQueriesAsync(meshQuery,
-                    CodeQueryResolver.ExpandAll(def?.Sources, CodeQueryResolver.DefaultSources, node.Path),
-                    token));
+                return RunQueries(meshQuery,
+                    CodeQueryResolver.ExpandAll(def?.Sources, CodeQueryResolver.DefaultSources, node.Path));
             })
             .Switch();
 
@@ -292,9 +291,8 @@ public static class NodeTypeLayoutAreas
                 if (node == null || meshQuery == null)
                     return Observable.Return(Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>);
                 var def = node.Content as NodeTypeDefinition;
-                return Observable.FromAsync(token => RunQueriesAsync(meshQuery,
-                    CodeQueryResolver.ExpandAll(def?.Tests, CodeQueryResolver.DefaultTests, node.Path),
-                    token));
+                return RunQueries(meshQuery,
+                    CodeQueryResolver.ExpandAll(def?.Tests, CodeQueryResolver.DefaultTests, node.Path));
             })
             .Switch();
 
@@ -537,34 +535,38 @@ public static class NodeTypeLayoutAreas
     /// the de-duplicated MeshNode results. Empty input → empty result, so the default
     /// "no sources/tests yet" state still renders cleanly.
     /// </summary>
-    private static async Task<IReadOnlyList<MeshNode>> RunQueriesAsync(
+    // Reactive (no async/FromAsync): each query is already an IObservable; compose
+    // them subscribe-all-upfront via CombineLatest (per AsynchronousCalls.md) and
+    // fold the positional results into one deduped list. Each per-query stream
+    // Take(1)s its initial set and Catches to empty, so one bad query can't blank
+    // the list and CombineLatest still fires + completes once every query emitted.
+    private static IObservable<IReadOnlyList<MeshNode>> RunQueries(
         IMeshService meshQuery,
-        IEnumerable<string> queries,
-        CancellationToken ct)
+        IEnumerable<string> queries)
     {
-        var results = new List<MeshNode>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var q in queries)
-        {
-            try
-            {
-                var stream = meshQuery
-                    .Query<MeshNode>(MeshQueryRequest.FromQuery(q))
-                    .Take(1)
-                    .SelectMany(c => c.Items.ToObservable())
-                    .ToAsyncEnumerableSequence(ct);
-                await foreach (var n in stream.WithCancellation(ct))
-                {
-                    if (n?.Path is { Length: > 0 } p && seen.Add(p))
-                        results.Add(n);
-                }
-            }
-            catch
-            {
+        var queryList = queries.ToList();
+        if (queryList.Count == 0)
+            return Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>());
+
+        var streams = queryList.Select(q =>
+            meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(q))
+                .Take(1)
+                .Select(c => (IReadOnlyList<MeshNode>)c.Items)
                 // A stray query syntax error in one entry shouldn't empty the whole list.
-            }
-        }
-        return results;
+                .Catch<IReadOnlyList<MeshNode>, Exception>(
+                    _ => Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>())));
+
+        return Observable.CombineLatest(streams)
+            .Select(lists =>
+            {
+                var seen = new HashSet<string>(StringComparer.Ordinal);
+                var results = new List<MeshNode>();
+                foreach (var list in lists)
+                    foreach (var n in list)
+                        if (n?.Path is { Length: > 0 } p && seen.Add(p))
+                            results.Add(n);
+                return (IReadOnlyList<MeshNode>)results;
+            });
     }
 
     private static NavGroupControl AppendCodeTreeNode(NavGroupControl parent, CodeTreeNode node)

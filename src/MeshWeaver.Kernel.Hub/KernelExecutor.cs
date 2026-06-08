@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Reflection;
 using System.Runtime.Loader;
 using System.Text.Json;
@@ -11,6 +12,7 @@ using MeshWeaver.Data.Serialization;
 using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using MeshWeaver.NuGet;
 using Microsoft.CodeAnalysis;
@@ -40,6 +42,26 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     private bool initialized;
 
     private readonly SemaphoreSlim executionLock = new(1, 1);
+
+    // 🚦 Roslyn script compile+execute is a CPU/blocking leaf (the compile prologue +
+    // RuntimeMetadataReferenceResolver.ResolveMissingAssembly file I/O run synchronously).
+    // It MUST go through the bounded Compile IoPool — NEVER a bare Observable.FromAsync on
+    // the shared ThreadPool. An unbounded script compile parks a ThreadPool thread for the
+    // whole compile (and can block on an assembly-file lock when a concurrent NodeType
+    // compile is writing the same DLL); a burst of them under a bulk test run starves the
+    // ThreadPool, so every reactive-timeout op elsewhere (synced queries, mesh-node updates)
+    // deadlocks. Routing through the SAME Compile pool NodeType compilation uses serialises
+    // the two so they never race on the same assembly file. Unbounded fallback only when no
+    // registry is wired (DI-less); still offloads, just no cap.
+    private readonly IIoPool compilePool =
+        publicHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Compile)
+            ?? IoPool.Unbounded;
+
+    // NuGet restore (#r "nuget:...") is a genuine network + file-system I/O leaf —
+    // route it through the bounded Http pool, never a bare Observable.FromAsync.
+    private readonly IIoPool nugetPool =
+        publicHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http)
+            ?? IoPool.Unbounded;
 
     // Cancellation source for the script currently inside ExecuteAsync. Replaced
     // on each submission. CancelScriptRequest cancels it; the script's
@@ -185,7 +207,11 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         ILogger scriptOutputLogger,
         CancellationToken ct)
     {
-        return Observable.FromAsync(_ => executionLock.WaitAsync(ct))
+        // executionLock is a serialization primitive (REPL ordering), not an I/O leaf —
+        // so it bridges to the observable contract reactively (Defer keeps it cold so the
+        // WaitAsync runs on Subscribe, inline on the action block, preserving FIFO acquire
+        // order), NOT through Observable.FromAsync and NOT through an I/O pool.
+        return Observable.Defer(() => executionLock.WaitAsync(ct).ToObservable())
             // The lock is acquired in submission order (the subscription runs
             // inline on the action block — see HandleSubmitCodeRequest). Hop to
             // the TaskPool ONLY for the work that follows, so the cold Roslyn
@@ -195,7 +221,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             .SelectMany(_ =>
             {
                 EnsureInitialized();
-                return Observable.FromAsync(t => ResolveNuGetReferencesAsync(code, t))
+                return nugetPool.Invoke(t => ResolveNuGetReferencesAsync(code, t))
                     .SelectMany(cleaned => RunOnePass(cleaned, viewId, scriptOutputLogger, inputs, ct));
             })
             .Catch<object?, Exception>(ex =>
@@ -239,7 +265,11 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                 var capture = CapturingTextWriter.Capture(stdoutPipe);
                 return new StdoutScope(stdoutPipe, capture);
             },
-            scope => Observable.FromAsync(t => scriptState is null
+            // Roslyn compile+execute on the bounded Compile IoPool (see `compilePool`) —
+            // NOT a bare Observable.FromAsync on the shared ThreadPool. `t` is the pool's
+            // cancellation (cancelled on unsubscribe), identical to the prior FromAsync CT,
+            // so REPL state + CancelScriptRequest semantics are preserved.
+            scope => compilePool.Invoke(t => scriptState is null
                     ? CSharpScript.RunAsync(cleaned, scriptOptions, scriptGlobals, typeof(MeshScriptGlobals), t)
                     : scriptState.ContinueWithAsync(cleaned, scriptOptions, t))
                 .Select(state =>

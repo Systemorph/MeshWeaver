@@ -310,14 +310,13 @@ never an ambient `await` mid-flow. See [Asynchronous Calls](AsynchronousCalls).
 
 | Pool | Used by |
 |---|---|
-| **Http** | `McpRemoteMeshClient` (MCP mirror), Social publishers (`ScheduledPostPublisher` / `PostStatsRefresher` / `PastPostIngestJob`) |
-| **Process** | `MeshPlugin.RunTests` (`dotnet test` via `Process.Start`, `InvokeBlocking`) |
+| **Http** | `McpRemoteMeshClient` (MCP mirror), Social publishers (`ScheduledPostPublisher` / `PostStatsRefresher` / `PastPostIngestJob`), `CopilotConnectStrategy` (SDK calls), `KernelExecutor` (`#r nuget` restore), `GoogleGeocodingService` (geocode fan-out) |
+| **Process** | `MeshPlugin.RunTests` (`dotnet test` via `Process.Start`), `ClaudeConnectStrategy` / `CopilotConnectStrategy` (CLI spawn + scrape) |
+| **Compile** | `KernelExecutor.RunOnePass` (the interactive Roslyn script compile+execute). The per-submission `executionLock` still serialises REPL order; the pool only bounds compiles across kernels and shares the gate with NodeType compilation, so a script compile and a NodeType compile never race on the same collectible-ALC assembly file (the deadlock a thread dump caught) |
+| **FileSystem** | `TypeSource` initial-data load, `MeshExtensions` post-creation handler invoke |
+| **`pg:{adapter}` / Cosmos** | `PostgreSqlStorageAdapter`, `PostgreSqlVersionQuery`, `PostgreSqlPartitionedMeshQuery`, `PostgreSqlPartitionStorageProvider`, `CosmosStorageAdapter`, `CosmosMeshQuery` — every DB round-trip goes through `_ioPool.Invoke`/`Run` |
 
-| **`pg:Postgres`** | `PostgreSqlPartitionStorageProvider.EnsurePartitionProvisioned` (schema provisioning, promise-cached) |
-
-The `Compile` pool exists but is currently unused: pooling `KernelExecutor`'s Roslyn run was reverted because it perturbed the carefully-ordered REPL execution path (submission-order / no-deadlock guarantees).
-
-**Migration debt, NOT exempt** (see [Scope](#scope--storage-and-postgres-are-pooled-too)): the hot-path query/storage `Observable.FromAsync` sites in `PostgreSqlMeshQuery` / `PostgreSqlVersionQuery` / `PostgreSqlStorageAdapter` / file-system adapters predate this rule and are being migrated onto per-adapter `pg:{adapter}` pools (and the file-system equivalents). They are **not** a sanctioned pattern to copy — new code is pooled from day one.
+**The sweep is complete.** `Observable.FromAsync` no longer appears anywhere in `src/`, `test/`, `samples/`, or `memex/` — the only occurrence is sealed inside `IoPool`. The former "migration debt" query/storage sites (`PostgreSqlMeshQuery` family, Cosmos, file-system adapters) are now pooled; orchestration that isn't an I/O leaf (layout view generators, message-delivery and routing bridges) was rewritten as pure reactive composition (`Observable.Create` / `Defer` + `Task.ToObservable()`), never `FromAsync`.
 
 ---
 

@@ -294,7 +294,7 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
         if (_registeredPartitions.ContainsKey(@namespace) || _schemasInitialized.ContainsKey(schema))
             return Observable.Return<bool?>(true);
 
-        return Observable.FromAsync<bool?>(async ct =>
+        return _ioPool.Invoke<bool?>(async ct =>
         {
             await using var cmd = _baseDataSource.CreateCommand("""
                 SELECT 1 FROM information_schema.schemata

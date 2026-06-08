@@ -43,6 +43,7 @@
                          Mode="InputFileMode.Stream"
                          Multiple="@IsFileMode"
                          Accept="@AcceptFilter"
+                         MaximumFileCount="1000"
                          MaximumFileSize="@(500 * 1024 * 1024)"
                          OnFileUploaded="@OnFileUploadedAsync"
                          OnCompleted="@OnUploadCompletedAsync" />

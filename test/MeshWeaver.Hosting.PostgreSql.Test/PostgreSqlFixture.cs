@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.PostgreSql;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Threading;
 using Npgsql;
 using Testcontainers.PostgreSql;
 using Xunit;
@@ -137,7 +138,7 @@ public class PostgreSqlFixture : IAsyncLifetime
     /// </summary>
     public IObservable<(NpgsqlDataSource SchemaDataSource, PostgreSqlStorageAdapter Adapter)>
         CreateSchemaAdapter(string schemaName, PartitionDefinition? partitionDef = null, CancellationToken ct = default)
-        => Observable.FromAsync(token => CreateSchemaAdapterAsync(schemaName, partitionDef, token));
+        => IoPool.Unbounded.Invoke(token => CreateSchemaAdapterAsync(schemaName, partitionDef, token));
 
     /// <summary>
     /// Disposes every per-schema NpgsqlDataSource ever returned by
@@ -160,7 +161,7 @@ public class PostgreSqlFixture : IAsyncLifetime
     /// (low-level PG ops) stay async inside.
     /// </summary>
     public IObservable<Unit> CleanData()
-        => Observable.FromAsync(async () => { await CleanDataAsync(); return Unit.Default; });
+        => IoPool.Unbounded.Invoke(async _ => { await CleanDataAsync(); return Unit.Default; });
 
     /// <summary>
     /// Cleans all data tables for test isolation.

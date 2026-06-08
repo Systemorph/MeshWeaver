@@ -25,15 +25,12 @@ public static class InboxSettingsTab
     private const string ResultDataId = "inboxResult";
 
     public static MessageHubConfiguration AddInboxSettingsTab(this MessageHubConfiguration config)
-        => config.AddGlobalSettingsMenuItems(new GlobalSettingsMenuItemProvider(GetInboxTabAsync));
+        => config.AddGlobalSettingsMenuItems(new GlobalSettingsMenuItemProvider(GetInboxTab));
 
-    private static async IAsyncEnumerable<GlobalSettingsMenuItemDefinition> GetInboxTabAsync(
+    private static IObservable<IReadOnlyList<GlobalSettingsMenuItemDefinition>> GetInboxTab(
         LayoutAreaHost host, RenderingContext ctx)
     {
-        if (!await AdminMenuGate.IsPlatformAdminAsync(host))
-            yield break;
-
-        yield return new GlobalSettingsMenuItemDefinition(
+        var tab = new GlobalSettingsMenuItemDefinition(
             Id: TabId,
             Label: "Inbox",
             ContentBuilder: BuildInboxContent,
@@ -41,6 +38,13 @@ public static class InboxSettingsTab
             Icon: FluentIcons.Mail(),
             GroupIcon: FluentIcons.Shield(),
             Order: 320);
+
+        // Reactive: AdminMenuGate.IsPlatformAdmin emits false first (tab hidden), then true once the
+        // platform-admin grant surfaces → the tab appears. No async/await/IAsyncEnumerable.
+        return AdminMenuGate.IsPlatformAdmin(host)
+            .Select(isAdmin => isAdmin
+                ? (IReadOnlyList<GlobalSettingsMenuItemDefinition>)new[] { tab }
+                : []);
     }
 
     internal static UiControl BuildInboxContent(LayoutAreaHost host, StackControl stack)

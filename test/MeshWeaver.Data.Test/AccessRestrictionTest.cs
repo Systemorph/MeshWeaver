@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
@@ -63,7 +63,7 @@ public class TypeLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestB
                 data.AddSource(dataSource =>
                     dataSource.WithType<RestrictedEntity>(type =>
                         type.WithKey(instance => instance.Id)
-                            .WithInitialData(_ => Task.FromResult(InitialRestrictedData.AsEnumerable()))
+                            .WithInitialData(_ => Observable.Return(InitialRestrictedData.AsEnumerable()))
                     )
                 )
             );
@@ -201,7 +201,7 @@ public class RowLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
                 data.AddSource(dataSource =>
                     dataSource.WithType<OwnedEntity>(type =>
                         type.WithKey(instance => instance.Id)
-                            .WithInitialData(_ => Task.FromResult(InitialOwnedData.AsEnumerable()))
+                            .WithInitialData(_ => Observable.Return(InitialOwnedData.AsEnumerable()))
                     )
                 )
             );
@@ -374,7 +374,7 @@ public class GlobalAccessRestrictionTest(ITestOutputHelper output) : HubTestBase
                 data.AddSource(dataSource =>
                     dataSource.WithType<SimpleEntity>(type =>
                         type.WithKey(instance => instance.Id)
-                            .WithInitialData(_ => Task.FromResult(InitialSimpleData.AsEnumerable()))
+                            .WithInitialData(_ => Observable.Return(InitialSimpleData.AsEnumerable()))
                     )
                 )
             );
@@ -507,7 +507,7 @@ public class CombinedAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
                 data.AddSource(dataSource =>
                     dataSource.WithType<RestrictedEntity>(type =>
                         type.WithKey(instance => instance.Id)
-                            .WithInitialData(_ => Task.FromResult(InitialData.AsEnumerable()))
+                            .WithInitialData(_ => Observable.Return(InitialData.AsEnumerable()))
                     )
                 )
             );

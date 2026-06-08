@@ -25,7 +25,7 @@ public static class NavMenuExtensions
         Func<NavMenuControl, LayoutAreaHost, RenderingContext, Task<NavMenuControl>> config)
         => layout.WithRenderer(a => a.Area == NavMenu,
             (ObservableRenderer)((h, c, store) =>
-                Observable.FromAsync(() => h.ConfigBasedRenderer(
+                LayoutAreaHost.FromViewBuilder(_ => h.ConfigBasedRenderer(
                     c,
                     store,
                     NavMenu,

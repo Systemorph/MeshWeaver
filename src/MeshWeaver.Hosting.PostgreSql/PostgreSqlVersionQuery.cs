@@ -3,6 +3,7 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using Npgsql;
 
 namespace MeshWeaver.Hosting.PostgreSql;
@@ -17,10 +18,13 @@ public class PostgreSqlVersionQuery : IVersionQuery
 {
     private readonly NpgsqlDataSource _dataSource;
     private readonly string _historyTable;
+    // Every DB round-trip runs inside the pg I/O pool (Invoke), never a bare _ioPool.Invoke.
+    private readonly IIoPool _ioPool;
 
-    public PostgreSqlVersionQuery(NpgsqlDataSource dataSource, string? schema = null)
+    public PostgreSqlVersionQuery(NpgsqlDataSource dataSource, string? schema = null, IIoPool? ioPool = null)
     {
         _dataSource = dataSource;
+        _ioPool = ioPool ?? IoPool.Unbounded;
         _historyTable = string.IsNullOrEmpty(schema)
             ? "\"mesh_node_history\""
             : $"\"{schema}\".\"mesh_node_history\"";
@@ -35,9 +39,9 @@ public class PostgreSqlVersionQuery : IVersionQuery
     }
 
     public IObservable<MeshNodeVersion> GetVersions(string path)
-        // Observable.FromAsync with Scheduler.Default runs the DB fetch on the
-        // ThreadPool — no custom TaskScheduler (Orleans) is ever captured.
-        => Observable.FromAsync(ct => FetchVersionsAsync(path, ct), Scheduler.Default)
+        // The pg I/O pool runs the DB fetch on the ThreadPool behind its concurrency gate
+        // with ConfigureAwait(false) — no custom TaskScheduler (Orleans) is ever captured.
+        => _ioPool.Invoke(ct => FetchVersionsAsync(path, ct))
             .SelectMany(versions => versions.ToObservable());
 
     private async Task<List<MeshNodeVersion>> FetchVersionsAsync(string path, CancellationToken ct)
@@ -65,7 +69,7 @@ public class PostgreSqlVersionQuery : IVersionQuery
     }
 
     public IObservable<MeshNode?> GetVersion(string path, long version, JsonSerializerOptions options)
-        => Observable.FromAsync(async ct =>
+        => _ioPool.Invoke(async ct =>
         {
             var (ns, id) = SplitPath(path);
             await using var cmd = _dataSource.CreateCommand(
@@ -84,7 +88,7 @@ public class PostgreSqlVersionQuery : IVersionQuery
         });
 
     public IObservable<MeshNode?> GetVersionBefore(string path, long beforeVersion, JsonSerializerOptions options)
-        => Observable.FromAsync(async ct =>
+        => _ioPool.Invoke(async ct =>
         {
             var (ns, id) = SplitPath(path);
             await using var cmd = _dataSource.CreateCommand(
@@ -104,7 +108,7 @@ public class PostgreSqlVersionQuery : IVersionQuery
         });
 
     public IObservable<MeshNode> WriteVersion(MeshNode node, JsonSerializerOptions options)
-        => Observable.FromAsync(async ct =>
+        => _ioPool.Invoke(async ct =>
         {
             var ns = node.Namespace ?? "";
             var contentJson = node.Content != null

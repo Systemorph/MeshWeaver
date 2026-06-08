@@ -62,6 +62,9 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
     private readonly ILogger<PostgreSqlPartitionedMeshQuery>? _logger;
     private readonly PostgreSqlPartitionStorageProvider? _partitionProvider;
     private readonly IoPoolRegistry? _ioPoolRegistry;
+    // Cross-schema fan-out + autocomplete run on the bounded I/O pool (Invoke), never a bare
+    // Observable.FromAsync. The per-schema leaf reads are pooled inside their own adapters.
+    private readonly IIoPool _ioPool;
     // Routing rules (nodeType:User → Auth, nodeType:Invitation → Admin) live here. A path-less
     // query that matches a rule must pin to the rule's schema instead of fanning out cross-schema
     // (which EXCLUDES auth/admin) — see the hint fallback in EnumerateFanOutAsync.
@@ -90,6 +93,7 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         _logger = logger;
         _partitionProvider = partitionProvider;
         _ioPoolRegistry = ioPoolRegistry;
+        _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
         _meshConfiguration = meshConfiguration;
     }
 
@@ -172,7 +176,7 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         // case so the merge can proceed (the per-schema StorageAdapterMeshQueryProvider
         // is the one that contributes the real rows for that path).
         var snapshot = new ReplaySubject<QueryResultChange<T>>(1);
-        Observable.FromAsync(async ct =>
+        _ioPool.Invoke(async ct =>
         {
             var items = new List<T>();
             if (NeedsFanOut(parsed))
@@ -261,9 +265,9 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         var effectiveUserId = ctxUser == WellKnownUsers.System ? null
             : string.IsNullOrEmpty(ctxUser) ? WellKnownUsers.Anonymous : ctxUser;
 
-        return Observable.FromAsync(ct =>
-                _crossSchema.AutocompleteTopLevelAsync(effectivePrefix, effectiveUserId, limit, ct))
-            .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default);
+        // _ioPool.Invoke already offloads to the ThreadPool behind its gate — no extra SubscribeOn.
+        return _ioPool.Invoke(ct =>
+            _crossSchema.AutocompleteTopLevelAsync(effectivePrefix, effectiveUserId, limit, ct));
     }
 
     /// <inheritdoc/>

@@ -3,6 +3,7 @@ using System.Reactive.Linq;
 using System.Text.RegularExpressions;
 using GitHub.Copilot.SDK;
 using MeshWeaver.AI.Connect;
+using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -39,11 +40,17 @@ public sealed class CopilotConnectStrategy : IConnectStrategy
 {
     private readonly IServiceProvider services;
     private readonly ILogger<CopilotConnectStrategy>? logger;
+    // Subprocess spawn → Process pool; Copilot SDK network calls → Http pool. Never FromAsync.
+    private readonly IIoPool processPool;
+    private readonly IIoPool httpPool;
 
     public CopilotConnectStrategy(IServiceProvider services)
     {
         this.services = services;
         logger = services.GetService<ILoggerFactory>()?.CreateLogger<CopilotConnectStrategy>();
+        var registry = services.GetService<IoPoolRegistry>();
+        processPool = registry?.Get(IoPoolNames.Process) ?? IoPool.Unbounded;
+        httpPool = registry?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
     }
 
     public ConnectProvider Provider => ConnectProvider.Copilot;
@@ -63,18 +70,18 @@ public sealed class CopilotConnectStrategy : IConnectStrategy
     /// headless-confirmable part of the Copilot flow.
     /// </summary>
     public IObservable<bool> IsLoggedIn(string? userConfigDir)
-        => Observable.FromAsync(ct => GetIsAuthenticatedAsync(userConfigDir, ct));
+        => httpPool.Invoke(ct => GetIsAuthenticatedAsync(userConfigDir, ct));
 
     public IObservable<ConnectChallenge> StartConnect(ConnectSession session, string ownerPath)
     {
         var options = Options;
-        return Observable.FromAsync(ct => SpawnAndScrapeDeviceCodeAsync(session, options, ct));
+        return processPool.Invoke(ct => SpawnAndScrapeDeviceCodeAsync(session, options, ct));
     }
 
     public IObservable<string> CompleteConnect(ConnectSession session, string? pastedCode)
     {
         var options = Options;
-        return Observable.FromAsync(ct => PollUntilAuthenticatedAsync(session, options, ct));
+        return httpPool.Invoke(ct => PollUntilAuthenticatedAsync(session, options, ct));
     }
 
     // ── SDK / subprocess boundary (the only place Task lives) ────────────────────────────────────

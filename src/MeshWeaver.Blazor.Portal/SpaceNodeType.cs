@@ -192,12 +192,12 @@ public static class SpaceNodeType
     {
         public string NodeType => SpaceNodeType.NodeType;
 
-        public Task HandleAsync(MeshNode createdNode, string? createdBy, CancellationToken ct)
+        public IObservable<System.Reactive.Unit> Handle(MeshNode createdNode, string? createdBy)
         {
             if (string.IsNullOrEmpty(createdBy))
             {
                 logger?.LogWarning("Cannot assign Admin role: no creator identity for Space at {Path}", createdNode.Path);
-                return Task.CompletedTask;
+                return Observable.Empty<System.Reactive.Unit>();
             }
 
             logger?.LogInformation("Granting Admin role to {User} on Space {Path}", createdBy, createdNode.Path);
@@ -213,23 +213,17 @@ public static class SpaceNodeType
                     Roles = [new RoleAssignment { Role = Role.Admin.Id, Denied = false }]
                 }
             };
-            // Await the grant under System impersonation so:
-            //   (1) the write authorises (creator can't already hold Create on a
-            //       brand-new partition root they don't own yet);
-            //   (2) a failure propagates — the awaited Task faults, which
-            //       RunPostCreationHandlersObs reports as a failed create response.
-            //       The old `.Subscribe(onError: log)` fire-and-forget swallowed it.
-            // INodePostCreationHandler is a Task-based contract invoked via
-            // Observable.FromAsync (the sanctioned reactive→Task boundary), so the
-            // ToTask bridge here is allowed (see AsynchronousCalls.md).
+            // Grant under System impersonation so the write authorises (creator can't already
+            // hold Create on a brand-new partition root). Return the observable directly — the
+            // caller subscribes; a failure propagates through OnError so RunPostCreationHandlers
+            // reports it. Pure reactive, no Task, no ToTask bridge.
             return Observable.Using(
                     () => accessService.ImpersonateAsSystem(),
                     _ => meshService.CreateNode(assignmentNode))
                 .Do(_ => logger?.LogInformation(
                     "Granted Admin to {User} on Space {Path} at {GrantPath}",
                     createdBy, createdNode.Path, assignmentNode.Path))
-                .FirstAsync()
-                .ToTask(ct);
+                .Select(_ => System.Reactive.Unit.Default);
         }
 
         /// <summary>

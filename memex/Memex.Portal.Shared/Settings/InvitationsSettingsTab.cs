@@ -36,15 +36,12 @@ public static class InvitationsSettingsTab
 
     public static MessageHubConfiguration AddInvitationsSettingsTab(
         this MessageHubConfiguration config)
-        => config.AddGlobalSettingsMenuItems(new GlobalSettingsMenuItemProvider(GetInvitationsTabAsync));
+        => config.AddGlobalSettingsMenuItems(new GlobalSettingsMenuItemProvider(GetInvitationsTab));
 
-    private static async IAsyncEnumerable<GlobalSettingsMenuItemDefinition> GetInvitationsTabAsync(
+    private static IObservable<IReadOnlyList<GlobalSettingsMenuItemDefinition>> GetInvitationsTab(
         LayoutAreaHost host, RenderingContext ctx)
     {
-        if (!await AdminMenuGate.IsPlatformAdminAsync(host))
-            yield break;
-
-        yield return new GlobalSettingsMenuItemDefinition(
+        var tab = new GlobalSettingsMenuItemDefinition(
             Id: TabId,
             Label: "Invitations",
             ContentBuilder: BuildInvitationsContent,
@@ -52,6 +49,12 @@ public static class InvitationsSettingsTab
             Icon: FluentIcons.Mail(),
             GroupIcon: FluentIcons.Shield(),
             Order: 310);
+
+        // Reactive: gated tab appears once the platform-admin grant surfaces. No async/await.
+        return AdminMenuGate.IsPlatformAdmin(host)
+            .Select(isAdmin => isAdmin
+                ? (IReadOnlyList<GlobalSettingsMenuItemDefinition>)new[] { tab }
+                : []);
     }
 
     internal static UiControl BuildInvitationsContent(

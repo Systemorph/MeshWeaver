@@ -221,10 +221,10 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     /// </summary>
     /// <param name="cancellationToken">Cancellation token for the operation</param>
     /// <returns>A task that represents the asynchronous operation, containing the initialized data</returns>
-    private Task<IEnumerable<MyData>> InitializeMyData(CancellationToken cancellationToken)
+    private IObservable<IEnumerable<MyData>> InitializeMyData()
     {
         storage = MyData.InitialData.ToImmutableDictionary(x => (object)x.Id, x => (object)x);
-        return Task.FromResult<IEnumerable<MyData>>(MyData.InitialData);
+        return Observable.Return<IEnumerable<MyData>>(MyData.InitialData);
     }
 
     /// <summary>

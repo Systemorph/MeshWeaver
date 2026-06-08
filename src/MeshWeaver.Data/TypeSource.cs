@@ -39,24 +39,21 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
     ITypeSource ITypeSource.WithInitialData(
         Func<
             WorkspaceReference<InstanceCollection>,
-            CancellationToken,
-            Task<IEnumerable<object>>
+            IObservable<IEnumerable<object>>
         > initialization
     ) => WithInitialData(initialization);
 
     public TTypeSource WithInitialData(
         Func<
             WorkspaceReference<InstanceCollection>,
-            CancellationToken,
-            Task<IEnumerable<object>>
+            IObservable<IEnumerable<object>>
         > initialization
     ) => This with { InitializationFunction = initialization };
 
     protected Func<
         WorkspaceReference<InstanceCollection>,
-        CancellationToken,
-        Task<IEnumerable<object>>
-    > InitializationFunction { get; init; } = (_, _) => Task.FromResult(Enumerable.Empty<object>());
+        IObservable<IEnumerable<object>>
+    > InitializationFunction { get; init; } = _ => Observable.Return(Enumerable.Empty<object>());
 
     IObservable<InstanceCollection> ITypeSource.Initialize(
         WorkspaceReference<InstanceCollection> reference,
@@ -64,18 +61,16 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
     ) => Initialize(reference, cancellationToken);
 
     /// <summary>
-    /// Reactive initialization. Default impl wraps the legacy Task-returning
-    /// <see cref="InitializationFunction"/> via a single
-    /// <see cref="Observable.FromAsync{TResult}(Func{CancellationToken,Task{TResult}})"/>
-    /// — sanctioned because <see cref="InitializationFunction"/> is an opaque user
-    /// callback, not a hub round-trip; the bridge is local and does not capture the
-    /// hub scheduler. Subclasses that touch hubs / streams MUST override this method
-    /// and return a pure observable composition (no <c>await</c>, no <c>.ToTask</c>).
+    /// Reactive initialization — pure <see cref="IObservable{T}"/> composition. The
+    /// <see cref="InitializationFunction"/> is itself reactive (no <c>Task</c>, no
+    /// <c>Observable.FromAsync</c>); subclasses that touch real I/O override this and bridge the
+    /// leaf reactively. <paramref name="cancellationToken"/> is unused — the subscription's
+    /// lifetime is the cancellation.
     /// </summary>
     protected virtual IObservable<InstanceCollection> Initialize(
         WorkspaceReference<InstanceCollection> reference,
         CancellationToken cancellationToken
-    ) => Observable.FromAsync(ct => InitializationFunction(reference, ct))
+    ) => InitializationFunction(reference)
         .Select(items => new InstanceCollection(items, TypeDefinition.GetKey));
 
     public void Dispose()

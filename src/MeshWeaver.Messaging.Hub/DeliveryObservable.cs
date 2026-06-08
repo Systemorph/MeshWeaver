@@ -1,5 +1,6 @@
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Reactive.Threading.Tasks;
 
 namespace MeshWeaver.Messaging;
 
@@ -29,9 +30,11 @@ internal static class DeliveryObservable
         Func<CancellationToken, Task<IMessageDelivery>> io)
     {
         var subject = new ReplaySubject<IMessageDelivery>(1);
-        // No SubscribeOn — stay on the turn thread; the sync prefix of `io` runs
-        // inline, only a real await inside it yields.
-        Observable.FromAsync(io).Subscribe(subject);
+        // No Observable.FromAsync and no SubscribeOn — invoke `io` directly so its synchronous
+        // prefix runs INLINE on the turn thread (a real await inside it yields via the captured
+        // ExecutionContext), then bridge the resulting Task reactively into the subject. This is
+        // the deliberate handler bridge; pooling it would move it off the turn and break ordering.
+        io(CancellationToken.None).ToObservable().Subscribe(subject);
         return subject.AsObservable();
     }
 }

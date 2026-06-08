@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using NpgsqlTypes;
@@ -29,6 +30,9 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     // e.g. in-memory/tests). Reads acquire a slot; writes stay ungated so they
     // always have pool headroom. See ReadConcurrencyGate.
     private readonly ReadConcurrencyGate? _readGate;
+    // The pg:{adapter} I/O pool — every DB round-trip runs inside it (Invoke), never a bare
+    // _ioPool.Invoke. Unbounded fallback when no registry is wired (in-memory/tests).
+    private readonly IIoPool _ioPool;
     private readonly Subject<DataChangeNotification> _changes = new();
 
     public NpgsqlDataSource DataSource => _dataSource;
@@ -53,7 +57,8 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         IEmbeddingProvider? embeddingProvider = null,
         PartitionDefinition? partitionDefinition = null,
         Microsoft.Extensions.Logging.ILogger<PostgreSqlStorageAdapter>? logger = null,
-        ReadConcurrencyGate? readGate = null)
+        ReadConcurrencyGate? readGate = null,
+        IIoPool? ioPool = null)
     {
         _dataSource = dataSource;
         _embeddingProvider = embeddingProvider ?? NullEmbeddingProvider.Instance;
@@ -61,6 +66,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         _schemaName = partitionDefinition?.Schema;
         _logger = logger;
         _readGate = readGate;
+        _ioPool = ioPool ?? IoPool.Unbounded;
     }
 
     /// <summary>
@@ -132,7 +138,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         => ex is PostgresException pg && pg.SqlState == "42P01";
 
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-        => Observable.FromAsync(ct => ReadAsyncCore(path, options, ct));
+        => _ioPool.Invoke(ct => ReadAsyncCore(path, options, ct));
 
     private async Task<MeshNode?> ReadAsyncCore(string path, JsonSerializerOptions options, CancellationToken ct)
     {
@@ -240,7 +246,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         });
 
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
-        => Observable.FromAsync<MeshNode?>(async ct =>
+        => _ioPool.Invoke<MeshNode?>(async ct =>
         {
             await WriteAsyncCore(node, options, ct).ConfigureAwait(false);
             // Fire the in-process Changes feed so same-process synced-query
@@ -318,7 +324,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     }
 
     public IObservable<string> Delete(string path)
-        => Observable.FromAsync(async ct =>
+        => _ioPool.Invoke(async ct =>
         {
             await DeleteAsyncCore(path, ct).ConfigureAwait(false);
             try { _changes.OnNext(DataChangeNotification.Deleted(path)); }
@@ -344,7 +350,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     }
 
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
-        => Observable.FromAsync(ct => ListChildPathsAsyncCore(parentPath, ct))
+        => _ioPool.Invoke(ct => ListChildPathsAsyncCore(parentPath, ct))
             .Catch<(IEnumerable<string>, IEnumerable<string>), Exception>(ex => IsUndefinedTable(ex)
                 ? Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(([], []))
                 : Observable.Throw<(IEnumerable<string>, IEnumerable<string>)>(ex));
@@ -375,7 +381,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     }
 
     public IObservable<bool> Exists(string path)
-        => Observable.FromAsync(ct => ExistsAsyncCore(path, ct))
+        => _ioPool.Invoke(ct => ExistsAsyncCore(path, ct))
             .Catch<bool, Exception>(ex => IsUndefinedTable(ex)
                 ? Observable.Return(false)
                 : Observable.Throw<bool>(ex));
@@ -400,7 +406,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
 
     public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
         string fullPath, JsonSerializerOptions options)
-        => Observable.FromAsync(ct => FindBestPrefixMatchAsyncCore(fullPath, options, ct))
+        => _ioPool.Invoke(ct => FindBestPrefixMatchAsyncCore(fullPath, options, ct))
             .Catch<(MeshNode?, int), Exception>(ex => IsUndefinedTable(ex)
                 ? Observable.Return<(MeshNode?, int)>((null, 0))
                 : Observable.Throw<(MeshNode?, int)>(ex));
@@ -443,7 +449,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     /// </summary>
     public IObservable<(MeshNode? Node, int MatchedSegments)> ResolvePath(
         string fullPath, JsonSerializerOptions options)
-        => Observable.FromAsync(ct => ResolvePathAsyncCore(fullPath, options, ct))
+        => _ioPool.Invoke(ct => ResolvePathAsyncCore(fullPath, options, ct))
             .Catch<(MeshNode?, int), Exception>(ex => IsUndefinedTable(ex)
                 ? Observable.Return<(MeshNode?, int)>((null, 0))
                 : Observable.Throw<(MeshNode?, int)>(ex));
@@ -560,7 +566,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
 
     public IObservable<Unit> SavePartitionObjects(
         string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
-        => Observable.FromAsync(async ct => { await SavePartitionObjectsAsyncCore(nodePath, subPath, objects, options, ct).ConfigureAwait(false); return Unit.Default; });
+        => _ioPool.Invoke(async ct => { await SavePartitionObjectsAsyncCore(nodePath, subPath, objects, options, ct).ConfigureAwait(false); return Unit.Default; });
 
     private async Task SavePartitionObjectsAsyncCore(
         string nodePath,
@@ -600,7 +606,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     }
 
     public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
-        => Observable.FromAsync(async ct => { await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct).ConfigureAwait(false); return Unit.Default; })
+        => _ioPool.Invoke(async ct => { await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct).ConfigureAwait(false); return Unit.Default; })
             .Catch<Unit, Exception>(ex => IsUndefinedTable(ex)
                 ? Observable.Return(Unit.Default)
                 : Observable.Throw<Unit>(ex));
@@ -621,7 +627,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     }
 
     public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
-        => Observable.FromAsync(ct => GetPartitionMaxTimestampAsyncCore(nodePath, subPath, ct))
+        => _ioPool.Invoke(ct => GetPartitionMaxTimestampAsyncCore(nodePath, subPath, ct))
             .Catch<DateTimeOffset?, Exception>(ex => IsUndefinedTable(ex)
                 ? Observable.Return<DateTimeOffset?>(null)
                 : Observable.Throw<DateTimeOffset?>(ex));
@@ -647,7 +653,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     }
 
     public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
-        => Observable.FromAsync(ct => ListPartitionSubPathsAsyncCore(nodePath, ct))
+        => _ioPool.Invoke(ct => ListPartitionSubPathsAsyncCore(nodePath, ct))
             .Catch<IEnumerable<string>, Exception>(ex => IsUndefinedTable(ex)
                 ? Observable.Return(Enumerable.Empty<string>())
                 : Observable.Throw<IEnumerable<string>>(ex));

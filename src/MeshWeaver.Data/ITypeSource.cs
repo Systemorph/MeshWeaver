@@ -1,6 +1,5 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data.Validation;
 using MeshWeaver.Domain;
 
@@ -9,20 +8,22 @@ namespace MeshWeaver.Data;
 public interface ITypeSource
 {
     ITypeDefinition TypeDefinition { get; }
+    // Reactive only — initial data loads as IObservable, never Task. A genuine I/O source
+    // bridges its leaf reactively (e.g. through IIoPool at the leaf); in-memory data uses
+    // Observable.Return.
     ITypeSource WithInitialData(
         Func<
             WorkspaceReference<InstanceCollection>,
-            CancellationToken,
-            Task<IEnumerable<object>>
-        > loadInstancesAsync
+            IObservable<IEnumerable<object>>
+        > loadInstances
     );
     ITypeSource WithInitialData(
-        Func<CancellationToken, Task<IEnumerable<object>>> loadInstancesAsync
-    ) => WithInitialData((_, ct) => loadInstancesAsync(ct));
+        Func<IObservable<IEnumerable<object>>> loadInstances
+    ) => WithInitialData(_ => loadInstances());
 
     ITypeSource WithInitialData(IEnumerable<object> instances) => WithInitialData(() => instances);
     ITypeSource WithInitialData(Func<IEnumerable<object>> loadInstances) =>
-        WithInitialData((_, _) => Task.FromResult(loadInstances()));
+        WithInitialData(_ => Observable.Return(loadInstances()));
 
     /// <summary>
     /// Loads the initial <see cref="InstanceCollection"/> for this type source, reactively.

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -19,18 +19,18 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// <summary>
 /// Compile-guard test for the <c>LinkedInPullActions</c> Code piece that lives
 /// under <c>Systemorph/LinkedInProfile/Source/</c> in the production mesh. The
-/// body inlined here is the authoritative production source — keep it in
+/// body inlined here is the authoritative production source â€” keep it in
 /// lockstep so any drift (missing <c>using</c>, syntax slip, wrong interface
 /// shape) fails CI instead of the user-facing LinkedIn dashboard.
 ///
 /// Regression for 2026-04-22 incident: the Code piece shipped without
 /// <c>using System.Threading.Tasks;</c>, the <c>Task</c>/<c>Task&lt;&gt;</c>
 /// helper method signatures failed to resolve, and the whole NodeType stopped
-/// compiling — the dashboard rendered the raw compiler diagnostic.
+/// compiling â€” the dashboard rendered the raw compiler diagnostic.
 /// </summary>
 public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    /// <summary>Share Mesh/SP across [Fact]s â€” see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
     protected override bool ShareMeshAcrossTests => true;
 
     private const string NodeTypePath = "Systemorph/LinkedInProfile";
@@ -41,7 +41,7 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
     {
         var workspace = Mesh.GetWorkspace();
 
-        // Register the NodeType with the PullPastPosts layout area wired in —
+        // Register the NodeType with the PullPastPosts layout area wired in â€”
         // this is the exact Configuration string that lives in prod.
         NodeFactory.CreateNode(new MeshNode("LinkedInProfile", "Systemorph")
         {
@@ -60,14 +60,14 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
 
         // Wait for the kickoff compile to settle BEFORE adding sources +
         // triggering. The per-NodeType hub's `InstallCompileWatcher` runs its
-        // one-shot kickoff the moment the hub activates — long before any
+        // one-shot kickoff the moment the hub activates â€” long before any
         // `CreateCodeAsync` lands, so the kickoff Roslyn compiles the
         // Configuration string against an empty source set and either errors
         // out or produces an assembly missing `LinkedInPullActions`.
         //
-        // 🚨 Why this matters for the trigger: if `RequestedReleaseAt` is
+        // ðŸš¨ Why this matters for the trigger: if `RequestedReleaseAt` is
         // written while kickoff `Status == Compiling`, `ReleaseRequestWatcher`'s
-        // status guard absorbs the trigger — it stamps
+        // status guard absorbs the trigger â€” it stamps
         // `LastReleaseRequestHandledAt` but keeps Status at Compiling (no
         // fresh Pending flip), so no second compile ever fires. The
         // watermark wait below then matches against the kickoff's release
@@ -78,7 +78,7 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
         // 2026-05-21 (prod EventCalendar regression). With no kickoff the
         // NodeType created above sits in Status=null until the test
         // explicitly drives a compile via RequestedReleaseAt below. No
-        // initial-state wait is needed — just plant the sources and
+        // initial-state wait is needed â€” just plant the sources and
         // trigger the watcher.
 
         CreateCode("LinkedInProfile", LinkedInProfileSource).Should().Within(30.Seconds()).Emit();
@@ -87,7 +87,7 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
         // Trigger an explicit recompile AFTER kickoff settled AND both source
         // nodes exist. `RequestedReleaseAt > LastReleaseRequestHandledAt` is
         // observed by `InstallReleaseRequestWatcher`; with Status now
-        // Ok/Error (not Compiling) the watcher flips Pending → the compile
+        // Ok/Error (not Compiling) the watcher flips Pending â†’ the compile
         // pipeline runs Roslyn against the now-visible Code sources.
         var triggerAt = DateTimeOffset.UtcNow;
         workspace.GetMeshNodeStream(NodeTypePath).Update(curr =>
@@ -105,7 +105,7 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
 
         // Wait for the compile that handled this trigger to settle on Ok with
         // a release path. The handled-at watermark + Ok status guarantees the
-        // currently-active release was produced by THIS trigger — not the
+        // currently-active release was produced by THIS trigger â€” not the
         // kickoff release we explicitly invalidated by re-triggering.
         workspace.GetMeshNodeStream(NodeTypePath)
             .Should().Within(60.Seconds())
@@ -130,7 +130,7 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
         // Render the PullPastPosts area. In the test mesh LinkedInPublisher is
         // NOT registered in DI, so the area hits its "publisher is null" branch
         // and returns a MarkdownControl describing the missing dependency.
-        // That branch still exercises the full compile of the Code piece —
+        // That branch still exercises the full compile of the Code piece â€”
         // which is what we're guarding.
         var control = RenderArea(instancePath, "PullPastPosts");
 
@@ -156,7 +156,7 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new Address(path), reference);
 
-        // Match the LinkedInTelemetry / CompilationPending timeout budget —
+        // Match the LinkedInTelemetry / CompilationPending timeout budget â€”
         // 60s caps below the cold-cache compile + activation pipeline on CI.
         var control = stream
             .GetControlStream(reference.Area!)
@@ -209,7 +209,7 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
                 var mesh = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
                 var publisher = host.Hub.ServiceProvider.GetService<LinkedInPublisher>();
 
-                return Observable.FromAsync(async () =>
+                return MeshWeaver.Mesh.Threading.IoPool.Unbounded.Invoke(async _ =>
                 {
                     if (publisher is null)
                         return (UiControl?)Controls.Markdown("## Pull past posts\n\n_LinkedInPublisher is not registered in DI._");
@@ -276,7 +276,7 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
             {
                 var t = (text ?? "").ReplaceLineEndings(" ").Trim();
                 if (t.Length == 0) return "(untitled)";
-                return t.Length > 80 ? t[..80] + "…" : t;
+                return t.Length > 80 ? t[..80] + "â€¦" : t;
             }
         }
         """;

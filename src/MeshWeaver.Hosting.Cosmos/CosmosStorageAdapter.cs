@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.Azure.Cosmos;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 
 namespace MeshWeaver.Hosting.Cosmos;
 
@@ -18,6 +19,8 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
     private readonly Container _partitionsContainer;
     private readonly CosmosSqlGenerator _sqlGenerator = new();
     private CosmosChangeFeedProcessor? _changeFeedProcessor;
+    // Every Cosmos round-trip runs inside the I/O pool (Invoke), never a bare _ioPool.Invoke.
+    private readonly IIoPool _ioPool;
     private readonly Subject<DataChangeNotification> _changes = new();
 
     /// <inheritdoc />
@@ -41,10 +44,12 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
 
     public CosmosStorageAdapter(
         Container nodesContainer,
-        Container partitionsContainer)
+        Container partitionsContainer,
+        IIoPool? ioPool = null)
     {
         _nodesContainer = nodesContainer;
         _partitionsContainer = partitionsContainer;
+        _ioPool = ioPool ?? IoPool.Unbounded;
     }
 
     /// <summary>
@@ -87,7 +92,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
         => select is null || select.Any(s => s.Equals(column, StringComparison.OrdinalIgnoreCase));
 
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-        => Observable.FromAsync(ct => ReadAsyncCore(path, options, ct));
+        => _ioPool.Invoke(ct => ReadAsyncCore(path, options, ct));
 
     private async Task<MeshNode?> ReadAsyncCore(string path, JsonSerializerOptions options, CancellationToken ct)
     {
@@ -115,7 +120,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
     }
 
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
-        => Observable.FromAsync(async ct => { await WriteAsyncCore(node, options, ct).ConfigureAwait(false); return node; });
+        => _ioPool.Invoke(async ct => { await WriteAsyncCore(node, options, ct).ConfigureAwait(false); return node; });
 
     private async Task WriteAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)
     {
@@ -130,7 +135,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
     }
 
     public IObservable<string> Delete(string path)
-        => Observable.FromAsync(async ct => { await DeleteAsyncCore(path, ct).ConfigureAwait(false); return path; });
+        => _ioPool.Invoke(async ct => { await DeleteAsyncCore(path, ct).ConfigureAwait(false); return path; });
 
     private async Task DeleteAsyncCore(string path, CancellationToken ct)
     {
@@ -157,7 +162,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
     }
 
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
-        => Observable.FromAsync(ct => ListChildPathsAsyncCore(parentPath, ct));
+        => _ioPool.Invoke(ct => ListChildPathsAsyncCore(parentPath, ct));
 
     private async Task<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPathsAsyncCore(
         string? parentPath, CancellationToken ct)
@@ -193,7 +198,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
     }
 
     public IObservable<bool> Exists(string path)
-        => Observable.FromAsync(ct => ExistsAsyncCore(path, ct));
+        => _ioPool.Invoke(ct => ExistsAsyncCore(path, ct));
 
     private async Task<bool> ExistsAsyncCore(string path, CancellationToken ct)
     {
@@ -250,7 +255,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
     public IObservable<Unit> SavePartitionObjects(
         string nodePath, string? subPath,
         IReadOnlyCollection<object> objects, JsonSerializerOptions options)
-        => Observable.FromAsync(async ct => { await SavePartitionObjectsAsyncCore(nodePath, subPath, objects, options, ct).ConfigureAwait(false); return Unit.Default; });
+        => _ioPool.Invoke(async ct => { await SavePartitionObjectsAsyncCore(nodePath, subPath, objects, options, ct).ConfigureAwait(false); return Unit.Default; });
 
     private async Task SavePartitionObjectsAsyncCore(
         string nodePath,
@@ -285,7 +290,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
     }
 
     public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
-        => Observable.FromAsync(async ct => { await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct).ConfigureAwait(false); return Unit.Default; });
+        => _ioPool.Invoke(async ct => { await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct).ConfigureAwait(false); return Unit.Default; });
 
     private async Task DeletePartitionObjectsAsyncCore(
         string nodePath,
@@ -322,7 +327,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
     }
 
     public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
-        => Observable.FromAsync(ct => GetPartitionMaxTimestampAsyncCore(nodePath, subPath, ct));
+        => _ioPool.Invoke(ct => GetPartitionMaxTimestampAsyncCore(nodePath, subPath, ct));
 
     private async Task<DateTimeOffset?> GetPartitionMaxTimestampAsyncCore(
         string nodePath,

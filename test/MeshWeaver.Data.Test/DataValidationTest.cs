@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
@@ -122,7 +122,7 @@ public abstract class DataValidationTestBase(ITestOutputHelper output) : HubTest
                 data.AddSource(dataSource =>
                     dataSource.WithType<ValidatableData>(type =>
                         type.WithKey(instance => instance.Id)
-                            .WithInitialData(_ => Task.FromResult(InitialTestData.AsEnumerable()))
+                            .WithInitialData(_ => Observable.Return(InitialTestData.AsEnumerable()))
                     )
                 )
             );

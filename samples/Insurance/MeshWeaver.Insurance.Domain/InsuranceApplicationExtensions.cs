@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Completion;
@@ -45,11 +46,11 @@ public static class InsuranceApplicationExtensions
                 {
                     var svc = data.Hub.ServiceProvider.GetRequiredService<IPricingService>();
                     return data.AddSource(src => src
-                        .WithType<LineOfBusiness>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetLinesOfBusiness())))
-                        .WithType<Country>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetCountries())))
-                        .WithType<LegalEntity>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetLegalEntities())))
-                        .WithType<Currency>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetCurrencies())))
-                        .WithType<Pricing>(t => t.WithInitialData(_ => Task.FromResult<IEnumerable<Pricing>>(svc.GetCatalog())))
+                        .WithType<LineOfBusiness>(t => t.WithInitialData(() => Observable.Return(SampleDataProvider.GetLinesOfBusiness())))
+                        .WithType<Country>(t => t.WithInitialData(() => Observable.Return(SampleDataProvider.GetCountries())))
+                        .WithType<LegalEntity>(t => t.WithInitialData(() => Observable.Return(SampleDataProvider.GetLegalEntities())))
+                        .WithType<Currency>(t => t.WithInitialData(() => Observable.Return(SampleDataProvider.GetCurrencies())))
+                        .WithType<Pricing>(t => t.WithInitialData(() => Observable.Return<IEnumerable<Pricing>>(svc.GetCatalog())))
                     );
                 })
                 .AddLayout(l => l
@@ -116,22 +117,20 @@ public static class InsuranceApplicationExtensions
                     var pricingId = data.Hub.Address.Id;
 
                     return data.AddSource(src => src
-                            .WithType<Pricing>(t => t.WithInitialData(async ct =>
-                            {
-                                var pricing = await svc.GetHeaderAsync(pricingId);
-                                return pricing is null ? [] : [pricing];
-                            }))
-                            .WithType<PropertyRisk>(t => t.WithInitialData(async ct =>
-                                await svc.GetRisksAsync(pricingId, ct)))
-                            .WithType<ReinsuranceAcceptance>(t => t.WithInitialData(_ => Task.FromResult(Enumerable.Empty<ReinsuranceAcceptance>())))
-                            .WithType<ReinsuranceSection>(t => t.WithInitialData(_ => Task.FromResult(Enumerable.Empty<ReinsuranceSection>())))
-                            .WithType<ExcelImportConfiguration>(t => t.WithInitialData(async ct =>
-                                await svc.GetImportConfigurationsAsync(pricingId).ToArrayAsync(ct)))
+                            // Bridge each genuine async service leaf reactively (.ToObservable) — IObservable, no Task surface.
+                            .WithType<Pricing>(t => t.WithInitialData(() => svc.GetHeaderAsync(pricingId).ToObservable()
+                                .Select(pricing => (IEnumerable<Pricing>)(pricing is null ? Array.Empty<Pricing>() : new[] { pricing }))))
+                            .WithType<PropertyRisk>(t => t.WithInitialData(() => svc.GetRisksAsync(pricingId, default).ToObservable()))
+                            .WithType<ReinsuranceAcceptance>(t => t.WithInitialData(() => Observable.Return(Enumerable.Empty<ReinsuranceAcceptance>())))
+                            .WithType<ReinsuranceSection>(t => t.WithInitialData(() => Observable.Return(Enumerable.Empty<ReinsuranceSection>())))
+                            .WithType<ExcelImportConfiguration>(t => t.WithInitialData(() =>
+                                svc.GetImportConfigurationsAsync(pricingId).ToArrayAsync().AsTask().ToObservable()
+                                    .Select(a => (IEnumerable<ExcelImportConfiguration>)a)))
                             // Add dimension data mappings
-                            .WithType<LineOfBusiness>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetLinesOfBusiness())))
-                            .WithType<Country>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetCountries())))
-                            .WithType<LegalEntity>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetLegalEntities())))
-                            .WithType<Currency>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetCurrencies())))
+                            .WithType<LineOfBusiness>(t => t.WithInitialData(() => Observable.Return(SampleDataProvider.GetLinesOfBusiness())))
+                            .WithType<Country>(t => t.WithInitialData(() => Observable.Return(SampleDataProvider.GetCountries())))
+                            .WithType<LegalEntity>(t => t.WithInitialData(() => Observable.Return(SampleDataProvider.GetLegalEntities())))
+                            .WithType<Currency>(t => t.WithInitialData(() => Observable.Return(SampleDataProvider.GetCurrencies())))
                         )
                         // Configure default data reference: data/pricing/pricingId returns the main Pricing entity
                         .WithDefaultDataReference(workspace =>
@@ -192,9 +191,8 @@ public static class InsuranceApplicationExtensions
                         Error = "No property risks available to geocode"
                     });
 
-                // External HTTP boundary — FromAsync is sanctioned because the
-                // inner method is a plain HTTP client, not a hub round-trip.
-                return Observable.FromAsync(token => geocodingService.GeocodeRisksAsync(riskList, token));
+                // Reactive service — the HTTP fan-out runs inside its bounded Http I/O queue.
+                return geocodingService.GeocodeRisks(riskList);
             })
             .Subscribe(
                 geocodingResponse =>

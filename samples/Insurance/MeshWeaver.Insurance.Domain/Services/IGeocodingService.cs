@@ -11,9 +11,10 @@ public interface IGeocodingService
     IObservable<GeocodingProgress?> Progress { get; }
 
     /// <summary>
-    /// Geocodes a collection of property risks.
+    /// Geocodes a collection of property risks. Reactive — returns <see cref="IObservable{T}"/>
+    /// (never Task); the HTTP leaf runs inside the bounded Http I/O queue.
     /// </summary>
-    Task<GeocodingResponse> GeocodeRisksAsync(IReadOnlyCollection<PropertyRisk> risks, CancellationToken cancellationToken = default);
+    IObservable<GeocodingResponse> GeocodeRisks(IReadOnlyCollection<PropertyRisk> risks);
 }
 
 /// <summary>

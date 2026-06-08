@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -38,11 +39,14 @@ public sealed class ClaudeConnectStrategy : IConnectStrategy
 {
     private readonly IServiceProvider services;
     private readonly ILogger<ClaudeConnectStrategy>? logger;
+    // Spawning + scraping the claude CLI is a process I/O leaf — bounded Process pool, never FromAsync.
+    private readonly IIoPool processPool;
 
     public ClaudeConnectStrategy(IServiceProvider services)
     {
         this.services = services;
         logger = services.GetService<ILoggerFactory>()?.CreateLogger<ClaudeConnectStrategy>();
+        processPool = services.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Process) ?? IoPool.Unbounded;
     }
 
     public ConnectProvider Provider => ConnectProvider.ClaudeCode;
@@ -86,13 +90,13 @@ public sealed class ClaudeConnectStrategy : IConnectStrategy
     public IObservable<ConnectChallenge> StartConnect(ConnectSession session, string ownerPath)
     {
         var options = Options;
-        return Observable.FromAsync(ct => SpawnAndScrapeUrlAsync(session, options, ct));
+        return processPool.Invoke(ct => SpawnAndScrapeUrlAsync(session, options, ct));
     }
 
     public IObservable<string> CompleteConnect(ConnectSession session, string? pastedCode)
     {
         var options = Options;
-        return Observable.FromAsync(ct => SubmitCodeAndCaptureTokenAsync(session, pastedCode, options, ct));
+        return processPool.Invoke(ct => SubmitCodeAndCaptureTokenAsync(session, pastedCode, options, ct));
     }
 
     // ── subprocess boundary (the only place Task lives — per "nothing async ever") ───────────────

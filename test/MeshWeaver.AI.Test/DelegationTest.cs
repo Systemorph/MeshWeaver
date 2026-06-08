@@ -37,7 +37,7 @@ public class DelegationTest
     private static IObservable<string> ToStream(
         Func<CancellationToken, Task<string>> body,
         CancellationToken ct = default)
-        => System.Reactive.Linq.Observable.FromAsync(() => body(ct));
+        => MeshWeaver.Mesh.Threading.IoPool.Unbounded.Invoke(_ => body(ct));
 
     #region Fake Chat Client Infrastructure
 

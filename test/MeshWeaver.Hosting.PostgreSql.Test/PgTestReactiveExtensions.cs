@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
@@ -30,15 +31,15 @@ internal static class PgTestReactiveExtensions
 {
     /// <summary>Project an arbitrary low-level PG <see cref="Task"/> (e.g. SyncNodeTypePermissionsAsync) to an observable.</summary>
     public static IObservable<Unit> Run(this Task task)
-        => Observable.FromAsync(async () => { await task; return Unit.Default; });
+        => IoPool.Unbounded.Invoke(async _ => { await task; return Unit.Default; });
 
     /// <summary>Project an arbitrary low-level PG <see cref="Task{T}"/> to an observable.</summary>
     public static IObservable<T> Run<T>(this Task<T> task)
-        => Observable.FromAsync(async () => await task);
+        => IoPool.Unbounded.Invoke(async _ => await task);
 
     /// <summary>Reactive scalar SQL count (low-level PG op stays async inside).</summary>
     public static IObservable<long> ScalarLong(this NpgsqlDataSource ds, string sql, CancellationToken ct = default)
-        => Observable.FromAsync(async () =>
+        => IoPool.Unbounded.Invoke(async _ =>
         {
             await using var cmd = ds.CreateCommand(sql);
             return (long)(await cmd.ExecuteScalarAsync(ct))!;
@@ -47,7 +48,7 @@ internal static class PgTestReactiveExtensions
     /// <summary>Reactive parameterised scalar SQL count.</summary>
     public static IObservable<long> ScalarLong(
         this NpgsqlDataSource ds, string sql, (string Name, object Value)[] parameters, CancellationToken ct = default)
-        => Observable.FromAsync(async () =>
+        => IoPool.Unbounded.Invoke(async _ =>
         {
             await using var cmd = ds.CreateCommand(sql);
             foreach (var (name, value) in parameters)
@@ -57,7 +58,7 @@ internal static class PgTestReactiveExtensions
 
     /// <summary>Reactive non-query SQL statement.</summary>
     public static IObservable<Unit> ExecuteNonQuery(this NpgsqlDataSource ds, string sql, CancellationToken ct = default)
-        => Observable.FromAsync(async () =>
+        => IoPool.Unbounded.Invoke(async _ =>
         {
             await using var cmd = ds.CreateCommand(sql);
             await cmd.ExecuteNonQueryAsync(ct);
@@ -68,7 +69,7 @@ internal static class PgTestReactiveExtensions
     public static IObservable<T> Probe<T>(
         this NpgsqlDataSource ds, string sql, (string Name, object Value)[] parameters,
         System.Func<NpgsqlDataReader, T> project, CancellationToken ct = default)
-        => Observable.FromAsync(async () =>
+        => IoPool.Unbounded.Invoke(async _ =>
         {
             await using var cmd = ds.CreateCommand(sql);
             foreach (var (name, value) in parameters)
@@ -82,7 +83,7 @@ internal static class PgTestReactiveExtensions
     public static IObservable<List<T>> Rows<T>(
         this NpgsqlDataSource ds, string sql, (string Name, object Value)[] parameters,
         System.Func<NpgsqlDataReader, T> project, CancellationToken ct = default)
-        => Observable.FromAsync(async () =>
+        => IoPool.Unbounded.Invoke(async _ =>
         {
             var rows = new List<T>();
             await using var cmd = ds.CreateCommand(sql);
@@ -97,7 +98,7 @@ internal static class PgTestReactiveExtensions
     /// <summary>Reactive materialisation of a query stream into a list (async-enumerable stays async inside).</summary>
     public static IObservable<List<object>> QueryList(
         this PostgreSqlMeshQuery query, MeshQueryRequest request, JsonSerializerOptions options, CancellationToken ct = default)
-        => Observable.FromAsync(async () =>
+        => IoPool.Unbounded.Invoke(async _ =>
         {
             var results = new List<object>();
             await foreach (var item in query.QueryAsync(request, options, ct))
@@ -107,7 +108,7 @@ internal static class PgTestReactiveExtensions
 
     /// <summary>Reactive materialisation of any <see cref="IAsyncEnumerable{T}"/> into a list.</summary>
     public static IObservable<List<T>> Collect<T>(this IAsyncEnumerable<T> source, CancellationToken ct = default)
-        => Observable.FromAsync(async () =>
+        => IoPool.Unbounded.Invoke(async _ =>
         {
             var results = new List<T>();
             await foreach (var item in source.WithCancellation(ct))
@@ -119,7 +120,7 @@ internal static class PgTestReactiveExtensions
     public static IObservable<Unit> Grant(
         this PostgreSqlAccessControl ac, string nodePath, string subject, string permission,
         bool isAllow, CancellationToken ct = default)
-        => Observable.FromAsync(async () =>
+        => IoPool.Unbounded.Invoke(async _ =>
         {
             await ac.GrantAsync(nodePath, subject, permission, isAllow, ct);
             return Unit.Default;
@@ -127,7 +128,7 @@ internal static class PgTestReactiveExtensions
 
     /// <summary>Reactive projection of <see cref="NpgsqlDataSource.DisposeAsync"/> for finally-blocks.</summary>
     public static IObservable<Unit> DisposeReactive(this NpgsqlDataSource ds)
-        => Observable.FromAsync(async () => { await ds.DisposeAsync(); return Unit.Default; });
+        => IoPool.Unbounded.Invoke(async _ => { await ds.DisposeAsync(); return Unit.Default; });
 
     /// <summary>
     /// Provision a partition the platform way — run every storage provider's

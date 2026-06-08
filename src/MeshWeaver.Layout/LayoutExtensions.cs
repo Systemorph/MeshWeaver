@@ -566,17 +566,13 @@ public static class LayoutExtensions
             c => c
         );
 
-        // Use FromAsync to allow the hub's message processing to handle the value
-        // before the observable sequence completes
-        var observable = Observable.FromAsync(_ =>
-        {
-            var areas = uiControlService.LayoutDefinition
-                .AreaDefinitions
-                .Values
-                .Where(l => l.IsVisible())
-                .ToList();
-            return Task.FromResult((object)areas);
-        });
+        // Pure in-memory projection — no I/O, no async. Defer keeps it cold (the area list is
+        // built on Subscribe, on the subscriber's turn), reactive, with no Observable.FromAsync.
+        var observable = Observable.Defer(() => Observable.Return((object)uiControlService.LayoutDefinition
+            .AreaDefinitions
+            .Values
+            .Where(l => l.IsVisible())
+            .ToList()));
 
         stream.RegisterForDisposal(
             observable
