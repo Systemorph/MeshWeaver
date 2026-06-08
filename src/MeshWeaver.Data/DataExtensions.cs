@@ -661,6 +661,42 @@ public static class DataExtensions
 
                     MergePatchRecursive(currentNode, patchNode);
 
+                    // 🚨 The OWNER mints the fresh monotonic Version on apply.
+                    // Per the owned-stream contract — SynchronizationStream
+                    // ("ONLY the owning hub sets Version", line ~255) and
+                    // NodeUpdatePipeline ("the OWNER assigns the fresh monotonic
+                    // version on apply") — a client/subscriber carries only the
+                    // BASE Version it observed, so the cross-hub JSON-merge patch
+                    // it computed never touches Version. The sync-stream
+                    // value-update path stamps Hub.Version on the owner; this
+                    // PatchDataRequest merge path must do the same, else every
+                    // cross-hub stream.Update reuses the base Version. For
+                    // MeshNode that collapses the version-history store (keyed on
+                    // {Id}_{Version}) onto a single snapshot — the
+                    // VersionHistoryTest regression after cross-hub Update moved
+                    // from UpdateViaSyncStream (which stamped the owner Version)
+                    // to UpdateRemote (this merge). `version` is hub.Version
+                    // captured for THIS patch message (monotonic, distinct per
+                    // patch).
+                    //
+                    // 🚨 Stamp UNCONDITIONALLY for MeshNode (the only versioned
+                    // reduced stream). The owner's IN-MEMORY MeshNode carries
+                    // Version=0 until a write stamps it (the create's Version=1
+                    // lands only in the persisted file, not the live collection),
+                    // and Version=0 is OMITTED from the serialized `currentNode`
+                    // by DefaultIgnoreCondition=WhenWritingDefault — so a
+                    // ContainsKey guard would never fire and every update would
+                    // keep Version=0, which FileSystemVersionStore.WriteVersion
+                    // skips (Version <= 0) → version-history collapse. Scope to
+                    // MeshNode by type name (this assembly can't reference the
+                    // type — same string-keyed approach used elsewhere here) so
+                    // version-less reduced streams stay untouched.
+                    if (typeof(T).FullName == "MeshWeaver.Mesh.MeshNode")
+                    {
+                        var versionKey = jsonOpts.PropertyNamingPolicy?.ConvertName("Version") ?? "Version";
+                        currentNode[versionKey] = version;
+                    }
+
                     var mergedJson = currentNode.ToJsonString(jsonOpts);
                     var merged = System.Text.Json.JsonSerializer.Deserialize<T>(mergedJson, jsonOpts);
                     if (merged is null)

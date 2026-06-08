@@ -380,8 +380,21 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // AsyncLocal on each emission so downstream Subscribe callbacks see
         // the same identity regardless of where the emission lands.
         var captured = accessService.Context ?? accessService.CircuitContext;
-        if (captured is null || string.IsNullOrEmpty(captured.ObjectId))
-            return shared; // No user identity (background / system path) — pass-through.
+        // No REAL user identity ⇒ no per-user gate. Three cases pass through to the
+        // cache's shared upstream (which already opened under the Read-only cache
+        // identity — see GetEntry): (1) null/empty context (background / system path);
+        // (2) a hub-shaped principal (sync/, mesh/, node/, activity/, portal/) that
+        // LEAKED onto AsyncLocal from a workspace emission scheduler. A hub address is
+        // NOT a user — probing the owner for its permissions yields Permission.None and
+        // GateOnRead would throw "user 'sync/…' lacks Read", the symptom pinned by
+        // SubscribeRequestIdentityRoutingTest.SubscribeRequest_FromSyncHubPrincipal_FallsBackToSystem.
+        // This mirrors the SubscribeWith identity fallback (JsonSynchronizationStream)
+        // and the SetContext leak guard: hub principals fall back to System, which the
+        // cache upstream already represents. Per-user enforcement applies to genuine
+        // users only; they still hit the gate below.
+        if (captured is null || string.IsNullOrEmpty(captured.ObjectId)
+            || AccessService.LooksLikeHubPrincipal(captured.ObjectId))
+            return shared;
 
         // 🚨 Prod-2026-05-21 regression guard: posting GetPermissionRequest to
         // an Address whose first segment is a NodeType name (e.g. "Thread",
