@@ -67,12 +67,15 @@ public sealed class InvitationEmailSender(
                           ?? configuration["PublicBaseUrl"]
                           ?? configuration["Email:WebhookBaseUrl"];
 
-            // Live query: every Pending invitation. We can't express "EmailSentAt is null" in
-            // the query string, so over-fetch Pending and filter in Send. IMeshQueryCore =
-            // the no-access-control core path (infra read).
+            // Live query: ALL invitations — filter Pending + not-yet-emailed in Send. We do NOT
+            // filter `content.status:Pending` in the query: a Pending invitation's status is the
+            // enum default (0) and is OMITTED from the stored JSON, so that filter would never
+            // match (same reason OnboardingMiddleware/InvitationService filter status in code).
+            // IMeshQueryCore = the no-access-control core path (infra read).
+            logger?.LogInformation("InvitationEmailSender: watching invitations (baseUrl={BaseUrl})", baseUrl ?? "(none)");
             subscriptions.Add(query
                 .Query<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"nodeType:{InvitationNodeType.NodeType} content.status:Pending"), jsonOptions)
+                    $"nodeType:{InvitationNodeType.NodeType}"), jsonOptions)
                 .Select(change => change.Items)
                 .Subscribe(
                     items =>
@@ -105,13 +108,7 @@ public sealed class InvitationEmailSender(
         // the rare multi-replica race — worst case one duplicate email, never a lost one.)
         var claimedAt = DateTimeOffset.UtcNow;
         SetEmailSentAt(node, invitation, claimedAt, meshService, accessService)
-            .SelectMany(claimed =>
-            {
-                var claimedInv = InvitationService.TryGetInvitation(claimed, jsonOptions);
-                if (claimedInv?.EmailSentAt != claimedAt)
-                    return Observable.Empty<bool>();   // lost the claim — another writer won
-                return emailSender.SendEmail(invitation.Email!, InviteSubject, BuildInviteEmailHtml(baseUrl));
-            })
+            .SelectMany(_ => emailSender.SendEmail(invitation.Email!, InviteSubject, BuildInviteEmailHtml(baseUrl)))
             .Subscribe(
                 ok => logger?.LogInformation(
                     "InvitationEmailSender: {Email} emailed (sent={Sent})", invitation.Email, ok),
