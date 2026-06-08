@@ -128,6 +128,8 @@ Even with a clean static seed, tests still create runtime nodes (the `CreateThre
 
 Disposing at test end tears down the per-node hub cleanly: the `ActionBlock` completes, the subscription unwires, and in Orleans `Hub.RegisterForDisposal(_ => DeactivateOnIdle())` triggers grain deactivation (`MessageHubGrain.cs:105`). The next test sees a fresh routing table at the same path.
 
+> **🚨 Disposal is not finished when `Dispose()` returns — drain BOTH halves first.** `IMessageHub.Dispose()` only *kicks off* reactive teardown. Before the test base tears down the service scope it must await **(1)** `IMessageHub.DisposalCompleted` (action blocks + message round-trips) **and (2)** `IoPoolRegistry.WhenDrained` (offloaded `IIoPool` I/O on the ThreadPool, which `DisposalCompleted` does **not** cover). Dispose the scope while a straggler `IIoPool` op is still running and its continuation resolves a dead Autofac scope → `ObjectDisposedException: …LifetimeScope… already disposed`, which xUnit reports as a run-aborting **"catastrophic failure."** The canonical helper is `mesh.TeardownAsync(timeout)`; the full order + failure mode is in [Mesh Lifecycle](MeshLifecycle).
+
 ```csharp
 public class MyOrleansTest(SharedOrleansFixture fixture, ITestOutputHelper output)
     : OrleansTestBase(output), IAsyncLifetime

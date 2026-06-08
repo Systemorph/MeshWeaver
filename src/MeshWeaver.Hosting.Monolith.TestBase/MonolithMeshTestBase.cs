@@ -11,6 +11,7 @@ using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.Configuration;
@@ -976,11 +977,28 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         try
         {
             FileOutput.WriteLine($"[DISPOSE] {testName}: Mesh.Dispose() invoking on {Mesh.Address}");
+            // Capture the mesh's I/O pool registry BEFORE disposal — once Dispose()
+            // begins, resolving DI races the scope teardown. We wait for it to drain
+            // after DisposalCompleted (below) so the service scope isn't torn down
+            // while offloaded ThreadPool I/O is still running. See MeshTeardownExtensions.
+            var ioPools = Mesh.ServiceProvider.GetService<IoPoolRegistry>();
             Mesh.Dispose();
             TestPhaseTrace(testName, "DISPOSE_INVOKED", sw.ElapsedMilliseconds);
 
             using var cts = new CancellationTokenSource(DisposeTimeout);
             await WaitWithProgressAsync(testName, sw, cts.Token);
+            // DisposalCompleted only drains the action blocks + message round-trips.
+            // Offloaded I/O (IIoPool) runs on the ThreadPool independently and is NOT
+            // covered — wait for it here, BEFORE base.DisposeAsync tears down the
+            // service scope, so no continuation resolves a disposed Autofac scope
+            // (the unobserved "catastrophic ObjectDisposedException" class).
+            if (ioPools is not null)
+            {
+                await ioPools.WhenDrained(DisposeTimeout).FirstAsync().ToTask();
+                if (ioPools.TotalInFlight > 0)
+                    FileOutput.WriteLine(
+                        $"[DISPOSE] {testName}: I/O pools still report {ioPools.TotalInFlight} in-flight after drain wait");
+            }
             FileOutput.WriteLine($"[DISPOSE] {testName}: Mesh.Disposal completed in {sw.ElapsedMilliseconds}ms");
             TestPhaseTrace(testName, "DISPOSE_DONE", sw.ElapsedMilliseconds);
 
