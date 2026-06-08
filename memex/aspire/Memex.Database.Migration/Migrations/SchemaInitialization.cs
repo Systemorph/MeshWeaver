@@ -8,7 +8,8 @@ namespace Memex.Database.Migration.Migrations;
 /// <summary>
 /// Idempotent DB setup that ALWAYS runs (regardless of fresh vs. existing DB):
 /// public-schema tables/indexes/triggers, satellite tables, partition_access stored proc,
-/// and the admin schema with mesh_nodes for version tracking.
+/// the admin schema with mesh_nodes for version tracking, and the apitoken token-validation
+/// index schema (must exist before any token is minted — the router no longer lazy-creates it).
 ///
 /// New DBs get everything correct from the start. Existing DBs get updated trigger functions
 /// and any newly-added objects. Reports whether the DB was fresh by detecting whether any
@@ -64,6 +65,19 @@ public static class SchemaInitialization
         var adminOptions = SchemaHelpers.BuildSchemaOptions(connectionString, "admin", options.VectorDimensions);
         await PostgreSqlSchemaInitializer.InitializeMeshTablesAsync(adminDataSource, adminOptions);
 
+        // ApiToken validation-index schema. ApiTokenService writes the global ApiToken/{hashPrefix}
+        // index node (ApiTokenIndex → the user-scoped token node) into the `apitoken` schema, and
+        // token validation reads it back by exact path on every bearer request. `ApiToken` is not
+        // an OwnsPartition type and the router no longer lazily CREATE-SCHEMAs (0ceba04ce), so the
+        // schema must be created EXPLICITLY here — otherwise a fresh DB (e.g. atioz) never gets it
+        // and every freshly-minted token (manual AND OAuth) 401s on the next request. Uses the
+        // single-source-of-truth per-partition DDL proc installed by InitializeAsync above; the
+        // boot-time PostgreSqlPartitionSubscriptionHostedService also provisions it from
+        // DefaultPartitionProvider, but the explicit create here covers the migration container and
+        // any DB that booted before the partition was declared. Idempotent.
+        await using (var ensureApiToken = dataSource.CreateCommand("SELECT public.ensure_partition_schema('apitoken')"))
+            await ensureApiToken.ExecuteNonQueryAsync();
+
         // NOTE: the framework schemas `auth` (V27 access-object mirror) and `system_access`
         // (global/root-scope grants) are NOT created here. The portal's
         // PostgreSqlPartitionSubscriptionHostedService provisions them (and every other
@@ -91,9 +105,10 @@ public static class SchemaInitialization
             -- Framework schemas are NOT content partitions — they must never make a fresh DB
             -- look non-fresh (which would run the legacy `user`-schema repair chain instead of
             -- fast-forwarding). admin = versions/catalogs; auth = access-object mirror;
-            -- system_* = global satellite scopes; portal/kernel = legacy session schemas.
+            -- apitoken = token-validation index; system_* = global satellite scopes;
+            -- portal/kernel = legacy session schemas.
             AND s.schema_name NOT IN (
-                'public', 'admin', 'auth', 'system_access', 'system_activity',
+                'public', 'admin', 'auth', 'apitoken', 'system_access', 'system_activity',
                 'system_user_activity', 'system_thread', 'portal', 'kernel',
                 'information_schema', 'pg_catalog', 'pg_toast')
             AND s.schema_name NOT LIKE '%\_versions' ESCAPE '\'

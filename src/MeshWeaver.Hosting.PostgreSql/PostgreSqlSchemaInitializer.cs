@@ -126,17 +126,19 @@ public static class PostgreSqlSchemaInitializer
                 FOR schema_rec IN SELECT schema_name FROM public.searchable_schemas ORDER BY schema_name
                 LOOP
                     IF union_sql != '' THEN union_sql := union_sql || ' UNION ALL '; END IF;
-                    -- Exactly the PARTITION ROOT: the namespace='' node whose id equals the
-                    -- schema (partition) name. `path` is a GENERATED column = id when
-                    -- namespace='' — so it does NOT embed the partition prefix, and a plain
-                    -- `WHERE namespace=''` would pull every top-level node from every schema,
-                    -- whose ids (= paths) collide across partitions (e.g. two partitions each
-                    -- with a top-level 'Documentation') → duplicate path → UNIQUE(path) fails.
-                    -- Pinning id = <schema_name> yields one row per partition (path = schema
-                    -- name = globally unique) and naturally drops pseudo-schemas that have no
-                    -- self-named root. The (namespace,id) PK already guarantees ≤1 such row.
+                    -- Exactly the PARTITION ROOT: the namespace='' node whose id matches the
+                    -- schema (partition) name CASE-INSENSITIVELY. The schema is the lowercased
+                    -- first path segment, but a partition root's id keeps its ORIGINAL case —
+                    -- e.g. a Space "Agentic Pension" lives in schema `agenticpension` with root
+                    -- id `AgenticPension`. The old `id = <schema_name>` filter matched only when
+                    -- root id == lowercased schema (true for usernames, FALSE for PascalCase
+                    -- space names) → those spaces silently vanished from the top-level listing.
+                    -- LOWER(id) = <schema_name> pins exactly one root per partition (path = the
+                    -- root id = globally unique) for any id casing. `path` is a GENERATED column
+                    -- = id when namespace='' — a plain `WHERE namespace=''` would instead pull
+                    -- every top-level node, colliding paths across partitions → UNIQUE(path) fails.
                     union_sql := union_sql || format(
-                        'SELECT %s FROM %I.mesh_nodes WHERE namespace = '''' AND id = %L',
+                        'SELECT %s FROM %I.mesh_nodes WHERE namespace = '''' AND LOWER(id) = %L',
                         cols, schema_rec.schema_name, schema_rec.schema_name);
                 END LOOP;
 

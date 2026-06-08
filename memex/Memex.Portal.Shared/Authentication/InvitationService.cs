@@ -44,11 +44,12 @@ public sealed class InvitationService(
         var jsonOptions = workspace.Hub.JsonSerializerOptions;
         return workspace.GetQuery(
                 $"invite:byEmail:{email}",
-                // namespace:Admin routes to the admin schema — invitations live in the Admin
-                // partition, which is excluded from cross-schema global search, so a path-less
-                // nodeType:Invitation query would never find them (onboarding would treat every
-                // invited email as NOT invited and block it).
-                $"namespace:{InvitationNodeType.PartitionName} nodeType:{InvitationNodeType.NodeType} content.email:{email}")
+                // PATH-scoped to Admin/Invitation so it routes to the admin schema (routing is by
+                // the path's first segment). Invitations live in the Admin partition, which is
+                // excluded from cross-schema global search, so a `namespace:Admin`-only query
+                // (no path) fans out cross-schema and never finds them — onboarding would then
+                // treat every invited email as NOT invited and block it.
+                $"path:{InvitationNodeType.Namespace} scope:children nodeType:{InvitationNodeType.NodeType} content.email:{email}")
             .Take(1)
             .Select(items => (MeshNode?)items
                 .FirstOrDefault(n => TryGetInvitation(n, jsonOptions) is { Status: InvitationStatus.Pending }))

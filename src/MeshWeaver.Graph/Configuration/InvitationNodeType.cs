@@ -11,14 +11,12 @@ namespace MeshWeaver.Graph.Configuration;
 /// system-managed — excluded from search and create contexts.
 ///
 /// <para>Storage: invitations live in the always-present <b>Admin</b> partition at
-/// <c>Admin/Invitation/{slug}</c>. The first-path-segment routing rule in
-/// <see cref="GraphConfigurationExtensions"/> already routes any explicit <c>Admin/…</c>
-/// path to the Admin partition; the rule registered here additionally routes the
-/// path-less onboarding lookup (<c>nodeType:Invitation content.email:X</c>) to the Admin
-/// partition so it resolves to a single schema rather than fanning out — the exact pattern
-/// <see cref="UserNodeType"/> uses for <c>User → Auth</c>. This deliberately does NOT use the
-/// auth-mirror trigger, which only mirrors <c>User/Group/Role/VUser/ApiToken</c> and would
-/// silently drop Invitation rows.</para>
+/// <c>Admin/Invitation/{slug}</c>. The PG query router routes by the path's first segment, so
+/// callers must query them <b>path-scoped</b> (<c>path:Admin/Invitation scope:children</c>) to
+/// hit the admin schema — a <c>namespace:Admin</c>-only query fans out cross-schema, which
+/// deliberately EXCLUDES the admin schema. This deliberately does NOT use the auth-mirror
+/// trigger, which only mirrors <c>User/Group/Role/VUser/ApiToken</c> and would silently drop
+/// Invitation rows.</para>
 /// </summary>
 public static class InvitationNodeType
 {
@@ -28,9 +26,14 @@ public static class InvitationNodeType
     /// <summary>Namespace under which invitation nodes are created (Admin partition).</summary>
     public const string Namespace = "Admin/Invitation";
 
-    /// <summary>The partition (first path segment) invitations live in. Queries must scope to
-    /// <c>namespace:Admin</c> to route to the admin schema — the Admin partition is deliberately
-    /// excluded from the cross-schema global search (PostgreSqlSchemaInitializer.searchable_schemas).</summary>
+    /// <summary>The partition (first path segment) invitations live in. Queries must be
+    /// <b>path-scoped</b> (<c>path:Admin/Invitation scope:children</c>) to route to the admin
+    /// schema: the PG router routes by the path's FIRST SEGMENT
+    /// (<c>PostgreSqlPartitionedMeshQuery.FirstSegment</c>), so a <c>namespace:Admin</c>-only
+    /// query has no path, fans out cross-schema, and the admin schema is deliberately EXCLUDED
+    /// from that fan-out (PostgreSqlSchemaInitializer.searchable_schemas) — it would find nothing.
+    /// (<c>namespace:Admin</c> is also exact-match and would miss the <c>Admin/Invitation</c>
+    /// namespace regardless.)</summary>
     public const string PartitionName = "Admin";
 
     /// <summary>
@@ -41,8 +44,12 @@ public static class InvitationNodeType
     {
         builder.AddMeshNodes(CreateMeshNode());
         builder.AddAutocompleteExcludedTypes(NodeType);
-        // nodeType:Invitation without a path constraint → Admin partition (no fan-out).
-        // Queries that already know the path follow the natural first-segment route.
+        // Intent: a path-less nodeType:Invitation query → Admin partition (no fan-out).
+        // NOTE: the PostgreSQL query router (PostgreSqlPartitionedMeshQuery) routes purely by
+        // the path's first segment and does NOT consume these QueryRoutingHints yet, so this
+        // rule is currently inert — invitation queries MUST therefore be path-scoped
+        // (path:Admin/Invitation), which is what InvitationService / InvitationEmailSender /
+        // InvitationsSettingsTab now do. Kept so the hint is in place once the router honours it.
         builder.AddQueryRoutingRule(query =>
             query.ExtractNodeType() == NodeType && string.IsNullOrEmpty(query.Path)
                 ? new QueryRoutingHints { Partition = "Admin" }

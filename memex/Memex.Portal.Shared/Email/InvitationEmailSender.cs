@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -15,11 +16,18 @@ using Microsoft.Extensions.Logging;
 namespace Memex.Portal.Shared.Email;
 
 /// <summary>
-/// Mesh-driven invitation emailer — node-state driven, NO in-memory dedup. Watches Pending
-/// <see cref="Invitation"/> nodes (Admin partition) that have not been emailed yet
-/// (<see cref="Invitation.EmailSentAt"/> == null) via <see cref="IMeshQueryCore"/>, sends the
-/// "You've been invited" email through <see cref="IEmailSender"/>, and stamps
-/// <c>EmailSentAt</c> so it never re-sends.
+/// Mesh-driven invitation emailer. Watches Pending <see cref="Invitation"/> nodes (Admin
+/// partition) that have not been emailed yet (<see cref="Invitation.EmailSentAt"/> == null) via
+/// <see cref="IMeshQueryCore"/>, sends the "You've been invited" email through
+/// <see cref="IEmailSender"/>, and stamps <c>EmailSentAt</c> so it never re-sends.
+///
+/// <para><b>Two-layer de-dup.</b> Node-state (<c>EmailSentAt</c>) is the durable, cross-restart
+/// guard. But the live query's snapshot LAGS the claim write — after we stamp <c>EmailSentAt</c>
+/// the query keeps re-emitting the stale (null) node, and because each node's claim re-emits the
+/// WHOLE set, a single batch would otherwise re-claim+re-send each invitation many times before
+/// propagation. So an in-process single-claim guard (<see cref="claiming"/>, an INSTANCE field —
+/// mesh/process-scoped, never static) makes the first claim per path win; later stale emissions
+/// short-circuit. Released only on send failure so a later tick retries.</para>
 ///
 /// <para>Decouples the invite email from the creation entry point: an invitation created from the
 /// Invitations settings tab, from MCP (raw <c>create</c>), or from a REST call all get emailed
@@ -35,6 +43,10 @@ public sealed class InvitationEmailSender(
 {
     private const string InviteSubject = "You've been invited to Memex";
     private readonly CompositeDisposable subscriptions = new();
+    // In-process single-claim guard: path → claimed. Instance (mesh/process-scoped), never static.
+    // Prevents the live-query snapshot lag from re-claiming+re-sending the same invitation while
+    // its EmailSentAt write propagates. See class summary; released on send failure to allow retry.
+    private readonly ConcurrentDictionary<string, byte> claiming = new();
     private IServiceScope? scope;
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -74,13 +86,17 @@ public sealed class InvitationEmailSender(
             // IMeshQueryCore = the no-access-control core path (infra read).
             logger?.LogInformation("InvitationEmailSender: watching invitations (baseUrl={BaseUrl})", baseUrl ?? "(none)");
             subscriptions.Add(query
-                // namespace:Admin scopes the query to the Admin partition. A path-less
-                // nodeType:Invitation query goes cross-schema, which intentionally EXCLUDES
-                // the admin schema (see PostgreSqlSchemaInitializer.searchable_schemas), so
-                // it would never see invitations. Runs as System (IMeshQueryCore + MeshQuery's
-                // System stamp), so no access-control filtering. See AccessControl.md.
+                // PATH-scoped to Admin/Invitation. Routing is by the path's FIRST SEGMENT
+                // (PostgreSqlPartitionedMeshQuery.FirstSegment → schema), so `path:Admin/…`
+                // routes to the admin schema. A `namespace:Admin`-only query has NO path, so it
+                // fans out cross-schema — and the admin schema is intentionally EXCLUDED from
+                // that fan-out (PostgreSqlSchemaInitializer.searchable_schemas) — so it would
+                // never see invitations. (`namespace:Admin` is also exact-match and would miss
+                // the `Admin/Invitation` namespace regardless.) scope:children = the invitation
+                // slugs directly under Admin/Invitation. Runs as System (IMeshQueryCore +
+                // MeshQuery's System stamp) — no access-control filtering. See AccessControl.md.
                 .Query<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"namespace:{InvitationNodeType.PartitionName} nodeType:{InvitationNodeType.NodeType}"), jsonOptions)
+                    $"path:{InvitationNodeType.Namespace} scope:children nodeType:{InvitationNodeType.NodeType}"), jsonOptions)
                 .Select(change => change.Items)
                 .Subscribe(
                     items =>
@@ -107,6 +123,13 @@ public sealed class InvitationEmailSender(
             || string.IsNullOrWhiteSpace(invitation.Email))
             return;
 
+        // In-process single-claim: the live query re-emits the STALE (EmailSentAt=null) node many
+        // times before our claim write propagates back into its snapshot (and every node's claim
+        // re-emits the whole set), so without this guard one batch re-sends each invitation many
+        // times. TryAdd makes the first claim per path win; we release only on send failure.
+        if (!claiming.TryAdd(node.Path, 0))
+            return;
+
         // Claim FIRST: stamp EmailSentAt before sending so a duplicate query emission (or a
         // second replica) doesn't re-send. On send failure we clear the stamp so a later tick
         // retries. (Single-writer per node on the owning hub; last-write-wins is acceptable for
@@ -120,7 +143,8 @@ public sealed class InvitationEmailSender(
                 ex =>
                 {
                     logger?.LogWarning(ex, "InvitationEmailSender: send failed for {Email}", invitation.Email);
-                    // Roll back the claim so the invitation is retried on the next emission.
+                    // Release the in-process claim + roll back the stamp so a later tick retries.
+                    claiming.TryRemove(node.Path, out _);
                     SetEmailSentAt(node, invitation, null, meshService, accessService)
                         .Subscribe(_ => { }, _ => { });
                 });

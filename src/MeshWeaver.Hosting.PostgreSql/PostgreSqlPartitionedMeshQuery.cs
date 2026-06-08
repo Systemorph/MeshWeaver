@@ -62,6 +62,10 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
     private readonly ILogger<PostgreSqlPartitionedMeshQuery>? _logger;
     private readonly PostgreSqlPartitionStorageProvider? _partitionProvider;
     private readonly IoPoolRegistry? _ioPoolRegistry;
+    // Routing rules (nodeType:User → Auth, nodeType:Invitation → Admin) live here. A path-less
+    // query that matches a rule must pin to the rule's schema instead of fanning out cross-schema
+    // (which EXCLUDES auth/admin) — see the hint fallback in EnumerateFanOutAsync.
+    private readonly MeshConfiguration? _meshConfiguration;
     private readonly QueryParser _parser = new();
     private long _version;
 
@@ -78,13 +82,15 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         AccessService? accessService = null,
         ILogger<PostgreSqlPartitionedMeshQuery>? logger = null,
         PostgreSqlPartitionStorageProvider? partitionProvider = null,
-        IoPoolRegistry? ioPoolRegistry = null)
+        IoPoolRegistry? ioPoolRegistry = null,
+        MeshConfiguration? meshConfiguration = null)
     {
         _crossSchema = crossSchema;
         _accessService = accessService;
         _logger = logger;
         _partitionProvider = partitionProvider;
         _ioPoolRegistry = ioPoolRegistry;
+        _meshConfiguration = meshConfiguration;
     }
 
     /// <summary>
@@ -366,6 +372,19 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         // lookup misses it returns no rows; UNION over zero rows is still
         // correct.
         var pinned = ResolvePinnedPartition(parsed, ResolveGlobalSchema);
+        // Routing-rule fallback: a path-less query (no concrete first segment) that matches a
+        // registered QueryRoutingRule pins to that rule's partition — nodeType:User → auth,
+        // nodeType:Invitation → admin. These schemas are DELIBERATELY excluded from cross-schema
+        // search (PostgreSqlCrossSchemaQueryProvider.ExcludedSchemas: auth is the central user/auth
+        // mirror, admin is platform-only), so without this a path-less nodeType:User query fans out,
+        // misses auth, and never finds the user → the onboarding redirect loop. This realises the
+        // hint UserNodeType/InvitationNodeType register (previously inert — no consumer).
+        if (pinned is null && _meshConfiguration is not null)
+        {
+            var hintPartition = _meshConfiguration.ResolveRoutingHints(parsed).Partition;
+            if (!string.IsNullOrEmpty(hintPartition))
+                pinned = hintPartition.ToLowerInvariant();
+        }
         List<string> schemas;
         if (pinned is not null)
         {

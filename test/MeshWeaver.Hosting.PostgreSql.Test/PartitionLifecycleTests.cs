@@ -161,4 +161,54 @@ public class PartitionLifecycleTests(PostgreSqlFixture fixture, ITestOutputHelpe
             .Should().Within(30.Seconds()).Emit();
         deleted.Should().BeTrue();
     }
+
+    /// <summary>
+    /// Regression (atioz, 2026-06-08): the global <c>apitoken</c> token-validation index
+    /// partition must be EAGERLY declared so portal boot
+    /// (<see cref="PostgreSqlPartitionSubscriptionHostedService"/>) and the migration provision it
+    /// — never lazily created. <c>ApiToken</c> is not an <c>OwnsPartition</c> type, and after the
+    /// lazy-<c>CREATE SCHEMA</c> removal a fresh DB never got the <c>apitoken</c> schema, so the
+    /// <c>ApiToken/{hashPrefix}</c> index node <see cref="Memex.Portal.Shared"/>.ApiTokenService
+    /// writes couldn't persist and EVERY freshly-minted bearer token — manual AND OAuth — 401'd
+    /// at validation (the index read short-circuits to null).
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public void ApiTokenIndexPartition_IsDeclaredEagerly_AndPersistsIndexWrites()
+    {
+        // 1. The framework DECLARES ApiToken → apitoken as a framework partition. This is what
+        //    boot-time provisioning seeds; its absence from DefaultPartitionProvider was the bug.
+        var declared = Mesh.ServiceProvider.GetServices<IStaticNodeProvider>()
+            .SelectMany(p => p.GetStaticNodes())
+            .Select(n => n.Content)
+            .OfType<PartitionDefinition>()
+            .FirstOrDefault(d => string.Equals(d.Namespace, "ApiToken", StringComparison.Ordinal));
+        declared.Should().NotBeNull(
+            "the ApiToken validation-index partition must be declared so it is provisioned eagerly, not lazily");
+        declared!.Schema.Should().Be("apitoken");
+
+        // 2. Provisioning it (what boot does from that definition) creates the schema, and a write
+        //    to ApiToken/{hashPrefix} — the exact path ApiTokenService reads on every bearer
+        //    request — persists and reads back.
+        ProvisionPartition("ApiToken");
+        _fixture.DataSource.ScalarLong(
+                "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = 'apitoken'")
+            .Should().Within(30.Seconds()).Be(1L);
+
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var hashPrefix = $"{Guid.NewGuid():N}"[..12];
+        var path = $"ApiToken/{hashPrefix}";
+        var saved = meshService.CreateNode(new MeshNode(hashPrefix, "ApiToken")
+        {
+            NodeType = "Markdown",
+            Name = "token-index",
+            State = MeshNodeState.Active,
+        }).Should().Within(30.Seconds()).Emit();
+        saved.Path.Should().Be(path);
+
+        var readBack = Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n is not null).Take(1).Timeout(15.Seconds())
+            .Catch<MeshNode?, TimeoutException>(_ => Observable.Return<MeshNode?>(null))
+            .Should().Within(30.Seconds()).Emit();
+        readBack.Should().NotBeNull("the provisioned apitoken index partition serves reads immediately");
+    }
 }

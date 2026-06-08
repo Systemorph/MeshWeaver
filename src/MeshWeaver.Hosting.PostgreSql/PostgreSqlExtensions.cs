@@ -292,7 +292,8 @@ public static class PostgreSqlExtensions
                 sp.GetService<AccessService>(),
                 sp.GetService<ILogger<PostgreSqlPartitionedMeshQuery>>(),
                 sp.GetRequiredService<PostgreSqlPartitionStorageProvider>(),
-                sp.GetService<IoPoolRegistry>()));
+                sp.GetService<IoPoolRegistry>(),
+                sp.GetService<MeshConfiguration>()));
 
         // pg_notify listener: register both the singleton and an IHostedService
         // wrapper so the LISTEN session opens at host startup. Without the
@@ -399,7 +400,8 @@ public static class PostgreSqlExtensions
                 sp.GetService<AccessService>(),
                 sp.GetService<ILogger<PostgreSqlPartitionedMeshQuery>>(),
                 sp.GetRequiredService<PostgreSqlPartitionStorageProvider>(),
-                sp.GetService<IoPoolRegistry>()));
+                sp.GetService<IoPoolRegistry>(),
+                sp.GetService<MeshConfiguration>()));
 
         // Start the Admin/Partition/* subscription so writes can route — see
         // the longer comment on the same registration in the connection-string
