@@ -385,7 +385,22 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                 : _cache is not null && _path is not null
                     ? _cache.Update(_path, wrappedUpdate, _jsonOptions)
                     : _bypassCache
-                        ? UpdateViaSyncStream(wrappedUpdate)
+                        // 🚨 Field-merge writes go through the CORRELATED PatchDataRequest
+                        // path, NOT the sync-stream write. UpdateViaSyncStream emits an
+                        // OPTIMISTIC local snapshot and never waits for the owner — so an
+                        // owner-side RLS denial / validation rejection / invalid-path write
+                        // is silently swallowed (the caller already "succeeded"), and the
+                        // unvalidated SetCurrentRequest lands the change anyway. UpdateRemote
+                        // posts the JSON-merge patch, AWAITS the owner's PatchDataResponse /
+                        // DeliveryFailure, and surfaces a denial as UnauthorizedAccessException
+                        // / rejection as MeshNodeStreamException on the caller's OnError —
+                        // delivered to ONLY the submitting caller (request/response is
+                        // inherently correlated; it never calls reduced.OnError, so the
+                        // SHARED read stream every other subscriber/mirror reads is never
+                        // faulted). It also confirms read-after-write (waits for the commit).
+                        // Overwrite (full-replace, static-repo import) stays on the
+                        // sync-stream path — see Overwrite below.
+                        ? UpdateRemote(wrappedUpdate)
                         : throw new InvalidOperationException(
                             $"Cross-hub MeshNode write to '{_path}' requires an IMeshNodeStreamCache "
                             + $"on hub '{_workspace.Hub.Address}', but none is registered. All non-own "

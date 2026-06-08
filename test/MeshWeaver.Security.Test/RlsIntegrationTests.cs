@@ -333,6 +333,96 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
             "stream.Update must surface the RLS denial as an error when the caller lacks Update rights");
     }
 
+    /// <summary>
+    /// Option-B isolation contract: when a cross-hub <c>stream.Update</c> is denied by the
+    /// owner's RLS gate, the rejection MUST error ONLY the submitting caller's Update
+    /// observable. A bystander that is concurrently subscribed to the SAME node's read
+    /// stream must NOT have its stream faulted — the owner correlates the rejection to the
+    /// submitting mirror (<c>ChangedBy = ClientId</c>) and faults only that write, never
+    /// broadcasting <c>OnError</c> to every subscriber of the shared node stream.
+    ///
+    /// <para>This pins the "but only for the client who submitted, not the others" half of
+    /// the contract. The sibling <see cref="StreamUpdate_WithoutUpdateRights_IsDeniedAndErrors"/>
+    /// pins that the submitter errors; this one pins that the blast radius is exactly one
+    /// caller. A naive fix that calls <c>Store.OnError(...)</c> on the shared sync stream
+    /// would tear down every reader's view and fail this test.</para>
+    /// </summary>
+    [Fact(Timeout = 40000)]
+    public async Task StreamUpdate_Denied_ErrorsOnlySubmitter_NotOtherSubscribers()
+    {
+        var client = GetClient();
+
+        const string adminId = "admin_noupd";   // Admin at rls/noupdate (static seed)
+        const string viewerId = "viewer_noupd"; // Viewer at rls/noupdate (static seed)
+        const string parentPath = "rls/noupdate";
+
+        var node = new MeshNode("DeniedErrorIsolation", parentPath)
+        {
+            Name = "Original Name",
+            NodeType = "Markdown",
+        };
+        client.Observe(new CreateNodeRequest(node) { CreatedBy = adminId }, o => o.WithTarget(Mesh.Address))
+            .Should().Emit().Message.Success.Should().BeTrue();
+
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+
+        // Bystander: a LIVE read subscription to the same node's stream, held under the
+        // admin identity (Read rights). It represents "the others" — it must survive the
+        // denied write untouched. Capture both values and any terminal error.
+        Exception? bystanderError = null;
+        var bystanderWarm = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var bystanderSub = Mesh.GetMeshNodeStream(node.Path)
+            .Subscribe(
+                n => { if (n is not null && n.Name == "Original Name") bystanderWarm.TrySetResult(); },
+                ex => bystanderError = ex);
+
+        // Wait until the bystander has the initial value, so the shared upstream is warm:
+        // if the denied write later broadcast-faults that stream, the bystander WOULD see it.
+        await bystanderWarm.Task.WaitAsync(20.Seconds(), TestTimeout);
+
+        // Submitter: viewer (no Update rights) attempts a write under their identity.
+        var original = accessService.CircuitContext;
+        accessService.SetCircuitContext(new AccessContext { ObjectId = viewerId, Name = viewerId });
+        Exception? submitterError = null;
+        try
+        {
+            // Warm the viewer's read so the per-node hub + permission state are live.
+            Mesh.GetMeshNodeStream(node.Path).Take(1)
+                .Should().Within(30.Seconds()).Match(n => n is not null && n.Name == "Original Name");
+
+            try
+            {
+                Mesh.GetMeshNodeStream(node.Path)
+                    .Update(n => n with { Name = "Hacked By Viewer" })
+                    .Should().Within(10.Seconds()).Emit();
+            }
+            catch (Exception ex)
+            {
+                submitterError = ex;
+            }
+        }
+        finally
+        {
+            accessService.SetCircuitContext(original);
+        }
+
+        // 1. The submitting caller MUST see the denial as an error.
+        submitterError.Should().NotBeNull(
+            "the submitting caller must see the RLS denial as an error, not optimistic success");
+
+        // 2. The bystander's shared read stream MUST NOT have been faulted by the OTHER
+        //    client's denied write — the rejection is scoped to the submitter alone.
+        bystanderError.Should().BeNull(
+            "a denial of one client's write must not error the shared node stream for other " +
+            "subscribers — the owner faults only the submitting mirror, never broadcasts OnError");
+
+        // 3. The shared stream is still alive AND the node is unchanged: a fresh read still
+        //    emits the original value (a faulted stream would replay OnError instead).
+        var after = ReadNode(node.Path).Should().Within(30.Seconds()).Match(n => n is not null);
+        after!.Name.Should().Be("Original Name",
+            "the denied update must leave the node unchanged");
+    }
+
     [Fact]
     public void HierarchicalPermission_InheritsFromParent()
     {
