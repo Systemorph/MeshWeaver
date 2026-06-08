@@ -11,6 +11,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
@@ -1245,16 +1246,27 @@ internal static class ThreadExecution
                     ImmutableList<NodeChangeEntry>.Empty, request.AgentName, request.ModelName,
                     status: ThreadMessageStatus.Streaming, harness: request.Harness);
 
-                // Streaming loop runs on the thread pool via Task.Run — the grain
-                // scheduler stays FREE to process tool-call responses, delegation
-                // callbacks, and workspace updates. Without this, tool calls
-                // deadlock: they await a response that needs the grain scheduler
-                // which is blocked by the in-flight `await foreach`. The
-                // `await foreach` is the ONLY async place in the entire
-                // implementation; tool invocations + cell pushes inside this
-                // task run as observable composition, and the grain scheduler
-                // is available to handle their cross-hub Subscribe callbacks.
-                Task.Run(async () =>
+                // 🚦 The streaming round is an async I/O leaf and MUST run on the bounded AI
+                // I/O pool — NEVER Task.Run, NEVER inline on the hub turn. The pool offloads onto
+                // the ThreadPool with ConfigureAwait(false)/TaskPoolScheduler discipline (so
+                // continuations never bounce back to the grain scheduler the way a bare Task.Run's
+                // can) AND caps concurrent rounds. The thread hub's single turn thus stays FREE to
+                // answer tool-call responses, delegation callbacks, and — critically — GetData /
+                // GetPermission for its OWN output cell. A blocked turn here is exactly the
+                // "harness hangs after submit" wedge (GetDataRequest to {thread}/{cell} pending for
+                // tens of seconds). The `await foreach` is the only async place; tool calls + cell
+                // pushes inside run as observable composition.
+                // 🔁 Delegation nests: a delegating round holds its slot while awaiting a sub-thread
+                // round (which takes its own slot), so the Ai cap is a runaway-fan-out stop, not a
+                // fine throttle (see IoPoolOptions.Ai). Unbounded fallback when no registry is wired
+                // (DI-less tests) — still offloads, just no cap.
+                // See Doc/Architecture/ControlledIoPooling.md → "Streaming an agent response into a cell".
+                var aiPool = parentHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Ai)
+                    ?? IoPool.Unbounded;
+                // poolCt (the pool's cancellation) is intentionally unused — the round's
+                // own executionCts.Token (below) is authoritative and is cancelled on hub
+                // disposal, so cancellation flows through it regardless of the pool token.
+                aiPool.Invoke(async poolCt =>
                 {
                     // Re-seed user AccessContext at the task-launch boundary. Inside this lambda we
                     // run the streaming loop + tool calls + responseStream.Update, all of which
@@ -1722,31 +1734,26 @@ internal static class ThreadExecution
                         // IMeshNodeStreamCache.Update, whose upstream handle is owned
                         // by the cache and outlives this round.
                     }
+                    return System.Reactive.Unit.Default;
                 })
-                .ContinueWith(t =>
-                {
-                    // 🚨 Observe the fire-and-forget streaming task's exceptions. The
-                    // GetService at the top of the lambda (and the catch/error handlers
-                    // inside, which themselves resolve services + post) can throw
-                    // ObjectDisposedException when the hub's DI scope is torn down
-                    // mid-round (test-class dispose / Orleans grain deactivation). Left
-                    // UNOBSERVED on a Task.Run that's `_ =`-discarded, that surfaces as
-                    // an xUnit "Catastrophic failure: ObjectDisposedException
-                    // (LifetimeScope already disposed)" which aborts the whole test
-                    // collection. Disposal-race exceptions are expected during teardown
-                    // and swallowed here; anything else is logged so real faults stay
-                    // visible.
-                    if (t.Exception is { } agg)
+                .Subscribe(
+                    _ => { },
+                    streamingEx =>
                     {
-                        var real = agg.Flatten().InnerExceptions.FirstOrDefault(e =>
-                            e is not ObjectDisposedException
-                            && !(e is InvalidOperationException ioe
-                                 && ioe.Message.Contains("disposed", StringComparison.OrdinalIgnoreCase)));
-                        if (real != null)
-                            logger.LogError(real,
-                                "[ThreadExec] streaming task faulted for {ThreadPath}", threadPath);
-                    }
-                }, TaskScheduler.Default);
+                        // 🚨 Observe the streaming round's escaped exceptions. The GetService calls
+                        // + the catch/error handlers inside can throw ObjectDisposedException when
+                        // the hub's DI scope is torn down mid-round (test-class dispose / Orleans
+                        // grain deactivation). Disposal-race exceptions are expected during teardown
+                        // and swallowed here; anything else is logged so real faults stay visible.
+                        // (Replaces the Task.Run + ContinueWith observation now that the round runs
+                        // on the bounded AI IoPool — onError carries the single escaped exception.)
+                        var disposalRace = streamingEx is ObjectDisposedException
+                            || (streamingEx is InvalidOperationException ioe
+                                && ioe.Message.Contains("disposed", StringComparison.OrdinalIgnoreCase));
+                        if (!disposalRace)
+                            logger.LogError(streamingEx,
+                                "[ThreadExec] streaming round faulted for {ThreadPath}", threadPath);
+                    });
                     }); // end of LoadFullConversationHistory.Subscribe
                 }); // end of contextNodeObs.Subscribe
                 }, // end of WhenInitialized.Subscribe onNext

@@ -32,6 +32,7 @@ public static class AIExtensions
                     .AddAgentType(serveFromPartition)
                     .AddLanguageModelType(serveFromPartition)
                     .AddHarnessType()
+                    .AddChatInputType()
                     .ConfigureServices(services => services.AddAgentChatServices())
                     // Register AI types on the MESH hub (for MeshQuery deserialization of Thread content)
                     .ConfigureHub(config =>

@@ -246,13 +246,17 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private string selectedHarness = Harnesses.MeshWeaver;
     private string? _stickyHarness;
 
-    // ─── Per-user chat template (_ThreadTemplate) ───
+    // ─── Per-user chat input (ChatInput) ───
     // The composer's draft text + harness/agent/model selection persist on a single
-    // stable Thread node at {userHome}/_ThreadTemplate (server-side, no browser
-    // storage) so they survive a reboot. On submit a new thread is cloned from it
-    // and the draft cleared. _userHome == AccessContext.ObjectId == the user's home
-    // partition (dev login stamps ObjectId = username).
-    private const string TemplateNodeId = "_ThreadTemplate";
+    // stable ChatInput node at {userHome}/ChatInput (server-side, no browser storage)
+    // so they survive a reboot. On submit a new thread is cloned from it and the draft
+    // cleared. _userHome == AccessContext.ObjectId == the user's home partition (dev
+    // login stamps ObjectId = username).
+    // Path has NO leading underscore: ChatInput is a MAIN (non-satellite) node, so the
+    // write and the path-based read BOTH hit mesh_nodes. The old "_ThreadTemplate" id
+    // routed the write to the `threads` SATELLITE table but the read resolved by path to
+    // mesh_nodes — so the selection never persisted (the "doesn't save last harness" bug).
+    private const string TemplateNodeId = "ChatInput";
     private string? _userHome;
     private string? _templatePath;
     private readonly System.Reactive.Subjects.Subject<string> _draftChanges = new();
@@ -482,7 +486,13 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 ? node with { Content = updated }
                 : new MeshNode(TemplateNodeId, _userHome)
                 {
-                    NodeType = MeshWeaver.AI.ThreadNodeType.NodeType,
+                    // NOT the Thread nodeType: nodeType:Thread routes the WRITE to the
+                    // per-partition `threads` SATELLITE table, but GetMeshNodeStream resolves
+                    // the READ by path to `mesh_nodes` — so the template was written to one
+                    // table and read from another and NEVER persisted (the harness/agent/model
+                    // selection + draft were always lost on reload). The dedicated ChatInput
+                    // type is a main (non-satellite) node → write+read both on `mesh_nodes`.
+                    NodeType = MeshWeaver.AI.ChatInputNodeType.NodeType,
                     Content = updated
                 };
         }).Subscribe(
