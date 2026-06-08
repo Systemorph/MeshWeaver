@@ -289,11 +289,23 @@ public class MeshQuery : IMeshQueryCore
         var isSystem = string.IsNullOrEmpty(request.UserId)
             || string.Equals(request.UserId, WellKnownUsers.System, StringComparison.Ordinal);
         var matched = SelectMatchingProviders(NamespacesForRequest(request));
+        // 🚨 On the unsecured path, STAMP UserId=System EXPLICITLY. Some providers
+        // (PostgreSqlMeshQuery.GetEffectiveUserId) bypass access control ONLY for an
+        // explicit System UserId — an EMPTY UserId falls back to the ambient
+        // AccessService.Context and silently applies the CALLER'S RLS. Infrastructure
+        // reads (SecurityService access-element loads, SyncedQueryMeshNodes, the invitation
+        // watcher, onboarding gate) pass an empty UserId expecting no-AC; without this stamp
+        // a platform admin's own permission check under-loads the Admin-partition grants and
+        // the Admin partition's nodes (invitations, grants) become invisible to query/search.
+        // See Doc/Architecture/AccessControl.md → "The Admin partition".
+        var coreRequest = isSystem && !string.Equals(request.UserId, WellKnownUsers.System, StringComparison.Ordinal)
+            ? request with { UserId = WellKnownUsers.System }
+            : request;
         return MergeProviderObservables(
                 matched.Select(p => isSystem
                     ? (p is IMeshQueryCore core
-                        ? core.Query<T>(request, options)
-                        : p.Query<T>(request, options))
+                        ? core.Query<T>(coreRequest, options)
+                        : p.Query<T>(coreRequest, options))
                     // Real user: ALWAYS hit the secured provider surface
                     // (validators apply per-result RLS for request.UserId).
                     : p.Query<T>(request, options)).ToList(),

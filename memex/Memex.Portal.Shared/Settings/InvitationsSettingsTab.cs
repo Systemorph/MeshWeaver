@@ -140,7 +140,7 @@ public static class InvitationsSettingsTab
         {
             var ws = h.Hub.GetWorkspace();
             var jsonOptions = ws.Hub.JsonSerializerOptions;
-            return ws.GetQuery("invite:list", $"nodeType:{InvitationNodeType.NodeType}")
+            return ws.GetQuery("invite:list", $"namespace:{InvitationNodeType.PartitionName} nodeType:{InvitationNodeType.NodeType}")
                 .Select(nodes => (UiControl?)BuildInvitationList(
                     nodes.ToList(), invitationService, jsonOptions));
         });
