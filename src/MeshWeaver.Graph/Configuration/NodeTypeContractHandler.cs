@@ -254,10 +254,22 @@ internal static class NodeTypeContractHandler
         if (string.IsNullOrEmpty(activityPath) || result is null)
             return Observable.Return(build(result));
 
+        // 🚨 Wait for the activity to reach a TERMINAL status, not its first
+        // emission. The compile activity is created Running and only later
+        // flipped to Succeeded/Failed by NodeTypeCompilationActivity.Complete —
+        // a CROSS-HUB write from the NodeType hub to the activity's own per-node
+        // hub. The parent's CompilationStatus = Ok (which AwaitCompilationSettled
+        // gated on above) is a fast OWN write that lands FIRST, so the activity
+        // can still be Running when we get here. Grabbing the first ActivityLog
+        // emission therefore surfaced a Running log into the response (the
+        // "activity left Running" symptom CompileFinishAndDisposeTest pins).
+        // Filter on terminal status so the surfaced log reflects the finished
+        // compile; the Catch below still falls back to result's own log if the
+        // activity never settles within the window.
         return hub.GetWorkspace().GetMeshNodeStream(activityPath)
-            .Where(n => n?.Content is ActivityLog)
+            .Where(n => n?.Content is ActivityLog log && log.Status != ActivityStatus.Running)
             .Take(1)
-            .Timeout(TimeSpan.FromSeconds(5))
+            .Timeout(TimeSpan.FromSeconds(15))
             .Select(activityNode =>
             {
                 var activityLog = activityNode!.Content as ActivityLog;

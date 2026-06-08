@@ -15,7 +15,7 @@ public class AccessService
     /// Used by <see cref="SetContext"/> / <see cref="SetCircuitContext"/> to
     /// log an error + stack trace so the leak source can be hunted down.
     /// </summary>
-    internal static bool LooksLikeHubPrincipal(string? objectId) =>
+    public static bool LooksLikeHubPrincipal(string? objectId) =>
         !string.IsNullOrEmpty(objectId)
         && (objectId.StartsWith("sync/", StringComparison.OrdinalIgnoreCase)
             || objectId.StartsWith("mesh/", StringComparison.OrdinalIgnoreCase)

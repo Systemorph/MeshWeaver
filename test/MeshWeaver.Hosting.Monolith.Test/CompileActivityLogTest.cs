@@ -74,11 +74,22 @@ public class CompileActivityLogTest(ITestOutputHelper output) : MonolithMeshTest
         return (NodeTypeDefinition)node.Content!;
     }
 
-    /// <summary>Reads the <see cref="ActivityLog"/> at <paramref name="activityPath"/> via the stream.</summary>
+    /// <summary>
+    /// Reads the <see cref="ActivityLog"/> at <paramref name="activityPath"/> via the stream,
+    /// waiting for the activity to reach a TERMINAL status (anything but
+    /// <see cref="ActivityStatus.Running"/>). The compile activity is created Running and only
+    /// later flipped to Succeeded/Failed; a one-shot "first ActivityLog emission" read races that
+    /// transition and captures the intermediate Running. Crucially, the activity's terminal write
+    /// is a CROSS-HUB write (the inline RunCompile runs on the NodeType hub, the activity lives on
+    /// its own per-node hub) while the parent's <c>CompilationStatus = Ok/Error</c> is a fast OWN
+    /// write — so by the time <see cref="CreateAndCompile"/> observes the parent settle, the
+    /// activity terminal write may not have landed yet. Wait on the actual condition (terminal
+    /// status), not the first emission.
+    /// </summary>
     private ActivityLog ReadActivityLog(string activityPath) =>
         (ActivityLog)Mesh.GetMeshNodeStream(activityPath)
             .Should().Within(15.Seconds())
-            .Match(n => n?.Content is ActivityLog)
+            .Match(n => n?.Content is ActivityLog log && log.Status != ActivityStatus.Running)
             .Content!;
 
     [Fact(Timeout = 60_000)]
