@@ -201,6 +201,11 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
 
     public IDisposable? AttachMonitor(Action<string> onChanged)
     {
+        // A brand-new collection (freshly-created Space) has no backing dir yet, and
+        // FileSystemWatcher's ctor throws ArgumentException("directory ... does not exist") on a
+        // missing path — which broke the FIRST upload at collection-init (before SaveFileAsync,
+        // which creates the dir on write, ever runs). Ensure it exists (idempotent).
+        Directory.CreateDirectory(basePath);
         watcher = new FileSystemWatcher(basePath)
         {
             IncludeSubdirectories = true,
@@ -236,6 +241,9 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
     /// <returns>A disposable that stops the watcher when disposed.</returns>
     public IDisposable? AttachMonitor(Action<DataChangeNotification> onChange, string? filter = null)
     {
+        // See the other AttachMonitor overload: FileSystemWatcher throws on a missing dir, which
+        // broke the first upload to a brand-new collection. Ensure the dir exists (idempotent).
+        Directory.CreateDirectory(basePath);
         var watcherInstance = new FileSystemWatcher(basePath)
         {
             IncludeSubdirectories = true,

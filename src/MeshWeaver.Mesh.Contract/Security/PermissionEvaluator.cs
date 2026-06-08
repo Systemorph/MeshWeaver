@@ -496,13 +496,25 @@ internal static class PermissionEvaluator
         var key = scope ?? string.Empty;
         var nsQuery = string.IsNullOrEmpty(key) ? "_Access" : $"{key}/_Access";
 
+        // The Admin partition is EXCLUDED from cross-schema global search
+        // (PostgreSqlSchemaInitializer.searchable_schemas), so a namespace-only access query
+        // never reaches admin.access — platform-admin grants would silently never load and a
+        // platform admin is unrecognized on Postgres. For Admin-rooted scopes, route by PATH:
+        // `path:{scope}/_Access` resolves to the admin schema via its first segment
+        // (PostgreSqlPartitionedMeshQuery.FirstSegment) and to the access table via nodeType.
+        // Every other scope keeps the namespace query — those schemas ARE in the cross-schema
+        // search, and path/namespace select the same flat grant set under {scope}/_Access.
+        var isAdminScope = key == AdminScope
+            || key.StartsWith(AdminScope + "/", StringComparison.Ordinal);
+        var selfFilter = isAdminScope
+            ? $"path:{nsQuery} scope:children nodeType:{SecurityCollections.AccessAssignmentNodeType}"
+            : $"namespace:{nsQuery} nodeType:{SecurityCollections.AccessAssignmentNodeType}";
+
         // Self: narrow per-scope query against the singleton cache. Each
         // scope's stream is cached PROCESS-WIDE under the key
         // "$security-access:{scope}" — every hub in the process shares one
         // upstream subscription per scope.
-        var self = cache.GetQuery(
-            $"$security-access:{key}",
-            $"namespace:{nsQuery} nodeType:{SecurityCollections.AccessAssignmentNodeType}");
+        var self = cache.GetQuery($"$security-access:{key}", selfFilter);
 
         // Parent: recursive reference to parent-scope cached observable.
         // Root scope folds in statics instead.

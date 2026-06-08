@@ -140,7 +140,9 @@ public static class InvitationsSettingsTab
         {
             var ws = h.Hub.GetWorkspace();
             var jsonOptions = ws.Hub.JsonSerializerOptions;
-            return ws.GetQuery("invite:list", $"namespace:{InvitationNodeType.PartitionName} nodeType:{InvitationNodeType.NodeType}")
+            // PATH-scoped (path:Admin/Invitation) so it routes to the admin schema; a
+            // namespace:Admin-only query fans out cross-schema, which excludes admin.
+            return ws.GetQuery("invite:list", $"path:{InvitationNodeType.Namespace} scope:children nodeType:{InvitationNodeType.NodeType}")
                 .Select(nodes => (UiControl?)BuildInvitationList(
                     nodes.ToList(), invitationService, jsonOptions));
         });

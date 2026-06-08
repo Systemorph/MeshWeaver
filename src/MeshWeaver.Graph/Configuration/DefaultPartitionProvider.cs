@@ -4,7 +4,7 @@ using MeshWeaver.Mesh.Services;
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
-/// Seeds the only two framework partitions the clean model keeps:
+/// Seeds the framework partitions the clean model keeps:
 /// <list type="bullet">
 ///   <item><b>Admin</b> — system administration data + version tracking + global catalogs
 ///     (agents / models / roles). Its schema is created eagerly by the migration.</item>
@@ -15,6 +15,14 @@ namespace MeshWeaver.Graph.Configuration;
 ///     <b>Trigger-populated only — application code NEVER writes to <c>auth</c></b>
 ///     (<c>PartitionWriteGuardValidator</c> rule 1 blocks it). The migration creates the
 ///     <c>auth</c> schema so the trigger has a destination.</item>
+///   <item><b>ApiToken</b> — the global token-validation index. <c>ApiTokenService</c> writes
+///     one <c>ApiTokenIndex</c> node per token at <c>ApiToken/{hashPrefix}</c> (under the system
+///     identity) that maps an incoming bearer token to its user-scoped token node at validation
+///     time. <c>ApiToken</c> is NOT an <c>OwnsPartition</c> type and the router no longer lazily
+///     creates schemas, so the <c>apitoken</c> schema must be provisioned eagerly — here (portal
+///     boot, via <c>PostgreSqlPartitionSubscriptionHostedService</c>) and in
+///     <c>SchemaInitialization</c> (migration). Without it, every freshly-minted token
+///     (manual AND OAuth) fails validation with a 401.</item>
 /// </list>
 ///
 /// <para><b>Legacy partitions are gone (2026-06-05).</b> <c>Portal</c> / <c>Kernel</c> session
@@ -42,6 +50,18 @@ internal class DefaultPartitionProvider : IStaticNodeProvider
             "Auth lookup mirror: User / Group / Role / VUser / ApiToken / Space rows mirrored "
                 + "from every source partition by the V27 trigger. Trigger-populated only — "
                 + "application code never writes here.",
+            tableMappings: PartitionDefinition.StandardTableMappings);
+
+        // Global API-token validation index. ApiTokenService writes one ApiTokenIndex node per
+        // token at ApiToken/{hashPrefix} (under the system identity) that maps an incoming bearer
+        // token to its user-scoped token node at validation time. Not an OwnsPartition type and the
+        // router no longer lazy-creates schemas, so it must be provisioned eagerly — at portal boot
+        // from this definition AND explicitly in SchemaInitialization (migration). Restores the
+        // pre-0ceba04ce `apitoken` schema that fresh DBs (e.g. atioz) otherwise never get, which
+        // 401'd every freshly-minted manual/OAuth token.
+        yield return CreatePartition("ApiToken", "apitoken",
+            "API token validation index — ApiToken/{hashPrefix} ApiTokenIndex nodes mapping a "
+                + "bearer token to its user-scoped token node.",
             tableMappings: PartitionDefinition.StandardTableMappings);
 
         // Global access-grant scope. A `_Access`-namespace AccessAssignment with MainNode=""
