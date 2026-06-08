@@ -6,6 +6,19 @@ This file provides guidance to AI agents working with this repository.
 
 **NEVER commit or push automatically.** Always wait for the user to explicitly ask.
 
+## 🚨🚨🚨 ABSOLUTE: No band-aids — root cause only, literally always
+
+**The user is LITERALLY NEVER interested in a band-aid, workaround, mitigation, or symptom-suppression.** When something hangs, deadlocks, flakes, or errors, find the EXACT defect and fix THAT — never paper over it.
+
+These are band-aids, and proposing one as "the fix" is forbidden:
+- **Increasing a bound to make it pass**: pool size, timeout, retry count, buffer size, `maxParallelThreads`. The question is never "how do I get more headroom" — it's "why is the slot/thread/budget not being released, or why is it erroring." A capped pool that exhausts means a slot is leaked or blocked; a timeout that trips means something never completes — fix the leak/block/non-completion.
+- **A watchdog / timer / poller that resubscribes or retries** to recover from a state that "shouldn't happen." If the initial state never arrives, find why it's dropped/erroring — don't add a timer to paper over it. (The 2026-06-08 prod outage was exactly this: an initial-state retry watchdog amplified a mishandled error into a resubscribe storm.)
+- **`catch {}` / swallow-and-continue / `.Catch(Observable.Empty)`** that hides a fault instead of surfacing or fixing it.
+- **Revert-and-move-on** when the revert just hides a defect that's still live underneath.
+- **A `Clear()` for test isolation, a widened `.Timeout(...)`, a sleep** — each is the *tell* of an unfixed root cause.
+
+If active bleeding genuinely needs a stopgap before the real fix lands, say so EXPLICITLY: "this is a temporary stopgap; the root cause is X; I will fix X" — then fix X. Default to writing a **deterministic repro** (a concurrency/deadlock test if that's the failure mode) that pins the true cause before changing code, so the fix is proven, not guessed. Full reference: memory `feedback_no_bandaids`.
+
 ## 🚨🚨🚨 ABSOLUTE: Never change log levels in code for debug reasons
 
 **Editing `LogInformation` ↔ `LogDebug` ↔ `LogTrace` (or `appsettings.json` under `src/`) to dial verbosity up or down for a debugging session is FORBIDDEN.** Log levels in code reflect the production cost model — `Information` lines ship to App Insights and we pay per ingest. Changing them temporarily silently bleeds budget the next CI run.
