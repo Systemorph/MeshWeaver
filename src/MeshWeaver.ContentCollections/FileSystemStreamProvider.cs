@@ -69,6 +69,12 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
 
     public IAsyncEnumerable<(Stream? Stream, string Path, DateTime LastModified)> GetStreamsAsync(Func<string, bool> filter, CancellationToken cancellationToken = default)
     {
+        // A brand-new collection (e.g. a freshly-created Space) has no backing directory
+        // yet. Enumerating it would throw DirectoryNotFoundException and break collection
+        // init — and thus the FIRST upload (SaveFileAsync below creates the dir on write,
+        // but GetCollectionAsync enumerates first). Treat "no dir" as "no files".
+        if (!Directory.Exists(basePath))
+            return AsyncEnumerable.Empty<(Stream? Stream, string Path, DateTime LastModified)>();
         var files = filter.Method.Name.Contains("MarkdownFilter")
             ? Directory.GetFiles(basePath, "*.md", SearchOption.AllDirectories)
             : Directory.GetFiles(basePath, "*", SearchOption.AllDirectories).Where(f => filter(f));
@@ -86,6 +92,8 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var fullPath = Path.Combine(basePath, path.TrimStart('/'));
+        if (!Directory.Exists(fullPath))
+            yield break;   // not-yet-created collection / folder — no entries
         foreach (var dirPath in Directory.EnumerateDirectories(fullPath))
         {
             ct.ThrowIfCancellationRequested();
@@ -102,6 +110,8 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var fullPath = Path.Combine(basePath, path.TrimStart('/'));
+        if (!Directory.Exists(fullPath))
+            yield break;   // not-yet-created collection / folder — no files
         foreach (var filePath in Directory.EnumerateFiles(fullPath))
         {
             ct.ThrowIfCancellationRequested();
