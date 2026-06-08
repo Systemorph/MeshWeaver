@@ -4,11 +4,14 @@
 // </meshweaver>
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Messaging;
+using MeshWeaver.Mesh.Threading;
+using Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
 /// Async loader utility for Microsoft pricing data.
@@ -149,4 +152,44 @@ public static class MicrosoftDataLoader
         // Fallback: return production path (will fail gracefully with empty data)
         return productionPath;
     }
+
+    /// <summary>
+    /// Resolves the bounded FileSystem I/O pool from the hub (falling back to the
+    /// unbounded pool when no registry is present, e.g. lightweight test hubs).
+    /// All file reads below run on this pool — never <c>Observable.FromAsync</c>.
+    /// </summary>
+    private static IIoPool FileSystemPool(IMessageHub hub) =>
+        hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
+        ?? IoPool.Unbounded;
+
+    /// <summary>
+    /// Reactive projection of <see cref="LoadPropertyRisksAsync"/> for
+    /// <c>WithInitialData(Func&lt;IObservable&lt;IEnumerable&lt;PropertyRisk&gt;&gt;&gt;)</c>.
+    /// The async file read is bridged through the FileSystem I/O pool.
+    /// </summary>
+    public static IObservable<IEnumerable<PropertyRisk>> LoadPropertyRisks(IMessageHub hub) =>
+        FileSystemPool(hub).Invoke(async ct =>
+            (IEnumerable<PropertyRisk>)await LoadPropertyRisksAsync(hub, ct));
+
+    /// <summary>
+    /// Reactive projection of the acceptances half of <see cref="LoadReinsuranceStructureAsync"/>.
+    /// </summary>
+    public static IObservable<IEnumerable<ReinsuranceAcceptance>> LoadReinsuranceAcceptances(
+        IMessageHub hub, string pricingId) =>
+        FileSystemPool(hub).Invoke(async ct =>
+        {
+            var (acceptances, _) = await LoadReinsuranceStructureAsync(hub, pricingId, ct);
+            return (IEnumerable<ReinsuranceAcceptance>)acceptances;
+        });
+
+    /// <summary>
+    /// Reactive projection of the sections half of <see cref="LoadReinsuranceStructureAsync"/>.
+    /// </summary>
+    public static IObservable<IEnumerable<ReinsuranceSection>> LoadReinsuranceSections(
+        IMessageHub hub, string pricingId) =>
+        FileSystemPool(hub).Invoke(async ct =>
+        {
+            var (_, sections) = await LoadReinsuranceStructureAsync(hub, pricingId, ct);
+            return (IEnumerable<ReinsuranceSection>)sections;
+        });
 }
