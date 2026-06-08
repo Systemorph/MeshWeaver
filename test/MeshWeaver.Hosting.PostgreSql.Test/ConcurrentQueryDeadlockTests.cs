@@ -108,7 +108,12 @@ public class ConcurrentQueryDeadlockTests
         }, ct)).ToArray();
 
         // Bounded join: a wedge becomes a failed assertion, never a hung run.
+        // xUnit1031 (no blocking task ops) is INTENTIONALLY suppressed here — the
+        // blocking join IS the test: it asserts the migrated path does NOT deadlock
+        // under blocking subscribers. The timeout makes the block itself bounded.
+#pragma warning disable xUnit1031
         var allDone = Task.WaitAll(tasks, TimeSpan.FromSeconds(90));
+#pragma warning restore xUnit1031
 
         allDone.Should().BeTrue(
             $"all {Concurrency} concurrent blocking query subscribers must complete through the regular IIoPool infra " +
