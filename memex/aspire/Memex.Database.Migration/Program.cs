@@ -139,6 +139,7 @@ var migrations = new IMigration[]
     new V30_EnsurePartitionSchemaStoredProc(),
     new V31_UnifyUserMirrorIntoAuthAndRelocateContent(),
     new V32_RepairAuthMirrorTriggerAndBackfill(),
+    new V33_SeedChatInputForExistingUsers(),
 };
 
 var ctx = new MigrationContext(dataSource, connectionString, options, logger, initResult.IsFreshDb);
