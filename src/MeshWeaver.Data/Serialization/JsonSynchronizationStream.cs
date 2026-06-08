@@ -380,6 +380,38 @@ public static class JsonSynchronizationStream
                 });
             reduced.RegisterForDisposal(sub);
 
+            // 🚨 Fast initial-state recovery — the dropped-initial-Full deadlock.
+            // The owner Acks a SubscribeRequest by routing its first DataChangedEvent
+            // (the Full) to the subscriber; under bulk load that Full can be lost in
+            // routing. Nothing else re-delivers it within a test's lifetime: the
+            // heartbeat above is keepalive-only and fires at HeartbeatInterval (45 s),
+            // and the change feed below resubscribes only on owner Created/Deleted. So
+            // the subscriber sits dark until its consumer's timeout — every sub-45 s
+            // test then flakes (a bulk msg-trace run showed 1092 SubscribeRequests and
+            // 0 HeartBeatEvents — the 45 s recovery never even ran). Poll Current on a
+            // short interval and, while it is still null, resubscribe to pull a fresh
+            // Full. TakeWhile stops the poller the moment the initial state lands;
+            // Resubscribe's single-flight guard keeps a slow/legit-in-flight Full from
+            // triggering a storm, and a resubscribe whose Full is ALSO dropped is
+            // retried on the next tick. The interval sits above a normal cold-activation
+            // round-trip so it does not fire for a Full that is merely in transit.
+            var initialStateRetryInterval = hub.ServiceProvider
+                .GetService<Microsoft.Extensions.Options.IOptions<SyncStreamOptions>>()
+                ?.Value?.InitialStateRetryInterval ?? TimeSpan.FromSeconds(5);
+            if (initialStateRetryInterval > TimeSpan.Zero
+                && initialStateRetryInterval != System.Threading.Timeout.InfiniteTimeSpan)
+            {
+                var initialRetrySub = Observable.Interval(initialStateRetryInterval)
+                    .TakeWhile(_ => reduced.Current is null)
+                    .Subscribe(_ =>
+                    {
+                        if (hub.RunLevel > MessageHubRunLevel.Started) return;
+                        if (reduced.Current is not null) return;
+                        Resubscribe("no initial state within initial-state retry window");
+                    });
+                reduced.RegisterForDisposal(initialRetrySub);
+            }
+
             // Resubscribe when the mesh change feed reports a Created/Deleted event
             // on the owner's path. This is the sole recycled-grain detector now that
             // heartbeats are fire-and-forget. Compare against Address.Path (segments
