@@ -171,6 +171,20 @@ Implementation: `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlStorageAdapter.cs:4
 > ⚠ **Footgun — wrong segment, wrong table.**
 > If you write an `AccessAssignment` whose namespace does **not** end in `_Access` (e.g. you write `Admin/Groups/G1` instead of `Admin/Groups/_Access/G1`), the row lands in `mesh_nodes` instead of `access`. The `access_changed` trigger will never fire, and `rebuild_user_effective_permissions` will not see the assignment. This was the bug behind Repair v1 (`memex/aspire/Memex.Database.Migration/Program.cs:133`).
 
+### The `_` prefix means *hidden*, not *satellite*
+
+A leading-underscore path segment is a **hidden ("dotfile") namespace** — like a Unix dot-folder. It is **decoupled from satellite-table routing**: ONLY the registered suffixes above route to a satellite table. A *new* `_`-prefixed segment that isn't in the mapping (e.g. `_Memex`) falls through to `mesh_nodes` for **both** the write and the path-based read — no satellite mismatch, no extra table needed.
+
+What the `_` prefix *does* buy you, everywhere, is **visibility hiding**: any node whose path contains a `_`-prefixed segment is excluded from the `search` context (`MeshNodeVisibility.IsHiddenPath` / `IsExcludedFromContext`, consulted by every query backend — Postgres, Cosmos, storage-adapter, static). This is the same `search`-context exclusion that `MeshNode.ExcludeFromContext` provides per-type, but applied by path convention so framework/default state never has to opt out individually.
+
+#### `_Memex` — per-user / global Memex defaults
+
+`_Memex` is the namespace for **Memex defaults and global Memex data** — framework-owned state that isn't user content. Per-user defaults live at `{user}/_Memex/…`; the canonical example is the side-panel chat composer's singleton **`{user}/_Memex/ChatInput`** (draft text + selected harness/agent/model). Because `_Memex` is a dotfile namespace that is *not* a registered satellite suffix:
+
+- write + path-read both hit `mesh_nodes` (the selection actually persists — contrast the dead `_ThreadTemplate`/`nodeType:Thread` approach, which split write→`threads` from read→`mesh_nodes` and silently lost the selection);
+- the nodes are auto-hidden from search;
+- **never reuse `_ThreadTemplate`** — it matched the `_Thread`→`threads` satellite prefix by `nodeType` and is the cautionary tale.
+
 ---
 
 ## `public` schema — infrastructure only

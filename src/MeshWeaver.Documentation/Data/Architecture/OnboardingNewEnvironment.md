@@ -9,8 +9,8 @@ Category: Architecture
 
 A "new environment" is an additional Memex portal — its own domain, database, and
 sign-in — running on the **shared AKS cluster** (`memexaks-cluster` / `memex-aks-rg`,
-swedencentral). `atioz.meshweaver.cloud` and the migrated `memex.meshweaver.cloud`
-are the worked examples; both live under [`deploy/aks/envs/<env>/`](../../../../deploy/aks/envs).
+swedencentral). `memex.meshweaver.cloud` is the worked example; it lives under
+[`deploy/aks/envs/<env>/`](../../../../deploy/aks/envs).
 The shared platform (cluster, ingress, Postgres server, Key Vault, ACR) is brought up
 once — see the [AKS deploy runbook](../../../../deploy/aks/DEPLOY-RUNBOOK.md); this guide
 adds an environment on top of it.
@@ -21,7 +21,7 @@ adds an environment on top of it.
 |---|---|---|
 | AKS cluster + node pools | ✅ `memexaks-cluster` | |
 | Ingress controller (app-routing nginx, one public IP) | ✅ | |
-| Postgres **server** | ✅ `memexaks-pg` | **database** (`atioz`, `memexcloud`, …) |
+| Postgres **server** | ✅ `memexaks-pg` | **database** (`memexcloud`, …) |
 | Key Vault | ✅ `Systemorph` | secret **names** (`<env>-*`) + **master key** |
 | ACR + portal image | ✅ `meshweaver.azurecr.io/memex-portal-ai` | image **tag** (a commit sha) |
 | Kubernetes namespace | | ✅ `<env>` |
@@ -30,7 +30,7 @@ adds an environment on top of it.
 
 ## 1. Scaffold the env folder
 
-Copy an existing env (`atioz` is the minimal template) to `deploy/aks/envs/<env>/`:
+Copy an existing env folder under [`deploy/aks/envs/`](../../../../deploy/aks/envs) to `deploy/aks/envs/<env>/`:
 
 | File | What to change |
 |---|---|

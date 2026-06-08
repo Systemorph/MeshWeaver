@@ -300,3 +300,59 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
         => this with { GlobalServiceConfigurations = GlobalServiceConfigurations.Add(services) };
 }
 
+/// <summary>
+/// Visibility conventions for mesh nodes — the single source of truth every query
+/// backend (Postgres, Cosmos, storage-adapter, static) consults to decide whether a
+/// node appears in a given UI/query <c>context</c> (e.g. <c>"search"</c>, <c>"create"</c>).
+///
+/// <para>Two independent mechanisms hide a node:</para>
+/// <list type="number">
+///   <item><b>Explicit opt-out</b> — <see cref="MeshNode.ExcludeFromContext"/> on the node
+///     (or, for type definitions, inherited by every instance) lists the contexts to hide
+///     from. This is the only way to hide from non-search contexts such as <c>"create"</c>.</item>
+///   <item><b>Dotfile convention</b> — any node whose path has a segment starting with
+///     <c>'_'</c> (<c>{user}/_Memex/ChatInput</c>, <c>{p}/_Access/…</c>, <c>{p}/_Thread/…</c>)
+///     is a hidden/system ("dotfile") node and is excluded from <c>"search"</c>, exactly the
+///     way Unix hides dot-folders. The <c>'_'</c> prefix means <i>hidden</i> ONLY — it is
+///     decoupled from satellite-table routing (only the registered suffixes in
+///     <see cref="PartitionDefinition.TableMappings"/> route to satellite tables; a fresh
+///     segment like <c>_Memex</c> stays in <c>mesh_nodes</c>).</item>
+/// </list>
+/// </summary>
+public static class MeshNodeVisibility
+{
+    /// <summary>The search context — the one context the dotfile convention auto-hides from.</summary>
+    public const string SearchContext = "search";
+
+    /// <summary>
+    /// True when <paramref name="path"/> has any segment starting with <c>'_'</c> — a
+    /// hidden/system ("dotfile") path. Empty/null is not hidden.
+    /// </summary>
+    public static bool IsHiddenPath(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return false;
+        var start = 0;
+        for (var i = 0; i <= path.Length; i++)
+        {
+            if (i == path.Length || path[i] == '/')
+            {
+                if (i > start && path[start] == '_') return true;
+                start = i + 1;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// True when <paramref name="node"/> must be hidden from <paramref name="context"/> —
+    /// either by its explicit <see cref="MeshNode.ExcludeFromContext"/> opt-out, or (for
+    /// the <see cref="SearchContext"/>) because it lives on a hidden dotfile path.
+    /// </summary>
+    public static bool IsExcludedFromContext(this MeshNode node, string? context)
+    {
+        if (string.IsNullOrEmpty(context)) return false;
+        if (node.ExcludeFromContext?.Contains(context) == true) return true;
+        return context == SearchContext && IsHiddenPath(node.Path);
+    }
+}
+

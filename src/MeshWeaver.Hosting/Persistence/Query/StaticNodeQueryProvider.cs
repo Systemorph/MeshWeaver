@@ -533,7 +533,7 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         if (context == null) return false;
         if (_meshConfiguration?.IsExcludedFromContext(node.NodeType, context) == true)
             return true;
-        if (node.ExcludeFromContext?.Contains(context) == true)
+        if (node.IsExcludedFromContext(context))
             return true;
         return false;
     }

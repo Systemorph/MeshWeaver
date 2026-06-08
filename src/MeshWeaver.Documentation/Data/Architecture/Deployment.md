@@ -11,10 +11,10 @@ MeshWeaver has **two distinct deploy routes**. They target different infrastruct
 
 | Route | Target | How | Doc |
 |---|---|---|---|
-| **AKS** | Shared cluster `memexaks-cluster` — the `atioz` + `memex` portal namespaces | Build images → `az aks command invoke` `kubectl set image` + rollout | [DeploymentAKS.md](DeploymentAKS.md) |
+| **AKS** | Shared cluster `memexaks-cluster` — the `memex` portal namespace | Build images → `az aks command invoke` `kubectl set image` + rollout | [DeploymentAKS.md](DeploymentAKS.md) |
 | **Azure Container Apps** | .NET Aspire `test` / `prod` modes (ACA, Sweden Central) | `tools/deploy.sh prod\|test` (wraps `aspire deploy` + migration-exit + db-version gate) | [DeploymentContainerApps.md](DeploymentContainerApps.md) |
 
-**Which one?** If you're shipping a code update to the `atioz`/`memex` portals on the shared AKS cluster → AKS doc. If you're deploying an Aspire-orchestrated `test`/`prod` Container Apps environment → Container Apps doc. The two routes provision and run on different platforms (raw AKS deployments + Helm vs. ACA via Aspire), with different update mechanics; they are not interchangeable.
+**Which one?** If you're shipping a code update to the `memex` portal on the shared AKS cluster → AKS doc. If you're deploying an Aspire-orchestrated `test`/`prod` Container Apps environment → Container Apps doc. The two routes provision and run on different platforms (raw AKS deployments + Helm vs. ACA via Aspire), with different update mechanics; they are not interchangeable.
 
 The sections below (local run, Azure AD, secrets, project layout) are **shared** across both routes.
 
