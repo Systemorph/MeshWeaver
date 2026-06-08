@@ -242,6 +242,21 @@ var request = new UpdateUnifiedReferenceRequest(
 await hub.InvokeAsync(request);
 ```
 
+> **The collection must exist.** A `data:` update is rejected with
+> `Success = false` (and a descriptive `Error`) when the path addresses nothing the
+> workspace can write to:
+> - **Unknown collection** — the collection is owned by no registered type source and
+>   is not a content provider (e.g. a bare reference like `"invalid"`, which the parser
+>   defaults to the `data:` prefix → collection `"invalid"`). It is *not* silently
+>   committed as a vacuous success.
+> - **Empty path** — `Reference` is null/empty (`"Path cannot be empty"`).
+> - **Default data reference** — `"data:"` with no collection (`"Cannot update the
+>   default data reference directly"`).
+> - **Unknown prefix** — anything other than `data`/`content`/`area`.
+>
+> Only a collection a `TypeSource` projects (data) or an `IFileContentProvider` serves
+> (content) is a valid write target.
+
 ## Workspace Extension Methods
 
 Convenience wrappers for the most common patterns:

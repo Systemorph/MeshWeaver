@@ -1568,6 +1568,21 @@ public static class DataExtensions
             return UpdateFile(hub, contentCollectionName, entityId, content);
         }
 
+        // 🚨 Reject a collection that no registered type source owns. A no-scheme
+        // path defaults to the `data` prefix (ParseUnifiedPath → "No prefix - default
+        // to data"), so a bogus reference such as "invalid" arrives here as
+        // collection="invalid". Without this guard the DataChangeRequest below is
+        // issued against a collection nothing projects and the workspace commits it
+        // as a vacuous "success" — the handler then wrongly reports Success=true for a
+        // path that addresses no data (UpdateUnifiedReferenceRequest_InvalidPath_ReturnsError).
+        // A valid data collection is one a TypeSource projects; content collections
+        // were already handled above.
+        var isKnownCollection = dataContext.TypeSources.Values
+            .Any(ts => string.Equals(ts.TypeDefinition.CollectionName, collection, StringComparison.OrdinalIgnoreCase));
+        if (!isKnownCollection)
+            return Observable.Return(UpdateUnifiedReferenceResponse.Fail(
+                $"Unknown collection '{collection}': no registered data type source or content provider owns this path."));
+
         var changeRequest = new DataChangeRequest
         {
             Updates = [content],
