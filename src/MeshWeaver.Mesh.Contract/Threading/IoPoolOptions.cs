@@ -16,6 +16,15 @@ public static class IoPoolNames
     /// <summary>Outbound HTTP/network leaves (social, AI providers, embeddings, MCP). Wave 2.</summary>
     public const string Http = "Http";
 
+    /// <summary>
+    /// AI agent execution rounds — the long-lived LLM streaming round (model turns + inline
+    /// tool calls + delegation), driven from <c>ThreadExecution.ExecuteMessageAsync</c>. Distinct
+    /// from <see cref="Http"/> so a burst of multi-minute rounds can't starve quick outbound HTTP
+    /// (social, MCP, embeddings). See <see cref="IoPoolOptions.Ai"/> for why its cap is a
+    /// runaway-fan-out stop, not a fine-grained throttle.
+    /// </summary>
+    public const string Ai = "Ai";
+
     /// <summary>CPU-bound compilation (Roslyn compile/script). Wave 3.</summary>
     public const string Compile = "Compile";
 
@@ -57,6 +66,16 @@ public sealed record IoPoolOptions
     /// <summary>Concurrent outbound HTTP ops. Defaults to 16.</summary>
     public int Http { get; init; } = 16;
 
+    /// <summary>
+    /// Concurrent AI agent rounds. A round holds its slot for the WHOLE round (model turns +
+    /// inline tool calls + delegation waits), not a single network call — and because a
+    /// delegating round holds its slot while awaiting a sub-thread round (which needs its own
+    /// slot), the cap must comfortably exceed realistic delegation concurrency. It is therefore a
+    /// runaway-fan-out STOP, not a fine-grained throttle; defaults generous (256). The thread is
+    /// released during the model await, so an idle-but-streaming round costs ~0 threads.
+    /// </summary>
+    public int Ai { get; init; } = 256;
+
     /// <summary>Concurrent compilations. CPU-bound; defaults to the processor count.</summary>
     public int Compile { get; init; } = Environment.ProcessorCount;
 
@@ -76,6 +95,7 @@ public sealed record IoPoolOptions
             IoPoolNames.FileSystem => FileSystem,
             IoPoolNames.Blob => Blob,
             IoPoolNames.Http => Http,
+            IoPoolNames.Ai => Ai,
             IoPoolNames.Compile => Compile,
             IoPoolNames.Process => Process,
             _ => Default,

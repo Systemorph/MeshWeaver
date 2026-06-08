@@ -135,7 +135,10 @@ public static class UserActivityLayoutAreas
         // Outer shell: flex column, fills the available main area (height managed by CSS grid)
         var dashboard = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden;");
+            // min-width: 0 + max-width: 100% + border-box → the dashboard shrinks WITH the main
+            // splitter pane when the chat side panel opens (the pane width is the 100% reference),
+            // instead of overflowing it. Every inner band repeats the same three so nothing pushes wider.
+            .WithStyle("display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; max-width: 100%; box-sizing: border-box; overflow: hidden;");
 
         // Welcome banner
         dashboard = dashboard.WithView(Controls.Html(
@@ -150,7 +153,7 @@ public static class UserActivityLayoutAreas
         if (pinned != null)
             dashboard = dashboard.WithView(Controls.Stack
                 .WithWidth("100%")
-                .WithStyle("flex-shrink: 0; padding: 0 24px 8px 24px;")
+                .WithStyle("flex-shrink: 0; min-width: 0; box-sizing: border-box; padding: 0 24px 8px 24px;")
                 .WithView(pinned));
 
         // Catalog region: a fixed tab bar over a swappable content pane. The
@@ -158,7 +161,10 @@ public static class UserActivityLayoutAreas
         // both the bar (active styling) and the content (which MeshSearch shows).
         var catalog = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; padding: 0 24px;");
+            // box-sizing: border-box → the 24px L/R padding is INSIDE the 100% width (not added
+            // to it), so the catalog + the MeshSearch inside don't overflow the area by 48px.
+            // min-width: 0 lets this flex child shrink below its content's intrinsic width.
+            .WithStyle("display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; box-sizing: border-box; overflow: hidden; padding: 0 24px;");
 
         // Init-once seed of the default tab — heap-captured so it survives the
         // per-subscription re-evaluation of the view-definition lambda.
@@ -182,9 +188,6 @@ public static class UserActivityLayoutAreas
                 .Select(selected => BuildCatalogContent(selected ?? TabThreads, nodePath, nodeOwnerId)));
 
         dashboard = dashboard.WithView(catalog);
-
-        // Chat input — pinned to the bottom of the dashboard column
-        dashboard = dashboard.WithView(BuildChatSection(host, nodePath));
 
         return dashboard;
     }
@@ -227,7 +230,9 @@ public static class UserActivityLayoutAreas
     {
         var pane = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("flex: 1; min-height: 0; overflow-y: auto; padding-top: 12px; " + ThinScrollbar);
+            // min-width: 0 + max-width: 100% + overflow-x: hidden → the MeshSearch grid inside is
+            // bounded by the pane width and never spills past it, even when the side panel narrows the area.
+            .WithStyle("flex: 1; min-height: 0; min-width: 0; max-width: 100%; box-sizing: border-box; overflow-y: auto; overflow-x: hidden; padding-top: 12px; " + ThinScrollbar);
 
         UiControl content = selected switch
         {
@@ -319,24 +324,6 @@ public static class UserActivityLayoutAreas
         return profile;
     }
 
-    /// <summary>
-    /// Chat input pinned to the very bottom — no header, full width, aligned with content above.
-    /// Hides the empty-state placeholder; shows only the input bar with agent/model selectors.
-    /// </summary>
-    private static UiControl BuildChatSection(LayoutAreaHost host, string nodePath)
-    {
-        var section = Controls.Stack
-            .WithStyle("flex-shrink: 0; width: 100%; padding: 8px 24px 12px 24px;");
-
-        var chatControl = new ThreadChatControl()
-            .WithInitialContext(nodePath)
-            .WithInitialContextDisplayName("Home")
-            .WithHideEmptyState()
-            .WithStyle("width: 100%;");
-
-        section = section.WithView(chatControl);
-        return section;
-    }
 
     /// <summary>
     /// Activity timeline — shows main content nodes with recent changes.

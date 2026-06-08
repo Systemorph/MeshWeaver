@@ -198,6 +198,50 @@ public IObservable<MeshNode?> Get(string path)
 
 ---
 
+## Streaming an agent response into a cell — the precise process
+
+> **Invariant: the thread hub must never block.** A blocked thread turn stops answering `GetData` / `GetPermission` / tool-call responses for its *own* output cell — so the response never renders and the round wedges (`GetDataRequest@{thread}/{cell}` pending for tens of seconds, `GetPermissionRequest` timing out). That **is** the entire "harness doesn't work after submit" symptom. **Therefore the streaming round runs in the I/O pool, never on the thread turn.** The pool is not an optimisation here — it is the mechanism that keeps the actor's single turn free while the multi-second LLM enumerable drains on a bounded ThreadPool worker.
+
+An LLM round is the archetypal `InvokeStream` leaf: `IChatClient.GetStreamingResponseAsync(...)` returns an `IAsyncEnumerable<ChatResponseUpdate>` — a genuine async I/O source that must run **off the thread hub's scheduler** and be **bounded**, exactly like a blob download or an HTTP call. It is never consumed with a bare `Task.Run(async () => await foreach …)` on (or launched from) the hub turn: that runs the enumerator's continuations under the grain scheduler, and a tool call that needs the same scheduler to answer then deadlocks against the in-flight `await foreach`. That is the "harness hangs after submit" failure — the thread hub stops answering `GetData`/`GetPermission` for its own output cell.
+
+The correct path is exactly **three steps**, and the **output cell is the rendezvous**: the pool writes it, the GUI reads it, and neither blocks on the other.
+
+**1 — Resolve the output cell and mark it streaming.** The round's last entry in `MeshThread.Messages` is the assistant output cell; its path is `{threadPath}/{ActiveMessageId}`. Confirm the last cell *is* the output (assistant) cell, take that as the streaming target, and flip its `Status` to `Streaming` so the GUI renders a live cell:
+
+```csharp
+// thread.ActiveMessageId is the canonical handle; the full output path derives from it.
+var output = $"{threadPath}/{thread.ActiveMessageId}";   // the last (assistant) cell in Messages
+workspace.GetMeshNodeStream(output).Update(node =>
+        node with { Content = ((ThreadMessage)node.Content) with { Status = ThreadMessageStatus.Streaming } })
+    .Subscribe(_ => { }, ex => logger.LogWarning(ex, "mark-streaming failed for {Path}", output));
+```
+
+**2 — Stream *in the pool*, writing each chunk to the cell's sync stream.** Consume the LLM `IAsyncEnumerable` through `IIoPool.InvokeStream` (off the hub scheduler, bounded — never `Task.Run`), and fold every chunk into the output cell via `GetMeshNodeStream(output).Update(...)`. The owning cell hub serialises the writes on its single-threaded action block (no race, no clobber), and the grain scheduler stays free to answer the round's tool-call responses:
+
+```csharp
+var acc = new StringBuilder();
+ioPool.InvokeStream(ct => chatClient.GetStreamingResponseAsync(messages, options: null, ct))
+    .Sample(StreamingSampleInterval)        // one cell write per sampled tick, NOT per token
+    .Subscribe(
+        update =>
+        {
+            acc.Append(update.Text);
+            workspace.GetMeshNodeStream(output).Update(node =>
+                    node with { Content = ((ThreadMessage)node.Content) with { Text = acc.ToString() } })
+                .Subscribe(_ => { }, ex => logger.LogWarning(ex, "stream write failed for {Path}", output));
+        },
+        ex => SetCellStatus(output, ThreadMessageStatus.Error),
+        () => SetCellStatus(output, ThreadMessageStatus.Completed));   // terminal: flip Status once
+```
+
+**3 — The GUI subscribes to the same cell stream.** The Blazor view databinds the output cell with `GetMeshNodeStream(output)` (or `GetRemoteStream<MeshNode>`), rendering `Content.Text` as it grows and reacting to the terminal `Status`. It reads the **exact node the pool is writing** — the cell is the single source of truth, so there is no second channel to reconcile.
+
+Why this is deadlock-free, point by point: the enumerator runs on a **pool** ThreadPool worker (step 2), never the grain turn, so an in-flight tool call still gets the scheduler. The cell writes go through the **owning hub's serialised action block** via the stream handle — a non-blocking cross-hub patch, not a synchronous wait. The GUI **only reads** (step 3). Three actors, one cell, no one blocks another.
+
+> 🚫 **The anti-pattern this replaces.** `Task.Run(async () => { await foreach (var u in client.GetStreamingResponseAsync(…)) cell.Update(…); })` *looks* offloaded, but it (a) is **unbounded** — N concurrent rounds spawn N enumerators with no governor — and (b) bypasses `IIoPool`, so it is invisible to the pool's diagnostics and cancellation, and any synchronous wait on the output cell from the hub turn (e.g. a sync-handshake read of a cell that isn't reachable yet) still wedges the hub. Route the enumerable through `InvokeStream`; the offload, the bound, and the cancellation come for free.
+
+---
+
 ## Scope — storage and Postgres are pooled too
 
 Earlier guidance carved storage and Postgres out of the pool and left them on plain `Observable.FromAsync`. **That carve-out is rescinded — there is no exemption.** `FromAsync` is never tolerated (see the absolute rule above), so storage / file-system / Postgres leaves go through `IIoPool` like everything else.
