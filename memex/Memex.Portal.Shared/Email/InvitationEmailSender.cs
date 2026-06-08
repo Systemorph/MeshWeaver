@@ -74,8 +74,13 @@ public sealed class InvitationEmailSender(
             // IMeshQueryCore = the no-access-control core path (infra read).
             logger?.LogInformation("InvitationEmailSender: watching invitations (baseUrl={BaseUrl})", baseUrl ?? "(none)");
             subscriptions.Add(query
+                // namespace:Admin scopes the query to the Admin partition. A path-less
+                // nodeType:Invitation query goes cross-schema, which intentionally EXCLUDES
+                // the admin schema (see PostgreSqlSchemaInitializer.searchable_schemas), so
+                // it would never see invitations. Runs as System (IMeshQueryCore + MeshQuery's
+                // System stamp), so no access-control filtering. See AccessControl.md.
                 .Query<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"nodeType:{InvitationNodeType.NodeType}"), jsonOptions)
+                    $"namespace:{InvitationNodeType.PartitionName} nodeType:{InvitationNodeType.NodeType}"), jsonOptions)
                 .Select(change => change.Items)
                 .Subscribe(
                     items =>

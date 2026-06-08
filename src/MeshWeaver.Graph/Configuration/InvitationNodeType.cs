@@ -28,6 +28,11 @@ public static class InvitationNodeType
     /// <summary>Namespace under which invitation nodes are created (Admin partition).</summary>
     public const string Namespace = "Admin/Invitation";
 
+    /// <summary>The partition (first path segment) invitations live in. Queries must scope to
+    /// <c>namespace:Admin</c> to route to the admin schema — the Admin partition is deliberately
+    /// excluded from the cross-schema global search (PostgreSqlSchemaInitializer.searchable_schemas).</summary>
+    public const string PartitionName = "Admin";
+
     /// <summary>
     /// Registers the built-in "Invitation" MeshNode on the mesh builder plus the
     /// path-less <c>nodeType:Invitation → Admin</c> query-routing rule.
