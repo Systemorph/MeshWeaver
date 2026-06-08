@@ -109,6 +109,41 @@ Visual Studio's F5 path does this implicitly via its launch profile, which is wh
 
 ---
 
+## Full stop → rebuild → restart (clean cold-start after a code change)
+
+Hot reload (Option 1) and the per-resource restarts (Options 2–3) are the default. But when you
+want a **clean cold-start with new code** — a non-trivial change spanning several referenced
+projects, or recovery from a wedged stack — use the explicit stop → rebuild → start cycle. The two
+steps people miss (and that cause the "I rebuilt but it still runs old code" / "my build won't
+compile, file in use" loops) are in **bold**:
+
+```powershell
+# 1. Stop Aspire — AND force-kill, because `aspire stop` can exit while leaving the
+#    AppHost + portal processes alive:
+aspire stop
+Get-Process Memex.AppHost,Memex.Portal.Distributed,aspire -ErrorAction SilentlyContinue | Stop-Process -Force
+
+# 2. 🚨 RELEASE THE BUILD LOCKS. Lingering MSBuild / VB-C# compiler-server nodes keep
+#    obj/*.dll open AFTER the AppHost is gone — that is the cause of the rebuild failing with
+#    "CS2012: cannot open '…/obj/…/X.dll' for writing" or "MSB3021: being used by another
+#    process". Killing the portal is NOT enough; you must shut the build server too:
+dotnet build-server shutdown
+
+# 3. Rebuild the portal project. Building Memex.Portal.Distributed also rebuilds every project
+#    it references (MeshWeaver.AI, .Graph, .Blazor.Portal, .Mesh.Contract, …), so ALL your edits
+#    compile — this doubles as your compile gate before bringing the stack up:
+dotnet build memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj --no-restore
+
+# 4. Start fast, reusing the build from step 3 (no second compile):
+aspire start --no-build --project memex/aspire/Memex.AppHost
+```
+
+> **Why `--no-build` is safe here:** step 3 already produced current binaries for the portal and
+> everything it references, so `--no-build` just launches them. The Postgres / blob containers are
+> persistent and survive the stop, so the database is intact across the cycle.
+
+---
+
 ## Option 1 — Hot reload with `dotnet watch`
 
 ```bash
@@ -200,8 +235,8 @@ For distributed traces across resources, open `https://localhost:17200/traces` a
 **"No AppHost is currently running" from `aspire mcp`.**
 The AppHost was started via `dotnet run`, not `aspire run`. Restart with the latter (see above).
 
-**Builds fail with `MSB3021: cannot copy … being used by another process`.**
-A previous AppHost or background process is holding the binaries open. Run the process-kill command above, then retry the build.
+**Builds fail with `MSB3021: cannot copy … being used by another process` or `CS2012: cannot open '…/obj/…/X.dll' for writing`.**
+A previous AppHost/portal **and/or** a lingering MSBuild / VB-C# compiler-server node is holding the binaries open. Killing the portal alone is often not enough — the build-server nodes survive it. Force-kill the processes **and** run `dotnet build-server shutdown`, then retry. See [Full stop → rebuild → restart](#full-stop--rebuild--restart-clean-cold-start-after-a-code-change) for the full cycle.
 
 **Portal's chat hangs at "Allocating agent…".**
 Almost always one of two causes:
