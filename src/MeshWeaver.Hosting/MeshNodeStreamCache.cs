@@ -105,6 +105,26 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     private readonly ConcurrentDictionary<string, Lazy<Entry>> _streams = new();
     private readonly ConcurrentDictionary<(string Path, string UserId), AccessEntry> _access = new();
 
+    // In-flight cross-hub write subscriptions that have OUTLIVED their queue slot. The
+    // per-path Update queue advances on a bounded signal (QueueAdvanceBound) so a lost
+    // owner response can't starve retries, but each write's subscription to the owner's
+    // PatchDataResponse must keep running to deliver the real terminal (value / RLS
+    // denial) to its caller. Tracked here so a mid-flight cache disposal tears them down;
+    // each self-removes on its own terminal so this never accumulates.
+    private readonly ConcurrentDictionary<IDisposable, byte> _inflightWrites = new();
+
+    // 🚨 How long the per-path serial Update queue waits for the CURRENT write's first
+    // owner signal before letting the NEXT queued write proceed. After the RLS commit
+    // switched entry.Handle.Update to UpdateRemote (which awaits the owner's
+    // PatchDataResponse, up to 30s), a lost response — the owner mid-dispose handles the
+    // patch but its reply never routes back — blocked the queue for the full 30s and
+    // starved every retry (the ResubscribeOnOwnerDispose deadlock). This bound caps that.
+    // It sits above a normal owner round-trip (ms-to-low-seconds) so a healthy write
+    // still advances the queue on its real terminal, not the bound — the queue only
+    // "gives up waiting" for a genuinely stuck/lost response. The caller's result is
+    // unaffected: it still receives the real terminal whenever it arrives.
+    private static readonly TimeSpan QueueAdvanceBound = TimeSpan.FromSeconds(5);
+
     // 🚨 Per-path serial Update queue. Concurrent mirror-side Updates on the
     // SAME path race their `current` snapshot — each call's lambda runs against
     // the same initial state, so each computes a patch with field overrides
@@ -265,6 +285,16 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // 3. Permission probe cache — drop the cached (path,user)⇒Permission
         //    entries so nothing roots the disposed mesh's identities.
         _access.Clear();
+
+        // 4. In-flight cross-hub write subscriptions that outlived their queue slot
+        //    (awaiting a slow/lost owner PatchDataResponse). Each normally self-removes
+        //    on its terminal; tear down any still pending so they don't root the disposed
+        //    mesh past shutdown.
+        foreach (var inflight in _inflightWrites.Keys)
+        {
+            try { inflight.Dispose(); } catch { /* best-effort */ }
+        }
+        _inflightWrites.Clear();
     }
 
     private Entry GetEntry(string path) =>
@@ -569,50 +599,67 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 logger.LogDebug(
                     "[UpdateQueue] START path={Path} seq={Seq} waitedInQueue={WaitedMs}ms",
                     path, req.Seq, waitedToStart);
-                DateTimeOffset? updatedLastModified = null;
-                var localEmittedAt = DateTimeOffset.MinValue;
                 var entry = GetEntry(path);
                 // FullNode set ⇒ overwrite (ChangeType.Full wholesale replace); else field-merge.
-                return (req.FullNode is not null
-                        ? entry.Handle.Overwrite(req.FullNode)
-                        : entry.Handle.Update(req.Update))
-                    .Do(node =>
+                var update = req.FullNode is not null
+                    ? entry.Handle.Overwrite(req.FullNode)
+                    : entry.Handle.Update(req.Update);
+
+                // 🚨 Deliver the owner's FULL terminal (value / RLS denial / completion)
+                // to the caller's result on a subscription whose lifetime is INDEPENDENT
+                // of the queue slot. After the RLS commit, entry.Handle.Update is
+                // UpdateRemote, which AWAITS the owner's PatchDataResponse (up to 30s). The
+                // RLS-denial surfacing + read-after-write that the commit added are
+                // preserved untouched — the caller still gets the real terminal whenever
+                // it arrives. Tracked in _inflightWrites for mid-flight cache disposal;
+                // self-removes on terminal so it never accumulates.
+                var inflight = new System.Reactive.Disposables.SingleAssignmentDisposable();
+                _inflightWrites[inflight] = 0;
+                void Settle()
+                {
+                    _inflightWrites.TryRemove(inflight, out _);
+                    try { inflight.Dispose(); } catch { /* best-effort */ }
+                }
+                inflight.Disposable = update.Subscribe(
+                    node =>
                     {
-                        updatedLastModified = node.LastModified;
-                        localEmittedAt = DateTimeOffset.UtcNow;
                         logger.LogDebug(
-                            "[UpdateQueue] LOCAL_EMIT path={Path} seq={Seq} updatedLastModified={LastModified} elapsedFromStart={ElapsedMs}ms",
-                            path, req.Seq, updatedLastModified, (localEmittedAt - req.EnteredAt).TotalMilliseconds);
+                            "[UpdateQueue] LOCAL_EMIT path={Path} seq={Seq} elapsedFromStart={ElapsedMs}ms",
+                            path, req.Seq, (DateTimeOffset.UtcNow - req.EnteredAt).TotalMilliseconds);
                         req.Result.OnNext(node);
-                    })
-                    // 🚨 DO NOT wait for the echo. The owning node hub's single-threaded
-                    // action block already serialises patches, so the next queued Update
-                    // sees post-patch state via the LOCAL Handle (which applied this patch
-                    // on LOCAL_EMIT above) — the echo wait bought nothing the owner's
-                    // ordering didn't already guarantee. Worse, waiting for entry.Shared
-                    // to re-emit the patch DEADLOCKS when that echo can never arrive: a
-                    // write to a FRESHLY-CREATED node DEFERS on the owner's [Initialize]
-                    // gate (so the patch isn't applied and never echoes), or the writing
-                    // hub's own action block is the very thread that would deliver the
-                    // echo. Either way the queue stalled up to 3s PER update — the inline
-                    // compile's activity/status writes pile several of these, accumulating
-                    // into the multi-second compile freeze. The Concat queue now completes
-                    // on LOCAL_EMIT so the next Update proceeds immediately.
-                    .Catch<MeshNode, Exception>(ex =>
+                    },
+                    ex =>
                     {
                         logger.LogWarning(ex,
                             "[UpdateQueue] FAILED path={Path} seq={Seq} elapsedMs={ElapsedMs}",
                             path, req.Seq, (DateTimeOffset.UtcNow - req.EnteredAt).TotalMilliseconds);
                         req.Result.OnError(ex);
-                        return Observable.Empty<MeshNode>();
-                    })
-                    .Finally(() =>
+                        Settle();
+                    },
+                    () =>
                     {
                         logger.LogDebug(
                             "[UpdateQueue] COMPLETE path={Path} seq={Seq} totalElapsed={ElapsedMs}ms",
                             path, req.Seq, (DateTimeOffset.UtcNow - req.EnteredAt).TotalMilliseconds);
                         req.Result.OnCompleted();
+                        Settle();
                     });
+
+                // 🚨 Advance the per-path queue on the FIRST owner signal OR
+                // QueueAdvanceBound — NEVER UpdateRemote's full 30s response wait. A lost
+                // owner response (owner mid-dispose handled the patch but its reply never
+                // routed back) otherwise blocked this serial queue for 30s and starved
+                // every retry (the ResubscribeOnOwnerDispose deadlock). Observe req.Result
+                // (already fed above) instead of opening a SECOND subscription to the cold
+                // update (which would post the patch twice). Complete without emitting so
+                // Concat moves to the next queued write.
+                return req.Result
+                    .Materialize()
+                    .Select(_ => System.Reactive.Unit.Default)
+                    .Take(1)
+                    .Timeout(QueueAdvanceBound, Observable.Return(System.Reactive.Unit.Default))
+                    .Take(1)
+                    .SelectMany(_ => Observable.Empty<MeshNode>());
             }))
             .Concat();
 
