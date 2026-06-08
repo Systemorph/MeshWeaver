@@ -58,4 +58,14 @@ public record Invitation
 
     /// <summary>Optional free-text note shown to the admin.</summary>
     public string? Note { get; init; }
+
+    /// <summary>
+    /// When the invitation email was sent (set by the node-driven
+    /// <c>InvitationEmailSender</c> hosted service). <c>null</c> = not yet emailed —
+    /// the sender stamps this so it never re-sends, regardless of how the invitation was
+    /// created (Invitations settings tab, MCP, REST). The email is decoupled from the
+    /// creation entry point: any Pending invitation with a null value gets emailed once.
+    /// </summary>
+    [Browsable(false)]
+    public DateTimeOffset? EmailSentAt { get; init; }
 }

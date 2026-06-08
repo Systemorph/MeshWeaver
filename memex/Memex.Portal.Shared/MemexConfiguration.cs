@@ -152,6 +152,10 @@ public static class MemexConfiguration
         services.AddHostedService<GraphSubscriptionService>();
         // Mesh-driven reply sender: drains agent-emitted Outbound Email nodes (Status=New) via Graph.
         services.AddHostedService<OutboundEmailSender>();
+        // Mesh-driven invitation emailer: emails any Pending Invitation node not yet emailed
+        // (EmailSentAt==null), from ANY entry point (Invitations tab, MCP, REST). Self-skips
+        // unless Email:Enabled. Decouples the invite email from the UI handler.
+        services.AddHostedService<Email.InvitationEmailSender>();
 
         // Microsoft Teams bot channel (bidirectional). Registered always but INERT unless Teams:Enabled
         // and Bot credentials are set (TeamsClient.IsConfigured gates the endpoint + sender). Activate by

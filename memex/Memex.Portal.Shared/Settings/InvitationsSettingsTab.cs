@@ -58,11 +58,10 @@ public static class InvitationsSettingsTab
         LayoutAreaHost host, StackControl stack)
     {
         var invitationService = host.Hub.ServiceProvider.GetRequiredService<InvitationService>();
-        var emailSender = host.Hub.ServiceProvider.GetRequiredService<IEmailSender>();
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var viewerId = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
-        var config = host.Hub.ServiceProvider.GetService<IConfiguration>();
-        var baseUrl = config?["Portal:BaseUrl"] ?? config?["PublicBaseUrl"];
+        // The invitation EMAIL is sent by the node-driven InvitationEmailSender hosted service
+        // (watches Pending invitations, stamps EmailSentAt). This handler just creates the node.
 
         stack = stack.WithView(Controls.H2("Invitations").WithStyle("margin: 0 0 8px 0;"));
         stack = stack.WithView(Controls.Html(
@@ -114,15 +113,9 @@ public static class InvitationsSettingsTab
                         }
 
                         invitationService.CreateInvitation(inviteEmail, viewerId, note)
-                            .SelectMany(_ => emailSender
-                                .SendEmail(inviteEmail, InviteSubject, BuildInviteEmailHtml(baseUrl))
-                                .Select(__ => true)
-                                .Catch<bool, Exception>(_ => Observable.Return(false)))
                             .Subscribe(
-                                emailed => h.UpdateData(ResultDataId, emailed
-                                    ? SuccessHtml($"Invited {Esc(inviteEmail)} — invitation email sent.")
-                                    : SuccessHtml($"Invited {Esc(inviteEmail)}. Email delivery failed " +
-                                        "(check Email settings) — they can still onboard with this address.")),
+                                _ => h.UpdateData(ResultDataId,
+                                    SuccessHtml($"Invited {Esc(inviteEmail)} — an invitation email will be sent shortly.")),
                                 ex => h.UpdateData(ResultDataId,
                                     ErrorHtml($"Failed to create invitation: {ex.Message}")));
                     });
