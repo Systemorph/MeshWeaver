@@ -31,6 +31,7 @@ public static class AIExtensions
                     .AddThreadType()
                     .AddAgentType(serveFromPartition)
                     .AddLanguageModelType(serveFromPartition)
+                    .AddHarnessType()
                     .ConfigureServices(services => services.AddAgentChatServices())
                     // Register AI types on the MESH hub (for MeshQuery deserialization of Thread content)
                     .ConfigureHub(config =>
@@ -76,6 +77,7 @@ public static class AIExtensions
 
     public static ITypeRegistry AddAITypes(this ITypeRegistry typeRegistry)
         => typeRegistry.WithType(typeof(AgentConfiguration), nameof(AgentConfiguration))
+            .WithType(typeof(Harness), nameof(Harness))
             .WithType(typeof(AgentDelegation), nameof(AgentDelegation))
             .WithType(typeof(ModelDefinition), nameof(ModelDefinition))
             .WithType(typeof(ModelProviderConfiguration), nameof(ModelProviderConfiguration))

@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using MeshWeaver.AI;
 using MeshWeaver.Mesh;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MeshWeaver.AI.ClaudeCode;
 
@@ -11,48 +12,39 @@ namespace MeshWeaver.AI.ClaudeCode;
 public static class ClaudeCodeExtensions
 {
     /// <summary>
-    /// Registers the Claude Code provider's catalog profile so its models
-    /// (sonnet / opus / haiku) surface in the chat picker + Models settings
-    /// tab. The provider's "key" is the user's subscription OAuth token
-    /// (<c>RequiresApiKey: true</c>) — stored encrypted like any other key
-    /// (Phase 2) and injected per request into the worker (Phase 5b). Pair
-    /// with <see cref="AddClaudeCode(IServiceCollection, Action{ClaudeCodeConfiguration})"/>
-    /// which registers the factory + binds <see cref="ClaudeCodeConfiguration"/>.
+    /// Claude Code is a <b>harness</b>, not a model provider — so this no longer
+    /// registers a language-model catalog source. The harness surfaces as a
+    /// <c>Harness</c> catalog node (see <see cref="HarnessNodeType"/>) and is wired
+    /// via <see cref="AddClaudeCode(IServiceCollection, Action{ClaudeCodeConfiguration})"/>.
+    /// Retained as a no-op so existing builder chains keep compiling.
     /// </summary>
     public static TBuilder AddClaudeCode<TBuilder>(this TBuilder builder)
         where TBuilder : MeshBuilder
-    {
-        builder.AddLanguageModelCatalogSource(new LanguageModelCatalogSource(
-            SectionName: "ClaudeCode",
-            ProviderName: "ClaudeCode",
-            Order: 5,
-            DisplayLabel: "Claude Code (my subscription)",
-            DefaultEndpoint: null,
-            DefaultModelIds: ImmutableArray.Create("sonnet", "opus", "haiku"),
-            RequiresApiKey: true,
-            Kind: ProviderKind.Cli));
-        return builder;
-    }
+        => builder;
 
     /// <summary>
-    /// Adds Claude Code services to the service collection.
-    /// Configuration should be bound to ClaudeCodeConfiguration.
-    /// Requires Claude Code CLI >= 2.0.0 installed via: npm install -g @anthropic-ai/claude-code
+    /// Registers Claude Code as a <b>harness</b> (NOT a model provider): the
+    /// <see cref="ClaudeCodeHarness"/> runs the <c>claude</c> CLI directly via the
+    /// Claude Agent SDK. <see cref="HarnessNodeType.AddHarnessType"/> projects it into
+    /// a catalog node; <see cref="ThreadExecution"/> dispatches the round to it.
+    /// Requires Claude Code CLI >= 2.0.0 (npm install -g @anthropic-ai/claude-code).
     /// </summary>
     public static IServiceCollection AddClaudeCode(this IServiceCollection services)
     {
-        return services.AddSingleton<IChatClientFactory, ClaudeCodeChatClientAgentFactory>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHarness, ClaudeCodeHarness>());
+        return services;
     }
 
     /// <summary>
-    /// Adds Claude Code services with configuration action.
-    /// Requires Claude Code CLI >= 2.0.0 installed via: npm install -g @anthropic-ai/claude-code
+    /// Registers the Claude Code harness with a configuration action that binds
+    /// <see cref="ClaudeCodeConfiguration"/>. See <see cref="AddClaudeCode(IServiceCollection)"/>.
     /// </summary>
     public static IServiceCollection AddClaudeCode(
         this IServiceCollection services,
         Action<ClaudeCodeConfiguration> configure)
     {
         services.Configure(configure);
-        return services.AddSingleton<IChatClientFactory, ClaudeCodeChatClientAgentFactory>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHarness, ClaudeCodeHarness>());
+        return services;
     }
 }

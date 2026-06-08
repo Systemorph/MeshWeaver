@@ -12,41 +12,31 @@ namespace MeshWeaver.AI.Copilot;
 public static class CopilotExtensions
 {
     /// <summary>
-    /// Registers the GitHub Copilot provider's catalog profile so its models
-    /// surface in the chat picker + Models settings tab — the MeshBuilder
-    /// counterpart to <c>ClaudeCodeExtensions</c>'s catalog source.
-    /// <c>RequiresApiKey: false</c> because Copilot authenticates via GitHub
-    /// device-flow OAuth (the "Log in via browser" flow), not a pasted key.
-    /// Pair with <see cref="AddCopilot(IServiceCollection, Action{CopilotConfiguration})"/>
-    /// which registers the factory + binds <see cref="CopilotConfiguration"/>.
+    /// GitHub Copilot is a <b>harness</b>, not a model provider — so this no longer
+    /// registers a language-model catalog source. The harness surfaces as a
+    /// <c>Harness</c> catalog node (see <see cref="HarnessNodeType"/>) and is wired
+    /// via <see cref="AddCopilot(IServiceCollection, Action{CopilotConfiguration})"/>.
+    /// Retained as a no-op so existing builder chains keep compiling.
     /// </summary>
     public static TBuilder AddCopilot<TBuilder>(this TBuilder builder)
         where TBuilder : MeshBuilder
-    {
-        builder.AddLanguageModelCatalogSource(new LanguageModelCatalogSource(
-            SectionName: "Copilot",
-            ProviderName: "Copilot",
-            Order: 6,
-            DisplayLabel: "GitHub Copilot",
-            DefaultEndpoint: null,
-            DefaultModelIds: ImmutableArray<string>.Empty,   // retrieved live from the CLI — never hard-coded
-            RequiresApiKey: false,
-            Kind: ProviderKind.Cli));
-        return builder;
-    }
+        => builder;
 
     /// <summary>
-    /// Adds GitHub Copilot services to the service collection.
-    /// Configuration should be bound to CopilotConfiguration.
+    /// Registers GitHub Copilot as a <b>harness</b>: the <see cref="CopilotHarness"/>
+    /// runs the Copilot CLI directly. The live model catalog is still registered (the
+    /// CLI reports its models). See <see cref="HarnessNodeType"/> + <see cref="ThreadExecution"/>.
     /// </summary>
     public static IServiceCollection AddCopilot(this IServiceCollection services)
     {
         services.TryAddSingleton<CopilotModelCatalog>();
-        return services.AddSingleton<IChatClientFactory, CopilotChatClientAgentFactory>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHarness, CopilotHarness>());
+        return services;
     }
 
     /// <summary>
-    /// Adds GitHub Copilot services with configuration action.
+    /// Registers the GitHub Copilot harness with a configuration action that binds
+    /// <see cref="CopilotConfiguration"/>. See <see cref="AddCopilot(IServiceCollection)"/>.
     /// </summary>
     public static IServiceCollection AddCopilot(
         this IServiceCollection services,
@@ -54,6 +44,7 @@ public static class CopilotExtensions
     {
         services.Configure(configure);
         services.TryAddSingleton<CopilotModelCatalog>();
-        return services.AddSingleton<IChatClientFactory, CopilotChatClientAgentFactory>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHarness, CopilotHarness>());
+        return services;
     }
 }

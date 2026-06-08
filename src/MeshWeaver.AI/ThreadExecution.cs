@@ -932,6 +932,24 @@ internal static class ThreadExecution
                 {
                 logger.LogDebug("[ThreadExec] Agents ready for {ThreadPath}, starting execution", threadPath);
 
+                // 🚦 Harness dispatch. A harness is NOT a model provider: Claude Code /
+                // GitHub Copilot run their OWN CLI library (ClaudeCodeChatClient /
+                // CopilotChatClient) and must bypass the model-provider factory chain.
+                // The MeshWeaver harness returns null → keep the agent/model client.
+                // This is the fix for "harness selected → Azure DeploymentNotFound":
+                // the round no longer routes a harness through a provider.
+                var selectedHarness = HarnessNodeType.ResolveHarness(parentHub.ServiceProvider, request.Harness);
+                // CLI harnesses (Claude Code / Copilot) return their own IChatClient;
+                // the MeshWeaver harness returns null → use the AgentChatClient (which
+                // has its own non-IChatClient streaming signature). harnessClient stays
+                // null for MeshWeaver so the existing agent path runs unchanged.
+                var harnessClient = selectedHarness?.CreateChatClient(
+                    new HarnessExecutionContext(parentHub, null, request.ModelName));
+                if (harnessClient != null)
+                    logger.LogInformation(
+                        "[ThreadExec] Harness '{Harness}' → {Client} (bypassing provider chain) for {ThreadPath}",
+                        request.Harness, harnessClient.GetType().Name, threadPath);
+
                 // Set context from remote stream — must subscribe (Current is null on cold streams).
                 // When ContextPath is empty we just set null; otherwise wait for the first emission
                 // (with a short timeout fallback so a missing/inaccessible node doesn't stall execution)
@@ -1294,8 +1312,13 @@ internal static class ThreadExecution
                         threadPath, request.AgentName ?? "(default)", request.ModelName ?? "(default)",
                         allMessages.Count);
 
-                    // Pass ALL messages through the official AgentChatClient path
-                    await foreach (var update in client.GetStreamingResponseAsync(allMessages, ct))
+                    // Pass ALL messages through the harness's client. MeshWeaver →
+                    // AgentChatClient (2-arg streaming); Claude Code / Copilot → that
+                    // harness's own CLI IChatClient (3-arg). Both yield ChatResponseUpdate.
+                    var responseStream = harnessClient != null
+                        ? harnessClient.GetStreamingResponseAsync(allMessages, options: null, ct)
+                        : client.GetStreamingResponseAsync(allMessages, ct);
+                    await foreach (var update in responseStream)
             {
                 // Diagnostic: surface every content-kind we see. If FunctionInvokingChatClient
                 // eats the FunctionCallContent before we see it, this loop only logs TextContent /
@@ -1684,6 +1707,11 @@ internal static class ThreadExecution
                     finally
                     {
                         delegationStampSub?.Dispose();
+                        // Dispose the per-round CLI harness client (Claude Code / Copilot).
+                        // The cached AgentChatClient (MeshWeaver path) is never disposed
+                        // here — it's reused across rounds.
+                        if (harnessClient is IDisposable sd) sd.Dispose();
+                        else if (harnessClient is IAsyncDisposable sad) _ = sad.DisposeAsync();
                         // Detach the accumulator so a check_inbox call between
                         // rounds can't split on a dead StringBuilder (the guard
                         // also requires IsExecuting + matching ActiveMessageId).
