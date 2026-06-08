@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Reactive;
+using System.Reactive.Linq;
 
 namespace MeshWeaver.Mesh.Threading;
 
@@ -28,6 +30,37 @@ public sealed class IoPoolRegistry : IDisposable
     /// </summary>
     public IIoPool Get(string name)
         => _pools.GetOrAdd(name, n => new IoPool(_options.MaxConcurrencyFor(n)));
+
+    /// <summary>
+    /// Total operations currently executing across every pool. Zero means no
+    /// offloaded I/O continuation is in flight — the safe point at which the
+    /// owning mesh's service scope may be torn down without a continuation
+    /// resolving a disposed scope.
+    /// </summary>
+    public int TotalInFlight => _pools.Values.Sum(p => p.CurrentInFlight);
+
+    /// <summary>
+    /// Completes once <see cref="TotalInFlight"/> reaches zero (polled), or after
+    /// <paramref name="timeout"/> elapses — whichever comes first. This is the
+    /// "wait for the I/O queue" half of mesh teardown: hub <c>DisposalCompleted</c>
+    /// only drains the action blocks + message round-trips, but I/O offloaded onto
+    /// the ThreadPool via <see cref="IIoPool"/> runs independently. If the service
+    /// scope is disposed while such an operation is still running, its continuation
+    /// (which may resolve a service) throws <see cref="ObjectDisposedException"/>
+    /// from the dead Autofac scope — surfacing as an unobserved "catastrophic"
+    /// failure. Await this between <c>DisposalCompleted</c> and scope disposal.
+    /// On timeout it completes anyway (a stuck slot is a separate bug the caller
+    /// can surface from a non-zero <see cref="TotalInFlight"/>).
+    /// </summary>
+    public IObservable<Unit> WhenDrained(TimeSpan timeout) =>
+        Observable.Interval(TimeSpan.FromMilliseconds(20))
+            .StartWith(-1L)
+            .Select(_ => TotalInFlight)
+            .Where(inFlight => inFlight == 0)
+            .Take(1)
+            .Select(_ => Unit.Default)
+            .Timeout(timeout)
+            .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default));
 
     public void Dispose()
     {

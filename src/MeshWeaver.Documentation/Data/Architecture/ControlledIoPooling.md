@@ -288,21 +288,45 @@ reactive instead:
 - **Let them all finish.** When the teardown owns several reactive completions, drain them together so
   they all emit before it returns — never an awaited loop that serialises (and can deadlock on) each one.
 
-**The only sanctioned `await` is that single drain at the boundary** — the **mesh teardown**, which is
-the same in tests and in prod (the silo's mesh disposal at shutdown), not a test-only concern — where
-the reactive completion is bridged to a `Task` exactly once and bounded:
+### 🚨 The mesh teardown drains TWO things, not one
+
+`DisposalCompleted` is **necessary but NOT sufficient**. It drains the hub's action blocks and
+in-flight message round-trips — but **I/O offloaded through `IIoPool` runs on the ThreadPool,
+independent of the action block, and `DisposalCompleted` knows nothing about it.** If the teardown
+disposes the service scope after `DisposalCompleted` but while an `IIoPool` operation is still in
+flight, that operation's continuation resolves a service from the dead Autofac scope and throws
+`ObjectDisposedException: …LifetimeScope… has already been disposed` — unobserved, it surfaces as an
+xUnit **"catastrophic failure"** that aborts the whole run.
+
+So the mesh teardown awaits **both** halves, in order, before the scope is disposed:
+
+1. `IMessageHub.DisposalCompleted` — action blocks + message round-trips.
+2. `IoPoolRegistry.WhenDrained(timeout)` — offloaded ThreadPool I/O (`TotalInFlight == 0`).
+
+**The only sanctioned `await` is that single two-phase drain at the boundary** — the **mesh teardown**,
+the same in tests and in prod (the silo's mesh disposal at shutdown). Capture the `IoPoolRegistry`
+*before* `Dispose()` (never resolve DI once disposal has begun), then drain both, bounded:
 
 ```csharp
-// ✅ The one drain, at the mesh-teardown boundary (test mesh OR prod silo shutdown): bridge the
-//    reactive completion to a Task, bounded, faults swallowed. NOT inside hub-reachable code.
-await hub.DisposalCompleted
+// ✅ The one drain, at the mesh-teardown boundary (test mesh OR prod silo shutdown).
+//    Either call the canonical helper:
+await mesh.TeardownAsync(TimeSpan.FromSeconds(15));   // MeshWeaver.Mesh.MeshTeardownExtensions
+
+//    …or, if you drive Dispose() yourself, do both phases by hand:
+var ioPools = mesh.ServiceProvider.GetService<IoPoolRegistry>();   // capture BEFORE Dispose()
+mesh.Dispose();
+await mesh.DisposalCompleted
     .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
-    .FirstOrDefaultAsync().ToTask().WaitAsync(TimeSpan.FromSeconds(10));
+    .FirstOrDefaultAsync().ToTask().WaitAsync(TimeSpan.FromSeconds(15));   // phase 1
+if (ioPools is not null)
+    await ioPools.WhenDrained(TimeSpan.FromSeconds(15)).FirstAsync().ToTask();   // phase 2
+// ONLY NOW dispose the service scope.
 ```
 
-"Only drainage of async pipelines is allowed": the `await` lives at that one drain, the work stays
-reactive. Same principle as `IIoPool` — the async boundary is pushed to the edge and bounded; it is
-never an ambient `await` mid-flow. See [Asynchronous Calls](AsynchronousCalls).
+"Only drainage of async pipelines is allowed": the `await` lives at that one (two-phase) drain, the work
+stays reactive. Same principle as `IIoPool` — the async boundary is pushed to the edge and bounded; it is
+never an ambient `await` mid-flow. Full order + failure mode: [Mesh Lifecycle](MeshLifecycle). See also
+[Asynchronous Calls](AsynchronousCalls).
 
 ---
 
