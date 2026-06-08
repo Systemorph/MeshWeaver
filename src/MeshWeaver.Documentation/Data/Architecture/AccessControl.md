@@ -69,7 +69,7 @@ A user is a **global (platform) admin** iff they hold `Permission.All` at scope 
 Admin/_Access/{user}_Access   →   AccessObject = {user}, Roles = [ Admin ],  MainNode = ""
 ```
 
-Such a user is a **platform superuser**: `PermissionEvaluator` applies a *global-admin short-circuit* — admin-on-the-Admin-partition ⇒ `Permission.All` on **every** path, exactly like the `System` identity. One grant, in one partition, drives both the platform-feature gates **and** cross-partition power.
+Such a user is a **platform admin — NOT a data superuser.** The `Admin/_Access` grant is scoped to the Admin partition (it covers `Admin/Invitation`, `Admin/_Provider`, the platform catalogs, …) and **does not** confer access to **spaces** or **user partitions**. Standing access is platform management (send invites, delete things, platform config); emergency changes to space/user *data* require an explicit **elevation (break-glass)** — a separate, auditable step, never standing permission. `IsGlobalAdmin()` reports "is a platform admin" and gates the platform features; it is **not** a permission override (a root `_Access` grant — *that* is the data-superuser shape — is deliberately NOT how platform admins are provisioned).
 
 ### The one predicate: `hub.IsGlobalAdmin()`
 
@@ -88,7 +88,9 @@ Readers that gate on it: `AdminMenuGate` (Invitations / Inbox tabs), `UserNodeTy
 - **Config-driven** — `Auth:GlobalAdmins: [ "rbuergi", … ]` → `GlobalAdminSeed` seeds a static `Admin/_Access/{user}_Access` grant at boot. A fresh DB with the config set comes up with each listed user already a platform admin.
 - **First user** — `UserOnboardingService.GrantPlatformAdmin` writes the same shape for the bootstrap user when the deployment has zero existing users.
 
-> 🚨 **The grant lives in `Admin/_Access`, never root `_Access`.** A root `_Access` grant gives "admin everywhere" via scope inheritance but is invisible to the Admin-scope gates; an `Admin/_Access` grant gives both (via the short-circuit). Writers (`GlobalAdminSeed`, `GrantPlatformAdmin`) and readers (`hub.IsGlobalAdmin`) must agree on the Admin partition — they did not before 2026-06-08, which silently locked configured admins out of every admin tab.
+> 🚨 **Platform-admin grants live in `Admin/_Access`, never root `_Access`.** A root `_Access` grant makes a user a **data superuser** (All on every partition via scope inheritance) — which platform admins must NOT be. An `Admin/_Access` grant scopes them to platform management only. Writers (`GlobalAdminSeed`, `GrantPlatformAdmin`) and readers (`hub.IsGlobalAdmin`) both use the Admin partition — they disagreed before 2026-06-08 (writers wrote root, readers checked Admin scope), which silently locked configured admins out of every admin tab.
+
+> **Emergency / cross-partition data access** is out of scope for the standing grant — it will be a deliberate **elevation (break-glass)** flow (audited, time-boxed), not a permission a platform admin holds by default.
 
 ---
 

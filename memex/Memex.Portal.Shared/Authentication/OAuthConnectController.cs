@@ -27,18 +27,35 @@ public class OAuthConnectController(
     private ApiTokenService TokenService => serviceProvider.GetRequiredService<ApiTokenService>();
 
     /// <summary>
-    /// The mesh-resolved identity for this cookie request, as stamped on the
-    /// portal hub's <see cref="AccessService"/> by <c>UserContextMiddleware</c>.
-    /// 🚨 The OAuth token's userId MUST be the mesh User.Id (e.g. <c>rbuergi</c>),
-    /// NEVER the <c>preferred_username</c> claim — Entra fills that with the
-    /// email/UPN, and an email userId routes the token node + its <c>_Access</c>
-    /// self-scope into a non-existent <c>{email}</c> partition (401 on every
+    /// Resolves the mesh <c>User.Id</c> for the issued token. 🚨 It MUST be the mesh
+    /// User.Id (e.g. <c>rbuergi</c>), NEVER the raw <c>preferred_username</c> claim — Entra
+    /// fills that with the email/UPN, and an email userId routes the token node + its
+    /// <c>_Access</c> self-scope into a non-existent <c>{email}</c> partition (401 on every
     /// freshly-minted token once the router stopped lazy-creating schemas).
+    /// <para>Prefers the authoritative identity <c>UserContextMiddleware</c> stamped on the
+    /// portal hub's <see cref="AccessService"/> (email→User.Id); falls back to normalising the
+    /// claim to the username (email local-part) when no resolved context is present — e.g.
+    /// controller unit tests, or any call before the middleware ran.</para>
     /// </summary>
-    private AccessContext? CurrentUser =>
-        serviceProvider.GetRequiredService<PortalApplication>()
-            .Hub.ServiceProvider.GetRequiredService<AccessService>()
-            .Context;
+    private string? ResolveMeshUserId()
+    {
+        var ctx = serviceProvider.GetService<PortalApplication>()?
+            .Hub.ServiceProvider.GetService<AccessService>()?.Context;
+        var resolved = ctx?.ObjectId;
+        if (!string.IsNullOrEmpty(resolved) && !resolved.Contains('@'))
+            return resolved;
+        var claim = User.FindFirstValue("preferred_username") ?? User.FindFirstValue(ClaimTypes.Email);
+        return UsernameFromEmail(claim);
+    }
+
+    /// <summary>Email-shaped identifier → its local part (the post-v10 username / mesh
+    /// partition key, e.g. <c>rbuergi@systemorph.com → rbuergi</c>); unchanged when there's no <c>@</c>.</summary>
+    private static string? UsernameFromEmail(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return null;
+        var at = value.IndexOf('@');
+        return at > 0 ? value[..at] : value;
+    }
 
     /// <summary>
     /// RFC 8414 — OAuth Authorization Server Metadata.
@@ -163,7 +180,7 @@ public class OAuthConnectController(
         var name = User.FindFirstValue(ClaimTypes.Name)
                    ?? User.FindFirstValue("name")
                    ?? email;
-        var userId = CurrentUser?.ObjectId;
+        var userId = ResolveMeshUserId();
 
         if (string.IsNullOrEmpty(email))
         {

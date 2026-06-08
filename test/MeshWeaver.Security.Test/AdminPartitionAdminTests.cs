@@ -8,16 +8,16 @@ using Xunit;
 namespace MeshWeaver.Security.Test;
 
 /// <summary>
-/// Pins the canonical global-admin model: a "global admin" is an admin on the
-/// <b>Admin partition</b> — <see cref="Permission.All"/> at scope <c>Admin</c> (an
-/// <c>AccessAssignment</c> in <c>Admin/_Access</c>). The <c>PermissionEvaluator</c>
-/// global-admin short-circuit then grants <see cref="Permission.All"/> on EVERY path
-/// (platform superuser, like <c>System</c>), and <c>hub.IsGlobalAdmin()</c> is the one
-/// predicate that reports it. See Doc/Architecture/AccessControl.md.
+/// Pins the platform-admin model: a "global / platform admin" is an admin on the ADMIN
+/// PARTITION — <see cref="Permission.All"/> at scope <c>Admin</c> (an <c>AccessAssignment</c>
+/// in <c>Admin/_Access</c>), reported by <c>hub.IsGlobalAdmin()</c>. This gates the platform
+/// features that live in the Admin partition (Invitations, Inbox, Global Administration, Models).
 ///
-/// <para>Regression guard for the 2026-06-08 lockout: the platform-admin gates check
-/// scope <c>Admin</c> while the seed wrote the grant at the root <c>_Access</c> scope —
-/// writers and readers disagreed, so a configured admin saw none of the admin tabs.</para>
+/// <para>🚨 A platform admin is NOT a data superuser. An <c>Admin/_Access</c> grant is scoped to
+/// the Admin partition; it does NOT confer access to <b>spaces</b> or <b>user partitions</b>.
+/// Standing access is platform management (send invites, delete things); emergency changes to
+/// space/user data are a separate, explicit <b>elevation</b> (break-glass), not standing
+/// permission. See Doc/Architecture/AccessControl.md → "The Admin partition".</para>
 /// </summary>
 public class AdminPartitionAdminTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -25,37 +25,37 @@ public class AdminPartitionAdminTests(ITestOutputHelper output) : MonolithMeshTe
         => ConfigureMeshBase(builder)
             .AddRowLevelSecurity()
             .AddMeshNodes(
-                // Admin on the ADMIN PARTITION (scope "Admin" → Admin/_Access) — the
-                // canonical platform admin. The ONLY grant this user has.
+                // Platform admin: Admin role on the ADMIN PARTITION (scope "Admin").
                 AssignmentNodeFactory.UserRole("AdminBoss", "Admin", "Admin"),
-                // A user scoped to ACME only — must never be mistaken for a global admin.
+                // A space-scoped user, for the negative checks.
                 AssignmentNodeFactory.UserRole("AcmeEditor", "Editor", "ACME"));
 
     [Fact]
-    public void AdminPartitionAdmin_HasAllPermissions_OnEveryPath()
-    {
-        // The Admin partition itself.
-        Mesh.GetEffectivePermissions("Admin", "AdminBoss").Should().Match(p => p == Permission.All);
-        // Other partitions — granted purely by the global-admin short-circuit.
-        Mesh.GetEffectivePermissions("ACME", "AdminBoss").Should().Match(p => p == Permission.All);
-        Mesh.GetEffectivePermissions("ACME/ProductLaunch/Todo/Task1", "AdminBoss").Should().Match(p => p == Permission.All);
-        Mesh.GetEffectivePermissions("rbuergi/Underwriting", "AdminBoss").Should().Match(p => p == Permission.All);
-    }
-
-    [Fact]
-    public void AdminPartitionAdmin_IsGlobalAdmin()
+    public void PlatformAdmin_IsGlobalAdmin()
         => Mesh.IsGlobalAdmin("AdminBoss").Should().Match(isAdmin => isAdmin);
 
     [Fact]
-    public void ScopedUser_IsNotGlobalAdmin_AndStaysScoped()
+    public void PlatformAdmin_HasAllOnAdminPartition_IncludingInvitations()
     {
-        Mesh.IsGlobalAdmin("AcmeEditor").Should().Match(isAdmin => !isAdmin);
-        // No leak: an ACME-only editor has nothing on the Admin partition nor elsewhere.
-        Mesh.GetEffectivePermissions("Admin", "AcmeEditor").Should().Match(p => p == Permission.None);
-        Mesh.GetEffectivePermissions("MeshWeaver", "AcmeEditor").Should().Match(p => p == Permission.None);
+        Mesh.GetEffectivePermissions("Admin", "AdminBoss").Should().Match(p => p == Permission.All);
+        // Invitations live in the Admin partition — a platform admin manages them.
+        Mesh.GetEffectivePermissions("Admin/Invitation", "AdminBoss").Should().Match(p => p == Permission.All);
     }
 
     [Fact]
-    public void UnknownUser_IsNotGlobalAdmin()
-        => Mesh.IsGlobalAdmin("nobody").Should().Match(isAdmin => !isAdmin);
+    public void PlatformAdmin_HasNoStandingAccessToSpacesOrUsers()
+    {
+        // 🚨 The directive: an Admin/_Access grant gives NO standing access to spaces nor
+        // user partitions. Cross-partition data changes require explicit elevation.
+        Mesh.GetEffectivePermissions("ACME", "AdminBoss").Should().Match(p => p == Permission.None);
+        Mesh.GetEffectivePermissions("ACME/Project/Task", "AdminBoss").Should().Match(p => p == Permission.None);
+        Mesh.GetEffectivePermissions("someuser/Underwriting", "AdminBoss").Should().Match(p => p == Permission.None);
+    }
+
+    [Fact]
+    public void NonPlatformUser_IsNotGlobalAdmin()
+    {
+        Mesh.IsGlobalAdmin("AcmeEditor").Should().Match(isAdmin => !isAdmin);
+        Mesh.IsGlobalAdmin("nobody").Should().Match(isAdmin => !isAdmin);
+    }
 }
