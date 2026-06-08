@@ -1,7 +1,9 @@
 ﻿using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Data;
@@ -361,7 +363,7 @@ public record LayoutAreaHost : IDisposable
         EntityStore store)
         => RenderObservable(
             context,
-            Observable.FromAsync(ct => asyncGenerator.Invoke(this, context, ct))
+            FromViewBuilder(ct => asyncGenerator.Invoke(this, context, ct))
                 .SelectMany(observable => observable.Select(c => (object?)c)),
             store);
 
@@ -423,7 +425,7 @@ public record LayoutAreaHost : IDisposable
         RenderingContext context, IObservable<ViewDefinition> generator, EntityStore store)
         => RenderObservable(
             context,
-            generator.Select(vd => Observable.FromAsync(ct => vd.Invoke(this, context, ct)))
+            generator.Select(vd => FromViewBuilder(ct => vd.Invoke(this, context, ct)))
                 .Switch()
                 .Select(c => (object?)c),
             store);
@@ -436,7 +438,7 @@ public record LayoutAreaHost : IDisposable
         RenderingContext context, ViewDefinition generator, EntityStore store)
         => RenderObservable(
             context,
-            Observable.FromAsync(ct => generator.Invoke(this, context, ct)).Select(c => (object?)c),
+            FromViewBuilder(ct => generator.Invoke(this, context, ct)).Select(c => (object?)c),
             store);
 
     /// <summary>
@@ -701,7 +703,7 @@ public record LayoutAreaHost : IDisposable
         // Observable.FromAsync (no await in hub-reachable code), flatten to the inner
         // control stream, and feed UpdateArea on each emission.
         RegisterForDisposal(context.Parent?.Area ?? context.Area,
-            Observable.FromAsync(ct => asyncGenerator.Invoke(this, context, store, ct))
+            FromViewBuilder(ct => asyncGenerator.Invoke(this, context, store, ct))
                 .Switch()
                 .Subscribe(c => UpdateArea(context, c), FailRendering));
         return ret;
@@ -711,6 +713,25 @@ public record LayoutAreaHost : IDisposable
     {
         logger.LogWarning(ex, "Rendering failed");
     }
+
+    /// <summary>
+    /// Reactive bridge for a Task-returning view-builder (orchestration, NOT an I/O leaf) —
+    /// the replacement for <c>Observable.FromAsync</c> here. View generators must NOT run on an
+    /// <see cref="MeshWeaver.Mesh.Threading.IIoPool"/>: area renders nest (a parent render
+    /// subscribes child-area renders), so a shared pool would self-deadlock on a nested slot
+    /// acquire. This composes reactively instead — cold (the builder starts on Subscribe), with a
+    /// cancellation token that trips when the subscription is disposed (RegisterForDisposal).
+    /// </summary>
+    internal static IObservable<T> FromViewBuilder<T>(Func<CancellationToken, Task<T>> builder) =>
+        Observable.Create<T>(observer =>
+        {
+            var cts = new CancellationTokenSource();
+            var inner = builder(cts.Token).ToObservable().Subscribe(observer);
+            return new CompositeDisposable(inner, Disposable.Create(() =>
+            {
+                try { cts.Cancel(); } finally { cts.Dispose(); }
+            }));
+        });
 
     public void UpdateProgress(string area, ProgressControl progress)
         => Stream.Update(state => Stream.ApplyChanges(
@@ -723,7 +744,7 @@ public record LayoutAreaHost : IDisposable
         // Reactive: bridge the Task-producing ViewDefinition via Observable.FromAsync
         // (no await in hub-reachable code) and feed UpdateArea once it resolves.
         RegisterForDisposal(context.Parent?.Area ?? context.Area,
-            Observable.FromAsync(ct => generator.Invoke(this, context, ct))
+            FromViewBuilder(ct => generator.Invoke(this, context, ct))
                 .Subscribe(view => UpdateArea(context, view!), FailRendering));
         return ret;
     }
@@ -737,7 +758,7 @@ public record LayoutAreaHost : IDisposable
         // Switch() keeps only the latest definition's resolution in flight.
         RegisterForDisposal(context.Area,
             generator
-                .Select(vd => Observable.FromAsync(ct => vd.Invoke(this, context, ct)))
+                .Select(vd => FromViewBuilder(ct => vd.Invoke(this, context, ct)))
                 .Switch()
                 .Subscribe(view => UpdateArea(context, view!), FailRendering));
 

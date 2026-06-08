@@ -61,7 +61,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         return base.ConfigureHost(configuration)
             .AddData(data =>
                 data.AddSource(dataSource =>
-                    dataSource.WithType<TestSchemaData>(type => type.WithInitialData(_ => Task.FromResult(new TestSchemaData[]
+                    dataSource.WithType<TestSchemaData>(type => type.WithInitialData(_ => Observable.Return(new TestSchemaData[]
                         {
                             new TestSchemaData(
                                 RequiredText: "Test",
@@ -90,7 +90,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         return base.ConfigureClient(configuration)
             .AddData(data =>
                 data.AddSource(dataSource =>
-                    dataSource.WithType<TestSchemaData>(type => type.WithInitialData(_ => Task.FromResult(new TestSchemaData[]
+                    dataSource.WithType<TestSchemaData>(type => type.WithInitialData(_ => Observable.Return(new TestSchemaData[]
                         {
                             new TestSchemaData(
                                 RequiredText: "Test",

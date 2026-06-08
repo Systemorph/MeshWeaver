@@ -33,8 +33,10 @@ public delegate UiControl SettingsContentBuilder(
     LayoutAreaHost host, StackControl stack, MeshNode? node);
 
 /// <summary>
-/// Provider delegate that yields settings menu items via IAsyncEnumerable.
-/// Providers are evaluated during settings layout rendering.
+/// Provider delegate that yields settings menu items reactively. Returns
+/// <see cref="IObservable{T}"/> (never Task) so a provider that needs a live permission check
+/// (e.g. the global-admin tab) composes it reactively; a static provider just
+/// <c>Observable.Return</c>s its items.
 /// </summary>
-public delegate IAsyncEnumerable<SettingsMenuItemDefinition> SettingsMenuItemProvider(
+public delegate IObservable<IReadOnlyList<SettingsMenuItemDefinition>> SettingsMenuItemProvider(
     LayoutAreaHost host, RenderingContext context);

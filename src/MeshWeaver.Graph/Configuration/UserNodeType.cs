@@ -209,16 +209,16 @@ public static class UserNodeType
     /// </summary>
     private static MessageHubConfiguration AddGlobalAdminSettingsTab(this MessageHubConfiguration config)
         => config.AddSettingsMenuItems(
-            new SettingsMenuItemProvider(GetGlobalAdminTabAsync));
+            new SettingsMenuItemProvider(GetGlobalAdminTab));
 
-    private static async IAsyncEnumerable<SettingsMenuItemDefinition> GetGlobalAdminTabAsync(
+    private static IObservable<IReadOnlyList<SettingsMenuItemDefinition>> GetGlobalAdminTab(
         LayoutAreaHost host, RenderingContext ctx)
     {
-        // Check if the viewer is the node owner
+        IReadOnlyList<SettingsMenuItemDefinition> none = Array.Empty<SettingsMenuItemDefinition>();
+
+        // Check if the viewer is the node owner. Post-v10: per-user partition at root, so
+        // hubPath == userId. Strip the legacy "User/" prefix when present.
         var hubPath = host.Hub.Address.ToString();
-        // Post-v10: per-user partition at root, so hubPath == userId. Strip
-        // the legacy "User/" prefix when present so transitional addresses
-        // continue to resolve until all data is migrated.
         var nodeOwnerId = hubPath.StartsWith("User/", StringComparison.OrdinalIgnoreCase)
             ? hubPath["User/".Length..]
             : hubPath;
@@ -228,44 +228,9 @@ public static class UserNodeType
 
         if (string.IsNullOrEmpty(viewerId)
             || !string.Equals(viewerId, nodeOwnerId, StringComparison.OrdinalIgnoreCase))
-            yield break;
+            return Observable.Return(none);
 
-        // Check if the user has Admin permissions at root level. Bridge the IObservable to
-        // an IAsyncEnumerable via a Channel — no .ToTask(), no await on a hub round-trip.
-        // See Doc/Architecture/AsynchronousCalls.md.
-        var adminChannel = System.Threading.Channels.Channel.CreateBounded<bool>(
-            new System.Threading.Channels.BoundedChannelOptions(1) { FullMode = System.Threading.Channels.BoundedChannelFullMode.DropOldest });
-
-        // Canonical platform-admin check: admin on the Admin partition
-        // (hub.IsGlobalAdmin → Permission.All at scope "Admin"). Filter for the
-        // POSITIVE with a bounded wait — NOT FirstAsync, which captures the premature
-        // empty static seed emitted before the synced AccessAssignment query lands. A
-        // non-admin never emits a positive, so the timeout fires and the tab stays
-        // hidden. See Doc/Architecture/AccessControl.md.
-        using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5));
-        using var sub = host.Hub.IsGlobalAdmin(viewerId)
-            .Where(isAdmin => isAdmin)
-            .Take(1)
-            .Subscribe(
-                _ => { adminChannel.Writer.TryWrite(true); adminChannel.Writer.TryComplete(); },
-                _ => adminChannel.Writer.TryComplete(),
-                () => adminChannel.Writer.TryComplete());
-
-        var isGlobalAdmin = false;
-        try
-        {
-            await foreach (var ok in adminChannel.Reader.ReadAllAsync(cts.Token))
-            {
-                isGlobalAdmin = ok;
-                break;
-            }
-        }
-        catch (OperationCanceledException) { }
-
-        if (!isGlobalAdmin)
-            yield break;
-
-        yield return new SettingsMenuItemDefinition(
+        var tab = new SettingsMenuItemDefinition(
             Id: GlobalAdminTab,
             Label: "Global Administration",
             ContentBuilder: BuildGlobalAdminTab,
@@ -273,6 +238,19 @@ public static class UserNodeType
             Icon: Application.Styles.FluentIcons.Shield(),
             GroupIcon: Application.Styles.FluentIcons.Shield(),
             Order: 300);
+
+        // Canonical platform-admin check: admin on the Admin partition (hub.IsGlobalAdmin →
+        // Permission.All at scope "Admin"). Pure reactive — wait for the POSITIVE (filter true)
+        // with a bounded timeout, NOT the first emission (which can be the premature empty static
+        // seed before the synced AccessAssignment query lands). StartWith(none) renders the menu
+        // immediately; the tab appears when admin is confirmed. Timeout/non-admin → stays hidden.
+        return host.Hub.IsGlobalAdmin(viewerId)
+            .Where(isAdmin => isAdmin)
+            .Take(1)
+            .Select(_ => (IReadOnlyList<SettingsMenuItemDefinition>)new[] { tab })
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Catch<IReadOnlyList<SettingsMenuItemDefinition>, Exception>(_ => Observable.Return(none))
+            .StartWith(none);
     }
 
     private static UiControl BuildGlobalAdminTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
@@ -343,7 +321,7 @@ public static class UserNodeType
     {
         public string NodeType => UserNodeType.NodeType;
 
-        public Task HandleAsync(MeshNode createdNode, string? createdBy, CancellationToken ct)
+        public IObservable<System.Reactive.Unit> Handle(MeshNode createdNode, string? createdBy)
         {
             // Grant the user Admin role on their own User/{userId} scope by
             // creating the AccessAssignment node directly via the mesh service.
@@ -351,7 +329,7 @@ public static class UserNodeType
             // ride the standard data layer.
             var userId = createdNode.Id;
             if (string.IsNullOrEmpty(userId))
-                return Task.CompletedTask;
+                return Observable.Empty<System.Reactive.Unit>();
 
             // Post-v10: User nodes live at the root namespace, so the user's
             // self-scope path is just {userId}. Fall back to the explicit Id
@@ -374,12 +352,9 @@ public static class UserNodeType
                 },
             };
 
-            // Fire-and-forget Subscribe — actor model serialises the per-node
-            // hub's writes; we don't need to await before returning.
-            meshService.CreateNode(assignmentNode).Subscribe(
-                _ => { },
-                _ => { /* error logging happens at the data layer */ });
-            return Task.CompletedTask;
+            // Reactive: return the create observable; the caller subscribes (the actor model
+            // serialises the per-node hub's writes). Map to Unit for the handler contract.
+            return meshService.CreateNode(assignmentNode).Select(_ => System.Reactive.Unit.Default);
         }
     }
 }

@@ -49,7 +49,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
                 data.AddSource(dataSource =>
                     dataSource.WithType<WorkspaceTestData>(type =>
                         type.WithKey(instance => instance.Id)
-                            .WithInitialData(_ => Task.FromResult(WorkspaceTestData.TestData.AsEnumerable()))
+                            .WithInitialData(_ => Observable.Return(WorkspaceTestData.TestData.AsEnumerable()))
                     )
                 )
             );

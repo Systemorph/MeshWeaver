@@ -93,7 +93,15 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
     {
         var fullPath = Path.Combine(basePath, path.TrimStart('/'));
         if (!Directory.Exists(fullPath))
-            yield break;   // not-yet-created collection / folder — no entries
+        {
+            // The collection root not existing = a not-yet-created collection (brand-new Space):
+            // list empty so the first upload works. But a missing SUBPATH under an existing
+            // collection is a genuine not-found — surface it so callers (e.g. the content
+            // file→folder fallback in HandleContentPath) don't mistake it for an empty folder.
+            if (!Directory.Exists(basePath))
+                yield break;
+            throw new DirectoryNotFoundException($"Folder not found: {path}");
+        }
         foreach (var dirPath in Directory.EnumerateDirectories(fullPath))
         {
             ct.ThrowIfCancellationRequested();
@@ -111,7 +119,13 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
     {
         var fullPath = Path.Combine(basePath, path.TrimStart('/'));
         if (!Directory.Exists(fullPath))
-            yield break;   // not-yet-created collection / folder — no files
+        {
+            // See GetFolders: brand-new collection (root missing) → empty; a missing subpath under
+            // an existing collection is a genuine not-found and must surface, not look like empty.
+            if (!Directory.Exists(basePath))
+                yield break;
+            throw new DirectoryNotFoundException($"Folder not found: {path}");
+        }
         foreach (var filePath in Directory.EnumerateFiles(fullPath))
         {
             ct.ThrowIfCancellationRequested();

@@ -34,17 +34,13 @@ public static class GlobalSettingsLayoutArea
     {
         var tabId = host.Reference.Id?.ToString();
 
-        return Observable.FromAsync(async () =>
-        {
-            var items = await host.Hub.Configuration
-                .EvaluateGlobalSettingsMenuItemsAsync(host, ctx);
-
-            if (string.IsNullOrEmpty(tabId) && items.Count > 0)
-                tabId = items[0].Id;
-            tabId ??= DataSourcesTab;
-
-            return (UiControl?)BuildGlobalSettingsPage(host, tabId, items);
-        });
+        // Reactive menu evaluation — re-renders when a provider's live admin check resolves.
+        return host.Hub.Configuration.EvaluateGlobalSettingsMenuItems(host, ctx)
+            .Select(items =>
+            {
+                var selectedTab = string.IsNullOrEmpty(tabId) && items.Count > 0 ? items[0].Id : (tabId ?? DataSourcesTab);
+                return (UiControl?)BuildGlobalSettingsPage(host, selectedTab, items);
+            });
     }
 
     private static UiControl BuildGlobalSettingsPage(

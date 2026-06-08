@@ -146,14 +146,14 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
                 data.AddSource(dataSource =>
                     dataSource.WithType<SerializationTestData>(type =>
                         type.WithKey(instance => instance.Name)
-                            .WithInitialData(_ => Task.FromResult(new[] { SerializationTestData.CreateSample() }.AsEnumerable()))
+                            .WithInitialData(_ => Observable.Return(new[] { SerializationTestData.CreateSample() }.AsEnumerable()))
                     )
                     .WithType<NestedData>(type =>
                         type.WithKey(instance => instance.Value)
                     )
                     .WithType<PolymorphicContainer>(type =>
                         type.WithKey(instance => instance.Id)
-                            .WithInitialData(_ => Task.FromResult(new[] { PolymorphicContainer.CreateSample() }.AsEnumerable()))
+                            .WithInitialData(_ => Observable.Return(new[] { PolymorphicContainer.CreateSample() }.AsEnumerable()))
                     )
                     .WithType<BaseShape>(type =>
                         type.WithKey(instance => instance.Name)

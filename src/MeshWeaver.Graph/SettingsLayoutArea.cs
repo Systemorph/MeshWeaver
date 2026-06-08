@@ -46,8 +46,7 @@ public static class SettingsLayoutArea
         var permsStream = host.Hub.GetEffectivePermissions(hubPath);
 
         return ownNode.CombineLatest(permsStream, (node, perms) => (Node: node, Perms: perms))
-            .SelectMany(t => Observable.FromAsync(() =>
-                    host.Hub.Configuration.EvaluateSettingsMenuItemsAsync(host, ctx, t.Perms))
+            .SelectMany(t => host.Hub.Configuration.EvaluateSettingsMenuItems(host, ctx, t.Perms)
                 .Select(items =>
                 {
                     var canEdit = t.Perms.HasFlag(Permission.Update);

@@ -168,7 +168,7 @@ public static class LayoutDefinitionExtensions
     ) where T : UiControl? =>
         layout.WithNamedRenderer(area, (a, c, s) =>
                 a.RenderAreaObservable(c,
-                    generator.Select(vd => Observable.FromAsync(ct => vd.Invoke(a, c, ct)).Select(x => (object?)x)).Switch(),
+                    generator.Select(vd => LayoutAreaHost.FromViewBuilder(ct => vd.Invoke(a, c, ct)).Select(x => (object?)x)).Switch(),
                     s))
             .WithAreaDefinition(layout.CreateLayoutAreaDefinition(area, areaDefinition, null))
         ;

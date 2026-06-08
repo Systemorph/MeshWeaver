@@ -1,3 +1,4 @@
+using System.Reactive;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 
@@ -230,13 +231,13 @@ public interface INodePostCreationHandler
     string NodeType { get; }
 
     /// <summary>
-    /// Executes after the node has been saved to persistence.
-    /// Failures are logged but do not prevent the creation response.
+    /// Executes after the node has been saved to persistence. Reactive — returns
+    /// <see cref="IObservable{T}"/> (never Task); compose any mesh writes with the reactive
+    /// primitives. Failures are logged but do not prevent the creation response.
     /// </summary>
     /// <param name="createdNode">The persisted node</param>
     /// <param name="createdBy">The ObjectId of the creating user (may be null)</param>
-    /// <param name="ct">Cancellation token</param>
-    Task HandleAsync(MeshNode createdNode, string? createdBy, CancellationToken ct);
+    IObservable<Unit> Handle(MeshNode createdNode, string? createdBy);
 
     /// <summary>
     /// Returns additional nodes that should be created as side effects of the primary node creation.

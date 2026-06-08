@@ -6,6 +6,7 @@ using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -1224,13 +1225,13 @@ public static class MeshExtensions
         if (handlers.Count == 0)
             return Observable.Empty<System.Reactive.Unit>();
 
-        // For each matching handler: invoke HandleAsync (logged-and-swallowed), then
+        // For each matching handler: invoke Handle (reactive, logged-and-swallowed), then
         // persist any additional nodes it returns. Sequentially via Concat to preserve
         // the original order's side-effect dependencies.
         return handlers
             .Select(handler =>
             {
-                var handleObs = Observable.FromAsync(token => handler.HandleAsync(node, createdBy, token))
+                var handleObs = handler.Handle(node, createdBy)
                     .Catch<System.Reactive.Unit, Exception>(ex =>
                     {
                         logger.LogWarning(ex,

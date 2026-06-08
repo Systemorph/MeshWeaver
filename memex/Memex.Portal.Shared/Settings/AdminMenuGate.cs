@@ -43,39 +43,24 @@ internal static class AdminMenuGate
     // after which a non-admin (no positive ever emitted) resolves to "not admin".
     private static readonly TimeSpan GrantWait = TimeSpan.FromSeconds(5);
 
-    public static async Task<bool> IsPlatformAdminAsync(LayoutAreaHost host)
+    /// <summary>
+    /// Pure-reactive platform-admin check: emits <c>false</c> immediately (so a menu renders without
+    /// the gated tab), then <c>true</c> if the viewer's <c>Admin</c>-scope grant surfaces within
+    /// <see cref="GrantWait"/>. Waits for the POSITIVE (filter true), NOT the first emission (which can
+    /// be the premature empty seed). No Task, no await, no Channel bridge.
+    /// </summary>
+    public static IObservable<bool> IsPlatformAdmin(LayoutAreaHost host)
     {
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var viewerId = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
         if (string.IsNullOrEmpty(viewerId))
-            return false;
+            return Observable.Return(false);
 
-        var channel = Channel.CreateBounded<bool>(
-            new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropOldest });
-
-        // Only a POSITIVE (root All) completes the channel early — premature empty/None emissions
-        // during the synced-query cold start are filtered out, so we never decide "not admin" off a
-        // not-yet-loaded snapshot.
-        using var sub = host.Hub.IsGlobalAdmin(viewerId)
+        return host.Hub.IsGlobalAdmin(viewerId)
             .Where(isAdmin => isAdmin)
             .Take(1)
-            .Subscribe(
-                _ => { channel.Writer.TryWrite(true); channel.Writer.TryComplete(); },
-                _ => channel.Writer.TryComplete(),
-                () => channel.Writer.TryComplete());
-
-        // Bounded wait: an admin's grant arrives within GrantWait; a non-admin never emits a positive,
-        // so the timeout fires and we fall through to the safe default below.
-        using var cts = new CancellationTokenSource(GrantWait);
-        try
-        {
-            await foreach (var isAdmin in channel.Reader.ReadAllAsync(cts.Token))
-                return isAdmin;
-        }
-        catch (OperationCanceledException)
-        {
-            // No positive within the window → treat as not root admin.
-        }
-        return false;
+            .Timeout(GrantWait)
+            .Catch<bool, Exception>(_ => Observable.Return(false))
+            .StartWith(false);
     }
 }

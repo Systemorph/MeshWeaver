@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
@@ -159,7 +160,9 @@ public class OrleansRoutingService : IRoutingService, IDisposable
 
         var grain = grainFactory.GetGrain<IRoutingGrain>("default");
 
-        return Observable.FromAsync(() => grain.RouteMessage(delivery))
+        // The grain RPC runs on the Orleans scheduler — bridge its Task reactively (Defer keeps
+        // it cold so each RetryWhen re-subscribe re-invokes RouteMessage), never Observable.FromAsync.
+        return Observable.Defer(() => grain.RouteMessage(delivery).ToObservable())
             .RetryWhen(errors => errors
                 .Select((ex, i) => (Exception: ex, Attempt: i))
                 .SelectMany(t =>

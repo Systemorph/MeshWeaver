@@ -28,19 +28,18 @@ public record TypeSourceWithType<T>(IWorkspace Workspace, object DataSource)
         };
 
     public TypeSourceWithType<T> WithInitialData(
-        Func<CancellationToken, Task<IEnumerable<T>>> initialData
-    ) => WithInitialData(async (_, c) => (await initialData.Invoke(c)).Cast<object>());
+        Func<IObservable<IEnumerable<T>>> initialData
+    ) => WithInitialData(_ => initialData().Select(x => x.Cast<object>()));
 
     public TypeSourceWithType<T> WithInitialData(
         Func<
             WorkspaceReference<InstanceCollection>,
-            CancellationToken,
-            Task<IEnumerable<T>>
+            IObservable<IEnumerable<T>>
         > initialData
-    ) => WithInitialData(async (r, c) => (await initialData.Invoke(r, c)).Cast<object>());
+    ) => WithInitialData(r => initialData(r).Select(x => x.Cast<object>()));
 
     public TypeSourceWithType<T> WithInitialData(IEnumerable<T> initialData) =>
-        WithInitialData((_, _) => Task.FromResult(initialData.Cast<object>()));
+        WithInitialData(_ => Observable.Return(initialData.Cast<object>()));
 
 }
 
