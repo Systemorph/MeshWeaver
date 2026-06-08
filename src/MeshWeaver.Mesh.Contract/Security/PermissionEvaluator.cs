@@ -95,31 +95,6 @@ internal static class PermissionEvaluator
         if (userId == MeshNodeCacheIdentityAddress)
             return Observable.Return(Permission.Read);
 
-        // 🚨 Global-admin short-circuit. Canonically a "global admin" is an admin on
-        // the ADMIN PARTITION — Permission.All at scope "Admin" (an AccessAssignment
-        // in Admin/_Access). Such a user is a platform superuser with All on EVERY
-        // path, exactly like WellKnownUsers.System. We OR the Admin-scope grant into
-        // the per-path result so ONE source of truth (the Admin partition) drives
-        // both the platform gates (hub.IsGlobalAdmin) AND cross-partition power.
-        // No recursion: the probe uses EvaluateScopedPermissions (override-free),
-        // never GetEffectivePermissions. See Doc/Architecture/AccessControl.md.
-        var basePerms = EvaluateScopedPermissions(hub, nodePath, userId);
-        if (string.Equals(nodePath, AdminScope, StringComparison.Ordinal))
-            return basePerms;   // already the Admin scope — the grant is in-hierarchy
-        return EvaluateScopedPermissions(hub, AdminScope, userId)
-            .Select(p => p.HasFlag(Permission.All))
-            .CombineLatest(basePerms, (isGlobalAdmin, perm) => isGlobalAdmin ? Permission.All : perm)
-            .DistinctUntilChanged();
-    }
-
-    /// <summary>
-    /// Per-path RLS evaluation WITHOUT the global-admin override — the building block
-    /// for both <see cref="GetEffectivePermissions(IMessageHub,string,string)"/> and
-    /// the Admin-scope probe that backs it. Override-free so the probe (which
-    /// evaluates scope "Admin") can never recurse.
-    /// </summary>
-    private static IObservable<Permission> EvaluateScopedPermissions(IMessageHub hub, string nodePath, string userId)
-    {
         var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Mesh.Security.PermissionEvaluator");
@@ -192,7 +167,7 @@ internal static class PermissionEvaluator
                         (builtIn, custom) => builtIn | custom);
 
                 IObservable<Permission> withPublic = (userId != WellKnownUsers.Anonymous && userId != WellKnownUsers.Public)
-                    ? rolePerms.Zip(EvaluateScopedPermissions(hub, nodePath, WellKnownUsers.Public),
+                    ? rolePerms.Zip(GetEffectivePermissions(hub, nodePath, WellKnownUsers.Public),
                         (own, pub) => own | pub)
                     : rolePerms;
 
