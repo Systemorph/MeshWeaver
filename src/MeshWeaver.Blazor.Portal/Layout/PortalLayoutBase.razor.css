@@ -31,7 +31,12 @@
         height: 100vh;
         width: 100vw;
         display: grid;
-        grid-template-columns: auto 1fr;
+        /* minmax(0, 1fr): the main column must be allowed to SHRINK below its
+           min-content size. A bare 1fr keeps a min-content floor, so the
+           splitter's pixel-sized panes (or wide content) force the whole grid
+           wider than the viewport and push the `auto` nav column off the left
+           edge — the "broken left" after toggling the side panel. */
+        grid-template-columns: auto minmax(0, 1fr);
         grid-template-rows: auto auto 1fr;
         grid-template-areas:
             "icon head"
@@ -40,13 +45,14 @@
         background-color: var(--fill-color);
         color: var(--neutral-foreground-rest);
         transition: grid-template-columns 0.3s ease;
+        overflow: hidden;
     }
 
     /* When side panel is visible on desktop, main area contains the splitter */
     ::deep.layout.panel-visible.panel-position-right,
     ::deep.layout.panel-visible.panel-position-left,
     ::deep.layout.panel-visible.panel-position-bottom {
-        grid-template-columns: auto 1fr;
+        grid-template-columns: auto minmax(0, 1fr);
         grid-template-areas:
             "icon head"
             "nav messagebar"
@@ -249,7 +255,7 @@
         height: 100vh;
         width: 100vw;
         display: grid;
-        grid-template-columns: auto 1fr;
+        grid-template-columns: auto minmax(0, 1fr);
         grid-template-rows: auto auto auto 1fr;
         grid-template-areas:
             "icon head"
@@ -258,6 +264,7 @@
             "main main";
         background-color: var(--fill-color);
         color: var(--neutral-foreground-rest);
+        overflow: hidden;
     }
 
     /* Mobile bottom position */

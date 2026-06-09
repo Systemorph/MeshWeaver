@@ -11,6 +11,7 @@ using MeshWeaver.Data.Completion;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reactive;
@@ -335,7 +336,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         // saved draft + selection. Debounced draft auto-save runs in composer mode
         // only (a real thread never carries a template draft).
         var accessSvc = Hub.ServiceProvider.GetService<AccessService>();
-        _userHome = accessSvc?.Context?.ObjectId ?? accessSvc?.CircuitContext?.ObjectId;
+        _userHome = ResolveUserHome(accessSvc);
         if (!string.IsNullOrEmpty(_userHome))
             _templatePath = MeshWeaver.AI.ChatInputNodeType.PathFor(_userHome);
 
@@ -414,6 +415,28 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     }
 
     // ─── Per-user chat template (_ThreadTemplate) ─────────────────────────────
+
+    /// <summary>
+    /// The signed-in user's partition — the main node that owns
+    /// <c>{user}/_Memex/ChatInput</c> and the namespace a submitted thread is created
+    /// under. Prefer <see cref="AccessService.CircuitContext"/> (the durable per-circuit
+    /// identity); <see cref="AccessService.Context"/> (AsyncLocal) is only a fallback and
+    /// is filtered for a leaked <c>system-security</c> / hub principal. Trusting
+    /// <c>Context</c> first pointed the composer at <c>system-security/_Memex/ChatInput</c>
+    /// and would have created threads under the wrong partition.
+    /// </summary>
+    private static string? ResolveUserHome(AccessService? accessSvc)
+    {
+        if (accessSvc is null) return null;
+        foreach (var candidate in new[] { accessSvc.CircuitContext?.ObjectId, accessSvc.Context?.ObjectId })
+        {
+            if (!string.IsNullOrEmpty(candidate)
+                && candidate != WellKnownUsers.System
+                && !AccessService.LooksLikeHubPrincipal(candidate))
+                return candidate;
+        }
+        return null;
+    }
 
     /// <summary>
     /// One-shot read of the per-user chat template node. Restores the saved

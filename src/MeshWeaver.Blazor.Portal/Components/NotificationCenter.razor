@@ -4,7 +4,7 @@
 @implements IDisposable
 @inject IDialogService DialogService
 
-<FluentButton BackgroundColor="transparent" OnClick="OpenNotificationCenterAsync" Title="Notifications">
+<FluentButton BackgroundColor="transparent" OnClick="ToggleNotificationCenterAsync" Title="Notifications">
     @if (unreadCount > 0)
     {
         <FluentCounterBadge Count="@unreadCount"
@@ -56,17 +56,41 @@
     private RenderFragment NotificationIcon() =>
         @<FluentIcon Value="@(new Size20.Alert())" Color="Color.Neutral" Title="Notifications" />;
 
-    private async Task OpenNotificationCenterAsync()
+    private async Task ToggleNotificationCenterAsync()
     {
-        Dialog = await DialogService.ShowPanelAsync<NotificationCenterPanel>(new DialogParameters<GlobalState>()
+        // Toggle: a second click on the bell while the panel is open closes it
+        // (previously each click opened another panel — the "stays open" bug).
+        if (Dialog is not null)
+        {
+            var open = Dialog;
+            Dialog = null;
+            await open.CloseAsync();
+            return;
+        }
+
+        // Opening acknowledges the notifications — clear the badge immediately.
+        // The panel persists IsRead durably; this is the optimistic UX so the
+        // count doesn't linger while the writes propagate.
+        if (unreadCount != 0)
+        {
+            unreadCount = 0;
+            StateHasChanged();
+        }
+
+        var dialog = await DialogService.ShowPanelAsync<NotificationCenterPanel>(new DialogParameters<GlobalState>()
         {
             Alignment = HorizontalAlignment.Right,
             Title = "Notifications",
+            Width = "min(420px, 100vw)",
             PrimaryAction = null,
             SecondaryAction = null,
             ShowDismiss = true
         });
-        await Dialog.Result;
+        Dialog = dialog;
+        await dialog.Result;
+        // Cleared either by the toggle-close branch above or by an explicit dismiss.
+        if (ReferenceEquals(Dialog, dialog))
+            Dialog = null;
     }
 
     public void Dispose() => subscription?.Dispose();

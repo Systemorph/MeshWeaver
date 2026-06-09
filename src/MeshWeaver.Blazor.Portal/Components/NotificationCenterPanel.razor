@@ -75,8 +75,13 @@
     .notification-panel {
         display: flex;
         flex-direction: column;
-        min-width: 360px;
-        max-width: 480px;
+        /* Fill the dialog panel; never force it wider than the viewport (the
+           old min-width:360 overflowed the panel on a narrow window → the cards
+           and "Mark all read" link were clipped on the right). */
+        width: 100%;
+        max-width: 100%;
+        box-sizing: border-box;
+        overflow-x: hidden;
         max-height: 70vh;
     }
     .notification-empty {
@@ -98,8 +103,13 @@
         all: unset;
         cursor: pointer;
         display: grid;
-        grid-template-columns: 28px 1fr auto;
+        /* minmax(0, 1fr) lets the text column SHRINK below its content size —
+           a bare 1fr keeps min-content width and pushes the card past the panel
+           edge (the right-side clipping). */
+        grid-template-columns: 28px minmax(0, 1fr) auto;
         gap: 12px;
+        box-sizing: border-box;
+        width: 100%;
         align-items: start;
         padding: 10px 12px;
         border: 1px solid var(--neutral-stroke-rest);
@@ -140,6 +150,7 @@
         font-size: 0.9rem;
         line-height: 1.25;
         margin-bottom: 2px;
+        overflow-wrap: anywhere;
     }
     .notification-message {
         font-size: 0.82rem;
@@ -215,10 +226,25 @@
 
     private void MarkAllRead()
     {
+        var updated = new List<MeshNode>(notifications.Count);
+        var changed = false;
         foreach (var n in notifications)
         {
             if (n.Content is Notification notif && !notif.IsRead)
-                MarkRead(n, notif);
+            {
+                MarkRead(n, notif);                                   // durable cross-hub write
+                updated.Add(n with { Content = notif with { IsRead = true } }); // optimistic
+                changed = true;
+            }
+            else
+            {
+                updated.Add(n);
+            }
+        }
+        if (changed)
+        {
+            notifications = updated;
+            InvokeAsync(StateHasChanged);
         }
     }
 

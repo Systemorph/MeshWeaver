@@ -2,6 +2,7 @@ using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.Blazor.Portal.SidePanel;
@@ -21,6 +22,8 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
     [Inject] private SidePanelStateService SidePanelState { get; set; } = null!;
     [Inject] private INavigationService NavigationService { get; set; } = null!;
     [Inject] private AccessService AccessService { get; set; } = null!;
+    [Inject] private IMeshNodeStreamCache StreamCache { get; set; } = null!;
+    [Inject] private IMessageHub Hub { get; set; } = null!;
 
     [Parameter] public EventCallback OnCloseRequested { get; set; }
 
@@ -97,10 +100,31 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
     /// </summary>
     private LayoutAreaControl? GetChatInputLayoutArea()
     {
-        var userHome = AccessService.Context?.ObjectId ?? AccessService.CircuitContext?.ObjectId;
+        var userHome = ResolveUserHome();
         return string.IsNullOrEmpty(userHome)
             ? null
             : new LayoutAreaControl(ChatInputNodeType.PathFor(userHome), new LayoutAreaReference(string.Empty));
+    }
+
+    /// <summary>
+    /// The signed-in user's partition — the main node that owns
+    /// <c>{user}/_Memex/ChatInput</c>. Prefer <see cref="AccessService.CircuitContext"/>
+    /// (the durable per-circuit identity); <see cref="AccessService.Context"/>
+    /// (AsyncLocal) is only a fallback and is filtered for a leaked
+    /// <c>system-security</c> / hub principal. Trusting <c>Context</c> first pointed
+    /// the composer at a non-existent <c>system-security/_Memex/ChatInput</c>, so the
+    /// "+" new-chat rendered nothing — the "+ not working" bug.
+    /// </summary>
+    private string? ResolveUserHome()
+    {
+        foreach (var candidate in new[] { AccessService.CircuitContext?.ObjectId, AccessService.Context?.ObjectId })
+        {
+            if (!string.IsNullOrEmpty(candidate)
+                && candidate != WellKnownUsers.System
+                && !AccessService.LooksLikeHubPrincipal(candidate))
+                return candidate;
+        }
+        return null;
     }
 
     private string SidePanelTitle => selectedThreadName ?? "New Chat";
@@ -110,6 +134,25 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
         selectedThreadPath = null;
         selectedThreadName = null;
         SidePanelState.SetContentPath(null);
+
+        // Fresh empty chat: clear the in-progress draft (message text + attachments)
+        // on the per-user ChatInput node but KEEP the harness/agent/model selection —
+        // "copy the thread input from _Memex except content". No thread is created
+        // here; the thread is created on submit. The composer rebinds to the cleared
+        // content via its live stream.
+        var userHome = ResolveUserHome();
+        if (!string.IsNullOrEmpty(userHome))
+        {
+            StreamCache.Update(ChatInputNodeType.PathFor(userHome), n =>
+            {
+                if (n.Content is not ChatInput ci) return n;
+                if (string.IsNullOrEmpty(ci.MessageContent)
+                    && (ci.Attachments is null || ci.Attachments.Count == 0))
+                    return n;
+                return n with { Content = ci with { MessageContent = null, Attachments = null } };
+            }, Hub.JsonSerializerOptions).Subscribe(_ => { }, _ => { });
+        }
+
         StateHasChanged();
     }
 
