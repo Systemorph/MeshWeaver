@@ -44,7 +44,19 @@ public class PostgreSqlFixture : IAsyncLifetime
         await _container.StartAsync();
         ConnectionString = _container.GetConnectionString();
 
-        var dataSourceBuilder = new NpgsqlDataSourceBuilder(ConnectionString);
+        // 🚨 Cap the SHARED base pool. Left at the Npgsql default (MaxPoolSize=100) it can
+        // hoard the container's entire max_connections=100 budget and hold those connections
+        // open for the default 300 s idle lifetime — leaving NOTHING for the per-schema pools
+        // (MaxPoolSize=1 each), of which a fan-out test activates ~30 at once. base(100)+30 > 100
+        // → "53300: sorry, too many clients already". Sequential tests gated to
+        // MaxReadConcurrency=16 reads never need a big base pool. Cap it well below the budget
+        // and prune idle connections fast so they RETURN to the server promptly between tests.
+        var csb = new NpgsqlConnectionStringBuilder(ConnectionString)
+        {
+            MaxPoolSize = 20,
+            ConnectionIdleLifetime = 15,
+        };
+        var dataSourceBuilder = new NpgsqlDataSourceBuilder(csb.ConnectionString);
         dataSourceBuilder.UseVector();
         DataSource = dataSourceBuilder.Build();
 
