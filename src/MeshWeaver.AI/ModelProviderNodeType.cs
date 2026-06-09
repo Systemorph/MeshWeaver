@@ -1,4 +1,5 @@
 using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
@@ -104,6 +105,15 @@ public static class ModelProviderNodeType
         builder.ConfigureServices(services =>
         {
             services.TryAddSingleton<BuiltInLanguageModelProvider>();
+            // Always generate a default (empty) {user}/_Provider/_Selection at User
+            // onboarding so the chat picker's selection read RESOLVES instead of
+            // generating a routing NotFound the GUI re-issues on a loop — the
+            // resubscribe-storm that starved the circuit until unrelated
+            // SubscribeRequests never completed (sglauser deadlock, 2026-06-09; same
+            // class as the 2026-06-08 storm). Empty selection == default catalog
+            // (root + context + nodeType), the existing behaviour. Mirrors
+            // ChatInputSeedHandler / the _Memex/ChatInput seed.
+            services.AddSingleton<INodePostCreationHandler>(_ => new ModelProviderSelectionSeedHandler());
             if (!dbSynced)
                 services.AddSingleton<IPartitionStorageProvider>(sp =>
                     new StaticNodePartitionStorageProvider(
@@ -148,4 +158,35 @@ public static class ModelProviderNodeType
             .AddMeshDataSource(source => source
                 .WithContentType<ModelProviderSelection>())
     };
+
+    /// <summary>
+    /// Seeds the per-user default <c>{user}/_Provider/_Selection</c> node (an empty
+    /// <see cref="ModelProviderSelection"/>) when a <c>User</c> partition is created.
+    /// Returned from <see cref="GetAdditionalNodes"/> so it persists directly alongside
+    /// the user (no hub round-trip) — the "always generate the default state" step that
+    /// keeps the chat picker's selection read from ever hitting a routing NotFound,
+    /// whose GUI-driven re-issue loop starved the circuit and hung unrelated
+    /// SubscribeRequests (the sglauser deadlock). Mirrors <c>ChatInputSeedHandler</c>.
+    /// </summary>
+    private sealed class ModelProviderSelectionSeedHandler : INodePostCreationHandler
+    {
+        public string NodeType => UserNodeType.NodeType; // "User"
+
+        public IObservable<System.Reactive.Unit> Handle(MeshNode createdNode, string? createdBy)
+            => System.Reactive.Linq.Observable.Empty<System.Reactive.Unit>();
+
+        public IEnumerable<MeshNode> GetAdditionalNodes(MeshNode createdNode)
+        {
+            var userPath = !string.IsNullOrEmpty(createdNode.Path) ? createdNode.Path : createdNode.Id;
+            if (string.IsNullOrEmpty(userPath))
+                yield break;
+
+            yield return new MeshNode(SelectionNodeId, $"{userPath}/{RootNamespace}")
+            {
+                NodeType = SelectionNodeType,
+                Name = "Model Provider Selection",
+                Content = new ModelProviderSelection(),
+            };
+        }
+    }
 }
