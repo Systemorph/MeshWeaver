@@ -954,6 +954,6 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // NodeTypeToSuffix is the canonical registry of "this is a NodeType
         // name, not a partition name". If the first segment is in here, the
         // path was never going to resolve as a partition path.
-        return PartitionDefinition.NodeTypeToSuffix.ContainsKey(firstSegment);
+        return PartitionDefinition.IsSatelliteNodeType(firstSegment);
     }
 }

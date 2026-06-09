@@ -65,7 +65,7 @@ internal sealed class IncludedPartitionStaticProvider(
                     DataSource = "default",
                     Schema = schema,
                     Table = "mesh_nodes",
-                    TableMappings = PartitionDefinition.StandardTableMappings,
+                    TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
                     Versioned = true,
                     Description = $"Sample data partition '{inc.Name}'",
                 }

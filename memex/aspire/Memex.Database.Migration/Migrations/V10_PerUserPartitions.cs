@@ -167,7 +167,7 @@ public sealed class V10_PerUserPartitions : IMigration
         await PostgreSqlSchemaInitializer.InitializeWithVersionsSchemaAsync(
             ctx.DataSource, schemaDs, versionsDs, schemaOpts, versionsSchemaName);
         await PostgreSqlSchemaInitializer.CreateSatelliteTablesAsync(
-            schemaDs, schemaOpts, MeshWeaver.Mesh.PartitionDefinition.StandardTableMappings.Values);
+            schemaDs, schemaOpts, MeshWeaver.Mesh.PartitionDefinition.DefaultSegmentTableMappings().Values);
 
         // 3. Move rows for every satellite table. `path` is GENERATED — recomputes from
         //    the rewritten namespace. Use `information_schema.columns` to compute the

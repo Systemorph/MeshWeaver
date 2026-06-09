@@ -44,13 +44,15 @@ internal class DefaultPartitionProvider : IStaticNodeProvider
     public IEnumerable<MeshNode> GetStaticNodes()
     {
         yield return CreatePartition("Admin", "admin", "System administration",
-            tableMappings: PartitionDefinition.StandardTableMappings);
+            tableMappings: PartitionDefinition.DefaultSegmentTableMappings(),
+            nodeTypeTableMappings: PartitionDefinition.DefaultNodeTypeTableMappings());
 
         yield return CreatePartition("Auth", "auth",
             "Auth lookup mirror: User / Group / Role / VUser / ApiToken / Space rows mirrored "
                 + "from every source partition by the V27 trigger. Trigger-populated only — "
                 + "application code never writes here.",
-            tableMappings: PartitionDefinition.StandardTableMappings);
+            tableMappings: PartitionDefinition.DefaultSegmentTableMappings(),
+            nodeTypeTableMappings: PartitionDefinition.DefaultNodeTypeTableMappings());
 
         // Global API-token validation index. ApiTokenService writes one ApiTokenIndex node per
         // token at ApiToken/{hashPrefix} (under the system identity) that maps an incoming bearer
@@ -62,7 +64,8 @@ internal class DefaultPartitionProvider : IStaticNodeProvider
         yield return CreatePartition("ApiToken", "apitoken",
             "API token validation index — ApiToken/{hashPrefix} ApiTokenIndex nodes mapping a "
                 + "bearer token to its user-scoped token node.",
-            tableMappings: PartitionDefinition.StandardTableMappings);
+            tableMappings: PartitionDefinition.DefaultSegmentTableMappings(),
+            nodeTypeTableMappings: PartitionDefinition.DefaultNodeTypeTableMappings());
 
         // Global access-grant scope. A `_Access`-namespace AccessAssignment with MainNode=""
         // is a ROOT-SCOPE grant that applies across every partition (platform-admin / global
@@ -101,6 +104,7 @@ internal class DefaultPartitionProvider : IStaticNodeProvider
     private static MeshNode CreatePartition(
         string id, string schema, string description,
         Dictionary<string, string>? tableMappings,
+        Dictionary<string, string>? nodeTypeTableMappings = null,
         bool versioned = true) =>
         new(id, PartitionNodeType.Namespace)
         {
@@ -114,6 +118,7 @@ internal class DefaultPartitionProvider : IStaticNodeProvider
                 Schema = schema,
                 Table = "mesh_nodes",
                 TableMappings = tableMappings,
+                NodeTypeTableMappings = nodeTypeTableMappings,
                 Versioned = versioned,
                 Description = description,
             }

@@ -84,7 +84,7 @@ public sealed class PartitionStorageRouter : IDisposable
                 DataSource = provider.Name,
                 Schema = firstSegment.ToLowerInvariant(),
                 Table = "mesh_nodes",
-                TableMappings = PartitionDefinition.StandardTableMappings,
+                TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
                 Versioned = false,
             };
             return Observable.Return<Address?>(SpawnOrReuse(path, provider, def));

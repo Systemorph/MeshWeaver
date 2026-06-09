@@ -39,7 +39,7 @@ public static class SchemaInitialization
         // Public schema: tables, indexes, triggers + satellite tables + partition_access proc.
         await PostgreSqlSchemaInitializer.InitializeAsync(dataSource, options);
 
-        var satelliteTableNames = PartitionDefinition.StandardTableMappings.Values;
+        var satelliteTableNames = PartitionDefinition.DefaultSegmentTableMappings().Values;
         await PostgreSqlSchemaInitializer.CreateSatelliteTablesAsync(
             dataSource, options, satelliteTableNames);
 

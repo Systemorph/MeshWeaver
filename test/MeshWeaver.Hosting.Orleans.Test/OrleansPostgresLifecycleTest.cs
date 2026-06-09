@@ -84,7 +84,7 @@ public class OrleansPostgresLifecycleTest(ITestOutputHelper output)
                 DataSource = "default",
                 Schema = ns,
                 Table = "mesh_nodes",
-                TableMappings = PartitionDefinition.StandardTableMappings,
+                TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
                 Versioned = true,
             },
         }).Timeout(30.Seconds()).FirstAsync().ToTask(ct);

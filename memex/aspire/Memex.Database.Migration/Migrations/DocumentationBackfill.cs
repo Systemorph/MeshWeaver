@@ -51,7 +51,7 @@ public static class DocumentationBackfill
 
         await PostgreSqlSchemaInitializer.InitializeMeshTablesAsync(ds, schemaOptions);
         await PostgreSqlSchemaInitializer.CreateSatelliteTablesAsync(
-            ds, schemaOptions, PartitionDefinition.StandardTableMappings.Values);
+            ds, schemaOptions, PartitionDefinition.DefaultSegmentTableMappings().Values);
 
         await using (var bk = ds.CreateCommand("""
             CREATE TABLE IF NOT EXISTS documentation_index (
