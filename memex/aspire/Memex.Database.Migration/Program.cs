@@ -140,6 +140,7 @@ var migrations = new IMigration[]
     new V31_UnifyUserMirrorIntoAuthAndRelocateContent(),
     new V32_RepairAuthMirrorTriggerAndBackfill(),
     new V33_SeedChatInputForExistingUsers(),
+    new V34_TypeOrphanPartitionRootsAsSpace(),
 };
 
 var ctx = new MigrationContext(dataSource, connectionString, options, logger, initResult.IsFreshDb);
