@@ -31,6 +31,13 @@ on:
 env:
   NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
 
+# publish-unit-test-result-action runs per shard AND in the collector — both need
+# checks: write to create check-runs and pull-requests: write to comment.
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
 jobs:
   # ───────────────────────────── BUILD ─────────────────────────────
   # Compile the whole solution exactly once and package the compiled output
@@ -248,6 +255,54 @@ jobs:
           collected-logs/
         compression-level: 9
         retention-days: 15
+    # ── Per-shard surfacing: publish THIS shard's results as soon as it
+    #    finishes, so you don't wait for the slowest sibling + the collector to
+    #    see shard 0's outcome. The collect-results job re-consolidates all
+    #    shards into one check at the end.
+    - name: Summarize test failures (this shard)
+      if: always()
+      run: |
+        echo "### Failed tests — shard ${{ matrix.shard }}" >> "$GITHUB_STEP_SUMMARY"
+        any=0
+        for trx in $(find test -name '*.trx' 2>/dev/null | sort); do
+          fails=$(grep -oE '<UnitTestResult[^>]*outcome="Failed"[^>]*>' "$trx" \
+                  | grep -oE 'testName="[^"]*"' \
+                  | sed -E 's/testName="([^"]*)"/\1/' | sort -u)
+          if [ -n "$fails" ]; then
+            any=1
+            while IFS= read -r t; do
+              [ -z "$t" ] && continue
+              echo "::error title=Test failed (shard ${{ matrix.shard }})::$t"
+              echo "- \`$t\`" >> "$GITHUB_STEP_SUMMARY"
+            done <<< "$fails"
+          fi
+        done
+        if [ "$any" = "0" ]; then
+          echo "_No failed tests in trx for shard ${{ matrix.shard }} (a hang/crash would show below)._" >> "$GITHUB_STEP_SUMMARY"
+        fi
+    - name: Publish Test Results (this shard)
+      uses: EnricoMi/publish-unit-test-result-action@v2.12.0
+      if: always()
+      with:
+        # Per-shard check so the 4 matrix legs don't clobber each other's
+        # check-run; distinct from the collector's "Test Results" check.
+        check_name: "Test Results (shard ${{ matrix.shard }})"
+        action_fail: true
+        files: |
+          test/**/*.trx
+    - name: Fail on hang / aborted test run (this shard)
+      # A hang aborts the test host and writes blame-*.dmp; fail the shard loudly
+      # so it isn't masked behind a green "results published" check. Last step so
+      # the artifact upload + per-shard publish above already ran.
+      if: always()
+      run: |
+        hang_dumps=$(find test -name 'blame-*.dmp' 2>/dev/null | wc -l)
+        if [ "$hang_dumps" -gt 0 ]; then
+          echo "::error::Shard ${{ matrix.shard }}: a test process hung — blame-*.dmp written."
+          find test -name 'blame-*.dmp' 2>/dev/null
+          cat test/test-results.log
+          exit 1
+        fi
 
   # ──────────────────────── COLLECT RESULTS ────────────────────────
   # Single fan-in: pull every shard's results and produce ONE consolidated
@@ -260,10 +315,6 @@ jobs:
     needs: test
     if: always()
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      checks: write
-      pull-requests: write
     steps:
     - name: Download all shard results
       uses: actions/download-artifact@v6
