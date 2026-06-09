@@ -20,10 +20,10 @@ namespace MeshWeaver.Mesh.Completion;
 /// Fully reactive: every method returns <see cref="IObservable{T}"/> composed with
 /// <c>Merge</c>/<c>SelectMany</c>. The only I/O is <c>meshQuery.Autocomplete(...)</c>
 /// (whose leaf runs in the IIoPool) and the per-node delegated hub round-trip — there is
-/// no <c>IAsyncEnumerable</c>, no <c>await</c>, no <c>Channel</c> bridge. Each
-/// <c>Autocomplete(...)</c> is <c>.TakeLast(1)</c>: the Monaco widget re-invokes
-/// <see cref="GetItems"/> per keystroke, so each call is a point-in-time snapshot for that
-/// exact prefix.
+/// no <c>IAsyncEnumerable</c>, no <c>await</c>, no <c>Channel</c> bridge. Results stream in
+/// PROGRESSIVELY via <see cref="ProgressiveItems"/>: each suggestion surfaces the moment
+/// its provider returns (fast providers first), with the widget rebinding on every emission.
+/// We never <c>TakeLast</c> — that would block the whole result on the SLOWEST provider.
 /// </summary>
 internal class UnifiedReferenceAutocompleteProvider(
     IMeshService? meshQuery,
@@ -98,6 +98,22 @@ internal class UnifiedReferenceAutocompleteProvider(
     }
 
     /// <summary>
+    /// Brings results AS THEY COME and KEEPS EMITTING — never <c>TakeLast</c> (which
+    /// would block on the SLOWEST provider before emitting anything). <see cref="IMeshService.Autocomplete"/>
+    /// emits a growing merged snapshot as each provider returns; we flatten every snapshot
+    /// and <c>Distinct</c> by insert-text so each suggestion surfaces ONCE, the moment it
+    /// first appears — the fast providers' results show immediately, the slow ones stream in
+    /// after, and the Monaco widget rebinds on each emission. No wait-for-all gate.
+    /// </summary>
+    private static IObservable<AutocompleteItem> ProgressiveItems(
+        IObservable<IReadOnlyCollection<QueryResult>> source,
+        Func<QueryResult, AutocompleteItem> toItem)
+        => source
+            .SelectMany(rows => rows.Select(toItem).ToObservable())
+            .Distinct(item => item.InsertText)
+            .Catch(Observable.Empty<AutocompleteItem>());
+
+    /// <summary>
     /// Provides suggestions using relative paths from the current node context.
     /// Handles: "@child", "@../sibling", "@../../ancestor/child"
     /// </summary>
@@ -149,17 +165,15 @@ internal class UnifiedReferenceAutocompleteProvider(
             streams.Add(GetRelativeKeywords(relativePrefix, currentSegment).ToObservable());
 
         // Suggest child nodes at the searchBase
-        streams.Add(
-            meshQuery.Autocomplete(searchBase, currentSegment, AutocompleteMode.RelevanceFirst, 15)
-                .TakeLast(1)
-                .SelectMany(rows => rows.Select(s => new AutocompleteItem(
-                    Label: s.Name ?? s.Path,
-                    InsertText: $"@{relativePrefix}{s.Name}/",
-                    Description: s.NodeType ?? "Node",
-                    Category: string.IsNullOrEmpty(relativePrefix) ? "Children" : "Nodes",
-                    Priority: ContextPriority,
-                    Kind: AutocompleteKind.Other)).ToObservable())
-                .Catch(Observable.Empty<AutocompleteItem>()));
+        streams.Add(ProgressiveItems(
+            meshQuery.Autocomplete(searchBase, currentSegment, AutocompleteMode.RelevanceFirst, 15),
+            s => new AutocompleteItem(
+                Label: s.Name ?? s.Path,
+                InsertText: $"@{relativePrefix}{s.Name}/",
+                Description: s.NodeType ?? "Node",
+                Category: string.IsNullOrEmpty(relativePrefix) ? "Children" : "Nodes",
+                Priority: ContextPriority,
+                Kind: AutocompleteKind.Other)));
 
         // Node delegation: ask the node at searchBase for its own completions
         // (layout areas, data collections, content files)
@@ -193,16 +207,15 @@ internal class UnifiedReferenceAutocompleteProvider(
         if (meshQuery == null)
             return Observable.Empty<AutocompleteItem>();
 
-        return meshQuery.Autocomplete(searchBase, currentSegment, AutocompleteMode.RelevanceFirst, 15)
-            .TakeLast(1)
-            .SelectMany(rows => rows.Select(s => new AutocompleteItem(
+        return ProgressiveItems(
+            meshQuery.Autocomplete(searchBase, currentSegment, AutocompleteMode.RelevanceFirst, 15),
+            s => new AutocompleteItem(
                 Label: s.Name ?? s.Path,
                 InsertText: $"@{relativePrefix}{s.Name} ",
                 Description: s.NodeType ?? GetKeywordItemDescription(keyword),
                 Category: GetKeywordCategory(keyword),
                 Priority: ItemPriority,
-                Kind: GetKeywordKind(keyword))).ToObservable())
-            .Catch(Observable.Empty<AutocompleteItem>());
+                Kind: GetKeywordKind(keyword)));
     }
 
     /// <summary>
@@ -250,17 +263,15 @@ internal class UnifiedReferenceAutocompleteProvider(
 
         // Suggest children at current path
         if (meshQuery != null)
-            streams.Add(
-                meshQuery.Autocomplete(address, currentSegment, AutocompleteMode.RelevanceFirst, 15)
-                    .TakeLast(1)
-                    .SelectMany(rows => rows.Select(s => new AutocompleteItem(
-                        Label: $"{s.Name}/",
-                        InsertText: $"@/{s.Path}/",
-                        Description: s.NodeType ?? "Node",
-                        Category: "Nodes",
-                        Priority: ItemPriority,
-                        Kind: AutocompleteKind.Other)).ToObservable())
-                    .Catch(Observable.Empty<AutocompleteItem>()));
+            streams.Add(ProgressiveItems(
+                meshQuery.Autocomplete(address, currentSegment, AutocompleteMode.RelevanceFirst, 15),
+                s => new AutocompleteItem(
+                    Label: $"{s.Name}/",
+                    InsertText: $"@/{s.Path}/",
+                    Description: s.NodeType ?? "Node",
+                    Category: "Nodes",
+                    Priority: ItemPriority,
+                    Kind: AutocompleteKind.Other)));
 
         // Node delegation for absolute paths
         if (endsWithSlash && completedSegments.Length >= 1)
@@ -273,7 +284,6 @@ internal class UnifiedReferenceAutocompleteProvider(
     {
         var meshRows = meshQuery != null
             ? meshQuery.Autocomplete("", prefix, AutocompleteMode.RelevanceFirst, 15)
-                .TakeLast(1)
                 .Catch(Observable.Return(EmptyRows))
             : Observable.Return(EmptyRows);
 
@@ -317,7 +327,10 @@ internal class UnifiedReferenceAutocompleteProvider(
             }
 
             return items.ToObservable();
-        });
+        })
+        // Keep emitting as each progressive snapshot arrives; Distinct by insert-text
+        // so a suggestion surfaces once across the growing snapshots (no TakeLast wait).
+        .Distinct(item => item.InsertText);
     }
 
     private IEnumerable<AutocompleteItem> GetAbsoluteKeywordSuggestions(string address, string prefix)
@@ -343,16 +356,15 @@ internal class UnifiedReferenceAutocompleteProvider(
         if (meshQuery == null)
             return Observable.Empty<AutocompleteItem>();
 
-        return meshQuery.Autocomplete(address, prefix, AutocompleteMode.RelevanceFirst, 15)
-            .TakeLast(1)
-            .SelectMany(rows => rows.Select(s => new AutocompleteItem(
+        return ProgressiveItems(
+            meshQuery.Autocomplete(address, prefix, AutocompleteMode.RelevanceFirst, 15),
+            s => new AutocompleteItem(
                 Label: s.Name ?? s.Path,
                 InsertText: $"@/{address}/{keyword}/{s.Name} ",
                 Description: s.NodeType ?? GetKeywordItemDescription(keyword),
                 Category: GetKeywordCategory(keyword),
                 Priority: ItemPriority,
-                Kind: GetKeywordKind(keyword))).ToObservable())
-            .Catch(Observable.Empty<AutocompleteItem>());
+                Kind: GetKeywordKind(keyword)));
     }
 
     private static string GetKeywordItemDescription(string keyword) => keyword switch
