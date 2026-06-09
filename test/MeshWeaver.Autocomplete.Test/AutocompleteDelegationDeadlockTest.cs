@@ -89,17 +89,18 @@ public class AutocompleteDelegationDeadlockTest : MonolithMeshTestBase
         // AutocompleteRequest to the per-node hub at "Systemorph/Marketing".
         const string Query = "@/Systemorph/Marketing/";
 
-        // Observable.Merge subscribes to all 8 cold GetItems streams concurrently —
-        // the same parallel-load fan-out that reproduced the ActionBlock deadlock,
-        // expressed purely reactively (no Task.WhenAll, no async-enumerable bridge).
-        // Each inner .ToList() yields one snapshot; the merged stream yields 8.
-        var results = Observable
-            .Merge(Enumerable.Range(0, 8).Select(_ => provider.GetItems(Query, null).ToList()))
-            .ToList()
-            .Should().Within(15.Seconds()).Match(snapshots => snapshots.Count == 8);
-
-        // No content assertion — the existence test is "did all calls return".
-        results.Should().AllSatisfy(items => items.Should().NotBeNull());
+        // Subscribe to all 8 query streams concurrently. Each is a PROGRESSIVE snapshot stream — we
+        // wait for every one to produce its first non-empty snapshot (keywords + local children
+        // stream in immediately; the delegated node folds in when it arrives) and NEVER block on the
+        // slowest delegation to COMPLETE. CombineLatest fires once all 8 have produced a snapshot.
+        // A re-entrant delegation deadlock would stall a stream's first emission → caught by Within.
+        // (Waiting on completion — .ToList() — is the anti-pattern: under load the per-source 2s
+        // Timeout timer is starved, so completion lags past the test budget even with no deadlock.)
+        Observable
+            .CombineLatest(Enumerable.Range(0, 8)
+                .Select(_ => provider.GetItems(Query, null).Where(snap => snap.Count > 0).Take(1)))
+            .Should().Within(15.Seconds())
+            .Match(snaps => snaps.Count == 8 && snaps.All(s => s.Count > 0));
     }
 
     /// <summary>
@@ -114,10 +115,10 @@ public class AutocompleteDelegationDeadlockTest : MonolithMeshTestBase
 
         // Relative mode: query is empty + ends with '/' so the provider asks the
         // contextPath node for its own completions (areas, data, content).
-        var items = provider.GetItems("@", "Systemorph/Marketing")
-            .ToList().Should().Within(10.Seconds()).Emit();
-
-        items.Should().NotBeNull();
+        // Progressive: the stream must produce its first snapshot promptly — a self-delegation
+        // deadlock would stall it. We observe the first emission, never completion.
+        provider.GetItems("@", "Systemorph/Marketing")
+            .Take(1).Should().Within(10.Seconds()).Emit();
     }
 
     /// <summary>
@@ -135,11 +136,11 @@ public class AutocompleteDelegationDeadlockTest : MonolithMeshTestBase
         // Path that does not exist anywhere — there is no per-node hub at this address.
         const string Query = "@/ZzzNonexistent/Bogus/";
 
-        var items = provider.GetItems(Query, null)
-            .ToList().Should().Within(15.Seconds()).Emit();
-
-        // Whether the result is empty or not is irrelevant — the contract is "must return".
-        items.Should().NotBeNull();
+        // A delegation to a non-existent node must not stall the stream: the first snapshot (local
+        // keywords) streams immediately and the dead delegation degrades to empty without blocking.
+        // We observe the first emission, never completion.
+        provider.GetItems(Query, null)
+            .Take(1).Should().Within(15.Seconds()).Emit();
     }
 
     /// <summary>
@@ -161,15 +162,14 @@ public class AutocompleteDelegationDeadlockTest : MonolithMeshTestBase
             "@/ACME/ProductLaunch/",
         };
 
-        // Interleaved concurrent load across distinct delegation targets, fanned out
-        // reactively via Observable.Merge (no Task.WhenAll). Each inner GetItems is a
-        // cold stream collected with .ToList(); the merged stream yields one snapshot
-        // per query and must complete with all six.
-        var results = Observable
-            .Merge(queries.Select(q => provider.GetItems(q, null).ToList()))
-            .ToList()
-            .Should().Within(20.Seconds()).Match(snapshots => snapshots.Count == queries.Length);
-
-        results.Should().AllSatisfy(items => items.Should().NotBeNull());
+        // Interleaved concurrent fan-out across distinct delegation targets. Each query's stream is
+        // observed PROGRESSIVELY — we wait for every one to produce a non-empty snapshot, proving the
+        // cross-partition fan-out streams results without deadlocking, and never block on the slowest
+        // delegation to complete (a re-entrant deadlock would stall a first emission → caught here).
+        Observable
+            .CombineLatest(queries
+                .Select(q => provider.GetItems(q, null).Where(snap => snap.Count > 0).Take(1)))
+            .Should().Within(20.Seconds())
+            .Match(snaps => snaps.Count == queries.Length && snaps.All(s => s.Count > 0));
     }
 }

@@ -38,10 +38,6 @@ public static class AgentsApplicationExtensions
                 .AddScoped<IAutocompleteProvider, CommandAutocompleteProvider>())
             .WithHandler<AutocompleteRequest>(HandleAutocompleteRequest);
 
-    // Higher Priority = better. Sort descending so best comes first.
-    private static readonly IComparer<AutocompleteItem> AutocompleteByPriority =
-        Comparer<AutocompleteItem>.Create((a, b) => b.Priority.CompareTo(a.Priority));
-
     private const int AutocompleteTopN = 50;
 
     private static IMessageDelivery HandleAutocompleteRequest(
@@ -52,19 +48,18 @@ public static class AgentsApplicationExtensions
         var query = request.Message.Query;
         var contextPath = request.Message.Context;
 
-        // Request-response: AutocompleteRequest expects exactly one AutocompleteResponse.
-        // Merge every provider's IAsyncEnumerable into one observable stream, fold into a
-        // top-N sorted snapshot via ScanTopN, and wait until all providers complete (Last)
-        // before posting the final aggregated response. No await, no Task — the observable
-        // chain drives the post when the source completes.
-        providers
-            .Select(p => p.GetItems(query, contextPath)
-                .Catch(Observable.Empty<AutocompleteItem>()))
-            .Merge()
-            .ScanTopN(AutocompleteTopN, AutocompleteByPriority)
-            .LastOrDefaultAsync()
+        // One-shot request/response back-compat: CombineLatest the providers' snapshot streams,
+        // merge+score-sort into one snapshot per advance, and post the SETTLED snapshot once every
+        // provider has completed (LastAsync). The progressive/streaming consumers use the
+        // AutocompleteReference workspace stream instead. Catch → empty so one bad provider can't
+        // stall the CombineLatest (it must still complete).
+        AutocompleteSnapshots.Combine(
+                providers.Select(p => p.GetItems(query, contextPath)
+                    .Catch(Observable.Return(AutocompleteSnapshots.Empty))),
+                AutocompleteTopN)
+            .LastAsync()
             .Subscribe(snapshot => hub.Post(
-                new AutocompleteResponse((snapshot ?? Array.Empty<AutocompleteItem>()).ToList()),
+                new AutocompleteResponse(snapshot.ToList()),
                 o => o.ResponseFor(request)));
 
         return request.Processed();

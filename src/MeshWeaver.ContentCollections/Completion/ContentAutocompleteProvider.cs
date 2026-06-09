@@ -28,16 +28,17 @@ public class ContentAutocompleteProvider(
     public string? Prefix => "content";
 
     /// <inheritdoc />
-    public IObservable<AutocompleteItem> GetItems(string query, string? contextPath = null)
+    public IObservable<IReadOnlyCollection<AutocompleteItem>> GetItems(string query, string? contextPath = null)
     {
         var searchText = ExtractSearchText(query);
-        return contentService.GetAllCollectionConfigs().ToObservable()
+        var items = contentService.GetAllCollectionConfigs().ToObservable()
             .SelectMany(config => _ioPool.Run(ct => contentService.GetCollectionAsync(config.Name!, ct)))
             .Where(collection => collection is not null)
             .SelectMany(collection => WalkCollection(collection!, "/", searchText, contextPath))
             // Same file can surface via multiple collections (parent/child hierarchy,
             // mapped collections pointing at the same storage path) — dedupe by insert text.
             .Distinct(item => item.InsertText);
+        return AutocompleteSnapshots.FromItems(items, 50);
     }
 
     private IObservable<AutocompleteItem> WalkCollection(

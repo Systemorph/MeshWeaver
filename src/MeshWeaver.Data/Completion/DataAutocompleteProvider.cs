@@ -12,14 +12,14 @@ public class DataAutocompleteProvider(IWorkspace workspace) : IAutocompleteProvi
     public string? Prefix => "data";
 
     /// <inheritdoc />
-    public IObservable<AutocompleteItem> GetItems(string query, string? contextPath = null)
+    public IObservable<IReadOnlyCollection<AutocompleteItem>> GetItems(string query, string? contextPath = null)
     {
         // Pure in-memory enumeration of registered TypeSources — no async I/O.
         var dataContext = workspace.DataContext;
         var address = workspace.Hub.Address;
         var addressStr = address.ToString();
 
-        return dataContext.TypeSources.Keys
+        var items = dataContext.TypeSources.Keys
             .Select(collectionName =>
             {
                 var priority = 500; // base priority for data collections
@@ -41,6 +41,7 @@ public class DataAutocompleteProvider(IWorkspace workspace) : IAutocompleteProvi
                     Priority: priority,
                     Kind: AutocompleteKind.Other);
             })
-            .ToObservable();
+            .ToList();
+        return Observable.Return((IReadOnlyCollection<AutocompleteItem>)items);
     }
 }

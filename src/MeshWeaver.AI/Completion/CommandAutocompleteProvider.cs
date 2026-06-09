@@ -25,14 +25,14 @@ public class CommandAutocompleteProvider : IAutocompleteProvider
     }
 
     /// <inheritdoc />
-    public IObservable<AutocompleteItem> GetItems(string query, string? contextPath = null)
+    public IObservable<IReadOnlyCollection<AutocompleteItem>> GetItems(string query, string? contextPath = null)
     {
-        // No external I/O — pure in-memory enumeration. ToObservable on the
-        // synchronous IEnumerable is the correct shape; no Channel / no async.
+        // No external I/O — pure in-memory enumeration. A single Observable.Return
+        // of the synchronous snapshot is the correct shape; no Channel / no async.
         if (_commandRegistry == null)
-            return Observable.Empty<AutocompleteItem>();
+            return Observable.Return(AutocompleteSnapshots.Empty);
 
-        return _commandRegistry.GetAllCommands()
+        var items = _commandRegistry.GetAllCommands()
             .Select(cmd => new AutocompleteItem(
                 Label: $"/{cmd.Name}",
                 InsertText: $"/{cmd.Name} ",
@@ -40,6 +40,7 @@ public class CommandAutocompleteProvider : IAutocompleteProvider
                 Category: "Commands",
                 Priority: CommandCategoryPriority,
                 Kind: AutocompleteKind.Command))
-            .ToObservable();
+            .ToList();
+        return Observable.Return((IReadOnlyCollection<AutocompleteItem>)items);
     }
 }

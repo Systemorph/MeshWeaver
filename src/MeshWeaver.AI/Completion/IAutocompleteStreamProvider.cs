@@ -1,6 +1,5 @@
 using System.Reactive.Linq;
 using MeshWeaver.Data.Completion;
-using MeshWeaver.Reactive;
 
 namespace MeshWeaver.AI.Completion;
 
@@ -31,28 +30,21 @@ public interface IAutocompleteStreamProvider
 }
 
 /// <summary>
-/// Default <see cref="IAutocompleteStreamProvider"/>. Merges every registered
-/// <see cref="IAutocompleteProvider.GetItems"/> observable and folds the merged
-/// stream through
-/// <see cref="ObservableTopNExtensions.ScanTopN{T}(IObservable{T},int,IComparer{T})"/>.
+/// Default <see cref="IAutocompleteStreamProvider"/>. CombineLatest's every registered
+/// <see cref="IAutocompleteProvider.GetItems"/> snapshot stream and merges them through
+/// <see cref="AutocompleteSnapshots.Combine"/>, so the merged top-N snapshot appears as
+/// soon as the first provider returns and refines as the rest arrive.
 /// </summary>
 public sealed class AutocompleteStreamProvider(IEnumerable<IAutocompleteProvider> providers, int topN = 50)
     : IAutocompleteStreamProvider
 {
-    /// <summary>
-    /// Higher <see cref="AutocompleteItem.Priority"/> = better. Sort descending so the
-    /// top-N snapshot has the best item at index 0.
-    /// </summary>
-    public static readonly IComparer<AutocompleteItem> ByPriorityDescending =
-        Comparer<AutocompleteItem>.Create((a, b) => b.Priority.CompareTo(a.Priority));
-
     public IObservable<IReadOnlyList<AutocompleteItem>> Stream(string query, string? contextPath)
     {
-        var snapshot = providers
-            .Select(p => p.GetItems(query, contextPath)
-                .Catch(Observable.Empty<AutocompleteItem>()))
-            .Merge()
-            .ScanTopN(topN, ByPriorityDescending);
-        return snapshot;
+        return AutocompleteSnapshots
+            .Combine(
+                providers.Select(p => p.GetItems(query, contextPath)
+                    .Catch(Observable.Return(AutocompleteSnapshots.Empty))),
+                topN)
+            .Select(snapshot => (IReadOnlyList<AutocompleteItem>)snapshot.ToList());
     }
 }

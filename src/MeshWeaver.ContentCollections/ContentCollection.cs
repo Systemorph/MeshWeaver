@@ -147,7 +147,14 @@ public class ContentCollection : IDisposable
             var key = article.Path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? article.Path[..^3] : article.Path;
             return new ChangeItem<InstanceCollection>(x!.SetItem(key, article), markdownStream.StreamId, Hub.Version);
 
-        }, _ => { });
+        }, ex =>
+        {
+            // The stream errors incoming pushes once it (or its hub) is disposing — typically a
+            // FileSystemWatcher event racing collection teardown. Close the incoming stream at the
+            // source so no further events flow into a disposed hub. See Doc/Architecture/HubDisposalModel.
+            if (ex is ObjectDisposedException)
+                monitorDisposable?.Dispose();
+        });
     }
 
     private async Task<MarkdownElement?> ParseArticleAsync(Stream? stream, string path, DateTime lastModified, CancellationToken ct)

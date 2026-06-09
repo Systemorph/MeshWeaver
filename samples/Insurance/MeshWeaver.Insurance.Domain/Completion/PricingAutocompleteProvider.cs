@@ -12,16 +12,17 @@ namespace MeshWeaver.Insurance.Domain.Completion;
 public class PricingAutocompleteProvider(IPricingService pricingService) : IAutocompleteProvider
 {
     /// <inheritdoc />
-    public IObservable<AutocompleteItem> GetItems(string query, string? contextPath = null) =>
-        // Pure in-memory enumeration of the pricing catalog — no I/O, no async.
+    public IObservable<IReadOnlyCollection<AutocompleteItem>> GetItems(string query, string? contextPath = null) =>
+        // Pure in-memory enumeration of the pricing catalog — no I/O, no async. One settled snapshot.
         // p.Id is in format "company/year" (e.g., "Microsoft/2026").
-        pricingService.GetCatalog()
-            .Select(p => new AutocompleteItem(
-                Label: $"@{InsuranceApplicationAttribute.PricingType}/{p.Id}/",
-                InsertText: $"@{InsuranceApplicationAttribute.PricingType}/{p.Id}/",
-                Description: p.InsuredName ?? p.Id,
-                Category: "Pricing",
-                Priority: 1000,
-                Kind: AutocompleteKind.Other))
-            .ToObservable();
+        Observable.Return<IReadOnlyCollection<AutocompleteItem>>(
+            pricingService.GetCatalog()
+                .Select(p => new AutocompleteItem(
+                    Label: $"@{InsuranceApplicationAttribute.PricingType}/{p.Id}/",
+                    InsertText: $"@{InsuranceApplicationAttribute.PricingType}/{p.Id}/",
+                    Description: p.InsuredName ?? p.Id,
+                    Category: "Pricing",
+                    Priority: 1000,
+                    Kind: AutocompleteKind.Other))
+                .ToArray());
 }

@@ -18,17 +18,17 @@ public class AddressCatalogAutocompleteProvider(IAddressCatalogService? addressC
     private const int AddressIdCategoryPriority = 1600;
 
     /// <inheritdoc />
-    public IObservable<AutocompleteItem> GetItems(string query, string? contextPath = null)
+    public IObservable<IReadOnlyCollection<AutocompleteItem>> GetItems(string query, string? contextPath = null)
     {
         if (addressCatalog is null || !query.StartsWith('@'))
-            return Observable.Empty<AutocompleteItem>();
+            return Observable.Return(AutocompleteSnapshots.Empty);
 
         // Extract address type from query (e.g., "@pricing/MS" → "pricing").
         var addressType = query.TrimStart('@').Split('/')[0];
         if (string.IsNullOrEmpty(addressType))
-            return Observable.Empty<AutocompleteItem>();
+            return Observable.Return(AutocompleteSnapshots.Empty);
 
-        return IoPool.Unbounded.Run(ct => addressCatalog.GetAddressIdsAsync(addressType, ct))
+        var items = IoPool.Unbounded.Run(ct => addressCatalog.GetAddressIdsAsync(addressType, ct))
             .SelectMany(ids => ids.ToObservable())
             .Select(id => new AutocompleteItem(
                 Label: $"@{addressType}/{id}/",
@@ -37,5 +37,6 @@ public class AddressCatalogAutocompleteProvider(IAddressCatalogService? addressC
                 Category: addressType,
                 Priority: AddressIdCategoryPriority,
                 Kind: AutocompleteKind.Other));
+        return AutocompleteSnapshots.FromItems(items, 50);
     }
 }

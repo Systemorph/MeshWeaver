@@ -220,30 +220,35 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         // missing path — which broke the FIRST upload at collection-init (before SaveFileAsync,
         // which creates the dir on write, ever runs). Ensure it exists (idempotent).
         Directory.CreateDirectory(basePath);
-        watcher = new FileSystemWatcher(basePath)
+        var w = new FileSystemWatcher(basePath)
         {
             IncludeSubdirectories = true,
             NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite
         };
+        watcher = w;
 
-        watcher.Changed += (sender, e) =>
+        // The returned handle stops the watcher AND flips a flag that in-flight callbacks observe.
+        // FileSystemWatcher events dispatch on threadpool threads, so an event can already be
+        // queued when teardown disposes the watcher — without the flag that late callback would
+        // drive stream.Update into a disposed hub. See Doc/Architecture/HubDisposalModel.
+        var handle = new WatcherHandle(w);
+
+        w.Changed += (sender, e) =>
         {
+            if (handle.Stopped) return;
             if (Path.GetExtension(e.FullPath) == ".md")
-            {
                 onChanged(Path.GetRelativePath(basePath, e.FullPath));
-            }
         };
 
-        watcher.Renamed += (sender, e) =>
+        w.Renamed += (sender, e) =>
         {
+            if (handle.Stopped) return;
             if (Path.GetExtension(e.FullPath) == ".md")
-            {
                 onChanged(Path.GetRelativePath(basePath, e.FullPath));
-            }
         };
 
-        watcher.EnableRaisingEvents = true;
-        return watcher;
+        w.EnableRaisingEvents = true;
+        return handle;
     }
 
     /// <summary>
@@ -264,8 +269,13 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
             NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.DirectoryName
         };
 
+        // See the first overload: the handle's flag makes in-flight callbacks no-op after teardown
+        // disposes the watcher, so a late event can't drive a write into a disposed hub.
+        var handle = new WatcherHandle(watcherInstance);
+
         void OnChanged(object sender, FileSystemEventArgs e)
         {
+            if (handle.Stopped) return;
             if (filter != null && Path.GetExtension(e.FullPath) != filter)
                 return;
 
@@ -275,6 +285,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
 
         void OnCreated(object sender, FileSystemEventArgs e)
         {
+            if (handle.Stopped) return;
             if (filter != null && Path.GetExtension(e.FullPath) != filter)
                 return;
 
@@ -284,6 +295,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
 
         void OnDeleted(object sender, FileSystemEventArgs e)
         {
+            if (handle.Stopped) return;
             if (filter != null && Path.GetExtension(e.FullPath) != filter)
                 return;
 
@@ -293,6 +305,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
 
         void OnRenamed(object sender, RenamedEventArgs e)
         {
+            if (handle.Stopped) return;
             if (filter != null && Path.GetExtension(e.FullPath) != filter)
                 return;
 
@@ -309,7 +322,27 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         watcherInstance.Renamed += OnRenamed;
 
         watcherInstance.EnableRaisingEvents = true;
-        return watcherInstance;
+        return handle;
+    }
+
+    /// <summary>
+    /// Disposable wrapper over a <see cref="FileSystemWatcher"/> that makes teardown race-safe.
+    /// <see cref="Dispose"/> flips <see cref="Stopped"/> (a volatile flag the event callbacks check)
+    /// BEFORE stopping and disposing the watcher — so a callback already dispatched on a threadpool
+    /// thread observes the stop and no-ops instead of driving a write into a disposed hub.
+    /// </summary>
+    private sealed class WatcherHandle(FileSystemWatcher watcher) : IDisposable
+    {
+        private volatile bool stopped;
+        public bool Stopped => stopped;
+
+        public void Dispose()
+        {
+            stopped = true;
+            try { watcher.EnableRaisingEvents = false; }
+            catch (ObjectDisposedException) { /* already gone — fine */ }
+            watcher.Dispose();
+        }
     }
 
     public async Task<ImmutableDictionary<string, Author>> LoadAuthorsAsync(CancellationToken cancellationToken = default)

@@ -41,7 +41,7 @@ public class ModelAutocompleteProvider : IAutocompleteProvider
     }
 
     /// <inheritdoc />
-    public IObservable<AutocompleteItem> GetItems(string query, string? contextPath = null)
+    public IObservable<IReadOnlyCollection<AutocompleteItem>> GetItems(string query, string? contextPath = null)
     {
         // No external I/O — pure in-memory enumeration of the model list.
         // Order: union across all factories (sorted by factory.Order, then model
@@ -55,7 +55,7 @@ public class ModelAutocompleteProvider : IAutocompleteProvider
 
         if (factoryModels.Count > 0)
         {
-            return factoryModels
+            var items = factoryModels
                 .Select(p => new AutocompleteItem(
                     Label: $"@model/{p.Model}",
                     InsertText: $"@model/{p.Model} ",
@@ -63,13 +63,14 @@ public class ModelAutocompleteProvider : IAutocompleteProvider
                     Category: "Models",
                     Priority: 0,
                     Kind: AutocompleteKind.Other))
-                .ToObservable();
+                .ToList();
+            return Observable.Return((IReadOnlyCollection<AutocompleteItem>)items);
         }
 
         if (_availableModels is null)
-            return Observable.Empty<AutocompleteItem>();
+            return Observable.Return(AutocompleteSnapshots.Empty);
 
-        return _availableModels
+        var fallback = _availableModels
             .Select(model => new AutocompleteItem(
                 Label: $"@model/{model}",
                 InsertText: $"@model/{model} ",
@@ -77,6 +78,7 @@ public class ModelAutocompleteProvider : IAutocompleteProvider
                 Category: "Models",
                 Priority: 0,
                 Kind: AutocompleteKind.Other))
-            .ToObservable();
+            .ToList();
+        return Observable.Return((IReadOnlyCollection<AutocompleteItem>)fallback);
     }
 }

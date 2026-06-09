@@ -231,40 +231,48 @@ public class AutocompleteStreamProviderTests
     // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Test doubles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// <summary>
-    /// Provider whose <c>GetItems</c> observable forwards everything the test
-    /// pushes via <see cref="Emit"/>, and completes when the test calls
-    /// <see cref="Complete"/>. The backing <see cref="Subject{T}"/> IS the
+    /// Provider whose <c>GetItems</c> observable emits a GROWING snapshot each time
+    /// the test pushes an item via <see cref="Emit"/>, and completes when the test
+    /// calls <see cref="Complete"/>. Each snapshot is the running accumulation — the
+    /// snapshot contract: providers emit their current best <see cref="IReadOnlyCollection{T}"/>,
+    /// the aggregator merges + sorts. The backing <see cref="Subject{T}"/> IS the
     /// observable â€” no async-enumerable bridge needed.
     /// </summary>
     private sealed class ScriptedProvider : IAutocompleteProvider
     {
-        private readonly Subject<AutocompleteItem> subject = new();
+        private readonly Subject<IReadOnlyCollection<AutocompleteItem>> subject = new();
+        private ImmutableList<AutocompleteItem> items = ImmutableList<AutocompleteItem>.Empty;
 
-        public void Emit(AutocompleteItem item) => subject.OnNext(item);
+        public void Emit(AutocompleteItem item)
+        {
+            items = items.Add(item);
+            subject.OnNext(items);
+        }
         public void Complete() => subject.OnCompleted();
 
-        public IObservable<AutocompleteItem> GetItems(string query, string? contextPath = null)
+        public IObservable<IReadOnlyCollection<AutocompleteItem>> GetItems(string query, string? contextPath = null)
             => subject;
     }
 
     private sealed class FailingProvider : IAutocompleteProvider
     {
-        public IObservable<AutocompleteItem> GetItems(string query, string? contextPath = null)
-            => Observable.Throw<AutocompleteItem>(
+        public IObservable<IReadOnlyCollection<AutocompleteItem>> GetItems(string query, string? contextPath = null)
+            => Observable.Throw<IReadOnlyCollection<AutocompleteItem>>(
                 new InvalidOperationException("simulated provider failure"));
     }
 
     /// <summary>
-    /// Provider that emits N items per query, each labelled with the query string.
-    /// Lets us verify that subscribing with different queries produces distinct
-    /// per-query streams (Monaco user-typing scenario).
+    /// Provider that emits a single snapshot of N items per query, each labelled with
+    /// the query string. Lets us verify that subscribing with different queries produces
+    /// distinct per-query streams (Monaco user-typing scenario).
     /// </summary>
     private sealed class QueryAwareProvider : IAutocompleteProvider
     {
-        public IObservable<AutocompleteItem> GetItems(string query, string? contextPath = null)
-            => Enumerable.Range(1, query.Length)
-                .Select(i => new AutocompleteItem($"{query}-{i}", $"{query}-{i}",
-                    Priority: 100 - i))
-                .ToObservable();
+        public IObservable<IReadOnlyCollection<AutocompleteItem>> GetItems(string query, string? contextPath = null)
+            => Observable.Return<IReadOnlyCollection<AutocompleteItem>>(
+                Enumerable.Range(1, query.Length)
+                    .Select(i => new AutocompleteItem($"{query}-{i}", $"{query}-{i}",
+                        Priority: 100 - i))
+                    .ToArray());
     }
 }

@@ -894,6 +894,17 @@ public class MessageService : IMessageService
             Id = opt.MessageId
         };
 
+        // Teardown guard — hoisted ahead of postPipeline.Invoke. ScheduleNotify already
+        // DROPS every non-shutdown message once RunLevel >= DisposeHostedHubs, but it runs
+        // AFTER the post pipeline. The pipeline (AccessContext stamping) resolves services
+        // from the hub's ServiceProvider, which is disposed mid-teardown — so a fire-and-forget
+        // post whose continuation lands during disposal threw ObjectDisposedException
+        // SYNCHRONOUSLY out of Post into its subscriber (unobserved → process-fatal). Skipping
+        // the pipeline for a message that ScheduleNotify is about to drop anyway makes Post
+        // uniformly teardown-safe with ZERO behavioral change for live hubs.
+        if (hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs
+            && message is not ShutdownRequest and not DisposeRequest)
+            return ((IMessageDelivery)delivery).Failed("Hub is shutting down");
 
         // TODO V10: Which cancellation token to pass here? (12.01.2025, Roland Bürgi)
         ScheduleNotify(postPipeline.Invoke(delivery), default);
