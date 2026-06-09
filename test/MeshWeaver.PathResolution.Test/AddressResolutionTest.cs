@@ -141,6 +141,47 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
         resolution.Should().BeNull();
     }
 
+    [Fact(Timeout = 10000)]
+    public void ResolvePath_SegmentWithSpace_ResolvesToExactNode()
+    {
+        EnsureNodesCreated();
+        // Content and files commonly have spaces in their names → spaces in the path
+        // (e.g. "Agentic Pension", "Annual Report.pdf"). The resolver builds a
+        // `path:{prefixes}` query; a parser that treats a space as a token separator
+        // splits "pricing/Annual Report" into `path:pricing/Annual` + free-text and
+        // never matches the node — the "trouble loading paths with spaces" symptom.
+        NodeFactory.CreateNode(MeshNode.FromPath("pricing/Annual Report") with
+        {
+            Name = "Annual Report",
+            NodeType = "Markdown",
+        }).Should().Emit();
+
+        var resolution = PathResolver.ResolvePath("pricing/Annual Report").Should().Emit();
+
+        resolution.Should().NotBeNull("a path segment containing a space must resolve");
+        resolution!.Prefix.Should().Be("pricing/Annual Report",
+            "the full space-containing path is an exact node — it must not break on the space and fall back to 'pricing'");
+        resolution.Remainder.Should().BeNull();
+    }
+
+    [Fact(Timeout = 10000)]
+    public void ResolvePath_SpaceSegmentWithAreaSuffix_FallsBackToNode()
+    {
+        EnsureNodesCreated();
+        NodeFactory.CreateNode(MeshNode.FromPath("pricing/Annual Report") with
+        {
+            Name = "Annual Report",
+            NodeType = "Markdown",
+        }).Should().Emit();
+
+        // /pricing/Annual Report/Overview → node "pricing/Annual Report" + area "Overview"
+        var resolution = PathResolver.ResolvePath("pricing/Annual Report/Overview").Should().Emit();
+
+        resolution.Should().NotBeNull();
+        resolution!.Prefix.Should().Be("pricing/Annual Report");
+        resolution.Remainder.Should().Be("Overview");
+    }
+
     #endregion
 
     #region Score-Based Matching Priority Tests
