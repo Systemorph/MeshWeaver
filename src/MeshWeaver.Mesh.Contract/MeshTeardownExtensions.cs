@@ -56,7 +56,7 @@ public static class MeshTeardownExtensions
 
     /// <summary>
     /// The wait half of <see cref="TeardownAsync"/>, exposed for callers that
-    /// already drive <see cref="IMessageHub.Dispose"/> themselves (and keep their
+    /// already drive <see cref="System.IDisposable.Dispose"/> themselves (and keep their
     /// own progress/diagnostic loop around <see cref="IMessageHub.DisposalCompleted"/>).
     /// Pass the <see cref="IoPoolRegistry"/> + <see cref="AsyncDisposeQueue"/> captured
     /// BEFORE disposal began.

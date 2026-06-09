@@ -10,7 +10,8 @@ namespace MeshWeaver.Mesh.Threading;
 /// in-flight <see cref="IIoPool"/> operation, flushing a write queue, awaiting a stream
 /// to finish. They cannot do it inside their sync <c>Dispose()</c>.
 ///
-/// <para>The pattern: in their sync <c>Dispose()</c>, resources <see cref="Enqueue"/>
+/// <para>The pattern: in their sync <c>Dispose()</c>, resources
+/// <see cref="Enqueue(System.Func{System.Threading.CancellationToken,System.Threading.Tasks.Task})"/>
 /// their async cleanup onto this mesh-scoped queue instead of running or leaking it. A
 /// single-consumer TPL <see cref="ActionBlock{T}"/> keeps draining the queue in the
 /// background (serially, so teardown order is deterministic). The mesh's own async
