@@ -26,6 +26,9 @@ public static class IoPoolServiceCollectionExtensions
         services.TryAddSingleton(_ =>
             configure is null ? new IoPoolOptions() : configure(new IoPoolOptions()));
         services.TryAddSingleton<IoPoolRegistry>();
+        // The async half of mesh teardown — resources enqueue async cleanup here from
+        // their sync Dispose(); the mesh's DisposeAsync drains it before the scope dies.
+        services.TryAddSingleton<AsyncDisposeQueue>();
         return services;
     }
 }
