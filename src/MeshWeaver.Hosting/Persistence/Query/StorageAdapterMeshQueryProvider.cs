@@ -180,58 +180,55 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         return string.IsNullOrEmpty(userId) ? WellKnownUsers.Anonymous : userId;
     }
 
-    private async IAsyncEnumerable<object> QueryAsync(
+    /// <summary>
+    /// Pure-IObservable query: composes <see cref="FindMatchingNodes"/> across every
+    /// effective query, unions hits by path, sorts, projects, and caps — emitting the
+    /// full matched set as a single <see cref="IReadOnlyList{T}"/>. No <c>async</c>, no
+    /// <c>IAsyncEnumerable</c>, no <c>await foreach</c>: the I/O leaves
+    /// (<see cref="IStorageAdapter.ListChildPaths"/> / <c>Read</c>) are already pooled
+    /// IObservables at their own boundary; this layer only composes them. Replaces the
+    /// former <c>QueryAsync</c>/<c>QueryCoreAsync</c> async-enumerable pair —
+    /// <paramref name="useSecurityFilter"/> selects RLS-filtered (IMeshQueryProvider)
+    /// vs raw (IMeshQueryCore) reads.
+    /// <para>
+    /// The <c>#20</c> defer-to-native gate lives in the public callers
+    /// (<see cref="ObserveQueryInternal{T}"/>); <see cref="Autocomplete"/> intentionally
+    /// never deferred (a scoped storage adapter short-circuits the walk itself), so this
+    /// layer applies no defer of its own — behaviour identical to the old pair.
+    /// </para>
+    /// </summary>
+    private IObservable<IReadOnlyList<object>> RunQueryNodes(
         MeshQueryRequest request,
         JsonSerializerOptions options,
-        [EnumeratorCancellation] CancellationToken ct = default)
-    {
-        // #20: defer unscoped + satellite queries to the native fan-out provider.
-        if (_deferToNative && DefersToNativeProvider(request))
-            yield break;
+        bool useSecurityFilter)
+        => CollectMatched(request, options, useSecurityFilter)
+            .Select(collected =>
+            {
+                var (matched, parsedQuery, _) = collected;
 
-        var (matched, parsedQuery, basePaths) = await CollectMatchedAsync(
-            request, options, useSecurityFilter: true, ct);
+                IEnumerable<object> sorted = matched;
+                if (parsedQuery.OrderBy != null)
+                {
+                    sorted = parsedQuery.OrderBy.Descending
+                        ? matched.OrderByDescending(n => GetSortableValue(n, parsedQuery.OrderBy.Property))
+                        : matched.OrderBy(n => GetSortableValue(n, parsedQuery.OrderBy.Property));
+                }
 
-        // For source:activity, filter to nodes that actually have _activity children.
-        // Scan EVERY query's basePath for Activity satellite nodes and union their
-        // MainNode paths so multi-query unions don't filter queries #2+ against
-        // query #0's subtree only.
-        // `source:activity` filtering: previously walked persistence descendants.
-        // Now handled by the pedestrian query provider (SimpleMeshNodeStorageQueryProvider)
-        // or by Postgres SQL-side JOIN — the engine knows nothing about how it's done.
+                IEnumerable<object> projected = sorted.Select(node =>
+                    parsedQuery.Select != null
+                        ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
+                        : node);
 
-        // Apply sort
-        IEnumerable<object> sorted = matched;
-        if (parsedQuery.OrderBy != null)
-        {
-            sorted = parsedQuery.OrderBy.Descending
-                ? matched.OrderByDescending(n => GetSortableValue(n, parsedQuery.OrderBy.Property))
-                : matched.OrderBy(n => GetSortableValue(n, parsedQuery.OrderBy.Property));
-        }
+                // Load cap = (Skip ?? 0) + Limit. request.Skip itself is applied
+                // POST-MERGE in ClipMergedInitial (applying it here too would
+                // double-skip); we only bound the load so a deep walk over a
+                // 10 000-row subtree doesn't materialise everything for a 3-item page.
+                var loadCap = LoadCap(request, parsedQuery);
+                if (loadCap is int cap && cap > 0)
+                    projected = projected.Take(cap);
 
-        // Yield with a "Skip + Limit" load buffer. The engine is one bucket in
-        // the MeshQuery.MergeProviderObservables fan-out — request.Skip /
-        // request.Limit are applied POST-MERGE in ClipMergedInitial.
-        // Applying request.Skip here too would double-skip (engine skips N,
-        // then merge skips another N → empty page 2). What we DO cap here is
-        // the load: yield at most (Skip + Limit) items so a deep walk over a
-        // 10 000-row subtree doesn't materialise everything when the caller
-        // only wants 3 items at offset 0. parsedQuery.Limit (the explicit
-        // `limit:N` in the query string) is still honoured per-query — it's
-        // a hint to each provider, not the cross-provider cap.
-        var loadCap = LoadCap(request, parsedQuery);
-        int yielded = 0;
-        foreach (var node in sorted)
-        {
-            yield return parsedQuery.Select != null
-                ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
-                : node;
-
-            yielded++;
-            if (loadCap.HasValue && loadCap.Value > 0 && yielded >= loadCap.Value)
-                yield break;
-        }
-    }
+                return (IReadOnlyList<object>)projected.ToList();
+            });
 
     private static int? LoadCap(MeshQueryRequest request, ParsedQuery parsedQuery)
     {
@@ -253,76 +250,32 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         };
 
     /// <summary>
-    /// Core query without access control — used by IMeshQueryCore for infrastructure.
-    /// Shares parsing/sorting/paging logic with QueryAsync but skips all AC checks.
-    /// </summary>
-    private async IAsyncEnumerable<object> QueryCoreAsync(
-        MeshQueryRequest request,
-        JsonSerializerOptions options,
-        [EnumeratorCancellation] CancellationToken ct = default)
-    {
-        var (matched, parsedQuery, basePaths) = await CollectMatchedAsync(
-            request, options, useSecurityFilter: false, ct);
-
-        // `source:activity` activity-MainNode filter via persistence loop deleted —
-        // see comment in QueryAsync above. Backend providers do this themselves
-        // (Postgres satellite-table join; FS scans the _Activity satellite tree).
-
-        IEnumerable<object> sorted = matched;
-        if (parsedQuery.OrderBy != null)
-        {
-            sorted = parsedQuery.OrderBy.Descending
-                ? matched.OrderByDescending(n => GetSortableValue(n, parsedQuery.OrderBy.Property))
-                : matched.OrderBy(n => GetSortableValue(n, parsedQuery.OrderBy.Property));
-        }
-
-        // See QueryAsync for the rationale: request.Skip is applied post-merge
-        // in ClipMergedInitial; the engine loads up to (Skip + Limit) items
-        // and yields without an in-engine skip to avoid double-skipping.
-        var loadCap = LoadCap(request, parsedQuery);
-        int yielded = 0;
-        foreach (var node in sorted)
-        {
-            yield return parsedQuery.Select != null
-                ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
-                : node;
-
-            yielded++;
-            if (loadCap.HasValue && loadCap.Value > 0 && yielded >= loadCap.Value)
-                yield break;
-        }
-    }
-
-    /// <summary>
     /// Shared collector: iterates <see cref="MeshQueryRequest.EffectiveQueries"/>,
-    /// runs <see cref="FindMatchingNodes"/> per query, and unions hits by
-    /// <see cref="MeshNode.Path"/>. Returns the matched nodes plus the FIRST
-    /// query's parsed form + the union of every query's base path (used by
-    /// the post-filter / sort blocks in the public callers).
+    /// runs <see cref="FindMatchingNodes"/> per query (already <see cref="IObservable{T}"/>),
+    /// and unions hits by <see cref="MeshNode.Path"/>. Emits — as a single reactive value —
+    /// the matched nodes plus the FIRST query's parsed form and every query's base path.
+    /// Pure-IObservable: no <c>async</c>, no <c>await</c>, no <c>IAsyncEnumerable</c>.
+    /// Replaces the old <c>CollectMatchedAsync</c> whose per-query <c>ForEachAsync</c>
+    /// Task-bridge re-entered the single-threaded hub pump under bulk load (the
+    /// autocomplete-fan-out deadlock).
     /// <para>
-    /// <see cref="MeshQueryRequest.Limit"/> is intentionally NOT pushed into
-    /// any per-query parse: doing so on query #0 only made the union
-    /// iteration-order dependent (query #0 might hit its limit before yielding
-    /// its most relevant rows, while queries #1+ contributed everything past
-    /// it). The Limit is enforced post-union in the public callers instead.
+    /// <see cref="MeshQueryRequest.Limit"/> is intentionally NOT pushed into any
+    /// per-query parse: doing so on query #0 only made the union iteration-order
+    /// dependent. The Limit is enforced post-union in <see cref="RunQueryNodes"/>.
     /// </para>
     /// </summary>
-    private async Task<(List<object> Matched, ParsedQuery FirstParsed, IReadOnlyList<string> BasePaths)>
-        CollectMatchedAsync(
+    private IObservable<(IReadOnlyList<object> Matched, ParsedQuery FirstParsed, IReadOnlyList<string> BasePaths)>
+        CollectMatched(
             MeshQueryRequest request,
             JsonSerializerOptions options,
-            bool useSecurityFilter,
-            CancellationToken ct)
+            bool useSecurityFilter)
     {
         var effectiveQueries = request.EffectiveQueries;
         var userId = GetEffectiveUserId(request);
 
-        var matchedByPath = new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase);
-        var nonNodeMatched = new List<object>();
-        var seenRefs = new HashSet<object>(ReferenceEqualityComparer.Instance);
-
         ParsedQuery? firstParsed = null;
         var basePaths = new List<string>(effectiveQueries.Count);
+        var perQuery = new List<IObservable<object>>(effectiveQueries.Count);
 
         for (var qi = 0; qi < effectiveQueries.Count; qi++)
         {
@@ -333,34 +286,36 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             var (basePath, effectiveScope) = ResolvePathAndScope(parsedQuery, request);
             var context = request.Context ?? parsedQuery.Context;
             basePaths.Add(basePath);
-
             if (qi == 0)
-            {
                 firstParsed = parsedQuery;
-            }
 
-            // Per-query reactive composition: FindMatchingNodes emits objects;
-            // we filter by validator (when useSecurityFilter), dedup, and fold
-            // into the shared closures. ForEachAsync awaits source completion
-            // and is the single Task bridge per query — everything inside the
-            // observable chain stays IObservable.
-            await FindMatchingNodes(
-                    parsedQuery, effectiveScope, basePath, userId, context, request, options)
-                .SelectMany(node =>
-                {
-                    if (node is MeshNode meshNode)
+            // FindMatchingNodes emits objects reactively; apply the RLS validator
+            // (when useSecurityFilter) inline. Dedup runs once on the materialised
+            // set below — cheaper to express, identical union result.
+            perQuery.Add(
+                FindMatchingNodes(parsedQuery, effectiveScope, basePath, userId, context, request, options)
+                    .SelectMany(node =>
                     {
-                        if (!string.IsNullOrEmpty(meshNode.Path) && matchedByPath.ContainsKey(meshNode.Path))
-                            return Observable.Empty<object>();
-                        return useSecurityFilter
-                            ? ValidateRead(meshNode, userId)
-                                .Where(valid => valid)
-                                .Select(_ => (object)meshNode)
-                            : Observable.Return<object>(meshNode);
-                    }
-                    return Observable.Return(node);
-                })
-                .ForEachAsync(n =>
+                        if (node is MeshNode meshNode)
+                            return useSecurityFilter
+                                ? ValidateRead(meshNode, userId).Where(valid => valid).Select(_ => (object)meshNode)
+                                : Observable.Return<object>(meshNode);
+                        return Observable.Return(node);
+                    }));
+        }
+
+        // Concat preserves query order (query #0's hits before #1's) — same ordering
+        // as the old sequential per-query ForEachAsync fold. ToList materialises the
+        // union once; the dedup fold below is in-memory, off the I/O path.
+        return perQuery.Concat()
+            .ToList()
+            .Select(all =>
+            {
+                var matchedByPath = new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase);
+                var nonNodeMatched = new List<object>();
+                var seenRefs = new HashSet<object>(ReferenceEqualityComparer.Instance);
+
+                foreach (var n in all)
                 {
                     if (n is MeshNode mn)
                     {
@@ -373,17 +328,17 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                     {
                         nonNodeMatched.Add(n);
                     }
-                }, ct);
-        }
+                }
 
-        var matched = matchedByPath.Values.Cast<object>().Concat(nonNodeMatched).ToList();
-        return (matched, firstParsed ?? _parser.Parse(""), basePaths);
+                var matched = matchedByPath.Values.Cast<object>().Concat(nonNodeMatched).ToList();
+                return ((IReadOnlyList<object>)matched, firstParsed ?? _parser.Parse(""), (IReadOnlyList<string>)basePaths);
+            });
     }
 
     /// <summary>
     /// Resolves effective base path (request.DefaultPath fallback) and scope
     /// (Children/Subtree fallback when query has no path + Exact scope) — same
-    /// rules previously inlined at the top of <see cref="QueryAsync"/>.
+    /// rules previously inlined at the top of the former <c>QueryAsync</c>.
     /// </summary>
     private (string BasePath, QueryScope Scope) ResolvePathAndScope(
         ParsedQuery parsedQuery, MeshQueryRequest request)
@@ -408,7 +363,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     /// Pure-IObservable per-query node finder — no <c>async</c>, no <c>await</c>,
     /// no <c>IAsyncEnumerable</c> bridge inside. The three sub-pipelines
     /// (activity-source / exact-path probes / scope-walk) compose into a single
-    /// observable; the caller (<see cref="CollectMatchedAsync"/>) consumes
+    /// observable; the caller (<see cref="CollectMatched"/>) consumes
     /// reactively via <c>SelectMany</c>.
     /// </summary>
     private IObservable<object> FindMatchingNodes(
@@ -755,11 +710,11 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     }
 
     /// <summary>
-    /// Native reactive autocomplete. A thin scoring layer over <see cref="QueryCoreAsync"/>: the
+    /// Native reactive autocomplete. A thin scoring layer over <see cref="RunQueryNodes"/>: the
     /// per-query scope walk (over <see cref="IStorageAdapter.ListChildPaths"/> / <c>Read</c>, all
-    /// already <see cref="IObservable{T}"/>) is the I/O leaf — bridged once via
-    /// <see cref="Observable.FromAsync{TResult}(Func{CancellationToken, Task{TResult}})"/> and pushed
-    /// to <see cref="System.Reactive.Concurrency.TaskPoolScheduler"/> so the calling hub's action
+    /// already <see cref="IObservable{T}"/>) is the I/O leaf, pooled inside the adapter. The query
+    /// itself stays pure-IObservable here — no async-enumerable, no <c>_ioPool.Run</c>/await-foreach
+    /// bridge — so the calling hub's action
     /// block is never blocked. No <c>Task.Run</c> bridge (that was the deadlock), no async-enumerable
     /// on the public surface. Emits a single snapshot then completes.
     /// </summary>
@@ -806,10 +761,14 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 : Math.Max(limit * 5, 100),
         };
 
-        return _ioPool.Run(async cancel =>
+        // Pure-IObservable scoring layer over the query stream — no _ioPool.Run /
+        // await foreach bridge (the bulk-fan-out deadlock). RunQueryNodes already
+        // composes the (pooled) adapter reads reactively; we just score the snapshot.
+        return RunQueryNodes(queryRequest, options, useSecurityFilter: false)
+            .Select(nodes =>
             {
                 var suggestions = new List<QuerySuggestion>();
-                await foreach (var obj in QueryCoreAsync(queryRequest, options, cancel).ConfigureAwait(false))
+                foreach (var obj in nodes)
                 {
                     if (obj is not MeshNode node) continue;
                     // Skip node types excluded from autocomplete (AddAutocompleteExcludedTypes)
@@ -1002,8 +961,8 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
 
     /// <summary>
     /// Shared Query body. <paramref name="useSecurityFilter"/> selects between the
-    /// security-filtered <see cref="QueryAsync"/> (IMeshQueryProvider surface) and the raw
-    /// <see cref="QueryCoreAsync"/> (IMeshQueryCore surface). The latter is what
+    /// security-filtered (IMeshQueryProvider surface) and the raw (IMeshQueryCore
+    /// surface) <see cref="RunQueryNodes"/> read. The latter is what
     /// SecurityService consumes via SyncedQueryMeshNodes — it must NOT re-enter
     /// SecurityService for filtering, otherwise the DI container detects a cycle.
     /// </summary>
@@ -1054,26 +1013,19 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             var cts = new CancellationTokenSource();
             disposables.Add(cts);
 
-            IAsyncEnumerable<object> QueryStream(CancellationToken ct) =>
-                useSecurityFilter ? QueryAsync(request, options, ct) : QueryCoreAsync(request, options, ct);
-
-            // Pure IObservable shape — the IAsyncEnumerable leaf runs entirely
-            // inside the IIoPool (every await ConfigureAwait(false) behind the
-            // pool gate) and its result is replayed via a ReplaySubject. NEVER a
-            // bare Observable.FromAsync: that only moves the subscribe onto the
-            // pool, leaving the await-foreach continuation free to resume on a
-            // captured scheduler and deadlock under a blocking subscriber (the
-            // snapshot-query hang). See IoPoolExtensions / AsynchronousCalls.md.
-            IObservable<List<(string? Path, T Item)>> RunQuery(CancellationToken ct) =>
-                _ioPool.Run(async cancel =>
+            // Pure-IObservable query: RunQueryNodes composes the (pooled) adapter
+            // reads reactively and emits the full snapshot once — no IAsyncEnumerable,
+            // no _ioPool.Run / await-foreach bridge that re-entered the single-threaded
+            // hub pump and deadlocked under bulk fan-out. useSecurityFilter selects the
+            // RLS-filtered (IMeshQueryProvider) vs raw (IMeshQueryCore) read.
+            IObservable<List<(string? Path, T Item)>> RunQuery() =>
+                RunQueryNodes(request, options, useSecurityFilter)
+                    .Select(nodes =>
                     {
-                        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, cancel);
                         var results = new List<(string?, T)>();
-                        await foreach (var item in QueryStream(linked.Token).ConfigureAwait(false))
-                        {
+                        foreach (var item in nodes)
                             if (item is T typed)
                                 results.Add((GetItemPath(item), typed));
-                        }
                         return results;
                     });
 
@@ -1101,7 +1053,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             disposables.Add(earlySubscription);
 
             disposables.Add(
-                RunQuery(cts.Token).Subscribe(
+                RunQuery().Subscribe(
                     initialResults =>
                     {
                         var initialItems = new List<T>();
@@ -1131,7 +1083,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                         // RunQuery per change vs batched) for correctness.
                         disposables.Add(
                             changeBuffer
-                                .Select(n => RunQuery(cts.Token)
+                                .Select(n => RunQuery()
                                     .Select(newResults => (batch: (IList<DataChangeNotification>)new[] { n }, newResults)))
                                 .Concat()
                                 .Subscribe(
