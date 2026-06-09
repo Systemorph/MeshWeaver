@@ -54,6 +54,17 @@ public static class CreateLayoutArea
     {
         var currentPath = host.Hub.Address.ToString();
 
+        // Chat-protocol short-circuit. When an explicitly-requested NodeType declares
+        // CreateBehavior=Chat (the threads catalog "+" passes ?type=Thread&namespace=…/_Thread),
+        // we don't show the generic form: we create the chat-input node IN THE REQUESTED
+        // NAMESPACE — {namespace}/ChatInput, i.e. {context}/_Thread/ChatInput — and redirect
+        // to its OVERVIEW, whose default area is the same composer the side panel shows
+        // (registered on the ChatInput NodeType). Nothing else is created up-front; the
+        // thread is created on submit from that composer.
+        var chatRedirect = TryBuildChatProtocolRedirect(host);
+        if (chatRedirect != null)
+            return chatRedirect;
+
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
@@ -76,6 +87,49 @@ public static class CreateLayoutArea
 
             return (UiControl?)BuildCreateNewForm(host, nodes, currentPath);
         });
+    }
+
+    /// <summary>The NodeType materialized by the Chat create-protocol — the per-namespace
+    /// chat-input node whose overview default area is the new-thread composer. A string,
+    /// not a type reference: the ChatInput NodeType is registered by the AI module, which
+    /// Graph does not (and must not) reference.</summary>
+    private const string ChatInputType = "ChatInput";
+
+    /// <summary>
+    /// Implements the Chat create-protocol (<see cref="NodeCreateBehavior.Chat"/>). When the
+    /// explicitly-requested type (query <c>?type=</c>) declares that behavior, create the
+    /// chat-input node in the requested namespace — <c>{namespace}/ChatInput</c>, i.e.
+    /// <c>{context}/_Thread/ChatInput</c> — and redirect to its overview. The overview's
+    /// default area is the composer registered on the ChatInput NodeType, the SAME view the
+    /// side panel renders. Re-creating on each "+" resets to a fresh empty composer (the
+    /// "new chat" semantics). Returns <c>null</c> when the protocol doesn't apply.
+    /// </summary>
+    private static IObservable<UiControl?>? TryBuildChatProtocolRedirect(LayoutAreaHost host)
+    {
+        var typeOverride = host.GetQueryStringParamValue("type");
+        if (string.IsNullOrEmpty(typeOverride))
+            return null;
+        if (host.Hub.ServiceProvider.FindStaticNode(typeOverride)?.Content is not NodeTypeDefinition td
+            || td.CreateBehavior != NodeCreateBehavior.Chat)
+            return null;
+
+        var ns = host.GetQueryStringParamValue("namespace") ?? host.Hub.Address.ToString();
+        var chatInputPath = string.IsNullOrEmpty(ns) ? ChatInputType : $"{ns}/{ChatInputType}";
+        var overviewHref = $"/{chatInputPath}";
+
+        var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var node = MeshNode.FromPath(chatInputPath) with
+        {
+            Name = "New Chat",
+            NodeType = ChatInputType,
+            State = MeshNodeState.Active,
+        };
+        // Create then navigate. If the node already exists and the create errors, still
+        // navigate — the composer overview is there either way.
+        return meshService.CreateNode(node)
+            .Take(1)
+            .Select(_ => (UiControl?)new RedirectControl(overviewHref))
+            .Catch<UiControl?, Exception>(_ => Observable.Return<UiControl?>(new RedirectControl(overviewHref)));
     }
 
     /// <summary>
@@ -568,13 +622,8 @@ public static class CreateLayoutArea
             var typeNode = host.Hub.ServiceProvider.FindStaticNode(knownType);
             var typeDef = typeNode?.Content as NodeTypeDefinition;
 
-            // The NodeType carries the GUI-create protocol. When it declares the Chat
-            // behavior (e.g. Thread) AND the type was explicitly requested — the catalog
-            // "+" passes ?type=Thread — open the new-chat composer (/chat) instead of this
-            // generic form. Nothing is created up-front; the instance is created on submit.
-            var typeExplicit = !string.IsNullOrEmpty(typeOverride) || restrictedTypes is { Length: 1 };
-            if (typeExplicit && typeDef?.CreateBehavior == NodeCreateBehavior.Chat)
-                return new RedirectControl("/chat");
+            // (Chat create-protocol is handled earlier in Create() via
+            // TryBuildChatProtocolRedirect — it never reaches this generic form.)
 
             // Apply DefaultNamespace from NodeTypeDefinition (pre-selects but doesn't restrict)
             if (typeDef?.DefaultNamespace != null)
