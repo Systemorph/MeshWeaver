@@ -135,10 +135,21 @@ public sealed class GraphSubscriptionService(
                 ExpiresAt = expiration
             }
         };
+        // Idempotent persist: if CreateNode hits an already-existing node (the seeded
+        // default, or a prior run whose startup read timed out → nodeExists=false), fall
+        // back to UpdateNode so the live SubscriptionId IS saved. Without this the id is
+        // lost and the next restart creates a DUPLICATE inbox subscription (mail delivered
+        // twice). A genuine failure still surfaces via the inner warning.
         using (access.ImpersonateAsSystem())
             (nodeExists ? meshService.UpdateNode(node) : meshService.CreateNode(node)).Subscribe(
                 _ => nodeExists = true,
-                ex => logger?.LogWarning(ex, "EmailSubscription: failed to persist subscription state"));
+                _ =>
+                {
+                    using (access.ImpersonateAsSystem())
+                        meshService.UpdateNode(node).Subscribe(
+                            _ => nodeExists = true,
+                            ex2 => logger?.LogWarning(ex2, "EmailSubscription: failed to persist subscription state"));
+                });
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
