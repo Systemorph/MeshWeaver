@@ -261,6 +261,13 @@ var portal = builder
     .WithReference(orleans)
     // Local modes need Development environment for static web assets (_framework, _content)
     .WithEnvironment("ASPNETCORE_ENVIRONMENT", isDeployed ? "Production" : "Development")
+    // Static-repo → DB sync: materialize the embedded docs, built-in agents, and model catalog
+    // into their DB partitions on boot (served from PG — the distributed/Orleans routing does not
+    // consult the in-memory embedded adapter, so without this /Doc pages hang). Mirrors the Helm
+    // default and values.atioz.yaml.
+    .WithEnvironment("Features__StaticRepoSync__Partitions__0", "Doc")
+    .WithEnvironment("Features__StaticRepoSync__Partitions__1", "Agent")
+    .WithEnvironment("Features__StaticRepoSync__Partitions__2", "Model")
     // Embedding
     .WithEnvironment("Embedding__Endpoint", embeddingEndpoint)
     .WithEnvironment("Embedding__Model", embeddingModel)

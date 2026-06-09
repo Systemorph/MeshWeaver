@@ -1,3 +1,4 @@
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 
 namespace MeshWeaver.AI;
@@ -28,4 +29,21 @@ public sealed class AgentStaticRepoSource(BuiltInAgentProvider provider) : IStat
         provider.GetStaticNodes()
             .Where(n => !n.Segments.Skip(1).Any(seg => seg.StartsWith('_')))
             .ToArray();
+
+    /// <inheritdoc />
+    public MeshNode? PartitionRoot => new("Agent")
+    {
+        Name = "Agents",
+        NodeType = "Space",
+        State = MeshNodeState.Active,
+        Content = new MarkdownContent
+        {
+            Content = """
+                # Agents
+
+                The built-in agents available across the platform. Open one to see its instructions,
+                or use the chat input below to start a thread with an agent.
+                """
+        }
+    };
 }

@@ -1,3 +1,4 @@
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 
 namespace MeshWeaver.AI;
@@ -27,4 +28,21 @@ public sealed class ModelStaticRepoSource(BuiltInLanguageModelProvider provider)
     // (the _Policy is also prune-protected by the governance rule).
     public IReadOnlyList<MeshNode> EnumerateSourceNodes() =>
         provider.GetStaticNodes().ToArray();
+
+    /// <inheritdoc />
+    public MeshNode? PartitionRoot => new(LanguageModelNodeType.RootNamespace)
+    {
+        Name = "Models",
+        NodeType = "Space",
+        State = MeshNodeState.Active,
+        Content = new MarkdownContent
+        {
+            Content = """
+                # Models
+
+                The language models available to this deployment. Browse the catalog to see each
+                model's provider and capabilities.
+                """
+        }
+    };
 }

@@ -33,6 +33,24 @@ public interface IStaticRepoSource
     /// All source nodes <b>with full content</b> (e.g. <c>MarkdownContent</c>), in any order
     /// (the fingerprint + import are order-independent). This is the authored content, read
     /// straight from the assembly — never from the live mesh.
+    ///
+    /// <para>These are the partition's <b>children</b> only — never the partition root. The
+    /// <c>namespace=""</c> root is created as a proper <c>Space</c> by the importer as a standard
+    /// step (see <see cref="PartitionRoot"/>); shipping it here would break the importer's
+    /// descendants-scoped existing-read and prune logic.</para>
     /// </summary>
     IReadOnlyList<MeshNode> EnumerateSourceNodes();
+
+    /// <summary>
+    /// Optional customization of the partition <b>root</b> node (<c>namespace="", id={Partition}</c>).
+    /// The importer always ensures a proper <c>Space</c> root exists for the partition as a standard
+    /// step; when this returns <c>null</c> it synthesizes a generic <c>Space</c> root. Override it to
+    /// ship a curated landing page (e.g. the Doc welcome page) — typically
+    /// <c>new MeshNode(Partition) { NodeType = "Space", Content = new MarkdownContent { … } }</c>.
+    ///
+    /// <para>Use <c>NodeType = "Space"</c> as a string and <c>MarkdownContent</c> for the body — do
+    /// NOT reference the <c>Space</c> record (it lives in the portal assembly). The importer
+    /// prerenders the markdown into <c>PreRenderedHtml</c>, which the Space Overview renders.</para>
+    /// </summary>
+    MeshNode? PartitionRoot => null;
 }

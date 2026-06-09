@@ -71,15 +71,27 @@ public static class StaticRepoImporter
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
 
         var nodes = source.EnumerateSourceNodes();
-        var fingerprint = PartitionSourceFingerprint.Compute(nodes, source.Versioned, hub.JsonSerializerOptions);
+        // The partition root (namespace="", id=Partition) is a STANDARD part of every import — a
+        // proper Space so the partition is routable + listable and has a landing page. Sources may
+        // customize it (the Doc welcome page); otherwise we synthesize a generic Space root. It is
+        // included in the fingerprint so editing the welcome re-imports.
+        var root = ResolveRoot(source);
+        var fingerprint = PartitionSourceFingerprint.Compute(
+            nodes.Append(root).ToArray(), source.Versioned, hub.JsonSerializerOptions);
         var activityId = $"import-{fingerprint}";
         var activityNamespace = $"{source.Partition}/_Activity";
         var activityPath = $"{activityNamespace}/{activityId}";
 
-        // Short-circuit: a Succeeded import activity for this fingerprint = already imported.
-        // (Existence check via query — eventually consistent, but the CreateNode lock below is the
-        // authoritative guard; a stale miss just attempts the create and loses the race.)
-        return meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{activityPath}"))
+        // 🚨 Provision the partition schema BEFORE the activity-lock create. The lock node lives at
+        // {Partition}/_Activity/… — i.e. INSIDE the partition schema. On a not-yet-provisioned
+        // partition the create would fault (42P01, no lazy schema create — see GhostSchemaInvariant)
+        // and be misreported as "AlreadyRunning". EnsurePartitionProvisioned is reactive + pooled +
+        // promise-cached, so Run's later re-provision of the touched partitions is a no-op.
+        return ProvisionPartitions(hub, [source.Partition])
+            // Short-circuit: a Succeeded import activity for this fingerprint = already imported.
+            // (Existence check via query — eventually consistent, but the CreateNode lock below is the
+            // authoritative guard; a stale miss just attempts the create and loses the race.)
+            .SelectMany(_ => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{activityPath}")))
             .Take(1)
             .SelectMany(change =>
             {
@@ -106,8 +118,10 @@ public static class StaticRepoImporter
                 };
 
                 // CreateNode is the lock: first instance wins; concurrent replicas fault here.
-                return meshService.CreateNode(activityNode)
-                    .SelectMany(_ => Run(hub, source, nodes, activityPath, fingerprint, logger))
+                // Under System so the lock write authorizes on read-only-_Policy partitions and
+                // persists on the distributed path (see AsSystem).
+                return AsSystem(hub, () => meshService.CreateNode(activityNode))
+                    .SelectMany(_ => Run(hub, source, nodes, root, activityPath, fingerprint, logger))
                     .Catch<StaticRepoImportResult, Exception>(ex =>
                     {
                         logger?.LogInformation(
@@ -121,7 +135,7 @@ public static class StaticRepoImporter
 
     private static IObservable<StaticRepoImportResult> Run(
         IMessageHub hub, IStaticRepoSource source, IReadOnlyList<MeshNode> nodes,
-        string activityPath, string fingerprint, ILogger? logger)
+        MeshNode root, string activityPath, string fingerprint, ILogger? logger)
     {
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         NodeTypeCompilationActivity.AppendLog(
@@ -146,13 +160,9 @@ public static class StaticRepoImporter
         // the canonical provisioning entry point — never declare PartitionDefinition nodes to force a
         // schema (that path used the namespace verbatim and provisioned the wrong CASE). No async,
         // no FromAsync — all IObservable. See Doc/Architecture/ControlledIoPooling.md + StaticRepoImport.md.
-        var providers = hub.ServiceProvider.GetServices<IPartitionStorageProvider>().ToArray();
-        var provisionLeaves = partitions
-            .SelectMany(p => providers.Select(pr => pr.EnsurePartitionProvisioned(p)))
-            .ToArray();
-        var provision = provisionLeaves.Length == 0
-            ? Observable.Return(System.Reactive.Unit.Default)
-            : Observable.Merge(provisionLeaves).ToList().Select(_ => System.Reactive.Unit.Default);
+        // (source.Partition was already provisioned in Import before the activity lock; the promise
+        // cache makes this a no-op for it and provisions any additional touched partition, e.g. _Provider.)
+        var provision = ProvisionPartitions(hub, partitions);
 
         var existingSubtrees = partitions.Length == 0
             ? Observable.Return((IEnumerable<MeshNode>)Array.Empty<MeshNode>())
@@ -164,6 +174,10 @@ public static class StaticRepoImporter
                 .Select(lists => lists.SelectMany(x => x));
 
         return provision
+            // Root-first: ensure the Space partition root exists (standard import step) before the
+            // children. Children depend only on the schema (provisioned above), but the root is what
+            // makes the partition a routable + listable Space with a landing page.
+            .SelectMany(_ => EnsureRoot(hub, meshService, source, root, activityPath, logger))
             .SelectMany(_ => existingSubtrees)
             .Take(1)
             .SelectMany(existingItems =>
@@ -199,9 +213,9 @@ public static class StaticRepoImporter
 
                         var materialized = Materialize(sourceNode);
                         if (target is null)
-                            return CreateOne(meshService, materialized, logger);
+                            return CreateOne(hub, meshService, materialized, logger);
 
-                        // Preserve owner identity; Version is re-stamped by the owner on the Full.
+                        // Preserve owner identity; Version is re-stamped on the fresh create.
                         var authoritative = materialized with
                         {
                             CreatedDate = target.CreatedDate,
@@ -231,7 +245,7 @@ public static class StaticRepoImporter
                     var pruned = toPrune.Length == 0
                         ? Observable.Return(0)
                         : toPrune
-                            .Select(t => meshService.DeleteNode(t.Path)
+                            .Select(t => AsSystem(hub, () => meshService.DeleteNode(t.Path))
                                 .Select(_ => 1)
                                 .Catch<int, Exception>(ex =>
                                 {
@@ -264,6 +278,87 @@ public static class StaticRepoImporter
                 return Observable.Return(new StaticRepoImportResult(source.Partition, fingerprint, "Failed"));
             });
     }
+
+    /// <summary>
+    /// The partition root node the importer materializes (<c>namespace="", id={Partition}</c>). Uses
+    /// the source's <see cref="IStaticRepoSource.PartitionRoot"/> customization when provided,
+    /// otherwise synthesizes a generic <c>Space</c> root with a default welcome — so creating a
+    /// proper Space is a STANDARD part of every import, never per-source opt-in.
+    /// </summary>
+    private static MeshNode ResolveRoot(IStaticRepoSource source) =>
+        source.PartitionRoot ?? new MeshNode(source.Partition)
+        {
+            Name = source.Partition,
+            NodeType = SpaceNodeTypeName,
+            State = MeshNodeState.Active,
+            Content = new MarkdownContent
+            {
+                Content = $"""
+                    # {source.Partition}
+
+                    Welcome. Explore the contents from the menu above, or use the chat input below to
+                    ask a question or start a new thread.
+                    """
+            }
+        };
+
+    /// <summary>The <c>Space</c> node type — referenced by name to avoid a portal-assembly dependency.</summary>
+    private const string SpaceNodeTypeName = "Space";
+
+    /// <summary>
+    /// Provisions each partition's storage (PG schema + satellite tables) via the standard
+    /// <see cref="IPartitionStorageProvider.EnsurePartitionProvisioned"/> (reactive, pooled,
+    /// promise-cached, lowercases the schema). Providers that don't own a partition no-op. Idempotent
+    /// — safe to call for the same partition more than once across the import.
+    /// </summary>
+    private static IObservable<System.Reactive.Unit> ProvisionPartitions(
+        IMessageHub hub, IEnumerable<string> partitions)
+    {
+        var providers = hub.ServiceProvider.GetServices<IPartitionStorageProvider>().ToArray();
+        var leaves = partitions
+            .Where(p => !string.IsNullOrEmpty(p))
+            .SelectMany(p => providers.Select(pr => pr.EnsurePartitionProvisioned(p)))
+            .ToArray();
+        return leaves.Length == 0
+            ? Observable.Return(System.Reactive.Unit.Default)
+            : Observable.Merge(leaves).ToList().Select(_ => System.Reactive.Unit.Default);
+    }
+
+    /// <summary>
+    /// Ensures the partition root exists as a proper <c>Space</c>. Read by EXACT path (not
+    /// <c>scope:descendants</c>, which emits <c>LIKE 'P/%'</c> and never matches the
+    /// <c>namespace=""</c> root). Absent → create through the canonical pipeline (a <c>Space</c>
+    /// create triggers eager schema provisioning + the partition-definition/routing prime + the
+    /// admin grant); present → overwrite to refresh the welcome, preserving owner identity. The
+    /// create degrades to an overwrite on a concurrent-replica "already exists" so the import never
+    /// faults on the lock race.
+    /// </summary>
+    private static IObservable<int> EnsureRoot(
+        IMessageHub hub, IMeshService meshService, IStaticRepoSource source, MeshNode root,
+        string activityPath, ILogger? logger) =>
+        meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{source.Partition}"))
+            .Take(1)
+            .SelectMany(change =>
+            {
+                var existing = change.Items.FirstOrDefault(n => string.IsNullOrEmpty(n.Namespace));
+                var materialized = Materialize(root);
+                if (existing is null)
+                {
+                    NodeTypeCompilationActivity.AppendLog(
+                        hub, activityPath, $"Creating Space root {source.Partition}…", logger!);
+                    return CreateOne(hub, meshService, materialized, logger)
+                        // Concurrent replica won the create between our read and write — replace
+                        // instead of faulting the whole import (mirrors the activity-lock catch).
+                        .Catch<int, Exception>(_ => OverwriteOne(hub, materialized));
+                }
+
+                var authoritative = materialized with
+                {
+                    CreatedDate = existing.CreatedDate,
+                    CreatedBy = existing.CreatedBy
+                };
+                return OverwriteOne(hub, authoritative);
+            });
 
     /// <summary>Top-level partition segment of a path (the part before the first '/').</summary>
     private static string FirstSegment(string path)
@@ -308,19 +403,46 @@ public static class StaticRepoImporter
         return node with { State = MeshNodeState.Active };
     }
 
+    /// <summary>
+    /// Establishes the well-known System identity ON THE WRITE'S OWN SUBSCRIBE THREAD. The single
+    /// top-level <c>ImpersonateAsSystem</c> in <see cref="ImportAll"/> is NOT sufficient on the
+    /// distributed/Orleans path: it sets an AsyncLocal on the (TaskPool) subscribe thread, but every
+    /// cross-hub write is subscribed deep inside <c>.SelectMany</c>/<c>.Merge</c> lambdas that run on
+    /// PG-query / remote-stream emission threads where that AsyncLocal is gone — so the write captures
+    /// a null AccessContext, the owner's PostPipeline fails closed, and the write is silently dropped
+    /// (while returning an optimistic snapshot). Re-establishing System synchronously around each
+    /// write's subscribe makes <c>CreateNode</c>/<c>DeleteNode</c> capture System at their <c>Defer</c>,
+    /// and makes <c>GetMeshNodeStream(...).Overwrite</c> capture System into its <c>capturedContext</c>
+    /// (which the sync-stream post then carries). See Doc/Architecture/AccessContextPropagation.md.
+    /// </summary>
+    private static IObservable<T> AsSystem<T>(IMessageHub hub, Func<IObservable<T>> write)
+    {
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        return access is null
+            ? Observable.Defer(write)
+            : Observable.Using(() => access.ImpersonateAsSystem(), _ => write());
+    }
+
     /// <summary>Create an absent node through the canonical create pipeline (content + prerender,
-    /// already computed by <see cref="Materialize"/>). Returns 1 on success.</summary>
-    private static IObservable<int> CreateOne(IMeshService meshService, MeshNode node, ILogger? logger) =>
-        meshService.CreateNode(node)
+    /// already computed by <see cref="Materialize"/>). Returns 1 on success. Idempotent: if the node
+    /// already exists (the existing-subtree snapshot is eventually consistent and can miss a row, or
+    /// a prior partial import created it), fall back to <see cref="OverwriteOne"/> rather than
+    /// faulting the whole partition import.</summary>
+    private static IObservable<int> CreateOne(IMessageHub hub, IMeshService meshService, MeshNode node, ILogger? logger) =>
+        AsSystem(hub, () => meshService.CreateNode(node))
             .FirstAsync()
             .Select(_ => 1)
-            .Catch<int, Exception>(ex => Observable.Throw<int>(
-                new InvalidOperationException($"Create of '{node.Path}' failed: {ex.Message}", ex)));
+            .Catch<int, Exception>(ex =>
+                ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase)
+                    ? OverwriteOne(hub, node)
+                    : Observable.Throw<int>(
+                        new InvalidOperationException($"Create of '{node.Path}' failed: {ex.Message}", ex)));
 
-    /// <summary>Overwrite an existing node with the full authoritative state (ChangeType.Full),
-    /// decoupled from the merge-sync protocol. Returns 1 on success.</summary>
+    /// <summary>Overwrite an existing node with the full authoritative state (ChangeType.Full).
+    /// Non-destructive (no delete) — persistence depends on the owner→PG write-back carrying the
+    /// caller's AccessContext (see <c>WriteViaSyncStream</c> + the owner-hub persistence path).</summary>
     private static IObservable<int> OverwriteOne(IMessageHub hub, MeshNode node) =>
-        hub.GetWorkspace().GetMeshNodeStream(node.Path).Overwrite(node)
+        AsSystem(hub, () => hub.GetWorkspace().GetMeshNodeStream(node.Path).Overwrite(node))
             .FirstAsync()
             .Select(_ => 1)
             .Catch<int, Exception>(ex => Observable.Throw<int>(

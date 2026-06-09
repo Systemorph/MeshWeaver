@@ -3,6 +3,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
@@ -1109,6 +1110,12 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
             Version = reader.GetInt64(reader.GetOrdinal("version")),
             State = (MeshNodeState)reader.GetInt16(reader.GetOrdinal("state")),
             Content = content,
+            // Mirror the prerendered HTML onto the top-level field, like the FileSystem/Caching
+            // adapters do (CachingStorageAdapter.MergeIndexMarkdownAsync). Consumers that render
+            // straight from the node — e.g. the Space Overview's BuildBodyContent — read
+            // MeshNode.PreRenderedHtml, not Content; without this the welcome page served from PG
+            // is blank. It's a transient mirror of MarkdownContent.PrerenderedHtml, not a column.
+            PreRenderedHtml = content is MarkdownContent { PrerenderedHtml: { Length: > 0 } html } ? html : null,
             DesiredId = reader.IsDBNull(reader.GetOrdinal("desired_id")) ? null : reader.GetString(reader.GetOrdinal("desired_id")),
             MainNode = reader.IsDBNull(reader.GetOrdinal("main_node"))
                 ? (string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}")
