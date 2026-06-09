@@ -44,23 +44,37 @@ public static class MeshTeardownExtensions
     {
         ArgumentNullException.ThrowIfNull(mesh);
 
-        // Capture the registry while the scope is still ALIVE — never resolve DI
-        // once disposal has begun (the scope may already be tearing down).
+        // Capture mesh-scoped teardown services while the scope is still ALIVE —
+        // never resolve DI once disposal has begun (the scope may already be tearing down).
         var ioPools = mesh.ServiceProvider.GetService<IoPoolRegistry>();
+        var asyncDisposeQueue = mesh.ServiceProvider.GetService<AsyncDisposeQueue>();
 
         mesh.Dispose();
 
-        await mesh.WaitForDisposalAndIoDrainAsync(ioPools, timeout);
+        await mesh.WaitForDisposalAndIoDrainAsync(ioPools, asyncDisposeQueue, timeout);
     }
 
     /// <summary>
     /// The wait half of <see cref="TeardownAsync"/>, exposed for callers that
     /// already drive <see cref="IMessageHub.Dispose"/> themselves (and keep their
     /// own progress/diagnostic loop around <see cref="IMessageHub.DisposalCompleted"/>).
-    /// Pass the <see cref="IoPoolRegistry"/> captured BEFORE disposal began.
+    /// Pass the <see cref="IoPoolRegistry"/> + <see cref="AsyncDisposeQueue"/> captured
+    /// BEFORE disposal began.
+    ///
+    /// <para>Three ordered phases, all BEFORE the service scope is disposed:</para>
+    /// <list type="number">
+    /// <item>await <see cref="IMessageHub.DisposalCompleted"/> — the synchronous/reactive
+    ///   disposal: action blocks + message round-trips. Resources enqueue their async
+    ///   cleanup onto the <see cref="AsyncDisposeQueue"/> during this phase.</item>
+    /// <item>drain the offloaded ThreadPool I/O the action block doesn't cover
+    ///   (<see cref="IoPoolRegistry.WhenDrained"/>).</item>
+    /// <item>after all the sync stuff is disposed, give the
+    ///   <see cref="AsyncDisposeQueue"/> a bounded quiesce budget to finish
+    ///   (<see cref="AsyncDisposeQueue.DrainAsync"/>), then the caller closes the scope.</item>
+    /// </list>
     /// </summary>
     public static async Task WaitForDisposalAndIoDrainAsync(
-        this IMessageHub mesh, IoPoolRegistry? ioPools, TimeSpan timeout)
+        this IMessageHub mesh, IoPoolRegistry? ioPools, AsyncDisposeQueue? asyncDisposeQueue, TimeSpan timeout)
     {
         // (1) Action blocks + message round-trips.
         await mesh.DisposalCompleted
@@ -72,5 +86,10 @@ public static class MeshTeardownExtensions
         // (2) Offloaded ThreadPool I/O — the half DisposalCompleted does not cover.
         if (ioPools is not null)
             await ioPools.WhenDrained(timeout).FirstAsync().ToTask();
+
+        // (3) After all the sync stuff is disposed (and everyone has enqueued their
+        //     async cleanup), quiesce the async dispose queue before the scope closes.
+        if (asyncDisposeQueue is not null)
+            await asyncDisposeQueue.DrainAsync(timeout);
     }
 }

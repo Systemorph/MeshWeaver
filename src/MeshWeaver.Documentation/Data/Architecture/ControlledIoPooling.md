@@ -288,38 +288,47 @@ reactive instead:
 - **Let them all finish.** When the teardown owns several reactive completions, drain them together so
   they all emit before it returns — never an awaited loop that serialises (and can deadlock on) each one.
 
-### 🚨 The mesh teardown drains TWO things, not one
+### 🚨 The mesh teardown drains THREE things, not one
 
 `DisposalCompleted` is **necessary but NOT sufficient**. It drains the hub's action blocks and
 in-flight message round-trips — but **I/O offloaded through `IIoPool` runs on the ThreadPool,
 independent of the action block, and `DisposalCompleted` knows nothing about it.** If the teardown
-disposes the service scope after `DisposalCompleted` but while an `IIoPool` operation is still in
-flight, that operation's continuation resolves a service from the dead Autofac scope and throws
-`ObjectDisposedException: …LifetimeScope… has already been disposed` — unobserved, it surfaces as an
-xUnit **"catastrophic failure"** that aborts the whole run.
+disposes the service scope after `DisposalCompleted` but while an `IIoPool` operation (or any other
+async cleanup) is still in flight, that continuation resolves a service from the dead Autofac scope and
+throws `ObjectDisposedException: …LifetimeScope… has already been disposed` — unobserved, it surfaces
+as an xUnit **"catastrophic failure"** that aborts the whole run.
 
-So the mesh teardown awaits **both** halves, in order, before the scope is disposed:
+So the mesh teardown awaits **all three**, in order, before the scope is disposed:
 
-1. `IMessageHub.DisposalCompleted` — action blocks + message round-trips.
+1. `IMessageHub.DisposalCompleted` — action blocks + message round-trips. (Resources enqueue their
+   async cleanup onto the `AsyncDisposeQueue` during this synchronous-`Dispose()` phase — `Dispose()`
+   must never block, so async cleanup is *queued*, not run inline.)
 2. `IoPoolRegistry.WhenDrained(timeout)` — offloaded ThreadPool I/O (`TotalInFlight == 0`).
+3. `AsyncDisposeQueue.DrainAsync(timeout)` — the queued async cleanup. A TPL `ActionBlock` drains it;
+   `DrainAsync` `Complete()`s the block and awaits the remainder (bounded), so it converges even under
+   continuous influx — a *version-target* wait would not (the queue is a message stream / endless
+   messages). `DrainedVersion` advances once per item, the test hook.
 
-**The only sanctioned `await` is that single two-phase drain at the boundary** — the **mesh teardown**,
-the same in tests and in prod (the silo's mesh disposal at shutdown). Capture the `IoPoolRegistry`
-*before* `Dispose()` (never resolve DI once disposal has begun), then drain both, bounded:
+**The only sanctioned `await` is that single three-phase drain at the boundary** — the **mesh teardown**,
+the same in tests and in prod (the silo's mesh disposal at shutdown). Capture the mesh-scoped teardown
+services *before* `Dispose()` (never resolve DI once disposal has begun), then drain all three, bounded:
 
 ```csharp
 // ✅ The one drain, at the mesh-teardown boundary (test mesh OR prod silo shutdown).
 //    Either call the canonical helper:
 await mesh.TeardownAsync(TimeSpan.FromSeconds(15));   // MeshWeaver.Mesh.MeshTeardownExtensions
 
-//    …or, if you drive Dispose() yourself, do both phases by hand:
-var ioPools = mesh.ServiceProvider.GetService<IoPoolRegistry>();   // capture BEFORE Dispose()
+//    …or, if you drive Dispose() yourself, do the phases by hand:
+var ioPools = mesh.ServiceProvider.GetService<IoPoolRegistry>();        // capture BEFORE Dispose()
+var disposeQueue = mesh.ServiceProvider.GetService<AsyncDisposeQueue>();
 mesh.Dispose();
 await mesh.DisposalCompleted
     .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
     .FirstOrDefaultAsync().ToTask().WaitAsync(TimeSpan.FromSeconds(15));   // phase 1
 if (ioPools is not null)
     await ioPools.WhenDrained(TimeSpan.FromSeconds(15)).FirstAsync().ToTask();   // phase 2
+if (disposeQueue is not null)
+    await disposeQueue.DrainAsync(TimeSpan.FromSeconds(15));               // phase 3
 // ONLY NOW dispose the service scope.
 ```
 

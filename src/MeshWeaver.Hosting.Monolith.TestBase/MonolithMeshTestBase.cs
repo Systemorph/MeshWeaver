@@ -977,11 +977,13 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         try
         {
             FileOutput.WriteLine($"[DISPOSE] {testName}: Mesh.Dispose() invoking on {Mesh.Address}");
-            // Capture the mesh's I/O pool registry BEFORE disposal — once Dispose()
-            // begins, resolving DI races the scope teardown. We wait for it to drain
-            // after DisposalCompleted (below) so the service scope isn't torn down
-            // while offloaded ThreadPool I/O is still running. See MeshTeardownExtensions.
+            // Capture the mesh-scoped teardown services BEFORE disposal — once Dispose()
+            // begins, resolving DI races the scope teardown. We drain them after
+            // DisposalCompleted (below) so the service scope isn't torn down while
+            // offloaded ThreadPool I/O is still running or async cleanup is still
+            // enqueued. See MeshTeardownExtensions.
             var ioPools = Mesh.ServiceProvider.GetService<IoPoolRegistry>();
+            var asyncDisposeQueue = Mesh.ServiceProvider.GetService<AsyncDisposeQueue>();
             Mesh.Dispose();
             TestPhaseTrace(testName, "DISPOSE_INVOKED", sw.ElapsedMilliseconds);
 
@@ -999,6 +1001,10 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
                     FileOutput.WriteLine(
                         $"[DISPOSE] {testName}: I/O pools still report {ioPools.TotalInFlight} in-flight after drain wait");
             }
+            // After all the sync stuff is disposed (and everyone has enqueued their async
+            // cleanup), quiesce the async dispose queue before the scope closes below.
+            if (asyncDisposeQueue is not null)
+                await asyncDisposeQueue.DrainAsync(DisposeTimeout);
             FileOutput.WriteLine($"[DISPOSE] {testName}: Mesh.Disposal completed in {sw.ElapsedMilliseconds}ms");
             TestPhaseTrace(testName, "DISPOSE_DONE", sw.ElapsedMilliseconds);
 
