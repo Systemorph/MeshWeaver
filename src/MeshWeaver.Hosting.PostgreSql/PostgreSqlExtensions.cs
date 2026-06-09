@@ -250,10 +250,25 @@ public static class PostgreSqlExtensions
         var opts = new PostgreSqlStorageOptions { ConnectionString = connectionString };
         configure?.Invoke(opts);
 
-        var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
-        dataSourceBuilder.UseVector();
-        configureDataSource?.Invoke(dataSourceBuilder);
-        var baseDataSource = dataSourceBuilder.Build();
+        // 🚨 Leak fix: the base NpgsqlDataSource (and its connection pool) used to be
+        // built here as a captured local and handed to the singleton factories below.
+        // A pool built outside the container is never tracked for disposal — DI only
+        // disposes IDisposables IT creates (type/factory registrations, NOT externally
+        // built instances passed to AddSingleton(instance)). So every mesh that ran
+        // this overload leaked a full connection pool on disposal; across a test
+        // project's many meshes the open server connections accumulated until Postgres
+        // rejected new ones ("53300: sorry, too many clients already"). Registering the
+        // data source via a factory makes the container its creator → it is disposed
+        // (pool closed) when the mesh's ServiceProvider is disposed. This also unifies
+        // both overloads on a single DI-resolved NpgsqlDataSource (the Aspire overload
+        // already resolves it from DI).
+        services.AddSingleton<NpgsqlDataSource>(_ =>
+        {
+            var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
+            dataSourceBuilder.UseVector();
+            configureDataSource?.Invoke(dataSourceBuilder);
+            return dataSourceBuilder.Build();
+        });
 
         // No need to remove a pre-registered InMemory wildcard: PersistenceService
         // orders wildcards by IPartitionStorageProvider.Priority desc, and
@@ -264,7 +279,7 @@ public static class PostgreSqlExtensions
 
         services.AddSingleton<PostgreSqlPartitionStorageProvider>(sp =>
             new PostgreSqlPartitionStorageProvider(
-                baseDataSource,
+                sp.GetRequiredService<NpgsqlDataSource>(),
                 connectionString,
                 opts,
                 partitions: null,
@@ -279,7 +294,7 @@ public static class PostgreSqlExtensions
         // Cross-schema query provider — UNION fan-out over searchable partitions.
         services.AddSingleton<ICrossSchemaQueryProvider>(sp =>
             new PostgreSqlCrossSchemaQueryProvider(
-                baseDataSource,
+                sp.GetRequiredService<NpgsqlDataSource>(),
                 sp.GetService<ILoggerFactory>()?.CreateLogger<PostgreSqlCrossSchemaQueryProvider>()));
 
         // Fan-out IMeshQueryProvider — picks up unscoped + wildcard-namespace
