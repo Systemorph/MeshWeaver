@@ -92,27 +92,27 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
     }
 
     /// <summary>
-    /// Out-of-thread composer: the per-user ChatInput node's default ("") layout area —
+    /// Out-of-thread composer: the per-user ThreadComposer node's default ("") layout area —
     /// the databound compose box (message text + harness/agent/model + attachments),
-    /// backed by <c>{userHome}/_Memex/ChatInput</c> (see <see cref="ChatInputView"/>).
+    /// backed by <c>{userHome}/_Memex/ThreadComposer</c> (see <see cref="ThreadComposerView"/>).
     /// Null until the user identity resolves, in which case the caller degrades to the
     /// direct <see cref="GetNewChatControl"/> ThreadChatControl.
     /// </summary>
-    private LayoutAreaControl? GetChatInputLayoutArea()
+    private LayoutAreaControl? GetThreadComposerLayoutArea()
     {
         var userHome = ResolveUserHome();
         return string.IsNullOrEmpty(userHome)
             ? null
-            : new LayoutAreaControl(ChatInputNodeType.PathFor(userHome), new LayoutAreaReference(string.Empty));
+            : new LayoutAreaControl(ThreadComposerNodeType.PathFor(userHome), new LayoutAreaReference(string.Empty));
     }
 
     /// <summary>
     /// The signed-in user's partition — the main node that owns
-    /// <c>{user}/_Memex/ChatInput</c>. Prefer <see cref="AccessService.CircuitContext"/>
+    /// <c>{user}/_Memex/ThreadComposer</c>. Prefer <see cref="AccessService.CircuitContext"/>
     /// (the durable per-circuit identity); <see cref="AccessService.Context"/>
     /// (AsyncLocal) is only a fallback and is filtered for a leaked
     /// <c>system-security</c> / hub principal. Trusting <c>Context</c> first pointed
-    /// the composer at a non-existent <c>system-security/_Memex/ChatInput</c>, so the
+    /// the composer at a non-existent <c>system-security/_Memex/ThreadComposer</c>, so the
     /// "+" new-chat rendered nothing — the "+ not working" bug.
     /// </summary>
     private string? ResolveUserHome()
@@ -136,16 +136,16 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
         SidePanelState.SetContentPath(null);
 
         // Fresh empty chat: clear the in-progress draft (message text + attachments)
-        // on the per-user ChatInput node but KEEP the harness/agent/model selection —
+        // on the per-user ThreadComposer node but KEEP the harness/agent/model selection —
         // "copy the thread input from _Memex except content". No thread is created
         // here; the thread is created on submit. The composer rebinds to the cleared
         // content via its live stream.
         var userHome = ResolveUserHome();
         if (!string.IsNullOrEmpty(userHome))
         {
-            StreamCache.Update(ChatInputNodeType.PathFor(userHome), n =>
+            StreamCache.Update(ThreadComposerNodeType.PathFor(userHome), n =>
             {
-                if (n.Content is not ChatInput ci) return n;
+                if (n.Content is not ThreadComposer ci) return n;
                 if (string.IsNullOrEmpty(ci.MessageContent)
                     && (ci.Attachments is null || ci.Attachments.Count == 0))
                     return n;

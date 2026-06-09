@@ -83,13 +83,9 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
     {
         CurrentModelName = modelName;
 
-        if (string.IsNullOrEmpty(config.PreferredModel) && !string.IsNullOrEmpty(config.ModelTier))
-        {
-            var tierConfig = Hub.ServiceProvider.GetService<IOptions<ModelTierConfiguration>>()?.Value;
-            var resolvedModel = tierConfig?.Resolve(config.ModelTier);
-            if (!string.IsNullOrEmpty(resolvedModel))
-                config = config with { PreferredModel = resolvedModel };
-        }
+        // Model tiers (heavy/standard/light/utility) removed — the model is ALWAYS the one
+        // selected in the chat composer (ThreadComposer.ModelName), threaded through as
+        // modelName / CurrentModelName. An agent's explicit PreferredModel still wins when set.
 
         // Sync: use raw instructions, skip @@reference resolution (resolved lazily)
         var instructions = GetAgentInstructions(config, hierarchyAgents, chat);
@@ -106,13 +102,9 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
     {
         CurrentModelName = modelName;
 
-        if (string.IsNullOrEmpty(config.PreferredModel) && !string.IsNullOrEmpty(config.ModelTier))
-        {
-            var tierConfig = Hub.ServiceProvider.GetService<IOptions<ModelTierConfiguration>>()?.Value;
-            var resolvedModel = tierConfig?.Resolve(config.ModelTier);
-            if (!string.IsNullOrEmpty(resolvedModel))
-                config = config with { PreferredModel = resolvedModel };
-        }
+        // Model tiers (heavy/standard/light/utility) removed — the model is ALWAYS the one
+        // selected in the chat composer (ThreadComposer.ModelName), threaded through as
+        // modelName / CurrentModelName. An agent's explicit PreferredModel still wins when set.
 
         var instructions = await GetAgentInstructionsAsync(config, hierarchyAgents, chat);
         return CreateAgentCore(config, chat, existingAgents, hierarchyAgents, instructions, modelName);

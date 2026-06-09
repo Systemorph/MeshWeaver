@@ -6,11 +6,11 @@
 @using MeshWeaver.Messaging
 @inject AccessService AccessService
 
-@* The standalone /chat composer is the per-user ChatInput node's default ("")
-   layout area — databinds message text + harness/agent/model to {user}/_Memex/ChatInput
-   (see ChatInputView). Falls back to a direct ThreadChatControl while the user
+@* The standalone /chat composer is the per-user ThreadComposer node's default ("")
+   layout area — databinds message text + harness/agent/model to {user}/_Memex/ThreadComposer
+   (see ThreadComposerView). Falls back to a direct ThreadChatControl while the user
    identity is still resolving. *@
-@{ var chatInputArea = GetChatInputLayoutArea(); }
+@{ var chatInputArea = GetThreadComposerLayoutArea(); }
 @if (chatInputArea is not null)
 {
     <div style="height: 100%; min-height: 0; display: flex; flex-direction: column;">
@@ -25,11 +25,11 @@ else
 @code {
     private readonly ThreadChatControl chatControl = new();
 
-    private LayoutAreaControl? GetChatInputLayoutArea()
+    private LayoutAreaControl? GetThreadComposerLayoutArea()
     {
         // Durable circuit user first; skip a leaked system-security / hub principal on the
         // AsyncLocal Context (which would point the composer at a non-existent
-        // system-security/_Memex/ChatInput). Mirrors ThreadSidePanelContent.ResolveUserHome.
+        // system-security/_Memex/ThreadComposer). Mirrors ThreadSidePanelContent.ResolveUserHome.
         string? userHome = null;
         foreach (var candidate in new[] { AccessService.CircuitContext?.ObjectId, AccessService.Context?.ObjectId })
         {
@@ -43,6 +43,6 @@ else
         }
         return string.IsNullOrEmpty(userHome)
             ? null
-            : new LayoutAreaControl(ChatInputNodeType.PathFor(userHome), new LayoutAreaReference(string.Empty));
+            : new LayoutAreaControl(ThreadComposerNodeType.PathFor(userHome), new LayoutAreaReference(string.Empty));
     }
 }

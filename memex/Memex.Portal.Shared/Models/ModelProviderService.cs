@@ -18,7 +18,7 @@ namespace Memex.Portal.Shared.Models;
 /// Modelled on <see cref="Memex.Portal.Shared.Authentication.ApiTokenService"/>
 /// — credentials are stored as <c>nodeType:ModelProvider</c> MeshNodes in the
 /// owner's dotfile namespace (<c>{userId}/_Memex/{providerName}</c>, the same
-/// hidden namespace that hosts <c>{user}/_Memex/ChatInput</c>; see
+/// hidden namespace that hosts <c>{user}/_Memex/ThreadComposer</c>; see
 /// <see cref="ModelProviderNodeType.UserNamespace"/>). Any node's namespace
 /// works for shared / org-level credentials.
 ///

@@ -53,8 +53,8 @@ public static class ModelProviderNodeType
     /// <summary>
     /// Per-user satellite namespace for the user's OWN providers, models, and
     /// selection — the same hidden "dotfile" namespace
-    /// (<see cref="ChatInputNodeType.MemexDefaultsNamespace"/>, <c>_Memex</c>)
-    /// that already hosts <c>{user}/_Memex/ChatInput</c>. User-owned provider /
+    /// (<see cref="ThreadComposerNodeType.MemexDefaultsNamespace"/>, <c>_Memex</c>)
+    /// that already hosts <c>{user}/_Memex/ThreadComposer</c>. User-owned provider /
     /// model nodes live at <c>{userPath}/_Memex/{providerName}</c> and
     /// <c>{userPath}/_Memex/{providerName}/{modelId}</c>; the user's selection at
     /// <c>{userPath}/_Memex/_Selection</c>.
@@ -66,7 +66,7 @@ public static class ModelProviderNodeType
     /// picker / resolver union BOTH namespaces (see the model queries) so a user
     /// sees the system catalog, any shared providers, and their own.</para>
     /// </summary>
-    public const string UserNamespace = ChatInputNodeType.MemexDefaultsNamespace; // "_Memex"
+    public const string UserNamespace = ThreadComposerNodeType.MemexDefaultsNamespace; // "_Memex"
 
     /// <summary>
     /// Node id for the per-user provider-selection node — the single node, at
@@ -139,7 +139,7 @@ public static class ModelProviderNodeType
             // SubscribeRequests never completed (sglauser deadlock, 2026-06-09; same
             // class as the 2026-06-08 storm). Empty selection == default catalog
             // (root + context + nodeType), the existing behaviour. Mirrors
-            // ChatInputSeedHandler / the _Memex/ChatInput seed.
+            // ThreadComposerSeedHandler / the _Memex/ThreadComposer seed.
             services.AddSingleton<INodePostCreationHandler>(_ => new ModelProviderSelectionSeedHandler());
             if (!dbSynced)
                 services.AddSingleton<IPartitionStorageProvider>(sp =>
@@ -193,7 +193,7 @@ public static class ModelProviderNodeType
     /// the user (no hub round-trip) — the "always generate the default state" step that
     /// keeps the chat picker's selection read from ever hitting a routing NotFound,
     /// whose GUI-driven re-issue loop starved the circuit and hung unrelated
-    /// SubscribeRequests (the sglauser deadlock). Mirrors <c>ChatInputSeedHandler</c>.
+    /// SubscribeRequests (the sglauser deadlock). Mirrors <c>ThreadComposerSeedHandler</c>.
     /// </summary>
     private sealed class ModelProviderSelectionSeedHandler : INodePostCreationHandler
     {

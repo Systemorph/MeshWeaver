@@ -311,7 +311,7 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
 ///     (or, for type definitions, inherited by every instance) lists the contexts to hide
 ///     from. This is the only way to hide from non-search contexts such as <c>"create"</c>.</item>
 ///   <item><b>Dotfile convention</b> — any node whose path has a segment starting with
-///     <c>'_'</c> (<c>{user}/_Memex/ChatInput</c>, <c>{p}/_Access/…</c>, <c>{p}/_Thread/…</c>)
+///     <c>'_'</c> (<c>{user}/_Memex/ThreadComposer</c>, <c>{p}/_Access/…</c>, <c>{p}/_Thread/…</c>)
 ///     is a hidden/system ("dotfile") node and is excluded from <c>"search"</c>, exactly the
 ///     way Unix hides dot-folders. The <c>'_'</c> prefix means <i>hidden</i> ONLY — it is
 ///     decoupled from satellite-table routing (only the registered suffixes in

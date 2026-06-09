@@ -1229,7 +1229,16 @@ internal static class ThreadExecution
                 // Cancel Task.Run when the hub disposes (grain deactivation).
                 // Without this, OnDeactivateAsync waits up to 120s for the Task.Run
                 // that's stuck on an AI API call with no cancellation signal.
-                hub.RegisterForDisposal(_ => executionCts.Cancel());
+                // Guard against a disposal race: the round may already have completed and
+                // disposed its CTS (or another disposal path raced here), in which case
+                // Cancel() throws ObjectDisposedException — which, unhandled in
+                // HandleShutdownCore, faults the whole hub teardown. A cancel of an
+                // already-finished round is a no-op; swallow it.
+                hub.RegisterForDisposal(_ =>
+                {
+                    try { executionCts.Cancel(); }
+                    catch (ObjectDisposedException) { /* round already finished + CTS disposed — nothing to cancel */ }
+                });
 
                 // The live response-text accumulator. Wired into the round's
                 // ActiveResponseSegment + capturedResponseText BEFORE the first

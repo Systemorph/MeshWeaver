@@ -400,30 +400,30 @@ public class ThreadSubmissionIntegrationTest : AITestBase
             string.Join(",", responseCells.Select(c => c.Id)));
     }
 
-    // ─── ChatInput composer (out-of-thread) ───
+    // ─── ThreadComposer composer (out-of-thread) ───
 
     /// <summary>
     /// The out-of-thread composer state — message content + the harness/agent/model
-    /// comboboxes — persists on the per-user <c>{user}/_Memex/ChatInput</c> singleton as
-    /// the dedicated <see cref="ChatInput"/> record, written AND read back through the
+    /// comboboxes — persists on the per-user <c>{user}/_Memex/ThreadComposer</c> singleton as
+    /// the dedicated <see cref="ThreadComposer"/> record, written AND read back through the
     /// canonical <c>hub.GetMeshNodeStream(path)</c> surface (the same path the GUI composer
     /// uses in <c>ThreadChatView.WriteTemplate</c> / <c>LoadTemplate</c>). No bespoke
     /// request/response — the only mutation API is <c>stream.Update</c>.
     /// </summary>
     [Fact]
-    public void ChatInput_PersistsMessageContentAndComboboxes_ReadBackViaGetMeshNodeStream()
+    public void ThreadComposer_PersistsMessageContentAndComboboxes_ReadBackViaGetMeshNodeStream()
     {
         var client = GetClient();
-        var chatInputPath = ChatInputNodeType.PathFor(MonolithMeshTestBase.TestPartition);
+        var chatInputPath = ThreadComposerNodeType.PathFor(MonolithMeshTestBase.TestPartition);
 
-        // The per-user ChatInput singleton is seeded at onboarding (ChatInputSeedHandler),
+        // The per-user ThreadComposer singleton is seeded at onboarding (ThreadComposerSeedHandler),
         // so the composer always updates an EXISTING node. Mirror that here.
         NodeFactory.CreateNode(new MeshNode(chatInputPath)
         {
             Name = "Chat Input",
-            NodeType = ChatInputNodeType.NodeType,
+            NodeType = ThreadComposerNodeType.NodeType,
             MainNode = chatInputPath,
-            Content = new ChatInput(),
+            Content = new ThreadComposer(),
         }).Should().Emit();
 
         // Write the composer state exactly like the GUI does — hub.GetMeshNodeStream(path).Update.
@@ -434,12 +434,12 @@ public class ThreadSubmissionIntegrationTest : AITestBase
             var n = node ?? new MeshNode(chatInputPath)
             {
                 Name = "Chat Input",
-                NodeType = ChatInputNodeType.NodeType,
+                NodeType = ThreadComposerNodeType.NodeType,
                 MainNode = chatInputPath,
             };
             return n with
             {
-                Content = new ChatInput
+                Content = new ThreadComposer
                 {
                     MessageContent = "draft hello",
                     Harness = Harnesses.MeshWeaver,
@@ -450,9 +450,9 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         }).Subscribe();
 
         // Read it back through the same hub.GetMeshNodeStream surface — every picked field
-        // is reflected on the ChatInput record.
+        // is reflected on the ThreadComposer record.
         var stored = client.GetMeshNodeStream(chatInputPath)
-            .Select(n => n?.Content as ChatInput)
+            .Select(n => n?.Content as ThreadComposer)
             .Where(c => c is { MessageContent: "draft hello" })
             .Should().Within(TimeSpan.FromSeconds(10))
             .Match(_ => true)!;

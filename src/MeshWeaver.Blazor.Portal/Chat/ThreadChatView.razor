@@ -9,7 +9,7 @@
 @using FluentAppearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
 @inject NavigationManager NavigationManager
 
-<div class="thread-chat-container @(ViewModel.HideEmptyState ? "compact-mode" : "")" style="@Style">
+<div class="thread-chat-container @(ViewModel.HideEmptyState ? "compact-mode" : "") @(HasNoMessages ? "no-messages" : "")" style="@Style">
 @if (viewMode == ChatViewMode.ResumeThreads)
 {
     <div class="thread-resume-view">

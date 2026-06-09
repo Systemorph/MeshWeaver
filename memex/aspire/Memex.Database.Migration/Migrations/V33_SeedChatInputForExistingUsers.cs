@@ -3,11 +3,11 @@ using Microsoft.Extensions.Logging;
 namespace Memex.Database.Migration.Migrations;
 
 /// <summary>
-/// Seeds the per-user <b>ChatInput</b> singleton at <c>{userId}/_Memex/ChatInput</c> for every
+/// Seeds the per-user <b>ThreadComposer</b> singleton at <c>{userId}/_Memex/ThreadComposer</c> for every
 /// existing user partition, so the chat composer's read RESOLVES instead of emitting a routing
-/// <c>NotFound</c> that the GUI re-issues on a loop (the 2026-06-08 ChatInput event-storm class).
+/// <c>NotFound</c> that the GUI re-issues on a loop (the 2026-06-08 ThreadComposer event-storm class).
 ///
-/// <para>New users get this seeded at onboarding (<c>ChatInputSeedHandler</c>); this repair
+/// <para>New users get this seeded at onboarding (<c>ThreadComposerSeedHandler</c>); this repair
 /// backfills users created before that handler existed. The node is a <b>MAIN</b> node under the
 /// hidden <c>_Memex</c> "dotfile" namespace — <c>_Memex</c> is NOT a registered satellite suffix,
 /// so the write and the path-based read BOTH hit <c>mesh_nodes</c> (contrast the dead
@@ -23,10 +23,10 @@ namespace Memex.Database.Migration.Migrations;
 /// excluded explicitly (it carries MIRRORED User rows, not a real per-user partition). Idempotent
 /// via an existence check + <c>ON CONFLICT (namespace, id) DO NOTHING</c>.</para>
 /// </summary>
-public sealed class V33_SeedChatInputForExistingUsers : IMigration
+public sealed class V33_SeedThreadComposerForExistingUsers : IMigration
 {
     public int Version => 33;
-    public string Description => "Seed {user}/_Memex/ChatInput singleton for every existing user partition";
+    public string Description => "Seed {user}/_Memex/ThreadComposer singleton for every existing user partition";
 
     public async Task RunAsync(MigrationContext ctx)
     {
@@ -79,8 +79,8 @@ public sealed class V33_SeedChatInputForExistingUsers : IMigration
         {
             var quotedSchema = schema.Replace("\"", "\"\"");
             var ns = $"{userId}/_Memex";
-            const string id = "ChatInput";
-            var mainNode = $"{userId}/_Memex/ChatInput";
+            const string id = "ThreadComposer";
+            var mainNode = $"{userId}/_Memex/ThreadComposer";
 
             bool exists;
             await using (var chkCmd = ctx.DataSource.CreateCommand($"""
@@ -95,7 +95,7 @@ public sealed class V33_SeedChatInputForExistingUsers : IMigration
             }
             if (exists)
             {
-                ctx.Logger.LogDebug("Repair v33: '{Schema}' — ChatInput already present, skipping", schema);
+                ctx.Logger.LogDebug("Repair v33: '{Schema}' — ThreadComposer already present, skipping", schema);
                 continue;
             }
 
@@ -103,7 +103,7 @@ public sealed class V33_SeedChatInputForExistingUsers : IMigration
             await using (var insertCmd = ctx.DataSource.CreateCommand($"""
                 INSERT INTO "{quotedSchema}".mesh_nodes
                     (namespace, id, name, node_type, state, content, main_node, last_modified, version)
-                VALUES ($1, $2, 'Chat Input', 'ChatInput', 2, NULL, $3, now(), 1)
+                VALUES ($1, $2, 'Chat Input', 'ThreadComposer', 2, NULL, $3, now(), 1)
                 ON CONFLICT (namespace, id) DO NOTHING
                 """))
             {
@@ -119,6 +119,6 @@ public sealed class V33_SeedChatInputForExistingUsers : IMigration
             }
         }
 
-        ctx.Logger.LogInformation("Repair v33: done — {Inserted} ChatInput node(s) seeded", inserted);
+        ctx.Logger.LogInformation("Repair v33: done — {Inserted} ThreadComposer node(s) seeded", inserted);
     }
 }

@@ -32,7 +32,7 @@ public static class AIExtensions
                     .AddAgentType(serveFromPartition)
                     .AddLanguageModelType(serveFromPartition)
                     .AddHarnessType()
-                    .AddChatInputType()
+                    .AddThreadComposerType()
                     .ConfigureServices(services => services.AddAgentChatServices())
                     // Register AI types on the MESH hub (for MeshQuery deserialization of Thread content)
                     .ConfigureHub(config =>
@@ -84,10 +84,10 @@ public static class AIExtensions
             .WithType(typeof(ModelProviderConfiguration), nameof(ModelProviderConfiguration))
             .WithType(typeof(AI.Thread), nameof(AI.Thread))
             .WithType(typeof(ThreadMessage), nameof(ThreadMessage))
-            // ChatInput: content of the per-user {user}/_Memex/ChatInput composer
+            // ThreadComposer: content of the per-user {user}/_Memex/ThreadComposer composer
             // singleton (message text + harness/agent/model + attachments). Registered
             // mesh-wide so the node serialises across routing/mesh hubs.
-            .WithType(typeof(ChatInput), nameof(ChatInput))
+            .WithType(typeof(ThreadComposer), nameof(ThreadComposer))
             // MessageViewModel is not registered — handled as JsonElement on the wire.
             // SubmitMessageRequest / SubmitMessageResponse deleted 2026-05-25:
             // the only mutation API is workspace.GetMeshNodeStream(path).Update(...).
@@ -120,8 +120,6 @@ public static class AIExtensions
         /// </summary>
         public IServiceCollection AddAgentChatServices()
         {
-            services.AddOptions<ModelTierConfiguration>()
-                .BindConfiguration("ModelTier");
             services.AddTransient<IIconGenerator, IconGenerator>();
             services.AddTransient<IDescriptionGenerator, DescriptionGenerator>();
 

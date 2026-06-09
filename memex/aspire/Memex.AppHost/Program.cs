@@ -119,25 +119,18 @@ var anthropicEndpoint = builder.AddParameter("anthropic-endpoint", secret: false
 // pipeline instead of short-circuiting Aspire's parameter resolution.
 var azureFoundryEndpoint = builder.AddParameter("azure-foundry-endpoint", secret: false);
 
-// Model-tier mappings: agents declare ModelTier ("heavy" / "standard" /
-// "light") and the factory resolves it to a concrete model name via these
-// parameters. Hidden from source so the deployment owns the model identity.
+// Anthropic model CATALOG: the concrete model names offered in the chat composer's
+// model picker (Anthropic__Models__0/1/2 → BuiltInLanguageModelProvider). Model TIERS
+// (heavy/standard/light) are removed — the active model is always the composer
+// selection, never a tier. Hidden from source so the deployment owns the model identity.
 //
-// 🚨 NO `value:` argument: passing `value: ""` makes Aspire treat the param
-// as resolved to the literal empty string and SKIP user-secrets / config
-// lookup entirely — so even with `Parameters:model-tier-heavy` set in
-// user-secrets the portal received empty Anthropic__Models__0 etc., which
-// in turn left the BuiltInLanguageModelProvider catalog empty and the
-// chat dropdown with zero models. Without `value:`, Aspire reads from
-// `Parameters:model-tier-{name}` (user-secrets locally, container env in
-// deployed mode).
-var modelTierHeavy = builder.AddParameter("model-tier-heavy", secret: false);
-var modelTierStandard = builder.AddParameter("model-tier-standard", secret: false);
-var modelTierLight = builder.AddParameter("model-tier-light", secret: false);
-// Utility tier — a cheap/fast model (e.g. Kimi) for background micro-jobs: node icon +
-// user-avatar generation, description writing, and thread auto-naming. Optional (empty
-// default); when unset, ModelTierConfiguration falls back to the light model.
-var modelTierUtility = builder.AddParameter("model-tier-utility", value: "", secret: false);
+// 🚨 NO `value:` argument: passing `value: ""` makes Aspire treat the param as resolved
+// to the literal empty string and SKIP user-secrets / config lookup entirely, leaving the
+// catalog empty and the chat dropdown with zero models. Without `value:`, Aspire reads
+// from `Parameters:anthropic-model-{n}` (user-secrets locally, container env in deploy).
+var anthropicModel0 = builder.AddParameter("anthropic-model-0", secret: false);
+var anthropicModel1 = builder.AddParameter("anthropic-model-1", secret: false);
+var anthropicModel2 = builder.AddParameter("anthropic-model-2", secret: false);
 
 // Provider-key encryption master key (Ai:KeyProtection:MasterKey). Encrypts the
 // literal ApiKey stored on ModelProvider nodes at rest so a Postgres/backup leak
@@ -282,17 +275,12 @@ var portal = builder
     // non-empty — that's what BuiltInLanguageModelProvider scans to seed
     // the `nodeType:LanguageModel` mesh nodes under `Model/<id>`. Without
     // these the picker lists nothing for Anthropic and `claude-sonnet-4-6`
-    // doesn't appear in autocomplete. Heavy/Standard/Light come from the
-    // ModelTier params below — keep the catalog in sync.
-    .WithEnvironment("Anthropic__Models__0", modelTierHeavy)
-    .WithEnvironment("Anthropic__Models__1", modelTierStandard)
-    .WithEnvironment("Anthropic__Models__2", modelTierLight)
-    // Model tier → concrete model mapping. Sourced from parameters so the
-    // deployment owns the model identity.
-    .WithEnvironment("ModelTier__Heavy", modelTierHeavy)
-    .WithEnvironment("ModelTier__Standard", modelTierStandard)
-    .WithEnvironment("ModelTier__Light", modelTierLight)
-    .WithEnvironment("ModelTier__Utility", modelTierUtility)
+    // doesn't appear in autocomplete. These params are the model CATALOG (the
+    // selectable models in the chat composer) — model tiers were removed; the
+    // active model is always the composer selection.
+    .WithEnvironment("Anthropic__Models__0", anthropicModel0)
+    .WithEnvironment("Anthropic__Models__1", anthropicModel1)
+    .WithEnvironment("Anthropic__Models__2", anthropicModel2)
     // Provider-key encryption master key (ConfigMasterKeyProvider reads this).
     .WithEnvironment("Ai__KeyProtection__MasterKey", keyProtectionMasterKey)
     // LLM: Azure AI Foundry (multi-model inference endpoint — covers OpenAI,

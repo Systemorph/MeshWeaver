@@ -8,6 +8,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -169,13 +170,13 @@ public static class ThreadLayoutAreas
                 ExecutionStartedAt = threadContent?.ExecutionStartedAt,
                 SelectedHarness = threadContent?.SelectedHarness,
                 CreatedBy = node?.CreatedBy,
-                ChatInputId = threadContent?.ChatInputId,
+                ThreadComposerId = threadContent?.ThreadComposerId,
             };
         });
         host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));
 
-        // Each thread owns a ChatInput composer node at {threadPath}/ChatInput. The first
-        // time the thread renders without one (ChatInputId unset), create it and stamp the
+        // Each thread owns a ThreadComposer composer node at {threadPath}/ThreadComposer. The first
+        // time the thread renders without one (ThreadComposerId unset), create it and stamp the
         // id on the thread so every later read gates on a known-present node — never a
         // maybe-absent GetMeshNodeStream that Orleans-NotFound-storms. Deterministic id ⇒
         // the create is idempotent if two areas (main + side panel) mount at once.
@@ -183,8 +184,8 @@ public static class ThreadLayoutAreas
             .Select(node => node?.Content as MeshThread)
             .Where(t => t is not null)
             .Take(1)
-            .Where(t => string.IsNullOrEmpty(t!.ChatInputId))
-            .Subscribe(_ => EnsureThreadChatInput(host, hubPath)));
+            .Where(t => string.IsNullOrEmpty(t!.ThreadComposerId))
+            .Subscribe(_ => EnsureThreadComposer(host, hubPath)));
 
         // Push title to data section — data-bound, no observable control rebuild.
         var titleStream = host.Workspace.GetMeshNodeStream()
@@ -308,38 +309,47 @@ public static class ThreadLayoutAreas
     }
 
     /// <summary>
-    /// Lazily materialises the thread's own ChatInput composer node at
-    /// <c>{threadPath}/ChatInput</c> and stamps its id onto the thread
-    /// (<see cref="Thread.ChatInputId"/>), so readers gate on a known-present node rather
-    /// than a maybe-absent path read (which Orleans-NotFound-storms). The id is the
-    /// constant <see cref="ChatInputNodeType.NodeType"/> ⇒ one composer per thread, and
-    /// the create is idempotent under a concurrent second render. Robust: invoked from the
-    /// thread render whenever <see cref="Thread.ChatInputId"/> is unset.
+    /// Ensures the thread's composer node exists and stamps its FULL path onto the thread
+    /// (<see cref="Thread.ThreadComposerId"/>) so the composer gates on a known-present node — never
+    /// a maybe-absent direct read (which Orleans-NotFound-storms; see
+    /// feedback_optional_node_query_not_access). The composer is owned per (main node, user):
+    /// the main node is the path before the first <c>/_Thread</c>; for the user's own partition
+    /// it is the seeded <c>{user}/_Thread/ThreadComposer</c>, otherwise <c>{node}/_Thread/{user}/ThreadComposer</c>.
+    /// It is NOT a per-thread node under the thread (that sits under <c>_Thread/{threadId}</c> and
+    /// does not read back). The stamp fires on both create success and "already exists" (the
+    /// per-user node is seeded), and is idempotent.
     /// </summary>
-    private static void EnsureThreadChatInput(LayoutAreaHost host, string threadPath)
+    private static void EnsureThreadComposer(LayoutAreaHost host, string threadPath)
     {
-        var chatInputId = ChatInputNodeType.NodeType; // "ChatInput" — one per thread
-        var chatInputPath = $"{threadPath}/{chatInputId}";
+        var mainNode = ThreadNodeType.MainNodeOf(threadPath);
+        var accessSvc = host.Hub.ServiceProvider.GetService<AccessService>();
+        var user = accessSvc?.Context?.ObjectId ?? accessSvc?.CircuitContext?.ObjectId;
+        var chatInputPath =
+            string.IsNullOrEmpty(user) || string.Equals(mainNode, user, StringComparison.OrdinalIgnoreCase)
+                ? ThreadComposerNodeType.PathFor(string.IsNullOrEmpty(user) ? mainNode : user)
+                : ThreadComposerNodeType.PathForNode(mainNode, user);
         var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
-            ?.CreateLogger("MeshWeaver.AI.ThreadChatInput");
-        meshService.CreateNode(new MeshNode(chatInputId, threadPath)
+            ?.CreateLogger("MeshWeaver.AI.ThreadComposer");
+
+        // Stamp the resolved composer path onto the thread (idempotent) so every reader gates
+        // on a known-present node. Fire on BOTH create success and error ("already exists").
+        void Stamp() => host.Workspace.GetMeshNodeStream().Update(n =>
+                n is { Content: MeshThread t } && t.ThreadComposerId != chatInputPath
+                    ? n with { Content = t with { ThreadComposerId = chatInputPath } }
+                    : n!)
+            .Subscribe(_ => { }, ex => logger?.LogWarning(ex,
+                "[ThreadComposer] stamp failed for {Path}", threadPath));
+
+        meshService.CreateNode(MeshNode.FromPath(chatInputPath) with
             {
-                NodeType = ChatInputNodeType.NodeType,
+                NodeType = ThreadComposerNodeType.NodeType,
                 Name = "Chat Input",
-                MainNode = threadPath,
-                Content = new ChatInput(),
+                MainNode = mainNode,
+                Content = new ThreadComposer(),
             })
             .Take(1)
-            .Subscribe(
-                _ => host.Workspace.GetMeshNodeStream().Update(n =>
-                        n is { Content: MeshThread t } && string.IsNullOrEmpty(t.ChatInputId)
-                            ? n with { Content = t with { ChatInputId = chatInputId } }
-                            : n!)
-                    .Subscribe(_ => { }, ex => logger?.LogWarning(ex,
-                        "[ThreadChatInput] stamp id failed for {Path}", threadPath)),
-                ex => logger?.LogWarning(ex,
-                    "[ThreadChatInput] create failed at {Path}", chatInputPath));
+            .Subscribe(_ => Stamp(), _ => Stamp());
     }
 
     /// <summary>
@@ -373,7 +383,7 @@ public static class ThreadLayoutAreas
                 ExecutionStartedAt = threadContent?.ExecutionStartedAt,
                 SelectedHarness = threadContent?.SelectedHarness,
                 CreatedBy = node?.CreatedBy,
-                ChatInputId = threadContent?.ChatInputId,
+                ThreadComposerId = threadContent?.ThreadComposerId,
             };
         });
         host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));

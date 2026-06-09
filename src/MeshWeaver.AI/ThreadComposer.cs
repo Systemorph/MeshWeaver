@@ -1,8 +1,8 @@
 namespace MeshWeaver.AI;
 
 /// <summary>
-/// Content of the per-user <b>ChatInput</b> singleton node at
-/// <c>{userHome}/_Memex/ChatInput</c> — the persisted state of the out-of-thread
+/// Content of the per-user <b>ThreadComposer</b> singleton node at
+/// <c>{userHome}/_Memex/ThreadComposer</c> — the persisted state of the out-of-thread
 /// chat composer (the "new chat" box). Carries the in-progress message text plus the
 /// three composer comboboxes (harness / agent / model) and any reference attachments,
 /// so the user's draft + selection survive a reload server-side (no browser storage).
@@ -14,7 +14,7 @@ namespace MeshWeaver.AI;
 /// <see cref="Thread"/>) keeps the input box's content to exactly the fields it owns,
 /// instead of the dozens of execution/message fields on a conversation thread.</para>
 /// </summary>
-public record ChatInput
+public record ThreadComposer
 {
     /// <summary>The in-progress composer text — the message currently being typed.</summary>
     public string? MessageContent { get; init; }

@@ -70,13 +70,6 @@ public record ModelDefinition
     public string? ProviderRef { get; init; }
 
     /// <summary>
-    /// Optional model-tier hint — <c>standard</c>, <c>reasoning</c>,
-    /// <c>fast</c>, etc. Lets agents that declare <c>modelTier</c>
-    /// frontmatter pick a matching model without naming it explicitly.
-    /// </summary>
-    public string? ModelTier { get; init; }
-
-    /// <summary>
     /// Optional description shown in the picker.
     /// </summary>
     public string? Description { get; init; }

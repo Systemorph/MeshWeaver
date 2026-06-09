@@ -17,6 +17,27 @@
     width: 100%;
 }
 
+/* No-messages (new-chat) landing. The composer is height:100% of its slot a priori; the
+   Thread view controls how big that slot is by collapsing the empty message history and
+   letting the bottom block flex-fill. The fill propagates down the chain (bottom → footer →
+   input-area → input-content → editor) so the input field grows to occupy the space rather
+   than sitting as a thin bar. With messages present this class is absent, so the history
+   takes flex:1 and the composer reverts to its natural bottom-bar height. */
+.thread-chat-container.no-messages .thread-chat-messages {
+    flex: 0 1 auto;
+    min-height: 0;
+}
+.thread-chat-container.no-messages .thread-chat-bottom,
+.thread-chat-container.no-messages .thread-chat-footer,
+.thread-chat-container.no-messages .thread-chat-input-area,
+.thread-chat-container.no-messages .thread-chat-input-content,
+.thread-chat-container.no-messages .input-container {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
 .thread-chat-messages {
     flex: 1;
     min-height: 0;

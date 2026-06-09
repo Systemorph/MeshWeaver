@@ -39,11 +39,11 @@
                             ViewModel="@GetThreadLayoutArea()"
                             Area="@($"sidepanel-{selectedThreadPath}")" />
         }
-        else if (GetChatInputLayoutArea() is { } chatInputArea)
+        else if (GetThreadComposerLayoutArea() is { } chatInputArea)
         {
-            @* New chat (out of thread) — the composer is the per-user ChatInput node's
+            @* New chat (out of thread) — the composer is the per-user ThreadComposer node's
                default ("") layout area, databinding message text + harness/agent/model to
-               {user}/_Memex/ChatInput (see ChatInputView). @key includes the primary path so
+               {user}/_Memex/ThreadComposer (see ThreadComposerView). @key includes the primary path so
                it rebuilds on context change. *@
             <div style="flex: 1; min-height: 0; display: flex; flex-direction: column;">
                 <LayoutAreaView @key="@($"chatinput-{lastPrimaryPath ?? string.Empty}")"

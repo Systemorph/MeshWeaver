@@ -40,17 +40,6 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// </summary>
     [Inject] private ChatCommandRegistry? CommandRegistry { get; set; }
 
-    /// <summary>
-    /// ModelTier mapping (heavy/standard/light → concrete model name). Used
-    /// to resolve an agent's <c>ModelTier</c> to its actual model so the
-    /// chat picker shows the SAME model the AzureClaude factory will route
-    /// the request to. Without this, agents that declare only ModelTier
-    /// (no PreferredModel) leave the picker on whatever happened to be
-    /// selected before — so picking "haiku" can quietly send to "sonnet"
-    /// because the agent's tier resolves to it server-side.
-    /// </summary>
-    [Inject] private IOptions<ModelTierConfiguration>? ModelTierOptions { get; set; }
-
     /// <summary>Stateless — single instance reused per submission.</summary>
     private static readonly ChatPreParser ChatParser = new();
 
@@ -130,19 +119,17 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 threadPath = value.ThreadPath ?? threadPath;
                 initialContext = value.InitialContext ?? initialContext;
 
-                // Rebind the composer's draft + selection persistence to THIS thread's own
-                // ChatInput node once it exists (id stamped by the server-side Thread view).
-                // Gated on the non-null id ⇒ the path is known-present, so LoadTemplate never
-                // reads a maybe-absent node (the NotFound-storm class).
-                if (!string.IsNullOrEmpty(value.ChatInputId) && !string.IsNullOrEmpty(threadPath))
+                // Rebind the composer's draft + selection persistence to this thread's composer
+                // once it exists. ThreadComposerId holds the FULL composer path
+                // ({mainNode}/_Thread/{user}/ThreadComposer, or the seeded per-user
+                // {user}/_Thread/ThreadComposer) — stamped by the server-side Thread view only AFTER
+                // the node is ensured to exist, so this read never hits a maybe-absent path
+                // (the NotFound-storm class).
+                if (!string.IsNullOrEmpty(value.ThreadComposerId) && _templatePath != value.ThreadComposerId)
                 {
-                    var threadTemplatePath = $"{threadPath}/{value.ChatInputId}";
-                    if (_templatePath != threadTemplatePath)
-                    {
-                        _templatePath = threadTemplatePath;
-                        _templateLoaded = false;
-                        LoadTemplate();
-                    }
+                    _templatePath = value.ThreadComposerId;
+                    _templateLoaded = false;
+                    LoadTemplate();
                 }
 
                 // Restore the user's sticky harness / agent / model selection from
@@ -207,6 +194,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     }
     private IReadOnlyList<string> ThreadMessages => ThreadViewModel?.Messages ?? [];
 
+    /// <summary>
+    /// True when the thread has no materialised messages AND nothing queued — the brand-new /
+    /// empty-thread state. Drives the full-height composer (the "start a conversation" landing):
+    /// the input box fills the view instead of sitting as a thin bar at the bottom.
+    /// </summary>
+    private bool HasNoMessages =>
+        ThreadMessages.Count == 0
+        && (ThreadViewModel?.PendingMessageTexts?.Count ?? 0) == 0;
+
     // Input state
     private MonacoEditorView? monacoEditor;
     private ElementReference messagesContainer;
@@ -262,24 +258,24 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private string selectedHarness = Harnesses.MeshWeaver;
     private string? _stickyHarness;
 
-    // ─── Per-user chat input (ChatInput) ───
+    // ─── Per-user chat input (ThreadComposer) ───
     // The composer's draft text + harness/agent/model selection persist on a single
-    // stable ChatInput node at {userHome}/ChatInput (server-side, no browser storage)
+    // stable ThreadComposer node at {userHome}/ThreadComposer (server-side, no browser storage)
     // so they survive a reboot. On submit a new thread is cloned from it and the draft
     // cleared. _userHome == AccessContext.ObjectId == the user's home partition (dev
     // login stamps ObjectId = username).
-    // ChatInput is a per-user SINGLETON main node living under the user's hidden _Memex
-    // defaults namespace: {userHome}/_Memex/ChatInput. `_Memex` is a "dotfile" namespace —
+    // ThreadComposer is a per-user SINGLETON main node living under the user's hidden _Memex
+    // defaults namespace: {userHome}/_Memex/ThreadComposer. `_Memex` is a "dotfile" namespace —
     // hidden from search/create by convention (see MeshNodeVisibility) — but it is NOT a
     // satellite suffix, so the write and the path-based read BOTH hit mesh_nodes. (The dead
     // "_ThreadTemplate"/nodeType:Thread approach routed the write to the `threads` satellite
     // table while the path-read hit mesh_nodes → the selection never persisted; never reuse it.)
     // Single source of truth — the read path here MUST equal the seed path
-    // (ChatInputNodeType.ChatInputSeedHandler) and the type, or the singleton splits.
-    private const string TemplateNodeId = MeshWeaver.AI.ChatInputNodeType.NodeType;
+    // (ThreadComposerNodeType.ThreadComposerSeedHandler) and the type, or the singleton splits.
+    private const string TemplateNodeId = MeshWeaver.AI.ThreadComposerNodeType.NodeType;
 
     /// <summary>The user's hidden Memex-defaults namespace (dotfile): <c>{userHome}/_Memex/…</c>.</summary>
-    private const string MemexDefaultsNamespace = MeshWeaver.AI.ChatInputNodeType.MemexDefaultsNamespace;
+    private const string MemexDefaultsNamespace = MeshWeaver.AI.ThreadComposerNodeType.MemexDefaultsNamespace;
     private string? _userHome;
     private string? _templatePath;
     private readonly System.Reactive.Subjects.Subject<string> _draftChanges = new();
@@ -352,12 +348,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         // only (a real thread never carries a template draft).
         var accessSvc = Hub.ServiceProvider.GetService<AccessService>();
         _userHome = ResolveUserHome(accessSvc);
-        // Compose mode (no thread) persists draft + selection to the per-user ChatInput
-        // singleton. Thread mode rebinds to the thread's OWN ChatInput once its id arrives
+        // Compose mode (no thread) persists draft + selection to the per-user ThreadComposer
+        // singleton. Thread mode rebinds to the thread's OWN ThreadComposer once its id arrives
         // via the ThreadViewModel (see the setter) — left null here so we never save/restore
         // against the per-user node while inside a thread, nor read a not-yet-created path.
         if (string.IsNullOrEmpty(threadPath) && !string.IsNullOrEmpty(_userHome))
-            _templatePath = MeshWeaver.AI.ChatInputNodeType.PathFor(_userHome);
+            _templatePath = MeshWeaver.AI.ThreadComposerNodeType.PathFor(_userHome);
 
         _draftSaveSub = _draftChanges
             .Throttle(TimeSpan.FromMilliseconds(600))
@@ -437,11 +433,11 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     /// <summary>
     /// The signed-in user's partition — the main node that owns
-    /// <c>{user}/_Memex/ChatInput</c> and the namespace a submitted thread is created
+    /// <c>{user}/_Memex/ThreadComposer</c> and the namespace a submitted thread is created
     /// under. Prefer <see cref="AccessService.CircuitContext"/> (the durable per-circuit
     /// identity); <see cref="AccessService.Context"/> (AsyncLocal) is only a fallback and
     /// is filtered for a leaked <c>system-security</c> / hub principal. Trusting
-    /// <c>Context</c> first pointed the composer at <c>system-security/_Memex/ChatInput</c>
+    /// <c>Context</c> first pointed the composer at <c>system-security/_Memex/ThreadComposer</c>
     /// and would have created threads under the wrong partition.
     /// </summary>
     private static string? ResolveUserHome(AccessService? accessSvc)
@@ -469,7 +465,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (string.IsNullOrEmpty(_templatePath) || _templateLoaded)
             return;
         Hub.GetMeshNodeStream(_templatePath)
-            .Select(n => n?.Content as MeshWeaver.AI.ChatInput)
+            .Select(n => n?.Content as MeshWeaver.AI.ThreadComposer)
             .Where(t => t is not null)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(3))
@@ -483,7 +479,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 _ => _templateLoaded = true);
     }
 
-    private void ApplyTemplate(MeshWeaver.AI.ChatInput t)
+    private void ApplyTemplate(MeshWeaver.AI.ThreadComposer t)
     {
         if (!string.IsNullOrEmpty(t.Harness) && Harnesses.All.Contains(t.Harness))
         {
@@ -495,7 +491,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         // Draft restore: composer mode only, and never clobber text the user has
         // already begun typing this session.
-        // Restore the saved draft from whichever ChatInput backs this composer (per-user in
+        // Restore the saved draft from whichever ThreadComposer backs this composer (per-user in
         // compose mode, the thread's own once _templatePath has rebound to it). Gated on a
         // non-null _templatePath so an existing thread never restores the per-user draft.
         if (!string.IsNullOrEmpty(_templatePath) && !string.IsNullOrEmpty(t.MessageContent)
@@ -526,25 +522,24 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// the old browser-localStorage persistence so the draft + selection survive a
     /// reboot server-side.
     /// </summary>
-    private void WriteTemplate(Func<MeshWeaver.AI.ChatInput, MeshWeaver.AI.ChatInput> mutate)
+    private void WriteTemplate(Func<MeshWeaver.AI.ThreadComposer, MeshWeaver.AI.ThreadComposer> mutate)
     {
         if (string.IsNullOrEmpty(_templatePath) || string.IsNullOrEmpty(_userHome))
             return;
         Hub.GetMeshNodeStream(_templatePath).Update(node =>
         {
-            var t = node?.Content as MeshWeaver.AI.ChatInput ?? new MeshWeaver.AI.ChatInput();
+            var t = node?.Content as MeshWeaver.AI.ThreadComposer ?? new MeshWeaver.AI.ThreadComposer();
             var updated = mutate(t);
             return node != null
                 ? node with { Content = updated }
-                : new MeshNode(TemplateNodeId, $"{_userHome}/{MemexDefaultsNamespace}")
+                // Create-on-first-write fallback: build the node at the exact _templatePath
+                // (the resolved composer path — per-user {user}/_Thread/ThreadComposer, seeded, or
+                // per-node {node}/_Thread/{user}/ThreadComposer, ensured by the Thread view). Derive
+                // from the path so write + read target the same node; never a hard-coded
+                // namespace.
+                : MeshWeaver.Mesh.MeshNode.FromPath(_templatePath!) with
                 {
-                    // NOT the Thread nodeType: nodeType:Thread routes the WRITE to the
-                    // per-partition `threads` SATELLITE table, but GetMeshNodeStream resolves
-                    // the READ by path to `mesh_nodes` — so the template was written to one
-                    // table and read from another and NEVER persisted (the harness/agent/model
-                    // selection + draft were always lost on reload). The dedicated ChatInput
-                    // type is a main (non-satellite) node → write+read both on `mesh_nodes`.
-                    NodeType = MeshWeaver.AI.ChatInputNodeType.NodeType,
+                    NodeType = MeshWeaver.AI.ThreadComposerNodeType.NodeType,
                     Content = updated
                 };
         }).Subscribe(
@@ -798,26 +793,14 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         var agentConfig = agentDisplayInfos.FirstOrDefault(a => a.Name == agentName)?.AgentConfiguration;
 
-        // 1) Explicit PreferredModel on the agent wins.
+        // Explicit PreferredModel on the agent wins; otherwise the first available model.
+        // Model tiers (heavy/standard/light) removed — the active model is the user's chat
+        // composer selection, not an agent-declared tier.
         if (!string.IsNullOrEmpty(agentConfig?.PreferredModel))
         {
             var configuredModel = MatchModel(agentConfig.PreferredModel);
             if (configuredModel != null)
                 return configuredModel;
-        }
-
-        // 2) Resolve ModelTier (heavy/standard/light) the same way the factory does
-        //    in ChatClientAgentFactory.CreateAgent — keeps the picker in sync with
-        //    what the server will actually route the request to.
-        if (!string.IsNullOrEmpty(agentConfig?.ModelTier))
-        {
-            var resolvedModelName = ModelTierOptions?.Value?.Resolve(agentConfig.ModelTier);
-            if (!string.IsNullOrEmpty(resolvedModelName))
-            {
-                var resolved = MatchModel(resolvedModelName);
-                if (resolved != null)
-                    return resolved;
-            }
         }
 
         return availableModels.FirstOrDefault();
@@ -1255,9 +1238,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private void OnMessageTextChanged(string value)
     {
         MessageText = value;
-        // Debounce-save the draft onto whichever ChatInput backs this composer — the
-        // per-user singleton in compose mode, the thread's OWN ChatInput inside a thread
-        // (both via _templatePath). Null _templatePath (a thread whose ChatInput id hasn't
+        // Debounce-save the draft onto whichever ThreadComposer backs this composer — the
+        // per-user singleton in compose mode, the thread's OWN ThreadComposer inside a thread
+        // (both via _templatePath). Null _templatePath (a thread whose ThreadComposer id hasn't
         // arrived yet) ⇒ skip, so we never write a maybe-absent node.
         if (!string.IsNullOrEmpty(_templatePath))
             _draftChanges.OnNext(value ?? string.Empty);

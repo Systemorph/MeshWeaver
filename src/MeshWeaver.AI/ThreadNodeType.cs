@@ -37,6 +37,21 @@ public static class ThreadNodeType
     public const string ThreadPartition = "_Thread";
 
     /// <summary>
+    /// The MAIN NODE of a path: everything before the first <c>/_Thread</c> segment — i.e.
+    /// "what the chat is about". <c>rbuergi/_Thread/x</c> → <c>rbuergi</c>;
+    /// <c>acme/Project/X/_Thread/y/ThreadComposer</c> → <c>acme/Project/X</c>; a path with no
+    /// <c>_Thread</c> returns unchanged. Stripping at the FIRST <c>_Thread</c> collapses any
+    /// accidental nesting (a thread/composer under another thread) back to the true main node,
+    /// so the per-(node,user) ThreadComposer never nests.
+    /// </summary>
+    public static string MainNodeOf(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return path;
+        var idx = path.IndexOf($"/{ThreadPartition}", StringComparison.OrdinalIgnoreCase);
+        return idx >= 0 ? path[..idx] : path;
+    }
+
+    /// <summary>
     /// Layout area for thread content and message history (default).
     /// </summary>
     public const string ThreadArea = "Thread";
@@ -257,7 +272,7 @@ public static class ThreadNodeType
             IsSatelliteType = true,
             ExcludeFromContext = ImmutableHashSet.Create("search"),
             // The NodeType carries the GUI-create protocol: creating a Thread from the "+"
-            // (anywhere) opens the new-chat composer (the per-user ChatInput / new-thread
+            // (anywhere) opens the new-chat composer (the per-user ThreadComposer / new-thread
             // view) and creates nothing up front — the thread is created on submit, NOT via
             // the generic Create form. Injected as BuildCreate so the generic CreateLayoutArea
             // delegates to us regardless of which "+" routed here.
@@ -265,18 +280,19 @@ public static class ThreadNodeType
             {
                 BuildCreate = (host, ns) =>
                 {
-                    // Materialise the new-chat composer node at {context}/_Thread/ChatInput — a
-                    // singleton composer in the context's thread namespace — and redirect to its
-                    // overview (the SAME composer the side panel shows). ns may already be a thread
-                    // namespace (the catalog button passes {context}/_Thread); don't double it.
-                    var threadNs = string.IsNullOrEmpty(ns)
-                        ? ThreadPartition
-                        : ns.Equals(ThreadPartition, StringComparison.OrdinalIgnoreCase)
-                          || ns.EndsWith($"/{ThreadPartition}", StringComparison.OrdinalIgnoreCase)
-                          || ns.Contains($"/{ThreadPartition}/", StringComparison.OrdinalIgnoreCase)
-                            ? ns
-                            : $"{ns}/{ThreadPartition}";
-                    var chatInputPath = $"{threadNs}/{ChatInputNodeType.NodeType}";
+                    // Composer node, owned per (main node, user). The MAIN NODE is the path
+                    // before /_Thread (what the chat is ABOUT); the user is the signed-in
+                    // identity. For the user's own partition this is the per-user default
+                    // {user}/_Thread/ThreadComposer (seeded at onboarding); for any other node it's
+                    // {node}/_Thread/{user}/ThreadComposer. Always under _Thread with ThreadComposer as the
+                    // leaf — NEVER the bare {node}/_Thread/ThreadComposer, which doesn't read back.
+                    var mainNode = MainNodeOf(ns);
+                    var accessSvc = host.Hub.ServiceProvider.GetService<AccessService>();
+                    var user = accessSvc?.Context?.ObjectId ?? accessSvc?.CircuitContext?.ObjectId;
+                    var chatInputPath =
+                        string.IsNullOrEmpty(user) || string.Equals(mainNode, user, StringComparison.OrdinalIgnoreCase)
+                            ? ThreadComposerNodeType.PathFor(string.IsNullOrEmpty(user) ? mainNode : user)
+                            : ThreadComposerNodeType.PathForNode(mainNode, user);
                     var overviewHref = $"/{chatInputPath}";
                     var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
                     var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
@@ -284,7 +300,8 @@ public static class ThreadNodeType
                     var node = MeshNode.FromPath(chatInputPath) with
                     {
                         Name = "New Chat",
-                        NodeType = ChatInputNodeType.NodeType,
+                        NodeType = ThreadComposerNodeType.NodeType,
+                        MainNode = mainNode,
                         State = MeshNodeState.Active,
                     };
                     // Create then navigate. A real failure (anything other than "already exists")
@@ -296,7 +313,7 @@ public static class ThreadNodeType
                         .Catch<UiControl?, Exception>(ex =>
                         {
                             logger?.LogWarning(ex,
-                                "[ThreadCreate] ChatInput create failed at {Path}; navigating to overview anyway",
+                                "[ThreadCreate] ThreadComposer create failed at {Path}; navigating to overview anyway",
                                 chatInputPath);
                             return Observable.Return<UiControl?>(new RedirectControl(overviewHref));
                         });
