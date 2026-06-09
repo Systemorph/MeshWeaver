@@ -108,6 +108,24 @@ jobs:
 
     steps:
     - uses: actions/checkout@v6
+    # The ~14 GB free on a GitHub-hosted runner does not fit the extracted 50-project
+    # build output + the pgvector Testcontainers image + per-project test outputs/blame
+    # dumps + runner _diag logs — shards were dying with "No space left on device" (the
+    # runner Worker itself, mid-run). Reclaim the ~25 GB of preinstalled tooling a
+    # .NET+Postgres test run never touches (Android SDK, Haskell/GHC, preloaded Docker
+    # images, big apt packages). NOT a band-aid for a code leak — it removes genuinely
+    # unused runner bloat so the legitimate test workload fits. Keep .NET + the hosted
+    # tool cache (setup-dotnet uses them).
+    - name: Free disk space
+      uses: jlumbroso/free-disk-space@main
+      with:
+        tool-cache: false
+        dotnet: false
+        android: true
+        haskell: true
+        large-packages: true
+        docker-images: true
+        swap-storage: true
     - name: Setup .NET
       uses: actions/setup-dotnet@v5
       with:
