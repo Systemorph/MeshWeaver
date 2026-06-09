@@ -314,7 +314,11 @@ public static class CommentLayoutAreas
                             var cache = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
                             cache.Update(ownPath, n =>
                             {
-                                var existing = n.Content as Comment ?? new Comment();
+                                var existing = n.ContentAs<Comment>(host.Hub.JsonSerializerOptions);
+                                // Existing node whose content can't be recovered → leave it alone, NEVER clobber.
+                                if (n.Content is not null && existing is null)
+                                    return n;
+                                existing ??= new Comment();
                                 return n with { Content = existing with { Text = newText } };
                             }, host.Hub.JsonSerializerOptions).Subscribe(
                                 _ => ctx.Host.UpdateData(editStateId, false),
@@ -383,7 +387,11 @@ public static class CommentLayoutAreas
                             var cache = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
                             cache.Update(replyPath, n =>
                             {
-                                var replyComment = n.Content as Comment ?? new Comment();
+                                var replyComment = n.ContentAs<Comment>(host.Hub.JsonSerializerOptions);
+                                // Existing node whose content can't be recovered → leave it alone, NEVER clobber.
+                                if (n.Content is not null && replyComment is null)
+                                    return n;
+                                replyComment ??= new Comment();
                                 return n with
                                 {
                                     State = MeshNodeState.Active,
