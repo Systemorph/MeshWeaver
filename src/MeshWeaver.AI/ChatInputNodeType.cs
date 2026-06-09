@@ -25,8 +25,9 @@ namespace MeshWeaver.AI;
 /// their <c>User</c> partition is created (<see cref="ChatInputSeedHandler"/>, a
 /// <see cref="INodePostCreationHandler"/>), so the chat composer's read always RESOLVES instead of
 /// generating a routing NotFound that the GUI re-issues on a loop — the 2026-06-08 event-storm
-/// class. The content reuses the <see cref="Thread"/> shape (it already carries the draft +
-/// selection fields).</para>
+/// class. The content is the dedicated <see cref="ChatInput"/> record (message text + the
+/// harness/agent/model comboboxes + attachments) — exactly the fields the out-of-thread composer
+/// owns, not the full conversation <see cref="Thread"/> shape.</para>
 /// </summary>
 public static class ChatInputNodeType
 {
@@ -68,7 +69,9 @@ public static class ChatInputNodeType
         ExcludeFromContext = new HashSet<string> { "search", "create" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
-                .WithContentType<Thread>())
+                .WithContentType<ChatInput>())
+            // The composer is the node's default ("") layout area — see ChatInputView.
+            .AddChatInputView()
     };
 
     /// <summary>
@@ -101,7 +104,7 @@ public static class ChatInputNodeType
             {
                 NodeType = ChatInputNodeType.NodeType,
                 Name = "Chat Input",
-                Content = new Thread(),
+                Content = new ChatInput(),
             };
         }
     }

@@ -46,8 +46,13 @@
     50%      { opacity: 0.15; }
 }
 
-/* Execution status bar above chat input */
+/* Execution status bar above chat input. `flex: 0 1 auto` + `min-height: 0`
+   lets it shrink (and scroll internally) when the bottom bar runs out of room,
+   so it yields space to the always-visible input footer rather than pushing it
+   off the bottom. */
 .thread-exec-bar {
+    flex: 0 1 auto;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -186,9 +191,19 @@
 
 /* Bottom bar: groups the execution status ("where we are"), the runtime panel,
    and the input footer (harness selector + editor + send) into one block pinned
-   to the bottom of the screen. The chat history above (flex:1) scrolls under it. */
+   to the bottom of the screen. The chat history above (flex:1) scrolls under it.
+
+   `flex: 0 1 auto` + `min-height: 0` (NOT `flex-shrink: 0`): the block must be
+   ALLOWED to shrink so the container's height bounds it. Otherwise, when a thread
+   is running with sub-threads, the exec-bar (≤200px) + runtime-panel (≤38vh) +
+   input together exceed the side-panel height; with the block unshrinkable the
+   surplus overflows the `overflow:hidden` container and clips its LAST child —
+   the input footer — off the bottom. Letting the block shrink hands the surplus
+   to the shrinkable status panels below (which scroll internally) while the
+   footer stays flex-shrink:0 and fully visible. */
 .thread-chat-bottom {
-    flex-shrink: 0;
+    flex: 0 1 auto;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     min-width: 0;
@@ -958,7 +973,14 @@
    surface so the chat input feels like the bottom of a stacked
    control. */
 .thread-runtime-panel {
-    flex: 0 0 auto;
+    /* `flex: 0 1 auto` + `min-height: 0` (was `flex: 0 0 auto`): the panel must be
+       allowed to shrink so it yields vertical space to the input footer when the
+       side panel is short. `flex: 0 0 auto` made it refuse to shrink, so a tall
+       run of sub-thread cards (up to 38vh) pushed the input past the container's
+       `overflow:hidden` fold and hid it. Now it shrinks and scrolls its cards
+       internally; the input stays visible. */
+    flex: 0 1 auto;
+    min-height: 0;
     max-height: 38vh;
     overflow-y: auto;
     padding: 8px 24px;

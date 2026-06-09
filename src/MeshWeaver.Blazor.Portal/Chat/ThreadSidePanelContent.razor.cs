@@ -3,6 +3,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using MeshWeaver.Blazor.Portal.SidePanel;
 using Microsoft.AspNetCore.Components;
 
@@ -19,6 +20,7 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
     [Inject] private NavigationManager NavigationManager { get; set; } = null!;
     [Inject] private SidePanelStateService SidePanelState { get; set; } = null!;
     [Inject] private INavigationService NavigationService { get; set; } = null!;
+    [Inject] private AccessService AccessService { get; set; } = null!;
 
     [Parameter] public EventCallback OnCloseRequested { get; set; }
 
@@ -84,6 +86,21 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
         return new ThreadChatControl()
             .WithInitialContext(context?.PrimaryPath ?? string.Empty)
             .WithInitialContextDisplayName(context?.Node?.Name ?? context?.Node?.Id ?? string.Empty);
+    }
+
+    /// <summary>
+    /// Out-of-thread composer: the per-user ChatInput node's default ("") layout area —
+    /// the databound compose box (message text + harness/agent/model + attachments),
+    /// backed by <c>{userHome}/_Memex/ChatInput</c> (see <see cref="ChatInputView"/>).
+    /// Null until the user identity resolves, in which case the caller degrades to the
+    /// direct <see cref="GetNewChatControl"/> ThreadChatControl.
+    /// </summary>
+    private LayoutAreaControl? GetChatInputLayoutArea()
+    {
+        var userHome = AccessService.Context?.ObjectId ?? AccessService.CircuitContext?.ObjectId;
+        return string.IsNullOrEmpty(userHome)
+            ? null
+            : new LayoutAreaControl(ChatInputNodeType.PathFor(userHome), new LayoutAreaReference(string.Empty));
     }
 
     private string SidePanelTitle => selectedThreadName ?? "New Chat";

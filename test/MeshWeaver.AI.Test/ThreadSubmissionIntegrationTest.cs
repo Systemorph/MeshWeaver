@@ -400,6 +400,103 @@ public class ThreadSubmissionIntegrationTest : AITestBase
             string.Join(",", responseCells.Select(c => c.Id)));
     }
 
+    // ─── ChatInput composer (out-of-thread) ───
+
+    /// <summary>
+    /// The out-of-thread composer state — message content + the harness/agent/model
+    /// comboboxes — persists on the per-user <c>{user}/_Memex/ChatInput</c> singleton as
+    /// the dedicated <see cref="ChatInput"/> record, written AND read back through the
+    /// canonical <c>hub.GetMeshNodeStream(path)</c> surface (the same path the GUI composer
+    /// uses in <c>ThreadChatView.WriteTemplate</c> / <c>LoadTemplate</c>). No bespoke
+    /// request/response — the only mutation API is <c>stream.Update</c>.
+    /// </summary>
+    [Fact]
+    public void ChatInput_PersistsMessageContentAndComboboxes_ReadBackViaGetMeshNodeStream()
+    {
+        var client = GetClient();
+        var chatInputPath = ChatInputNodeType.PathFor(MonolithMeshTestBase.TestPartition);
+
+        // The per-user ChatInput singleton is seeded at onboarding (ChatInputSeedHandler),
+        // so the composer always updates an EXISTING node. Mirror that here.
+        NodeFactory.CreateNode(new MeshNode(chatInputPath)
+        {
+            Name = "Chat Input",
+            NodeType = ChatInputNodeType.NodeType,
+            MainNode = chatInputPath,
+            Content = new ChatInput(),
+        }).Should().Emit();
+
+        // Write the composer state exactly like the GUI does — hub.GetMeshNodeStream(path).Update.
+        // Null-guard the lambda: the remote handle fires it with node==null until the sync
+        // handshake delivers the initial state (see ResponseStream handshake race in CLAUDE.md).
+        client.GetMeshNodeStream(chatInputPath).Update(node =>
+        {
+            var n = node ?? new MeshNode(chatInputPath)
+            {
+                Name = "Chat Input",
+                NodeType = ChatInputNodeType.NodeType,
+                MainNode = chatInputPath,
+            };
+            return n with
+            {
+                Content = new ChatInput
+                {
+                    MessageContent = "draft hello",
+                    Harness = Harnesses.MeshWeaver,
+                    AgentName = "Assistant",
+                    ModelName = "fake-model",
+                }
+            };
+        }).Subscribe();
+
+        // Read it back through the same hub.GetMeshNodeStream surface — every picked field
+        // is reflected on the ChatInput record.
+        var stored = client.GetMeshNodeStream(chatInputPath)
+            .Select(n => n?.Content as ChatInput)
+            .Where(c => c is { MessageContent: "draft hello" })
+            .Should().Within(TimeSpan.FromSeconds(10))
+            .Match(_ => true)!;
+
+        stored.Harness.Should().Be(Harnesses.MeshWeaver);
+        stored.AgentName.Should().Be("Assistant");
+        stored.ModelName.Should().Be("fake-model");
+    }
+
+    /// <summary>
+    /// Submitting from the composer with no current thread starts a NEW thread via the
+    /// <c>hub.StartThread</c> static extension, the selected agent rides onto the ingested
+    /// user cell, and the round produces an output cell. (Submitting into an EXISTING
+    /// thread is covered by <see cref="Submit_ExistingThread_UserMessageIngested_OutputCellAppears"/>.)
+    /// </summary>
+    [Fact]
+    public void StartThread_FromComposer_CreatesThread_SelectedAgentRidesOntoUserCell()
+    {
+        var client = GetClient();
+        var threadCreated = new System.Reactive.Subjects.AsyncSubject<MeshNode>();
+
+        client.StartThread(
+            MonolithMeshTestBase.TestPartition,
+            "Compose then start",
+            agentName: "Assistant",
+            createdBy: "rbuergi@systemorph.com",
+            onCreated: node => { threadCreated.OnNext(node); threadCreated.OnCompleted(); });
+
+        var created = threadCreated.Should().Emit();
+        var threadPath = created.Path!;
+
+        var committed = WaitForThread(
+            threadPath,
+            t => t.IngestedMessageIds.Count >= 1 && t.Messages.Count >= 2,
+            timeoutMs: 15_000);
+
+        committed.Messages.Should().HaveCount(2, "one user cell + one output cell");
+
+        // The selected agent (a "combobox") flows from the composer through StartThread
+        // onto the materialised user cell.
+        var userCell = ReadNode($"{threadPath}/{committed.Messages[0]}").Should().Emit();
+        (userCell!.Content as ThreadMessage)!.AgentName.Should().Be("Assistant");
+    }
+
     // â”€â”€â”€ Helpers â”€â”€â”€
 
     private string SeedEmptyThread()

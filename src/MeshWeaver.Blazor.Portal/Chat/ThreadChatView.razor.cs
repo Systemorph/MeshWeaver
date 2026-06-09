@@ -344,7 +344,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             .Subscribe(text => InvokeAsync(() =>
             {
                 if (_isDisposed || !string.IsNullOrEmpty(threadPath)) return;
-                WriteTemplate(t => t with { DraftText = string.IsNullOrEmpty(text) ? null : text });
+                WriteTemplate(t => t with { MessageContent = string.IsNullOrEmpty(text) ? null : text });
             }));
 
         LoadTemplate();
@@ -427,7 +427,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (string.IsNullOrEmpty(_templatePath) || _templateLoaded)
             return;
         Hub.GetMeshNodeStream(_templatePath)
-            .Select(n => n?.Content as MeshWeaver.AI.Thread)
+            .Select(n => n?.Content as MeshWeaver.AI.ChatInput)
             .Where(t => t is not null)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(3))
@@ -441,26 +441,26 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 _ => _templateLoaded = true);
     }
 
-    private void ApplyTemplate(MeshWeaver.AI.Thread t)
+    private void ApplyTemplate(MeshWeaver.AI.ChatInput t)
     {
-        if (!string.IsNullOrEmpty(t.SelectedHarness) && Harnesses.All.Contains(t.SelectedHarness))
+        if (!string.IsNullOrEmpty(t.Harness) && Harnesses.All.Contains(t.Harness))
         {
-            selectedHarness = t.SelectedHarness;
-            _stickyHarness = t.SelectedHarness;
+            selectedHarness = t.Harness;
+            _stickyHarness = t.Harness;
         }
-        if (!string.IsNullOrEmpty(t.SelectedAgentName))
-            _stickyAgentName = t.SelectedAgentName;
+        if (!string.IsNullOrEmpty(t.AgentName))
+            _stickyAgentName = t.AgentName;
 
         // Draft restore: composer mode only, and never clobber text the user has
         // already begun typing this session.
-        if (string.IsNullOrEmpty(threadPath) && !string.IsNullOrEmpty(t.DraftText)
+        if (string.IsNullOrEmpty(threadPath) && !string.IsNullOrEmpty(t.MessageContent)
             && string.IsNullOrEmpty(MessageText))
         {
-            MessageText = t.DraftText;
+            MessageText = t.MessageContent;
             if (monacoEditor != null)
-                _ = SafeSetMonacoAsync(t.DraftText!);
+                _ = SafeSetMonacoAsync(t.MessageContent!);
             else
-                _pendingDraft = t.DraftText; // applied in OnAfterRenderAsync
+                _pendingDraft = t.MessageContent; // applied in OnAfterRenderAsync
         }
 
         ApplySelections();
@@ -481,13 +481,13 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// the old browser-localStorage persistence so the draft + selection survive a
     /// reboot server-side.
     /// </summary>
-    private void WriteTemplate(Func<MeshWeaver.AI.Thread, MeshWeaver.AI.Thread> mutate)
+    private void WriteTemplate(Func<MeshWeaver.AI.ChatInput, MeshWeaver.AI.ChatInput> mutate)
     {
         if (string.IsNullOrEmpty(_templatePath) || string.IsNullOrEmpty(_userHome))
             return;
         Hub.GetMeshNodeStream(_templatePath).Update(node =>
         {
-            var t = node?.Content as MeshWeaver.AI.Thread ?? new MeshWeaver.AI.Thread();
+            var t = node?.Content as MeshWeaver.AI.ChatInput ?? new MeshWeaver.AI.ChatInput();
             var updated = mutate(t);
             return node != null
                 ? node with { Content = updated }
@@ -523,9 +523,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private void PersistTemplateSelection() =>
         WriteTemplate(t => t with
         {
-            SelectedHarness = selectedHarness,
-            SelectedAgentName = selectedAgentInfo?.Name ?? t.SelectedAgentName,
-            SelectedModelName = selectedModelInfo?.Name ?? t.SelectedModelName
+            Harness = selectedHarness,
+            AgentName = selectedAgentInfo?.Name ?? t.AgentName,
+            ModelName = selectedModelInfo?.Name ?? t.ModelName
         });
 
     /// <summary>
@@ -921,7 +921,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 // New thread cloned from the template — clear the template draft.
                 // The selection (harness/agent/model) stays so the next new thread
                 // inherits it.
-                WriteTemplate(t => t with { DraftText = null });
+                WriteTemplate(t => t with { MessageContent = null });
             }
             else
             {

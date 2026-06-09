@@ -84,6 +84,10 @@ public static class AIExtensions
             .WithType(typeof(ModelProviderConfiguration), nameof(ModelProviderConfiguration))
             .WithType(typeof(AI.Thread), nameof(AI.Thread))
             .WithType(typeof(ThreadMessage), nameof(ThreadMessage))
+            // ChatInput: content of the per-user {user}/_Memex/ChatInput composer
+            // singleton (message text + harness/agent/model + attachments). Registered
+            // mesh-wide so the node serialises across routing/mesh hubs.
+            .WithType(typeof(ChatInput), nameof(ChatInput))
             // MessageViewModel is not registered — handled as JsonElement on the wire.
             // SubmitMessageRequest / SubmitMessageResponse deleted 2026-05-25:
             // the only mutation API is workspace.GetMeshNodeStream(path).Update(...).
