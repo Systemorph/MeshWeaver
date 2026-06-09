@@ -144,4 +144,84 @@ public class SourceQueryJsonOptionsTest(ITestOutputHelper output) : MonolithMesh
             "back to JsonElement — that's the exact production failure " +
             "shape this test pins.");
     }
+
+    /// <summary>
+    /// Repro: the discriminator names a REGISTERED type but the stored JSON no
+    /// longer fits it (a renamed/removed property, a changed shape — the legacy-data
+    /// case). The converter must NOT throw (a throw on the node read path faults the
+    /// whole node → wedged per-node grain). It degrades to a raw <see cref="JsonElement"/>
+    /// so the node stays readable and repairable.
+    /// </summary>
+    [Fact(Timeout = 10_000)]
+    public void RegisteredTypeWithIncompatibleShape_DegradesToJsonElement_NotThrow()
+    {
+        // Registry resolves "CodeConfiguration" to the real type...
+        var def = Substitute.For<ITypeDefinition>();
+        def.Type.Returns(typeof(CodeConfiguration));
+        var registry = Substitute.For<ITypeRegistry>();
+        registry.TryGetType(Arg.Any<string>(), out Arg.Any<ITypeDefinition?>())
+            .Returns(call => { call[1] = def; return true; });
+
+        var options = new JsonSerializerOptions
+        {
+            Converters = { new ObjectPolymorphicConverter(registry) }
+        };
+
+        // ...but the body is incompatible: `Language` is a (non-nullable) string,
+        // the JSON gives a number → JsonSerializer.Deserialize(CodeConfiguration) throws.
+        // (PascalCase keys so they actually map under these naming-policy-free options.)
+        var contentJson = """
+            {
+              "$type": "CodeConfiguration",
+              "Code": "public class X {}",
+              "Language": 12345
+            }
+            """;
+
+        object? result = null;
+        var act = () => { result = JsonSerializer.Deserialize<object>(contentJson, options); };
+
+        act.Should().NotThrow(
+            "a deserialization failure on a registered-but-drifted shape must NOT " +
+            "propagate — that faults the node read and wedges the owning grain");
+        result.Should().BeOfType<JsonElement>(
+            "the converter degrades the unreadable content to raw JSON so the node " +
+            "stays readable/repairable instead of white-screening");
+    }
+
+    /// <summary>
+    /// Repro of the recovery side: a node whose Content degraded to a
+    /// <see cref="JsonElement"/> (its <c>$type</c> is a since-renamed type the
+    /// registry no longer knows) is recovered by <see cref="MeshNodeContentExtensions.ContentAs{T}"/>,
+    /// because at the read site we KNOW the concrete target type and can deserialize
+    /// straight into it. The stale <c>$type</c> is just an ignored member; every field
+    /// whose name still matches survives. This is what turns a content-type rename
+    /// from a data wipe into a transparent repair.
+    /// </summary>
+    [Fact(Timeout = 10_000)]
+    public void ContentAs_RecoversRenamedContent_ViaTargetType()
+    {
+        var options = Mesh.JsonSerializerOptions;
+
+        // Stored under a since-renamed discriminator the registry can't resolve, but
+        // the field names still line up with CodeConfiguration.
+        var legacyJson = """
+            {
+              "$type": "OldCodeConfigName",
+              "code": "public class Y {}",
+              "language": "fsharp"
+            }
+            """;
+        var degraded = JsonSerializer.Deserialize<object>(legacyJson, options);
+        degraded.Should().BeOfType<JsonElement>(
+            "an unknown/renamed $type degrades to JsonElement — the starting condition");
+
+        var node = new MeshNode("Code", "rbuergi/SomeCode") { Content = degraded };
+
+        var recovered = node.ContentAs<CodeConfiguration>(options);
+
+        recovered.Should().NotBeNull("we know the target type, so the JsonElement is recoverable");
+        recovered!.Code.Should().Be("public class Y {}");
+        recovered.Language.Should().Be("fsharp");
+    }
 }

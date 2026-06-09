@@ -382,7 +382,11 @@ internal static class ThreadSubmissionServer
             // thread hub), so its own GetMeshNodeStream is the OWN handle.
             hub.GetWorkspace().GetMeshNodeStream().Update(n =>
             {
-                var t = n.Content as MeshThread ?? new MeshThread();
+                var t = n.ContentAs<MeshThread>(hub.JsonSerializerOptions, logger);
+                // Existing node whose content can't be recovered → leave it alone, NEVER clobber.
+                if (n.Content is not null && t is null)
+                    return n;
+                t ??= new MeshThread();
                 // 🚨 Roll back ONLY a stuck StartingExecution claim that found nothing
                 // to dispatch. NEVER roll back an Executing round. The claim Status
                 // oscillates and the _Exec round watcher can fire DispatchAfterClaim
@@ -461,7 +465,9 @@ internal static class ThreadSubmissionServer
         var threadPath = hub.Address.Path;
         var responseMsgId = dispatch.ResponseMessageId;
         var responsePath = $"{threadPath}/{responseMsgId}";
-        var thread = threadNode.Content as MeshThread ?? new MeshThread();
+        // Read-side recovery: top-of-method read (not a write-back), so no clobber
+        // guard — recover a degraded JsonElement, preserve the existing new-on-absent fallback.
+        var thread = threadNode.ContentAs<MeshThread>(hub.JsonSerializerOptions, logger) ?? new MeshThread();
         var mainEntity = threadNode.MainNode ?? dispatch.ContextPath ?? threadPath;
 
         var accessService = hub.ServiceProvider.GetService<AccessService>();
@@ -565,7 +571,11 @@ internal static class ThreadSubmissionServer
             var didCommitThisEmission = false;
             hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
             {
-                var t = node.Content as MeshThread ?? new MeshThread();
+                var t = node.ContentAs<MeshThread>(hub.JsonSerializerOptions, logger);
+                // Existing node whose content can't be recovered → leave it alone, NEVER clobber.
+                if (node.Content is not null && t is null)
+                    return node;
+                t ??= new MeshThread();
                 // Decide whether to LAUNCH from the lambda parameter's CURRENT status:
                 //   • fresh claim:  StartingExecution → Executing (the normal commit edge).
                 //   • resume:       the round is ALREADY Executing (cold-load / self-heal

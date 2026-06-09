@@ -120,7 +120,11 @@ public static class ThreadInput
                 "[AppendUserInput] UPDATE_LAMBDA invoked for {ThreadPath} (node.Path={NodePath} contentType={ContentType})",
                 threadPath, node.Path ?? "(null)",
                 node.Content?.GetType().Name ?? "(null)");
-            var thread = node.Content as MeshThread ?? new MeshThread();
+            var thread = node.ContentAs<MeshThread>(workspace.Hub.JsonSerializerOptions, logger);
+            // Existing node whose content can't be recovered → leave it alone, NEVER clobber.
+            if (node.Content is not null && thread is null)
+                return node;
+            thread ??= new MeshThread();
             var userIds = thread.UserMessageIds.Contains(msgId)
                 ? thread.UserMessageIds
                 : thread.UserMessageIds.Add(msgId);

@@ -1,6 +1,7 @@
 ﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 using MeshWeaver.Domain;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Messaging.Serialization;
 
@@ -8,7 +9,7 @@ namespace MeshWeaver.Messaging.Serialization;
 /// Custom converter for object types that handles polymorphic serialization/deserialization
 /// using the type registry and $type discriminator.
 /// </summary>
-public class ObjectPolymorphicConverter(ITypeRegistry typeRegistry) : JsonConverter<object>
+public class ObjectPolymorphicConverter(ITypeRegistry typeRegistry, ILogger? logger = null) : JsonConverter<object>
 {
     public override bool CanConvert(Type typeToConvert)
     {
@@ -68,8 +69,18 @@ public class ObjectPolymorphicConverter(ITypeRegistry typeRegistry) : JsonConver
                     var json = JsonElementNormalizer.GetNormalizedRawText(cleanedElement);
                     return JsonSerializer.Deserialize(json, typeInfo!.Type, options)!;
                 }
-                catch (NotSupportedException ex) when (ex.Message.StartsWith("Deserialization of interface or abstract"))
+                catch (Exception ex) when (
+                    ex is JsonException
+                    or NotSupportedException
+                    or InvalidOperationException
+                    or ArgumentException)
                 {
+                    // Registered type but the stored JSON no longer fits it. Don't throw
+                    // (a throw faults the node read → wedged grain); preserve the raw JSON
+                    // so the node stays readable/repairable. Logged loud, not swallowed.
+                    logger?.LogWarning(ex,
+                        "Content for '{TypeName}' could not be deserialized; preserving raw JSON",
+                        typeName);
                     return cleanedElement.Clone();
                 }
             }

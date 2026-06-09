@@ -352,7 +352,11 @@ public static class HubThreadExtensions
             ?.CreateLogger("MeshWeaver.AI.HubThreadExtensions");
         hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
         {
-            var t = node.Content as MeshThread ?? new MeshThread();
+            var t = node.ContentAs<MeshThread>(hub.JsonSerializerOptions, logger);
+            // Existing node whose content can't be recovered → leave it alone, NEVER clobber.
+            if (node.Content is not null && t is null)
+                return node;
+            t ??= new MeshThread();
             if (t.IsExecuting)
             {
                 logger?.LogInformation(
@@ -415,7 +419,11 @@ public static class HubThreadExtensions
         meshService.CreateNode(errorCell)
             .SelectMany(_ => workspace.GetMeshNodeStream(threadPath).Update(node =>
             {
-                var t = node.Content as MeshThread ?? new MeshThread();
+                var t = node.ContentAs<MeshThread>(hub.JsonSerializerOptions, logger);
+                // Existing node whose content can't be recovered → leave it alone, NEVER clobber.
+                if (node.Content is not null && t is null)
+                    return node;
+                t ??= new MeshThread();
                 var msgs = t.Messages;
                 if (!msgs.Contains(userMessageId)) msgs = msgs.Add(userMessageId);
                 if (!msgs.Contains(errorCellId)) msgs = msgs.Add(errorCellId);

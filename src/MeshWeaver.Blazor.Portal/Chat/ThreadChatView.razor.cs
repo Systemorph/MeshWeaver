@@ -465,7 +465,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (string.IsNullOrEmpty(_templatePath) || _templateLoaded)
             return;
         Hub.GetMeshNodeStream(_templatePath)
-            .Select(n => n?.Content as MeshWeaver.AI.ThreadComposer)
+            // Bad-data tolerant: recover a degraded JsonElement (unknown/renamed $type)
+            // into ThreadComposer rather than dropping it as a null `as` cast.
+            .Select(n => n.ContentAs<MeshWeaver.AI.ThreadComposer>(Hub.JsonSerializerOptions, Logger))
             .Where(t => t is not null)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(3))
@@ -528,15 +530,16 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             return;
         Hub.GetMeshNodeStream(_templatePath).Update(node =>
         {
-            var t = node?.Content as MeshWeaver.AI.ThreadComposer ?? new MeshWeaver.AI.ThreadComposer();
-            var updated = mutate(t);
+            var existing = node.ContentAs<MeshWeaver.AI.ThreadComposer>(Hub.JsonSerializerOptions, Logger);
+            // Node exists but its content can't be recovered → leave it alone, never
+            // clobber data a human might still rescue. ContentAs already logged loud.
+            if (node != null && existing is null)
+                return node;
+            var updated = mutate(existing ?? new MeshWeaver.AI.ThreadComposer());
             return node != null
                 ? node with { Content = updated }
-                // Create-on-first-write fallback: build the node at the exact _templatePath
-                // (the resolved composer path — per-user {user}/_Thread/ThreadComposer, seeded, or
-                // per-node {node}/_Thread/{user}/ThreadComposer, ensured by the Thread view). Derive
-                // from the path so write + read target the same node; never a hard-coded
-                // namespace.
+                // Create-on-first-write: build at the exact _templatePath so write + read
+                // target the same node; never a hard-coded namespace.
                 : MeshWeaver.Mesh.MeshNode.FromPath(_templatePath!) with
                 {
                     NodeType = MeshWeaver.AI.ThreadComposerNodeType.NodeType,
@@ -1378,7 +1381,11 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         {
             Hub.GetMeshNodeStream(threadPath).Update(node =>
             {
-                var thread = node.Content as MeshWeaver.AI.Thread ?? new MeshWeaver.AI.Thread();
+                var thread = node.ContentAs<MeshWeaver.AI.Thread>(Hub.JsonSerializerOptions, Logger);
+                // Unreadable thread content → leave it alone, never clobber.
+                if (node.Content is not null && thread is null)
+                    return node;
+                thread ??= new MeshWeaver.AI.Thread();
                 if (thread.SelectedAgentName == agentName && thread.SelectedModelName == modelName
                     && (harness is null || thread.SelectedHarness == harness))
                     return node; // no-op

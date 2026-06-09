@@ -456,7 +456,11 @@ public static class CommentsView
                             var cache = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
                             cache.Update(ownPath, n =>
                             {
-                                var c = n.Content as Comment ?? new Comment();
+                                var c = n.ContentAs<Comment>(host.Hub.JsonSerializerOptions);
+                                // Existing node whose content can't be recovered → leave it alone, NEVER clobber.
+                                if (n.Content is not null && c is null)
+                                    return n;
+                                c ??= new Comment();
                                 return n with
                                 {
                                     State = MeshNodeState.Active,

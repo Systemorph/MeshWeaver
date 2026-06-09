@@ -59,7 +59,11 @@ internal static class ThreadExecution
     {
         hub.GetMeshNodeStream(responsePath).Update(node =>
         {
-            var current = node?.Content as ThreadMessage ?? new ThreadMessage
+            var current = node.ContentAs<ThreadMessage>(hub.JsonSerializerOptions, logger);
+            // Existing node whose content can't be recovered → leave it alone, NEVER clobber.
+            if (node?.Content is not null && current is null)
+                return node;
+            current ??= new ThreadMessage
             {
                 Role = "assistant",
                 Text = "",
@@ -230,7 +234,11 @@ internal static class ThreadExecution
                                     threadPath);
                                 parentHub.GetWorkspace().GetMeshNodeStream().Update(n =>
                                 {
-                                    var t = n.Content as MeshThread ?? new MeshThread();
+                                    var t = n.ContentAs<MeshThread>(parentHub.JsonSerializerOptions, logger);
+                                    // Existing node whose content can't be recovered → leave it alone, NEVER clobber.
+                                    if (n.Content is not null && t is null)
+                                        return n;
+                                    t ??= new MeshThread();
                                     return t.Status == ThreadExecutionStatus.StartingExecution
                                         ? n with { Content = t with { Status = ThreadExecutionStatus.Idle, ExecutionStartedAt = null } }
                                         : n;
@@ -729,7 +737,11 @@ internal static class ThreadExecution
             // through the identical shared handle the GUI reads from.
             var updateObs = parentHub.GetMeshNodeStream(curResponsePath).Update(node =>
             {
-                var current = node?.Content as ThreadMessage ?? new ThreadMessage
+                var current = node.ContentAs<ThreadMessage>(parentHub.JsonSerializerOptions, logger);
+                // Existing node whose content can't be recovered → leave it alone, NEVER clobber.
+                if (node?.Content is not null && current is null)
+                    return node;
+                current ??= new ThreadMessage
                 {
                     Role = "assistant",
                     Text = "",

@@ -6,6 +6,7 @@ using System.Text.Json.Serialization.Metadata;
 using MeshWeaver.Domain;
 using MeshWeaver.Messaging.Serialization;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Messaging;
 
@@ -66,7 +67,8 @@ public static class SerializationExtensions
     private static IEnumerable<JsonConverter> GetStandardConverters(IMessageHub hub)
     {
         yield return new AddressConverter();
-        yield return new ObjectPolymorphicConverter(hub.TypeRegistry);
+        yield return new ObjectPolymorphicConverter(hub.TypeRegistry,
+            hub.ServiceProvider.GetService<ILogger<ObjectPolymorphicConverter>>());
         yield return new MessageDeliveryConverter(hub.TypeRegistry);
         yield return new ReadOnlyCollectionConverterFactory();
         yield return new JsonNodeConverter();
