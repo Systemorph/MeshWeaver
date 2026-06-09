@@ -230,7 +230,7 @@ public static class PostgreSqlSchemaInitializer
     /// Builds the <c>CREATE OR REPLACE FUNCTION public.ensure_partition_schema(partition_name text)</c>
     /// DDL. The proc idempotently creates the partition's schema + the full versioned
     /// table set (<c>{partition}.mesh_nodes</c> + every satellite table from
-    /// <see cref="PartitionDefinition.StandardTableMappings"/>) + the permission-rebuild
+    /// <see cref="SatelliteTableMapping"/>) + the permission-rebuild
     /// functions and notify/mirror/history triggers.
     ///
     /// <para><b>Byte-faithful to the C# DDL.</b> The proc body embeds the exact strings

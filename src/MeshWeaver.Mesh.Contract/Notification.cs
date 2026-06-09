@@ -21,7 +21,7 @@ public enum NotificationType
 /// Notifications are <b>satellites</b> of their main entity: the notification node
 /// has <c>MainNode = mainEntityPath</c> and its own path lives under
 /// <c>{mainEntityPath}/_Notification/{id}</c>. Storage routes through the
-/// <c>notifications</c> table via <see cref="PartitionDefinition.StandardTableMappings"/>.
+/// <c>notifications</c> table via <see cref="SatelliteTableMapping"/>.
 /// </summary>
 public record Notification
 {

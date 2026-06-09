@@ -23,7 +23,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 /// MeshNode through the real <see cref="IMeshService"/> stack (router →
 /// per-partition PG storage adapter) and the satellite mapping
 /// <c>_Notification → notifications</c> in
-/// <see cref="PartitionDefinition.StandardTableMappings"/> lands the row in
+/// <see cref="SatelliteTableMapping"/> lands the row in
 /// the dedicated <c>notifications</c> table inside the per-partition schema.
 ///
 /// <para>Lower-level routing is covered by SatelliteNodeTests (adapter calls

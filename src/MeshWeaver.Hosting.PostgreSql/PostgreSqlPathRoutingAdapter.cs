@@ -116,7 +116,8 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
             DataSource = "default",
             Schema = seg.ToLowerInvariant(),
             Table = "mesh_nodes",
-            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
+            TableMappings = _provider.SatelliteSegmentMappings(),
+            NodeTypeTableMappings = _provider.SatelliteNodeTypeMappings(),
             Versioned = true,
         };
     }

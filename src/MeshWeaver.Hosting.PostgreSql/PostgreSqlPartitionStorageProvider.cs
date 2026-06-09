@@ -227,6 +227,18 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     }
 
     /// <summary>
+    /// The configured segment→table satellite map (from <c>PostgreSqlStorageOptions.SatelliteTables</c>,
+    /// host-overridable). Stamped onto every partition this provider provisions/routes so a custom
+    /// satellite layout actually takes effect — not the hardcoded default.
+    /// </summary>
+    internal Dictionary<string, string> SatelliteSegmentMappings()
+        => SatelliteTableMapping.ToSegmentTableMap(_options.SatelliteTables);
+
+    /// <summary>The configured nodeType→table satellite map (from <c>PostgreSqlStorageOptions.SatelliteTables</c>).</summary>
+    internal Dictionary<string, string> SatelliteNodeTypeMappings()
+        => SatelliteTableMapping.ToNodeTypeTableMap(_options.SatelliteTables);
+
+    /// <summary>
     /// The reactive provisioning entry point — the ONE path that creates a partition's
     /// schema + tables, driven by <c>OwnsPartitionProvisioningValidator</c> when a
     /// top-level <c>User</c>/<c>Space</c> is created. Routed through
@@ -247,7 +259,8 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
             DataSource = Name,
             Schema = @namespace.ToLowerInvariant(),
             Table = "mesh_nodes",
-            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
+            TableMappings = SatelliteSegmentMappings(),
+            NodeTypeTableMappings = SatelliteNodeTypeMappings(),
             Versioned = true,
         };
         // Promise-cache: provision each schema at most once. IIoPool.Run pushes the

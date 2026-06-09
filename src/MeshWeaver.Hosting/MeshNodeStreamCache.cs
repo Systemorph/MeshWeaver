@@ -938,7 +938,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
 
     /// <summary>
     /// True when <paramref name="path"/> is empty or its first segment matches
-    /// a known NodeType name (from <see cref="PartitionDefinition.NodeTypeToSuffix"/>).
+    /// a known NodeType name (from <see cref="SatelliteTableMapping"/>).
     /// Used by <c>GetStream</c> to skip the access-check round-trip on
     /// non-partition-rooted paths, which previously triggered the prod
     /// 2026-05-21 regression where <c>PostgreSqlPathRoutingAdapter</c>

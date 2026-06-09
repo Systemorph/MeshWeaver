@@ -11,7 +11,7 @@ namespace MeshWeaver.Graph;
 /// <see cref="MeshNode.MainNode"/> is the entity's path; its own path is
 /// <c>{mainNodePath}/_Notification/{id}</c>. Storage routes through the
 /// dedicated <c>notifications</c> table via
-/// <see cref="PartitionDefinition.StandardTableMappings"/>.
+/// <see cref="SatelliteTableMapping"/>.
 /// </summary>
 public static class NotificationService
 {

@@ -44,7 +44,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 ///     <see cref="IPathResolver"/> for a <c>_Access</c> satellite only.</item>
 /// </list>
 /// <para>None of the above hits <see cref="IPathResolver"/> for EVERY
-/// satellite shape in <see cref="PartitionDefinition.StandardTableMappings"/>.
+/// satellite shape in <see cref="SatelliteTableMapping"/>.
 /// That is the gap.</para>
 ///
 /// <para>The <see cref="Theory"/> below parameterises over every satellite
@@ -88,7 +88,7 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
 
     /// <summary>
     /// Every satellite/code segment in
-    /// <see cref="PartitionDefinition.StandardTableMappings"/>. The triple is
+    /// <see cref="SatelliteTableMapping"/>. The triple is
     /// <c>(segment, nodeType, contentNeeded)</c>:
     /// <list type="bullet">
     ///   <item><c>segment</c> — the path segment that pins the satellite
@@ -127,7 +127,7 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
 
     /// <summary>
     /// For each satellite/code segment in
-    /// <see cref="PartitionDefinition.StandardTableMappings"/>: create the
+    /// <see cref="SatelliteTableMapping"/>: create the
     /// user partition root + a satellite node at <c>user/{segment}/{id}</c>,
     /// then ask <see cref="IPathResolver"/> to resolve that exact URL the
     /// way the Blazor router does. Assertions pin the contracts the prod

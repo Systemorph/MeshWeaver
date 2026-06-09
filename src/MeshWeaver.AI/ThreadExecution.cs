@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -1837,7 +1837,7 @@ internal static class ThreadExecution
     /// Posts a <see cref="Notification"/> satellite under the thread on
     /// successful round completion. The notification stores in the
     /// <c>notifications</c> table (satellite routing via
-    /// <see cref="PartitionDefinition.StandardTableMappings"/>) and shows up
+    /// <see cref="SatelliteTableMapping"/>) and shows up
     /// in the user's bell — clicking it navigates to the thread.
     /// Fire-and-forget; failures are logged but don't fail the round.
     /// </summary>

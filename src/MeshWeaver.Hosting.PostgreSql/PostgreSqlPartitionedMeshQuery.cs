@@ -456,15 +456,15 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
     ///     <c>namespace:partition/_Thread</c>, <c>namespace:partition/*/_Thread</c>,
     ///     and any other path that carries a satellite segment
     ///     (<c>_Thread</c>, <c>_ThreadMessage</c>, <c>_Activity</c>,
-    ///     <c>_Access</c>, …) resolve via <see cref="PartitionDefinition.StandardTableMappings"/>.
+    ///     <c>_Access</c>, …) resolve via <see cref="SatelliteTableMapping"/>.
     ///     Longest-suffix-wins ordering inside <see cref="PartitionDefinition.ResolveTable"/>
     ///     means <c>_ThreadMessage</c> beats <c>_Thread</c> when both could match.</item>
     ///   <item><b>nodeType filter</b> — when the path is missing or doesn't
     ///     contain a satellite segment, fall back to the nodeType filter:
     ///     <c>nodeType:Thread</c> → <c>threads</c>, <c>nodeType:ThreadMessage</c> → <c>threads</c>,
     ///     <c>nodeType:Activity</c> → <c>activities</c>, <c>nodeType:Comment</c> → <c>annotations</c>,
-    ///     etc. — via <see cref="PartitionDefinition.NodeTypeToSuffix"/> chained
-    ///     into <see cref="PartitionDefinition.StandardTableMappings"/>.</item>
+    ///     etc. — via <see cref="SatelliteTableMapping"/> chained
+    ///     into <see cref="SatelliteTableMapping"/>.</item>
     ///   <item><b>Fallback</b> — <c>mesh_nodes</c> for primary content.</item>
     /// </list>
     /// </summary>

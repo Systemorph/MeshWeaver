@@ -17,7 +17,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 
 /// <summary>
 /// Exhaustive Postgres-backed tests for satellite-table routing — every
-/// satellite type defined in <see cref="PartitionDefinition.StandardTableMappings"/>
+/// satellite type defined in <see cref="SatelliteTableMapping"/>
 /// plus the prod-2026-05-21 regression where a query whose first segment is
 /// a NodeType name (<c>Thread</c>, <c>AccessAssignment</c>) was routed to a
 /// schema with that name. The user's directive (verbatim): "there should be
@@ -52,7 +52,7 @@ public class SatelliteRoutingExhaustiveTest
     /// scenario: seed a node at <c>{partition}/{suffix}/{id}</c>, read by
     /// exact path, read by multi-value <c>path:A|B|C</c> via
     /// <c>PostgreSqlMeshQuery.Query</c>. Source of truth:
-    /// <see cref="PartitionDefinition.StandardTableMappings"/>.
+    /// <see cref="SatelliteTableMapping"/>.
     /// </summary>
     public static TheoryData<string, string, string, string> SatelliteSuffixes =>
         new()
