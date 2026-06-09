@@ -417,11 +417,22 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         _negative[path] = new NegativeEntry(error, failCount, DateTimeOffset.UtcNow + TimeSpan.FromTicks(backoffTicks));
         if (failCount == StormFailThreshold)
             logger.LogWarning(
-                "[STORM-BREAKER] Suppressing re-probe of '{Path}' after {FailCount} consecutive read failures: {Error}. "
-                + "Reads fast-fail until the backoff window elapses. A point node-access to a node that does not exist "
-                + "is a defect — read optional nodes via GetQuery (empty-on-absent), not GetMeshNodeStream(exactPath).",
+                "[STORM-BREAKER] Suppressing re-probe of '{Path}' after {FailCount} consecutive access failures: {Error}. "
+                + "Reads AND writes fast-fail until the backoff window elapses. A point node-access to a node that does "
+                + "not exist is a defect — read optional nodes via GetQuery (empty-on-absent), not GetMeshNodeStream(exactPath); "
+                + "bring a new node into being with CreateNode, not Update.",
                 path, failCount, error.Message);
     }
+
+    /// <summary>
+    /// True when an owner failure means the node/hub does not exist (NotFound / activation
+    /// failed) — the only failure class the storm-breaker suppresses on the WRITE path. RLS
+    /// denials and transient routing errors are excluded so an existing-but-busy node is never
+    /// falsely blocked from writes.
+    /// </summary>
+    private static bool IsMissingNodeFailure(Exception error) =>
+        error.Message.Contains("No node found", StringComparison.OrdinalIgnoreCase)
+        || error.Message.Contains("activation failed", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Returns a per-user access-gated view of the cached shared stream. The
@@ -597,6 +608,16 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // patches that the RFC 7396 owner-side merge cannot resolve (lists
         // collapse to the last writer). Serializing per path makes each
         // lambda observe its predecessor's effect.
+        // STORM BREAKER (write side): if this path's owner is in a known missing-node failure
+        // window, fast-fail rather than enqueue another PatchDataRequest the owner can't
+        // activate. Same negative cache as the read-side GetStreamRaw breaker, so a missing-node
+        // path can never storm the mesh from either direction. Only a real CreateNode brings a
+        // non-existent node into being — an Update can't.
+        if (_negative.TryGetValue(path, out var negWrite)
+            && negWrite.OpenUntil > DateTimeOffset.UtcNow
+            && IsMissingNodeFailure(negWrite.Error))
+            return Observable.Throw<MeshNode>(negWrite.Error);
+
         var queue = GetOrCreateUpdateQueue(path);
         var result = new ReplaySubject<MeshNode>();
         var seq = System.Threading.Interlocked.Increment(ref _updateSeq);
@@ -703,6 +724,9 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                         logger.LogDebug(
                             "[UpdateQueue] LOCAL_EMIT path={Path} seq={Seq} elapsedFromStart={ElapsedMs}ms",
                             path, req.Seq, (DateTimeOffset.UtcNow - req.EnteredAt).TotalMilliseconds);
+                        // A successful write proves the owner is live ⇒ clear any storm-breaker
+                        // window so reads/writes re-probe normally.
+                        _negative.TryRemove(path, out _);
                         req.Result.OnNext(node);
                     },
                     ex =>
@@ -710,6 +734,13 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                         logger.LogWarning(ex,
                             "[UpdateQueue] FAILED path={Path} seq={Seq} elapsedMs={ElapsedMs}",
                             path, req.Seq, (DateTimeOffset.UtcNow - req.EnteredAt).TotalMilliseconds);
+                        // Storm-breaker (write side): a terminal "node/hub does not exist" failure
+                        // opens the negative-cache window so subsequent writes AND reads fast-fail
+                        // instead of re-enqueueing doomed PatchDataRequests against a hub that can't
+                        // activate. Only missing-node failures record (not RLS denial / transient),
+                        // so a legitimately-existing node is never falsely suppressed.
+                        if (IsMissingNodeFailure(ex))
+                            RecordNegative(path, ex);
                         req.Result.OnError(ex);
                         Settle();
                     },

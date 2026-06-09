@@ -139,7 +139,7 @@ var migrations = new IMigration[]
     new V30_EnsurePartitionSchemaStoredProc(),
     new V31_UnifyUserMirrorIntoAuthAndRelocateContent(),
     new V32_RepairAuthMirrorTriggerAndBackfill(),
-    new V33_SeedChatInputForExistingUsers(),
+    new V33_SeedThreadComposerForExistingUsers(),
     new V34_TypeOrphanPartitionRootsAsSpace(),
 };
 

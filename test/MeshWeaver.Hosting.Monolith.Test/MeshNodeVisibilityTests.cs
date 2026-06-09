@@ -20,14 +20,14 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
 /// Unit tests for the <see cref="MeshNodeVisibility"/> "dotfile" convention: a path segment
-/// starting with <c>'_'</c> (e.g. <c>{user}/_Memex/ChatInput</c>, <c>{p}/_Access/…</c>) marks a
+/// starting with <c>'_'</c> (e.g. <c>{user}/_Memex/ThreadComposer</c>, <c>{p}/_Access/…</c>) marks a
 /// node as hidden and excludes it from the <c>search</c> context — decoupled from satellite-table
 /// routing. Pure logic, no fixture.
 /// </summary>
 public class MeshNodeVisibilityUnitTests
 {
     [Theory]
-    [InlineData("rsalzmann/_Memex/ChatInput", true)]   // the ChatInput singleton
+    [InlineData("rsalzmann/_Memex/ThreadComposer", true)]   // the ThreadComposer singleton
     [InlineData("ACME/_Access/G1", true)]              // a known satellite namespace is also a dotfile
     [InlineData("_Memex", true)]                       // single leading-underscore segment
     [InlineData("a/_b/c", true)]                       // underscore in a middle segment
@@ -42,7 +42,7 @@ public class MeshNodeVisibilityUnitTests
     [Fact]
     public void IsExcludedFromContext_DotfilePath_ExcludedFromSearchOnly()
     {
-        var hidden = new MeshNode("ChatInput", "rsalzmann/_Memex");
+        var hidden = new MeshNode("ThreadComposer", "rsalzmann/_Memex");
 
         hidden.IsExcludedFromContext("search").Should().BeTrue(
             "a _-prefixed (dotfile) path is hidden from search");
@@ -78,7 +78,7 @@ public class MeshNodeVisibilityUnitTests
 
 /// <summary>
 /// Integration test: a <c>_</c>-prefixed (dotfile) node — e.g. the per-user
-/// <c>{user}/_Memex/ChatInput</c> singleton — must be dropped from the <c>search</c> context by the
+/// <c>{user}/_Memex/ThreadComposer</c> singleton — must be dropped from the <c>search</c> context by the
 /// query backend (here the in-memory storage-adapter provider), yet remain directly queryable
 /// without that context (the composer's own read). Mirrors <see cref="CreatableTypesIntegrationTest"/>'s
 /// in-memory setup.
@@ -97,7 +97,7 @@ public class SearchExclusionIntegrationTest : MonolithMeshTestBase
         Save(persistence, MeshNode.FromPath("ACME") with { Name = "ACME", NodeType = "Group" });
         // Ordinary, searchable node.
         Save(persistence, MeshNode.FromPath("ACME/Visible") with { Name = "Visible", NodeType = "Markdown" });
-        // Hidden node under a _Memex dotfile namespace — same shape as {user}/_Memex/ChatInput.
+        // Hidden node under a _Memex dotfile namespace — same shape as {user}/_Memex/ThreadComposer.
         Save(persistence, MeshNode.FromPath("ACME/_Memex/Hidden") with { Name = "Hidden", NodeType = "Markdown" });
 
         return builder
