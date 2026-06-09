@@ -117,8 +117,15 @@ public sealed class GraphSubscriptionService(
     private void Persist(string? subId, string url, DateTimeOffset expiration)
     {
         if (meshService is null || access is null || string.IsNullOrEmpty(subId)) return;
-        var node = new MeshNode(GraphSubscriptionNodeType.NodeType, GraphSubscriptionNodeType.InboxPath)
+        // 🚨 Write to the SAME path the renewal read uses (InboxPath). The old
+        // `new MeshNode(NodeType, InboxPath)` set id=NodeType + namespace=InboxPath →
+        // path "Admin/_GraphSubscription/inbox/GraphSubscription", so the read of
+        // InboxPath NEVER found it → every read NotFound-stormed the missing node (the
+        // inbox read/write mismatch). FromPath splits InboxPath into
+        // namespace="Admin/_GraphSubscription" + id="inbox" → path == InboxPath.
+        var node = MeshNode.FromPath(GraphSubscriptionNodeType.InboxPath) with
         {
+            NodeType = GraphSubscriptionNodeType.NodeType,
             Name = "Graph Subscription",
             Content = new GraphSubscriptionState
             {
