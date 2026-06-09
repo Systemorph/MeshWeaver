@@ -621,10 +621,22 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             observer.OnError(ex);
                         };
                         // full ⇒ ChangeType.Full overwrite (re-assert wholesale); else field-merge.
-                        if (full)
-                            remoteStream.SetFull(valueUpdate, onWriteError);
-                        else
-                            remoteStream.Update(valueUpdate, onWriteError);
+                        // 🚨 Carry the caller's AccessContext onto the sync-stream post. This callback
+                        // runs on the remote-stream initial-snapshot thread, where the AsyncLocal
+                        // AccessContext is gone — so without re-asserting the captured context the
+                        // UpdateStreamRequest is posted with no AccessContext and the owner's
+                        // PostPipeline fails closed (the write is silently dropped). UpdateRemote
+                        // already stamps WithAccessContext on its PatchDataRequest; this is the missing
+                        // symmetric carry for the Full/Overwrite path. See AccessContextPropagation.md.
+                        using (accessService is not null && capturedContext is not null
+                                   ? accessService.SwitchAccessContext(capturedContext)
+                                   : System.Reactive.Disposables.Disposable.Empty)
+                        {
+                            if (full)
+                                remoteStream.SetFull(valueUpdate, onWriteError);
+                            else
+                                remoteStream.Update(valueUpdate, onWriteError);
+                        }
                     },
                     ex =>
                     {
