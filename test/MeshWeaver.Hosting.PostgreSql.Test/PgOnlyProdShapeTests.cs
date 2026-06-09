@@ -185,4 +185,42 @@ public class PgOnlyProdShapeTests(PostgreSqlFixture fixture, ITestOutputHelper o
         resolution.Should().NotBeNull("satellite UNION must surface _Access rows for ResolvePath");
         resolution!.Prefix.Should().Be(satPath);
     }
+
+    /// <summary>
+    /// The route-resolution algorithm for an area-suffixed URL (e.g. <c>{partition}/Files</c>):
+    /// the first segment maps to the partition's schema; there is NO node at the exact path
+    /// <c>{partition}/Files</c> (Files is a layout AREA, not a node), so resolution must fall
+    /// back to the longest existing prefix — the partition ROOT (the main node) — with the area
+    /// as the <see cref="AddressResolution.Remainder"/>. Without this, <c>/{space}/Files</c> 404s
+    /// with "does not match any registered address pattern" even though the space exists.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public void ResolvePath_AreaSuffixOnExistingPartition_FallsBackToMainNode()
+    {
+        var ns = $"pg9a_area_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+
+        // Brand-new top-level partition root (the "main node"). Created under System because
+        // the auto-logged-in admin has no Create on a fresh top-level partition.
+        using var _systemScope = accessService.ImpersonateAsSystem();
+        meshService.CreateNode(new MeshNode(ns)
+        {
+            NodeType = "User",
+            Name = ns,
+            State = MeshNodeState.Active,
+        }).Should().Within(15.Seconds()).Emit();
+
+        var resolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
+        // No node exists at "{ns}/Files" — resolution must fall back to the partition root.
+        var resolution = resolver.ResolvePath($"{ns}/Files")
+            .Where(r => r is not null).Take(1).Timeout(15.Seconds())
+            .Catch<AddressResolution?, TimeoutException>(_ => Observable.Return<AddressResolution?>(null))
+            .Should().Within(30.Seconds()).Emit();
+
+        resolution.Should().NotBeNull(
+            "'{0}/Files' must resolve to the partition root (main node), not 404 — Files is an area, not a node", ns);
+        resolution!.Prefix.Should().Be(ns, "first path segment maps to the partition root / main node");
+        resolution.Remainder.Should().Be("Files", "the area suffix becomes the resolution Remainder");
+    }
 }
