@@ -11,3 +11,18 @@
     display: flex;
     flex-direction: column;
 }
+
+/* Default: a top-level (page) area fills the full available height.
+   The container already fills (.body-content is a definite-height flex column
+   and .layout-area-container is flex:1), but the single control rendered inside
+   would otherwise take only its natural height — so page backgrounds "stop in the
+   middle", and fixed-height leaves (code view, pdf, editors) don't reach the
+   bottom. Stretching the top-level content gives it the full height to fill or
+   scroll within. Only applies to top-level pages (Top=true) and only once the
+   content has loaded, so embedded areas and the loading spinner are untouched.
+   Authors who set an explicit height still win: flex-basis:auto reads it, and
+   flex-grow merely lets it reach the bottom. */
+.layout-area-container.top-area.content-loaded > * {
+    flex: 1 1 auto;
+    min-height: 0;
+}
