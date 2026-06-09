@@ -82,7 +82,8 @@ public static class AgentPickerProjection
     public static string[] BuildModelQueries(
         string? currentPath = null,
         string? nodeTypePath = null,
-        IEnumerable<string>? selectedProviderPaths = null)
+        IEnumerable<string>? selectedProviderPaths = null,
+        string? userPath = null)
     {
         var typeFilter = $"{LanguageModelNodeType.NodeType}|{ModelProviderNodeType.NodeType}";
         var queries = new List<string>
@@ -93,6 +94,12 @@ public static class AgentPickerProjection
             queries.Add($"namespace:{currentPath}/{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants");
         if (!string.IsNullOrEmpty(nodeTypePath))
             queries.Add($"namespace:{nodeTypePath}/{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants");
+        // The chatting user's OWN providers + models live in their dotfile
+        // namespace ({user}/_Memex/{provider}/{model}), NOT a shared _Provider
+        // satellite — see ModelProviderNodeType.UserNamespace. One more query
+        // (the union is the synced-collection's job) surfaces them in the picker.
+        if (!string.IsNullOrEmpty(userPath))
+            queries.Add($"namespace:{ModelProviderNodeType.UserNamespacePath(userPath)} nodeType:{typeFilter} scope:descendants");
         // User-selected provider subtrees (the provider-selection picker). Each
         // selected path IS a ModelProvider node (e.g. acme/_Provider/Anthropic);
         // scope:selfAndDescendants pulls the provider node AND its child
@@ -171,10 +178,11 @@ public static class AgentPickerProjection
     public static IObservable<IReadOnlyList<ModelInfo>> ObserveModels(
         IWorkspace workspace, IMessageHub hub,
         string? currentPath = null, string? nodeTypePath = null,
-        IReadOnlyList<string>? selectedProviderPaths = null)
+        IReadOnlyList<string>? selectedProviderPaths = null,
+        string? userPath = null)
         => ObserveSnapshot(workspace, hub,
-                BuildQueryId(ModelsQueryId, currentPath, nodeTypePath, selectedProviderPaths),
-                BuildModelQueries(currentPath, nodeTypePath, selectedProviderPaths))
+                BuildQueryId(ModelsQueryId, currentPath, nodeTypePath, selectedProviderPaths, userPath),
+                BuildModelQueries(currentPath, nodeTypePath, selectedProviderPaths, userPath))
             .Select(snapshot => ProjectModels(snapshot, hub.JsonSerializerOptions));
 
     /// <summary>
@@ -188,12 +196,13 @@ public static class AgentPickerProjection
     /// </summary>
     private static string BuildQueryId(
         string baseId, string? currentPath, string? nodeTypePath,
-        IReadOnlyList<string>? selectedProviderPaths = null)
+        IReadOnlyList<string>? selectedProviderPaths = null,
+        string? userPath = null)
     {
         var selected = selectedProviderPaths is { Count: > 0 }
             ? string.Join(",", selectedProviderPaths.OrderBy(x => x, StringComparer.Ordinal))
             : "";
-        return $"{baseId}|p={currentPath ?? ""}|t={nodeTypePath ?? ""}|s={selected}";
+        return $"{baseId}|p={currentPath ?? ""}|t={nodeTypePath ?? ""}|s={selected}|u={userPath ?? ""}";
     }
 
     /// <summary>

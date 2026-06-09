@@ -107,7 +107,7 @@ public class ConnectStrategyTest : AITestBase
         var configDir = Path.Combine(Path.GetTempPath(), $"connect-test-{Guid.NewGuid():N}", ".claude");
 
         // Establish the owner's partition root first. The connect flow writes the credential
-        // node at {owner}/_Provider/ClaudeCode; in production the owner is the logged-in user
+        // node at {owner}/_Memex/ClaudeCode; in production the owner is the logged-in user
         // whose partition already exists.
         NodeFactory.CreateNode(new MeshNode(owner) { Name = owner, NodeType = "Markdown" })
             .Should().Within(10.Seconds()).Emit();
@@ -130,7 +130,7 @@ public class ConnectStrategyTest : AITestBase
         Output.WriteLine($"[diag] connect status = {connected.GetType().Name}: {connected}");
         var ok = connected.Should().BeOfType<ConnectStatus.Connected>().Which;
         Output.WriteLine($"[diag] connected path={ok.ProviderNodePath} fp={ok.KeyFingerprint}");
-        ok.ProviderNodePath.Should().Be($"{owner}/_Provider/ClaudeCode");
+        ok.ProviderNodePath.Should().Be($"{ModelProviderNodeType.UserNamespacePath(owner)}/ClaudeCode");
         ok.KeyFingerprint.Should().NotBe("(empty)");
 
         // Diagnostic single-node read — confirms the satellite read path resolves.

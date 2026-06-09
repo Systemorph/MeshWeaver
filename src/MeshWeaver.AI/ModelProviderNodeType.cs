@@ -41,17 +41,36 @@ public static class ModelProviderNodeType
     /// <summary>
     /// Conventional satellite-namespace segment for provider credential
     /// nodes — mirrors <c>_Access</c>, <c>_Thread</c>, <c>_Comment</c>.
-    /// User-owned providers live at <c>{userPath}/_Provider/{providerName}</c>;
-    /// organisation-shared providers at <c>{orgPath}/_Provider/{providerName}</c>;
-    /// system defaults at the root <c>_Provider/{providerName}</c>. The
-    /// picker / resolver query each owning path's <c>_Provider</c>
-    /// subtree directly — no path-walk heuristics, no central registry.
+    /// Organisation-shared providers live at <c>{orgPath}/_Provider/{providerName}</c>
+    /// and system defaults at the root <c>_Provider/{providerName}</c>. A user's
+    /// OWN providers live in their dotfile namespace instead —
+    /// <c>{userPath}/_Memex/{providerName}</c> (see <see cref="UserNamespace"/>).
+    /// The picker / resolver query each owning path's subtree directly — no
+    /// path-walk heuristics, no central registry.
     /// </summary>
     public const string RootNamespace = "_Provider";
 
     /// <summary>
+    /// Per-user satellite namespace for the user's OWN providers, models, and
+    /// selection — the same hidden "dotfile" namespace
+    /// (<see cref="ChatInputNodeType.MemexDefaultsNamespace"/>, <c>_Memex</c>)
+    /// that already hosts <c>{user}/_Memex/ChatInput</c>. User-owned provider /
+    /// model nodes live at <c>{userPath}/_Memex/{providerName}</c> and
+    /// <c>{userPath}/_Memex/{providerName}/{modelId}</c>; the user's selection at
+    /// <c>{userPath}/_Memex/_Selection</c>.
+    ///
+    /// <para>Distinct from <see cref="RootNamespace"/> (<c>_Provider</c>), which
+    /// holds the SYSTEM catalog at root and org/context-SHARED providers at
+    /// <c>{orgPath}/_Provider/…</c>. A user's personal credentials are theirs,
+    /// so they belong in their dotfile namespace, not a shared satellite. The
+    /// picker / resolver union BOTH namespaces (see the model queries) so a user
+    /// sees the system catalog, any shared providers, and their own.</para>
+    /// </summary>
+    public const string UserNamespace = ChatInputNodeType.MemexDefaultsNamespace; // "_Memex"
+
+    /// <summary>
     /// Node id for the per-user provider-selection node — the single node, at
-    /// <c>{userPath}/_Provider/_Selection</c>, whose content is a
+    /// <c>{userPath}/_Memex/_Selection</c>, whose content is a
     /// <see cref="ModelProviderSelection"/>. See <see cref="SelectionPath"/>.
     /// </summary>
     public const string SelectionNodeId = "_Selection";
@@ -66,10 +85,18 @@ public static class ModelProviderNodeType
 
     /// <summary>
     /// Path of the provider-selection node for an owner (user) path:
-    /// <c>{ownerPath}/_Provider/_Selection</c>.
+    /// <c>{ownerPath}/_Memex/_Selection</c>.
     /// </summary>
     public static string SelectionPath(string ownerPath) =>
-        $"{ownerPath}/{RootNamespace}/{SelectionNodeId}";
+        $"{ownerPath}/{UserNamespace}/{SelectionNodeId}";
+
+    /// <summary>
+    /// The owner's personal provider/model namespace path:
+    /// <c>{ownerPath}/_Memex</c>. Picker + resolver query this (scope:descendants)
+    /// to surface a user's OWN providers and models.
+    /// </summary>
+    public static string UserNamespacePath(string ownerPath) =>
+        $"{ownerPath}/{UserNamespace}";
 
     /// <summary>
     /// Registers the <c>ModelProvider</c> MeshNode definition + content type.
@@ -105,7 +132,7 @@ public static class ModelProviderNodeType
         builder.ConfigureServices(services =>
         {
             services.TryAddSingleton<BuiltInLanguageModelProvider>();
-            // Always generate a default (empty) {user}/_Provider/_Selection at User
+            // Always generate a default (empty) {user}/_Memex/_Selection at User
             // onboarding so the chat picker's selection read RESOLVES instead of
             // generating a routing NotFound the GUI re-issues on a loop — the
             // resubscribe-storm that starved the circuit until unrelated
@@ -160,7 +187,7 @@ public static class ModelProviderNodeType
     };
 
     /// <summary>
-    /// Seeds the per-user default <c>{user}/_Provider/_Selection</c> node (an empty
+    /// Seeds the per-user default <c>{user}/_Memex/_Selection</c> node (an empty
     /// <see cref="ModelProviderSelection"/>) when a <c>User</c> partition is created.
     /// Returned from <see cref="GetAdditionalNodes"/> so it persists directly alongside
     /// the user (no hub round-trip) — the "always generate the default state" step that
@@ -181,7 +208,7 @@ public static class ModelProviderNodeType
             if (string.IsNullOrEmpty(userPath))
                 yield break;
 
-            yield return new MeshNode(SelectionNodeId, $"{userPath}/{RootNamespace}")
+            yield return new MeshNode(SelectionNodeId, $"{userPath}/{UserNamespace}")
             {
                 NodeType = SelectionNodeType,
                 Name = "Model Provider Selection",

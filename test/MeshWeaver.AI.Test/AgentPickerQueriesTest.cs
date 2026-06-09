@@ -62,4 +62,26 @@ public class AgentPickerQueriesTest
             selectedProviderPaths: new[] { "acme/_Provider/Anthropic", "", null! });
         queries.Should().HaveCount(2); // root + the one non-empty selection
     }
+
+    [Fact]
+    public void BuildModelQueries_WithUserPath_AddsUserMemexSubtreeQuery()
+    {
+        // The chatting user's own providers/models live in their dotfile
+        // namespace ({user}/_Memex/{provider}/{model}); the picker unions a
+        // descendants query over it so they appear alongside the catalog.
+        var queries = AgentPickerProjection.BuildModelQueries(userPath: "rbuergi");
+
+        queries.Should().Contain("namespace:_Provider nodeType:LanguageModel|ModelProvider scope:descendants");
+        queries.Should().Contain($"namespace:{ModelProviderNodeType.UserNamespacePath("rbuergi")} nodeType:LanguageModel|ModelProvider scope:descendants");
+        queries.Should().HaveCount(2); // root + user _Memex
+    }
+
+    [Fact]
+    public void BuildModelQueries_NoUserPath_OmitsUserMemexQuery()
+    {
+        // userPath defaults to null — no _Memex query, byte-for-byte the prior
+        // behaviour so existing (non-user-scoped) callers are unaffected.
+        var queries = AgentPickerProjection.BuildModelQueries();
+        queries.Should().NotContain(q => q.Contains("/_Memex"));
+    }
 }

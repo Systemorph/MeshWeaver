@@ -135,4 +135,50 @@ public class MissingSatelliteTest(ITestOutputHelper output) : MonolithMeshTestBa
                 "'missing' placeholder instead of crashing the circuit.");
         }
     }
+
+    /// <summary>
+    /// Storm-breaker contract: re-reading the SAME missing path many times in a
+    /// row (the resubscribe-storm shape that froze the portal on 2026-06-09 —
+    /// AgentChatClient.Initialize re-reading an absent optional node every
+    /// streaming rebuild) must stay responsive. Every read surfaces a fast
+    /// <see cref="DeliveryFailureException"/>; the cache's negative cache replays
+    /// the cached failure instead of re-opening an upstream SubscribeRequest per
+    /// read, so the path never hangs and the contract never degrades under a flood.
+    /// </summary>
+    [Fact]
+    public void MissingSatellite_ReReadInTightLoop_StaysResponsive_NoStorm()
+    {
+        var threadId = Guid.NewGuid().AsString();
+        var threadPath = $"{TestPartition}/{ThreadNodeType.ThreadPartition}/{threadId}";
+        NodeFactory.CreateNode(new MeshNode(threadPath)
+        {
+            Name = "Storm-breaker thread",
+            NodeType = ThreadNodeType.NodeType,
+            MainNode = TestPartition,
+            Content = new MeshThread { CreatedBy = TestUsers.Admin.ObjectId }
+        }).Should().Emit();
+
+        var cache = Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var missingPath = $"{threadPath}/{Guid.NewGuid().AsString()}";
+
+        // Read the same missing path far past the storm threshold. Each read must
+        // surface DeliveryFailureException within a tight deadline — proving the
+        // breaker fast-fails (replays the cached error) rather than starving on a
+        // fresh routing round-trip per iteration.
+        using (accessService.ImpersonateAsSystem())
+        {
+            for (var i = 0; i < 10; i++)
+            {
+                var note = cache.GetStream(missingPath, Mesh.JsonSerializerOptions)
+                    .Where(n => n?.Content is not null)
+                    .Materialize()
+                    .Should().Within(TimeSpan.FromSeconds(5)).Match(
+                        n => n.Kind == NotificationKind.OnError,
+                        $"missing-path read #{i} must stay responsive under the storm breaker");
+                note.Exception.Should().BeOfType<DeliveryFailureException>(
+                    $"read #{i} must keep surfacing the cached NotFound failure, never hang or change shape");
+            }
+        }
+    }
 }

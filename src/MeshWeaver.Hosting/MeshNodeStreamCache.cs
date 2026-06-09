@@ -90,6 +90,34 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     private readonly ConcurrentDictionary<string, Lazy<Entry>> _streams = new();
     private readonly ConcurrentDictionary<(string Path, string UserId), AccessEntry> _access = new();
 
+    // 🚨 STORM BREAKER / negative cache. A read whose owner answers NotFound /
+    // DeliveryFailure (the node does not exist) caches that FAILURE here with an
+    // exponential-backoff window. While the window is OPEN, GetStreamRaw fast-fails
+    // by replaying the cached error WITHOUT re-opening an upstream SubscribeRequest,
+    // so a re-subscribing caller — a short-lived exec hub that bypasses the per-path
+    // Lazy<Entry> dedup, or anything that re-reads an absent optional node on a loop —
+    // can NOT hammer RoutingGrain with the same NotFound. That resubscribe-storm
+    // starved the portal/<user> action block until unrelated SubscribeRequests went
+    // stale >30s and the circuit FROZE (2026-06-09: AgentChatClient.Initialize re-read
+    // {user}/_Provider/_Selection — absent for pre-existing users — every streaming
+    // rebuild). The PRIMARY fix is to read optional nodes via GetQuery (empty-on-absent,
+    // never NotFound); this breaker is the framework backstop so NO point-access can
+    // storm, present or future.
+    //
+    // Self-healing, NEVER a watchdog: the window simply EXPIRES — the next NATURAL read
+    // after it elapses re-probes the owner exactly once. There is NO timer that
+    // re-subscribes on its own (an auto-resubscribe watchdog is exactly what caused the
+    // 2026-06-08 prod outage; this only ever evicts, never re-subscribes). A successful
+    // read clears the entry immediately. Consecutive failures grow the window
+    // (StormBaseCooldown · 2^(n-1), capped at StormMaxCooldown); crossing
+    // StormFailThreshold logs ONE "[STORM-BREAKER] suppressing" warning so the storm is
+    // visible in App Insights without the per-failure log flood.
+    private readonly ConcurrentDictionary<string, NegativeEntry> _negative = new();
+    private sealed record NegativeEntry(Exception Error, int FailCount, DateTimeOffset OpenUntil);
+    private static readonly TimeSpan StormBaseCooldown = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan StormMaxCooldown = TimeSpan.FromMinutes(5);
+    private const int StormFailThreshold = 5;
+
     // In-flight cross-hub write subscriptions that have OUTLIVED their queue slot. The
     // per-path Update queue advances on a bounded signal (QueueAdvanceBound) so a lost
     // owner response can't starve retries, but each write's subscription to the owner's
@@ -280,6 +308,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             try { inflight.Dispose(); } catch { /* best-effort */ }
         }
         _inflightWrites.Clear();
+
+        // 5. Storm-breaker negative cache — drop the cached failure windows so
+        //    nothing roots the disposed mesh's exceptions/identities.
+        _negative.Clear();
     }
 
     private Entry GetEntry(string path) =>
@@ -348,13 +380,48 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             {
                 hydrationSub = ((IObservable<MeshNode>)handle).Subscribe(synced);
             }
-            // Store hydrationSub on the Entry so the mesh hub's pre-Quiescing
+            // Storm-breaker bookkeeping: a lightweight second observer on the SAME
+            // ReplaySubject (opens NO additional upstream). First value ⇒ clear any
+            // negative-cache entry (the node resolved); terminal error ⇒ record the
+            // failure + backoff window via RecordNegative. Composed with hydrationSub
+            // so both tear down together on eviction / mesh disposal.
+            var bookkeeping = inner.AsObservable().Subscribe(
+                _node => _negative.TryRemove(p, out _),
+                ex => RecordNegative(p, ex));
+            var disposal = new System.Reactive.Disposables.CompositeDisposable(hydrationSub, bookkeeping);
+            // Store the disposal on the Entry so the mesh hub's pre-Quiescing
             // disposal hook (registered in the ctor) can cancel it. Without
             // this, every cache.GetStream(path) leaks a long-lived
             // SubscribeRequest into the mesh hub's responseSubjects and the
             // test base's leak detection flags it at dispose.
-            return new Entry(handle, inner.AsObservable(), hydrationSub);
+            return new Entry(handle, inner.AsObservable(), disposal);
         }, LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+
+    /// <summary>
+    /// Records an upstream read failure for <paramref name="path"/> in the storm
+    /// breaker's negative cache with an exponential-backoff window
+    /// (<see cref="StormBaseCooldown"/> · 2^(n-1), capped at
+    /// <see cref="StormMaxCooldown"/>). Crossing <see cref="StormFailThreshold"/>
+    /// consecutive failures logs ONE warning. Never re-subscribes — purely records
+    /// state that <see cref="GetStreamRaw"/> consults to fast-fail.
+    /// </summary>
+    private void RecordNegative(string path, Exception error)
+    {
+        var priorFails = _negative.TryGetValue(path, out var existing) ? existing.FailCount : 0;
+        var failCount = priorFails + 1;
+        // 2^(n-1) capped at 20 shifts (~12 days) before the Min — StormMaxCooldown
+        // is the real ceiling; the cap just keeps the intermediate from overflowing.
+        var backoffTicks = Math.Min(
+            StormBaseCooldown.Ticks * (1L << Math.Min(failCount - 1, 20)),
+            StormMaxCooldown.Ticks);
+        _negative[path] = new NegativeEntry(error, failCount, DateTimeOffset.UtcNow + TimeSpan.FromTicks(backoffTicks));
+        if (failCount == StormFailThreshold)
+            logger.LogWarning(
+                "[STORM-BREAKER] Suppressing re-probe of '{Path}' after {FailCount} consecutive read failures: {Error}. "
+                + "Reads fast-fail until the backoff window elapses. A point node-access to a node that does not exist "
+                + "is a defect — read optional nodes via GetQuery (empty-on-absent), not GetMeshNodeStream(exactPath).",
+                path, failCount, error.Message);
+    }
 
     /// <summary>
     /// Returns a per-user access-gated view of the cached shared stream. The
@@ -379,6 +446,23 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // wedged-thread / never-dispatching-watcher bug class.
     private IObservable<MeshNode> GetStreamRaw(string path)
     {
+        // STORM BREAKER: while this path's negative-cache window is open, fast-fail
+        // by replaying the cached owner error WITHOUT opening an upstream
+        // SubscribeRequest. See _negative. Once the window elapses, drop the errored
+        // Entry so the NEXT read re-probes the owner exactly once (re-probe is driven
+        // by a real read, never an auto-resubscribe). FailCount is retained so a
+        // repeat failure backs off further; a success clears it (see GetEntry).
+        if (_negative.TryGetValue(path, out var neg))
+        {
+            if (neg.OpenUntil > DateTimeOffset.UtcNow)
+                return Observable.Throw<MeshNode>(neg.Error);
+            if (_streams.TryRemove(path, out var staleLazy))
+            {
+                try { if (staleLazy.IsValueCreated) staleLazy.Value.HydrationSub.Dispose(); }
+                catch (Exception ex) { logger.LogDebug(ex, "MeshNodeStreamCache: error disposing stale entry for {Path}", path); }
+            }
+        }
+
         var shared = GetEntry(path).Shared;
 
         var accessService = meshHub.ServiceProvider.GetService<AccessService>();

@@ -24,7 +24,7 @@ namespace MeshWeaver.AI.Test;
 /// End-to-end tests for <see cref="ModelProviderService"/> â€” the reactive
 /// CRUD surface backing the user's Models settings tab. Asserts that
 /// CreateProvider lays down the canonical
-/// <c>{userId}/_Provider/{provider}</c> + N child LanguageModel nodes, that
+/// <c>{userId}/_Memex/{provider}</c> + N child LanguageModel nodes, that
 /// RotateKey preserves other fields, and that DeleteProvider cascades.
 /// </summary>
 public class ModelProviderServiceTest : AITestBase
@@ -64,7 +64,7 @@ public class ModelProviderServiceTest : AITestBase
             label: "Roland's test key")
             .Should().Within(20.Seconds()).Emit();
 
-        result.ProviderNode.Path.Should().Be($"{owner}/_Provider/Anthropic");
+        result.ProviderNode.Path.Should().Be($"{ModelProviderNodeType.UserNamespacePath(owner)}/Anthropic");
         result.ProviderNode.NodeType.Should().Be(ModelProviderNodeType.NodeType);
 
         var cfg = result.ProviderNode.Content.Should().BeOfType<ModelProviderConfiguration>().Which;
@@ -76,10 +76,10 @@ public class ModelProviderServiceTest : AITestBase
         result.ModelNodes.Should().AllSatisfy(node =>
         {
             node.NodeType.Should().Be(LanguageModelNodeType.NodeType);
-            node.Path.Should().StartWith($"{owner}/_Provider/Anthropic/");
+            node.Path.Should().StartWith($"{ModelProviderNodeType.UserNamespacePath(owner)}/Anthropic/");
             var def = node.Content.Should().BeOfType<ModelDefinition>().Which;
             def.Provider.Should().Be("Anthropic");
-            def.ProviderRef.Should().Be($"{owner}/_Provider/Anthropic");
+            def.ProviderRef.Should().Be($"{ModelProviderNodeType.UserNamespacePath(owner)}/Anthropic");
         });
     }
 

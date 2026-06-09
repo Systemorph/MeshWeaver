@@ -291,8 +291,16 @@ public sealed class ChatClientCredentialResolver : IDisposable
         {
             $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants",
         };
+        // Each watched partition is a USER partition (WatchPartition is called
+        // with the resolving user's id). A user's own providers/models live in
+        // their dotfile namespace ({user}/_Memex/…); union the legacy _Provider
+        // subtree too so pre-existing data still resolves (many queries are fine
+        // — the synced collection unions them).
         foreach (var p in partitions)
+        {
+            queries.Add($"namespace:{ModelProviderNodeType.UserNamespacePath(p)} nodeType:{typeFilter} scope:descendants");
             queries.Add($"namespace:{p}/{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants");
+        }
         return queries.ToArray();
     }
 

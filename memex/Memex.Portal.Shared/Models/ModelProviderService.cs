@@ -17,8 +17,10 @@ namespace Memex.Portal.Shared.Models;
 /// Service for creating, rotating, and deleting AI model provider credentials.
 /// Modelled on <see cref="Memex.Portal.Shared.Authentication.ApiTokenService"/>
 /// — credentials are stored as <c>nodeType:ModelProvider</c> MeshNodes in the
-/// owner's namespace (typically <c>{userId}/Model/{providerName}</c>, but any
-/// node's namespace works for shared / org-level credentials).
+/// owner's dotfile namespace (<c>{userId}/_Memex/{providerName}</c>, the same
+/// hidden namespace that hosts <c>{user}/_Memex/ChatInput</c>; see
+/// <see cref="ModelProviderNodeType.UserNamespace"/>). Any node's namespace
+/// works for shared / org-level credentials.
 ///
 /// <para>
 /// 🚨 Reactive end-to-end. No <c>async</c>, no <c>await</c>, no
@@ -33,10 +35,10 @@ namespace Memex.Portal.Shared.Models;
 ///
 /// <para>Layout per provider entry (Anthropic example, owner = <c>rbuergi</c>):</para>
 /// <code>
-/// rbuergi/Model/Anthropic                            ← ModelProvider (carries ApiKey, RLS-gated)
-/// rbuergi/Model/Anthropic/claude-opus-4-7            ← LanguageModel, ProviderRef → ../Anthropic
-/// rbuergi/Model/Anthropic/claude-sonnet-4-6          ← LanguageModel, same ProviderRef
-/// rbuergi/Model/Anthropic/claude-haiku-4-5-20251001  ← LanguageModel, same ProviderRef
+/// rbuergi/_Memex/Anthropic                            ← ModelProvider (carries ApiKey, RLS-gated)
+/// rbuergi/_Memex/Anthropic/claude-opus-4-7            ← LanguageModel, ProviderRef → ../Anthropic
+/// rbuergi/_Memex/Anthropic/claude-sonnet-4-6          ← LanguageModel, same ProviderRef
+/// rbuergi/_Memex/Anthropic/claude-haiku-4-5-20251001  ← LanguageModel, same ProviderRef
 /// </code>
 ///
 /// <para>The default model ids come from
@@ -70,7 +72,7 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
 
     /// <summary>
     /// Reactive provider creation. Creates the <c>ModelProvider</c> node at
-    /// <c>{ownerPath}/Model/{provider}</c> with the supplied key + endpoint,
+    /// <c>{ownerPath}/_Memex/{provider}</c> with the supplied key + endpoint,
     /// then creates one <c>LanguageModel</c> child per default model id
     /// (each pointing back at the provider node via
     /// <see cref="ModelDefinition.ProviderRef"/>). Defaults come from the
@@ -97,7 +99,10 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
         var modelIds = (modelIdsOverride ?? (IReadOnlyList<string>?)source?.EffectiveModelIds)
             ?? Array.Empty<string>();
 
-        var providerNamespace = $"{ownerPath}/{ModelProviderNodeType.RootNamespace}";
+        // User-owned providers/models live in the owner's dotfile namespace
+        // ({owner}/_Memex/{provider}/{model}), NOT a shared _Provider satellite.
+        // See ModelProviderNodeType.UserNamespace.
+        var providerNamespace = ModelProviderNodeType.UserNamespacePath(ownerPath);
         var providerPath = $"{providerNamespace}/{provider}";
 
         var providerConfig = new ModelProviderConfiguration
@@ -277,7 +282,7 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
             return entry.Stream;
 
         var workspace = hub.GetWorkspace();
-        var providerNamespace = $"{ownerPath}/{ModelProviderNodeType.RootNamespace}";
+        var providerNamespace = ModelProviderNodeType.UserNamespacePath(ownerPath);
 
         var stream = workspace.GetQuery(
                 $"model-providers:{ownerPath}",
@@ -327,10 +332,19 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
     {
         if (string.IsNullOrEmpty(ownerPath))
             return Observable.Return(ImmutableArray<string>.Empty);
+        // 🚨 Read the selection via a QUERY, not a point GetMeshNodeStream(exactPath):
+        // a pre-existing user partition has no selection node, and a point-subscribe
+        // to a missing path routes to a NotFound DeliveryFailure (the resubscribe-storm
+        // that froze the portal, 2026-06-09). A query returns EMPTY on absence — the
+        // documented "no selection ⇒ default catalog" behaviour — and never errors.
         return hub.GetWorkspace()
-            .GetMeshNodeStream(ModelProviderNodeType.SelectionPath(ownerPath))
-            .Select(node =>
+            .GetQuery(
+                $"{ModelProviderNodeType.SelectionNodeType}|{ownerPath}",
+                $"namespace:{ModelProviderNodeType.UserNamespacePath(ownerPath)} nodeType:{ModelProviderNodeType.SelectionNodeType}")
+            .Select(snapshot =>
             {
+                var node = snapshot.FirstOrDefault(n =>
+                    string.Equals(n.NodeType, ModelProviderNodeType.SelectionNodeType, StringComparison.OrdinalIgnoreCase));
                 var sel = node?.Content as ModelProviderSelection
                     ?? ExtractContent<ModelProviderSelection>(node);
                 if (sel is null) return ImmutableArray<string>.Empty;
@@ -351,7 +365,7 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
         if (string.IsNullOrEmpty(ownerPath))
             return Observable.Return(false);
 
-        var ns = $"{ownerPath}/{ModelProviderNodeType.RootNamespace}";
+        var ns = ModelProviderNodeType.UserNamespacePath(ownerPath);
         var content = new ModelProviderSelection { SelectedProviderPaths = providerPaths };
         var newNode = new MeshNode(ModelProviderNodeType.SelectionNodeId, ns)
         {

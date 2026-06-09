@@ -38,13 +38,13 @@ public class ModelProviderIntegrationTest : AITestBase
     public void UserOwnedModelProvider_ResolverFindsKeyViaProviderRef()
     {
         var userId = $"user-{Guid.NewGuid():N}";
-        var providerPath = $"{userId}/_Provider/Anthropic";
+        var providerPath = $"{ModelProviderNodeType.UserNamespacePath(userId)}/Anthropic";
         var modelId = "claude-opus-4-7";
         var modelPath = $"{providerPath}/{modelId}";
         var rawKey = "sk-ant-USERKEY-1234567890";
 
-        // 1. Create the ModelProvider node in the user's namespace.
-        var providerNode = new MeshNode("Anthropic", $"{userId}/_Provider")
+        // 1. Create the ModelProvider node in the user's dotfile (_Memex) namespace.
+        var providerNode = new MeshNode("Anthropic", ModelProviderNodeType.UserNamespacePath(userId))
         {
             NodeType = ModelProviderNodeType.NodeType,
             Name = "Anthropic",
@@ -81,10 +81,13 @@ public class ModelProviderIntegrationTest : AITestBase
         MeshService.CreateNode(modelNode).Should().Within(20.Seconds()).Emit();
 
         // 3. Pre-warm the resolver's snapshot via the same workspace.GetQuery
-        //    the resolver uses internally â€” see SyncedMeshNodeQueries.md.
+        //    the resolver uses internally â€” see SyncedMeshNodeQueries.md. The
+        //    user's own providers live in their dotfile namespace ({user}/_Memex),
+        //    so warm via userPath, not currentPath (which targets the shared
+        //    _Provider satellite).
         Workspace.GetQuery(
                 "warmup",
-                AgentPickerProjection.BuildModelQueries(currentPath: userId))
+                AgentPickerProjection.BuildModelQueries(userPath: userId))
             .Should().Within(15.Seconds()).Match(s => s.Any(n => n.Path == modelPath));
 
         // 4. Resolve and verify. Poll via Observable.Interval â€” the

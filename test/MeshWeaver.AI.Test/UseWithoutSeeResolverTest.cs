@@ -31,9 +31,9 @@ public class UseWithoutSeeResolverTest : AITestBase
                 SectionName: "Anthropic", ProviderName: "Anthropic", Order: 1,
                 DisplayLabel: "Anthropic", DefaultEndpoint: "https://api.anthropic.com/v1/messages",
                 DefaultModelIds: ImmutableArray.Create("claude-opus-4-7"), RequiresApiKey: true))
-            // userA gets Viewer (Read) on the org _Provider subtree; userB gets nothing.
+            // userA gets Viewer (Read) on the org _Memex provider subtree; userB gets nothing.
             // Seeded at hub init so it's loaded before the test runs (no propagation race).
-            .AddMeshNodes(AssignmentNodeFactory.UserRole("userA", "Viewer", "acme/_Provider"))
+            .AddMeshNodes(AssignmentNodeFactory.UserRole("userA", "Viewer", ModelProviderNodeType.UserNamespacePath("acme")))
             .ConfigureServices(services => { services.AddSingleton<ModelProviderService>(); return services; });
 
     // SKIPPED: the resolver use-without-see logic (WatchSharedProvider under
@@ -41,7 +41,7 @@ public class UseWithoutSeeResolverTest : AITestBase
     // implemented and compiles, but this cross-partition integration test isn't
     // reliably green in the monolith harness yet — the positive case (userA with
     // Read resolving the org key) times out. Suspect: the seeded
-    // acme/_Provider/_Access Viewer grant isn't propagating to SecurityService
+    // acme/_Memex/_Access Viewer grant isn't propagating to SecurityService
     // for the org partition the same way a same-partition grant does, and/or the
     // system-identity synced ingest of the acme provider/model races the gate.
     // Revisit with WaitForPermission-style settling on CheckPermission(providerPath,
@@ -59,7 +59,7 @@ public class UseWithoutSeeResolverTest : AITestBase
         var created = service.CreateProvider("acme", "Anthropic", "sk-org-secret",
                 modelIdsOverride: new[] { modelId })
             .Should().Within(20.Seconds()).Emit();
-        var providerPath = created.ProviderNode.Path!;   // acme/_Provider/Anthropic
+        var providerPath = created.ProviderNode.Path!;   // acme/_Memex/Anthropic
 
         // userA HAS Read -> can USE the key (resolver reads it under system identity).
         accessService.SetCircuitContext(new AccessContext { ObjectId = "userA", Name = "User A" });

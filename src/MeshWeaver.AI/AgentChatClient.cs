@@ -1127,7 +1127,7 @@ public class AgentChatClient : IAgentChat
         // 🚨 Guests (VUser / IsVirtual identities) own NO ModelProvider or
         // LanguageModel nodes — they consume the root + shared catalog only.
         // Watching a guest's partition makes ChatClientCredentialResolver.ReadSnapshot
-        // fan out `namespace:{VUser/id}/_Provider scope:descendants` per guest
+        // fan out `namespace:{VUser/id}/_Memex scope:descendants` per guest
         // session: a descendants walk on the `vuser` schema that returns nothing
         // yet pins a DB connection (ListChildPaths + node reads). With many
         // concurrent guests that storms the connection pool to exhaustion
@@ -1139,10 +1139,27 @@ public class AgentChatClient : IAgentChat
             credentialResolver?.WatchPartition(selectionUserId!);
 
         selectionSubscription?.Dispose();
+        // 🚨 Read the user's provider selection via a QUERY, never a point
+        // `GetMeshNodeStream(SelectionPath)` node-access. A point-subscribe to a
+        // node that does NOT exist — every PRE-EXISTING user partition that
+        // predates the `_Selection` seed (ModelProviderNodeType) — routes to a
+        // RoutingGrain `NotFound` DeliveryFailure + SYNC_STREAM `OnError`.
+        // Initialize re-runs on every agent/model rebuild during streaming, so
+        // the failing subscribe is re-issued in a tight loop: the resubscribe-
+        // storm that starved the `portal/<user>` action block until unrelated
+        // SubscribeRequests went stale >30s and the circuit FROZE (2026-06-09).
+        // A `GetQuery` over the namespace returns an EMPTY set when the selection
+        // node is absent (the documented "empty ⇒ default catalog" behaviour) —
+        // no NotFound, no resubscribe, nothing to storm. GetQuery returns typed
+        // Content (deserialised through this hub's options), so
+        // ExtractSelectedProviderPaths reads `node.Content` directly. Seeding the
+        // node only ever covered NEW users; querying fixes the whole class.
         var selectionStream = !watchOwnProviders
             ? Observable.Return(ImmutableArray<string>.Empty)
-            : workspace.GetMeshNodeStream(ModelProviderNodeType.SelectionPath(selectionUserId!))
-                .Select(ExtractSelectedProviderPaths)
+            : workspace.GetQuery(
+                    $"{ModelProviderNodeType.SelectionNodeType}|{selectionUserId}",
+                    $"namespace:{ModelProviderNodeType.UserNamespacePath(selectionUserId!)} nodeType:{ModelProviderNodeType.SelectionNodeType}")
+                .Select(nodes => ExtractSelectedProviderPaths(nodes.FirstOrDefault()))
                 .Catch<ImmutableArray<string>, Exception>(_ => Observable.Return(ImmutableArray<string>.Empty))
                 .StartWith(ImmutableArray<string>.Empty)
                 .DistinctUntilChanged(SelectedPathsComparer.Instance);
@@ -1155,10 +1172,11 @@ public class AgentChatClient : IAgentChat
                 foreach (var p in selectedPaths)
                     credentialResolver.WatchSharedProvider(p, selectionUserId);
 
-            // Picker: (re)subscribe models to include the selected subtrees.
+            // Picker: (re)subscribe models to include the selected subtrees AND
+            // the user's own {user}/_Memex provider/model nodes (userPath).
             modelsSubscription?.Dispose();
             modelsSubscription = AgentPickerProjection
-                .ObserveModels(workspace, hub, contextPath, nodeTypePath, selectedPaths)
+                .ObserveModels(workspace, hub, contextPath, nodeTypePath, selectedPaths, selectionUserId)
                 .Subscribe(
                     models =>
                     {
@@ -1448,7 +1466,7 @@ public class AgentChatClient : IAgentChat
     /// ModelProvider / LanguageModel nodes. True only for a real, non-virtual
     /// identity. Guests (<c>VUser</c> / <see cref="MeshWeaver.Messaging.AccessContext.IsVirtual"/>)
     /// own no providers — they consume the root + shared catalog — so watching
-    /// their partition fans out a per-session <c>namespace:{VUser/id}/_Provider
+    /// their partition fans out a per-session <c>namespace:{VUser/id}/_Memex
     /// scope:descendants</c> query against the <c>vuser</c> schema that returns
     /// nothing yet pins a DB connection; with many concurrent guests that storms
     /// the connection pool to exhaustion (prod 2026-06-04).
