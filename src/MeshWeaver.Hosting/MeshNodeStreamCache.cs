@@ -27,12 +27,15 @@ namespace MeshWeaver.Hosting;
 /// <para>The handle is opened on the mesh hub's workspace under
 /// <see cref="AccessService.ImpersonateAsSystem"/> — that's correct for the
 /// system-internal infrastructure subscription. Per-user enforcement lives
-/// at the <c>GetStream</c> seam: the cache asks the owning node hub
-/// via <see cref="GetPermissionRequest"/> for the current user's effective
-/// permissions on the path; only when the response carries
-/// <see cref="Permission.Read"/> does the gated observable forward the
-/// upstream emissions. Per-(path,user) validations are cached for
-/// <see cref="AccessTtl"/> to avoid hammering the owning hub.</para>
+/// at the <c>GetStream</c> seam: the cache evaluates the current user's
+/// effective permissions on the path LOCALLY via the security service
+/// (<c>hub.GetEffectivePermissions</c> → <c>PermissionEvaluator</c>), whose
+/// scope walk picks up the access defined on the partition / main node (so
+/// "who can read the main node can read all its satellites"); only when the
+/// result carries <see cref="Permission.Read"/> does the gated observable
+/// forward the upstream emissions. No round-trip to the leaf path's own hub —
+/// a satellite / cell sub-path with no hub of its own no longer wedges the
+/// subscription. Per-(path,user) results are cached for <see cref="AccessTtl"/>.</para>
 ///
 /// <para><b>Never go around the cache.</b> An ad-hoc
 /// <c>workspace.GetRemoteStream(...)</c> from some other hub is a SEPARATE
@@ -62,33 +65,15 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     private sealed record Entry(MeshNodeStreamHandle Handle, IObservable<MeshNode> Shared, IDisposable HydrationSub);
 
     /// <summary>
-    /// Validity window for a cached <c>(path,user) → Permission</c> probe. A
-    /// hit within this window short-circuits the <see cref="GetPermissionRequest"/>
-    /// round-trip; a miss issues the request and caches its response. Trade-off:
-    /// permission revocations propagate after at most <c>AccessTtl</c> — short
-    /// enough for interactive UX, long enough that <c>GetStream</c> hot paths
-    /// don't hammer the owning hub. The value matches the canonical
-    /// AccessControl cache TTL used elsewhere in the codebase (30s).
+    /// Validity window for a cached <c>(path,user) → Permission</c> result. A
+    /// hit within this window short-circuits the local permission evaluation; a
+    /// miss evaluates <c>hub.GetEffectivePermissions</c> and caches the result.
+    /// Trade-off: permission revocations propagate after at most <c>AccessTtl</c>
+    /// — short enough for interactive UX, long enough that <c>GetStream</c> hot
+    /// paths don't re-walk the scope hierarchy every emission. The value matches
+    /// the canonical AccessControl cache TTL used elsewhere in the codebase (30s).
     /// </summary>
     private static readonly TimeSpan AccessTtl = TimeSpan.FromSeconds(30);
-
-    /// <summary>
-    /// Maximum time we wait for the owning per-node hub to answer
-    /// <see cref="GetPermissionRequest"/>. The handler is synchronous
-    /// (`AccessControlPipeline.HandleGetPermission` resolves the local
-    /// <c>SecurityService</c> and posts a response immediately)
-    /// once the hub is active. The catch is Orleans cold-start: the per-node
-    /// grain may take 5-10s to activate on first touch (cluster placement,
-    /// MeshNode hydration, SecurityService warm-up). 15s covers cold start
-    /// while still bounding genuinely stuck hubs.
-    ///
-    /// On timeout we DENY this subscription (Permission.None → Unauthorized)
-    /// but DO NOT cache the deny — a single slow activation would otherwise
-    /// poison the cache for <see cref="AccessTtl"/> and lock out every
-    /// subsequent subscription within that window. Real Deny answers from
-    /// the hub are cached as normal.
-    /// </summary>
-    private static readonly TimeSpan PermissionRequestTimeout = TimeSpan.FromSeconds(15);
 
     private readonly IMessageHub meshHub;
     private readonly IMessageHub cacheHub;
@@ -373,17 +358,19 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
 
     /// <summary>
     /// Returns a per-user access-gated view of the cached shared stream. The
-    /// gate is enforced by asking the owning node hub for the current user's
-    /// effective permissions via <see cref="GetPermissionRequest"/>; the
-    /// response is cached for <see cref="AccessTtl"/> per <c>(path,user)</c>.
-    /// On <see cref="Permission.Read"/> ⇒ the upstream observable is returned
+    /// gate is enforced by evaluating the current user's effective permissions
+    /// on the path LOCALLY via the security service
+    /// (<c>hub.GetEffectivePermissions</c>); the result is cached for
+    /// <see cref="AccessTtl"/> per <c>(path,user)</c>. On
+    /// <see cref="Permission.Read"/> ⇒ the upstream observable is returned
     /// directly; on missing Read ⇒ the observable terminates with
     /// <see cref="UnauthorizedAccessException"/>.
     ///
-    /// <para>Authoritative source: the node's OWN hub (not the cache, not the
-    /// caller's hub). The hub already runs the validator chain when it
-    /// answers <see cref="GetPermissionRequest"/>; consulting it keeps the
-    /// gate aligned with every other access decision in the system.</para>
+    /// <para>Authoritative source: the same <c>PermissionEvaluator</c> every
+    /// other access decision uses. Its scope walk evaluates access defined on
+    /// the partition / main node, which by design covers every satellite under
+    /// it — so the gate never needs to reach the leaf path's own hub (which may
+    /// not exist for a satellite / cell sub-path).</para>
     /// </summary>
     // 🚨 PRIVATE raw read — emits untyped JsonElement Content. The interface no
     // longer exposes a bare GetStream(string): callers MUST pass
@@ -398,10 +385,9 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         if (accessService is null)
             return shared; // No AccessService (minimal test fixture) — pass-through.
 
-        // RLS not installed on this mesh ⇒ no gate. GetPermissionRequest handler
-        // is wired up by AddRowLevelSecurity → AddAccessControlPipeline on every
-        // per-node hub; without RLS the message has no handler and the feature
-        // makes no sense.
+        // RLS not installed on this mesh ⇒ no gate. The EffectivePermissionsDelegate
+        // is wired up by AddRowLevelSecurity; without it GetEffectivePermissions has
+        // no evaluator and the feature makes no sense.
         if (meshHub.Configuration.Get<EffectivePermissionsDelegate>() is null)
             return shared;
 
@@ -415,7 +401,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // identity — see GetEntry): (1) null/empty context (background / system path);
         // (2) a hub-shaped principal (sync/, mesh/, node/, activity/, portal/) that
         // LEAKED onto AsyncLocal from a workspace emission scheduler. A hub address is
-        // NOT a user — probing the owner for its permissions yields Permission.None and
+        // NOT a user — evaluating its permissions yields Permission.None and
         // GateOnRead would throw "user 'sync/…' lacks Read", the symptom pinned by
         // SubscribeRequestIdentityRoutingTest.SubscribeRequest_FromSyncHubPrincipal_FallsBackToSystem.
         // This mirrors the SubscribeWith identity fallback (JsonSynchronizationStream)
@@ -426,14 +412,11 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             || AccessService.LooksLikeHubPrincipal(captured.ObjectId))
             return shared;
 
-        // 🚨 Prod-2026-05-21 regression guard: posting GetPermissionRequest to
-        // an Address whose first segment is a NodeType name (e.g. "Thread",
-        // "AccessAssignment") causes PostgreSqlPathRoutingAdapter to lower-case
-        // it into a schema name and `EnsureSchemaForPartitionSync` blows up
-        // with `relation "thread.mesh_nodes" does not exist`. The cache gate
-        // only makes sense for paths that ARE real partition-rooted node
-        // paths. If the first segment is empty or matches a known NodeType
-        // name, skip the gate entirely.
+        // A path whose first segment is a NodeType name (e.g. "Thread",
+        // "AccessAssignment") is a type-definition node, not user-partition data —
+        // the per-user gate only makes sense for real partition-rooted node paths.
+        // If the first segment is empty or matches a known NodeType name, skip the
+        // gate entirely (pass through to the system-read shared upstream).
         if (LooksLikeNodeTypePath(path))
             return shared;
 
@@ -452,53 +435,63 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     }
 
     /// <summary>
-    /// Probes the owning hub for <paramref name="captured"/>'s effective permissions on
-    /// <paramref name="path"/> via <see cref="GetPermissionRequest"/>, cached per
-    /// <c>(path,user)</c> for <see cref="AccessTtl"/>. A timeout denies (Permission.None)
-    /// WITHOUT caching. Shared by the read gate (<see cref="GetStreamRaw"/>) and the write
-    /// gate (<see cref="Update"/>) so the two never diverge.
+    /// Evaluates <paramref name="captured"/>'s effective permissions on
+    /// <paramref name="path"/> LOCALLY via the security service
+    /// (<c>hub.GetEffectivePermissions</c> → <c>PermissionEvaluator</c>), cached per
+    /// <c>(path,user)</c> for <see cref="AccessTtl"/>. Backs the read gate
+    /// (<see cref="GetStreamRaw"/>); writes are gated separately by the owning hub's
+    /// <c>[RequiresPermission(Update)]</c> on <c>PatchDataRequest</c>. No hub
+    /// round-trip — the scope walk resolves access defined on the partition / main
+    /// node, so a satellite / cell sub-path with no hub of its own can never wedge
+    /// the gate.
     /// </summary>
     private IObservable<Permission> ProbeEffectivePermissions(string path, AccessContext captured)
     {
         var key = (Path: path, UserId: captured.ObjectId);
         return Observable.Defer(() =>
         {
-            // TTL cache hit ⇒ short-circuit the round-trip.
+            // TTL cache hit ⇒ short-circuit the evaluation.
             if (_access.TryGetValue(key, out var cached)
                 && cached.ValidUntil > DateTimeOffset.UtcNow)
             {
                 return Observable.Return(cached.Permissions);
             }
 
-            // Miss ⇒ ask the owning hub for the user's effective permissions on this
-            // path. The GetPermissionRequest handler is wired on every per-node hub by
-            // AddAccessControlPipeline (from AddRowLevelSecurity).
+            // Miss ⇒ evaluate the user's effective permissions LOCALLY via the
+            // security service (PermissionEvaluator), NOT a GetPermissionRequest
+            // round-trip to the owning per-node hub.
             //
-            // 🚨 Timeout is non-negotiable: a stuck/cold owning hub must not wedge every
-            // subscriber forever. Timeout ⇒ deny this attempt as Permission.None but DO
-            // NOT cache it, so a single slow activation doesn't lock out the path for the
-            // whole TTL — the next attempt gets a fresh chance.
-            return meshHub.Observe(
-                    new GetPermissionRequest(),
-                    o => o.WithTarget(new Address(path)).WithAccessContext(captured))
-                .Select(d => (d.Message as GetPermissionResponse)?.Permissions ?? Permission.None)
-                .Take(1)
-                .Select(perms => (Perms: perms, IsTimeout: false))
-                .Timeout(PermissionRequestTimeout, Observable.Defer(() =>
-                {
-                    logger.LogWarning(
-                        "GetPermissionRequest timed out after {Timeout} for {Path} (user={User}) — denying " +
-                        "this attempt as Permission.None WITHOUT caching. Owning hub did not respond; check " +
-                        "for stuck per-node hub, corrupted ancestor, or slow Orleans grain activation.",
-                        PermissionRequestTimeout, path, captured.ObjectId);
-                    return Observable.Return((Perms: Permission.None, IsTimeout: true));
-                }))
-                .Select(result =>
-                {
-                    if (!result.IsTimeout)
-                        _access[key] = new AccessEntry(result.Perms, DateTimeOffset.UtcNow + AccessTtl);
-                    return result.Perms;
-                });
+            // 🚨 Why local, not a hub probe: GetEffectivePermissions walks the
+            // path's scope hierarchy — root, partition, every ancestor, the node
+            // itself — so access defined on the MAIN node (the partition / owning
+            // node where AccessAssignments live) covers every satellite under it:
+            // "who can read the main node can read all its satellites." Asking the
+            // security service for the PATH is therefore sufficient; there is no
+            // need to first resolve the main node, and no need to reach the leaf's
+            // own hub.
+            //
+            // The old GetPermissionRequest round-trip targeted new Address(path).
+            // For a satellite / cell sub-path with no hub of its own — e.g.
+            // {thread}/{messageId} the GUI subscribed to but that was never
+            // persisted, or a brand-new thread — routing returns NotFound and
+            // nothing answers, so the probe blocked the full 15s timeout and the
+            // side-panel subscribe spun forever. Local evaluation has no such
+            // dependency: it resolves from the cached AccessAssignment streams and
+            // emits immediately (the partition owner gets Admin via the scope walk).
+            //
+            // Restore the caller's captured context across the SYNCHRONOUS evaluator
+            // capture so claim-based (Bearer-token) roles on AccessContext.Roles
+            // resolve — PermissionEvaluator snapshots accessService.Context on the
+            // calling thread before any Rx scheduler hop.
+            var accessService = meshHub.ServiceProvider.GetService<AccessService>();
+            using (accessService?.SwitchAccessContext(captured)
+                   ?? System.Reactive.Disposables.Disposable.Empty)
+            {
+                return meshHub.GetEffectivePermissions(path, captured.ObjectId)
+                    .Take(1)
+                    .Do(perms => _access[key] =
+                        new AccessEntry(perms, DateTimeOffset.UtcNow + AccessTtl));
+            }
         });
     }
 
