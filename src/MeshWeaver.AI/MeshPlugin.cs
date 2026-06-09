@@ -92,14 +92,26 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     // tool invocation pipeline, so each plugin entry point must explicitly re-seed before
     // hitting hub-backed ops. Defer ensures the seed runs on Subscribe (same call as ToTask),
     // keeping each public method a strict one-line MCP adapter per AsynchronousCalls.md.
-    private IObservable<T> WithContext<T>(Func<IObservable<T>> work) =>
-        Observable.Defer(() =>
+    //
+    // CAPTURE THE EFFECTIVE IDENTITY SYNCHRONOUSLY, on the calling thread, where it is reliable:
+    // the agent's execution context wins; else the request-scoped Context an active delivery set;
+    // else the circuit/persistent context the Blazor session or test established. Re-reading it
+    // *inside* Defer is the concurrency bug — under N parallel tool calls (Task.WhenAll) the
+    // ambient AsyncLocal can be lost past a thread hop for one operation, so its hub-post stamps an
+    // empty AccessContext → "Access denied". Capturing once, here, and re-seeding the request-scoped
+    // Context on Subscribe makes every operation carry the caller's identity regardless of flow.
+    private IObservable<T> WithContext<T>(Func<IObservable<T>> work)
+    {
+        var captured = chat.ExecutionContext?.UserAccessContext
+            ?? accessService?.Context
+            ?? accessService?.CircuitContext;
+        return Observable.Defer(() =>
         {
-            var userCtx = chat.ExecutionContext?.UserAccessContext;
-            if (userCtx != null)
-                accessService?.SetContext(userCtx);
+            if (captured != null)
+                accessService?.SetContext(captured);
             return work();
         });
+    }
 
     [Description("Displays a node's visual layout in the chat UI.")]
     public string NavigateTo(
