@@ -1,4 +1,4 @@
-﻿using System.Reactive.Disposables;
+using System.Reactive.Disposables;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -152,7 +152,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         foreach (var seg in path.Split('/', StringSplitOptions.RemoveEmptyEntries))
             if (seg.StartsWith('_')) return false;
         var nodeType = parsed.ExtractNodeType();
-        if (!string.IsNullOrEmpty(nodeType) && PartitionDefinition.NodeTypeToSuffix.ContainsKey(nodeType))
+        if (!string.IsNullOrEmpty(nodeType) && PartitionDefinition.IsSatelliteNodeType(nodeType))
             return false;
         // Scoped PRIMARY (mesh_nodes) read → the per-schema delegate now serves it live; defer
         // so the pedestrian's ListChildPaths scope-walk is removed for this shape (the storm fix).

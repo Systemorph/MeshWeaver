@@ -186,7 +186,7 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
         // doesn't hit 42P01. The common partition-root case (StandardTableMappings +
         // Table="mesh_nodes") finds nothing extra here and skips the per-schema datasource.
         var standard = new HashSet<string>(
-            PartitionDefinition.StandardTableMappings.Values, StringComparer.Ordinal);
+            PartitionDefinition.DefaultSegmentTableMappings().Values, StringComparer.Ordinal);
         var extraTables = new HashSet<string>(StringComparer.Ordinal);
         if (def.TableMappings is { Count: > 0 })
             foreach (var t in def.TableMappings.Values)
@@ -247,7 +247,7 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
             DataSource = Name,
             Schema = @namespace.ToLowerInvariant(),
             Table = "mesh_nodes",
-            TableMappings = PartitionDefinition.StandardTableMappings,
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
             Versioned = true,
         };
         // Promise-cache: provision each schema at most once. IIoPool.Run pushes the

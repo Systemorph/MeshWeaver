@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Mesh;
+using MeshWeaver.Mesh;
 using Npgsql;
 
 namespace MeshWeaver.Hosting.PostgreSql;
@@ -65,10 +65,16 @@ public static class PostgreSqlSchemaInitializer
                         || 'FROM %I.mesh_nodes n WHERE n.main_node = n.path',
                         schema_rec.schema_name);
 
-                    -- Add access control per schema.
-                    -- partition_access is ALWAYS required — public_read only skips
-                    -- node-level permission checks, not the partition check.
-                    IF user_list IS NOT NULL THEN
+                    -- Add access control per schema — ONLY for schemas that actually
+                    -- carry the per-partition permission tables. Public content schemas
+                    -- (e.g. `doc`, the mirrored documentation) ship `mesh_nodes` WITHOUT
+                    -- `user_effective_permissions` / `node_type_permissions`; referencing
+                    -- those missing relations made the ENTIRE union fail to plan (42P01)
+                    -- for every authenticated user → empty search / empty catalog. Such
+                    -- schemas are PUBLIC content (no per-user filter); access-controlled
+                    -- partitions still get the full partition_access + node check.
+                    IF user_list IS NOT NULL
+                       AND to_regclass(format('%I.user_effective_permissions', schema_rec.schema_name)) IS NOT NULL THEN
                         union_sql := union_sql || format(
                             ' AND ('
                             || 'EXISTS (SELECT 1 FROM public.partition_access pa WHERE pa.user_id IN (%s) AND pa.partition = %L)'
@@ -251,7 +257,7 @@ public static class PostgreSqlSchemaInitializer
         // Satellite tables: same set the runtime provider + SchemaInitialization create.
         // These are schema-agnostic (no schema self-reference), so no sentinel needed.
         var satelliteDdl = string.Join("\n\n",
-            PartitionDefinition.StandardTableMappings.Values.Distinct()
+            PartitionDefinition.DefaultSegmentTableMappings().Values.Distinct()
                 .Select(t => GetSatelliteTableScript(t, dim)));
 
         // The DDL bodies contain $$ / $migrate$ dollar-quoted blocks, so the proc body

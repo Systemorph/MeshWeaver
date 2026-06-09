@@ -43,7 +43,7 @@ public class ThreadPathResolutionTest
         {
             Namespace = "TestOrg",
             Schema = "testorg",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
 
         var (ds, adapter) = CreateSchema("testorg", partitionDef, ct);
@@ -78,7 +78,7 @@ public class ThreadPathResolutionTest
         {
             Namespace = "TestOrg",
             Schema = "testorg",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
 
         var (ds, adapter) = CreateSchema("testorg", partitionDef, ct);
@@ -116,7 +116,7 @@ public class ThreadPathResolutionTest
         {
             Namespace = "TestOrg",
             Schema = "testorg",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
 
         var (ds, adapter) = CreateSchema("testorg", partitionDef, ct);
@@ -162,7 +162,7 @@ public class ThreadPathResolutionTest
         {
             Namespace = "TestOrg",
             Schema = "testorg",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
 
         var (ds, adapter) = CreateSchema("testorg", partitionDef, ct);
@@ -208,7 +208,7 @@ public class ThreadPathResolutionTest
         {
             Namespace = "TestOrg",
             Schema = "testorg",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
 
         var (ds, adapter) = CreateSchema("testorg", partitionDef, ct);
@@ -274,7 +274,7 @@ public class ThreadPathResolutionTest
         {
             Namespace = "TestOrg",
             Schema = "testorg",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
 
         var (ds, adapter) = CreateSchema("testorg", partitionDef, ct);
@@ -410,7 +410,7 @@ public class ThreadPathResolutionTest
         {
             Namespace = "PrivateOrg",
             Schema = "privateorg",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
         var (ds, adapter) = CreateSchema("privateorg", partitionDef, ct);
 
@@ -480,12 +480,12 @@ public class ThreadPathResolutionTest
         var defA = new PartitionDefinition
         {
             Namespace = "OrgA", Schema = "orga",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
         var defB = new PartitionDefinition
         {
             Namespace = "OrgB", Schema = "orgb",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
         var (dsA, adapterA) = CreateSchema("orga", defA, ct);
         var (dsB, adapterB) = CreateSchema("orgb", defB, ct);

@@ -26,7 +26,7 @@ public class SatelliteTableTests : IAsyncLifetime
         DataSource = "default",
         Schema = "satellite_test",
         Versioned = true,
-        TableMappings = PartitionDefinition.StandardTableMappings,
+        TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
     };
 
     public SatelliteTableTests(PostgreSqlFixture fixture)

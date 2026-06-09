@@ -60,7 +60,7 @@ public class PartitionRoutingTests
             DataSource = "default",
             Schema = schema,
             Table = "mesh_nodes",
-            TableMappings = PartitionDefinition.StandardTableMappings,
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
             Versioned = true,
         };
 

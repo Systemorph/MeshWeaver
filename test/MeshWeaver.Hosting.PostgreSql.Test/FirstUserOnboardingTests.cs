@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -50,7 +50,7 @@ public class FirstUserOnboardingTests
         {
             Namespace = "Admin",
             Schema = "admin",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
         var (adminDs, adminAdapter) = _fixture.CreateSchemaAdapter("admin", partitionDef, ct)
             .Should().Within(60.Seconds()).Emit();
@@ -127,7 +127,7 @@ public class FirstUserOnboardingTests
 
         var partitionDef = new PartitionDefinition
         {
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
 
         // Create admin schema with global admin

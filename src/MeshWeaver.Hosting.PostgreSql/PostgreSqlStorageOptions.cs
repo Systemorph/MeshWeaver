@@ -29,4 +29,17 @@ public class PostgreSqlStorageOptions
     /// in-memory storage has no connection scarcity and is never gated.
     /// </summary>
     public int MaxReadConcurrency { get; set; } = 16;
+
+    /// <summary>
+    /// Satellite-table mapping — a <b>PostgreSQL storage-provider implementation detail</b>,
+    /// configurable per host, NOT a static dictionary and NOT baked into the storage-agnostic
+    /// <see cref="MeshWeaver.Mesh.PartitionDefinition"/>. Within a partition's schema, nodes whose
+    /// path carries a satellite segment (e.g. <c>_Thread</c>, <c>_Approval</c>) — or, when there is
+    /// no path, whose <c>nodeType</c> maps to one — live in a dedicated table instead of the primary
+    /// <c>mesh_nodes</c>. The PG router stamps these onto every <see cref="MeshWeaver.Mesh.PartitionDefinition"/>
+    /// it routes, so <b>search, query, and routing all resolve the right table</b>. Override to add a
+    /// custom satellite type's table; other backends (Cosmos, in-memory) simply have no satellites.
+    /// </summary>
+    public IReadOnlyList<MeshWeaver.Mesh.SatelliteTableMapping> SatelliteTables { get; init; }
+        = MeshWeaver.Mesh.SatelliteTableMapping.Defaults;
 }

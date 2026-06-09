@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -44,7 +44,7 @@ public class CrossPartitionThreadQueryTests
 
         var partitionDef = new PartitionDefinition
         {
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
 
         var partitions = new Dictionary<string, (NpgsqlDataSource Ds, PostgreSqlStorageAdapter Adapter)>();
@@ -195,7 +195,7 @@ public class CrossPartitionThreadQueryTests
 
         var partitionDef = new PartitionDefinition
         {
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
         var schema = "cp_thread_nocreated";
         var (ds, adapter) = _fixture.CreateSchemaAdapter(
@@ -236,7 +236,7 @@ public class CrossPartitionThreadQueryTests
 
         var partitionDef = new PartitionDefinition
         {
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
         var schema = "cp_thread_case";
         var (ds, adapter) = _fixture.CreateSchemaAdapter(

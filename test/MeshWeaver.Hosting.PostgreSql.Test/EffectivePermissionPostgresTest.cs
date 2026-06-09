@@ -126,7 +126,7 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
             DataSource = "default",
             Schema = orgId.ToLowerInvariant(),
             Table = "mesh_nodes",
-            TableMappings = PartitionDefinition.StandardTableMappings,
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
             Versioned = true,
         };
         var partitionNode = new MeshNode(orgId, "Admin/Partition")
@@ -221,7 +221,7 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
                 DataSource = "default",
                 Schema = scope.ToLowerInvariant(),
                 Table = "mesh_nodes",
-                TableMappings = PartitionDefinition.StandardTableMappings,
+                TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
                 Versioned = true,
             };
             pgProvider.EnsureSchemaForPartitionAsync(partitionDef, TestContext.Current.CancellationToken)

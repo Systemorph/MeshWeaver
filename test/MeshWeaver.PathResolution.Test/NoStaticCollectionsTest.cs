@@ -74,7 +74,7 @@ public class NoStaticCollectionsTest
         ["MeshWeaver.Markdown.LayoutAreaMarkdownParser.IgnoreChars"] = "CONST",
         ["MeshWeaver.Markdown.LayoutAreaMarkdownParser.ReservedKeywords"] = "CONST",
         ["MeshWeaver.Mesh.Completion.UnifiedReferenceAutocompleteProvider.Keywords"] = "CONST",
-        ["MeshWeaver.Mesh.PartitionDefinition.NodeTypeToSuffix"] = "CONST",
+        ["MeshWeaver.Mesh.SatelliteTableMapping.Defaults"] = "CONST",
         ["MeshWeaver.Mesh.QueryParser.ReservedQualifiers"] = "CONST",
         ["MeshWeaver.Mesh.Security.PermissionEvaluator.BuiltInRoles"] = "CONST",
         ["MeshWeaver.Messaging.MessageHubPluginExtensions.HandlerTypes"] = "CONST",

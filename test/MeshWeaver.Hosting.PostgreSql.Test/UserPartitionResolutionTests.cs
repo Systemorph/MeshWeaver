@@ -94,7 +94,7 @@ public class UserPartitionResolutionTests(PostgreSqlFixture fixture, ITestOutput
             DataSource = "default",
             Schema = username.ToLowerInvariant(),
             Table = "mesh_nodes",
-            TableMappings = PartitionDefinition.StandardTableMappings,
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
             Versioned = true,
         };
         pgProvider.EnsureSchemaForPartitionAsync(partitionDef, TestTimeout)
@@ -171,7 +171,7 @@ public class UserPartitionResolutionTests(PostgreSqlFixture fixture, ITestOutput
             DataSource = "default",
             Schema = username.ToLowerInvariant(),
             Table = "mesh_nodes",
-            TableMappings = PartitionDefinition.StandardTableMappings,
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
             Versioned = true,
         };
         pgProvider.EnsureSchemaForPartitionAsync(partitionDef, TestTimeout)

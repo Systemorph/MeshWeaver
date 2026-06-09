@@ -83,7 +83,7 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
         // surfacing as `relation "thread.mesh_nodes" does not exist` and the
         // SatelliteRoutingExhaustive schema-must-not-exist assertion failing for
         // AccessAssignment.
-        if (PartitionDefinition.NodeTypeToSuffix.ContainsKey(seg))
+        if (PartitionDefinition.IsSatelliteNodeType(seg))
             return null;
         // 🚨 Global satellite namespaces (`_Access`, `_Activity`, `_Thread`,
         // `_UserActivity`) are managed by DefaultPartitionProvider with explicit
@@ -116,7 +116,7 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
             DataSource = "default",
             Schema = seg.ToLowerInvariant(),
             Table = "mesh_nodes",
-            TableMappings = PartitionDefinition.StandardTableMappings,
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
             Versioned = true,
         };
     }

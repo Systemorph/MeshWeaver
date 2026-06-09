@@ -49,7 +49,7 @@ public class PartitionQueryTests
                 Namespace = "ACME",
                 DataSource = "default",
                 Schema = "acme",
-                TableMappings = PartitionDefinition.StandardTableMappings,
+                TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
                 Description = "ACME organization partition"
             }
         }, _options).Should().Within(30.Seconds()).Emit();
@@ -169,7 +169,7 @@ public class PartitionQueryTests
         var def = new PartitionDefinition
         {
             Namespace = "User",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
 
         // Main node → primary table

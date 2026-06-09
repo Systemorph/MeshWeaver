@@ -165,7 +165,7 @@ public class PostgreSqlPartitionedMeshQueryMappingTests
             Namespace = "Systemorph",
             Schema = "systemorph",
             Table = "mesh_nodes",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
         var table = def.ResolveTable(path);
         table.Should().Be(expectedTable);
@@ -179,7 +179,7 @@ public class PostgreSqlPartitionedMeshQueryMappingTests
             Namespace = "Systemorph",
             Schema = "systemorph",
             Table = "mesh_nodes",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
 
         def.ResolveTable("Systemorph").Should().Be("mesh_nodes");
@@ -202,7 +202,7 @@ public class PostgreSqlPartitionedMeshQueryMappingTests
             Namespace = "Systemorph",
             Schema = "systemorph",
             Table = "mesh_nodes",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
         def.ResolveTable(path).Should().Be(expectedTable);
     }

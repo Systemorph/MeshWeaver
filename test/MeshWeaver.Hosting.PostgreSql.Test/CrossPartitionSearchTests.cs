@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -49,7 +49,7 @@ public class CrossPartitionSearchTests
 
         var partitionDef = new PartitionDefinition
         {
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
 
         // Admin partition (default schema) â€” stores partition metadata
@@ -78,7 +78,7 @@ public class CrossPartitionSearchTests
                     Namespace = org,
                     DataSource = "default",
                     Schema = schemaName,
-                    TableMappings = PartitionDefinition.StandardTableMappings
+                    TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
                 }
             }, _options, ct);
 

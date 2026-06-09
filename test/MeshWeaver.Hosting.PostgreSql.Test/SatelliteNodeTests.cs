@@ -28,7 +28,7 @@ public class SatelliteNodeTests : IAsyncLifetime
         Namespace = "ACME",
         DataSource = "default",
         Schema = "acme_sat_test",
-        TableMappings = PartitionDefinition.StandardTableMappings,
+        TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
     };
 
     /// <summary>
@@ -557,7 +557,7 @@ public class SatelliteNodeTests : IAsyncLifetime
         var def = new PartitionDefinition
         {
             Namespace = "User",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
 
         def.ResolveTable("User/alice/_Activity/act-1").Should().Be("activities");
@@ -578,7 +578,7 @@ public class SatelliteNodeTests : IAsyncLifetime
         var def = new PartitionDefinition
         {
             Namespace = "User",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
 
         def.ResolveTable("User/alice").Should().Be("mesh_nodes");

@@ -90,7 +90,7 @@ public class SatelliteRoutingExhaustiveTest
         {
             Namespace = "TestOrg",
             Schema = "testorg",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
         var (ds, adapter) = CreateSchema("testorg", partitionDef, ct);
 
@@ -214,7 +214,7 @@ public class SatelliteRoutingExhaustiveTest
         {
             Namespace = "TestOrg",
             Schema = "testorg",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
         var (ds, adapter) = CreateSchema("testorg", partitionDef, ct);
         _fixture.AccessControl.Grant("TestOrg", "Anonymous", "Read", isAllow: true, ct)
@@ -293,7 +293,7 @@ public class SatelliteRoutingExhaustiveTest
         {
             Namespace = "TestOrg",
             Schema = "testorg",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
         var (ds, adapter) = CreateSchema("testorg", partitionDef, ct);
         _fixture.AccessControl.Grant("TestOrg", "Anonymous", "Read", isAllow: true, ct)
@@ -303,7 +303,7 @@ public class SatelliteRoutingExhaustiveTest
             _options).Should().Within(30.Seconds()).Emit();
 
         // Seed a satellite node so the nodeType-only query has something to find.
-        var satSuffix = PartitionDefinition.NodeTypeToSuffix[nodeTypeName];
+        var satSuffix = SatelliteTableMapping.SegmentForNodeType(nodeTypeName)!;
         var satNodeId = $"sat-{nodeTypeName.ToLowerInvariant()}-only";
         var satPath = $"TestOrg/{satSuffix}/{satNodeId}";
         adapter.Write(

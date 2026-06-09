@@ -38,7 +38,7 @@ public class AccessAssignmentRoutingTests
         {
             Namespace = "TestOrg",
             Schema = "testorg_access",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
         var (ds, adapter) = _fixture.CreateSchemaAdapter("testorg_access", partitionDef, ct)
             .Should().Within(60.Seconds()).Emit();
@@ -100,7 +100,7 @@ public class AccessAssignmentRoutingTests
         {
             Namespace = "OrgAccSeg",
             Schema = "orgaccseg",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
         var (ds, adapter) = _fixture.CreateSchemaAdapter("orgaccseg", partitionDef, ct)
             .Should().Within(60.Seconds()).Emit();
@@ -153,7 +153,7 @@ public class AccessAssignmentRoutingTests
         {
             Namespace = "TestOrg2",
             Schema = "testorg2_access",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
         var (ds, adapter) = _fixture.CreateSchemaAdapter("testorg2_access", partitionDef, ct)
             .Should().Within(60.Seconds()).Emit();

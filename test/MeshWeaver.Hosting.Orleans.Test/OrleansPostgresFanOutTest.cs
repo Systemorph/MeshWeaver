@@ -415,7 +415,7 @@ public class OrleansPostgresFanOutTest(ITestOutputHelper output)
             DataSource = "default",
             Schema = partition,
             Table = "mesh_nodes",
-            TableMappings = PartitionDefinition.StandardTableMappings,
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
             Versioned = true,
         };
 
@@ -449,7 +449,7 @@ public class OrleansPostgresFanOutTest(ITestOutputHelper output)
                 DataSource = "default",
                 Schema = partition,
                 Table = "mesh_nodes",
-                TableMappings = PartitionDefinition.StandardTableMappings,
+                TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
                 Versioned = true,
             },
             jsonOptions: jsonOptions,

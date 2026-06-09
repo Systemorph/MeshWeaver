@@ -34,8 +34,19 @@ public record PartitionDefinition
     /// Satellite nodes whose path contains a matching segment (e.g., "_Activity")
     /// are stored in the mapped table instead of the primary <see cref="Table"/>.
     /// Keys are segment prefixes like "_Activity", values are table names like "activities".
+    /// <para>This is storage-agnostic data carried per namespace; the VALUES (table names) are a
+    /// storage-provider concern and are stamped on by the provider (the PG router fills them from
+    /// its configurable <c>SatelliteTables</c> options). It is not seeded from any static dictionary.</para>
     /// </summary>
     public Dictionary<string, string>? TableMappings { get; init; }
+
+    /// <summary>
+    /// Maps a satellite <c>nodeType</c> to its table — used to resolve the table when a query
+    /// carries a <c>nodeType</c> filter but no path (e.g. <c>nodeType:Thread</c> → <c>threads</c>).
+    /// Populated alongside <see cref="TableMappings"/> by the storage provider from the same
+    /// configurable source; replaces the old static <c>NodeTypeToSuffix</c> chain.
+    /// </summary>
+    public Dictionary<string, string>? NodeTypeTableMappings { get; init; }
 
     /// <summary>
     /// Whether this partition tracks node history (versions schema + triggers).
@@ -67,33 +78,6 @@ public record PartitionDefinition
     public string? DefaultActivityParentPath { get; init; }
 
     /// <summary>
-    /// Standard table mappings shared by all content partitions (User, org partitions).
-    /// Satellite types (metadata attached to primary nodes): Activity and UserActivity
-    /// get dedicated tables for high-volume, time-series queries; Thread and
-    /// ThreadMessage share a dedicated "threads" table; Access gets its own table
-    /// (used by permission rebuild functions); comments, approvals, and tracking
-    /// share the "annotations" table to simplify schema maintenance.
-    /// Non-satellite content: Source and Test are first-class code files that
-    /// share a dedicated "code" table as a storage optimization (not because they
-    /// are satellites — they are primary content with their own paths).
-    /// The main mesh_nodes table only contains primary entities (MainNode == Path).
-    /// </summary>
-    public static Dictionary<string, string> StandardTableMappings => new()
-    {
-        ["_Activity"] = "activities",
-        ["_UserActivity"] = "user_activities",
-        ["_Thread"] = "threads",
-        ["_ThreadMessage"] = "threads",
-        ["_Access"] = "access",
-        ["_Tracking"] = "annotations",
-        ["_Approval"] = "annotations",
-        ["_Comment"] = "annotations",
-        ["_Notification"] = "notifications",
-        ["Source"] = "code",
-        ["Test"] = "code",
-    };
-
-    /// <summary>
     /// Resolves the table name for a given node path based on <see cref="TableMappings"/>.
     /// Returns the mapped table if the path contains a matching satellite segment, otherwise the primary table.
     /// Matches longest suffix first to avoid "_Thread" matching "_ThreadMessage" paths.
@@ -114,36 +98,48 @@ public record PartitionDefinition
     }
 
     /// <summary>
-    /// Standard mapping from nodeType to satellite path suffix.
-    /// Used to resolve the table when the query has nodeType but no path,
-    /// and by routing to determine if a nodeType lives in a satellite table.
-    /// </summary>
-    public static readonly Dictionary<string, string> NodeTypeToSuffix = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["Thread"] = "_Thread",
-        ["ThreadMessage"] = "_ThreadMessage",
-        ["Activity"] = "_Activity",
-        ["UserActivity"] = "_UserActivity",
-        ["AccessAssignment"] = "_Access",
-        ["Comment"] = "_Comment",
-        ["TrackedChange"] = "_Tracking",
-        ["Approval"] = "_Approval",
-        ["Notification"] = "_Notification",
-    };
-
-    /// <summary>
-    /// Resolves the table name for a given node type.
+    /// Resolves the table name for a given node type via <see cref="NodeTypeTableMappings"/>.
     /// Used when the query has a nodeType filter but no path to infer the satellite table from.
     /// Returns the mapped table if a mapping exists, otherwise the primary table.
     /// </summary>
     public string ResolveTableByNodeType(string? nodeType)
     {
-        if (nodeType != null && TableMappings != null &&
-            NodeTypeToSuffix.TryGetValue(nodeType, out var suffix) &&
-            TableMappings.TryGetValue(suffix, out var table))
+        if (nodeType == null)
+            return Table;
+        // 1. An explicit per-namespace nodeType→table override wins.
+        if (NodeTypeTableMappings != null && NodeTypeTableMappings.TryGetValue(nodeType, out var table))
             return table;
+        // 2. Otherwise derive via the standard classification: nodeType → its satellite segment →
+        //    THIS def's segment→table map. Lets a def that only carries TableMappings (segment→table)
+        //    still resolve a nodeType-filter query, matching the old NodeTypeToSuffix-chain behaviour.
+        var segment = SatelliteTableMapping.SegmentForNodeType(nodeType);
+        if (segment != null && TableMappings != null && TableMappings.TryGetValue(segment, out var derived))
+            return derived;
         return Table;
     }
+
+    /// <summary>
+    /// A fresh segment→table map from the configurable standard satellite layout
+    /// (<see cref="SatelliteTableMapping.Defaults"/>). Use to populate <see cref="TableMappings"/>
+    /// on a standard content partition. Not a static dictionary — a factory over an immutable list.
+    /// </summary>
+    public static Dictionary<string, string> DefaultSegmentTableMappings()
+        => SatelliteTableMapping.ToSegmentTableMap(SatelliteTableMapping.Defaults);
+
+    /// <summary>
+    /// A fresh nodeType→table map from the standard satellite layout. Use to populate
+    /// <see cref="NodeTypeTableMappings"/> on a standard content partition.
+    /// </summary>
+    public static Dictionary<string, string> DefaultNodeTypeTableMappings()
+        => SatelliteTableMapping.ToNodeTypeTableMap(SatelliteTableMapping.Defaults);
+
+    /// <summary>
+    /// True if <paramref name="nodeType"/> is a standard satellite type (resolves to a non-primary
+    /// table). Replaces the old <c>NodeTypeToSuffix.ContainsKey</c> checks.
+    /// </summary>
+    public static bool IsSatelliteNodeType(string? nodeType)
+        => nodeType != null && SatelliteTableMapping.Defaults.Any(
+            s => s.NodeTypes.Any(nt => string.Equals(nt, nodeType, StringComparison.OrdinalIgnoreCase)));
 
     /// <summary>
     /// Checks if a path contains the given segment as a complete path component.

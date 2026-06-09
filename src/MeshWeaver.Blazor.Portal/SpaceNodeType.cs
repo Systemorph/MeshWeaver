@@ -243,7 +243,7 @@ public static class SpaceNodeType
                     Namespace = createdNode.Id,
                     DataSource = "default",
                     Schema = createdNode.Id.ToLowerInvariant(),
-                    TableMappings = PartitionDefinition.StandardTableMappings,
+                    TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
                     Description = $"Partition for space {createdNode.Name ?? createdNode.Id}"
                 }
             };

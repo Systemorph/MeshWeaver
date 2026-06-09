@@ -247,7 +247,7 @@ public class PathResolutionTests
                 DataSource = "default",
                 Schema = schema,
                 Table = "mesh_nodes",
-                TableMappings = PartitionDefinition.StandardTableMappings,
+                TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
                 Versioned = true,
             });
 
@@ -259,7 +259,7 @@ public class PathResolutionTests
                 Namespace = schema,
                 Schema = schema,
                 Table = "mesh_nodes",
-                TableMappings = PartitionDefinition.StandardTableMappings,
+                TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
             });
             var userNode = new MeshNode(schema)
             {
@@ -310,7 +310,7 @@ public class PathResolutionTests
             DataSource = "default",
             Schema = schema,
             Table = "mesh_nodes",
-            TableMappings = PartitionDefinition.StandardTableMappings,
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
             Versioned = true,
         };
         // The fixture's IObservable form keeps the low-level schema DDL async

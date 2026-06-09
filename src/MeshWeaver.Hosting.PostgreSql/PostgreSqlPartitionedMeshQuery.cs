@@ -470,12 +470,15 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
     /// </summary>
     internal static string ResolveTable(ParsedQuery parsed)
     {
+        // Satellite table layout — the configurable default (PostgreSqlStorageOptions.SatelliteTables);
+        // table names are uniform across a fan-out's schemas, so the default maps apply. No static dict.
+        var segmentTables = PartitionDefinition.DefaultSegmentTableMappings();
+
         // Path-based mapping first — a concrete path with a satellite segment
         // (e.g. namespace:partition/doc/_Thread) pins the satellite table.
         if (!string.IsNullOrEmpty(parsed.Path))
         {
-            foreach (var (suffix, table) in PartitionDefinition.StandardTableMappings
-                         .OrderByDescending(kv => kv.Key.Length))
+            foreach (var (suffix, table) in segmentTables.OrderByDescending(kv => kv.Key.Length))
             {
                 if (PathContainsSegment(parsed.Path, suffix))
                     return table;
@@ -493,8 +496,7 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
             // boundary check ("partition/%/_Thread" → "partition//_Thread"
             // → still has '_Thread' bounded by '/').
             var sanitized = nsLikeValue.Replace("%", "");
-            foreach (var (suffix, table) in PartitionDefinition.StandardTableMappings
-                         .OrderByDescending(kv => kv.Key.Length))
+            foreach (var (suffix, table) in segmentTables.OrderByDescending(kv => kv.Key.Length))
             {
                 if (PathContainsSegment(sanitized, suffix))
                     return table;
@@ -505,8 +507,7 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         // carries a satellite hint.
         var nodeType = parsed.ExtractNodeType();
         if (!string.IsNullOrEmpty(nodeType)
-            && PartitionDefinition.NodeTypeToSuffix.TryGetValue(nodeType, out var nodeTypeSuffix)
-            && PartitionDefinition.StandardTableMappings.TryGetValue(nodeTypeSuffix, out var nodeTypeTable))
+            && PartitionDefinition.DefaultNodeTypeTableMappings().TryGetValue(nodeType, out var nodeTypeTable))
         {
             return nodeTypeTable;
         }

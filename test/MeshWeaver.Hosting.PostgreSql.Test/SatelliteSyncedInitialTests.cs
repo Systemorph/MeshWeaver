@@ -41,7 +41,7 @@ public class SatelliteSyncedInitialTests : IAsyncLifetime
         Namespace = "User",
         DataSource = "default",
         Schema = Schema,
-        TableMappings = PartitionDefinition.StandardTableMappings,
+        TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
     };
 
     public SatelliteSyncedInitialTests(PostgreSqlFixture fixture) => _fixture = fixture;

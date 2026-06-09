@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -50,7 +50,7 @@ public class CrossPartitionSatelliteFanOutTests
             {
                 Namespace = org,
                 Schema = schema,
-                TableMappings = PartitionDefinition.StandardTableMappings,
+                TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
             };
             var (ds, adapter) = await _fixture.CreateSchemaAdapterAsync(schema, partitionDef, ct);
 

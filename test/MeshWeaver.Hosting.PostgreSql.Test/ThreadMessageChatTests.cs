@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -34,7 +34,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         Namespace = "User",
         DataSource = "default",
         Schema = "user_chat_test",
-        TableMappings = PartitionDefinition.StandardTableMappings,
+        TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
     };
 
     public ThreadMessageChatTests(PostgreSqlFixture fixture)

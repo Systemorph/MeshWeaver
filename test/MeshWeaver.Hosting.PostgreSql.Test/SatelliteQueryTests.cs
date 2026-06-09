@@ -29,7 +29,7 @@ public class SatelliteQueryTests : IAsyncLifetime
         Namespace = "User",
         DataSource = "default",
         Schema = "user_sat_query_test",
-        TableMappings = PartitionDefinition.StandardTableMappings,
+        TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
     };
 
     public SatelliteQueryTests(PostgreSqlFixture fixture) => _fixture = fixture;
