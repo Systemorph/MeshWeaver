@@ -1,25 +1,9 @@
 ﻿using MeshWeaver.ContentCollections;
+using MeshWeaver.Layout;
+using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh.Services;
 
 namespace MeshWeaver.Graph.Configuration;
-
-/// <summary>
-/// What the GUI does when the user creates an instance of a NodeType (the "+"/Create
-/// action). Configurable per type via <see cref="NodeTypeDefinition.CreateBehavior"/>.
-/// </summary>
-public enum NodeCreateBehavior
-{
-    /// <summary>Default — launch the generic Create form (type / name / namespace / …).</summary>
-    Form = 0,
-
-    /// <summary>
-    /// Open the new-chat composer instead of the form and create nothing up-front —
-    /// the instance is created on submit. Used by <c>Thread</c>: "+" opens the per-user
-    /// ChatInput composer (the same new-thread view the side panel shows) and the thread
-    /// is created when the user sends the first message.
-    /// </summary>
-    Chat = 1,
-}
 
 /// <summary>
 /// Content type for NodeType MeshNodes.
@@ -29,12 +13,21 @@ public enum NodeCreateBehavior
 public record NodeTypeDefinition
 {
     /// <summary>
-    /// What happens when a user creates an instance of this type from the GUI. Default
-    /// (<see cref="NodeCreateBehavior.Form"/>) launches the generic Create form;
-    /// <see cref="NodeCreateBehavior.Chat"/> opens the new-chat composer and defers
-    /// creation to submit. See <see cref="NodeCreateBehavior"/>.
+    /// Optional per-type override for the "+"/Create action. When set, the generic
+    /// <see cref="MeshWeaver.Graph.CreateLayoutArea"/> invokes this INSTEAD of building
+    /// the standard type/name/namespace form and renders whatever control the observable
+    /// yields — e.g. a <see cref="RedirectControl"/> to a bespoke composer (Thread opens
+    /// the new-chat composer), or a validation/error control that refuses the create. The
+    /// arguments are the create <see cref="LayoutAreaHost"/> and the resolved target
+    /// namespace; yield <c>null</c> to fall back to the default form.
     /// </summary>
-    public NodeCreateBehavior CreateBehavior { get; init; }
+    /// <remarks>
+    /// <c>[JsonIgnore]</c>: a delegate can't round-trip as JSON, so this is honoured only
+    /// for statically-registered NodeTypes (read in-process via <c>FindStaticNode</c>).
+    /// Dynamically-compiled types fall through to the default form.
+    /// </remarks>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public Func<LayoutAreaHost, string, IObservable<UiControl?>>? BuildCreate { get; init; }
 
     /// <summary>
     /// Emoji character to use as icon. Takes precedence over MeshNode.Icon if set.
