@@ -4,12 +4,38 @@ using MeshWeaver.Mesh.Services;
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
+/// What the GUI does when the user creates an instance of a NodeType (the "+"/Create
+/// action). Configurable per type via <see cref="NodeTypeDefinition.CreateBehavior"/>.
+/// </summary>
+public enum NodeCreateBehavior
+{
+    /// <summary>Default — launch the generic Create form (type / name / namespace / …).</summary>
+    Form = 0,
+
+    /// <summary>
+    /// Open the new-chat composer instead of the form and create nothing up-front —
+    /// the instance is created on submit. Used by <c>Thread</c>: "+" opens the per-user
+    /// ChatInput composer (the same new-thread view the side panel shows) and the thread
+    /// is created when the user sends the first message.
+    /// </summary>
+    Chat = 1,
+}
+
+/// <summary>
 /// Content type for NodeType MeshNodes.
 /// Properties like Name, Icon, Order, Namespace are on MeshNode itself.
 /// This record holds only NodeType-specific configuration.
 /// </summary>
 public record NodeTypeDefinition
 {
+    /// <summary>
+    /// What happens when a user creates an instance of this type from the GUI. Default
+    /// (<see cref="NodeCreateBehavior.Form"/>) launches the generic Create form;
+    /// <see cref="NodeCreateBehavior.Chat"/> opens the new-chat composer and defers
+    /// creation to submit. See <see cref="NodeCreateBehavior"/>.
+    /// </summary>
+    public NodeCreateBehavior CreateBehavior { get; init; }
+
     /// <summary>
     /// Emoji character to use as icon. Takes precedence over MeshNode.Icon if set.
     /// Example: "📝", "📁", "🎯"
