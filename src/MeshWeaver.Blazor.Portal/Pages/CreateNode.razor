@@ -4,6 +4,7 @@
 @using MeshWeaver.Blazor.Portal.Chat
 @using MeshWeaver.Data
 @using MeshWeaver.Graph
+@using MeshWeaver.Graph.Configuration
 @using MeshWeaver.Mesh
 @using MeshWeaver.Mesh.Services
 @using MeshWeaver.Mesh.Security
@@ -187,7 +188,47 @@
 
     protected override async Task OnInitializedAsync()
     {
+        // Per-NodeType GUI-create protocol: if the requested type declares CreateBehavior=Chat
+        // (e.g. Thread), don't show this form — create the chat-input node in the requested
+        // namespace ({namespace}/_Thread/ChatInput) and navigate to its overview, whose
+        // default area is the same composer the side panel shows. The thread is created on
+        // submit from that composer. See NodeTypeDefinition.CreateBehavior.
+        if (RedirectIfChatType(TypeParam))
+            return;
         await LoadOptionsAsync();
+    }
+
+    /// <summary>
+    /// Per-NodeType GUI-create protocol. If <paramref name="typePath"/> resolves to a
+    /// NodeType whose <see cref="NodeTypeDefinition.CreateBehavior"/> is
+    /// <see cref="NodeCreateBehavior.Chat"/> (e.g. Thread), create the chat-input node in
+    /// the requested namespace — <c>{namespace}/ChatInput</c> (i.e. <c>{context}/_Thread/ChatInput</c>) —
+    /// and navigate to its overview (the side-panel composer). Returns true if it redirected.
+    /// </summary>
+    private bool RedirectIfChatType(string? typePath)
+    {
+        if (string.IsNullOrEmpty(typePath))
+            return false;
+        if (Hub.ServiceProvider.FindStaticNode(typePath)?.Content is not NodeTypeDefinition def
+            || def.CreateBehavior != NodeCreateBehavior.Chat)
+            return false;
+
+        var ns = NamespaceParam ?? ParentParam ?? NavigationService.CurrentNamespace ?? "";
+        var chatInputPath = string.IsNullOrEmpty(ns)
+            ? MeshWeaver.AI.ChatInputNodeType.NodeType
+            : $"{ns}/{MeshWeaver.AI.ChatInputNodeType.NodeType}";
+        var node = MeshNode.FromPath(chatInputPath) with
+        {
+            Name = "New Chat",
+            NodeType = MeshWeaver.AI.ChatInputNodeType.NodeType,
+            State = MeshNodeState.Active,
+        };
+        isLoading = false; // never render the form for the Chat protocol
+        // Create then navigate to the overview; if the node already exists, still navigate.
+        MeshService.CreateNode(node).Subscribe(
+            _ => NavigationService.NavigateTo($"/{chatInputPath}"),
+            _ => NavigationService.NavigateTo($"/{chatInputPath}"));
+        return true;
     }
 
     private async Task LoadOptionsAsync()
@@ -252,6 +293,10 @@
 
     private void OnTypeChanged(QuerySuggestion? type)
     {
+        // Selecting a Chat-protocol type (e.g. Thread) skips the form entirely — go
+        // straight to the new-chat composer in the chosen location.
+        if (RedirectIfChatType(type?.Path))
+            return;
         selectedTypeItem = type;
         // Update location filter when type changes
         locationOptions.FilterByCreatableType = type?.Path;
@@ -291,6 +336,11 @@
     private void CreateNodeAction()
     {
         if (selectedTypeItem == null || string.IsNullOrWhiteSpace(nodeName) || selectedLocation == null)
+            return;
+
+        // Safety net: a Chat-protocol type never creates a node from this form — go to
+        // the composer (also covers the type being chosen before this handler runs).
+        if (RedirectIfChatType(selectedTypeItem.Path))
             return;
 
         isCreating = true;
