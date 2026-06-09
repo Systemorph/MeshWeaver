@@ -2,6 +2,7 @@
 @using MeshWeaver.AI
 @using MeshWeaver.Data
 @using MeshWeaver.Layout
+@using MeshWeaver.Mesh.Security
 @using MeshWeaver.Messaging
 @inject AccessService AccessService
 
@@ -26,7 +27,20 @@ else
 
     private LayoutAreaControl? GetChatInputLayoutArea()
     {
-        var userHome = AccessService.Context?.ObjectId ?? AccessService.CircuitContext?.ObjectId;
+        // Durable circuit user first; skip a leaked system-security / hub principal on the
+        // AsyncLocal Context (which would point the composer at a non-existent
+        // system-security/_Memex/ChatInput). Mirrors ThreadSidePanelContent.ResolveUserHome.
+        string? userHome = null;
+        foreach (var candidate in new[] { AccessService.CircuitContext?.ObjectId, AccessService.Context?.ObjectId })
+        {
+            if (!string.IsNullOrEmpty(candidate)
+                && candidate != WellKnownUsers.System
+                && !AccessService.LooksLikeHubPrincipal(candidate))
+            {
+                userHome = candidate;
+                break;
+            }
+        }
         return string.IsNullOrEmpty(userHome)
             ? null
             : new LayoutAreaControl(ChatInputNodeType.PathFor(userHome), new LayoutAreaReference(string.Empty));

@@ -568,6 +568,14 @@ public static class CreateLayoutArea
             var typeNode = host.Hub.ServiceProvider.FindStaticNode(knownType);
             var typeDef = typeNode?.Content as NodeTypeDefinition;
 
+            // The NodeType carries the GUI-create protocol. When it declares the Chat
+            // behavior (e.g. Thread) AND the type was explicitly requested — the catalog
+            // "+" passes ?type=Thread — open the new-chat composer (/chat) instead of this
+            // generic form. Nothing is created up-front; the instance is created on submit.
+            var typeExplicit = !string.IsNullOrEmpty(typeOverride) || restrictedTypes is { Length: 1 };
+            if (typeExplicit && typeDef?.CreateBehavior == NodeCreateBehavior.Chat)
+                return new RedirectControl("/chat");
+
             // Apply DefaultNamespace from NodeTypeDefinition (pre-selects but doesn't restrict)
             if (typeDef?.DefaultNamespace != null)
                 defaultNamespace = typeDef.DefaultNamespace;

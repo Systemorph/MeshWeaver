@@ -253,6 +253,13 @@ public static class ThreadNodeType
             Icon = DefaultIcon,
             IsSatelliteType = true,
             ExcludeFromContext = ImmutableHashSet.Create("search"),
+            // The NodeType carries the GUI-create protocol: creating a Thread from the
+            // "+" opens the new-chat composer (the per-user ChatInput / new-thread view),
+            // and the thread is created on submit — NOT the generic Create form.
+            Content = new MeshWeaver.Graph.Configuration.NodeTypeDefinition
+            {
+                CreateBehavior = MeshWeaver.Graph.Configuration.NodeCreateBehavior.Chat
+            },
             // Register AI types DIRECTLY on the per-thread hub config — not just
             // via ConfigureDefaultNodeHub. The polymorphic resolver discriminator
             // is picked from the SENDING hub's TypeRegistry; if Thread NodeType's
