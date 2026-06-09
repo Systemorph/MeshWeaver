@@ -142,9 +142,11 @@ public class ContentAutocompleteInChatTest(ITestOutputHelper output) : MonolithM
             return;
         }
 
-        var items = await contentProvider.GetItems("@")
+        // GetItems is a snapshot stream; the settled (last) snapshot is the complete item set.
+        var snapshots = await contentProvider.GetItems("@")
             .ToAsyncEnumerableSequence(TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
+        var items = snapshots.LastOrDefault() ?? (IReadOnlyCollection<AutocompleteItem>)Array.Empty<AutocompleteItem>();
         Output.WriteLine($"ContentAutocompleteProvider returned {items.Count} items:");
         foreach (var item in items.Take(10))
             Output.WriteLine($"  - [{item.Kind}] {item.Label}: {item.InsertText}");

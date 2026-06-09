@@ -12,14 +12,14 @@ namespace MeshWeaver.Layout.Completion;
 public class LayoutAreaAutocompleteProvider(IUiControlService uiControlService, IMessageHub hub) : IAutocompleteProvider
 {
     /// <inheritdoc />
-    public IObservable<AutocompleteItem> GetItems(string query, string? contextPath = null)
+    public IObservable<IReadOnlyCollection<AutocompleteItem>> GetItems(string query, string? contextPath = null)
     {
         // Pure in-memory enumeration of registered layout area definitions.
         var layoutDefinition = uiControlService.LayoutDefinition;
         var address = hub.Address;
         var addressStr = address.ToString();
 
-        return layoutDefinition.AreaDefinitions.Values
+        var items = layoutDefinition.AreaDefinitions.Values
             .Where(area => area.IsInvisible != true && !area.Area.StartsWith("$"))
             .Select(area =>
             {
@@ -41,6 +41,7 @@ public class LayoutAreaAutocompleteProvider(IUiControlService uiControlService, 
                     Priority: priority,
                     Kind: AutocompleteKind.Other);
             })
-            .ToObservable();
+            .ToList();
+        return Observable.Return((IReadOnlyCollection<AutocompleteItem>)items);
     }
 }

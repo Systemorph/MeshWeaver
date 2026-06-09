@@ -19,11 +19,11 @@ internal class MeshNodeAutocompleteProvider(
     private const int DefaultMaxResults = 20;
 
     /// <inheritdoc />
-    public IObservable<AutocompleteItem> GetItems(string query, string? contextPath = null)
+    public IObservable<IReadOnlyCollection<AutocompleteItem>> GetItems(string query, string? contextPath = null)
     {
         // Skip UCR prefix queries — handled by dedicated providers (Content, Data, etc.)
         if (StartsWithUcrPrefix(query))
-            return Observable.Empty<AutocompleteItem>();
+            return Observable.Return(AutocompleteSnapshots.Empty);
 
         // Use the hub's address as the parent path.
         var parentPath = hub.Address.ToString();
@@ -35,11 +35,12 @@ internal class MeshNodeAutocompleteProvider(
         // AutocompleteItems. No await, no IAsyncEnumerable bridge — the old EnumerateAsync
         // round-tripped Observable → IAsyncEnumerable → Observable (via ToAsyncEnumerableSequence +
         // FromAsyncEnumerable) for nothing.
-        return meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(queryString))
+        var items = meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(queryString))
             .Take(1)
             .SelectMany(c => c.Items
                 .Take(DefaultMaxResults)
                 .Select(node => ToAutocompleteItem(node, contextPath)));
+        return AutocompleteSnapshots.FromItems(items, 50);
     }
 
     private static AutocompleteItem ToAutocompleteItem(MeshNode node, string? contextPath)

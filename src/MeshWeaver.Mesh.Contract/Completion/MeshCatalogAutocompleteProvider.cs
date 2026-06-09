@@ -22,7 +22,7 @@ public class MeshCatalogAutocompleteProvider : IAutocompleteProvider
     }
 
     /// <inheritdoc />
-    public IObservable<AutocompleteItem> GetItems(string query, string? contextPath = null)
+    public IObservable<IReadOnlyCollection<AutocompleteItem>> GetItems(string query, string? contextPath = null)
     {
         // Pure in-memory enumeration of registered mesh configuration nodes + reserved prefixes.
         var yielded = new HashSet<string>();
@@ -69,6 +69,6 @@ public class MeshCatalogAutocompleteProvider : IAutocompleteProvider
                 Kind: AutocompleteKind.Other));
         }
 
-        return items.ToObservable();
+        return Observable.Return((IReadOnlyCollection<AutocompleteItem>)items);
     }
 }

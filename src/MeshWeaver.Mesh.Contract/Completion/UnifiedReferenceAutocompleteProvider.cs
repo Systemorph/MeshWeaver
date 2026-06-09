@@ -17,13 +17,13 @@ namespace MeshWeaver.Mesh.Completion;
 /// When no contextPath (top-level search):
 /// - "@" suggests top-level nodes globally (absolute paths)
 ///
-/// Fully reactive: every method returns <see cref="IObservable{T}"/> composed with
-/// <c>Merge</c>/<c>SelectMany</c>. The only I/O is <c>meshQuery.Autocomplete(...)</c>
-/// (whose leaf runs in the IIoPool) and the per-node delegated hub round-trip — there is
-/// no <c>IAsyncEnumerable</c>, no <c>await</c>, no <c>Channel</c> bridge. Results stream in
-/// PROGRESSIVELY via <see cref="ProgressiveItems"/>: each suggestion surfaces the moment
-/// its provider returns (fast providers first), with the widget rebinding on every emission.
-/// We never <c>TakeLast</c> — that would block the whole result on the SLOWEST provider.
+/// SNAPSHOT contract (see <see cref="IAutocompleteProvider"/>): every branch returns an
+/// <c>IObservable&lt;IReadOnlyCollection&lt;AutocompleteItem&gt;&gt;</c>. Each sub-source (keywords,
+/// children via <c>meshQuery.Autocomplete</c>, the per-node delegation) is itself a snapshot stream;
+/// they are composed with <see cref="AutocompleteSnapshots.Combine"/> (CombineLatest + score-merge),
+/// so the merged snapshot appears as soon as the FIRST source returns and refines as the rest arrive
+/// — it never waits for the slowest. Empty results emit <see cref="AutocompleteSnapshots.Empty"/>,
+/// never <c>Observable.Empty</c> (which would stall the aggregator's CombineLatest).
 /// </summary>
 internal class UnifiedReferenceAutocompleteProvider(
     IMeshService? meshQuery,
@@ -35,6 +35,9 @@ internal class UnifiedReferenceAutocompleteProvider(
     private const int PrefixPriority = 1800;
     private const int KeywordPriority = 1500;
     private const int ItemPriority = 1000;
+
+    // Per-branch merge cap — generous (display is ≤ ~15); the outer per-node aggregator caps again.
+    private const int CombineCap = 50;
 
     private static readonly IReadOnlyList<QueryResult> EmptyRows = Array.Empty<QueryResult>();
 
@@ -51,10 +54,10 @@ internal class UnifiedReferenceAutocompleteProvider(
     };
 
     /// <inheritdoc />
-    public IObservable<AutocompleteItem> GetItems(string query, string? contextPath = null)
+    public IObservable<IReadOnlyCollection<AutocompleteItem>> GetItems(string query, string? contextPath = null)
     {
         if (string.IsNullOrEmpty(query) || !query.StartsWith("@"))
-            return Observable.Empty<AutocompleteItem>();
+            return Observable.Return(AutocompleteSnapshots.Empty);
 
         // Strip the @ prefix(es) - handle both @ and @@
         var path = query.TrimStart('@');
@@ -62,7 +65,7 @@ internal class UnifiedReferenceAutocompleteProvider(
         // If the path starts with (or contains) a UCR prefix segment (content/, data/, schema/, etc.),
         // skip — dedicated providers (ContentAutocompleteProvider, DataAutocompleteProvider) handle these.
         if (StartsWithUcrPrefix(path))
-            return Observable.Empty<AutocompleteItem>();
+            return Observable.Return(AutocompleteSnapshots.Empty);
 
         // Determine effective context: prefer explicit contextPath, fall back to navigation context
         var effectiveContext = contextPath ?? navigationContext?.CurrentNamespace;
@@ -98,26 +101,23 @@ internal class UnifiedReferenceAutocompleteProvider(
     }
 
     /// <summary>
-    /// Brings results AS THEY COME and KEEPS EMITTING — never <c>TakeLast</c> (which
-    /// would block on the SLOWEST provider before emitting anything). <see cref="IMeshService.Autocomplete"/>
-    /// emits a growing merged snapshot as each provider returns; we flatten every snapshot
-    /// and <c>Distinct</c> by insert-text so each suggestion surfaces ONCE, the moment it
-    /// first appears — the fast providers' results show immediately, the slow ones stream in
-    /// after, and the Monaco widget rebinds on each emission. No wait-for-all gate.
+    /// Maps each <see cref="IMeshService.Autocomplete"/> snapshot (a score-sorted set of
+    /// <see cref="QueryResult"/>) directly to an <see cref="AutocompleteItem"/> snapshot — keeping the
+    /// progressive nature (one snapshot per provider advance) without flattening to items. Errors
+    /// collapse to an empty snapshot so a failing child can't stall the composing CombineLatest.
     /// </summary>
-    private static IObservable<AutocompleteItem> ProgressiveItems(
+    private static IObservable<IReadOnlyCollection<AutocompleteItem>> SnapshotItems(
         IObservable<IReadOnlyCollection<QueryResult>> source,
         Func<QueryResult, AutocompleteItem> toItem)
         => source
-            .SelectMany(rows => rows.Select(toItem).ToObservable())
-            .Distinct(item => item.InsertText)
-            .Catch(Observable.Empty<AutocompleteItem>());
+            .Select(rows => (IReadOnlyCollection<AutocompleteItem>)rows.Select(toItem).ToList())
+            .Catch(Observable.Return(AutocompleteSnapshots.Empty));
 
     /// <summary>
     /// Provides suggestions using relative paths from the current node context.
     /// Handles: "@child", "@../sibling", "@../../ancestor/child"
     /// </summary>
-    private IObservable<AutocompleteItem> GetRelativeSuggestions(string path, string contextPath)
+    private IObservable<IReadOnlyCollection<AutocompleteItem>> GetRelativeSuggestions(string path, string contextPath)
     {
         // Count and consume ../ prefixes to navigate up
         var relativePrefix = "";
@@ -151,21 +151,22 @@ internal class UnifiedReferenceAutocompleteProvider(
         }
 
         if (meshQuery == null)
-            return Observable.Empty<AutocompleteItem>();
+            return Observable.Return(AutocompleteSnapshots.Empty);
 
         // Keyword-specific suggestions (data:, content:, etc.)
         var lastSegment = completedSegments.LastOrDefault()?.ToLowerInvariant();
         if (lastSegment != null && Keywords.ContainsKey(lastSegment + "/"))
             return GetRelativeKeywordSuggestions(searchBase, lastSegment, relativePrefix, currentSegment);
 
-        var streams = new List<IObservable<AutocompleteItem>>();
+        var streams = new List<IObservable<IReadOnlyCollection<AutocompleteItem>>>();
 
         // Suggest keywords if we ended with a slash and have at least one completed segment
         if (endsWithSlash && completedSegments.Length > 0)
-            streams.Add(GetRelativeKeywords(relativePrefix, currentSegment).ToObservable());
+            streams.Add(Observable.Return(
+                (IReadOnlyCollection<AutocompleteItem>)GetRelativeKeywords(relativePrefix, currentSegment).ToList()));
 
         // Suggest child nodes at the searchBase
-        streams.Add(ProgressiveItems(
+        streams.Add(SnapshotItems(
             meshQuery.Autocomplete(searchBase, currentSegment, AutocompleteMode.RelevanceFirst, 15),
             s => new AutocompleteItem(
                 Label: s.Name ?? s.Path,
@@ -180,7 +181,7 @@ internal class UnifiedReferenceAutocompleteProvider(
         if (endsWithSlash && !string.IsNullOrEmpty(searchBase))
             streams.Add(GetNodeDelegatedCompletions(searchBase, relativePrefix, currentSegment));
 
-        return streams.Merge();
+        return AutocompleteSnapshots.Combine(streams, CombineCap);
     }
 
     private IEnumerable<AutocompleteItem> GetRelativeKeywords(string relativePrefix, string prefix)
@@ -198,16 +199,16 @@ internal class UnifiedReferenceAutocompleteProvider(
             ));
     }
 
-    private IObservable<AutocompleteItem> GetRelativeKeywordSuggestions(
+    private IObservable<IReadOnlyCollection<AutocompleteItem>> GetRelativeKeywordSuggestions(
         string searchBase,
         string keyword,
         string relativePrefix,
         string currentSegment)
     {
         if (meshQuery == null)
-            return Observable.Empty<AutocompleteItem>();
+            return Observable.Return(AutocompleteSnapshots.Empty);
 
-        return ProgressiveItems(
+        return SnapshotItems(
             meshQuery.Autocomplete(searchBase, currentSegment, AutocompleteMode.RelevanceFirst, 15),
             s => new AutocompleteItem(
                 Label: s.Name ?? s.Path,
@@ -222,7 +223,7 @@ internal class UnifiedReferenceAutocompleteProvider(
     /// Provides suggestions using absolute paths (global search).
     /// Triggered by @/ or when no context is available.
     /// </summary>
-    private IObservable<AutocompleteItem> GetAbsoluteSuggestions(string path)
+    private IObservable<IReadOnlyCollection<AutocompleteItem>> GetAbsoluteSuggestions(string path)
     {
         var segments = path.Split('/', StringSplitOptions.None);
         var completedSegments = segments.SkipLast(1).ToArray();
@@ -232,7 +233,7 @@ internal class UnifiedReferenceAutocompleteProvider(
         return GetAbsoluteSuggestionsForStage(completedSegments, currentSegment, endsWithSlash);
     }
 
-    private IObservable<AutocompleteItem> GetAbsoluteSuggestionsForStage(
+    private IObservable<IReadOnlyCollection<AutocompleteItem>> GetAbsoluteSuggestionsForStage(
         string[] completedSegments,
         string currentSegment,
         bool endsWithSlash)
@@ -243,11 +244,12 @@ internal class UnifiedReferenceAutocompleteProvider(
 
         // Build the address from completed segments
         var address = string.Join("/", completedSegments);
-        var streams = new List<IObservable<AutocompleteItem>>();
+        var streams = new List<IObservable<IReadOnlyCollection<AutocompleteItem>>>();
 
         // If we ended with a slash after at least 2 segments, suggest keywords + children
         if (completedSegments.Length >= 2 && endsWithSlash)
-            streams.Add(GetAbsoluteKeywordSuggestions(address, currentSegment).ToObservable());
+            streams.Add(Observable.Return(
+                (IReadOnlyCollection<AutocompleteItem>)GetAbsoluteKeywordSuggestions(address, currentSegment).ToList()));
 
         // Check for keyword in segments — keyword-specific suggestions replace children + delegation
         if (completedSegments.Length >= 3)
@@ -257,13 +259,13 @@ internal class UnifiedReferenceAutocompleteProvider(
             {
                 var keywordAddress = string.Join("/", completedSegments.SkipLast(1));
                 streams.Add(GetAbsoluteKeywordSpecificSuggestions(keywordAddress, potentialKeyword, currentSegment));
-                return streams.Merge();
+                return AutocompleteSnapshots.Combine(streams, CombineCap);
             }
         }
 
         // Suggest children at current path
         if (meshQuery != null)
-            streams.Add(ProgressiveItems(
+            streams.Add(SnapshotItems(
                 meshQuery.Autocomplete(address, currentSegment, AutocompleteMode.RelevanceFirst, 15),
                 s => new AutocompleteItem(
                     Label: $"{s.Name}/",
@@ -277,17 +279,19 @@ internal class UnifiedReferenceAutocompleteProvider(
         if (endsWithSlash && completedSegments.Length >= 1)
             streams.Add(GetNodeDelegatedCompletions(address, $"/{address}/", currentSegment));
 
-        return streams.Merge();
+        return AutocompleteSnapshots.Combine(streams, CombineCap);
     }
 
-    private IObservable<AutocompleteItem> GetTopLevelSuggestions(string prefix)
+    private IObservable<IReadOnlyCollection<AutocompleteItem>> GetTopLevelSuggestions(string prefix)
     {
         var meshRows = meshQuery != null
             ? meshQuery.Autocomplete("", prefix, AutocompleteMode.RelevanceFirst, 15)
                 .Catch(Observable.Return(EmptyRows))
             : Observable.Return(EmptyRows);
 
-        return meshRows.SelectMany(rows =>
+        // One snapshot per meshRows emission (progressive). Each snapshot is the FULL current set:
+        // mesh-query top-level rows + static-node type definitions, deduped by path.
+        return meshRows.Select(rows =>
         {
             var addedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var items = new List<AutocompleteItem>();
@@ -326,11 +330,8 @@ internal class UnifiedReferenceAutocompleteProvider(
                         Kind: AutocompleteKind.Other));
             }
 
-            return items.ToObservable();
-        })
-        // Keep emitting as each progressive snapshot arrives; Distinct by insert-text
-        // so a suggestion surfaces once across the growing snapshots (no TakeLast wait).
-        .Distinct(item => item.InsertText);
+            return (IReadOnlyCollection<AutocompleteItem>)items;
+        });
     }
 
     private IEnumerable<AutocompleteItem> GetAbsoluteKeywordSuggestions(string address, string prefix)
@@ -348,15 +349,15 @@ internal class UnifiedReferenceAutocompleteProvider(
             ));
     }
 
-    private IObservable<AutocompleteItem> GetAbsoluteKeywordSpecificSuggestions(
+    private IObservable<IReadOnlyCollection<AutocompleteItem>> GetAbsoluteKeywordSpecificSuggestions(
         string address,
         string keyword,
         string prefix)
     {
         if (meshQuery == null)
-            return Observable.Empty<AutocompleteItem>();
+            return Observable.Return(AutocompleteSnapshots.Empty);
 
-        return ProgressiveItems(
+        return SnapshotItems(
             meshQuery.Autocomplete(address, prefix, AutocompleteMode.RelevanceFirst, 15),
             s => new AutocompleteItem(
                 Label: s.Name ?? s.Path,
@@ -395,19 +396,20 @@ internal class UnifiedReferenceAutocompleteProvider(
 
     /// <summary>
     /// Asks the node at the given path for its own completions (layout areas, data collections,
-    /// content files) by sending an AutocompleteRequest to that node's hub. Fully observable —
-    /// no <c>await</c> on hub round-trips, no <c>.ToTask()</c>, no <c>Channel</c> bridge.
+    /// content files) by sending an AutocompleteRequest to that node's hub, and projects the single
+    /// response into one snapshot. Fully observable — no <c>await</c>, no <c>.ToTask()</c>.
     /// See <c>Doc/Architecture/AsynchronousCalls.md</c>.
     /// </summary>
-    private IObservable<AutocompleteItem> GetNodeDelegatedCompletions(
+    private IObservable<IReadOnlyCollection<AutocompleteItem>> GetNodeDelegatedCompletions(
         string nodePath,
         string insertPrefix,
         string currentSegment)
     {
         return GetCompletionsViaHub(nodePath, currentSegment)
-            .SelectMany(response =>
-                (response?.Items?.AsEnumerable() ?? Enumerable.Empty<AutocompleteItem>()).ToObservable())
-            .Select(item => item with { Priority = item.Priority > 0 ? item.Priority : ItemPriority });
+            .Select(response => (IReadOnlyCollection<AutocompleteItem>)
+                (response?.Items ?? Enumerable.Empty<AutocompleteItem>())
+                    .Select(item => item with { Priority = item.Priority > 0 ? item.Priority : ItemPriority })
+                    .ToList());
     }
 
     /// <summary>2-second cap on a delegated per-node round-trip. Without this we
@@ -425,11 +427,17 @@ internal class UnifiedReferenceAutocompleteProvider(
         // deadlocks the ActionBlock (the original handler is still pumping when
         // the delegated request arrives, action block has MaxDegreeOfParallelism=1).
         // The dispatch *must* land on a different hub.
+        //
+        // STREAM the response into the parent CombineLatest — NO FirstAsync. FirstAsync gates the
+        // whole result on the node's single settled response: under load the response (and the
+        // Timeout timer) lag, so any consumer that waits for completion stalls. Instead the parent's
+        // per-source StartWith(empty) emits the overall snapshot immediately from the local sources
+        // and folds this delegated result in WHEN it arrives. A slow/unreachable node degrades to a
+        // null snapshot via the Timeout fallback observable (not an error, not a block).
         var request = new AutocompleteRequest($"@{currentSegment}", nodePath);
         return hub.Observe(request, o => o.WithTarget(new Address(nodePath)))
-            .Timeout(NodeDelegationTimeout)
-            .FirstAsync()
             .Select(d => d.Message as AutocompleteResponse)
-            .Catch<AutocompleteResponse?, Exception>(_ => Observable.Return<AutocompleteResponse?>(null));
+            .Catch<AutocompleteResponse?, Exception>(_ => Observable.Return<AutocompleteResponse?>(null))
+            .Timeout(NodeDelegationTimeout, Observable.Return<AutocompleteResponse?>(null));
     }
 }

@@ -156,7 +156,10 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     public void Update(Func<TStream?, ChangeItem<TStream>?> update, Action<Exception> exceptionCallback)
     {
         if (!TryGetActiveHub(out var hub))
+        {
+            SignalDisposedToProducer(exceptionCallback);
             return;
+        }
         var capturedContext = CaptureCallerAccessContext(hub);
         hub.Post(
             new UpdateStreamRequest((stream, _) => Task.FromResult(update.Invoke(stream)), exceptionCallback),
@@ -167,11 +170,37 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         Action<Exception> exceptionCallback)
     {
         if (!TryGetActiveHub(out var hub))
+        {
+            SignalDisposedToProducer(exceptionCallback);
             return;
+        }
         var capturedContext = CaptureCallerAccessContext(hub);
         hub.Post(
             new UpdateStreamRequest(update, exceptionCallback),
             opt => capturedContext is null ? opt : opt.WithAccessContext(capturedContext));
+    }
+
+    /// <summary>
+    /// Incoming write to a dead/disposed stream: error back to the PRODUCER via its
+    /// <paramref name="exceptionCallback"/> so it tears down its own source (a FileSystemWatcher,
+    /// a remote subscription, a timer) instead of pushing into the void — "incoming streams start
+    /// erroring" on teardown. The signal is an <see cref="ObjectDisposedException"/>, the benign
+    /// teardown marker the rest of the stream already classifies as Debug-only. The callback itself
+    /// is guarded: a producer that throws from its handler must not escape onto a background thread.
+    /// </summary>
+    private void SignalDisposedToProducer(Action<Exception> exceptionCallback)
+    {
+        try
+        {
+            exceptionCallback(new ObjectDisposedException(
+                nameof(SynchronizationStream<TStream>),
+                $"Stream {StreamId} is disposed; the incoming update was rejected — stop the source."));
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex,
+                "[SYNC_STREAM] producer exceptionCallback threw while signalling disposed for {StreamId}", StreamId);
+        }
     }
 
     /// <summary>
@@ -332,8 +361,22 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     /// </summary>
     private static AccessContext? CaptureCallerAccessContext(IMessageHub hub)
     {
-        var accessService = hub.ServiceProvider.GetService<AccessService>();
-        return accessService?.Context ?? accessService?.CircuitContext;
+        // A late background trigger can reach stream.Update while the hub is tearing down —
+        // e.g. a FileSystemWatcher Changed event racing ContentCollection disposal. By then the
+        // hub's Autofac LifetimeScope may already be disposed, and GetService THROWS
+        // ObjectDisposedException on a disposed scope. There is no caller AccessContext to capture
+        // during teardown, so fall back to null (the method's documented no-context path; the
+        // resulting post is then dropped by the hub's teardown guard). Surfacing it instead would
+        // escape onto the watcher's threadpool thread unobserved → process-fatal.
+        try
+        {
+            var accessService = hub.ServiceProvider.GetService<AccessService>();
+            return accessService?.Context ?? accessService?.CircuitContext;
+        }
+        catch (ObjectDisposedException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

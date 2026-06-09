@@ -102,22 +102,27 @@ public class DeadStreamSafetyTest(ITestOutputHelper output) : HubTestBase(output
     }
 
     [HubFact]
-    public void Update_OnDeadStream_NoOps()
+    public void Update_OnDeadStream_SignalsDisposedToProducer()
     {
         var stream = CreateAgainstDisposingHost();
         var updateInvoked = false;
-        var errorInvoked = false;
+        Exception? signaled = null;
 
         var act = () => stream.Update(
             _ => { updateInvoked = true; return (ChangeItem<Empty>?)null; },
-            _ => errorInvoked = true);
+            ex => signaled = ex);
 
-        act.Should().NotThrow("Update on a dead stream must be a silent no-op");
+        act.Should().NotThrow(
+            "Update on a dead stream must not throw — it errors back to the producer instead");
         // The update delegate itself should NOT have been invoked — the dead
         // stream's TryGetActiveHub guard returns false BEFORE Hub.Post runs.
         updateInvoked.Should().BeFalse(
             "the update delegate executes on the hub action block; a dead stream has no hub to post to");
-        errorInvoked.Should().BeFalse("no error path triggered when the guard returns false");
+        // New contract: a dead/disposed stream ERRORS incoming writes (ObjectDisposedException) so the
+        // producer — a FileSystemWatcher, a remote subscription — tears down its own source instead of
+        // pushing into a disposed hub. See Doc/Architecture/HubDisposalModel.
+        signaled.Should().BeOfType<ObjectDisposedException>(
+            "incoming writes to a dead stream must error so the producer stops feeding it");
     }
 
     [HubFact]
@@ -143,6 +148,60 @@ public class DeadStreamSafetyTest(ITestOutputHelper output) : HubTestBase(output
         var stream = CreateAgainstDisposingHost();
         var act = () => stream.Dispose();
         act.Should().NotThrow("Dispose on a dead stream must skip the null Hub branch cleanly");
+    }
+
+    /// <summary>
+    /// Root-cause repro for the autocomplete-suite FATAL ObjectDisposedException: a fire-and-forget
+    /// <c>.Subscribe(snapshot =&gt; hub.Post(response, ResponseFor(req)))</c> whose continuation lands
+    /// while the hub is tearing down. <c>ScheduleNotify</c> already DROPS every non-shutdown message
+    /// once <c>RunLevel &gt;= DisposeHostedHubs</c>, but it runs AFTER <c>postPipeline.Invoke</c> — and
+    /// the pipeline (AccessContext stamping) resolves services from the now-disposed ServiceProvider,
+    /// throwing ObjectDisposedException SYNCHRONOUSLY out of <c>Post</c> into the subscriber (unobserved
+    /// → process-fatal). The fix hoists the teardown drop-guard ahead of the pipeline.
+    ///
+    /// <para>This pins it deterministically with a post-pipeline step that throws once armed
+    /// (standing in for the disposed-SP resolution). Pre-fix the throw escapes <c>Post</c>; post-fix
+    /// <c>Post</c> short-circuits to a dropped delivery before the pipeline ever runs.</para>
+    /// </summary>
+    [HubFact]
+    public void Post_OnDisposingHost_DropsWithoutInvokingPipeline()
+    {
+        var armed = false;
+        var pipelineInvokedWhileArmed = false;
+
+        var host = GetHost(c => c.AddPostPipeline(p => p.AddPipeline((delivery, next) =>
+        {
+            if (armed)
+            {
+                // Pre-fix: this runs during teardown and throws straight out of Post.
+                pipelineInvokedWhileArmed = true;
+                throw new ObjectDisposedException("ServiceProvider",
+                    "simulated disposed-ServiceProvider resolution inside the post pipeline");
+            }
+            return next(delivery);
+        })));
+
+        // Drive the host to teardown (RunLevel >= DisposeHostedHubs).
+        host.Dispose();
+        host.DisposalCompleted
+            .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
+            .FirstOrDefaultAsync()
+            .ToTask()
+            .Wait(2.Seconds()).Should().BeTrue("host should dispose within 2s");
+
+        armed = true;
+
+        IMessageDelivery? result = null;
+        var act = () => { result = host.Post(new Empty()); };
+
+        act.Should().NotThrow(
+            "Post on a disposing hub must drop the message before invoking the post pipeline — " +
+            "never let an ObjectDisposedException escape synchronously into a fire-and-forget subscriber");
+        pipelineInvokedWhileArmed.Should().BeFalse(
+            "the teardown guard must short-circuit ahead of postPipeline.Invoke, so the pipeline " +
+            "(which touches the disposed ServiceProvider) is never run during teardown");
+        result?.State.Should().Be(MessageDeliveryState.Failed,
+            "a message posted during teardown is dropped as a Failed delivery, matching ScheduleNotify's drop");
     }
 
     private sealed class ActionDisposable(Action onDispose) : IDisposable

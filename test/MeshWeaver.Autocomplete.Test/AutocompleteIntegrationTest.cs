@@ -284,10 +284,10 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
             return;
         }
 
+        // Universal format check over the settled snapshot (the final, complete item set).
         var items = contentProvider
             .GetItems("@", null)
-            .Take(10)
-            .ToList().Should().Within(30.Seconds()).Emit().ToArray();
+            .TakeLast(1).Should().Within(30.Seconds()).Emit().ToArray();
 
         Output.WriteLine($"Content items: {items.Length}");
         foreach (var item in items)
@@ -317,10 +317,13 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
             .FirstOrDefault(p => p.GetType().Name.Contains("UnifiedReference"));
         unifiedProvider.Should().NotBeNull();
 
-        // Type @/ACME/ProductLaunch/ to get keyword suggestions (needs 2+ completed segments)
+        // Type @/ACME/ProductLaunch/ to get keyword suggestions (needs 2+ completed segments).
+        // Reactive: wait for the first snapshot that actually carries the keyword category.
         var items = unifiedProvider!
             .GetItems("@/ACME/ProductLaunch/", null)
-            .ToList().Should().Within(30.Seconds()).Emit().ToArray();
+            .Should().Within(30.Seconds())
+            .Match(snap => snap.Any(i => i.Category == "Keywords"))
+            .ToArray();
 
         var keywords = items.Where(i => i.Category == "Keywords").ToArray();
 
@@ -394,24 +397,20 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
     [Fact(Timeout = 30000)]
     public void ChatAutocomplete_GlobalFanOut_ReachesOtherPartitions()
     {
-        // When typing "@ACM" from Systemorph context, broadening should find ACME
-        var batches = Orchestrator
+        // When typing "@ACM" from Systemorph context, broadening should find ACME.
+        // Reactive: wait for the FIRST batch whose items contain ACME — we bring results
+        // when they come, never block on the slowest cross-partition fan-out completing.
+        var acmeBatch = Orchestrator
             .GetCompletions("@ACM", "Systemorph")
-            .ToList().Should().Within(30.Seconds()).Emit();
+            .Should().Within(30.Seconds())
+            .Match(batch => batch.Items.Any(i =>
+                i.InsertText.Contains("ACME", StringComparison.OrdinalIgnoreCase)),
+                "broadening should find ACME from Systemorph context");
 
-        var allItems = batches.SelectMany(b => b.Items).ToList();
-
-        Output.WriteLine($"Items for '@ACM' from Systemorph context:");
-        foreach (var batch in batches)
-        {
-            Output.WriteLine($"  Batch '{batch.Category}': {batch.Items.Count} items");
-            foreach (var item in batch.Items.Take(3))
-                Output.WriteLine($"    [{item.Priority}] {item.Label} => {item.InsertText}");
-        }
-
-        allItems.Should().Contain(i =>
-            i.InsertText.Contains("ACME", StringComparison.OrdinalIgnoreCase),
-            "broadening should find ACME from Systemorph context");
+        Output.WriteLine($"First ACME-bearing batch '{acmeBatch.Category}': {acmeBatch.Items.Count} items");
+        foreach (var item in acmeBatch.Items.Where(i =>
+            i.InsertText.Contains("ACME", StringComparison.OrdinalIgnoreCase)).Take(3))
+            Output.WriteLine($"    [{item.Priority}] {item.Label} => {item.InsertText}");
     }
 
     #endregion

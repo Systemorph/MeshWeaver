@@ -133,8 +133,9 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         // Arrange - get provider from DI
         var provider = GetUnifiedReferenceProvider();
 
-        // Act - query with just "@"
-        var items = provider.GetItems("@", null).ToList().Should().Within(10.Seconds()).Emit().ToArray();
+        // Act - query with just "@" — wait for the first non-empty snapshot (don't block on completion)
+        var items = provider.GetItems("@", null)
+            .Should().Within(10.Seconds()).Match(snap => snap.Count > 0).ToArray();
 
         // Assert
         Output.WriteLine($"Got {items.Count()} suggestions for '@':");
@@ -152,8 +153,13 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         // Arrange - get provider from DI
         var provider = GetUnifiedReferenceProvider();
 
-        // Act - query with "@Sys" (partial match for Systemorph)
-        var items = provider.GetItems("@Sys", null).ToList().Should().Within(10.Seconds()).Emit().ToArray();
+        // Act - query with "@Sys" — wait for the first snapshot that contains Systemorph
+        var items = provider.GetItems("@Sys", null)
+            .Should().Within(10.Seconds())
+            .Match(snap => snap.Any(i =>
+                i.Label.Contains("Systemorph", StringComparison.OrdinalIgnoreCase) ||
+                i.InsertText.Contains("Systemorph", StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
 
         // Assert
         Output.WriteLine($"Got {items.Count()} suggestions for '@Sys':");
@@ -187,8 +193,11 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         MeshQuery.AutocompleteAsync("ACME", "Pro", 15)
             .ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit();
 
-        // Act - query with "@Pro" (partial match for Project)
-        var items = provider.GetItems("@Pro", null).ToList().Should().Within(10.Seconds()).Emit().ToArray();
+        // Act - query with "@Pro" — wait for the first snapshot that contains Project
+        var items = provider.GetItems("@Pro", null)
+            .Should().Within(10.Seconds())
+            .Match(snap => snap.Any(i => i.Label.Contains("Project", StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
 
         // Assert
         Output.WriteLine($"Got {items.Count()} suggestions for '@Pro':");
@@ -209,8 +218,11 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         // Arrange - get provider from DI
         var provider = GetUnifiedReferenceProvider();
 
-        // Act - query with "@Use" (partial match for User)
-        var items = provider.GetItems("@Use", null).ToList().Should().Within(10.Seconds()).Emit().ToArray();
+        // Act - query with "@Use" — wait for the first snapshot that contains User
+        var items = provider.GetItems("@Use", null)
+            .Should().Within(10.Seconds())
+            .Match(snap => snap.Any(i => i.Label.Contains("User", StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
 
         // Assert
         Output.WriteLine($"Got {items.Count()} suggestions for '@Use':");
@@ -231,8 +243,11 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         // Arrange - get provider from DI
         var provider = GetUnifiedReferenceProvider();
 
-        // Act - query with lowercase "@sys"
-        var items = provider.GetItems("@sys", null).ToList().Should().Within(10.Seconds()).Emit().ToArray();
+        // Act - query with lowercase "@sys" — wait for the first snapshot that contains Systemorph
+        var items = provider.GetItems("@sys", null)
+            .Should().Within(10.Seconds())
+            .Match(snap => snap.Any(i => i.Label.Contains("Systemorph", StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
 
         // Assert
         Output.WriteLine($"Got {items.Count()} suggestions for '@sys' (lowercase):");
@@ -255,7 +270,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     public void Provider_AtEmpty_DoesNotReturnRandomWords()
     {
         var provider = GetUnifiedReferenceProvider();
-        var items = provider.GetItems("@", null).ToList().Should().Within(10.Seconds()).Emit().ToArray();
+        var items = provider.GetItems("@", null).TakeLast(1).Should().Within(10.Seconds()).Emit().ToArray();
 
         Output.WriteLine($"Got {items.Length} suggestions for '@':");
         foreach (var item in items.Take(10))
@@ -273,7 +288,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     public void Provider_AtPartialPrefix_OnlyReturnsMatchingNodes()
     {
         var provider = GetUnifiedReferenceProvider();
-        var items = provider.GetItems("@Sys", null).ToList().Should().Within(10.Seconds()).Emit().ToArray();
+        var items = provider.GetItems("@Sys", null).TakeLast(1).Should().Within(10.Seconds()).Emit().ToArray();
 
         // All results should contain "Sys" somewhere — no unrelated suggestions
         items.Should().AllSatisfy(item =>
@@ -288,7 +303,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     public void Provider_AtNonexistentPrefix_ReturnsEmpty()
     {
         var provider = GetUnifiedReferenceProvider();
-        var items = provider.GetItems("@ZzzNonexistent999", null).ToList().Should().Within(10.Seconds()).Emit().ToArray();
+        var items = provider.GetItems("@ZzzNonexistent999", null).TakeLast(1).Should().Within(10.Seconds()).Emit().ToArray();
 
         items.Should().BeEmpty("a nonexistent prefix should not match any nodes");
     }
@@ -369,8 +384,11 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         // Get provider from DI
         var provider = GetUnifiedReferenceProvider();
 
-        // Act
-        var items = provider.GetItems("@Sys", null).ToList().Should().Within(10.Seconds()).Emit().ToArray();
+        // Act - wait for the first snapshot that contains Systemorph
+        var items = provider.GetItems("@Sys", null)
+            .Should().Within(10.Seconds())
+            .Match(snap => snap.Any(i => i.Label.Contains("Systemorph", StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
 
         // Assert
         Output.WriteLine($"Provider returned {items.Length} suggestions for '@Sys':");
@@ -388,8 +406,15 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     {
         var provider = GetUnifiedReferenceProvider();
 
-        // Provider expects addressType/addressId (2 segments) before showing keywords
-        var items = provider.GetItems("@Systemorph/Marketing/", null).ToList().Should().Within(10.Seconds()).Emit().ToArray();
+        // Provider expects addressType/addressId (2 segments) before showing keywords.
+        // Wait for the first snapshot carrying the content/data/schema keyword suggestions.
+        var items = provider.GetItems("@Systemorph/Marketing/", null)
+            .Should().Within(10.Seconds())
+            .Match(snap =>
+                snap.Any(i => i.Label.Contains("content", StringComparison.OrdinalIgnoreCase)) &&
+                snap.Any(i => i.Label.Contains("data", StringComparison.OrdinalIgnoreCase)) &&
+                snap.Any(i => i.Label.Contains("schema", StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
 
         Output.WriteLine($"Got {items.Length} suggestions for '@Systemorph/Marketing/':");
         foreach (var item in items)
@@ -411,7 +436,10 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     {
         var provider = GetUnifiedReferenceProvider();
 
-        var items = provider.GetItems("@Systemorph/Marketing/", null).ToList().Should().Within(10.Seconds()).Emit().ToArray();
+        var items = provider.GetItems("@Systemorph/Marketing/", null)
+            .Should().Within(10.Seconds())
+            .Match(snap => snap.Any(i => i.Label.Contains("content")))
+            .ToArray();
 
         var contentItem = items.FirstOrDefault(i => i.Label.Contains("content"));
         contentItem.Should().NotBeNull();
@@ -424,7 +452,12 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     {
         var provider = GetUnifiedReferenceProvider();
 
-        var items = provider.GetItems("@Systemorph/Marketing/", null).ToList().Should().Within(10.Seconds()).Emit().ToArray();
+        var items = provider.GetItems("@Systemorph/Marketing/", null)
+            .Should().Within(10.Seconds())
+            .Match(snap =>
+                snap.Any(i => i.Label.Contains("content")) &&
+                snap.Any(i => i.Label.Contains("data")))
+            .ToArray();
 
         // All keyword insert texts should use / separator (not :)
         var contentItem = items.FirstOrDefault(i => i.Label.Contains("content"));
@@ -445,10 +478,11 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     {
         var provider = GetUnifiedReferenceProvider();
 
-        // Query with context — should get relative results with higher priority
-        var withContext = provider.GetItems("@", "Systemorph/Marketing").ToList().Should().Within(10.Seconds()).Emit().ToArray();
+        // Query with context — wait for the first snapshot that returns children of the context
+        var withContext = provider.GetItems("@", "Systemorph/Marketing")
+            .Should().Within(10.Seconds()).Match(snap => snap.Count > 0).ToArray();
 
-        var withoutContext = provider.GetItems("@", null).ToList().Should().Within(10.Seconds()).Emit().ToArray();
+        var withoutContext = provider.GetItems("@", null).TakeLast(1).Should().Within(10.Seconds()).Emit().ToArray();
 
         Output.WriteLine($"With context: {withContext.Length} items, Without context: {withoutContext.Length} items");
         foreach (var item in withContext.Take(5))

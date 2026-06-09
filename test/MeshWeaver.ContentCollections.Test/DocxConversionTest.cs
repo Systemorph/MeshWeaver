@@ -113,8 +113,10 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
             .FirstOrDefault();
         contentProvider.Should().NotBeNull("ContentAutocompleteProvider should be registered");
 
-        // Act — query "sample" should match sample.docx but NOT readme.md
-        var items = contentProvider!.GetItems("sample").ToList().Should().Emit();
+        // Act — query "sample" should match sample.docx but NOT readme.md.
+        // Wait for the first snapshot that carries the matching file.
+        var items = contentProvider!.GetItems("sample")
+            .Should().Match(snap => snap.Any(i => i.Label == "sample.docx"));
 
         // Assert — only matching files returned
         Output.WriteLine($"Autocomplete items for 'sample': {items.Count}");
@@ -143,8 +145,9 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
             .FirstOrDefault();
         contentProvider.Should().NotBeNull();
 
-        // Act — exact name match
-        var items = contentProvider!.GetItems("sample.docx").ToList().Should().Emit();
+        // Act — exact name match; wait for the first snapshot carrying it
+        var items = contentProvider!.GetItems("sample.docx")
+            .Should().Match(snap => snap.Any(i => i.Label == "sample.docx"));
 
         // Assert — exact match should score 3000
         var docxItem = items.First(i => i.Label == "sample.docx");
@@ -165,8 +168,9 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
             .OfType<ContentCollections.Completion.ContentAutocompleteProvider>()
             .FirstOrDefault();
 
-        // Act
-        var items = contentProvider!.GetItems("my doc").ToList().Should().Emit();
+        // Act — wait for the first snapshot carrying the spaced file
+        var items = contentProvider!.GetItems("my doc")
+            .Should().Match(snap => snap.Any(i => i.Label == "my document.docx"));
 
         // Assert
         Output.WriteLine($"Items for 'my doc': {items.Count}");

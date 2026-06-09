@@ -159,7 +159,7 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
         // so the body stays void/await-free.
         var notification = contentProvider
             .GetItems("@Annual", "ACME/ProductLaunch")
-            .ToList()
+            .TakeLast(1)
             .Timeout(TimeSpan.FromSeconds(5))
             .Materialize()
             .Where(n => n.Kind != NotificationKind.OnCompleted)

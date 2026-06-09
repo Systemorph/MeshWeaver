@@ -1881,13 +1881,17 @@ public static class DataExtensions
         return (ISynchronizationStream<object>?)typedStream;
     }
 
+    // Generous aggregate cap — autocomplete display is ≤ ~15, but we keep a wide window so the
+    // relevance re-scoring below (which lifts zero-priority items) isn't pre-truncated.
+    private const int AutocompleteAggregateTopN = 200;
+
     /// <summary>
-    /// Handles AutocompleteRequest by aggregating items from all registered
-    /// <see cref="IAutocompleteProvider"/> services. Sync handler — providers
-    /// expose <see cref="IObservable{AutocompleteItem}"/> directly per the
-    /// observable-first contract, so we Merge their streams and Subscribe.
-    /// Each provider's <c>OnError</c> is swallowed to a Catch returning Empty
-    /// so one bad provider doesn't kill the aggregate.
+    /// Handles the one-shot <see cref="AutocompleteRequest"/> by aggregating the SNAPSHOT streams of
+    /// every registered <see cref="IAutocompleteProvider"/>. CombineLatest + merge (see
+    /// <see cref="AutocompleteSnapshots.Combine"/>); the SETTLED snapshot is taken (LastAsync) and a
+    /// single <see cref="AutocompleteResponse"/> posted. Progressive consumers use the
+    /// <see cref="AutocompleteReference"/> workspace stream instead. Each provider's <c>OnError</c> is
+    /// swallowed to an empty snapshot so one bad provider doesn't stall the CombineLatest.
     /// </summary>
     private static IMessageDelivery HandleAutocompleteRequest(
         IMessageHub hub,
@@ -1897,31 +1901,32 @@ public static class DataExtensions
         var query = request.Message.Query;
         var contextPath = request.Message.Context;
 
-        var perProvider = providers.Select(p =>
-            p.GetItems(query, contextPath)
-                .Catch<AutocompleteItem, Exception>(_ => Observable.Empty<AutocompleteItem>()));
-
-        Observable.Merge(perProvider)
-            .ToList()
-            .Subscribe(allItems =>
-            {
-                // Apply relevance filtering: boost items that match the query text,
-                // suppress items with zero priority that don't match
-                var searchText = ExtractAutocompleteSearchText(query);
-                IEnumerable<AutocompleteItem> result = allItems;
-                if (!string.IsNullOrEmpty(searchText))
+        AutocompleteSnapshots.Combine(
+                providers.Select(p => p.GetItems(query, contextPath)
+                    .Catch<IReadOnlyCollection<AutocompleteItem>, Exception>(
+                        _ => Observable.Return(AutocompleteSnapshots.Empty))),
+                AutocompleteAggregateTopN)
+            .LastAsync()
+            .Subscribe(
+                snapshot =>
                 {
-                    result = allItems
-                        .Select(item => item.Priority > 0
-                            ? item // Provider already scored this item
-                            : item with { Priority = ScoreAutocompleteItem(item, searchText) })
-                        .Where(item => item.Priority > 0)
-                        .OrderByDescending(item => item.Priority);
-                }
+                    // Apply relevance filtering: boost items that match the query text,
+                    // suppress zero-priority items that don't match.
+                    var searchText = ExtractAutocompleteSearchText(query);
+                    IEnumerable<AutocompleteItem> result = snapshot;
+                    if (!string.IsNullOrEmpty(searchText))
+                    {
+                        result = snapshot
+                            .Select(item => item.Priority > 0
+                                ? item // Provider already scored this item
+                                : item with { Priority = ScoreAutocompleteItem(item, searchText) })
+                            .Where(item => item.Priority > 0)
+                            .OrderByDescending(item => item.Priority);
+                    }
 
-                hub.Post(new AutocompleteResponse(result.ToList()), o => o.ResponseFor(request));
-            },
-            _ => hub.Post(new AutocompleteResponse([]), o => o.ResponseFor(request)));
+                    hub.Post(new AutocompleteResponse(result.ToList()), o => o.ResponseFor(request));
+                },
+                _ => hub.Post(new AutocompleteResponse([]), o => o.ResponseFor(request)));
 
         return request.Processed();
     }

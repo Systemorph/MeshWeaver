@@ -250,6 +250,51 @@ an observable.
 
 ---
 
+## Teardown-safe writes: `Post` drops, incoming streams error
+
+Disposal is reactive and bounded, but it is not instantaneous — and **background
+producers don't observe the action block.** A `FileSystemWatcher`, a remote sync
+subscription, or a timer can fire a write *while the hub is tearing down*, after the
+Autofac `LifetimeScope` (the hub's `ServiceProvider`) has already been disposed. That
+write used to crash the process: it reached `stream.Update` → `CaptureCallerAccessContext`
+→ `hub.ServiceProvider.GetService<AccessService>()` on a disposed scope → Autofac throws
+`ObjectDisposedException` synchronously on the **producer's threadpool thread**, with no
+observer → xUnit `[FATAL ERROR]` / a prod `Catastrophic`. Three layers make this safe, in
+order of how early they stop the work:
+
+1. **Close the incoming stream at the source.** A producer wrapper disposes its source
+   *and* flips a `volatile` guard that in-flight callbacks check, so a callback already
+   dispatched on a threadpool thread no-ops instead of pushing into a disposed hub.
+   Canonical: `FileSystemStreamProvider.WatcherHandle` — `Dispose()` sets `stopped = true`,
+   then `EnableRaisingEvents = false`, then disposes the watcher; every event handler
+   early-returns on `handle.Stopped`.
+
+2. **Incoming streams error on a disposing target.** A write to a dead/disposed
+   `SynchronizationStream` does **not** silently no-op — it errors back to the producer
+   via its `exceptionCallback` with an `ObjectDisposedException`
+   (`SynchronizationStream.SignalDisposedToProducer`). The producer reacts by tearing down
+   its own source — e.g. `ContentCollection.UpdateArticle`'s callback disposes the
+   monitor — so the feed stops at the root rather than retrying into the void.
+
+3. **`Post` is teardown-safe.** `MessageService.Post` short-circuits to a dropped
+   (`Failed`) delivery **before** invoking the post pipeline once
+   `RunLevel >= DisposeHostedHubs` (mirroring `ScheduleNotify`'s existing drop, just hoisted
+   ahead of the pipeline). The pipeline stamps `AccessContext` by resolving from the
+   `ServiceProvider`; running it during teardown is what threw. For live hubs this is a
+   no-op — `ScheduleNotify` already drops these messages — so there is **zero behavioral
+   change** except that the throwing pipeline never runs during teardown.
+   `SynchronizationStream.CaptureCallerAccessContext` additionally swallows a disposed-scope
+   `ObjectDisposedException` (returning `null`, its documented no-context path) for the
+   narrow window where the scope is gone but the stream isn't yet marked disposed.
+
+> **The principle:** a teardown is a terminal signal that must propagate *outward* to
+> producers — silently dropping their writes leaves them spinning, and letting their write
+> throw kills the process. Error the write, let the producer stop, and make the drop layers
+> below it inert. Repros: `DeadStreamSafetyTest.Update_OnDeadStream_SignalsDisposedToProducer`
+> and `Post_OnDisposingHost_DropsWithoutInvokingPipeline`.
+
+---
+
 ## Adding disposal work — the rule
 
 - **Need to run sync cleanup on dispose?** `hub.RegisterForDisposal(IDisposable)`
