@@ -169,9 +169,22 @@ public static class ThreadLayoutAreas
                 ExecutionStartedAt = threadContent?.ExecutionStartedAt,
                 SelectedHarness = threadContent?.SelectedHarness,
                 CreatedBy = node?.CreatedBy,
+                ChatInputId = threadContent?.ChatInputId,
             };
         });
         host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));
+
+        // Each thread owns a ChatInput composer node at {threadPath}/ChatInput. The first
+        // time the thread renders without one (ChatInputId unset), create it and stamp the
+        // id on the thread so every later read gates on a known-present node — never a
+        // maybe-absent GetMeshNodeStream that Orleans-NotFound-storms. Deterministic id ⇒
+        // the create is idempotent if two areas (main + side panel) mount at once.
+        host.RegisterForDisposal(host.Workspace.GetMeshNodeStream()
+            .Select(node => node?.Content as MeshThread)
+            .Where(t => t is not null)
+            .Take(1)
+            .Where(t => string.IsNullOrEmpty(t!.ChatInputId))
+            .Subscribe(_ => EnsureThreadChatInput(host, hubPath)));
 
         // Push title to data section — data-bound, no observable control rebuild.
         var titleStream = host.Workspace.GetMeshNodeStream()
@@ -295,6 +308,41 @@ public static class ThreadLayoutAreas
     }
 
     /// <summary>
+    /// Lazily materialises the thread's own ChatInput composer node at
+    /// <c>{threadPath}/ChatInput</c> and stamps its id onto the thread
+    /// (<see cref="Thread.ChatInputId"/>), so readers gate on a known-present node rather
+    /// than a maybe-absent path read (which Orleans-NotFound-storms). The id is the
+    /// constant <see cref="ChatInputNodeType.NodeType"/> ⇒ one composer per thread, and
+    /// the create is idempotent under a concurrent second render. Robust: invoked from the
+    /// thread render whenever <see cref="Thread.ChatInputId"/> is unset.
+    /// </summary>
+    private static void EnsureThreadChatInput(LayoutAreaHost host, string threadPath)
+    {
+        var chatInputId = ChatInputNodeType.NodeType; // "ChatInput" — one per thread
+        var chatInputPath = $"{threadPath}/{chatInputId}";
+        var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.AI.ThreadChatInput");
+        meshService.CreateNode(new MeshNode(chatInputId, threadPath)
+            {
+                NodeType = ChatInputNodeType.NodeType,
+                Name = "Chat Input",
+                MainNode = threadPath,
+                Content = new ChatInput(),
+            })
+            .Take(1)
+            .Subscribe(
+                _ => host.Workspace.GetMeshNodeStream().Update(n =>
+                        n is { Content: MeshThread t } && string.IsNullOrEmpty(t.ChatInputId)
+                            ? n with { Content = t with { ChatInputId = chatInputId } }
+                            : n!)
+                    .Subscribe(_ => { }, ex => logger?.LogWarning(ex,
+                        "[ThreadChatInput] stamp id failed for {Path}", threadPath)),
+                ex => logger?.LogWarning(ex,
+                    "[ThreadChatInput] create failed at {Path}", chatInputPath));
+    }
+
+    /// <summary>
     /// Renders just the ThreadChatControl without the full-page header.
     /// Used by the side panel — the title is pushed to the data section
     /// so the side panel header can display it.
@@ -325,6 +373,7 @@ public static class ThreadLayoutAreas
                 ExecutionStartedAt = threadContent?.ExecutionStartedAt,
                 SelectedHarness = threadContent?.SelectedHarness,
                 CreatedBy = node?.CreatedBy,
+                ChatInputId = threadContent?.ChatInputId,
             };
         });
         host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));

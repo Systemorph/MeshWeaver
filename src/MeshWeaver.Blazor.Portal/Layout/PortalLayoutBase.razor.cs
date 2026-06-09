@@ -365,6 +365,17 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     private void OnNavigationContextChanged(NavigationContext? ctx)
     {
         _currentNavContext = ctx;
+
+        // A thread lives in EITHER the main view OR the side panel, never both.
+        // When navigation puts a thread full-screen in the main view, close the
+        // side panel (mirrors MoveToMainPanel, which does the same explicitly).
+        if (ctx?.Node != null
+            && ThreadNodeType.IsThreadNodeType(ctx.Node.NodeType)
+            && SidePanelState.IsVisible)
+        {
+            SidePanelState.SetVisible(false);
+        }
+
         InvokeAsync(StateHasChanged);
     }
 

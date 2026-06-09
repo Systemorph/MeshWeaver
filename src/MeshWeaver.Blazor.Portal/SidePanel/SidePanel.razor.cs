@@ -42,6 +42,13 @@ public partial class SidePanel : ComponentBase, IDisposable
 
     private void OnNewThread()
     {
+        // Clear the active thread so the new-chat composer renders. This must happen
+        // here (the always-mounted panel), not only via RequestAction: when a thread
+        // is displayed the panel body is a LayoutAreaView, so no ThreadChatView is
+        // subscribed to OnActionRequested and the click would otherwise do nothing
+        // ("clicking + keeps me on the thread").
+        SidePanelState.SetContentPath(null);
+        // Notify a mounted composer to reset its view mode (e.g. Resume → Chat).
         SidePanelState.RequestAction("New");
     }
 

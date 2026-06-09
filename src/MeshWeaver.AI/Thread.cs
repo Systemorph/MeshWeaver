@@ -210,6 +210,20 @@ public record Thread
     public string? CreatedBy { get; init; }
 
     /// <summary>
+    /// Id of this thread's own <c>ChatInput</c> composer node, a child at
+    /// <c>{threadPath}/{ChatInputId}</c>. <see langword="null"/> until the thread is
+    /// first rendered, at which point the Thread view lazily creates the ChatInput and
+    /// stamps its id here.
+    ///
+    /// <para>Tracking the id on the thread node — rather than blindly reading a fixed
+    /// ChatInput path — is what keeps the read safe: every reader gates on this
+    /// known-present id instead of pointing <c>GetMeshNodeStream</c> at a maybe-absent
+    /// path, which Orleans-NotFound-storms (see feedback_optional_node_query_not_access).
+    /// Null here ⇒ "not created yet, create on render"; non-null ⇒ the node exists.</para>
+    /// </summary>
+    public string? ChatInputId { get; init; }
+
+    /// <summary>
     /// The thread's main output — the dedicated summary the agent produces at
     /// the end of execution before returning. For sub-threads spawned via
     /// <c>delegate_to_agent</c>, this is the value returned to the parent

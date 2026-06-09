@@ -1,11 +1,14 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
 using System.Text.RegularExpressions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.AI;
 
@@ -253,12 +256,51 @@ public static class ThreadNodeType
             Icon = DefaultIcon,
             IsSatelliteType = true,
             ExcludeFromContext = ImmutableHashSet.Create("search"),
-            // The NodeType carries the GUI-create protocol: creating a Thread from the
-            // "+" opens the new-chat composer (the per-user ChatInput / new-thread view),
-            // and the thread is created on submit — NOT the generic Create form.
+            // The NodeType carries the GUI-create protocol: creating a Thread from the "+"
+            // (anywhere) opens the new-chat composer (the per-user ChatInput / new-thread
+            // view) and creates nothing up front — the thread is created on submit, NOT via
+            // the generic Create form. Injected as BuildCreate so the generic CreateLayoutArea
+            // delegates to us regardless of which "+" routed here.
             Content = new MeshWeaver.Graph.Configuration.NodeTypeDefinition
             {
-                CreateBehavior = MeshWeaver.Graph.Configuration.NodeCreateBehavior.Chat
+                BuildCreate = (host, ns) =>
+                {
+                    // Materialise the new-chat composer node at {context}/_Thread/ChatInput — a
+                    // singleton composer in the context's thread namespace — and redirect to its
+                    // overview (the SAME composer the side panel shows). ns may already be a thread
+                    // namespace (the catalog button passes {context}/_Thread); don't double it.
+                    var threadNs = string.IsNullOrEmpty(ns)
+                        ? ThreadPartition
+                        : ns.Equals(ThreadPartition, StringComparison.OrdinalIgnoreCase)
+                          || ns.EndsWith($"/{ThreadPartition}", StringComparison.OrdinalIgnoreCase)
+                          || ns.Contains($"/{ThreadPartition}/", StringComparison.OrdinalIgnoreCase)
+                            ? ns
+                            : $"{ns}/{ThreadPartition}";
+                    var chatInputPath = $"{threadNs}/{ChatInputNodeType.NodeType}";
+                    var overviewHref = $"/{chatInputPath}";
+                    var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+                    var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                        ?.CreateLogger("MeshWeaver.AI.ThreadCreate");
+                    var node = MeshNode.FromPath(chatInputPath) with
+                    {
+                        Name = "New Chat",
+                        NodeType = ChatInputNodeType.NodeType,
+                        State = MeshNodeState.Active,
+                    };
+                    // Create then navigate. A real failure (anything other than "already exists")
+                    // leaves the composer overview empty — surface it in the log instead of
+                    // silently swallowing; we still navigate so an existing composer opens.
+                    return meshService.CreateNode(node)
+                        .Take(1)
+                        .Select(_ => (UiControl?)new RedirectControl(overviewHref))
+                        .Catch<UiControl?, Exception>(ex =>
+                        {
+                            logger?.LogWarning(ex,
+                                "[ThreadCreate] ChatInput create failed at {Path}; navigating to overview anyway",
+                                chatInputPath);
+                            return Observable.Return<UiControl?>(new RedirectControl(overviewHref));
+                        });
+                }
             },
             // Register AI types DIRECTLY on the per-thread hub config — not just
             // via ConfigureDefaultNodeHub. The polymorphic resolver discriminator

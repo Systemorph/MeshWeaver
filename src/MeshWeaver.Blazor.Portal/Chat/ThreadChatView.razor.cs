@@ -130,6 +130,21 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 threadPath = value.ThreadPath ?? threadPath;
                 initialContext = value.InitialContext ?? initialContext;
 
+                // Rebind the composer's draft + selection persistence to THIS thread's own
+                // ChatInput node once it exists (id stamped by the server-side Thread view).
+                // Gated on the non-null id ⇒ the path is known-present, so LoadTemplate never
+                // reads a maybe-absent node (the NotFound-storm class).
+                if (!string.IsNullOrEmpty(value.ChatInputId) && !string.IsNullOrEmpty(threadPath))
+                {
+                    var threadTemplatePath = $"{threadPath}/{value.ChatInputId}";
+                    if (_templatePath != threadTemplatePath)
+                    {
+                        _templatePath = threadTemplatePath;
+                        _templateLoaded = false;
+                        LoadTemplate();
+                    }
+                }
+
                 // Restore the user's sticky harness / agent / model selection from
                 // the Thread node so the picker survives a reload. Only fires when
                 // we actually have new values — won't clobber an in-progress
@@ -337,14 +352,18 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         // only (a real thread never carries a template draft).
         var accessSvc = Hub.ServiceProvider.GetService<AccessService>();
         _userHome = ResolveUserHome(accessSvc);
-        if (!string.IsNullOrEmpty(_userHome))
+        // Compose mode (no thread) persists draft + selection to the per-user ChatInput
+        // singleton. Thread mode rebinds to the thread's OWN ChatInput once its id arrives
+        // via the ThreadViewModel (see the setter) — left null here so we never save/restore
+        // against the per-user node while inside a thread, nor read a not-yet-created path.
+        if (string.IsNullOrEmpty(threadPath) && !string.IsNullOrEmpty(_userHome))
             _templatePath = MeshWeaver.AI.ChatInputNodeType.PathFor(_userHome);
 
         _draftSaveSub = _draftChanges
             .Throttle(TimeSpan.FromMilliseconds(600))
             .Subscribe(text => InvokeAsync(() =>
             {
-                if (_isDisposed || !string.IsNullOrEmpty(threadPath)) return;
+                if (_isDisposed || string.IsNullOrEmpty(_templatePath)) return;
                 WriteTemplate(t => t with { MessageContent = string.IsNullOrEmpty(text) ? null : text });
             }));
 
@@ -476,7 +495,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         // Draft restore: composer mode only, and never clobber text the user has
         // already begun typing this session.
-        if (string.IsNullOrEmpty(threadPath) && !string.IsNullOrEmpty(t.MessageContent)
+        // Restore the saved draft from whichever ChatInput backs this composer (per-user in
+        // compose mode, the thread's own once _templatePath has rebound to it). Gated on a
+        // non-null _templatePath so an existing thread never restores the per-user draft.
+        if (!string.IsNullOrEmpty(_templatePath) && !string.IsNullOrEmpty(t.MessageContent)
             && string.IsNullOrEmpty(MessageText))
         {
             MessageText = t.MessageContent;
@@ -1233,9 +1255,11 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private void OnMessageTextChanged(string value)
     {
         MessageText = value;
-        // Composer mode: debounce-save the draft onto the per-user chat template so
-        // it survives a reload/reboot. Existing-thread input stays transient.
-        if (string.IsNullOrEmpty(threadPath))
+        // Debounce-save the draft onto whichever ChatInput backs this composer — the
+        // per-user singleton in compose mode, the thread's OWN ChatInput inside a thread
+        // (both via _templatePath). Null _templatePath (a thread whose ChatInput id hasn't
+        // arrived yet) ⇒ skip, so we never write a maybe-absent node.
+        if (!string.IsNullOrEmpty(_templatePath))
             _draftChanges.OnNext(value ?? string.Empty);
         // Fire-and-forget reference extraction — may touch Monaco via JS interop.
         _ = UpdateExtractedReferencesAsync();
@@ -1517,6 +1541,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             switch (action)
             {
                 case "New":
+                    viewMode = ChatViewMode.Chat;
                     SidePanelState.SetContentPath(null);
                     break;
                 case "Resume":
