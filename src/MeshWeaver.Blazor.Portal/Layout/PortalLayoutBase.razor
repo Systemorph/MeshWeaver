@@ -162,7 +162,7 @@
     <FluentMultiSplitter Orientation="@(SidePanelPositionValue == SidePanelPosition.Bottom ? Orientation.Vertical : Orientation.Horizontal)"
                          Style="grid-area: main; height: 100%; width: 100%; overflow: hidden;"
                          Class="@(IsSidePanelVisible ? "body-splitter" : "body-splitter panel-collapsed")"
-                         BarSize="@(IsSidePanelVisible ? "8" : "0")">
+                         BarSize="@(IsSidePanelVisible ? "16" : "0")">
         <FluentMultiSplitterPane Size="@(IsSidePanelVisible ? MainPaneSize : "100%")" Min="100px" Collapsible="false">
             <div class="body-content">
                 <FluentToastProvider MaxToastCount="3" Timeout="5000" />

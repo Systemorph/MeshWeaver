@@ -595,6 +595,45 @@ This ensures tool calls run with the correct user identity for permission checks
 
 ## Satellite node permissions
 
+### 🚨 Access is defined on the main node — satellites inherit it
+
+**A satellite has no access rights of its own. Permissions are defined on its
+`MainNode`, and whoever can Read the main node can Read every satellite under
+it.** `MeshNode.MainNode` is a column on the node (the node *for which the
+satellite exists*); a main node has `MainNode == Path`.
+
+This falls out of the scope walk for free: `GetEffectivePermissions(path)`
+(`PermissionEvaluator`) evaluates every scope from the root down through the
+partition and every ancestor to the path itself. A satellite/sub path such as
+`{user}/_Thread/{threadId}/{messageId}` therefore inherits the grants at
+`{user}` (the partition / main node) — the partition owner gets Read on the
+whole subtree without a per-satellite grant. **To answer "can I read this
+thread / message?", you ask the security service for access on the path; you do
+NOT probe the leaf node's own hub.**
+
+Concretely:
+
+- **Reads / subscriptions** — `MeshNodeStreamCache` gates each subscription by
+  evaluating `hub.GetEffectivePermissions(path, user)` **locally** (the same
+  evaluator every other decision uses), cached per `(path, user)` for the
+  AccessControl TTL. It does **not** post a `GetPermissionRequest` to the leaf
+  path's hub. A satellite / cell sub-path (e.g. a `{thread}/{messageId}` the GUI
+  subscribed to that was never persisted, or a brand-new thread) has no hub of
+  its own — routing returns NotFound — so a leaf-hub probe would block on a grain
+  that never activates and the subscribe would spin forever. Local evaluation has
+  no such dependency: the scope walk resolves the main node's access and emits
+  immediately. (This was the side-panel "thread won't open" spinner.)
+- **Writes / CRUD** — `SatelliteAccessRule` delegates the create/update/delete
+  check to `context.Node.MainNode` (Create on a satellite = Update on the main
+  node, except `Comment` → `Permission.Comment`). Same rule, write side.
+
+For PostgreSQL the main node is reachable in a single query — the path itself
+determines schema (first segment) and table (satellite suffix, e.g. `_Thread`
+→ `threads`), and every row carries its `main_node` column — but the read gate
+doesn't even need that: the scope walk over the path already covers it.
+
+### Required permission by node type
+
 Satellite node types map to their required permission via `GetPermissionForNodeType`:
 
 | Node type | Required permission |
