@@ -71,8 +71,9 @@ public class PostgreSqlFixture : IAsyncLifetime
 
     public async ValueTask DisposeAsync()
     {
-        DisposeTrackedSchemaDataSources();
-        DataSource?.Dispose();
+        await DisposeTrackedSchemaDataSourcesAsync();
+        if (DataSource is not null)
+            await DataSource.DisposeAsync();
         if (_container != null)
             await _container.DisposeAsync();
     }
@@ -156,6 +157,23 @@ public class PostgreSqlFixture : IAsyncLifetime
     }
 
     /// <summary>
+    /// Async counterpart of <see cref="DisposeTrackedSchemaDataSources"/>.
+    /// <see cref="NpgsqlDataSource.DisposeAsync"/> releases the pooled physical
+    /// connections back to the server promptly; the synchronous <c>Dispose()</c>
+    /// can leave them lingering (pending async returns), which under the sharded
+    /// CI run packs enough live connections to trip <c>53300: too many clients</c>.
+    /// Awaited from <see cref="CleanDataAsync"/> (between tests) and
+    /// <see cref="DisposeAsync"/> so connections free upon dispose.
+    /// </summary>
+    public async Task DisposeTrackedSchemaDataSourcesAsync()
+    {
+        while (_trackedSchemaDataSources.TryTake(out var ds))
+        {
+            try { await ds.DisposeAsync(); } catch { /* tearing down */ }
+        }
+    }
+
+    /// <summary>
     /// <see cref="IObservable{T}"/> projection of <see cref="CleanDataAsync"/>
     /// so test bodies stay void + blocking-reactive (§2a). The DELETE statements
     /// (low-level PG ops) stay async inside.
@@ -169,8 +187,10 @@ public class PostgreSqlFixture : IAsyncLifetime
     public async Task CleanDataAsync()
     {
         // Release per-schema pool connections first so the DELETE statements
-        // don't compete with leaked schema adapters.
-        DisposeTrackedSchemaDataSources();
+        // don't compete with leaked schema adapters. Async-dispose so the physical
+        // connections actually return to the server (sync Dispose can leave them
+        // pending → 53300: too many clients under the sharded run).
+        await DisposeTrackedSchemaDataSourcesAsync();
 
         // 7 DELETEs in one round-trip. TRUNCATE looks tempting but is ~3× slower
         // here: tests use tiny tables (a handful of rows each), so DELETE's
