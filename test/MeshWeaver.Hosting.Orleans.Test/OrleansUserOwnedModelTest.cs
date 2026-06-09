@@ -46,7 +46,7 @@ public class OrleansUserOwnedModelTest(ITestOutputHelper output) : OrleansShared
     {
         var ct = new CancellationTokenSource(45.Seconds()).Token;
         var userId = $"user-{Guid.NewGuid():N}";
-        var providerPath = $"{userId}/_Provider/Anthropic";
+        var providerPath = $"{ModelProviderNodeType.UserNamespacePath(userId)}/Anthropic";
         var modelId = "claude-opus-4-7";
         var modelPath = $"{providerPath}/{modelId}";
         var rawKey = "sk-ant-USER-orleans-key";
@@ -54,8 +54,8 @@ public class OrleansUserOwnedModelTest(ITestOutputHelper output) : OrleansShared
         var client = GetClient(userId);
         var meshAddress = Fixture.ClientMesh.Address;
 
-        // 1. Create ModelProvider node in the user's namespace.
-        var providerNode = new MeshNode("Anthropic", $"{userId}/_Provider")
+        // 1. Create ModelProvider node in the user's dotfile (_Memex) namespace.
+        var providerNode = new MeshNode("Anthropic", ModelProviderNodeType.UserNamespacePath(userId))
         {
             NodeType = ModelProviderNodeType.NodeType,
             Name = "Anthropic",
@@ -103,7 +103,7 @@ public class OrleansUserOwnedModelTest(ITestOutputHelper output) : OrleansShared
         //    actually observes, not a separate per-node read that races
         //    Orleans routing-grain index convergence.
         var siloWorkspace = client.GetWorkspace();
-        var providerNs = $"{userId}/_Provider";
+        var providerNs = ModelProviderNodeType.UserNamespacePath(userId);
 
         var snapshot = await siloWorkspace.GetQuery(
                 $"user-owned-models-test:{userId}",
@@ -130,14 +130,14 @@ public class OrleansUserOwnedModelTest(ITestOutputHelper output) : OrleansShared
     {
         var ct = new CancellationTokenSource(45.Seconds()).Token;
         var userId = $"user-{Guid.NewGuid():N}";
-        var providerPath = $"{userId}/_Provider/OpenAI";
+        var providerPath = $"{ModelProviderNodeType.UserNamespacePath(userId)}/OpenAI";
         var modelId = "gpt-4o-mini";
         var modelPath = $"{providerPath}/{modelId}";
 
         var client = GetClient(userId);
         var meshAddress = Fixture.ClientMesh.Address;
 
-        var providerNode = new MeshNode("OpenAI", $"{userId}/_Provider")
+        var providerNode = new MeshNode("OpenAI", ModelProviderNodeType.UserNamespacePath(userId))
         {
             NodeType = ModelProviderNodeType.NodeType,
             Name = "OpenAI",
@@ -181,7 +181,7 @@ public class OrleansUserOwnedModelTest(ITestOutputHelper output) : OrleansShared
         // on the user-partition subtree.
         var siloWorkspace = client.GetWorkspace();
 
-        var providerNs = $"{userId}/_Provider";
+        var providerNs = ModelProviderNodeType.UserNamespacePath(userId);
 
         var snapshot = await siloWorkspace.GetQuery(
                 $"picker-test:{userId}",

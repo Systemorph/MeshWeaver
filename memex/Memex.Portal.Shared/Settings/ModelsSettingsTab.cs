@@ -481,7 +481,7 @@ public static class ModelsSettingsTab
                 sessionManager.Cancel(ownerPath, provider);
                 // Remove the stored provider node so the next render shows NotConnected.
                 var providerService = ctx.Host.Hub.ServiceProvider.GetRequiredService<ModelProviderService>();
-                providerService.DeleteProvider($"{ownerPath}/{ModelProviderNodeType.RootNamespace}/{src.ProviderName}")
+                providerService.DeleteProvider($"{ModelProviderNodeType.UserNamespacePath(ownerPath)}/{src.ProviderName}")
                     .Subscribe(
                         _ => ctx.Host.UpdateData(stateDataId, RenderCliBody(provider, new ConnectStatus.NotConnected(), src, stateDataId, sessionManager, ownerPath, userId, resultDataId)),
                         ex => ctx.Host.UpdateData(resultDataId, ErrorHtml(ex.Message)));

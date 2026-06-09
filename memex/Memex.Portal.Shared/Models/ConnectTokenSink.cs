@@ -27,7 +27,10 @@ public sealed class ConnectTokenSink(ModelProviderService providerService, ILogg
             return Observable.Throw<(string, string)>(new ArgumentException("token required", nameof(token)));
 
         var fingerprint = ConnectSessionManager.Fingerprint(token);
-        var providerPath = $"{ownerPath}/{ModelProviderNodeType.RootNamespace}/{providerName}";
+        // Must match ModelProviderService.CreateProvider's location — the user's
+        // own provider lives in their dotfile namespace ({owner}/_Memex/{provider}),
+        // and this path is the rotate-fallback target when the node already exists.
+        var providerPath = $"{ModelProviderNodeType.UserNamespacePath(ownerPath)}/{providerName}";
 
         // Create on first connect; if the provider node already exists, rotate its key. We avoid
         // GetProvidersForOwner().Take(1) here — that synced query is Replay(1).RefCount(), and the
