@@ -88,8 +88,13 @@ internal class PathResolutionService : IPathResolver
     private IObservable<AddressResolution?> ResolveOnce(string path)
     {
         var segments = path.Split('/');
+        // Quote each prefix so segments containing SPACES survive the query parser.
+        // Unquoted values terminate at the first whitespace (the parser's "space = AND"
+        // rule), which silently truncated paths like `AgenticPension/Data Analytics/…`
+        // to `AgenticPension/Data` → "No matching address found". Quoting + the parser's
+        // quoted `|`-alternation (QueryParser.ParseFieldValue) keeps the full path intact.
         var pathList = string.Join("|", Enumerable.Range(1, segments.Length)
-            .Select(depth => string.Join("/", segments.Take(depth)))
+            .Select(depth => "\"" + string.Join("/", segments.Take(depth)) + "\"")
             .Reverse());
         // 🚨 Path resolution MUST bypass access control. Mapping a URL path to
         // an address is ROUTING, not data access. If the user lacks Read on the

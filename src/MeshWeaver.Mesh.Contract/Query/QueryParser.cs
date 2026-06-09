@@ -234,6 +234,29 @@ public partial class QueryParser
         // so we never confuse a list with an embedded paren here.
         var value = ParseSingleValue(input, ref i, stopAtParens: false);
 
+        // Quoted `|` alternation — `field:"A B"|"C D"|E`. ParseSingleValue stops a
+        // QUOTED value at its closing quote, so a trailing `|` here is the alternation
+        // separator (the unquoted form keeps `|` inside the value and is split by the
+        // block below). This is what lets path segments containing SPACES take part in
+        // the prefix-set query the path resolver builds (`path:"a/b c"|"a"`).
+        if ((op == QueryOperator.Equal || op == QueryOperator.NotEqual)
+            && i < input.Length && input[i] == '|')
+        {
+            var altParts = new List<string>();
+            if (value.Length > 0) altParts.Add(value);
+            while (i < input.Length && input[i] == '|')
+            {
+                i++; // consume '|'
+                var next = ParseSingleValue(input, ref i, stopAtParens: false);
+                if (next.Length > 0) altParts.Add(next);
+            }
+            if (altParts.Count > 1)
+            {
+                op = isNegated ? QueryOperator.NotIn : QueryOperator.In;
+                return (new QueryCondition(field, op, altParts.ToArray()), i - start);
+            }
+        }
+
         // Grep-style `|` alternation — `field:A|B|C` is equivalent to
         // `field:(A OR B OR C)` but more concise, modelled on `grep -E`'s
         // alternation operator. Pushed down to `IN(...)` by query backends.
