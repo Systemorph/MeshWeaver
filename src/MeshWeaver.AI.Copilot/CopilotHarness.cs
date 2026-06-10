@@ -35,7 +35,8 @@ public sealed class CopilotHarness(IOptions<CopilotConfiguration> options) : IHa
             ? context.ModelName
             : configuration.Models.FirstOrDefault() ?? "auto";
 
-        // Per-user GitHub token pass-through, mirroring CopilotChatClientAgentFactory.
+        // Per-user GitHub token pass-through (the same per-user CLI auth the harness owns now
+        // that Copilot is a harness, not an agent).
         var resolver = hub.ServiceProvider.GetService<ChatClientCredentialResolver>();
         var githubToken = !string.IsNullOrEmpty(modelName) ? resolver?.Resolve(modelName).ApiKey : null;
         var clientLogger = hub.ServiceProvider.GetService<ILogger<CopilotChatClient>>();

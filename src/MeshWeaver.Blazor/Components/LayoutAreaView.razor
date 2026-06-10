@@ -8,7 +8,14 @@
     {
         <CompileProgressIndicator />
     }
-    <NamedAreaView Stream="@AreaStream" ViewModel="@NamedArea" Area="@NamedArea.GetArea()" Top="@Top" />
+    @* Guard: Blazor's parameter pipeline transiently feeds a null ViewModel (navigation / stream
+       tear-down — see SetParametersAsync). The render path must mirror that guard, else NamedArea
+       (which reads ViewModel.SpinnerType) NREs and tears down the whole circuit. A re-render arrives
+       once ViewModel repopulates. *@
+    @if (ViewModel is not null && Area is not null)
+    {
+        <NamedAreaView Stream="@AreaStream" ViewModel="@NamedArea" Area="@NamedArea.GetArea()" Top="@Top" />
+    }
 </div>
 
 @* Render dialog if one is active *@

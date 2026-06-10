@@ -956,8 +956,32 @@ internal static class ThreadExecution
                 // the MeshWeaver harness returns null → use the AgentChatClient (which
                 // has its own non-IChatClient streaming signature). harnessClient stays
                 // null for MeshWeaver so the existing agent path runs unchanged.
-                var harnessClient = selectedHarness?.CreateChatClient(
-                    new HarnessExecutionContext(parentHub, null, request.ModelName));
+                // 🔎 A harness was SPECIFIED but does not resolve to any registered IHarness —
+                // say it was NOT FOUND (a stale/renamed id, e.g. an old "Claude Code" path before
+                // the slug fix, or a CLI harness whose feature flag is off). Fall back to the
+                // default agent path rather than crashing or silently ignoring it. (Empty harness
+                // ⇒ no selection ⇒ default; not a "not found".)
+                if (selectedHarness is null && !string.IsNullOrEmpty(request.Harness))
+                    logger.LogWarning(
+                        "[ThreadExec] Harness '{Harness}' not found (no registered IHarness with that id) for " +
+                        "{ThreadPath} — falling back to the default agent path", request.Harness, threadPath);
+
+                // 🛡️ A harness that can't build its client (CLI missing, bad config, a bad
+                // harness id/path) must NOT crash the round or wedge the hub — catch, log, and
+                // fall back to the default MeshWeaver agent path (harnessClient stays null) so
+                // the user still gets a response. No retry/resubscribe here ⇒ no storm.
+                IChatClient? harnessClient = null;
+                try
+                {
+                    harnessClient = selectedHarness?.CreateChatClient(
+                        new HarnessExecutionContext(parentHub, null, request.ModelName));
+                }
+                catch (Exception harnessEx)
+                {
+                    logger.LogError(harnessEx,
+                        "[ThreadExec] Harness '{Harness}' threw building its chat client for {ThreadPath}; " +
+                        "falling back to the default agent path", request.Harness, threadPath);
+                }
                 if (harnessClient != null)
                     logger.LogInformation(
                         "[ThreadExec] Harness '{Harness}' → {Client} (bypassing provider chain) for {ThreadPath}",

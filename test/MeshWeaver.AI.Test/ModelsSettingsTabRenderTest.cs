@@ -75,12 +75,13 @@ public class ModelsSettingsTabRenderTest : MonolithMeshTestBase
         // it must actually have a node: the Settings layout area subscribes to the node hub at
         // this address, and an empty address errors "No node found". (The email form
         // "rbuergi@systemorph.com" also can't be an address — '@' is the address host
-        // separator.) Seed the node first; the own-partition write is allowed by the guard.
+        // separator.) A top-level node IS a partition root, so the PartitionWriteGuard only
+        // lets System (the partition provisioner) create a non-partition type there — seed it
+        // under System.
         var userId = "Roland";
         var nodeAddress = new Address(userId);
 
-        NodeFactory.CreateNode(new MeshNode(userId) { Name = "Roland", NodeType = "Markdown" })
-            .Should().Within(10.Seconds()).Emit();
+        SeedTopLevel(new MeshNode(userId) { Name = "Roland", NodeType = "Markdown" });
 
         var workspace = Mesh.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.SettingsArea) { Id = ModelsSettingsTab.TabId };

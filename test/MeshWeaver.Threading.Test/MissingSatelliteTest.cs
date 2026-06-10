@@ -69,7 +69,7 @@ public class MissingSatelliteTest(ITestOutputHelper output) : MonolithMeshTestBa
         var validId = Guid.NewGuid().AsString();
         var missingId = Guid.NewGuid().AsString();
 
-        NodeFactory.CreateNode(new MeshNode(threadPath)
+        NodeFactory.CreateNode(MeshNode.FromPath(threadPath) with
         {
             Name = "Reproducer thread",
             NodeType = ThreadNodeType.NodeType,
@@ -150,7 +150,7 @@ public class MissingSatelliteTest(ITestOutputHelper output) : MonolithMeshTestBa
     {
         var threadId = Guid.NewGuid().AsString();
         var threadPath = $"{TestPartition}/{ThreadNodeType.ThreadPartition}/{threadId}";
-        NodeFactory.CreateNode(new MeshNode(threadPath)
+        NodeFactory.CreateNode(MeshNode.FromPath(threadPath) with
         {
             Name = "Storm-breaker thread",
             NodeType = ThreadNodeType.NodeType,

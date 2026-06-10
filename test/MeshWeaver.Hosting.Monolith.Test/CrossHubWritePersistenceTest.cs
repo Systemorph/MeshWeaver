@@ -24,7 +24,11 @@ public class CrossHubWritePersistenceTest(ITestOutputHelper output) : MonolithMe
         var factory = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var path = $"{TestPartition}/CrossHubWrite-{Guid.NewGuid():N}";
 
-        var node = new MeshNode(path)
+        // FromPath splits the namespace ("TestData") from the id — `new MeshNode(path)` would
+        // bake the slash into the Id with an EMPTY namespace, which the PartitionWriteGuard
+        // (correctly) treats as a malformed top-level node and rejects. TestData is a registered
+        // partition namespace, so the nested create is allowed.
+        var node = MeshNode.FromPath(path) with
         {
             Name = "Original",
             NodeType = "Markdown",

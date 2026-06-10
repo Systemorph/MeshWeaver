@@ -418,7 +418,10 @@ public class ThreadSubmissionIntegrationTest : AITestBase
 
         // The per-user ThreadComposer singleton is seeded at onboarding (ThreadComposerSeedHandler),
         // so the composer always updates an EXISTING node. Mirror that here.
-        NodeFactory.CreateNode(new MeshNode(chatInputPath)
+        // FromPath splits the namespace from the id — `new MeshNode(path)` would bake the
+        // slashes into the Id with an EMPTY namespace, which the PartitionWriteGuard (correctly)
+        // rejects as a malformed top-level node.
+        NodeFactory.CreateNode(MeshNode.FromPath(chatInputPath) with
         {
             Name = "Chat Input",
             NodeType = ThreadComposerNodeType.NodeType,
@@ -503,7 +506,10 @@ public class ThreadSubmissionIntegrationTest : AITestBase
     {
         var threadId = Guid.NewGuid().AsString();
         var threadPath = $"{MonolithMeshTestBase.TestPartition}/{ThreadNodeType.ThreadPartition}/{threadId}";
-        NodeFactory.CreateNode(new MeshNode(threadPath)
+        // FromPath splits the namespace ("TestData/_Thread") from the id — `new MeshNode(path)`
+        // would bake the slashes into the Id with an EMPTY namespace, which the
+        // PartitionWriteGuard (correctly) rejects as a malformed top-level node.
+        NodeFactory.CreateNode(MeshNode.FromPath(threadPath) with
         {
             Name = $"Test Thread {threadId}",
             NodeType = ThreadNodeType.NodeType,

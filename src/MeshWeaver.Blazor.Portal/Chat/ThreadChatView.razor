@@ -403,10 +403,10 @@ else
         @* One bottom row: harness/agent/model pickers (data-bound to the ThreadComposer node) +
            attachment chips + Send (pushed right). The pickers live in ThreadComposerView.SelectorsArea
            (a content-width horizontal row); /agent /model slash-commands still drive the same node. *@
-        <div class="thread-chat-bottom-row" style="display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 4px;">
+        <div class="thread-chat-bottom-row" style="display: flex; align-items: flex-end; gap: 8px; flex-wrap: nowrap; margin-top: 4px;">
             @if (!string.IsNullOrEmpty(_templatePath))
             {
-                <div class="thread-chat-selectors" style="flex: 0 1 auto; min-width: 0;">
+                <div class="thread-chat-selectors" style="flex: 1 1 auto; min-width: 0;">
                     <LayoutAreaView @key="@($"composer-sel-{_templatePath}")"
                                     ViewModel="@(new LayoutAreaControl(_templatePath, new LayoutAreaReference(ThreadComposerView.SelectorsArea)))"
                                     Stream="@Stream"
@@ -415,14 +415,14 @@ else
             }
             @if (attachments.Count > 0)
             {
-                <div class="thread-chat-attachments" style="flex: 0 1 auto;">
+                <div class="thread-chat-attachments" style="flex: 0 1 auto; min-width: 0;">
                     <ReferenceChipCollection
                         Attachments="@attachments"
                         OnAttachmentRemoved="@OnAttachmentRemoved"
                         OnChipClick="@OnChipClicked" />
                 </div>
             }
-            <div class="selector-bar" style="margin-left: auto;">
+            <div class="selector-bar" style="flex: 0 0 auto; margin-left: auto;">
                 @if (!submissionHandler.IsInputEnabled)
                 {
                     <FluentButton Appearance="FluentAppearance.Accent" Disabled="true" Title="Sending...">
@@ -437,11 +437,11 @@ else
                     </FluentButton>
                 }
             </div>
-            @if (!string.IsNullOrEmpty(lastCommandStatus))
-            {
-                <span class="thread-chat-status-msg @(lastCommandStatusIsError ? "error" : "")" style="flex-basis: 100%;">@lastCommandStatus</span>
-            }
         </div>
+        @if (!string.IsNullOrEmpty(lastCommandStatus))
+        {
+            <span class="thread-chat-status-msg @(lastCommandStatusIsError ? "error" : "")">@lastCommandStatus</span>
+        }
         </div> @* /thread-chat-input-content *@
     </div>
     </div>

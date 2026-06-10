@@ -38,8 +38,8 @@ public class ContentUploadTest(ITestOutputHelper output) : MonolithMeshTestBase(
     {
         // Create a context node with content collections
         var contextPath = "UploadTestOrg";
-        NodeFactory.CreateNode(
-            new MeshNode(contextPath) { Name = "Upload Test", NodeType = "Markdown" }).Should().Emit();
+        // Top-level partition root → seed under System (only the partition provisioner may create there).
+        SeedTopLevel(new MeshNode(contextPath) { Name = "Upload Test", NodeType = "Markdown" });
 
         var svgContent = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\"><circle cx=\"50\" cy=\"50\" r=\"40\" fill=\"blue\"/></svg>";
 

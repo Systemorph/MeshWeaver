@@ -14,14 +14,21 @@ namespace MeshWeaver.AI;
 /// </remarks>
 public static class Harnesses
 {
+    // 🚨 These ids are used VERBATIM as the harness mesh-node id: BuiltInHarnessProvider
+    // creates `new MeshNode(Id, "Harness")` → path `Harness/{Id}`. So an id MUST be a
+    // path-safe slug (no spaces) — a space here produced `Harness/Claude Code`, and
+    // reading that space-containing path back tripped the resolver's space fragility →
+    // NotFound → resubscribe storm → the "harness change crashes" bug. The friendly label
+    // lives on `Harness.DisplayName` (the picker shows that, never the id).
+
     /// <summary>The native MeshWeaver agent harness — exposes agent + model selection.</summary>
     public const string MeshWeaver = "MeshWeaver";
 
-    /// <summary>The Claude Code harness (built-in <c>ClaudeCode</c> agent).</summary>
-    public const string ClaudeCode = "Claude Code";
+    /// <summary>The Claude Code harness id (slug; display name "Claude Code").</summary>
+    public const string ClaudeCode = "ClaudeCode";
 
-    /// <summary>The GitHub Copilot harness (built-in <c>Copilot</c> agent).</summary>
-    public const string Copilot = "GitHub Copilot";
+    /// <summary>The GitHub Copilot harness id (slug; display name "GitHub Copilot").</summary>
+    public const string Copilot = "Copilot";
 
     /// <summary>
     /// All harnesses in picker display order. MeshWeaver leads (it is the

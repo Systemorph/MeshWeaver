@@ -16,6 +16,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reactive;
 using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -231,6 +232,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private static string? LastSegment(string? path) =>
         string.IsNullOrEmpty(path) ? path : path.Split('/')[^1];
 
+    /// <summary>Fallback model id (the deployment's configured standard tier, <c>ModelTier:Standard</c>)
+    /// when nothing is selected — so submit never sends an empty model that the agent factory can't
+    /// resolve (the "no model configured" failure).</summary>
+    private string? DefaultModelId() =>
+        Hub.ServiceProvider.GetService<IConfiguration>()?["ModelTier:Standard"];
+
     /// <summary>
     /// True when viewing an existing thread created by another user. Threads are
     /// editable only by their owner, so in this case the chat input and all
@@ -378,26 +385,70 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             return;
         var path = _templatePath;
 
+        var defaults = DefaultComposer();
+
         // Self-heal: existing users predate the onboarding seed (ThreadComposerSeedHandler), so the
-        // composer node may be missing. RELIABLY create it — CreateNode registers a routable node
-        // (unlike GetMeshNodeStream(path).Update, which only patches an EXISTING node and otherwise
-        // NotFound-storms the partition hub — that wedged the portal). CreateNode rejects an existing
-        // node (NodeAlreadyExists), so BOTH success and that benign error mean "node present" — and
-        // ONLY THEN do we open the live read. We never subscribe GetMeshNodeStream on an absent node.
+        // composer node may be missing. RELIABLY create it with sensible defaults — CreateNode registers
+        // a routable node (unlike GetMeshNodeStream(path).Update, which only patches an EXISTING node and
+        // otherwise NotFound-storms the partition hub — that wedged the portal). CreateNode rejects an
+        // existing node (NodeAlreadyExists), so BOTH success and that benign error mean "node present" —
+        // then we fill any EMPTY selection with defaults (heals composers created before this fix) and
+        // open the live read. We never subscribe GetMeshNodeStream on an absent node.
         MeshQuery.CreateNode(MeshWeaver.Mesh.MeshNode.FromPath(path) with
             {
                 NodeType = MeshWeaver.AI.ThreadComposerNodeType.NodeType,
                 Name = "Chat Input",
-                Content = new MeshWeaver.AI.ThreadComposer()
+                Content = defaults
             })
             .Subscribe(
-                _ => InvokeAsync(() => OpenComposerProjection(path)),
+                _ => InvokeAsync(() => FillDefaultsAndProject(path, defaults)),
                 ex => InvokeAsync(() =>
                 {
                     Logger.LogDebug(ex,
                         "[ThreadChat:{InstanceId}] ensure composer node (benign if already exists) {Path}", _instanceId, path);
-                    OpenComposerProjection(path);
+                    FillDefaultsAndProject(path, defaults);
                 }));
+    }
+
+    /// <summary>Sensible default composer selection — MeshWeaver harness + the standard-tier model
+    /// (so a brand-new chat resolves to a configured factory instead of the empty Azure Foundry).</summary>
+    private MeshWeaver.AI.ThreadComposer DefaultComposer()
+    {
+        var standard = Hub.ServiceProvider.GetService<IConfiguration>()?["ModelTier:Standard"];
+        return new MeshWeaver.AI.ThreadComposer
+        {
+            Harness = $"{MeshWeaver.AI.HarnessNodeType.RootNamespace}/{MeshWeaver.AI.Harnesses.MeshWeaver}",
+            ModelName = string.IsNullOrEmpty(standard)
+                ? null
+                : $"{MeshWeaver.AI.ModelProviderNodeType.RootNamespace}/Anthropic/{standard}",
+        };
+    }
+
+    /// <summary>
+    /// Fills EMPTY selection fields on the (now-present) composer node with <paramref name="defaults"/>
+    /// — coalesce only, NEVER clobbering a value the user already set — then opens the live projection.
+    /// One idempotent Update (skips the write when nothing's empty), on an existing node (no storm).
+    /// </summary>
+    private void FillDefaultsAndProject(string path, MeshWeaver.AI.ThreadComposer defaults)
+    {
+        if (_isDisposed || _templatePath != path)
+            return;
+        Hub.GetMeshNodeStream(path).Update(node =>
+        {
+            var c = node.ContentAs<MeshWeaver.AI.ThreadComposer>(Hub.JsonSerializerOptions, Logger);
+            if (c is null) return node; // unreadable → leave alone, never clobber
+            var filled = c with
+            {
+                Harness = string.IsNullOrEmpty(c.Harness) ? defaults.Harness : c.Harness,
+                ModelName = string.IsNullOrEmpty(c.ModelName) ? defaults.ModelName : c.ModelName,
+            };
+            return filled == c ? node : node with { Content = filled };
+        }).Subscribe(
+            _ => { },
+            ex => Logger.LogDebug(ex,
+                "[ThreadChat:{InstanceId}] composer default-fill failed for {Path}", _instanceId, path));
+
+        OpenComposerProjection(path);
     }
 
     /// <summary>
@@ -720,7 +771,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     namespacePath: ns,
                     userText: userMessageText!,
                     agentName: LastSegment(boundAgentPath),
-                    modelName: LastSegment(boundModelPath),
+                    modelName: LastSegment(boundModelPath) ?? DefaultModelId(),
                     contextPath: initialContext,
                     attachments: capturedAttachments,
                     createdBy: createdBy,
@@ -755,7 +806,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     threadPath: threadPath,
                     userText: userMessageText!,
                     agentName: LastSegment(boundAgentPath),
-                    modelName: LastSegment(boundModelPath),
+                    modelName: LastSegment(boundModelPath) ?? DefaultModelId(),
                     contextPath: initialContext,
                     attachments: capturedAttachments,
                     createdBy: createdBy,
@@ -1732,7 +1783,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             }
         }), o => o.WithTarget(new Address(threadPath)));
         Hub.ResubmitMessage(threadPath, id, newUserText: state.Text ?? "",
-            agentName: LastSegment(boundAgentPath), modelName: LastSegment(boundModelPath), harness: LastSegment(boundHarness));
+            agentName: LastSegment(boundAgentPath), modelName: LastSegment(boundModelPath) ?? DefaultModelId(), harness: LastSegment(boundHarness));
     }
 
     private void DeleteFromMessage(string id)

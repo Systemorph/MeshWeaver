@@ -45,11 +45,11 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
     [Fact(Timeout = 30000)]
     public void NodeTypeThread_FansOutAcrossAllPartitions()
     {
-        // Arrange: create two partitions with threads in each
-        NodeFactory.CreateNode(
-            new MeshNode("PartitionA") { Name = "Partition A", NodeType = "Markdown" }).Should().Emit();
-        NodeFactory.CreateNode(
-            new MeshNode("PartitionB") { Name = "Partition B", NodeType = "Markdown" }).Should().Emit();
+        // Arrange: create two partitions with threads in each. Top-level partition roots are
+        // seeded under System (only the partition provisioner may create a non-partition type
+        // at the root); the threads beneath them belong to the test (Admin).
+        SeedTopLevel(new MeshNode("PartitionA") { Name = "Partition A", NodeType = "Markdown" });
+        SeedTopLevel(new MeshNode("PartitionB") { Name = "Partition B", NodeType = "Markdown" });
 
         var client = GetClient();
 
@@ -77,11 +77,9 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
     [Fact(Timeout = 30000)]
     public void NodeTypeThread_WithNamespace_SearchesSinglePartition()
     {
-        // Arrange: threads in two partitions
-        NodeFactory.CreateNode(
-            new MeshNode("NsX") { Name = "Namespace X", NodeType = "Markdown" }).Should().Emit();
-        NodeFactory.CreateNode(
-            new MeshNode("NsY") { Name = "Namespace Y", NodeType = "Markdown" }).Should().Emit();
+        // Arrange: threads in two partitions (top-level partition roots → seed under System).
+        SeedTopLevel(new MeshNode("NsX") { Name = "Namespace X", NodeType = "Markdown" });
+        SeedTopLevel(new MeshNode("NsY") { Name = "Namespace Y", NodeType = "Markdown" });
 
         var client = GetClient();
 
@@ -106,11 +104,10 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
     [Fact(Timeout = 30000)]
     public void NodeTypeComment_FansOutAcrossAllPartitions()
     {
-        // Arrange: create nodes with comments in different partitions
-        NodeFactory.CreateNode(
-            new MeshNode("CmtOrgA") { Name = "Org A", NodeType = "Markdown" }).Should().Emit();
-        NodeFactory.CreateNode(
-            new MeshNode("CmtOrgB") { Name = "Org B", NodeType = "Markdown" }).Should().Emit();
+        // Arrange: create nodes with comments in different partitions (top-level partition
+        // roots → seed under System).
+        SeedTopLevel(new MeshNode("CmtOrgA") { Name = "Org A", NodeType = "Markdown" });
+        SeedTopLevel(new MeshNode("CmtOrgB") { Name = "Org B", NodeType = "Markdown" });
 
         NodeFactory.CreateNode(MeshNode.FromPath("CmtOrgA/doc1") with
         {

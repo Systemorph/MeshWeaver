@@ -7,7 +7,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.Blazor.Portal;
+namespace MeshWeaver.Graph;
 
 /// <summary>
 /// Enforces the "a partition must always keep at least one administrator" invariant

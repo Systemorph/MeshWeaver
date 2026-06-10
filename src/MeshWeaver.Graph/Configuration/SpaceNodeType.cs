@@ -4,7 +4,6 @@ using System.Reactive.Threading.Tasks;
 using MeshWeaver.Messaging;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Domain;
-using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
@@ -13,7 +12,7 @@ using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.Blazor.Portal;
+namespace MeshWeaver.Graph;
 
 /// <summary>
 /// Represents a tenant container — a company, team, or organizational unit that owns
@@ -96,6 +95,15 @@ public static class SpaceNodeType
     public const string NodeType = "Space";
 
     /// <summary>
+    /// Marker registered once per builder so <see cref="AddSpaceType{TBuilder}"/> is
+    /// idempotent: the test base registers Space by default AND individual tests call
+    /// <c>AddSpaceType()</c>, so the second call must be a no-op. Registering the
+    /// access rule / post-creation handler / validator twice would run the
+    /// creator-admin grant twice and stack two access rules per Space.
+    /// </summary>
+    private sealed class SpaceTypeMarker;
+
+    /// <summary>
     /// Default welcome body rendered for a Space when the node has no
     /// PreRenderedHtml of its own. Plain markdown — no pseudo-HTML.
     /// Per-Space overrides live in each Space's own <c>index.md</c>
@@ -123,10 +131,22 @@ public static class SpaceNodeType
 
     public static TBuilder AddSpaceType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
-        builder.AddMeshNodes(CreateMeshNode());
-        builder.WithMeshType<Space>();
+        // Idempotent guard: the marker check runs against the LIVE IServiceCollection
+        // inside ConfigureServices, so it is correct regardless of whether the host
+        // invokes the service-config lambda synchronously (MeshHostApplicationBuilder,
+        // test base) or deferred during host build (MeshHostBuilder). The very first
+        // call registers the marker + node/type + the three singletons; every later
+        // call short-circuits. The builder mutations (AddMeshNodes / WithMeshType) are
+        // co-located inside the guarded lambda so they, too, run exactly once.
         builder.ConfigureServices(services =>
         {
+            if (services.Any(d => d.ServiceType == typeof(SpaceTypeMarker)))
+                return services;
+            services.AddSingleton<SpaceTypeMarker>();
+
+            builder.AddMeshNodes(CreateMeshNode());
+            builder.WithMeshType<Space>();
+
             services.AddSingleton<INodeTypeAccessRule>(sp =>
                 new SpaceAccessRule(sp.GetRequiredService<IMessageHub>()));
             // The top-level invariant + eager schema provisioning is handled generically
@@ -181,7 +201,7 @@ public static class SpaceNodeType
     /// <c>AccessService.ImpersonateAsSystem</c> (the new user / brand-new partition
     /// root means the caller can't already hold Create on it — the canonical
     /// infrastructure-write case) and is <b>awaited</b>, not fire-and-forget: a
-    /// failed grant faults <see cref="HandleAsync"/>, which
+    /// failed grant faults <see cref="Handle"/>, which
     /// <c>RunPostCreationHandlersObs</c> surfaces as a failed create response
     /// instead of silently dropping it.</para>
     /// </summary>

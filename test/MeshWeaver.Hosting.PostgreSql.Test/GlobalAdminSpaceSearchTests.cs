@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using MeshWeaver.Graph;
 using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;

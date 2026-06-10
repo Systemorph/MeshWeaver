@@ -7,6 +7,7 @@ using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.Authentication;
+using MeshWeaver.Graph;
 using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;

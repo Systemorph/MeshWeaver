@@ -41,8 +41,8 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     {
         // 1. Create a context node
         var contextPath = "PlanTestOrg";
-        NodeFactory.CreateNode(
-            new MeshNode(contextPath) { Name = "Plan Test Org", NodeType = "Markdown" }).Should().Emit();
+        // Top-level partition root → seed under System (only the partition provisioner may create there).
+        SeedTopLevel(new MeshNode(contextPath) { Name = "Plan Test Org", NodeType = "Markdown" });
 
         // 2. Create a thread under the context
         var client = GetClient();
@@ -94,8 +94,8 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     {
         // Create context + thread
         var contextPath = "PartitionTestOrg";
-        NodeFactory.CreateNode(
-            new MeshNode(contextPath) { Name = "Partition Test", NodeType = "Markdown" }).Should().Emit();
+        // Top-level partition root → seed under System (only the partition provisioner may create there).
+        SeedTopLevel(new MeshNode(contextPath) { Name = "Partition Test", NodeType = "Markdown" });
 
         var client = GetClient();
         var threadResponse = client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Test partition storage")), o => o.WithTarget(new Address(contextPath))).Should().Emit();
@@ -129,8 +129,8 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     {
         // Create context + thread
         var contextPath = "UpdatePlanOrg";
-        NodeFactory.CreateNode(
-            new MeshNode(contextPath) { Name = "Update Plan Test", NodeType = "Markdown" }).Should().Emit();
+        // Top-level partition root → seed under System (only the partition provisioner may create there).
+        SeedTopLevel(new MeshNode(contextPath) { Name = "Update Plan Test", NodeType = "Markdown" });
 
         var client = GetClient();
         var threadResponse = client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Update plan test")), o => o.WithTarget(new Address(contextPath))).Should().Emit();

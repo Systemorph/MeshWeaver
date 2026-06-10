@@ -253,6 +253,23 @@ public static class JsonSynchronizationStream
             && !string.IsNullOrEmpty(ambient.ObjectId)
             && !LooksLikeHubPrincipal(ambient.ObjectId);
         var identityForSubscribe = isRealUser ? ambient!.ObjectId : SystemUserId;
+
+        // Keep-alive machinery (the 45s heartbeat + the change-feed resubscribe) for a
+        // REMOTE owner is collected here so a TERMINAL failure of the initial
+        // SubscribeRequest — the owner ADDRESS DOES NOT EXIST (DeliveryFailure / NotFound) —
+        // can tear it ALL down. Without this, reduced.OnError only faults the SUBSCRIBERS;
+        // the stream object lingers "errored but undisposed", and the heartbeat (registered
+        // on the stream's DISPOSAL, not its error) keeps posting HeartBeatEvent to the
+        // non-existent owner FOREVER → "[ROUTE] NotFound" every heartbeat interval, one
+        // zombie subscription per open. Multiplied by Blazor re-render / per-cell fan-out
+        // that re-opens absent paths, that ramps into the resubscribe storm that pins the
+        // CPU. A terminal NotFound must STOP (the consumer re-asks if the node later appears,
+        // ideally via an empty-on-absent query) — it must never auto-heartbeat/resubscribe.
+        // CompositeDisposable is race-free: anything Add()ed after it is disposed is disposed
+        // immediately, so the async onError tearing it down can't lose to the synchronous
+        // heartbeat setup below (or vice-versa).
+        var keepAlive = new System.Reactive.Disposables.CompositeDisposable();
+        reduced.RegisterForDisposal(keepAlive);
         IDisposable observeSubscription;
         var impersonationScope = isRealUser ? null : accessService?.ImpersonateAsSystem();
         try
@@ -276,12 +293,18 @@ public static class JsonSynchronizationStream
                         logger.LogWarning("SubscribeRequest for stream {StreamId} failed: {Message}",
                             reduced.StreamId, dfe.Message);
                         reduced.OnError(dfe);
+                        // Terminal: the owner address does not exist (NotFound). Tear down the
+                        // keep-alive so we never heartbeat a non-existent owner — the zombie
+                        // subscription that storms the mesh. STOP, never auto-resubscribe.
+                        keepAlive.Dispose();
                     }
                     else if (ex is not TimeoutException)
                     {
                         logger.LogWarning(ex, "SubscribeRequest for stream {StreamId} failed",
                             reduced.StreamId);
                         reduced.OnError(ex);
+                        // Faulted stream — stop the heartbeat too (no point keeping a dead owner alive).
+                        keepAlive.Dispose();
                     }
                 });
         }
@@ -378,7 +401,10 @@ public static class JsonSynchronizationStream
                     // needed; receiver doesn't gate on principal.
                     hub.Post(new HeartBeatEvent(), o => o.WithTarget(owner));
                 });
-            reduced.RegisterForDisposal(sub);
+            // On keepAlive (not directly on reduced): a terminal NotFound from the initial
+            // SubscribeRequest disposes keepAlive → stops this heartbeat. Normal teardown
+            // still reaches it because keepAlive is itself registered on reduced's disposal.
+            keepAlive.Add(sub);
 
             // Resubscribe when the mesh change feed reports a Created/Deleted event
             // on the owner's path. This is the sole recycled-grain detector now that
@@ -390,7 +416,7 @@ public static class JsonSynchronizationStream
                 hub.ServiceProvider, logger, ownerPath,
                 () => Resubscribe("change feed event"));
             if (changeFeedSub != null)
-                reduced.RegisterForDisposal(changeFeedSub);
+                keepAlive.Add(changeFeedSub); // torn down with the heartbeat on terminal NotFound
         }
 
         return reduced;

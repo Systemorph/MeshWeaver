@@ -48,8 +48,8 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
 
     private string CreateContextNode(string path)
     {
-        NodeFactory.CreateNode(
-            new MeshNode(path) { Name = path, NodeType = "Markdown" }).Should().Emit();
+        // Top-level partition root → seed under System (only the partition provisioner may create there).
+        SeedTopLevel(new MeshNode(path) { Name = path, NodeType = "Markdown" });
         return path;
     }
 

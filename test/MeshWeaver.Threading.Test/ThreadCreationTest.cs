@@ -46,9 +46,12 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
 
         // Arrange Ã¢â‚¬â€ create context node so the node hub exists
+        // Organization ⇒ Space: a top-level context node is a partition root. Only User/Space
+        // own a partition, so it must be a Space (PartitionWriteGuardValidator rejects top-level
+        // Markdown). Creating a Space is the sanctioned explicit partition-creation path.
         var contextPath = "ACME";
         NodeFactory.CreateNode(
-            new MeshNode(contextPath) { Name = "ACME Corp", NodeType = "Markdown" }).Should().Emit();
+            new MeshNode(contextPath) { Name = "ACME Corp", NodeType = "Space" }).Should().Emit();
 
         // Act Ã¢â‚¬â€ send CreateNodeRequest to the context node's hub (production path)
         var client = GetClient();
@@ -92,9 +95,10 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
 
         // Arrange Ã¢â‚¬â€ create a different context node
+        // Organization ⇒ Space (top-level context node = partition root; only User/Space own one).
         var contextPath = "TestProject";
         NodeFactory.CreateNode(
-            new MeshNode(contextPath) { Name = "Test Project", NodeType = "Markdown" }).Should().Emit();
+            new MeshNode(contextPath) { Name = "Test Project", NodeType = "Space" }).Should().Emit();
 
         // Act Ã¢â‚¬â€ send to the context node's hub
         var client = GetClient();
@@ -293,14 +297,16 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         var parentNode = new MeshNode(parentPath)
         {
             Name = "Test Project",
-            NodeType = "Markdown"
+            NodeType = "Space" // Organization ⇒ Space (top-level partition root)
         };
         NodeFactory.CreateNode(parentNode).Should().Emit();
 
         // Create thread as direct child
         var threadPath = $"{parentPath}/{threadId}";
         var threadContent = new MeshThread();
-        var threadNode = new MeshNode(threadPath)
+        // FromPath splits namespace/id — `new MeshNode("a/b/c")` bakes the slashes into the Id
+        // with an empty namespace, which the guard correctly rejects as a malformed top-level node.
+        var threadNode = MeshNode.FromPath(threadPath) with
         {
             Name = "Thread as Direct Child",
             NodeType = ThreadNodeType.NodeType,
@@ -336,14 +342,15 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         var parentNode = new MeshNode(parentPath)
         {
             Name = "Test Parent",
-            NodeType = "Markdown"
+            NodeType = "Space" // Organization ⇒ Space (top-level partition root)
         };
         NodeFactory.CreateNode(parentNode).Should().Emit();
 
         // Create thread as direct child: {parentPath}/{threadId}
         var threadPath = $"{parentPath}/{threadId}";
         var threadContent = new MeshThread();
-        var threadNode = new MeshNode(threadPath)
+        // FromPath splits namespace/id (see CreateThread_AsDirectChild_FollowsPattern).
+        var threadNode = MeshNode.FromPath(threadPath) with
         {
             Name = "Thread under Parent",
             NodeType = ThreadNodeType.NodeType,
@@ -563,7 +570,7 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         // Create context node
         NodeFactory.CreateNode(
-            new MeshNode("SecureProject") { Name = "Secure Project", NodeType = "Markdown" }).Should().Emit();
+            new MeshNode("SecureProject") { Name = "Secure Project", NodeType = "Space" }).Should().Emit();
 
         // Act Ã¢â‚¬â€ admin creates thread (has Update permission)
         var client = GetClient();
@@ -586,7 +593,7 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
             .Should().Within(10.Seconds()).Match(p => p.HasFlag(Permission.Create));
 
         NodeFactory.CreateNode(
-            new MeshNode("SecureProject") { Name = "Secure Project", NodeType = "Markdown" }).Should().Emit();
+            new MeshNode("SecureProject") { Name = "Secure Project", NodeType = "Space" }).Should().Emit();
 
         // Switch to viewer (Read+Execute only, no Update)
         TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = ViewerUserId, Name = "Viewer" });

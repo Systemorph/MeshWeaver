@@ -93,8 +93,8 @@ public class ProviderCatalogRegistrationTest : AITestBase
         copilot.SupportsAgentSelection.Should().BeFalse();
         copilot.IsDefault.Should().BeFalse();
 
-        // Resolve-by-id is case-insensitive — the same lookup ThreadExecution uses.
-        HarnessNodeType.ResolveHarness(Mesh.ServiceProvider, "claude code")!.Id
+        // Resolve-by-id — the same lookup ThreadExecution uses, keyed by the slug constant.
+        HarnessNodeType.ResolveHarness(Mesh.ServiceProvider, Harnesses.ClaudeCode)!.Id
             .Should().Be(Harnesses.ClaudeCode);
         HarnessNodeType.ResolveHarness(Mesh.ServiceProvider, Harnesses.Copilot)
             .Should().BeOfType<CopilotHarness>();

@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Runtime.Loader;
 using System.Text.Json;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Security;
@@ -97,6 +98,12 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             .AddInMemoryPersistence()
             .AddRowLevelSecurity()
             .AddGraph()
+            // Space is a core partition-owning NodeType (relocated from Blazor.Portal).
+            // Register it by default so every Monolith test can create legitimate
+            // top-level Space fixtures — the partition-write guard rejects top-level
+            // creates of any non-partition-owning type. AddSpaceType is idempotent,
+            // so tests that also call it explicitly are unaffected.
+            .AddSpaceType()
             .AddMeshNodes(new MeshNode(TestPartition) { Name = "Test Data", NodeType = "Markdown" })
             .ConfigureServices(s => s.AddFileSystemAssemblyStore(_assemblyStoreRoot))
             // Isolate the legacy CompilationCacheService disk cache to a

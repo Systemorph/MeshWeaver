@@ -39,8 +39,8 @@ public sealed class ClaudeCodeHarness(IOptions<ClaudeCodeConfiguration> options)
             ? context.ModelName
             : configuration.Models.FirstOrDefault() ?? "sonnet";
 
-        // Per-user isolation, mirroring ClaudeCodeChatClientAgentFactory: the user's
-        // own subscription token + CLAUDE_CONFIG_DIR + token-based MCP back-connection.
+        // Per-user isolation owned by the harness (Claude Code is a harness, not an agent):
+        // the user's own subscription token + CLAUDE_CONFIG_DIR + token-based MCP back-connection.
         var resolver = hub.ServiceProvider.GetService<ChatClientCredentialResolver>();
         var token = !string.IsNullOrEmpty(modelName) ? resolver?.Resolve(modelName).ApiKey : null;
         var accessCtx = hub.ServiceProvider.GetService<AccessService>()?.Context;

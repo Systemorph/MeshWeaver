@@ -261,7 +261,7 @@ public static class AgentPickerProjection
         // Alphabetical group order happens to give Claude Code, GitHub Copilot,
         // MeshWeaver; within a group, Order then Name (Assistant's order:-1 leads MeshWeaver).
         return byPath.Values
-            .OrderBy(a => a.GroupName ?? "MeshWeaver", StringComparer.OrdinalIgnoreCase)
+            .OrderBy(a => a.GroupName ?? Harnesses.MeshWeaver, StringComparer.OrdinalIgnoreCase)
             .ThenBy(a => a.Order)
             .ThenBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();

@@ -50,7 +50,11 @@ public class MeshHubDisposalLeakTest(ITestOutputHelper output) : MonolithMeshTes
         var factory = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var path = $"{TestPartition}/LeakProbe-{Guid.NewGuid():N}";
-        var node = new MeshNode(path)
+        // FromPath splits the namespace ("TestData") from the id — `new MeshNode(path)` would
+        // bake the slash into the Id with an EMPTY namespace, which the PartitionWriteGuard
+        // (correctly) rejects as a malformed top-level node. TestData is a registered partition
+        // namespace, so the nested create is allowed.
+        var node = MeshNode.FromPath(path) with
         {
             NodeType = "Markdown",
             Name = "probe",

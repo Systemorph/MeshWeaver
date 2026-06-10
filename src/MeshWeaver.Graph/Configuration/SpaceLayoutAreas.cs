@@ -1,11 +1,10 @@
 using System.Reactive.Linq;
 using MeshWeaver.Data;
-using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 
-namespace MeshWeaver.Blazor.Portal;
+namespace MeshWeaver.Graph;
 
 /// <summary>
 /// Custom views for Space nodes.

@@ -108,9 +108,10 @@ public class ConnectStrategyTest : AITestBase
 
         // Establish the owner's partition root first. The connect flow writes the credential
         // node at {owner}/_Memex/ClaudeCode; in production the owner is the logged-in user
-        // whose partition already exists.
-        NodeFactory.CreateNode(new MeshNode(owner) { Name = owner, NodeType = "Markdown" })
-            .Should().Within(10.Seconds()).Emit();
+        // whose partition already exists. A top-level node IS a partition root, so the
+        // PartitionWriteGuard only lets System (the partition provisioner) create a
+        // non-partition type there — seed it under System.
+        SeedTopLevel(new MeshNode(owner) { Name = owner, NodeType = "Markdown" });
 
         // 1. Not logged in initially (no credentials file).
         var loggedInBefore = Manager.IsLoggedIn(ConnectProvider.ClaudeCode, configDir)

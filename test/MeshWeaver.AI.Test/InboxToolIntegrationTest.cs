@@ -423,7 +423,10 @@ public class InboxToolIntegrationTest : AITestBase
     {
         var threadId = Guid.NewGuid().AsString();
         var threadPath = $"{MonolithMeshTestBase.TestPartition}/{ThreadNodeType.ThreadPartition}/{threadId}";
-        await NodeFactory.CreateNode(new MeshNode(threadPath)
+        // FromPath splits the namespace ("TestData/_Thread") from the id — `new MeshNode(path)`
+        // would bake the slashes into the Id with an EMPTY namespace, which the
+        // PartitionWriteGuard (correctly) rejects as a malformed top-level node.
+        await NodeFactory.CreateNode(MeshNode.FromPath(threadPath) with
         {
             Name = $"Inbox Test Thread {threadId}",
             NodeType = ThreadNodeType.NodeType,
