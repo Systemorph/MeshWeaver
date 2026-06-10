@@ -49,6 +49,72 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
         response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
     }
 
+    /// <summary>
+    /// Repro for the atioz mesh-wide outage (2026-06-10). A <see cref="DisposeRequest"/>
+    /// is a permission-gateless <c>[SystemMessage]</c>, so any sender — including an
+    /// unauthenticated external/RawJson client — could route one to the root mesh hub's
+    /// own address (<c>mesh/&lt;id&gt;</c>) and dispose the irreplaceable singleton. Once
+    /// disposed it was never rebuilt, so every node operation timed out at 60 s forever
+    /// until the process restarted. The mesh hub must IGNORE a message-routed dispose
+    /// (its lifecycle is owned by host teardown, which calls Dispose() directly).
+    /// Before the fix this test hangs on the second round-trip (mesh dead → no routing).
+    /// </summary>
+    [Fact]
+    public void DisposeRequestToMeshRoot_IsRefused_MeshStaysAlive()
+    {
+        var host = GetHost();
+        var client = GetClient();
+        var mesh = Mesh;
+
+        // Precondition: we really are targeting the irreplaceable root mesh hub.
+        mesh.Address.Type.Should().Be(AddressExtensions.MeshType);
+        mesh.IsDisposing.Should().BeFalse();
+
+        // Baseline: a round-trip routed THROUGH the mesh works.
+        client.Observe(new SayHelloRequest(), o => o.WithTarget(host.Address))
+            .Should().Within(10.Seconds()).Emit();
+
+        // The incident: a DisposeRequest routed to the root mesh hub's own address.
+        client.Post(new DisposeRequest(), o => o.WithTarget(mesh.Address));
+
+        // The mesh must survive. This second round-trip both proves the mesh is still
+        // routing AND (FIFO) that the DisposeRequest was already drained by the time the
+        // response returns — so the IsDisposing assertion below is observed post-handling.
+        var response = client.Observe(new SayHelloRequest(), o => o.WithTarget(host.Address))
+            .Should().Within(10.Seconds()).Emit();
+        response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
+
+        mesh.IsDisposing.Should().BeFalse(
+            "a message-routed DisposeRequest must never dispose the root mesh hub");
+    }
+
+    /// <summary>
+    /// Guard companion to <see cref="DisposeRequestToMeshRoot_IsRefused_MeshStaysAlive"/>:
+    /// the refusal is scoped to the mesh root ONLY. A normal hosted hub (portal circuit,
+    /// per-node, client) must still honor a message-routed dispose — recycle and circuit
+    /// teardown depend on it.
+    /// </summary>
+    [Fact]
+    public async Task DisposeRequestToHostedHub_StillDisposesIt()
+    {
+        var victim = GetClient();
+        victim.Address.Type.Should().NotBe(AddressExtensions.MeshType);
+        victim.IsDisposing.Should().BeFalse();
+
+        Mesh.Post(new DisposeRequest(), o => o.WithTarget(victim.Address));
+
+        // A non-mesh hub must still dispose on a message-routed DisposeRequest.
+        try
+        {
+            await victim.DisposalCompleted.FirstOrDefaultAsync().ToTask().WaitAsync(10.Seconds());
+        }
+        catch
+        {
+            // A faulting disposal still counts as "disposing" for this assertion.
+        }
+        victim.IsDisposing.Should().BeTrue();
+    }
+
     [Fact]
     public void RoutingCycleDetection_ShouldDetectCycle()
     {
