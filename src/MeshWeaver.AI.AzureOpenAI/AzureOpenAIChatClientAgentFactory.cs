@@ -39,11 +39,8 @@ public class AzureOpenAIChatClientAgentFactory(
 
     protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {
-        // Agent's PreferredModel wins. CurrentModelName (the globally selected
-        // model in the chat dropdown) is only used when the agent doesn't pin a
-        // model; first configured model fills in as a last resort.
-        var modelName = !string.IsNullOrEmpty(agentConfig.PreferredModel) ? agentConfig.PreferredModel
-            : !string.IsNullOrEmpty(CurrentModelName) ? CurrentModelName
+        // Model comes from the chat composer selection; first configured model as a last resort.
+        var modelName = !string.IsNullOrEmpty(CurrentModelName) ? CurrentModelName
             : credentials.Models.FirstOrDefault();
 
         if (string.IsNullOrEmpty(modelName))

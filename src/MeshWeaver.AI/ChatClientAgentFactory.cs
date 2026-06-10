@@ -83,9 +83,8 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
     {
         CurrentModelName = modelName;
 
-        // Model tiers (heavy/standard/light/utility) removed — the model is ALWAYS the one
-        // selected in the chat composer (ThreadComposer.ModelName), threaded through as
-        // modelName / CurrentModelName. An agent's explicit PreferredModel still wins when set.
+        // The model is ALWAYS the one selected in the chat composer (ThreadComposer.ModelName),
+        // threaded through as modelName / CurrentModelName — fully independent of the agent.
 
         // Sync: use raw instructions, skip @@reference resolution (resolved lazily)
         var instructions = GetAgentInstructions(config, hierarchyAgents, chat);
@@ -102,9 +101,8 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
     {
         CurrentModelName = modelName;
 
-        // Model tiers (heavy/standard/light/utility) removed — the model is ALWAYS the one
-        // selected in the chat composer (ThreadComposer.ModelName), threaded through as
-        // modelName / CurrentModelName. An agent's explicit PreferredModel still wins when set.
+        // The model is ALWAYS the one selected in the chat composer (ThreadComposer.ModelName),
+        // threaded through as modelName / CurrentModelName — fully independent of the agent.
 
         var instructions = await GetAgentInstructionsAsync(config, hierarchyAgents, chat);
         return CreateAgentCore(config, chat, existingAgents, hierarchyAgents, instructions, modelName);

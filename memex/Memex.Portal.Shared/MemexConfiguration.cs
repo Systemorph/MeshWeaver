@@ -531,6 +531,7 @@ public static class MemexConfiguration
                         .AddThreadsLayoutArea()
                         .AddApiTokensSettingsTab()
                         .AddModelsSettingsTab()
+                        .AddAiSettingsTab()
                         // Dedicated Admin menu (platform-wide GlobalSettings area), gated on root
                         // Permission.All: Invitations + Inbox.
                         .AddInvitationsSettingsTab()

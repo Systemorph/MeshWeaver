@@ -365,8 +365,8 @@ public record Thread
 
     /// <summary>
     /// Model id selected on this thread (sticky across reloads). Same
-    /// resume semantics as <see cref="SelectedAgentName"/>. Null →
-    /// inherit the selected agent's PreferredModel (or first available).
+    /// resume semantics as <see cref="SelectedAgentName"/>. The model is
+    /// independent of the agent; null → first available model.
     /// </summary>
     public string? SelectedModelName { get; init; }
 

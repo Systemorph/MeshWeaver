@@ -176,7 +176,6 @@ public class BuiltInAgentProvider : IStaticNodeProvider
                 Instructions = h.Instructions
             }).ToList(),
             Plugins = frontMatter.Plugins?.Select(ParsePluginReference).ToList(),
-            PreferredModel = frontMatter.PreferredModel,
             ContextMatchPattern = frontMatter.ContextMatchPattern,
             Order = frontMatter.Order
         };
@@ -273,7 +272,6 @@ public class BuiltInAgentProvider : IStaticNodeProvider
         public bool IsDefault { get; set; }
         public bool ExposedInNavigator { get; set; }
         public string? ContextMatchPattern { get; set; }
-        public string? PreferredModel { get; set; }
         public int Order { get; set; }
         public string? CustomIconSvg { get; set; }
         public List<DelegationEntry>? Delegations { get; set; }

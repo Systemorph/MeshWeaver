@@ -385,12 +385,11 @@ else
 
         @* Active agent + model selectors. Sourced from the workspace synced
            query (agents from namespace:Agent, models from namespace:Model
-           via the same nodeType:Agent|LanguageModel union). Selecting an
-           agent updates the model to that agent's preferred model
-           (GetPreferredModelInfoForAgent); the user can override per
-           thread by picking a different model. Slash commands /agent and
-           /model still work (ChatCommandRegistry) and update the same
-           selection state. *@
+           via the same nodeType:Agent|LanguageModel union). Agent and model
+           are INDEPENDENT — switching the agent never changes the model; the
+           user picks each separately and the model choice persists. Slash
+           commands /agent and /model still work (ChatCommandRegistry) and
+           update the same selection state. *@
         <div class="thread-chat-selectors">
             @* Harness selector — the single top-level choice. Claude Code and
                GitHub Copilot each resolve to one built-in agent, so the agent +

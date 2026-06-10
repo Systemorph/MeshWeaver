@@ -72,12 +72,6 @@ public record AgentConfiguration
     public List<AgentHandoff>? Handoffs { get; init; }
 
     /// <summary>
-    /// Preferred model name from available models.
-    /// Null means use the factory default.
-    /// </summary>
-    public string? PreferredModel { get; init; }
-
-    /// <summary>
     /// RSQL pattern for context matching.
     /// If set, agent activates when context matches this pattern.
     /// Example: "address.type==pricing" or "address.path=like=*Todo*"

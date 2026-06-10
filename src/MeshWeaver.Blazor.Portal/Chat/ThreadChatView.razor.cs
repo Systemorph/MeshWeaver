@@ -245,8 +245,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     // ({userHome}/_ThreadTemplate). Matched against the agent list once it loads
     // (see ApplySelections). Replaces the old browser-localStorage "sticky" values.
     private string? _stickyAgentName;
+    // The user's last/persisted model selection — INDEPENDENT of the agent. Restored from the
+    // ThreadComposer (compose) / Thread (in-thread) and matched against availableModels.
+    private string? _stickyModelName;
     private IReadOnlyList<ModelInfo> availableModels = [];
-    private readonly Dictionary<string, string> agentModelPreferences = new();
 
     /// <summary>
     /// The selected harness (<see cref="Harnesses"/>). The single top-level
@@ -486,6 +488,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         }
         if (!string.IsNullOrEmpty(t.AgentName))
             _stickyAgentName = t.AgentName;
+        // The model is INDEPENDENT of the agent — restore the persisted composer model
+        // directly (ApplySelections → ResolveSelectedModel matches it against availableModels).
+        if (!string.IsNullOrEmpty(t.ModelName))
+            _stickyModelName = t.ModelName;
 
         // Draft restore: composer mode only, and never clobber text the user has
         // already begun typing this session.
@@ -718,7 +724,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             if (harnessAgent != null)
             {
                 selectedAgentInfo = harnessAgent;
-                selectedModelInfo = GetPreferredModelInfoForAgent(harnessAgent.Name);
+                ResolveSelectedModel();
                 return;
             }
         }
@@ -747,10 +753,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 ?? pool.FirstOrDefault();
         }
 
-        if (selectedAgentInfo != null)
-            selectedModelInfo = GetPreferredModelInfoForAgent(selectedAgentInfo.Name);
-        else
-            selectedModelInfo = availableModels.FirstOrDefault();
+        // Model is independent of the agent.
+        ResolveSelectedModel();
     }
 
     /// <summary>
@@ -785,46 +789,30 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             .ToList();
     }
 
-    private ModelInfo? GetPreferredModelInfoForAgent(string agentName)
+    /// <summary>
+    /// Resolves <see cref="selectedModelInfo"/> — <b>independent of the agent</b>. Model selection
+    /// is the user's own choice, decoupled from which agent is picked: keep the current selection if
+    /// it is still available; otherwise restore the persisted/sticky model
+    /// (<see cref="ThreadComposer.ModelName"/> in compose mode, <see cref="Thread.SelectedModelName"/>
+    /// in a thread); otherwise the first available model.
+    /// </summary>
+    private void ResolveSelectedModel()
     {
-        if (agentModelPreferences.TryGetValue(agentName, out var preferredModelName))
-            return availableModels.FirstOrDefault(m => m.Name == preferredModelName);
-
-        var agentConfig = agentDisplayInfos.FirstOrDefault(a => a.Name == agentName)?.AgentConfiguration;
-
-        // Explicit PreferredModel on the agent wins; otherwise the first available model.
-        // Model tiers (heavy/standard/light) removed — the active model is the user's chat
-        // composer selection, not an agent-declared tier.
-        if (!string.IsNullOrEmpty(agentConfig?.PreferredModel))
+        if (selectedModelInfo != null)
         {
-            var configuredModel = MatchModel(agentConfig.PreferredModel);
-            if (configuredModel != null)
-                return configuredModel;
+            var stillAvailable = availableModels.FirstOrDefault(m =>
+                string.Equals(m.Name, selectedModelInfo.Name, StringComparison.OrdinalIgnoreCase));
+            if (stillAvailable != null)
+            {
+                selectedModelInfo = stillAvailable;
+                return;
+            }
         }
 
-        return availableModels.FirstOrDefault();
-    }
-
-    /// <summary>
-    /// Resolves a model name to an available <see cref="ModelInfo"/> tolerantly:
-    /// exact (case-insensitive) first, then a substring match in either direction
-    /// so an alias ("sonnet") or a versioned id ("claude-sonnet-4-6-2025…") still
-    /// lands on the right model when the configured / agent-declared name isn't a
-    /// character-for-character match of the available model's Name. Without this,
-    /// a tier/PreferredModel that doesn't EXACTLY equal an available model silently
-    /// falls through to the first model (the "model never follows the agent" bug).
-    /// </summary>
-    private ModelInfo? MatchModel(string? name)
-    {
-        if (string.IsNullOrWhiteSpace(name))
-            return null;
-        var exact = availableModels.FirstOrDefault(m =>
-            string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase));
-        if (exact != null)
-            return exact;
-        return availableModels.FirstOrDefault(m =>
-            m.Name.Contains(name, StringComparison.OrdinalIgnoreCase) ||
-            name.Contains(m.Name, StringComparison.OrdinalIgnoreCase));
+        selectedModelInfo =
+            availableModels.FirstOrDefault(m =>
+                string.Equals(m.Name, _stickyModelName, StringComparison.OrdinalIgnoreCase))
+            ?? availableModels.FirstOrDefault();
     }
 
     private void SendMessage()
@@ -1415,12 +1403,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         selectedAgentInfo = newAgent;
 
-        // Update model to agent's preferred model
-        var preferredModel = GetPreferredModelInfoForAgent(newAgent.Name);
-        if (preferredModel != null)
-        {
-            selectedModelInfo = preferredModel;
-        }
+        // Model is INDEPENDENT of the agent — switching agents leaves the model selection
+        // untouched (the user picks the model separately in the model dropdown).
 
         // Remember as the preferred agent (matched again when the agent list
         // reloads) and persist: onto the chat template when composing, onto the
@@ -1437,14 +1421,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             return;
 
         selectedModelInfo = newModel;
+        _stickyModelName = newModel.Name;
 
         // Persist the model choice (template when composing, thread otherwise).
         PersistSelection();
-
-        if (selectedAgentInfo != null)
-        {
-            agentModelPreferences[selectedAgentInfo.Name] = newModel.Name;
-        }
 
         StateHasChanged();
     }
@@ -1475,7 +1455,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             if (agent != null)
             {
                 selectedAgentInfo = agent;
-                selectedModelInfo = GetPreferredModelInfoForAgent(agent.Name);
+                ResolveSelectedModel();
             }
         }
 
@@ -1504,7 +1484,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (agent != null)
         {
             selectedAgentInfo = agent;
-            selectedModelInfo = GetPreferredModelInfoForAgent(agent.Name);
+            ResolveSelectedModel();
         }
     }
 

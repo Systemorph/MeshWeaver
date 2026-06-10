@@ -60,18 +60,13 @@ public class AzureClaudeChatClientAgentFactory(
 
     protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {
-        // Agent's PreferredModel wins (resolved from ModelTier in
-        // ChatClientAgentFactory.CreateAgent). The chat picker should
-        // auto-follow the selected agent's PreferredModel — see
-        // ThreadChatView's agent-change handler. CurrentModelName is the
-        // fallback when an agent doesn't pin a model.
-        var modelName = !string.IsNullOrEmpty(agentConfig.PreferredModel) ? agentConfig.PreferredModel
-            : !string.IsNullOrEmpty(CurrentModelName) ? CurrentModelName
+        // Model comes from the chat composer selection.
+        var modelName = !string.IsNullOrEmpty(CurrentModelName) ? CurrentModelName
             : configuration.Models.FirstOrDefault();
 
         if (string.IsNullOrEmpty(modelName))
             throw new InvalidOperationException(
-                $"No model selected for agent {agentConfig.Id}. Set the agent's PreferredModel or pick one in the chat dropdown.");
+                "No model selected. Pick one in the chat dropdown.");
 
         // Driver config: resolver walks parent ModelProvider → root ModelProvider
         // → legacy ModelDefinition fields. Fall back to IOptions if the resolver

@@ -71,12 +71,11 @@ public class AzureFoundryPersistentAgentFactory : IChatClientFactory
     {
         var client = GetOrCreateClient();
 
+        // Model comes from the chat composer selection.
         var model = !string.IsNullOrEmpty(modelName)
             ? modelName
-            : !string.IsNullOrEmpty(config.PreferredModel)
-                ? config.PreferredModel
-                : configuration.Models.FirstOrDefault()
-                  ?? throw new InvalidOperationException("No model configured");
+            : configuration.Models.FirstOrDefault()
+              ?? throw new InvalidOperationException("No model configured");
 
         var instructions = GetAgentInstructions(config, hierarchyAgents);
         var name = config.Id;

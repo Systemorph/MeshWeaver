@@ -29,8 +29,7 @@ public class ClaudeCodeChatClientAgentFactory(
     /// here even when <c>ClaudeCode:Models</c> isn't configured, plus anything a
     /// <c>ModelProvider</c> declares as provider <c>ClaudeCode</c>. Additive over
     /// the base (Models-list) match, so it never narrows existing routing. This
-    /// is what lets the dedicated "Claude Code" agent (PreferredModel=sonnet)
-    /// reach the CLI.
+    /// is what lets the dedicated "Claude Code" agent reach the CLI.
     /// </summary>
     public override bool Supports(string modelName)
     {
@@ -44,9 +43,8 @@ public class ClaudeCodeChatClientAgentFactory(
 
     protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {
-        // Agent's PreferredModel wins; CurrentModelName fills in only when the agent doesn't pin one.
-        var modelName = !string.IsNullOrEmpty(agentConfig.PreferredModel) ? agentConfig.PreferredModel
-            : !string.IsNullOrEmpty(CurrentModelName) ? CurrentModelName
+        // Model comes from the chat composer selection.
+        var modelName = !string.IsNullOrEmpty(CurrentModelName) ? CurrentModelName
             : configuration.Models.FirstOrDefault();
 
         logger.LogInformation(

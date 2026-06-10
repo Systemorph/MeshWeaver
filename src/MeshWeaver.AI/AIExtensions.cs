@@ -33,6 +33,7 @@ public static class AIExtensions
                     .AddLanguageModelType(serveFromPartition)
                     .AddHarnessType()
                     .AddThreadComposerType()
+                    .AddAiSettingsType()
                     .ConfigureServices(services => services.AddAgentChatServices())
                     // Register AI types on the MESH hub (for MeshQuery deserialization of Thread content)
                     .ConfigureHub(config =>
@@ -88,6 +89,9 @@ public static class AIExtensions
             // singleton (message text + harness/agent/model + attachments). Registered
             // mesh-wide so the node serialises across routing/mesh hubs.
             .WithType(typeof(ThreadComposer), nameof(ThreadComposer))
+            // AiSettings: per-user {user}/_Memex/AiSettings config (enabled harnesses + agent/model
+            // picker query templates). Registered mesh-wide so the node serialises across hubs.
+            .WithType(typeof(AiSettings), nameof(AiSettings))
             // MessageViewModel is not registered — handled as JsonElement on the wire.
             // SubmitMessageRequest / SubmitMessageResponse deleted 2026-05-25:
             // the only mutation API is workspace.GetMeshNodeStream(path).Update(...).

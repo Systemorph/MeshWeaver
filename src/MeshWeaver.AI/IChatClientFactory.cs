@@ -31,8 +31,8 @@ public interface IChatClientFactory
 
     /// <summary>
     /// Returns <c>true</c> when this factory can serve <paramref name="modelName"/>.
-    /// Used for factory selection per agent: the agent's <c>PreferredModel</c> drives
-    /// which factory creates its chat client. The default implementation honours the
+    /// Used for factory selection: the chat composer's selected model drives which factory
+    /// creates the chat client. The default implementation honours the
     /// legacy <see cref="Models"/> list — concrete factories should override with a
     /// shape-aware predicate (e.g. "claude-*" → AzureClaude, "*" → AzureFoundry
     /// gateway as catch-all) so routing works even when <see cref="Models"/> is empty

@@ -162,8 +162,6 @@ public static class AgentView
         if (!string.IsNullOrEmpty(agent.Icon))
             infoCard = infoCard.WithView(BuildInfoRow("Icon", agent.Icon));
         infoCard = infoCard.WithView(BuildInfoRow("Display Order", agent.Order.ToString()));
-        if (!string.IsNullOrEmpty(agent.PreferredModel))
-            infoCard = infoCard.WithView(BuildInfoRow("Preferred Model", agent.PreferredModel));
         if (!string.IsNullOrEmpty(agent.ContextMatchPattern))
             infoCard = infoCard.WithView(BuildInfoRow("Context Pattern", agent.ContextMatchPattern));
 
@@ -257,7 +255,6 @@ public static class AgentView
         var iconNameDataId = Guid.NewGuid().AsString();
         var groupNameDataId = Guid.NewGuid().AsString();
         var orderDataId = Guid.NewGuid().AsString();
-        var preferredModelDataId = Guid.NewGuid().AsString();
         var contextMatchPatternDataId = Guid.NewGuid().AsString();
         var isDefaultDataId = Guid.NewGuid().AsString();
         var exposedInNavigatorDataId = Guid.NewGuid().AsString();
@@ -269,7 +266,6 @@ public static class AgentView
         host.UpdateData(iconNameDataId, agent.Icon ?? "");
         host.UpdateData(groupNameDataId, agent.GroupName ?? "");
         host.UpdateData(orderDataId, agent.Order.ToString());
-        host.UpdateData(preferredModelDataId, agent.PreferredModel ?? "");
         host.UpdateData(contextMatchPatternDataId, agent.ContextMatchPattern ?? "");
         host.UpdateData(isDefaultDataId, agent.IsDefault ? "true" : "false");
         host.UpdateData(exposedInNavigatorDataId, agent.ExposedInNavigator ? "true" : "false");
@@ -327,15 +323,6 @@ public static class AgentView
                 .WithPlaceholder("0")
                 .WithImmediate(true) with
             { DataContext = LayoutAreaReference.GetDataPointer(orderDataId) }));
-
-        // Preferred Model
-        stack = stack.WithView(Controls.Stack
-            .WithStyle(formStyle)
-            .WithView(Controls.Html("<label style=\"font-weight: 500;\">Preferred Model:</label>"))
-            .WithView(new TextFieldControl(new JsonPointerReference(""))
-                .WithPlaceholder("e.g., claude-sonnet-4-5")
-                .WithImmediate(true) with
-            { DataContext = LayoutAreaReference.GetDataPointer(preferredModelDataId) }));
 
         // Context Match Pattern
         stack = stack.WithView(Controls.Stack
@@ -407,13 +394,12 @@ public static class AgentView
                     host.Stream.GetDataStream<string>(iconNameDataId).Take(1),
                     host.Stream.GetDataStream<string>(groupNameDataId).Take(1),
                     host.Stream.GetDataStream<string>(orderDataId).Take(1),
-                    host.Stream.GetDataStream<string>(preferredModelDataId).Take(1),
                     host.Stream.GetDataStream<string>(contextMatchPatternDataId).Take(1),
                     host.Stream.GetDataStream<string>(isDefaultDataId).Take(1),
                     host.Stream.GetDataStream<string>(exposedInNavigatorDataId).Take(1),
                     host.Stream.GetDataStream<string>(instructionsDataId).Take(1),
                     (newDisplayName, newDescription, newIconName, newGroupName, newOrderStr,
-                     newPreferredModel, newContextMatchPattern, newIsDefaultStr, newExposedInNavigatorStr, newInstructions) =>
+                     newContextMatchPattern, newIsDefaultStr, newExposedInNavigatorStr, newInstructions) =>
                     {
                         if (!int.TryParse(newOrderStr, out var newOrder))
                             newOrder = 0;
@@ -426,7 +412,6 @@ public static class AgentView
                             Icon = string.IsNullOrWhiteSpace(newIconName) ? null : newIconName,
                             GroupName = string.IsNullOrWhiteSpace(newGroupName) ? null : newGroupName,
                             Order = newOrder,
-                            PreferredModel = string.IsNullOrWhiteSpace(newPreferredModel) ? null : newPreferredModel,
                             ContextMatchPattern = string.IsNullOrWhiteSpace(newContextMatchPattern) ? null : newContextMatchPattern,
                             IsDefault = newIsDefault,
                             ExposedInNavigator = newExposedInNavigator,

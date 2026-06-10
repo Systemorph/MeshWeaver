@@ -60,9 +60,8 @@ public class CopilotChatClientAgentFactory(
 
     protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {
-        // Agent's PreferredModel wins; CurrentModelName fills in only when the agent doesn't pin one.
-        var modelName = !string.IsNullOrEmpty(agentConfig.PreferredModel) ? agentConfig.PreferredModel
-            : !string.IsNullOrEmpty(CurrentModelName) ? CurrentModelName
+        // Model comes from the chat composer selection.
+        var modelName = !string.IsNullOrEmpty(CurrentModelName) ? CurrentModelName
             : configuration.Models.FirstOrDefault();
 
         logger.LogInformation(

@@ -1281,12 +1281,10 @@ public class AgentChatClient : IAgentChat
         // if the new attempt succeeds.
         lastAgentCreationError = null;
 
-        // Per-agent factory selection. The agent's PreferredModel is the source
-        // of truth (see ChatClientAgentFactory subclasses' CreateChatClient
-        // precedence). currentModelName (the chat dropdown selection) is only
-        // used when the agent doesn't pin a model. Selecting the factory for
-        // each agent's effective model ensures we don't try to serve, e.g.,
-        // an OpenAI model on an Azure Foundry factory.
+        // Factory selection from the chat dropdown selection (currentModelName) — the
+        // single source of truth for the model, independent of the agent. Selecting the
+        // factory for that model ensures we don't try to serve, e.g., an OpenAI model on
+        // an Azure Foundry factory.
         // isPersistentFactory tracks the default factory's persistence mode for
         // legacy paths that haven't been threaded through per-agent.
         var defaultFactory = GetFactoryForModel(currentModelName);
@@ -1299,7 +1297,7 @@ public class AgentChatClient : IAgentChat
             return;
         }
         isPersistentFactory = defaultFactory.IsPersistent;
-        logger.LogDebug("[AgentChatClient] Default factory {FactoryName} for model {ModelName} (persistent={IsPersistent}); agents may select per-agent factories via PreferredModel",
+        logger.LogDebug("[AgentChatClient] Factory {FactoryName} for chat-selected model {ModelName} (persistent={IsPersistent})",
             defaultFactory.Name, currentModelName ?? "default", isPersistentFactory);
 
         var configs = loadedAgents.Select(a => a.AgentConfiguration).ToImmutableList();
@@ -1328,7 +1326,8 @@ public class AgentChatClient : IAgentChat
         // SelectAgent can fall back to a working one.
         foreach (var agentConfig in orderedConfigs)
         {
-            var effectiveModel = agentConfig.PreferredModel ?? currentModelName;
+            // Model is the chat composer's selection — fully independent of the agent.
+            var effectiveModel = currentModelName;
             var factory = GetFactoryForModel(effectiveModel) ?? defaultFactory;
             try
             {
@@ -1348,7 +1347,8 @@ public class AgentChatClient : IAgentChat
         var cyclicAgents = FindCyclicDelegations(configs);
         foreach (var agentConfig in cyclicAgents)
         {
-            var effectiveModel = agentConfig.PreferredModel ?? currentModelName;
+            // Model is the chat composer's selection — fully independent of the agent.
+            var effectiveModel = currentModelName;
             var factory = GetFactoryForModel(effectiveModel) ?? defaultFactory;
             try
             {
@@ -1444,7 +1444,7 @@ public class AgentChatClient : IAgentChat
         // AzureFoundry → catch-all for non-Claude). Falling back on Models[]
         // (the legacy mechanism) only matters for factories that haven't
         // overridden Supports — and Models[] is empty by default now since
-        // model env-vars were removed in favour of agent-declared PreferredModel.
+        // model env-vars were removed in favour of the chat composer selection.
         var factory = chatClientFactories
             .OrderBy(f => f.Order)
             .FirstOrDefault(f => f.Supports(modelName));
