@@ -275,15 +275,17 @@ PostPipeline fails closed when no context is set. The "silently stamp hub-self a
 
 Canonical reference: [AccessContextPropagation.md](src/MeshWeaver.Documentation/Data/Architecture/AccessContextPropagation.md).
 
-## 🚨 Reactive Pattern — Nothing Async Ever
+## 🚨🚨🚨 ABSOLUTE: Nothing async, EVER — *NO* `async`, *NO* `await`, *NO* `Task<T>` in hub/UI code
 
-**No `await`, no `async`, no `Task<T>` in hub-reachable code.** All hub code is `IObservable<T>` end-to-end.
+**The user is LITERALLY NEVER OK with `async`/`await`/`Task<T>`/`.ToTask()`/`TaskCompletionSource` in any hub-reachable OR Blazor-view/component code.** It runs continuations on the wrong scheduler, deadlocks the single-threaded action block, and (the 2026-06-10 chat regression) NotFound-storms a partition hub until the whole portal wedges. **Read [AsynchronousCalls.md](src/MeshWeaver.Documentation/Data/Architecture/AsynchronousCalls.md) BEFORE writing any call that touches the hub, a mesh node, or a stream.**
 
+Everything is `IObservable<T>` end-to-end — compose and **`.Subscribe(...)`**, never `await`:
+- **Create / read / update a node** → `meshService.CreateNode(node).Subscribe(...)` · `hub.Observe<TResp>(req).Subscribe(...)` · `workspace.GetMeshNodeStream(path).Update(cur => …).Subscribe(...)`. NEVER `await …Async()`. (For create-or-update use the reactive `hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node)).Subscribe(...)` — see `StaticRepoImporter` / `NodeCopyHelper`.)
 - Handlers, services, layout areas → return `IObservable<T>` (or `void` for fire-and-forget). Never `Task<T>`.
-- Compose with `.SelectMany`, `.Select`, `.Where`, `.Timeout`.
+- Compose with `.SelectMany`, `.Select`, `.Where`, `.Timeout`. Chain dependent work in `.SelectMany`, not `await`.
 - Click actions: `WithClickAction(ctx => { ...; return Task.CompletedTask; })` — never `async ctx =>`.
-- `TaskCompletionSource` in hub code = red flag — delete it, return `IObservable<T>`.
-- **Tests only**: `await .FirstAsync().ToTask()` is acceptable.
+- `async`/`await`/`Task.Run`/`TaskCompletionSource`/`.ToTask()`/`.Result`/`.Wait()` in hub or Blazor-view code = red flag — delete it, return/compose `IObservable<T>` and Subscribe.
+- **Tests only**: `await .FirstAsync().ToTask()` is acceptable. Nowhere else.
 
 ### 🚨🚨🚨 ABSOLUTE: `Observable.FromAsync` is NEVER tolerated
 
