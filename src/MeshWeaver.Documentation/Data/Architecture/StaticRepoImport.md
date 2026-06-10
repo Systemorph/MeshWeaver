@@ -1,57 +1,53 @@
 ---
 Name: Static-Repo Import (content-addressed, as an Activity)
 Category: Architecture
-Description: How a static repository (embedded docs, sample graphs, seed data) is materialized into a mesh partition — full content + prerender — exactly once per deploy, tracked as an Activity, idempotent via a source fingerprint stamped on the partition main node.
+Description: How a static repository (embedded docs, built-in agents, the model catalog, seed graphs) is materialized into a mesh partition — full content + prerender + a Space root — idempotently per content-version, tracked as a content-addressed Activity, through the one canonical upsert verb.
 Icon: DatabaseArrowDown
 ---
 
 # Static-Repo Import
 
-A **static repo** is authored content that ships *with the build* — embedded documentation (`MeshWeaver.Documentation`), sample graphs (`samples/Graph/Data`), node-type templates. It is the **source**, never the live serving copy. This doc defines the one canonical way to get a static repo into a partition so the partition is **served from the database** like any other.
+A **static repo** is authored content that ships *with the build* — embedded documentation (`MeshWeaver.Documentation`), the built-in agents (`MeshWeaver.AI`), the model catalog, sample graphs (`samples/Graph/Data`). It is the **source**, never the live serving copy. This doc defines the **one** way to get a static repo into a partition so the partition is **served from the database** like any other.
 
 ## The rule
 
-> **A static repo is materialized into its partition by the canonical node-create pipeline (content + prerender), exactly once per (deploy, content-version), tracked as a content-addressed `Activity`. No bespoke SQL, no per-instance races, no content-NULL shells.**
+> **A static repo is materialized into its partition through the single canonical upsert verb (`CreateOrUpdateNodeRequest`) — content + prerender + a `Space` root — idempotently per content-version, tracked as a content-addressed `Activity`, then reconciled (prune absent). No bespoke SQL, no hand-rolled `CreateNode`/stream-`Overwrite`, no per-instance races, no content-NULL shells.**
 
-### The import always creates a proper Space partition root
+## How to import a static repo (the whole recipe)
 
-Creating the partition **root** is a *standard step of every import*, not a per-source opt-in. Before the children, the importer ensures a `namespace="", id={Partition}` node typed **`Space`** exists — so the partition is routable, listed in `public.top_level_index`, and has a landing page. A source customizes it via `IStaticRepoSource.PartitionRoot` (e.g. the `Doc` welcome page that invites the reader to explore the docs or start a chat); when it returns `null` the importer synthesizes a generic `Space` root. The root is read by **exact** path (not `scope:descendants`, whose `LIKE 'P/%'` never matches the `namespace=""` root), created-if-absent / overwritten-if-present, and is **included in the fingerprint** so an edited welcome re-imports.
+To materialize partition **`P`** from a static repo:
 
-The partition **schema is provisioned before the activity-lock node is created** — the lock lives at `{Partition}/_Activity/…`, inside the partition schema, so on a fresh partition the lock create would otherwise fault (42P01; there is no lazy schema create). `EnsurePartitionProvisioned` is idempotent (promise-cached), so the later per-partition provisioning in the run is a no-op.
+1. **Implement [`IStaticRepoSource`](../../../MeshWeaver.Mesh.Contract/IStaticRepoSource.cs):**
+   - `Partition` → **the target partition name** (e.g. `"Doc"`). This *is* the target; it defaults to the repo's own partition — there is no separate "target" argument, you set it here.
+   - `Versioned` → `false` for authored content (fingerprint on content hash so an edited file re-imports); `true` if the nodes carry meaningful versions.
+   - `EnumerateSourceNodes()` → the partition's **children, with full `Content`** (e.g. `MarkdownContent`). Children + satellites only — never the `namespace=""` root.
+   - `PartitionRoot` (optional) → a curated `Space` root (`NodeType = "Space"`, `MarkdownContent` welcome). Return `null` to get a generic synthesized root.
+2. **Register it:** `services.AddSingleton<IStaticRepoSource>(new MyRepoSource())`, gated behind `Features:StaticRepoSync:Partitions` via `AddStaticRepoSync(serveFromPartition)`. For a synced partition the in-memory read-only static provider is skipped so Postgres serves + accepts the import.
+3. **That's it.** On boot, `StaticRepoImporter.ImportAll(hub)` runs every registered source. To import one source directly: `StaticRepoImporter.Import(hub, source)`.
 
-## When to use this
+Reference implementations: [`DocumentationStaticRepoSource`](../../../MeshWeaver.Documentation/DocumentationStaticRepoSource.cs), [`AgentStaticRepoSource`](../../../MeshWeaver.AI/AgentStaticRepoSource.cs), [`ModelStaticRepoSource`](../../../MeshWeaver.AI/ModelStaticRepoSource.cs). The importer: [`StaticRepoImporter`](../../../MeshWeaver.Graph/StaticRepoImporter.cs).
 
-Use it for **build-time content that must live in the DB and be served like any mesh node**: embedded docs, sample graphs, node-type / agent templates, seed data. The authored files are the **source of truth on disk**; this pattern turns them into **rows the partition serves**, refreshed automatically whenever the files change.
+## What the importer does, per source, per boot
 
-Do **not** use it for user-authored content (created live), or for content you're content to serve straight from the in-memory embedded overlay without DB persistence / search.
+1. **Resolve the Space root** — `source.PartitionRoot` or a synthesized generic `Space` — and fold it into the source node set.
+2. **Provision the partition schema** (`IPartitionStorageProvider.EnsurePartitionProvisioned`, lowercased, idempotent/promise-cached) **before** anything is written — the activity-lock node in step 4 lives at `{P}/_Activity/…`, *inside* the partition schema, so a fresh partition would otherwise fault (42P01 — there is no lazy schema create; see [GhostSchemaInvariantTests]).
+3. **Fingerprint + short-circuit** — `PartitionSourceFingerprint.Compute(nodes + root)`. If a `Succeeded` activity at `{P}/_Activity/import-{fingerprint}` already exists, **stop** (the common case on every boot).
+4. **Lock** — `CreateNode({P}/_Activity/import-{fingerprint})`. The node lifecycle makes the **first caller win**; concurrent replicas get "already exists" and stop. The activity *is* the lock and the durable "version vN imported at T" record.
+5. **Ensure the Space root** (standard step) via the canonical upsert — creating a `Space` triggers eager schema provisioning + the `Admin/Partition/{P}` routing prime + the admin grant; an existing root is updated. This makes the partition routable, listed in `public.top_level_index`, and gives it a landing page.
+6. **Upsert every source node** through **`CreateOrUpdateNodeRequest`** — the single canonical verb (the same one [`NodeCopyHelper`](../../../MeshWeaver.Graph/NodeCopyHelper.cs) uses). It **creates** absent nodes and **updates** existing ones (the owner **re-stamps Version**), running the full pipeline: prerender (`MarkdownContent.Parse`), embedding, satellites, access. User-claimed subtrees (`SyncBehavior != Include`) are skipped.
+7. **Prune (full-replace)** — delete target nodes absent from the source (except governance `_Policy`/`_Access`/`_Activity`), then `MarkSucceeded` / `MarkFailed`.
 
-## The pattern (the whole recipe, 5 steps)
+All writes run under `AccessService.ImpersonateAsSystem` (re-established at each write's own subscribe, since the System identity must reach the cross-hub write — see [AccessContextPropagation.md](AccessContextPropagation.md)).
 
-To make partition **`P`** materialize from a static repo: implement an [`IStaticRepoSource`](../../../MeshWeaver.Mesh.Contract/IStaticRepoSource.cs) (`Partition = "P"`, `EnumerateSourceNodes()` returning the authored nodes **with content**) and register it. On boot, for each registered source:
+### Why `CreateOrUpdateNodeRequest`, not CreateNode + Overwrite
 
-1. **Fingerprint** the source nodes → a content-version hash. `PartitionSourceFingerprint.Compute(nodes, versioned)`.
-2. **Short-circuit:** if `{P}/_Activity/import-{fingerprint}` already exists and is `Succeeded`, stop — this exact content is already imported (the common case on every boot).
-3. **Lock:** `CreateNode({P}/_Activity/import-{fingerprint})`. The mesh node-lifecycle makes the **first caller win**; concurrent replicas get "already exists" and stop. The activity node *is* both the lock and the durable "version vN imported at T" record.
-4. **Materialize:** for each source node, compute prerender (markdown → `MarkdownContent.Parse`), then upsert via `CreateOrUpdateNodeRequest` through the **canonical pipeline** — content, prerender, embedding, access all fall out of the normal write path. No SQL fork.
-5. **Reconcile + finish:** prune target nodes absent from the source (full-replace), and `MarkSucceeded` / `MarkFailed` the activity.
+The importer must be **idempotent over existing rows** (re-imports, eventually-consistent snapshots, and especially the migration backfill's content-NULL shadow rows). Plain `CreateNode` faults on an existing node; a hand-rolled stream-`Overwrite` re-asserts the *same* Version, which the owner drops as not-newer — so content silently never lands. The canonical `CreateOrUpdateNodeRequest` does the right thing for both cases and **increments the Version on update**, so the write is accepted and persists. This is non-negotiable: do not re-implement create/update in the importer.
 
-That's the entire pattern: **fingerprint + content-addressed activity + canonical upsert.** The id-is-the-fingerprint choice (step 2–3) is what makes it idempotent *and* single-execution with no separate lock. The reference implementation is [`StaticRepoImporter`](../../../MeshWeaver.Graph/StaticRepoImporter.cs).
-
-## What this replaces (and why)
-
-Before this pattern, docs were populated by `DocumentationBackfill` — a raw `INSERT INTO doc.mesh_nodes (… , content = NULL, …)` run inside the SQL migration. That had three defects:
-
-1. **Not served from the DB.** Rows were a *search index* (`content = NULL`); page content + `PreRenderedHtml` were expected to come from the in-memory `EmbeddedResourceStorageAdapter` at read time. When that read path isn't the serving source (distributed portal), doc pages render empty / 404 even though the row exists.
-2. **Forked logic.** Raw SQL bypassed the canonical `CreateNode` pipeline (prerender, embedding, satellite + access handling). Re-implementing all of it in SQL is a maintenance trap.
-3. **No clear lock / version.** "Did this content already import?" was a per-row hash table (`documentation_index`), not a partition-level fact, and nothing coordinated multiple portal replicas.
-
-The pattern below fixes all three: the embedded resources become a **source repo only**; serving comes from the **DB partition**, materialized through the **real pipeline**, **once**.
-
-## The three primitives
+## The two primitives
 
 ### 1. Source fingerprint — the content-version
 
-A deterministic, order-independent hash over the source node set:
+A deterministic, order-independent hash over the source node set (children **+ the Space root**):
 
 ```
 for each source node:  line = path + "\0" + (Versioned ? version : sha256(content))
@@ -59,99 +55,54 @@ sort lines by path                     // order MUST NOT affect the hash
 fingerprint = sha256( join(lines, "\n") )[..16]
 ```
 
-- Changes iff a node is **added, removed, or modified** (the line set changes).
-- Versioned partitions use `(path, version)` (cheap, no content read); unversioned static repos (embedded docs, `Versioned=false`) fall back to `(path, contentHash)`.
-- Helper: [`PartitionSourceFingerprint.Compute(IEnumerable<MeshNode>)`](../../../MeshWeaver.Mesh.Contract/PartitionSourceFingerprint.cs).
+Changes iff a node is added, removed, or modified — including an edited welcome (the root is in the set). Helper: [`PartitionSourceFingerprint.Compute`](../../../MeshWeaver.Mesh.Contract/PartitionSourceFingerprint.cs).
 
-### 2. Content-addressed Activity — the lock + the state
+### 2. Content-addressed Activity — the lock + the short-circuit
 
-The import runs as an [Activity](ActivityControlPlane.md) whose **id is the fingerprint**:
+The import runs as an [Activity](ActivityControlPlane.md) whose **id is the fingerprint**: `{Partition}/_Activity/import-{fingerprint}`.
 
-```
-{Partition}/_Activity/import-{fingerprint}
-```
-
-This single naming choice gives the whole lock for free:
-
-- **Same source ⇒ same name.** Two replicas both `CreateNodeRequest` that exact path → the mesh hub's node lifecycle makes the **first writer win**; the rest get "already exists" and observe instead of duplicate. No advisory lock, no leader election.
-- **Owning hub serializes.** The `_Activity` node is owned by one hub whose single-threaded action block runs the work once; `WatchControlPlane` reacts to `RequestedStatus = Running`. (`ActivityLog.Status`/`RequestedStatus`, `ActivityStatus` enum — see [ActivityControlPlane.md](ActivityControlPlane.md).)
-- **Changed source ⇒ new name** ⇒ a fresh import activity runs.
-- **Observable + cancellable** like every other activity (`hub.RequestActivityStatus` / `hub.CancelActivity`).
-
-Old `import-{prevHash}` nodes are kept as an **import history** (cheap; a visible "doc set vN imported at T" trail). Pruning is optional.
-
-### 3. Partition main node — the durable "what's installed"
-
-The partition root (`namespace="", id={Partition}`) carries the last successfully-imported fingerprint:
-
-```jsonc
-// MeshNode { Namespace="", Id="Doc" }.Content
-{ "importedSourceHash": "<fingerprint>", "importedAt": "<utc>", "nodeCount": 149 }
-```
-
-This is the **short-circuit**: on every boot, compute the source fingerprint and compare to the main node. Equal ⇒ **done, no activity, no work** (the common case). This is also where `public.top_level_index` (#16) reads the partition root, so maintaining this node keeps the partition routable and listable.
-
-## End-to-end flow (startup)
-
-```
-DocImport hosted service (per partition flagged ImportFromStaticRepo):
-  1. nodes        = source.EnumerateSourceNodes()        // LoadIndexableNodes() for Doc
-  2. fingerprint  = PartitionSourceFingerprint.Compute(nodes)
-  3. root         = GetMeshNodeStream(Partition).Take(1)  // partition main node
-  4. if root.ImportedSourceHash == fingerprint:  return   // ← short-circuit, no work
-  5. CreateNodeRequest({Partition}/_Activity/import-{fingerprint})   // first-writer-wins lock
-        Content = ActivityLog(Import) { Status = Running }
-  6. owning hub (WatchControlPlane → Running) runs ImportPartition:
-        for each source node:
-            content    = node.Content
-            prerender  = content is MarkdownContent md
-                           ? MarkdownContent.Parse(md.Content, path, path).PrerenderedHtml   // SHARED static
-                           : null
-            CreateNode( node with { Content, PreRenderedHtml = prerender } )   // canonical pipeline
-            AppendLog(activity, "imported {path}")
-        prune target nodes whose path ∉ source   // full-replace semantics (Install = Copy + RemoveMissing)
-        stamp main node { ImportedSourceHash = fingerprint, ImportedAt, NodeCount }
-        MarkSucceeded(activity)   // or MarkFailed(activity, error)
-```
-
-Single-execution holds three ways over: the **main-node short-circuit** (step 4) skips the common case; the **content-addressed CreateNode** (step 5) makes concurrent replicas converge to one node; the **owning hub's action block** (step 6) serialises the work.
+- **Same source ⇒ same id.** Concurrent replicas both `CreateNode` that exact path → first writer wins; the rest get "already exists" and observe. No advisory lock, no leader election.
+- **A `Succeeded` activity for the fingerprint is the durable "already imported" record** — the boot short-circuit reads it; equal fingerprint ⇒ no work.
+- **Changed source ⇒ new id** ⇒ a fresh import runs. Old `import-{prevHash}` activities remain as a visible import history.
 
 ## Why startup, not the SQL migration
 
-The SQL migration (`Memex.Database.Migration`) is a standalone process with **no live mesh** — it cannot post `CreateNodeRequest` or compute prerender through the pipeline. Doing the import there forces the bespoke-SQL fork this pattern removes. The portal boot **has** the live mesh, so the canonical pipeline is available there. The migration keeps owning **schema** (DDL); static-repo **content** is owned by this startup import. They sequence naturally — the import waits for the partition schema to exist (provisioned by [`PostgreSqlPartitionSubscriptionHostedService`](../../../MeshWeaver.Hosting.PostgreSql/PostgreSqlPartitionSubscriptionHostedService.cs)).
+The SQL migration (`Memex.Database.Migration`) is a standalone process with **no live mesh** — it cannot post `CreateOrUpdateNodeRequest` or compute prerender through the pipeline. The portal boot **has** the live mesh, so the canonical pipeline is available there. The migration owns **schema** (DDL); static-repo **content** is owned by this startup import. The content-addressed activity is exactly what makes "runs in the portal" safe across replicas (not "runs N times").
 
-Distributed-replica safety is exactly what the content-addressed activity buys — so "runs in the portal, not the one-shot migration job" no longer means "runs N times."
+(`DocumentationBackfill` — the old raw `INSERT … content = NULL` search-index write in the migration — is now redundant: the imported rows are content-bearing. It is harmless but its content-NULL rows, if present, are refilled by the import's upsert.)
+
+## Distributed serving (why this matters)
+
+In the **distributed (Orleans/PG) portal, routing does not consult the in-memory `EmbeddedResourceStorageAdapter`** — so a partition that is only served from the embedded overlay 404s / hangs. The static-repo import is what makes built-in partitions (Doc/Agent/Model) **served from the DB** there. The monolith (in-process embedded routing) works either way, so the cutover is gated by `Features:StaticRepoSync:Partitions` (default `["Doc","Agent","Model"]` for the distributed portal; monolith leaves it empty and keeps in-memory serving).
 
 ## Import / export symmetry
 
-Export is the inverse and shares the lock: an export activity at `{Partition}/_Activity/export-{…}` reads the partition subtree and writes the static-repo shape; before either direction starts, it checks for an in-flight `import-*` / `export-*` on the partition. One activity surface gates both.
+Export is the inverse and shares the lock: an export activity at `{Partition}/_Activity/export-{…}` reads the partition subtree and writes the static-repo shape; before either direction starts it checks for an in-flight `import-*` / `export-*`. One activity surface gates both.
 
 ## Reuse map (do not re-invent)
 
 | Need | Existing piece |
 |---|---|
-| Copy a node subtree as an activity | [`NodeCopyDispatchRequest`](../../../MeshWeaver.Graph/NodeCopyDispatchRequest.cs) + `NodeCopyHelper.CopyNodeTree` + `Templates/NodeCopy.csx` |
+| Upsert one node (create-or-update) | `CreateOrUpdateNodeRequest` (the single canonical verb) |
+| Copy/import an existing **mesh** subtree (node + children + satellites) as an activity | [`NodeCopyDispatchRequest`](../../../MeshWeaver.Graph/NodeCopyDispatchRequest.cs) + `NodeCopyHelper.CopyNodeTree` (`Force` = overwrite/full-replace) |
+| GUI import / copy / export | `ImportLayoutArea` (Import menu: namespace + Mesh Node/File/Folder), `CopyLayoutArea`, `MarkdownExport` |
 | Activity node + state machine | `ActivityLog` / `ActivityStatus` / `hub.WatchControlPlane` ([ActivityControlPlane.md](ActivityControlPlane.md)) |
 | Start/log/finish an activity | `NodeTypeCompilationActivity.Start/AppendLog/MarkSucceeded/MarkFailed` |
-| Enumerate embedded doc nodes (with content) | `DocumentationNodeProvider.LoadIndexableNodes()` |
+| Enumerate embedded doc nodes (with content) | `DocumentationNodeProvider.LoadIndexableNodes(jsonOptions)` — **pass the hub's `JsonSerializerOptions`** (camelCase + polymorphic `$type`), else `.json` nodes deserialize bare |
 | Prerender markdown | `MarkdownContent.Parse(content, path, path).PrerenderedHtml` |
-| Write the main node | `workspace.GetMeshNodeStream(partition).Update(...)` |
-| Per-partition startup hook | `IHostedService` (see `PostgreSqlPartitionSubscriptionHostedService`) |
 
-`NodeCopyHelper.CopyNodeTree` already preserves `PreRenderedHtml` but does **not compute** it — the import wraps it (or its own per-node path) with the `MarkdownContent.Parse` prerender step. `ImportNodesRequest` (in `ImportDeleteRequests.cs`) is **dead/unimplemented** — do not use it; this pattern supersedes it.
+`ImportNodesRequest` (in `ImportDeleteRequests.cs`) is **dead/unimplemented** — do not use it; this pattern supersedes it.
 
-## Implementation status / phases
+## Status
 
-- **Phase 1 — fingerprint. ✅ committed.** [`PartitionSourceFingerprint.Compute`](../../../MeshWeaver.Mesh.Contract/PartitionSourceFingerprint.cs) + 6/6 unit tests ([`PartitionSourceFingerprintTests`](../../../../test/MeshWeaver.Hosting.PostgreSql.Test/PartitionSourceFingerprintTests.cs)).
-- **Phase 2 — import machinery. ✅ committed (inert).** [`IStaticRepoSource`](../../../MeshWeaver.Mesh.Contract/IStaticRepoSource.cs), [`DocumentationStaticRepoSource`](../../../MeshWeaver.Documentation/DocumentationStaticRepoSource.cs), and [`StaticRepoImporter`](../../../MeshWeaver.Graph/StaticRepoImporter.cs) — content-addressed activity lock, fingerprint short-circuit, `CreateOrUpdate` upsert with prerender, status tracking. **Inert until Phase 3** (no `IStaticRepoSource` is registered yet, so nothing runs / no behaviour changes). Deferred within this phase: the **prune** step and the **main-node marker** — the committed importer's durable "already imported" record is the `Succeeded` `import-{fingerprint}` activity (the §3 main-node marker is a Phase-3 enhancement that *also* feeds `public.top_level_index`).
-- **Phase 3 — startup orchestration.** A generic `AddGraph` init hook (`WithInitialization(hub => RunAll(hub))`) that imports every registered `IStaticRepoSource` — **no-op when none is registered**, so monolith stays untouched by default. Sequenced after schema provisioning.
-- **Phase 4 — cut over docs (the activating, deployment-asymmetric step). ✅ done.** Register `DocumentationStaticRepoSource` and stop serving `Doc` from the embedded adapter so `CreateOrUpdate` writes reach the partition store. ⚠️ **Gated, not global:** distributed (PG) was broken (Orleans routing doesn't consult the embedded adapter → 404) and is *fixed* by the import; monolith *works* (in-process embedded routing) and keeps it. The cutover is opt-in (`AddDocumentation(serveFromPartition: …)` keyed on the PG/distributed path), **never a global demote**. It is enabled by `Features:StaticRepoSync:Partitions = ["Doc","Agent","Model"]` (Helm default; set explicitly per AKS env). `DocumentationBackfill`'s `content = NULL` search-index write is now redundant (the imported rows are content-bearing) but harmless. The import also creates the `Doc` Space root + welcome page (above), and the partition schema is the lowercased name (the `Documentation` `PartitionDefinition` carries an explicit lowercase `Schema` so no verbatim/capital ghost schema is provisioned).
-- **Phase 5 — export + general repos.** Export activity (`export-{…}` sharing the same lock); generalise to `samples/Graph/Data` seed import.
+Shipped and enabled for `Doc` / `Agent` / `Model` on the distributed portal. The migration backfill is superseded (content-NULL rows are refilled by the import).
 
-## Invariants (tests)
+## Invariants (tested — [`StaticRepoImporterTests`](../../../../test/MeshWeaver.Hosting.PostgreSql.Test/StaticRepoImporterTests.cs), [`PartitionSourceFingerprintTests`](../../../../test/MeshWeaver.Hosting.PostgreSql.Test/PartitionSourceFingerprintTests.cs))
 
 - Fingerprint is **order-independent** and changes on add/remove/modify.
-- Re-run with an unchanged source is a **no-op** (main-node short-circuit; zero `CreateNode`s).
-- Concurrent triggers for the same fingerprint produce **one** activity and **one** import (content-addressed create).
-- After import, doc rows have **non-NULL content and PreRenderedHtml**, and navigation resolves them from the DB (no embedded-adapter dependency).
-- A genuinely-absent page resolves to a fast, clean `NavigationPhase.NotFound` (no `DeliveryFailureException`), because absence is now real absence — not a content-NULL shell.
+- Import materializes children **with non-NULL content + `PreRenderedHtml`** (round-tripped from PG) and a `namespace=""` `Space` root.
+- Only the **lowercased** partition schema is provisioned — never a verbatim/capital ghost.
+- A **changed** source re-imports and **increments the Version** of updated nodes (the canonical-upsert guarantee).
+- An import over a **content-NULL row refills its content** (the migration-backfill shadow case).
+- A node **absent from the source is pruned** (full-replace).
+- Re-run with an unchanged source is a **no-op** (fingerprint short-circuit).
