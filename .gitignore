@@ -34,6 +34,9 @@ bld/
 # ...but keep build outputs (the dedicated deploy AppHost compiles here) ignored.
 /deploy/**/bin/
 /deploy/**/obj/
+# atioz tenant deployment env — kept out of the shared repo (untracked 2026-06-11).
+# Placed after the !/deploy/** re-include above so this re-exclusion wins.
+/deploy/aks/envs/atioz/
 
 # Visual Studio 2015/2017 cache/options directory
 .vs/
