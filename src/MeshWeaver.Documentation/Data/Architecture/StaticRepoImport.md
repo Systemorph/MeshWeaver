@@ -43,6 +43,18 @@ All writes run under `AccessService.ImpersonateAsSystem` (re-established at each
 
 The importer must be **idempotent over existing rows** (re-imports, eventually-consistent snapshots, and especially the migration backfill's content-NULL shadow rows). Plain `CreateNode` faults on an existing node; a hand-rolled stream-`Overwrite` re-asserts the *same* Version, which the owner drops as not-newer — so content silently never lands. The canonical `CreateOrUpdateNodeRequest` does the right thing for both cases and **increments the Version on update**, so the write is accepted and persists. This is non-negotiable: do not re-implement create/update in the importer.
 
+## Scope: mesh nodes vs. content-collection files
+
+The import materializes **mesh nodes** — a node's `Content` (e.g. `MarkdownContent`) and its prerendered HTML. It does **not** yet sync **content-collection files** — the binary/file assets a node references through the `content` (or `assets`, `files`, …) collection, e.g. an `@@content/logo.svg` image embed or an `@@content/sample.md` include on a doc page.
+
+Those files live in a **per-node content collection**, not in the node row: `ConfigureDefaultNodeHub` gives every node hub its own `content` collection rooted at `{Storage:BasePath}/content/{nodePath}` (`IsEditable`, `ExposeInChildren`), read via `IFileContentProvider.GetFileContent("content", "<file>")` **on that node's hub**. Because the collection is owned by the per-node hub (not the mesh hub the importer runs on), syncing a file is a **cross-hub write** — `SaveFileContent("content", "<file>", stream)` dispatched to the owning node's hub — distinct from the node upsert above.
+
+Consequence today: a synced doc page that embeds `@@content/<file>` renders blank on a fresh deployment (the runtime `content` collection — atioz: FileSystem `/mnt/content` — has no file there) until the file is uploaded. Shipping those sample assets requires a content-file sync step on `IStaticRepoSource` (a content-file surface the importer drains), which is **not implemented yet**.
+
+> **When it is built, it must go through the canonical content operation** — post `SaveContentRequest { CollectionName, FilePath, TextContent }` to the **owning node's address** (`o.WithTarget(new Address(nodePath))`), the same verb the `upload` tool (`ContentCollectionPlugin.UploadContent`) uses. The node hub handles it (it has `IFileContentProvider`) and serves the file back through `/static/{address}/content/<file>`. **Do NOT hand-roll a cross-hub `IFileContentProvider.SaveFileContent` from the importer.** Reuse the mesh content operation exactly as the node upsert reuses `CreateOrUpdateNodeRequest`. (`SaveContentRequest` currently lives in `MeshWeaver.AI`; the importer is in `MeshWeaver.Graph`, so the record moves to a shared assembly — `MeshWeaver.Mesh.Contract` — before the importer can post it.) `IStaticRepoSource` gains a content-file surface (default empty) that the importer drains under `ImpersonateAsSystem` after the node upsert.
+
+Until then, reference only files that exist in the deployed `content` collection, or embed via a node `Content` field rather than a collection file.
+
 ## The two primitives
 
 ### 1. Source fingerprint — the content-version
