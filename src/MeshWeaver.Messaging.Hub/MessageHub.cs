@@ -1635,6 +1635,25 @@ public sealed class MessageHub : IMessageHub
 
     private IMessageDelivery HandleDispose(IMessageDelivery<DisposeRequest> request)
     {
+        // 🚨 The root mesh hub (Address.Type == "mesh") is an irreplaceable,
+        // process-lifetime DI singleton — built ONCE via AddSingleton(BuildHub) and
+        // never rebuilt. DisposeRequest is a [SystemMessage] with NO permission gate,
+        // so ANY sender (including an unauthenticated external / RawJson client routed
+        // to mesh/<id>) could otherwise tear the whole mesh down: once disposed, every
+        // node operation times out at 60 s forever until the process restarts — the
+        // atioz mesh-wide outage on 2026-06-10. The host owns this hub's lifecycle and
+        // disposes it via a DIRECT Dispose() call (MeshTeardownExtensions.TeardownAsync
+        // on host shutdown), NEVER through the message bus — so refusing the message
+        // path here cannot block a legitimate shutdown. Per-node / portal / client hubs
+        // stay message-disposable (recycle, circuit teardown).
+        if (Address.Type == AddressExtensions.MeshType)
+        {
+            logger.LogWarning(
+                "Refused a message-routed DisposeRequest targeting the root mesh hub {Address} (sender={Sender}). " +
+                "The mesh hub's lifecycle is owned by host teardown, not the message bus.",
+                Address, request.Sender);
+            return request.Ignored();
+        }
         Dispose();
         return request.Processed();
     }
