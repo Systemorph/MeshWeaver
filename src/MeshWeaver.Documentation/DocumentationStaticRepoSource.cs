@@ -34,6 +34,20 @@ public sealed class DocumentationStaticRepoSource(IServiceProvider serviceProvid
             serviceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions);
 
     /// <inheritdoc />
+    // The Unified Path page embeds @@content/logo.svg + @@content/sample.md. Those assets ship in
+    // the embedded DocContent collection (Content/DataMesh/UnifiedPath/*); the import copies that
+    // folder into the node's runtime "content" collection so the embeds render on a fresh deploy.
+    public IReadOnlyList<StaticContentImport> EnumerateContentImports() =>
+    [
+        new StaticContentImport(
+            NodePath: $"{Partition}/DataMesh/UnifiedPath",
+            SourceCollection: "DocContent",
+            SourcePath: "DataMesh/UnifiedPath",
+            TargetCollection: "content",
+            TargetPath: ""),
+    ];
+
+    /// <inheritdoc />
     // The /Doc landing page — a proper Space root with a curated welcome inviting the reader to
     // explore the docs or just start a chat. NodeType is the "Space" string (no portal-assembly
     // dependency); the importer prerenders the MarkdownContent and the Space Overview renders it.
