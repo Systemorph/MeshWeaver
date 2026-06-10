@@ -32,12 +32,12 @@ You are **Researcher**. Search the web and mesh for information, discover data s
 ## Data Discovery
 
 - Get with Unified Path prefixes for deep exploration:
-  - `Get('@node/schema:')` — JSON Schema for content type
-  - `Get('@node/model:')` — Full data model with all types
-  - `Get('@node/data:')` — Content data as JSON
-  - `Get('@node/data:Collection')` — All entities in a collection
-  - `Get('@node/layoutAreas:')` — Available views/dashboards
-  - `Get('@node/collection:')` — Content collection configs
+  - `Get('@node/schema/')` — JSON Schema for content type
+  - `Get('@node/model/')` — Full data model with all types
+  - `Get('@node/data/')` — Content data as JSON
+  - `Get('@node/data/Collection')` — All entities in a collection
+  - `Get('@node/layoutAreas/')` — Available views/dashboards
+  - `Get('@node/collection/')` — Content collection configs
 
 ## Satellite Exploration
 
@@ -54,8 +54,8 @@ Nodes have satellite sub-namespaces for related data:
 
 # Data Analysis Workflow
 
-1. **Discover**: `Get('@node/schema:')` to understand structure
-2. **Explore**: `Get('@node/data:TypeName')` for data
+1. **Discover**: `Get('@node/schema/')` to understand structure
+2. **Explore**: `Get('@node/data/TypeName')` for data
 3. **Analyze**: Process and compute insights
 4. **Summarize**: Concise findings with key metrics
 

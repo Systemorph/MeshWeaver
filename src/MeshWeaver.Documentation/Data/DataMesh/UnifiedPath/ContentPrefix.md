@@ -115,7 +115,7 @@ The platform automatically selects a renderer based on file extension:
 
 **Result:**
 
-@@../content:logo.svg
+@@../content/logo.svg
 
 ## Link to a Markdown File
 
@@ -128,7 +128,7 @@ Use single `@` to produce a clickable navigation link instead of an inline embed
 
 **Result:**
 
-@../content:sample.md
+@../content/sample.md
 
 ## Custom Collection Name
 

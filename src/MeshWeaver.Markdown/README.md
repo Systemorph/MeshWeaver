@@ -76,8 +76,8 @@ MeshWeaver.Markdown supports unified content references for embedding various ty
 Basic syntax:
 ```markdown
 @app/dashboard/Overview
-@data:app/myapp/Products
-@content:app/docs/readme.md
+@data/app/myapp/Products
+@content/app/docs/readme.md
 ```
 
 For paths with spaces or special characters, use quotes:
@@ -96,7 +96,7 @@ Display a layout area from another address:
 
 ```markdown
 @app/dashboard/Overview
-@area:app/dashboard/UserDetails/user123
+@area/app/dashboard/UserDetails/user123
 ```
 
 Format: `area:addressType/addressId/areaName[/areaId]`
@@ -111,8 +111,8 @@ Paths without a prefix default to `area:`, so these are equivalent:
 Display data as JSON or in a structured format:
 
 ```markdown
-@data:app/myapp/Users
-@data:app/myapp/Users/user123
+@data/app/myapp/Users
+@data/app/myapp/Users/user123
 ```
 
 Format: `data:addressType/addressId[/collection[/entityId]]`
@@ -125,8 +125,8 @@ Format: `data:addressType/addressId[/collection[/entityId]]`
 Display file content based on its mime type:
 
 ```markdown
-@content:app/myapp/Documents/report.pdf
-@content:app/myapp/Documents@2024/annual-report.pdf
+@content/app/myapp/Documents/report.pdf
+@content/app/myapp/Documents@2024/annual-report.pdf
 ```
 
 For paths with spaces, use quoted syntax:

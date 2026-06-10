@@ -56,7 +56,7 @@ MeshWeaver generates UI where the data lives. Instead of shipping large datasets
 
 The design philosophy is easiest to grasp with a concrete example. Suppose you need to display a million-row dataset as a 10 × 10 summary table. The naive approach transfers all one million rows to the client; MeshWeaver transfers only the 100 aggregated numbers:
 
-@@content:data-compression.svg
+@@content/data-compression.svg
 
 This pattern applies everywhere — charts, grids, KPI tiles — and becomes especially powerful when data is sensitive or very large.
 

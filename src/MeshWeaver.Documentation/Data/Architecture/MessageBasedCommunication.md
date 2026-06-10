@@ -47,7 +47,7 @@ MessageHubs can be deployed across any cloud environment (Azure, AWS, on-premise
 </svg>
 *MessageHub topology: hubs communicate via a central message bus; each hub processes its queue single-threaded and may delegate to child hubs.*
 
-@@content:message-flow.svg
+@@content/message-flow.svg
 
 ---
 

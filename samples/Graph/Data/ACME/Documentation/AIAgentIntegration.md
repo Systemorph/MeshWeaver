@@ -134,7 +134,7 @@ Agent: "Created 'Demo environment setup' in Engineering category with Medium pri
 The agent demonstrates sophisticated behavior by first retrieving available categories through the `MeshPlugin`, then matching user input to existing categories. This prevents data inconsistencies and provides a better user experience:
 
 1. **User Input**: "Add a marketing review task for the campaign"
-2. **Category Discovery**: Agent calls `Get("@ACME/Project/Todo/schema:")` to see available categories
+2. **Category Discovery**: Agent calls `Get("@ACME/Project/Todo/schema/")` to see available categories
 3. **Intelligent Matching**: Agent matches "marketing review" to the "Marketing" category
 4. **Todo Creation**: Agent calls `Update()` with properly structured Todo JSON
 

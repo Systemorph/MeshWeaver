@@ -156,10 +156,10 @@ With any other prefix, it accesses files from a content collection.
 
 - `Get('@Doc/Architecture')` — Get a specific node
 - `Get('@NodeType/*')` — List all available node types
-- `Get('@Doc/DataMesh/data:')` — Get the node's content data as JSON
-- `Get('@Doc/DataMesh/schema:')` — Get content type schema
-- `Get('@Doc/DataMesh/model:')` — Get the full data model
-- `Get('@Doc/DataMesh/layoutAreas:')` — List available layout areas
+- `Get('@Doc/DataMesh/data/')` — Get the node's content data as JSON
+- `Get('@Doc/DataMesh/schema/')` — Get content type schema
+- `Get('@Doc/DataMesh/model/')` — Get the full data model
+- `Get('@Doc/DataMesh/layoutAreas/')` — List available layout areas
 
 ## Search
 
@@ -306,14 +306,14 @@ The `path` of a node is derived as `{namespace}/{id}` (or just `{id}` for root-l
 
 Before creating a node, discover what content fields are expected:
 
-- `Get('@Doc/Architecture/schema:')` — Returns the JSON Schema for the node's content type
-- `Get('@Doc/Architecture/schema:TypeName')` — Returns the JSON Schema for a specific named type
-- `Get('@Doc/Architecture/model:')` — Returns the full data model with all registered types
+- `Get('@Doc/Architecture/schema/')` — Returns the JSON Schema for the node's content type
+- `Get('@Doc/Architecture/schema/TypeName')` — Returns the JSON Schema for a specific named type
+- `Get('@Doc/Architecture/model/')` — Returns the full data model with all registered types
 
 ### Workflow
 
 1. Find an existing node of the type you want to create, or the namespace where you want to create
-2. Retrieve its content schema: `Get('@Doc/Architecture/schema:')`
+2. Retrieve its content schema: `Get('@Doc/Architecture/schema/')`
 3. Construct the MeshNode JSON with all required fields
 4. Call Create with the JSON
 
@@ -400,7 +400,7 @@ When the user asks about **reports**, **views**, **charts**, **analysis**, **das
 Use the `layoutAreas:` prefix to list all available layout areas for a node:
 
 ```
-Get('@Doc/Architecture/layoutAreas:')
+Get('@Doc/Architecture/layoutAreas/')
 ```
 
 This returns an array of `LayoutAreaDefinition` objects with `Area`, `Title`, `Description`, `Group`, and `Order` fields.
@@ -410,7 +410,7 @@ This returns an array of `LayoutAreaDefinition` objects with `Area`, `Title`, `D
 Use the `area:` prefix to download a layout area's data for analysis:
 
 ```
-Get('@Doc/Architecture/area:AreaName')
+Get('@Doc/Architecture/area/AreaName')
 ```
 
 This returns the area's data as an EntityStore, which you can analyze and summarize.

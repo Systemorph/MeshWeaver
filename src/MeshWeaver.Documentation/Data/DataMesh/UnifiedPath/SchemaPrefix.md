@@ -52,33 +52,33 @@ The `schema/` prefix lets you embed a type's JSON Schema definition directly int
 
 | Reference | What it embeds |
 |-----------|----------------|
-| `@@schema:` | Schema of the current node (self-reference) |
-| `@@Doc/DataMesh/UnifiedPath/schema:MeshNode` | Built-in `MeshNode` schema |
-| `@@Doc/DataMesh/UnifiedPath/schema:CustomType` | Any registered custom type |
+| `@@schema/` | Schema of the current node (self-reference) |
+| `@@Doc/DataMesh/UnifiedPath/schema/MeshNode` | Built-in `MeshNode` schema |
+| `@@Doc/DataMesh/UnifiedPath/schema/CustomType` | Any registered custom type |
 
 # Embedding the MeshNode Schema
 
 The following reference embeds the full schema for the built-in `MeshNode` type:
 
 ```
-@@Doc/DataMesh/UnifiedPath/schema:MeshNode
+@@Doc/DataMesh/UnifiedPath/schema/MeshNode
 ```
 
 **Live result:**
 
-@@../schema:MeshNode
+@@../schema/MeshNode
 
 # Embedding a Self-Schema
 
 Use an empty type name to embed the schema of the node you are currently editing. This is useful for NodeType documentation pages that need to describe their own shape:
 
 ```
-@@Doc/DataMesh/UnifiedPath/SchemaPrefix/schema:
+@@Doc/DataMesh/UnifiedPath/SchemaPrefix/schema/
 ```
 
 **Live result:**
 
-@@schema:
+@@schema/
 
 # How Schemas Are Rendered
 

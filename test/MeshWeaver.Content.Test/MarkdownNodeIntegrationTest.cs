@@ -879,6 +879,86 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
     #endregion
 
+    #region UCR Slash-Form (migrated) Tests
+
+    // These lock in the migrated {prefix}/{path} slash form (replacing the legacy
+    // {prefix}:{path} colon form) for every prefix used in the shipped docs/samples.
+    // The slash form is the preferred Unified Path syntax (Doc/DataMesh/UnifiedPath).
+
+    [Fact(Timeout = 20000)]
+    public void ContentSlashReference_WithPath_ParsesCorrectly()
+    {
+        var markdown = "@@Doc/DataMesh/UnifiedPath/content/logo.svg";
+        var pipeline = new MarkdownPipelineBuilder().Use(new LayoutAreaMarkdownExtension()).Build();
+        var document = Markdig.Markdown.Parse(markdown, pipeline);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("Doc/DataMesh/UnifiedPath");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.ContentAreaName);
+        layoutArea.Id.Should().Be("logo.svg");
+        layoutArea.IsInline.Should().BeTrue();
+    }
+
+    [Fact(Timeout = 20000)]
+    public void ContentSlashReference_DeepPath_ParsesCorrectly()
+    {
+        // Mirrors samples/Graph/Data/Cornerstone/.../UnifiedReferences.md
+        var markdown = "@@Cornerstone/Microsoft/2026/content/Submissions/Slip.md";
+        var pipeline = new MarkdownPipelineBuilder().Use(new LayoutAreaMarkdownExtension()).Build();
+        var document = Markdig.Markdown.Parse(markdown, pipeline);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("Cornerstone/Microsoft/2026");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.ContentAreaName);
+        layoutArea.Id.Should().Be("Submissions/Slip.md");
+        layoutArea.IsInline.Should().BeTrue();
+    }
+
+    [Fact(Timeout = 20000)]
+    public void DataSlashReference_WithType_ParsesCorrectly()
+    {
+        // Mirrors samples/Graph/Data/Northwind/.../UnifiedReferences.md (@Northwind/data/Order)
+        var markdown = "@Northwind/data/Order";
+        var pipeline = new MarkdownPipelineBuilder().Use(new LayoutAreaMarkdownExtension()).Build();
+        var document = Markdig.Markdown.Parse(markdown, pipeline);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("Northwind");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
+        layoutArea.Id.Should().Be("Order");
+        layoutArea.IsInline.Should().BeFalse();
+    }
+
+    [Fact(Timeout = 20000)]
+    public void SchemaSlashReference_WithType_ParsesCorrectly()
+    {
+        var markdown = "@@Doc/DataMesh/UnifiedPath/schema/MeshNode";
+        var pipeline = new MarkdownPipelineBuilder().Use(new LayoutAreaMarkdownExtension()).Build();
+        var document = Markdig.Markdown.Parse(markdown, pipeline);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("Doc/DataMesh/UnifiedPath");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.SchemaAreaName);
+        layoutArea.Id.Should().Be("MeshNode");
+        layoutArea.IsInline.Should().BeTrue();
+    }
+
+    [Fact(Timeout = 20000)]
+    public void DataSlashReference_DeepPath_ParsesCorrectly()
+    {
+        var markdown = "@@Cornerstone/Microsoft/2026/data/PropertyRisk";
+        var pipeline = new MarkdownPipelineBuilder().Use(new LayoutAreaMarkdownExtension()).Build();
+        var document = Markdig.Markdown.Parse(markdown, pipeline);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("Cornerstone/Microsoft/2026");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
+        layoutArea.Id.Should().Be("PropertyRisk");
+        layoutArea.IsInline.Should().BeTrue();
+    }
+
+    #endregion
+
     #region Interactive Markdown Tests
 
     /// <summary>

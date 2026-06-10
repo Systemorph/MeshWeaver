@@ -88,12 +88,12 @@ An empty path after `data:` is a self-reference — it surfaces all data collect
 
 **Syntax:**
 ```
-@@Doc/DataMesh/UnifiedPath/DataPrefix/data:
+@@Doc/DataMesh/UnifiedPath/DataPrefix/data/
 ```
 
 **Result:**
 
-@@data:
+@@data/
 
 ---
 
@@ -103,12 +103,12 @@ You can walk up the path hierarchy to embed collections from a parent or sibling
 
 **Syntax:**
 ```
-@Doc/DataMesh/UnifiedPath/data:
+@Doc/DataMesh/UnifiedPath/data/
 ```
 
 **Result:**
 
-@../data:
+@../data/
 
 ---
 

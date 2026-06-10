@@ -56,7 +56,7 @@ Never create under `Agent/` or other system namespaces unless explicitly asked.
 
 ## Creating Nodes
 
-1. **Discover the schema**: `Get('@target-namespace/schema:')` to see required fields
+1. **Discover the schema**: `Get('@target-namespace/schema/')` to see required fields
 2. **Construct the MeshNode JSON** with required properties:
    - `id` — simple slug identifier, **NO slashes** (e.g., "PricingTool", "Q1-Report")
    - `namespace` — full parent path (e.g., "ACME", "User/rbuergi"). This is where the node lives.
