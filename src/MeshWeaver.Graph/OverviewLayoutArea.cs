@@ -167,9 +167,10 @@ public static class OverviewLayoutArea
 
     /// <summary>
     /// Sets up auto-save: watches local data stream for changes and persists via DataChangeRequest.
-    /// Follows the exact pattern from InlineEditingTest.cs but for MeshNode content.
+    /// Follows the exact pattern from InlineEditingTest.cs but for MeshNode content. Public so other
+    /// node layout areas (e.g. the chat composer) persist their data-bound content the SAME standard way.
     /// </summary>
-    internal static void SetupAutoSave(
+    public static void SetupAutoSave(
         LayoutAreaHost host,
         string dataId,
         object instance,

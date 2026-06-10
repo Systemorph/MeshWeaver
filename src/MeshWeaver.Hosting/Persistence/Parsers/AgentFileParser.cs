@@ -120,7 +120,6 @@ public class AgentFileParser : IFileFormatParser
                 AgentPath = h.AgentPath ?? "",
                 Instructions = h.Instructions
             }).ToList(),
-            PreferredModel = frontMatter.PreferredModel,
             ContextMatchPattern = frontMatter.ContextMatchPattern,
             Order = frontMatter.Order
         };
@@ -167,7 +166,6 @@ public class AgentFileParser : IFileFormatParser
             IsDefault = agentConfig?.IsDefault ?? false,
             ExposedInNavigator = agentConfig?.ExposedInNavigator ?? false,
             ContextMatchPattern = agentConfig?.ContextMatchPattern,
-            PreferredModel = agentConfig?.PreferredModel,
             Order = agentConfig?.Order ?? 0,
             CustomIconSvg = agentConfig?.CustomIconSvg,
             Delegations = agentConfig?.Delegations?.Select(d => new DelegationFrontMatter
@@ -244,7 +242,6 @@ public class AgentFileParser : IFileFormatParser
                 GroupName = ExtractString(element, "groupName"),
                 IsDefault = ExtractBool(element, "isDefault"),
                 ExposedInNavigator = ExtractBool(element, "exposedInNavigator"),
-                PreferredModel = ExtractString(element, "preferredModel"),
                 ContextMatchPattern = ExtractString(element, "contextMatchPattern"),
                 Order = ExtractInt(element, "order"),
                 Delegations = ExtractDelegations(element),
@@ -394,7 +391,6 @@ public class AgentFileParser : IFileFormatParser
         public bool IsDefault { get; set; }
         public bool ExposedInNavigator { get; set; }
         public string? ContextMatchPattern { get; set; }
-        public string? PreferredModel { get; set; }
         public int Order { get; set; }
         public string? CustomIconSvg { get; set; }
         public List<DelegationFrontMatter>? Delegations { get; set; }

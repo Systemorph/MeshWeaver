@@ -147,7 +147,6 @@ public class AgentFileParserTest
         agentConfig.IsDefault.Should().BeTrue();
         agentConfig.ExposedInNavigator.Should().BeTrue();
         agentConfig.ContextMatchPattern.Should().Be("address=like=*Test*");
-        agentConfig.PreferredModel.Should().Be("gpt-4");
         agentConfig.Order.Should().Be(10);
     }
 
@@ -505,7 +504,6 @@ public class AgentFileParserTest
         agentConfig.IsDefault.Should().BeTrue();
         agentConfig.ExposedInNavigator.Should().BeTrue();
         agentConfig.ContextMatchPattern.Should().Be("address=like=*Test*");
-        agentConfig.PreferredModel.Should().Be("gpt-4");
         agentConfig.Order.Should().Be(5);
         agentConfig.Delegations.Should().HaveCount(1);
         agentConfig.Delegations![0].AgentPath.Should().Be("Helper");

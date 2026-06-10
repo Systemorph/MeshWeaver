@@ -19,6 +19,18 @@ These are band-aids, and proposing one as "the fix" is forbidden:
 
 If active bleeding genuinely needs a stopgap before the real fix lands, say so EXPLICITLY: "this is a temporary stopgap; the root cause is X; I will fix X" — then fix X. Default to writing a **deterministic repro** (a concurrency/deadlock test if that's the failure mode) that pins the true cause before changing code, so the fix is proven, not guessed. Full reference: memory `feedback_no_bandaids`.
 
+## 🚨🚨🚨 ABSOLUTE: Never hand-roll UI / data-binding / persistence / submit — use the framework
+
+**A "UI feature" means wiring up the framework's EXISTING pieces, never reinventing them.** The framework already does data binding, node-content editing, auto-persistence, picking, and thread submission ONE standard way that every layout area uses. Hand-rolling a parallel version is FORBIDDEN.
+
+- **Editing a mesh node's content, data-bound + auto-persisting** → the **standard node edit** (`MeshNodeLayoutAreas` → `WithView(EditArea, EditNode)`) / `MeshNodePropertyEditor`. **Every** node layout area (Overview, Settings, Edit, …) binds to the node and persists the SAME way — set yours up identically. Do NOT write `host.Hub.Edit(observable, result)` + a manual `GetMeshNodeStream().Update(...)` save.
+- **Auto-save** is built into the standard editor (`MeshNodePropertyEditor.Save → UpdateMeshNode`). NEVER write `GetDataStream<T>(id).Skip(1).Throttle(...).Subscribe(... Update ...)`.
+- **Picking a mesh node** → `[MeshNode("query")]` → `MeshNodePickerControl` (stores the node PATH). **Form controls** → the `Edit` macro + `[UiControl<T>]`/`[Description]`/`[Editable(false)]`. Don't hand-build selects/checkboxes/textareas + a data section.
+- **Submitting a chat message** → existing `hub.StartThread(...)` / `hub.SubmitMessage(...)` (see the thread tests: `client.SubmitMessage(threadPath, text, …)`). No wrapper class, no path→id resolution, no create-or-submit logic beyond those APIs. Pass node PATHS through; downstream loads the node (e.g. `StartThread` takes a model PATH and loads the model from its mesh-node stream — don't pre-resolve an id).
+- **Never** `.Take(1)` on a stream feeding a live data-bound view — it freezes the binding (GUI/DataBinding.md).
+
+Before writing ANY UI/binding/persistence code, FIND the existing framework area/control/macro/extension and use it. If you're reaching for `GetDataStream`/`Subscribe`/`Update`/`CombineLatest`/a new wrapper for a UI feature, STOP. Full reference: memory `feedback_no_handrolling`; GUI/DataBinding.md; the data-bind tests (`InlineEditingWorkflowTest`).
+
 ## 🚨🚨🚨 ABSOLUTE: Never change log levels in code for debug reasons
 
 **Editing `LogInformation` ↔ `LogDebug` ↔ `LogTrace` (or `appsettings.json` under `src/`) to dial verbosity up or down for a debugging session is FORBIDDEN.** Log levels in code reflect the production cost model — `Information` lines ship to App Insights and we pay per ingest. Changing them temporarily silently bleeds budget the next CI run.

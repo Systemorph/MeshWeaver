@@ -48,10 +48,8 @@ public class OpenAIChatClientAgentFactory(
 
     protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {
-        // Agent's PreferredModel wins; then the chat-dropdown selection; then
-        // the first configured model as a last resort.
-        var modelName = !string.IsNullOrEmpty(agentConfig.PreferredModel) ? agentConfig.PreferredModel
-            : !string.IsNullOrEmpty(CurrentModelName) ? CurrentModelName
+        // Model comes from the chat composer selection; first configured model as a last resort.
+        var modelName = !string.IsNullOrEmpty(CurrentModelName) ? CurrentModelName
             : credentials.Models.FirstOrDefault();
 
         if (string.IsNullOrEmpty(modelName))
