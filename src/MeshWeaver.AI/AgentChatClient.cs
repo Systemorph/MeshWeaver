@@ -67,6 +67,24 @@ public class AgentChatClient : IAgentChat
     private string? lastAgentCreationError;
 
     /// <summary>
+    /// Formats the no-agent failure into an APPROPRIATE chat output — never a crash.
+    /// The common cause is "no model configured" (every agent skipped via the unconfigured
+    /// catch-all factory); surface that with a clear, actionable hint plus the raw detail.
+    /// </summary>
+    private static string FormatNoAgentError(string? detail)
+    {
+        detail ??= "No suitable agent found to handle the request.";
+        var noModel = detail.Contains("must be configured", StringComparison.OrdinalIgnoreCase)
+                      || detail.Contains("no model", StringComparison.OrdinalIgnoreCase)
+                      || detail.Contains("no registered IChatClientFactory", StringComparison.OrdinalIgnoreCase);
+        return noModel
+            ? "⚠️ No AI model is available to run this request. Configure a language-model provider "
+              + "(Settings → Language Models) and select a model, or switch to the Claude Code harness.\n\n"
+              + $"_Details: {detail}_"
+            : detail;
+    }
+
+    /// <summary>
     /// Mesh-discovered models — bring-your-own-model entries from
     /// <c>nodeType:Model</c> nodes. Surfaced into ThreadChatView's picker
     /// alongside the factory-provided defaults.
@@ -589,8 +607,10 @@ public class AgentChatClient : IAgentChat
         var agent = SelectAgent(messages.LastOrDefault());
         if (agent == null)
         {
-            yield return new ChatMessage(ChatRole.Assistant,
-                lastAgentCreationError ?? "No suitable agent found to handle the request.");
+            // Never crash — surface the real reason AS the chat output. The common case
+            // is "no model configured" (every agent skipped via the unconfigured catch-all
+            // factory), so make that actionable.
+            yield return new ChatMessage(ChatRole.Assistant, FormatNoAgentError(lastAgentCreationError));
             yield break;
         }
 
@@ -712,8 +732,8 @@ public class AgentChatClient : IAgentChat
         var agent = SelectAgent(messages.LastOrDefault());
         if (agent == null)
         {
-            yield return new ChatResponseUpdate(ChatRole.Assistant,
-                lastAgentCreationError ?? "No suitable agent found to handle the request.");
+            // Never crash — surface the real reason AS the streamed chat output.
+            yield return new ChatResponseUpdate(ChatRole.Assistant, FormatNoAgentError(lastAgentCreationError));
             yield break;
         }
 

@@ -163,10 +163,33 @@ public static class InboxTool
     {
         ArgumentNullException.ThrowIfNull(threadHub);
 
-        // MEAI AIFunction surface requires Task<string>; CheckInbox is the IObservable<string>
-        // production surface. The .FirstAsync().ToTask() bridge runs only at this boundary.
+        // 🚨 check_inbox is invoked from INSIDE the round's streaming loop, which already runs on
+        // the AI IoPool slot (ThreadExecution's aiPool.Invoke) — i.e. OFF the thread hub's action
+        // block — and in tests it is invoked directly from the test thread. So the drain runs off
+        // the action block in BOTH cases; there is nothing to offload. It must NOT re-acquire an
+        // AI-pool slot: a round already holds one for the whole round, and grabbing slot N+1 of the
+        // SAME pool from inside it is the re-entrant "capped pool exhausts" anti-pattern (CLAUDE.md).
+        // The only thing the drain needs is the caller's identity: capture the AccessContext
+        // synchronously (ThreadExecution re-seeded the user on the round thread) and re-seed it on
+        // Subscribe via Observable.Defer — identical to MeshPlugin.WithContext, the pattern every
+        // other reactive tool uses — then bridge the cold observable to the ValueTask the AIFunction
+        // surface requires. CheckInbox's own Timeout(5s)+Catch bound it; no pool, no re-entrancy.
         return AIFunctionFactory.Create(
-            method: () => CheckInbox(threadHub, logger).FirstAsync().ToTask(),
+            method: (CancellationToken ct) =>
+            {
+                var access = threadHub.ServiceProvider.GetService<AccessService>();
+                // Capture on the calling thread (where the identity is reliable) and re-apply it on
+                // Subscribe so the drain's CreateNode/Update carry the user identity past any thread
+                // hop — a lost AsyncLocal would RLS-deny the writes.
+                var captured = access?.Context ?? access?.CircuitContext;
+                return Observable.Defer(() =>
+                    {
+                        if (captured is not null)
+                            access?.SetContext(captured);
+                        return CheckInbox(threadHub, logger);
+                    })
+                    .FirstAsync().ToTask(ct);
+            },
             name: ToolName,
             description: ToolDescription);
     }
