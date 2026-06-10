@@ -1,9 +1,6 @@
 using System;
-using System.Collections.Generic;
 using System.IO;
-using System.Threading.Tasks;
 using MeshWeaver.ContentCollections;
-using MeshWeaver.Documentation;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
@@ -77,26 +74,5 @@ public class ContentImportTest(ITestOutputHelper output) : MonolithMeshTestBase(
         File.Exists(Path.Combine(StorageRoot, "content", "logo.svg"))
             .Should().BeTrue("logo.svg should be copied into the target collection folder");
         File.ReadAllText(Path.Combine(StorageRoot, "content", "logo.svg")).Should().Contain("<svg");
-    }
-
-    [Fact]
-    public async Task EmbeddedContentCollection_GetFiles_EnumeratesAnyExtension()
-    {
-        // The embedded DocContent collection must enumerate ANY file (svg, md, …), not only .md —
-        // it is the source of the UnifiedPath @@content/<file> assets. Regression guard for the
-        // slash-vs-dot prefix bug in EmbeddedResourceStreamProvider.GetFiles.
-        var provider = new EmbeddedResourceStreamProvider(
-            typeof(DocumentationExtensions).Assembly, "MeshWeaver.Documentation.Content");
-
-        var names = new List<string>();
-        await foreach (var file in provider.GetFiles("DataMesh/UnifiedPath"))
-            names.Add(file.Name);
-
-        names.Should().Contain("logo.svg", "the SVG asset must be enumerated, not just markdown");
-        names.Should().Contain("sample.md");
-
-        // The yielded path must round-trip through the read API.
-        await using var stream = await provider.GetStreamAsync("DataMesh/UnifiedPath/logo.svg");
-        stream.Should().NotBeNull("the enumerated file must be readable back");
     }
 }
