@@ -153,21 +153,24 @@ public class EmbeddedResourceStreamProvider(Assembly assembly, string basePath) 
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         EnsureInitialized();
-        var normalizedPath = path.TrimStart('/').Replace('/', '.');
-        var files = resourcePaths.Keys
-            .Where(p => p.StartsWith(normalizedPath, StringComparison.OrdinalIgnoreCase))
-            .Where(p =>
-            {
-                var relativePath = p[(normalizedPath.Length == 0 ? 0 : normalizedPath.Length + 1)..];
-                return !relativePath.Contains('.') || relativePath.EndsWith(".md", StringComparison.OrdinalIgnoreCase);
-            });
-        foreach (var p in files)
+        // resourcePaths keys are already clean slash-paths with extension (see ExtractPath), e.g.
+        // "DataMesh/UnifiedPath/logo.svg". Match by the slash-path prefix (NOT a dot-path — the old
+        // code converted '/'→'.' and never matched the slash keys, so only the .md fallback ever
+        // surfaced, and even that yielded a mangled "md.md" name). Enumerate ANY direct-child file of
+        // any extension under the path — mirrors FileSystemStreamProvider.GetFiles (one folder level,
+        // no recursion).
+        var prefix = path.Trim('/');
+        var prefixWithSlash = prefix.Length == 0 ? string.Empty : prefix + "/";
+        foreach (var key in resourcePaths.Keys)
         {
             ct.ThrowIfCancellationRequested();
-            var fileName = p.Split('.').Last();
-            if (p.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
-                fileName += ".md";
-            yield return new FileItem($"{path.TrimEnd('/')}/{fileName}", fileName, DateTime.UtcNow);
+            if (prefixWithSlash.Length > 0
+                && !key.StartsWith(prefixWithSlash, StringComparison.OrdinalIgnoreCase))
+                continue;
+            var relative = prefixWithSlash.Length == 0 ? key : key[prefixWithSlash.Length..];
+            if (relative.Length == 0 || relative.Contains('/'))
+                continue; // nested under a sub-folder — not a direct child of `path`
+            yield return new FileItem(key, relative, DateTime.UtcNow);
         }
     }
 

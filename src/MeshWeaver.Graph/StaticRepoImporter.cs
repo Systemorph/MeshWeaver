@@ -1,5 +1,6 @@
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown;
@@ -258,16 +259,18 @@ public static class StaticRepoImporter
                             .Sum();
 
                     return pruned.SelectMany(prunedCount =>
-                    {
-                        NodeTypeCompilationActivity.AppendLog(hub, activityPath,
-                            $"Imported {count} node(s), pruned {prunedCount}.", logger!);
-                        NodeTypeCompilationActivity.MarkSucceeded(hub, activityPath, logger!);
-                        logger?.LogInformation(
-                            "[StaticRepoImport] {Partition}: imported {Count}, pruned {Pruned} at {Fingerprint}.",
-                            source.Partition, count, prunedCount, fingerprint);
-                        return Observable.Return(
-                            new StaticRepoImportResult(source.Partition, fingerprint, "Imported", count));
-                    });
+                        // Sync content-collection files (the assets behind @@content/<file> embeds)
+                        // collection→collection into each owning node — AFTER the node upsert.
+                        SyncContentImports(hub, source, logger).Select(contentCount =>
+                        {
+                            NodeTypeCompilationActivity.AppendLog(hub, activityPath,
+                                $"Imported {count} node(s), pruned {prunedCount}, synced {contentCount} content file(s).", logger!);
+                            NodeTypeCompilationActivity.MarkSucceeded(hub, activityPath, logger!);
+                            logger?.LogInformation(
+                                "[StaticRepoImport] {Partition}: imported {Count}, pruned {Pruned}, content {Content} at {Fingerprint}.",
+                                source.Partition, count, prunedCount, contentCount, fingerprint);
+                            return new StaticRepoImportResult(source.Partition, fingerprint, "Imported", count);
+                        }));
                 });
             })
             .Catch<StaticRepoImportResult, Exception>(ex =>
@@ -342,6 +345,37 @@ public static class StaticRepoImporter
         // the partition-definition/routing prime + the admin grant; an existing root is updated
         // (owner preserves identity). Same path as every other node.
         return Upsert(hub, Materialize(root));
+    }
+
+    /// <summary>
+    /// Syncs the source's content-collection imports (<see cref="IStaticRepoSource.EnumerateContentImports"/>)
+    /// — copies each declared source-collection folder into the owning node's content collection via the
+    /// canonical <see cref="ContentImportExtensions.ImportContent"/> operation, posted to the node's hub
+    /// under System (never a hand-rolled cross-hub write). Per-entry failures log and continue. Returns
+    /// the total files imported.
+    /// </summary>
+    private static IObservable<int> SyncContentImports(IMessageHub hub, IStaticRepoSource source, ILogger? logger)
+    {
+        var imports = source.EnumerateContentImports();
+        if (imports.Count == 0)
+            return Observable.Return(0);
+
+        return imports
+            .Select(import => AsSystem(hub, () => hub.ImportContent(import.NodePath)
+                    .From(import.SourceCollection, import.SourcePath)
+                    .To(import.TargetCollection, import.TargetPath)
+                    .Post())
+                .Select(r => r.Success ? r.FilesImported : 0)
+                .Catch<int, Exception>(ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "[StaticRepoImport] {Partition}: content import for {Node} failed (continuing).",
+                        source.Partition, import.NodePath);
+                    return Observable.Return(0);
+                }))
+            .ToObservable()
+            .Merge(BatchSize)
+            .Sum();
     }
 
     /// <summary>Top-level partition segment of a path (the part before the first '/').</summary>
