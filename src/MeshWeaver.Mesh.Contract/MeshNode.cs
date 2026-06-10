@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
@@ -298,6 +299,91 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     /// <returns>A new MeshNode with the added service configuration.</returns>
     public MeshNode WithGlobalServiceRegistry(Func<IServiceCollection, IServiceCollection> services)
         => this with { GlobalServiceConfigurations = GlobalServiceConfigurations.Add(services) };
+
+    /// <summary>
+    /// Content-aware value equality. <see cref="Content"/> is an <c>object?</c> that —
+    /// after a cross-hub sync round-trip, AND in the <see cref="IMeshNodeStreamCache"/>
+    /// whose hub does not know domain types — is a <see cref="JsonElement"/>. A
+    /// <c>JsonElement</c> has NO structural equality: two elements with byte-identical
+    /// JSON are never <c>.Equals</c>. The compiler-synthesized record equality therefore
+    /// reports EVERY re-synced node as "changed", defeating the
+    /// <c>SynchronizationStream.SetCurrent</c> dedup so the whole node re-broadcasts on
+    /// every push — the sync fan-out storm (a single thread node taking ~130
+    /// <c>SetCurrentRequest</c>s for one streamed round). We compare <c>JsonElement</c>
+    /// content with <see cref="JsonElement.DeepEquals(JsonElement, JsonElement)"/>.
+    ///
+    /// <para>The runtime-only wiring (<see cref="HubConfiguration"/>,
+    /// <see cref="GlobalServiceConfigurations"/>) is <c>[JsonIgnore]/[NotMapped]</c>,
+    /// reference-typed (a <c>Func</c> / a list of <c>Func</c>), and not part of the
+    /// node's persisted value — it is deliberately EXCLUDED from value equality.
+    /// Including it would compare delegates by reference and defeat the dedup just as
+    /// surely as the JsonElement problem.</para>
+    /// </summary>
+    public virtual bool Equals(MeshNode? other)
+    {
+        if (other is null) return false;
+        if (ReferenceEquals(this, other)) return true;
+        return Id == other.Id
+               && Namespace == other.Namespace
+               && MainNode == other.MainNode
+               && Name == other.Name
+               && Description == other.Description
+               && NodeType == other.NodeType
+               && Category == other.Category
+               && Icon == other.Icon
+               && Order == other.Order
+               && CreatedDate.Equals(other.CreatedDate)
+               && CreatedBy == other.CreatedBy
+               && LastModified.Equals(other.LastModified)
+               && LastModifiedBy == other.LastModifiedBy
+               && Version == other.Version
+               && State == other.State
+               && PreRenderedHtml == other.PreRenderedHtml
+               && DesiredId == other.DesiredId
+               && IsSatelliteType == other.IsSatelliteType
+               && SyncBehavior == other.SyncBehavior
+               && SequenceEqualOrNull(ExcludeFromContext, other.ExcludeFromContext)
+               && ContentEquals(Content, other.Content);
+    }
+
+    public override int GetHashCode()
+    {
+        // Cheap, stable SUBSET of the equality fields — must be a subset so equal nodes
+        // always hash equal (Content's precise compare lives in Equals; hashing a large
+        // JsonElement per lookup would be wasteful and is unnecessary for correctness).
+        var hash = new HashCode();
+        hash.Add(Id);
+        hash.Add(Namespace);
+        hash.Add(NodeType);
+        hash.Add(Version);
+        hash.Add(LastModified);
+        hash.Add(State);
+        return hash.ToHashCode();
+    }
+
+    private static bool SequenceEqualOrNull(IReadOnlyCollection<string>? a, IReadOnlyCollection<string>? b)
+    {
+        if (ReferenceEquals(a, b)) return true;
+        if (a is null || b is null) return false;
+        return a.Count == b.Count && a.SequenceEqual(b);
+    }
+
+    /// <summary>
+    /// Equality for the untyped <see cref="Content"/>: structural JSON compare when both
+    /// sides are <see cref="JsonElement"/> (the cache / cross-hub-sync representation);
+    /// otherwise the content type's own <c>Equals</c>. Mixed (one JsonElement, one typed)
+    /// falls through to <c>false</c> — no <see cref="JsonSerializerOptions"/> is available
+    /// here to bridge representations, and a missed dedup there is merely a wasted push,
+    /// never incorrect.
+    /// </summary>
+    private static bool ContentEquals(object? a, object? b)
+    {
+        if (ReferenceEquals(a, b)) return true;
+        if (a is null || b is null) return false;
+        if (a is JsonElement ea && b is JsonElement eb)
+            return JsonElement.DeepEquals(ea, eb);
+        return a.Equals(b);
+    }
 }
 
 /// <summary>
