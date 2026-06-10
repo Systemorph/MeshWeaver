@@ -110,26 +110,26 @@ See [Data Prefix](/Doc/DataMesh/UnifiedPath/DataPrefix) for the generic data ref
 ## Display Property Risks
 
 ```
-@@Cornerstone/Microsoft/2026/data:PropertyRisk
+@@Cornerstone/Microsoft/2026/data/PropertyRisk
 ```
 
-@@Cornerstone/Microsoft/2026/data:PropertyRisk
+@@Cornerstone/Microsoft/2026/data/PropertyRisk
 
 ## Display Reinsurance Acceptances
 
 ```
-@@Cornerstone/Microsoft/2026/data:ReinsuranceAcceptance
+@@Cornerstone/Microsoft/2026/data/ReinsuranceAcceptance
 ```
 
-@@Cornerstone/Microsoft/2026/data:ReinsuranceAcceptance
+@@Cornerstone/Microsoft/2026/data/ReinsuranceAcceptance
 
 ## Display Reinsurance Sections
 
 ```
-@@Cornerstone/Microsoft/2026/data:ReinsuranceSection
+@@Cornerstone/Microsoft/2026/data/ReinsuranceSection
 ```
 
-@@Cornerstone/Microsoft/2026/data:ReinsuranceSection
+@@Cornerstone/Microsoft/2026/data/ReinsuranceSection
 
 # Dimension References
 
@@ -198,13 +198,13 @@ Dimensions are shared across all pricings using the same NodeType.
 Content collections allow file references:
 
 ```
-@@Cornerstone/Microsoft/2026/content:Submissions/Slip.md
+@@Cornerstone/Microsoft/2026/content/Submissions/Slip.md
 ```
 
-@@Cornerstone/Microsoft/2026/content:Submissions/Slip.md
+@@Cornerstone/Microsoft/2026/content/Submissions/Slip.md
 
 ```
-@@Cornerstone/Microsoft/2026/content:Submissions/Microsoft.xlsx
+@@Cornerstone/Microsoft/2026/content/Submissions/Microsoft.xlsx
 ```
 
 # View References

@@ -61,14 +61,14 @@ Northwind exposes these data types through the AnalyticsCatalog:
 
 | Reference | Description |
 |-----------|-------------|
-| `@Northwind/data:Order` | All orders |
-| `@Northwind/data:OrderDetails` | All order line items |
-| `@Northwind/data:Product` | All products |
-| `@Northwind/data:Customer` | All customers |
-| `@Northwind/data:Employee` | All employees |
-| `@Northwind/data:Supplier` | All suppliers |
-| `@Northwind/data:Category` | Product categories |
-| `@Northwind/data:NorthwindDataCube` | Virtual analytics cube |
+| `@Northwind/data/Order` | All orders |
+| `@Northwind/data/OrderDetails` | All order line items |
+| `@Northwind/data/Product` | All products |
+| `@Northwind/data/Customer` | All customers |
+| `@Northwind/data/Employee` | All employees |
+| `@Northwind/data/Supplier` | All suppliers |
+| `@Northwind/data/Category` | Product categories |
+| `@Northwind/data/NorthwindDataCube` | Virtual analytics cube |
 
 ## Specific Entity References
 
@@ -76,22 +76,22 @@ Northwind exposes these data types through the AnalyticsCatalog:
 
 | Reference | Description |
 |-----------|-------------|
-| `@Northwind/data:Order/10248` | Order #10248 |
-| `@Northwind/data:Order/10249` | Order #10249 |
+| `@Northwind/data/Order/10248` | Order #10248 |
+| `@Northwind/data/Order/10249` | Order #10249 |
 
 **Products**:
 
 | Reference | Description |
 |-----------|-------------|
-| `@Northwind/data:Product/1` | Product ID 1 (Chai) |
-| `@Northwind/data:Product/2` | Product ID 2 (Chang) |
+| `@Northwind/data/Product/1` | Product ID 1 (Chai) |
+| `@Northwind/data/Product/2` | Product ID 2 (Chang) |
 
 **Customers**:
 
 | Reference | Description |
 |-----------|-------------|
-| `@Northwind/data:Customer/ALFKI` | Alfreds Futterkiste |
-| `@Northwind/data:Customer/QUICK` | QUICK-Stop |
+| `@Northwind/data/Customer/ALFKI` | Alfreds Futterkiste |
+| `@Northwind/data/Customer/QUICK` | QUICK-Stop |
 
 # Layout Area References
 
@@ -534,7 +534,7 @@ Inventory and trend analysis:
 The Northwind sample demonstrates MeshWeaver's unified path system for analytics:
 
 - **Namespace paths** organize the analytics hierarchy
-- **Data references** access orders, products, customers via `@path/data:Type`
+- **Data references** access orders, products, customers via `@path/data/Type`
 - **Layout areas** display views via `@@path/ViewName`
 - **53 views** across 8 categories for comprehensive analytics
 

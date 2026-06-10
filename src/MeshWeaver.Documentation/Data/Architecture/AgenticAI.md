@@ -217,9 +217,9 @@ Get("@Insurance/Claims/*")                -> Returns all claims (children)
 
 **Get with Unified Path prefixes** — Access schemas and data models without knowing the underlying storage:
 ```
-Get("@Cornerstone/schema:")             -> JSON Schema for content type
-Get("@Cornerstone/schema:Pricing")      -> Schema for a specific named type
-Get("@Cornerstone/model:")              -> Full data model with all types
+Get("@Cornerstone/schema/")             -> JSON Schema for content type
+Get("@Cornerstone/schema/Pricing")      -> Schema for a specific named type
+Get("@Cornerstone/model/")              -> Full data model with all types
 ```
 
 **Search** — Query with GitHub-style syntax:
@@ -268,9 +268,9 @@ The `@` prefix is a convenient shorthand. Unified Path prefixes let agents addre
 |--------|---------|
 | `@Insurance/Claims/CLM-001` | Full node JSON |
 | `@Insurance/Claims/*` | Direct children |
-| `@Cornerstone/schema:` | Content type JSON Schema |
-| `@Cornerstone/schema:TypeName` | Schema for a specific named type |
-| `@Cornerstone/model:` | Full data model |
+| `@Cornerstone/schema/` | Content type JSON Schema |
+| `@Cornerstone/schema/TypeName` | Schema for a specific named type |
+| `@Cornerstone/model/` | Full data model |
 
 # Including External MCP Servers
 
@@ -345,7 +345,7 @@ The MCP server exposes the same operations as the internal MeshPlugin, so extern
 **Example — Claude Code using MeshWeaver MCP:**
 ```
 Get("@Cornerstone/Claims/*")              -> List all claims
-Get("@Cornerstone/schema:")               -> Get content type schema
+Get("@Cornerstone/schema/")               -> Get content type schema
 Search("nodeType:Claim status:Open")      -> Find open claims
 Create('{"id": "CLM-NEW", ...}')          -> Create a claim
 ```

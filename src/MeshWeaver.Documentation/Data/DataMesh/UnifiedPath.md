@@ -170,20 +170,20 @@ Reserved keywords let you target a precise resource type on any node:
 ## 1. Inline Image
 
 ```
-@@content:logo.svg
+@@content/logo.svg
 ```
 
-@@content:logo.svg
+@@content/logo.svg
 
 ---
 
 ## 2. Embedded Markdown
 
 ```
-@@content:sample.md
+@@content/sample.md
 ```
 
-@@content:sample.md
+@@content/sample.md
 
 ---
 
@@ -200,20 +200,20 @@ Reserved keywords let you target a precise resource type on any node:
 ## 4. Node Data (Self)
 
 ```
-@@data:
+@@data/
 ```
 
-@@data:
+@@data/
 
 ---
 
 ## 5. Schema (Self)
 
 ```
-@@schema:
+@@schema/
 ```
 
-@@schema:
+@@schema/
 
 ---
 

@@ -24,7 +24,7 @@ MeshWeaver is a distributed platform for building data-driven applications with 
 
 ## Platform overview
 
-@@content:platform-overview.svg
+@@content/platform-overview.svg
 
 ## Core concepts
 

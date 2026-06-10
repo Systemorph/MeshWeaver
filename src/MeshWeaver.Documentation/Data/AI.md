@@ -73,14 +73,14 @@ The MeshPlugin gives AI agents a small, composable toolset to work with the mesh
 
 | Tool | Purpose |
 |------|---------|
-| **Get** | Retrieve nodes by path (`@path`, `@path/*` for children, `@path/schema:` for schemas) |
+| **Get** | Retrieve nodes by path (`@path`, `@path/*` for children, `@path/schema/` for schemas) |
 | **Search** | Query nodes using GitHub-style syntax |
 | **Create** | Create new nodes with validated MeshNode JSON |
 | **Update** | Update existing nodes (Get → modify → Update) |
 | **Delete** | Delete nodes by path |
 | **NavigateTo** | Display a node's visual representation instead of raw JSON |
 
-`Get` understands Unified Path prefixes — `@path/schema:` for the content's JSON Schema, `@path/model:` for the full data model. See [MeshPlugin Tools](Tools/MeshPlugin) for the full reference.
+`Get` understands Unified Path prefixes — `@path/schema/` for the content's JSON Schema, `@path/model/` for the full data model. See [MeshPlugin Tools](Tools/MeshPlugin) for the full reference.
 
 ---
 
