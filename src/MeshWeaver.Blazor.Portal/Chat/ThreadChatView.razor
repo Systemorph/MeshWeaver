@@ -391,145 +391,18 @@ else
            commands /agent and /model still work (ChatCommandRegistry) and
            update the same selection state. *@
         <div class="thread-chat-selectors">
-            @* Harness selector — the single top-level choice. Claude Code and
-               GitHub Copilot each resolve to one built-in agent, so the agent +
-               model selectors only appear for the MeshWeaver harness. *@
-            <SimpleDropdown TOption="string"
-                            SelectedItem="@selectedHarness"
-                            SelectedItemChanged="@OnHarnessChanged"
-                            Items="@Harnesses.All"
-                            GetDisplayText="@(h => h)"
-                            Placeholder="Harness…"
-                            Tooltip="@($"Harness: {selectedHarness}")"
-                            ShowSearch="false"
-                            PanelWidth="220px"
-                            Class="selector-harness">
-                <ItemTemplate Context="harness">
-                    <div class="dropdown-icon-name">
-                        <span class="simple-dropdown-item-name">@harness</span>
-                    </div>
-                </ItemTemplate>
-            </SimpleDropdown>
-
-            @if (selectedHarness == Harnesses.MeshWeaver)
+            @if (!string.IsNullOrEmpty(_templatePath))
             {
-                <SimpleDropdown TOption="AgentDisplayInfo"
-                                SelectedItem="@selectedAgentInfo"
-                                SelectedItemChanged="@OnAgentChanged"
-                                Items="@MeshWeaverAgents"
-                                GetDisplayText="@(a => a?.Name ?? "Agent…")"
-                                Placeholder="Agent…"
-                                Tooltip="@(selectedAgentInfo?.Path ?? "Pick an agent (or type /agent)")"
-                                PanelWidth="420px"
-                                Class="selector-agent">
-                    <ItemTemplate Context="agent">
-                        <div class="dropdown-icon-name">
-                            <FluentIcon Value="@(new Icons.Regular.Size16.Bot())" />
-                            <span class="simple-dropdown-item-name">@agent.Name</span>
-                        </div>
-                        @if (!string.IsNullOrEmpty(agent.Description))
-                        {
-                            <div class="simple-dropdown-item-description">@TruncateText(agent.Description, 80)</div>
-                        }
-                    </ItemTemplate>
-                </SimpleDropdown>
-
-                <SimpleDropdown TOption="ModelInfo"
-                                SelectedItem="@selectedModelInfo"
-                                SelectedItemChanged="@OnModelChanged"
-                                Items="@availableModels"
-                                GetDisplayText="@(m => m?.Name ?? (availableModels.Count == 0 ? "(no models)" : "Model…"))"
-                                GetGroupKey="@(m => m.Provider)"
-                                Placeholder="Model…"
-                                Tooltip="@(selectedModelInfo != null ? $"{selectedModelInfo.Provider}: {selectedModelInfo.Name}" : "Pick a model (or type /model)")"
-                                ShowSearch="false"
-                                PanelWidth="360px"
-                                Class="selector-model">
-                    <ItemTemplate Context="model">
-                        <div class="dropdown-icon-name">
-                            @{
-                                var brand = ModelBadge(model);
-                            }
-                            <span class="model-badge @brand.Class" title="@brand.Tooltip">@brand.Label</span>
-                            <span class="simple-dropdown-item-name">@model.Name</span>
-                        </div>
-                    </ItemTemplate>
-                </SimpleDropdown>
+                <LayoutAreaView @key="@($"composer-sel-{_templatePath}")"
+                                ViewModel="@(new LayoutAreaControl(_templatePath, new LayoutAreaReference(ThreadComposerView.SelectorsArea)))"
+                                Stream="@Stream"
+                                Area="@($"composer-sel-{_templatePath}")" />
             }
-
             @if (!string.IsNullOrEmpty(lastCommandStatus))
             {
                 <span class="thread-chat-status-msg @(lastCommandStatusIsError ? "error" : "")">@lastCommandStatus</span>
             }
         </div>
-
-        @* Inline picker rendered when /agent or /model was invoked without
-           an argument. AgentCommand and ModelCommand return Widget = AgentPicker
-           or ModelPicker; selection routes back through OnAgentPickerSelected
-           / OnModelPickerSelected which is equivalent to running
-           /agent <name> / /model <name>. *@
-        @if (pendingWidget == ChatWidget.AgentPicker)
-        {
-            <div class="thread-chat-widget">
-                <div class="thread-chat-widget-header">
-                    <span>Pick an agent</span>
-                    <FluentButton Appearance="FluentAppearance.Stealth" OnClick="DismissWidget" Title="Close">
-                        <FluentIcon Value="@(new Icons.Regular.Size16.Dismiss())" />
-                    </FluentButton>
-                </div>
-                <div class="thread-chat-widget-list">
-                    @foreach (var agent in agentDisplayInfos)
-                    {
-                        var captured = agent;
-                        <button class="thread-chat-widget-item @(captured.Name == selectedAgentInfo?.Name ? "selected" : "")"
-                                @onclick="() => OnAgentPickerSelected(captured)" type="button">
-                            <div class="thread-chat-widget-item-name">@captured.Name</div>
-                            @if (!string.IsNullOrEmpty(captured.Path) && captured.Path != captured.Name)
-                            {
-                                <div class="thread-chat-widget-item-path">@captured.Path</div>
-                            }
-                            @if (!string.IsNullOrEmpty(captured.Description))
-                            {
-                                <div class="thread-chat-widget-item-desc">@TruncateText(captured.Description, 90)</div>
-                            }
-                        </button>
-                    }
-                    @if (agentDisplayInfos.Count == 0)
-                    {
-                        <div class="thread-chat-widget-empty">No agents available.</div>
-                    }
-                </div>
-            </div>
-        }
-        else if (pendingWidget == ChatWidget.ModelPicker)
-        {
-            <div class="thread-chat-widget">
-                <div class="thread-chat-widget-header">
-                    <span>Pick a model</span>
-                    <FluentButton Appearance="FluentAppearance.Stealth" OnClick="DismissWidget" Title="Close">
-                        <FluentIcon Value="@(new Icons.Regular.Size16.Dismiss())" />
-                    </FluentButton>
-                </div>
-                <div class="thread-chat-widget-list">
-                    @foreach (var grp in availableModels.GroupBy(m => m.Provider).OrderBy(g => g.First().Order))
-                    {
-                        <div class="thread-chat-widget-group">@grp.Key</div>
-                        @foreach (var model in grp)
-                        {
-                            var captured = model;
-                            <button class="thread-chat-widget-item @(captured.Name == selectedModelInfo?.Name ? "selected" : "")"
-                                    @onclick="() => OnModelPickerSelected(captured)" type="button">
-                                <div class="thread-chat-widget-item-name">@captured.Name</div>
-                            </button>
-                        }
-                    }
-                    @if (availableModels.Count == 0)
-                    {
-                        <div class="thread-chat-widget-empty">No models available.</div>
-                    }
-                </div>
-            </div>
-        }
 
         @* Monaco editor for markdown input with completion. Stays visible during
            execution (Claude.ai pattern) — typing while a round is in flight is

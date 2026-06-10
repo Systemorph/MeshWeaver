@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reflection;
 using System.Text.Json;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
@@ -25,11 +26,61 @@ public static class ThreadComposerView
     /// <summary>The composer area name — registered as the node's default area.</summary>
     public const string ComposerArea = "Composer";
 
-    /// <summary>Adds the data-bound composer view; <see cref="ComposerArea"/> is the default area.</summary>
+    /// <summary>
+    /// The selectors-only area: just the harness/agent/model <c>[MeshNode]</c> pickers, data-bound to
+    /// THIS node and auto-persisting — the SAME standard wiring as <see cref="ComposerArea"/> but without
+    /// the message editor / Send button. The Blazor chat (<c>ThreadChatView</c>) embeds this so its
+    /// harness/agent/model selection is 100% data-bound (no hand-rolled dropdowns) while keeping its own
+    /// Monaco editor + attachments.
+    /// </summary>
+    public const string SelectorsArea = "Selectors";
+
+    /// <summary>Adds the data-bound composer + selectors views; <see cref="ComposerArea"/> is the default area.</summary>
     public static MessageHubConfiguration AddThreadComposerView(this MessageHubConfiguration configuration)
         => configuration.AddLayout(layout => layout
             .WithDefaultArea(ComposerArea)
-            .WithView(ComposerArea, Composer));
+            .WithView(ComposerArea, Composer)
+            .WithView(SelectorsArea, ComposerSelectors));
+
+    /// <summary>The composer content properties shown in <see cref="SelectorsArea"/>, in display order.</summary>
+    private static readonly string[] SelectorPropertyNames =
+        [nameof(ThreadComposer.Harness), nameof(ThreadComposer.AgentName), nameof(ThreadComposer.ModelName)];
+
+    /// <summary>
+    /// Renders just the harness/agent/model pickers, data-bound + auto-persisting against THIS node —
+    /// the standard <c>EditNode</c> wiring (<see cref="LayoutAreaHost.UpdateData"/> +
+    /// <see cref="OverviewLayoutArea.SetupAutoSave"/>) with the framework's per-property control mapper
+    /// (<see cref="EditorExtensions.MapToToggleableControl"/>) over the three selector properties only.
+    /// </summary>
+    public static UiControl ComposerSelectors(LayoutAreaHost host, RenderingContext context)
+        => Controls.Stack.WithWidth("100%")
+            .WithView((h, _) => h.Workspace.GetMeshNodeStream()
+                .Select(node =>
+                {
+                    if (node?.Content is null)
+                        return (UiControl?)Controls.Stack;
+
+                    var instance = node.Content;
+                    if (instance is JsonElement je)
+                        instance = JsonSerializer.Deserialize<object>(je.GetRawText(), h.Hub.JsonSerializerOptions)!;
+
+                    var nodePath = node.Path ?? string.Empty;
+                    var dataId = EditLayoutArea.GetDataId(nodePath);
+                    h.UpdateData(dataId, instance);
+                    OverviewLayoutArea.SetupAutoSave(h, dataId, instance, node);
+
+                    var grid = Controls.LayoutGrid.WithStyle(s => s.WithWidth("100%")).WithSkin(s => s.WithSpacing(2));
+                    foreach (var prop in SelectorProperties(instance.GetType()))
+                        grid = grid.WithView(
+                            h.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit: true, h, isToggleable: false),
+                            s => s.WithXs(12).WithSm(4));
+                    return (UiControl?)grid;
+                }));
+
+    private static IEnumerable<PropertyInfo> SelectorProperties(Type contentType) =>
+        SelectorPropertyNames
+            .Select(contentType.GetProperty)
+            .Where(p => p is not null)!;
 
     /// <summary>Renders the standard data-bound + auto-persisting editor for THIS node + a Send button.</summary>
     public static UiControl Composer(LayoutAreaHost host, RenderingContext context)
