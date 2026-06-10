@@ -707,6 +707,24 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     protected IMeshService NodeFactory => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
     /// <summary>
+    /// Seeds a TOP-LEVEL partition-root fixture under the System (platform) identity. A
+    /// top-level node (empty namespace) IS a partition root, so
+    /// <c>PartitionWriteGuardValidator</c> rejects a NON-System caller creating one whose
+    /// NodeType does not own a partition (only <c>User</c>/<c>Space</c> do) — see
+    /// <c>OrleansTopLevelPartitionGuardTest</c> / <c>McpFailureSurfacingTest</c>. Tests that
+    /// need an ad-hoc top-level "org"/namespace of an ordinary type (Group/Code/Markdown/
+    /// NodeType) must seed it this way: System is the legitimate partition provisioner
+    /// (exactly as onboarding/migration do in production), so it bypasses the guard. Only the
+    /// partition ROOT needs this — nested children create normally under the caller identity.
+    /// </summary>
+    protected MeshNode SeedTopLevel(MeshNode node)
+    {
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        using (access.ImpersonateAsSystem())
+            return NodeFactory.CreateNode(node).Timeout(TimeSpan.FromSeconds(30)).Wait();
+    }
+
+    /// <summary>
     /// Public API for querying nodes in tests.
     /// </summary>
     protected IMeshService MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshService>();

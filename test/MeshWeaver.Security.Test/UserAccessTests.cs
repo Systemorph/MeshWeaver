@@ -235,7 +235,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     public void SecurePersistence_LoggedOutUser_CanAccessPublicNamespace()
     {
         // Admin context (DevLogin) is active for the seed creates.
-        NodeFactory.CreateNode(new MeshNode("PublicArea") { Name = "Public Area", NodeType = "Group" }).Should().Emit();
+        SeedTopLevel(new MeshNode("PublicArea") { Name = "Public Area", NodeType = "Group" });
         NodeFactory.CreateNode(new MeshNode("Doc1", "PublicArea") { Name = "Document 1", NodeType = "Group" }).Should().Emit();
         NodeFactory.CreateNode(new MeshNode("Doc2", "PublicArea") { Name = "Document 2", NodeType = "Group" }).Should().Emit();
         ClearAdminContext();
@@ -252,7 +252,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public void SecurePersistence_LoggedOutUser_CannotAccessPrivateNamespace()
     {
-        NodeFactory.CreateNode(new MeshNode("PrivateArea") { Name = "Private Area", NodeType = "Group" }).Should().Emit();
+        SeedTopLevel(new MeshNode("PrivateArea") { Name = "Private Area", NodeType = "Group" });
         NodeFactory.CreateNode(new MeshNode("Secret1", "PrivateArea") { Name = "Secret 1", NodeType = "Group" }).Should().Emit();
         ClearAdminContext();
 
@@ -265,8 +265,8 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public void SecurePersistence_LoggedOutUser_SeesOnlyPublicRootChildren()
     {
-        NodeFactory.CreateNode(new MeshNode("OpenProject") { Name = "Open Project", NodeType = "Group" }).Should().Emit();
-        NodeFactory.CreateNode(new MeshNode("ClosedProject") { Name = "Closed Project", NodeType = "Group" }).Should().Emit();
+        SeedTopLevel(new MeshNode("OpenProject") { Name = "Open Project", NodeType = "Group" });
+        SeedTopLevel(new MeshNode("ClosedProject") { Name = "Closed Project", NodeType = "Group" });
         ClearAdminContext();
 
         var rootChildren = MeshQuery.Query<MeshNode>(new MeshQueryRequest { Query = "namespace:", UserId = "" })
@@ -337,17 +337,17 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public void MeshQuery_AnonymousUser_CanQueryPublicOrganizations()
     {
-        NodeFactory.CreateNode(new MeshNode("Systemorph")
+        SeedTopLevel(new MeshNode("Systemorph")
         {
             Name = "Systemorph",
             NodeType = "Group"
-        }).Should().Emit();
+        });
 
-        NodeFactory.CreateNode(new MeshNode("ACME")
+        SeedTopLevel(new MeshNode("ACME")
         {
             Name = "ACME",
             NodeType = "Group"
-        }).Should().Emit();
+        });
         ClearAdminContext();
 
         var request = new MeshQueryRequest
@@ -368,17 +368,17 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     {
         var accessService = Mesh.ServiceProvider.GetService<AccessService>();
 
-        NodeFactory.CreateNode(new MeshNode("MeshWeaver2")
+        SeedTopLevel(new MeshNode("MeshWeaver2")
         {
             Name = "MeshWeaver2",
             NodeType = "Group"
-        }).Should().Emit();
+        });
 
-        NodeFactory.CreateNode(new MeshNode("SecretOrg")
+        SeedTopLevel(new MeshNode("SecretOrg")
         {
             Name = "SecretOrg",
             NodeType = "Group"
-        }).Should().Emit();
+        });
         ClearAdminContext();
 
         accessService?.SetContext(null);
@@ -401,9 +401,9 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var publicNode = new MeshNode("PublicDoc", "Public") { Name = "Public Document", NodeType = "Group" };
         var restrictedNode = new MeshNode("PrivateDoc", "Private") { Name = "Private Document", NodeType = "Group" };
 
-        NodeFactory.CreateNode(new MeshNode("Public") { Name = "Public", NodeType = "Group" }).Should().Emit();
+        SeedTopLevel(new MeshNode("Public") { Name = "Public", NodeType = "Group" });
         NodeFactory.CreateNode(publicNode).Should().Emit();
-        NodeFactory.CreateNode(new MeshNode("Private") { Name = "Private", NodeType = "Group" }).Should().Emit();
+        SeedTopLevel(new MeshNode("Private") { Name = "Private", NodeType = "Group" });
         NodeFactory.CreateNode(restrictedNode).Should().Emit();
         ClearAdminContext();
 
@@ -426,7 +426,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     public void MeshQuery_AuthenticatedUser_SeesRestrictedNodes()
     {
         var restrictedNode = new MeshNode("SecretDoc", "Secret") { Name = "Secret Document", NodeType = "Group" };
-        NodeFactory.CreateNode(new MeshNode("Secret") { Name = "Secret", NodeType = "Group" }).Should().Emit();
+        SeedTopLevel(new MeshNode("Secret") { Name = "Secret", NodeType = "Group" });
         NodeFactory.CreateNode(restrictedNode).Should().Emit();
         ClearAdminContext();
 
@@ -443,17 +443,17 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     {
         var accessService = Mesh.ServiceProvider.GetService<AccessService>();
 
-        NodeFactory.CreateNode(new MeshNode("PublicOrg3")
+        SeedTopLevel(new MeshNode("PublicOrg3")
         {
             Name = "PublicOrg3",
             NodeType = "Code"
-        }).Should().Emit();
+        });
 
-        NodeFactory.CreateNode(new MeshNode("PrivateOrg3")
+        SeedTopLevel(new MeshNode("PrivateOrg3")
         {
             Name = "PrivateOrg3",
             NodeType = "Code"
-        }).Should().Emit();
+        });
         ClearAdminContext();
 
         accessService?.SetContext(new AccessContext
@@ -501,7 +501,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public void SecurePersistence_NodeInUserNamespace_VisibleViaExplicitAnonymousGrant()
     {
-        NodeFactory.CreateNode(new MeshNode("Profiles") { Name = "Profiles", NodeType = "Group" }).Should().Emit();
+        SeedTopLevel(new MeshNode("Profiles") { Name = "Profiles", NodeType = "Group" });
         NodeFactory.CreateNode(new MeshNode("AliceProfile", "Profiles") { Name = "Alice Profile", NodeType = "Markdown" }).Should().Emit();
         ClearAdminContext();
 
@@ -514,17 +514,17 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public void SecurePersistence_NodeTypeDefinition_VisibleWithExplicitGrant()
     {
-        NodeFactory.CreateNode(new MeshNode("CustomType")
+        SeedTopLevel(new MeshNode("CustomType")
         {
             Name = "CustomType",
             NodeType = "NodeType"
-        }).Should().Emit();
+        });
 
-        NodeFactory.CreateNode(new MeshNode("CustomInstance")
+        SeedTopLevel(new MeshNode("CustomInstance")
         {
             Name = "CustomInstance",
             NodeType = "Group"
-        }).Should().Emit();
+        });
         ClearAdminContext();
 
         var typeDef = MeshQuery.Query<MeshNode>(new MeshQueryRequest { Query = "path:CustomType", UserId = "" })
@@ -540,7 +540,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public void SecurePersistence_NodeInPrivateNamespace_HiddenWithoutGrant()
     {
-        NodeFactory.CreateNode(new MeshNode("SecretArea") { Name = "Secret Area", NodeType = "Group" }).Should().Emit();
+        SeedTopLevel(new MeshNode("SecretArea") { Name = "Secret Area", NodeType = "Group" });
         NodeFactory.CreateNode(new MeshNode("Doc1", "SecretArea") { Name = "Secret Doc", NodeType = "Group" }).Should().Emit();
         ClearAdminContext();
 

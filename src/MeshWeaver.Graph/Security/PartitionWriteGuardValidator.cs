@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -31,6 +32,14 @@ namespace MeshWeaver.Graph.Security;
 ///     created <i>explicitly</i> via the <c>Space</c> node type (which provisions the
 ///     partition under System before the root write); writing never creates a space as a
 ///     side effect.</item>
+///   <item><b>Top-level ⟺ partition-owning.</b> A top-level node (empty namespace) IS a
+///     partition root, so only a NodeType whose <see cref="NodeTypeDefinition.OwnsPartition"/>
+///     is <c>true</c> (<c>User</c>, <c>Space</c>) may be created there. A top-level node of
+///     any other type — even from a global/platform admin — is rejected (the atioz
+///     <c>HelloWorld</c> Markdown incident). Unlike rule 2 this is fail-CLOSED and does NOT
+///     consult the existence probe, so a pre-existing ("ghost") schema cannot launder a
+///     non-partition node into legitimacy. It is the converse of
+///     <see cref="OwnsPartitionProvisioningValidator"/>'s "OwnsPartition ⇒ top-level" check.</item>
 /// </list>
 ///
 /// <para><b>Exemptions</b> (all legitimate paths that must keep working):
@@ -135,6 +144,39 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
         // Create can do that. Updates always target an existing node, so skip.
         if (context.Operation != NodeOperation.Create)
             return Observable.Return(NodeValidationResult.Valid());
+
+        // Rule 3 — a TOP-LEVEL node IS a partition root, so only a partition-OWNING
+        // NodeType (NodeTypeDefinition.OwnsPartition: User, Space) may be created there.
+        // Everything else at the root ('') is illegal — content belongs inside a partition,
+        // never as a bare top-level node (the atioz `HelloWorld` Markdown / `BadTypeProbe`
+        // incident). This is fail-CLOSED and structural: it does NOT depend on the
+        // existence probe below (a ghost schema must not be able to launder a non-partition
+        // node into legitimacy). It is the converse of OwnsPartitionProvisioningValidator's
+        // "OwnsPartition ⇒ top-level" check — together they pin "top-level ⟺ owns a partition".
+        //
+        // Applies to EVERY non-System caller, INCLUDING a global/platform admin — admin is a
+        // data-management role, not a licence to drop content at the root. Only System (the
+        // partition provisioner / onboarding / migration, bypassed at the top of this method)
+        // may write a non-owning node top-level.
+        if (string.IsNullOrEmpty(context.Node.Namespace))
+        {
+            var def = _hub.ServiceProvider.FindStaticNode(context.Node.NodeType ?? string.Empty)?.Content
+                as NodeTypeDefinition;
+            if (def is not { OwnsPartition: true })
+            {
+                var ownSpace = string.IsNullOrEmpty(userId)
+                    ? $"your own space ('<your-id>/{context.Node.Id}')"
+                    : $"your own space ('{userId}/{context.Node.Id}')";
+                _logger.LogWarning(
+                    "PartitionWriteGuard: blocked top-level Create by {User} of non-partition node '{Path}' (NodeType {NodeType})",
+                    userId ?? "(anonymous)", context.Node.Path, context.Node.NodeType ?? "(untyped)");
+                return Observable.Return(NodeValidationResult.Invalid(
+                    $"Cannot create '{context.Node.Path}' at the top level: the root namespace ('') is reserved for " +
+                    $"partitions, and a '{context.Node.NodeType ?? "untyped"}' node does not own one (only User and Space do). " +
+                    $"Put it in {ownSpace}, or create a Space first and add it there.",
+                    NodeRejectionReason.InvalidPath));
+            }
+        }
 
         // Creating a Space IS the explicit partition-creation path — SpaceTopLevelValidator
         // provisions the schema under System before the root write. Defer to it.
