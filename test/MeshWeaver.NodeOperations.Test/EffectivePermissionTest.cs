@@ -1,5 +1,6 @@
 using System;
 using System.Threading.Tasks;
+using MeshWeaver.Graph;
 using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;

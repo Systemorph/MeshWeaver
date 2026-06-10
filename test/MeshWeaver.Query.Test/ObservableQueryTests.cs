@@ -275,7 +275,9 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
     public void ObserveQuery_ScopeExact_OnlyNotifiesOnExactPath()
     {
         var p = P();
-        NodeFactory.CreateNode(MeshNode.FromPath(p) with { Name = "TestOrg", NodeType = "Group" }).Should().Emit();
+        // Top-level partition root → seed under System (only the partition provisioner may
+        // create a non-partition type at the root).
+        SeedTopLevel(MeshNode.FromPath(p) with { Name = "TestOrg", NodeType = "Group" });
 
         var accumulated = ObserveAccumulated($"path:{p}").Replay();
         using var connection = accumulated.Connect();

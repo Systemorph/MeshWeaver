@@ -49,11 +49,15 @@ public class ExportDocumentScriptRelayTest(ITestOutputHelper output) : MonolithM
     public void ExportRequest_StartsScriptActivity_AndReturnsBytesOnTerminal()
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        meshService.CreateNode(MeshNode.FromPath(ExportNs) with
+        // ExportNs is a top-level container (empty namespace) = a partition root; the
+        // PartitionWriteGuard rejects a normal user creating a Markdown there. It only needs
+        // to EXIST as the parent of the source doc, so seed it under the System identity (the
+        // legitimate partition provisioner). The nested source doc creates normally below.
+        SeedTopLevel(MeshNode.FromPath(ExportNs) with
         {
             Name = "Test Export Root",
             NodeType = MarkdownNodeType.NodeType
-        }).Should().Emit();
+        });
         meshService.CreateNode(MeshNode.FromPath(SourcePath) with
         {
             Name = "Sample Document",

@@ -534,13 +534,17 @@ public class HubSelfAccessTests(ITestOutputHelper output) : MonolithMeshTestBase
     {
         await base.InitializeAsync();
 
-        NodeFactory.CreateNode(
+        // A top-level node IS a partition root; the PartitionWriteGuard only lets System
+        // (the partition provisioner) create a non-partition type there — and this class runs
+        // strict RLS without PublicAdminAccess. The node just needs to exist for the
+        // hub-self-access reads, so seed it under System.
+        SeedTopLevel(
             new MeshNode("TestHub")
             {
                 Name = "Test Hub",
                 NodeType = "Markdown",
                 Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Test Hub" }
-            }).Should().Emit();
+            });
     }
 
     /// <summary>

@@ -314,11 +314,11 @@ public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMes
     {
         var p = P();
 
-        // Create parent node first
-        NodeFactory.CreateNode(MeshNode.FromPath(p) with
+        // Create parent node first (top-level partition root → seed under System)
+        SeedTopLevel(MeshNode.FromPath(p) with
         {
             Name = "Parent", NodeType = "Markdown"
-        }).Should().Emit();
+        });
 
         // Create AccessAssignment (satellite type)
         NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Access/u1") with
@@ -343,11 +343,11 @@ public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMes
     {
         var p = P();
 
-        // Create parent
-        NodeFactory.CreateNode(MeshNode.FromPath(p) with
+        // Create parent (top-level partition root → seed under System)
+        SeedTopLevel(MeshNode.FromPath(p) with
         {
             Name = "Parent", NodeType = "Markdown"
-        }).Should().Emit();
+        });
 
         // Create Thread (satellite type)
         NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Thread/t1") with

@@ -36,10 +36,14 @@ public class MeshChangeFeedTest(ITestOutputHelper output) : MonolithMeshTestBase
 
     private MeshNode CreateTestNode(string id, string? ns = null)
     {
+        // Top-level fixtures (empty namespace) are partition roots; the PartitionWriteGuard
+        // rejects a normal user creating a non-partition-owning type (Markdown) there. These
+        // nodes only need to EXIST for the change-feed / path-resolver assertions, so seed
+        // them under the System identity (the legitimate partition provisioner) which bypasses
+        // the guard. SeedTopLevel routes through IMeshService.CreateNode — the same create
+        // pipeline that publishes the MeshChangeFeed event and warms the path resolver.
         var node = new MeshNode(id, ns) { Name = $"Test {id}", NodeType = "Markdown" };
-        var response = Mesh.Observe(new CreateNodeRequest(node), o => o.WithTarget(Mesh.Address)).Should().Emit();
-        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
-        return response.Message.Node!;
+        return SeedTopLevel(node);
     }
 
     private void DeleteTestNode(string path)

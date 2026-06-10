@@ -50,7 +50,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         try
         {
             var threadPath = $"{userId}/{Guid.NewGuid().AsString()}";
-            var node = new MeshNode(threadPath)
+            var node = MeshNode.FromPath(threadPath) with
             {
                 Name = "My Thread",
                 NodeType = ThreadNodeType.NodeType,
@@ -82,7 +82,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         {
             // Create thread first
             var threadPath = $"{userId}/{Guid.NewGuid().AsString()}";
-            NodeFactory.CreateNode(new MeshNode(threadPath)
+            NodeFactory.CreateNode(MeshNode.FromPath(threadPath) with
             {
                 Name = "Thread for Messages",
                 NodeType = ThreadNodeType.NodeType,
@@ -92,7 +92,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             // Create message under thread
             var msgId = Guid.NewGuid().AsString();
             var msgPath = $"{threadPath}/{msgId}";
-            var msgNode = new MeshNode(msgPath)
+            var msgNode = MeshNode.FromPath(msgPath) with
             {
                 NodeType = ThreadMessageNodeType.NodeType,
                 Content = new ThreadMessage
@@ -126,7 +126,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         try
         {
             var threadPath = $"victim/{Guid.NewGuid().AsString()}";
-            var node = new MeshNode(threadPath)
+            var node = MeshNode.FromPath(threadPath) with
             {
                 Name = "Malicious Thread",
                 NodeType = ThreadNodeType.NodeType,
@@ -153,7 +153,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var owner = "thread-owner-2";
         LoginAs(owner);
         var threadPath = $"{owner}/{Guid.NewGuid().AsString()}";
-        NodeFactory.CreateNode(new MeshNode(threadPath)
+        NodeFactory.CreateNode(MeshNode.FromPath(threadPath) with
         {
             Name = "Private Thread",
             NodeType = ThreadNodeType.NodeType,
@@ -166,7 +166,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         try
         {
             var msgPath = $"{threadPath}/{Guid.NewGuid().AsString()}";
-            var msgNode = new MeshNode(msgPath)
+            var msgNode = MeshNode.FromPath(msgPath) with
             {
                 NodeType = ThreadMessageNodeType.NodeType,
                 Content = new ThreadMessage
@@ -223,7 +223,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         try
         {
             var threadPath = $"{sharedPath}/{Guid.NewGuid().AsString()}";
-            var node = new MeshNode(threadPath)
+            var node = MeshNode.FromPath(threadPath) with
             {
                 Name = "Shared Thread",
                 NodeType = ThreadNodeType.NodeType,
@@ -265,7 +265,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         try
         {
             var threadPath = $"{sharedPath}/{Guid.NewGuid().AsString()}";
-            var node = new MeshNode(threadPath)
+            var node = MeshNode.FromPath(threadPath) with
             {
                 Name = "Editor Thread",
                 NodeType = ThreadNodeType.NodeType,
@@ -296,7 +296,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         try
         {
             var threadPath = $"{userId}/{Guid.NewGuid().AsString()}";
-            NodeFactory.CreateNode(new MeshNode(threadPath)
+            NodeFactory.CreateNode(MeshNode.FromPath(threadPath) with
             {
                 Name = "Readable Thread",
                 NodeType = ThreadNodeType.NodeType,
@@ -328,7 +328,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var owner = "owner-read-test";
         LoginAs(owner);
         var threadPath = $"{owner}/{Guid.NewGuid().AsString()}";
-        NodeFactory.CreateNode(new MeshNode(threadPath)
+        NodeFactory.CreateNode(MeshNode.FromPath(threadPath) with
         {
             Name = "Private Thread",
             NodeType = ThreadNodeType.NodeType,

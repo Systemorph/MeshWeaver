@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Reactive.Threading.Tasks;
 using System.Reactive.Linq;
+using MeshWeaver.Graph;
 using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;

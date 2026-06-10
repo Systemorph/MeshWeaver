@@ -28,26 +28,31 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
 
     private void EnsureNodesCreated()
     {
+        // `pricing` / `app` are TOP-LEVEL nodes = partition roots. A Markdown node does not
+        // own a partition (only User/Space do), so PartitionWriteGuardValidator Rule 3 rejects
+        // a non-System caller creating one ("the root namespace is reserved for partitions").
+        // Seed via SeedTopLevel (System is the legitimate partition provisioner) — the same way
+        // onboarding/migration provision partitions in production.
         var existingPricing = ReadNode("pricing").Should().Emit();
         if (existingPricing == null)
         {
-            NodeFactory.CreateNode(MeshNode.FromPath(PricingPath) with
+            SeedTopLevel(MeshNode.FromPath(PricingPath) with
             {
                 Name = "Pricing",
                 Icon = "Calculator",
                 NodeType = "Markdown",
-            }).Should().Emit();
+            });
         }
 
         var existingApp = ReadNode("app").Should().Emit();
         if (existingApp == null)
         {
-            NodeFactory.CreateNode(MeshNode.FromPath(AppPath) with
+            SeedTopLevel(MeshNode.FromPath(AppPath) with
             {
                 Name = "Applications",
                 Icon = "App",
                 NodeType = "Markdown",
-            }).Should().Emit();
+            });
         }
     }
 
@@ -150,11 +155,14 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
         // `path:{prefixes}` query; a parser that treats a space as a token separator
         // splits "pricing/Annual Report" into `path:pricing/Annual` + free-text and
         // never matches the node — the "trouble loading paths with spaces" symptom.
-        NodeFactory.CreateNode(MeshNode.FromPath("pricing/Annual Report") with
+        // Child under the System-seeded `pricing` partition — seed via System too (the partition
+        // owner granted no Write to the test's Admin identity; fixtures only need to EXIST so the
+        // System-impersonated resolver query can find them).
+        SeedTopLevel(MeshNode.FromPath("pricing/Annual Report") with
         {
             Name = "Annual Report",
             NodeType = "Markdown",
-        }).Should().Emit();
+        });
 
         var resolution = PathResolver.ResolvePath("pricing/Annual Report").Should().Emit();
 
@@ -168,11 +176,14 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     public void ResolvePath_SpaceSegmentWithAreaSuffix_FallsBackToNode()
     {
         EnsureNodesCreated();
-        NodeFactory.CreateNode(MeshNode.FromPath("pricing/Annual Report") with
+        // Child under the System-seeded `pricing` partition — seed via System too (the partition
+        // owner granted no Write to the test's Admin identity; fixtures only need to EXIST so the
+        // System-impersonated resolver query can find them).
+        SeedTopLevel(MeshNode.FromPath("pricing/Annual Report") with
         {
             Name = "Annual Report",
             NodeType = "Markdown",
-        }).Should().Emit();
+        });
 
         // /pricing/Annual Report/Overview → node "pricing/Annual Report" + area "Overview"
         var resolution = PathResolver.ResolvePath("pricing/Annual Report/Overview").Should().Emit();

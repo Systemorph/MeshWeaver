@@ -137,8 +137,9 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
     {
         // Arrange: create context node and thread (use non-User namespace to avoid ACL)
         var contextPath = "ThreadCtx";
-        NodeFactory.CreateNode(
-            new MeshNode(contextPath) { Name = "Thread Context", NodeType = "Markdown" }).Should().Emit();
+        // Top-level partition root → seed under System (only the partition provisioner may
+        // create a non-partition type at the root).
+        SeedTopLevel(new MeshNode(contextPath) { Name = "Thread Context", NodeType = "Markdown" });
 
         var client = GetClient();
         var response = client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Help me with my project")), o => o.WithTarget(new Address(contextPath))).Should().Within(TimeSpan.FromSeconds(25)).Emit();
@@ -178,9 +179,9 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
     {
         var ns = "myItems";
 
-        // Arrange: namespace node first (required for CreateNodeRequest target)
-        NodeFactory.CreateNode(
-            new MeshNode(ns) { Name = "My Items NS", NodeType = "Markdown" }).Should().Emit();
+        // Arrange: namespace node first (required for CreateNodeRequest target). Top-level
+        // partition root → seed under System.
+        SeedTopLevel(new MeshNode(ns) { Name = "My Items NS", NodeType = "Markdown" });
 
         // Main content nodes under the namespace
         NodeFactory.CreateNode(MeshNode.FromPath($"{ns}/doc1") with

@@ -33,17 +33,38 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : MonolithMeshTestBase
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
     private void CreateNode(string path, string? name = null, string? nodeType = null, object? content = null)
-        => MeshService.CreateNode(MeshNode.FromPath(path) with
+    {
+        var node = MeshNode.FromPath(path) with
         {
             Name = name ?? path.Split('/').Last(),
             NodeType = nodeType ?? "Markdown",
             Content = content,
             State = MeshNodeState.Active
-        }).Should().Within(30.Seconds()).Emit();
+        };
+        // A top-level fixture (empty namespace) is a partition root: the PartitionWriteGuard
+        // rejects a normal user creating a non-partition-owning type there. Seed it under the
+        // System identity (the legitimate partition provisioner) so the fixture exists for the
+        // copy assertions. Nested fixtures create normally under the test (Admin) identity.
+        if (string.IsNullOrEmpty(node.Namespace))
+            SeedTopLevel(node);
+        else
+            MeshService.CreateNode(node).Should().Within(30.Seconds()).Emit();
+    }
 
     private MeshNode? GetNode(string path)
         => Mesh.GetMeshNode(path, TimeSpan.FromSeconds(15))
             .Should().Within(15.Seconds()).Emit();
+
+    // Explicit partition creation — a Space is the sanctioned top-level container. The
+    // creator (the test's Admin identity) is granted Admin by SpacePostCreationHandler, so
+    // child writes under it authorise.
+    private void CreateSpace(string id)
+        => MeshService.CreateNode(new MeshNode(id)
+        {
+            Name = id,
+            NodeType = "Space",
+            State = MeshNodeState.Active
+        }).Should().Within(30.Seconds()).Emit();
 
     private int CopyTree(string source, string target, bool force)
         => NodeCopyHelper.CopyNodeTree(MeshService, MeshService, Mesh, source, target, force)
@@ -127,17 +148,21 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact]
-    public void CopyNodeTree_ToEmptyNamespace()
+    public void CopyNodeTree_ToSpaceNamespace()
     {
+        // The empty namespace is reserved for partitions (PartitionWriteGuard rejects a
+        // non-partition Markdown root there), so copy the subtree under an explicitly-created
+        // Space — the sanctioned top-level partition — rather than the bare root.
+        CreateSpace("destspace");
         CreateNode("org/Acme", "Acme Corp", "Markdown");
         CreateNode("org/Acme/Sub", "Sub Node", "Markdown");
 
-        var copied = CopyTree("org/Acme", "", force: false);
+        var copied = CopyTree("org/Acme", "destspace", force: false);
 
         copied.Should().Be(2);
 
-        GetNode("Acme").Should().NotBeNull();
-        GetNode("Acme/Sub").Should().NotBeNull();
+        GetNode("destspace/Acme").Should().NotBeNull();
+        GetNode("destspace/Acme/Sub").Should().NotBeNull();
     }
 
     [Fact]
