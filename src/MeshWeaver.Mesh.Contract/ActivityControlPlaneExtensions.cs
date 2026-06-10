@@ -1,8 +1,11 @@
 using System.Reactive.Linq;
+using System.Runtime.CompilerServices;
 using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Test")]
 
 namespace MeshWeaver.Mesh;
 
@@ -74,31 +77,14 @@ public static class ActivityControlPlaneExtensions
         // ThreadExecution.InitializeThreadLifecycle. A disposed guard + SerialDisposable
         // make the re-establish stop cleanly when the hub tears down. See
         // Doc/Architecture/ActivityControlPlane.md → "Recovery on activation".
-        var serial = new System.Reactive.Disposables.SerialDisposable();
-        var disposed = false;
-        void Establish()
-        {
-            if (disposed) return;
-            serial.Disposable = workspace.GetMeshNodeStream()
+        return SubscribeWithReEstablish(
+            () => workspace.GetMeshNodeStream()
                 .Select(node => (node?.Content as ActivityLog)?.RequestedStatus)
-                .DistinctUntilChanged()
-                .Subscribe(
-                    onRequestedStatus,
-                    ex =>
-                    {
-                        logger?.LogError(ex,
-                            "ActivityControlPlane subscription faulted on {Address} — re-establishing",
-                            hub.Address);
-                        if (!disposed)
-                            Observable.Timer(TimeSpan.FromSeconds(1)).Subscribe(_ => Establish());
-                    });
-        }
-        Establish();
-        return System.Reactive.Disposables.Disposable.Create(() =>
-        {
-            disposed = true;
-            serial.Dispose();
-        });
+                .DistinctUntilChanged(),
+            onRequestedStatus,
+            hub.Address,
+            logger,
+            "ActivityControlPlane subscription");
     }
 
     /// <summary>
@@ -169,12 +155,8 @@ public static class ActivityControlPlaneExtensions
         // sibling of the init-recovery deadlock). On fault we reset the single-flight
         // guard and re-establish after a short delay. Mirrors WatchControlPlane and
         // ThreadExecution.InitializeThreadLifecycle.
-        var serial = new System.Reactive.Disposables.SerialDisposable();
-        var disposed = false;
-        void Establish()
-        {
-            if (disposed) return;
-            serial.Disposable = hub.GetWorkspace().GetMeshNodeStream()
+        return SubscribeWithReEstablish<System.Reactive.Unit>(
+            () => hub.GetWorkspace().GetMeshNodeStream()
                 .DistinctUntilChanged(fingerprint)
                 .Where(needsDispatch)
                 .Where(_ => System.Threading.Interlocked.CompareExchange(ref dispatching, 1, 0) == 0)
@@ -186,20 +168,71 @@ public static class ActivityControlPlaneExtensions
                             hub.Address);
                         return System.Reactive.Linq.Observable.Empty<System.Reactive.Unit>();
                     })
-                    .Finally(() => System.Threading.Interlocked.Exchange(ref dispatching, 0)))
-                .Subscribe(
-                    _ => { },
-                    ex =>
+                    .Finally(() => System.Threading.Interlocked.Exchange(ref dispatching, 0))),
+            _ => { },
+            hub.Address,
+            logger,
+            "Submission watcher",
+            // Release the single-flight guard a faulted in-flight dispatch may have
+            // left set, so the re-established watcher can dispatch.
+            onTransientFault: () => System.Threading.Interlocked.Exchange(ref dispatching, 0));
+    }
+
+    /// <summary>
+    /// Subscribes to <paramref name="source"/> and keeps a control-plane / submission
+    /// watcher alive across <b>transient</b> faults by re-establishing after a short
+    /// delay — but treats a <b>terminal</b> fault as terminal.
+    ///
+    /// <para>🚨 A <see cref="ErrorType.NotFound"/> <see cref="DeliveryFailureException"/>
+    /// on a hub's OWN node means the node this watcher exists to observe is gone /
+    /// unroutable. Re-establishing then just re-issues a doomed cross-hub
+    /// <c>SubscribeRequest</c> every second forever — the atioz compile-activity storm
+    /// of 2026-06-10 (4999 NotFound round-trips through the single RoutingGrain in 14
+    /// min, starving unrelated subscriptions). That is the exact "resubscribe to recover
+    /// from a state that shouldn't happen" pattern the deleted 2026-06-08 watchdog was.
+    /// On a terminal own-node-gone fault we STOP (the orphaned hub idle-disposes); we
+    /// re-establish ONLY for genuinely transient faults (a hub hiccup where the activity
+    /// is still alive and must not be left unobserved).</para>
+    /// </summary>
+    /// <param name="scheduleReEstablish">Test seam for how a transient re-establish is
+    /// scheduled. Production default is a 1 s <see cref="Observable.Timer(TimeSpan)"/>
+    /// off the action block.</param>
+    internal static IDisposable SubscribeWithReEstablish<T>(
+        Func<IObservable<T>> source,
+        Action<T> onNext,
+        Address address,
+        ILogger? logger,
+        string faultLogContext,
+        Action? onTransientFault = null,
+        Action<Action>? scheduleReEstablish = null)
+    {
+        var serial = new System.Reactive.Disposables.SerialDisposable();
+        var disposed = false;
+        var schedule = scheduleReEstablish
+            ?? (reEstablish => Observable.Timer(TimeSpan.FromSeconds(1)).Subscribe(_ => reEstablish()));
+
+        void Establish()
+        {
+            if (disposed) return;
+            serial.Disposable = source().Subscribe(
+                onNext,
+                ex =>
+                {
+                    if (IsOwnNodeGone(ex))
                     {
-                        logger?.LogError(ex,
-                            "Submission watcher faulted on {Address} — re-establishing",
-                            hub.Address);
-                        // Release the single-flight guard a faulted in-flight dispatch
-                        // may have left set, so the re-established watcher can dispatch.
-                        System.Threading.Interlocked.Exchange(ref dispatching, 0);
-                        if (!disposed)
-                            Observable.Timer(TimeSpan.FromSeconds(1)).Subscribe(_ => Establish());
-                    });
+                        // Terminal: the node this watcher observes is gone/unroutable.
+                        // Stopping (not re-establishing) is what prevents the storm.
+                        logger?.LogWarning(ex,
+                            "{Context}: own node {Address} is gone (NotFound) — watch stops, no re-establish",
+                            faultLogContext, address);
+                        return;
+                    }
+                    logger?.LogError(ex, "{Context} faulted on {Address} — re-establishing",
+                        faultLogContext, address);
+                    onTransientFault?.Invoke();
+                    if (!disposed)
+                        schedule(Establish);
+                });
         }
         Establish();
         return System.Reactive.Disposables.Disposable.Create(() =>
@@ -207,5 +240,24 @@ public static class ActivityControlPlaneExtensions
             disposed = true;
             serial.Dispose();
         });
+    }
+
+    /// <summary>
+    /// True when <paramref name="ex"/> (or an inner exception) is a routing
+    /// <see cref="ErrorType.NotFound"/> — the node a watcher subscribes to does not
+    /// resolve. On a hub's OWN node this is terminal (the node is gone), so the watcher
+    /// must not resubscribe. Prefers the typed <see cref="DeliveryFailure.ErrorType"/>;
+    /// falls back to the canonical router message because the cross-hub failure is
+    /// sometimes re-wrapped as a plain <see cref="DeliveryFailureException"/>(string)
+    /// that drops the typed <see cref="DeliveryFailureException.Failure"/>.
+    /// </summary>
+    internal static bool IsOwnNodeGone(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException)
+        {
+            if (e is DeliveryFailureException { Failure.ErrorType: ErrorType.NotFound })
+                return true;
+        }
+        return ex.Message.Contains("No node found", StringComparison.Ordinal);
     }
 }
