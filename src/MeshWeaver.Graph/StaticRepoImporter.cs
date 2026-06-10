@@ -177,7 +177,7 @@ public static class StaticRepoImporter
             // Root-first: ensure the Space partition root exists (standard import step) before the
             // children. Children depend only on the schema (provisioned above), but the root is what
             // makes the partition a routable + listable Space with a landing page.
-            .SelectMany(_ => EnsureRoot(hub, meshService, source, root, activityPath, logger))
+            .SelectMany(_ => EnsureRoot(hub, source, root, activityPath, logger))
             .SelectMany(_ => existingSubtrees)
             .Take(1)
             .SelectMany(existingItems =>
@@ -197,8 +197,10 @@ public static class StaticRepoImporter
                     (target is not null && target.SyncBehavior != SyncBehavior.Include)
                     || excludedRoots.Any(root => IsAtOrUnder(path, root));
 
-                // Per source node: skip claimed; create absent (the create pipeline materializes
-                // content + prerender); overwrite existing as a Full (decoupled from merge-sync).
+                // Per source node: skip claimed; otherwise UPSERT through the single canonical verb
+                // (CreateOrUpdateNodeRequest — the same path NodeCopyHelper uses). It creates absent
+                // nodes and updates existing ones (version re-stamped by the owner), materializing
+                // content + prerender through the real pipeline. Preserve owner identity on update.
                 var upserted = nodes
                     .Select(sourceNode =>
                     {
@@ -212,16 +214,13 @@ public static class StaticRepoImporter
                         }
 
                         var materialized = Materialize(sourceNode);
-                        if (target is null)
-                            return CreateOne(hub, meshService, materialized, logger);
-
-                        // Preserve owner identity; Version is re-stamped on the fresh create.
-                        var authoritative = materialized with
-                        {
-                            CreatedDate = target.CreatedDate,
-                            CreatedBy = target.CreatedBy
-                        };
-                        return OverwriteOne(hub, authoritative);
+                        if (target is not null)
+                            materialized = materialized with
+                            {
+                                CreatedDate = target.CreatedDate,
+                                CreatedBy = target.CreatedBy
+                            };
+                        return Upsert(hub, materialized);
                     })
                     .ToObservable()
                     .Merge(BatchSize)
@@ -334,31 +333,16 @@ public static class StaticRepoImporter
     /// faults on the lock race.
     /// </summary>
     private static IObservable<int> EnsureRoot(
-        IMessageHub hub, IMeshService meshService, IStaticRepoSource source, MeshNode root,
-        string activityPath, ILogger? logger) =>
-        meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{source.Partition}"))
-            .Take(1)
-            .SelectMany(change =>
-            {
-                var existing = change.Items.FirstOrDefault(n => string.IsNullOrEmpty(n.Namespace));
-                var materialized = Materialize(root);
-                if (existing is null)
-                {
-                    NodeTypeCompilationActivity.AppendLog(
-                        hub, activityPath, $"Creating Space root {source.Partition}…", logger!);
-                    return CreateOne(hub, meshService, materialized, logger)
-                        // Concurrent replica won the create between our read and write — replace
-                        // instead of faulting the whole import (mirrors the activity-lock catch).
-                        .Catch<int, Exception>(_ => OverwriteOne(hub, materialized));
-                }
-
-                var authoritative = materialized with
-                {
-                    CreatedDate = existing.CreatedDate,
-                    CreatedBy = existing.CreatedBy
-                };
-                return OverwriteOne(hub, authoritative);
-            });
+        IMessageHub hub, IStaticRepoSource source, MeshNode root,
+        string activityPath, ILogger? logger)
+    {
+        NodeTypeCompilationActivity.AppendLog(
+            hub, activityPath, $"Ensuring Space root {source.Partition}…", logger!);
+        // Upsert through the canonical verb — creating a Space triggers eager schema provisioning +
+        // the partition-definition/routing prime + the admin grant; an existing root is updated
+        // (owner preserves identity). Same path as every other node.
+        return Upsert(hub, Materialize(root));
+    }
 
     /// <summary>Top-level partition segment of a path (the part before the first '/').</summary>
     private static string FirstSegment(string path)
@@ -423,28 +407,19 @@ public static class StaticRepoImporter
             : Observable.Using(() => access.ImpersonateAsSystem(), _ => write());
     }
 
-    /// <summary>Create an absent node through the canonical create pipeline (content + prerender,
-    /// already computed by <see cref="Materialize"/>). Returns 1 on success. Idempotent: if the node
-    /// already exists (the existing-subtree snapshot is eventually consistent and can miss a row, or
-    /// a prior partial import created it), fall back to <see cref="OverwriteOne"/> rather than
-    /// faulting the whole partition import.</summary>
-    private static IObservable<int> CreateOne(IMessageHub hub, IMeshService meshService, MeshNode node, ILogger? logger) =>
-        AsSystem(hub, () => meshService.CreateNode(node))
+    /// <summary>
+    /// Upsert a node through the SINGLE canonical verb <see cref="CreateOrUpdateNodeRequest"/> — the
+    /// same path <c>NodeCopyHelper</c> uses. The handler creates the node when absent and updates it
+    /// when present (the owner re-stamps Version), running the full pipeline (prerender, embedding,
+    /// satellite + access). This is the documented step 4 of the static-repo import (see
+    /// StaticRepoImport.md) — NOT a hand-rolled CreateNode/stream-Overwrite split. Returns 1.
+    /// </summary>
+    private static IObservable<int> Upsert(IMessageHub hub, MeshNode node) =>
+        AsSystem(hub, () => hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node)))
             .FirstAsync()
-            .Select(_ => 1)
-            .Catch<int, Exception>(ex =>
-                ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase)
-                    ? OverwriteOne(hub, node)
-                    : Observable.Throw<int>(
-                        new InvalidOperationException($"Create of '{node.Path}' failed: {ex.Message}", ex)));
-
-    /// <summary>Overwrite an existing node with the full authoritative state (ChangeType.Full).
-    /// Non-destructive (no delete) — persistence depends on the owner→PG write-back carrying the
-    /// caller's AccessContext (see <c>WriteViaSyncStream</c> + the owner-hub persistence path).</summary>
-    private static IObservable<int> OverwriteOne(IMessageHub hub, MeshNode node) =>
-        AsSystem(hub, () => hub.GetWorkspace().GetMeshNodeStream(node.Path).Overwrite(node))
-            .FirstAsync()
-            .Select(_ => 1)
-            .Catch<int, Exception>(ex => Observable.Throw<int>(
-                new InvalidOperationException($"Overwrite of '{node.Path}' failed: {ex.Message}", ex)));
+            .Select(d => d.Message)
+            .SelectMany(resp => resp.Success
+                ? Observable.Return(1)
+                : Observable.Throw<int>(new InvalidOperationException(
+                    $"Upsert of '{node.Path}' failed: {resp.Error}")));
 }

@@ -13,6 +13,7 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using Xunit;
@@ -20,11 +21,19 @@ using Xunit;
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
 /// <summary>
-/// Verifies the standard static-repo import contract (Doc/Architecture/StaticRepoImport.md): the
-/// importer materializes a partition's children AND — as a STANDARD step — creates a proper
-/// <c>Space</c> partition root, so the partition is routable + listable with a landing page. The
-/// custom <see cref="IStaticRepoSource.PartitionRoot"/> welcome must round-trip through PG and the
-/// only schema created must be the lowercased one (no ghost capital schema — the atioz regression).
+/// Verifies the static-repo import contract (Doc/Architecture/StaticRepoImport.md):
+/// <list type="bullet">
+///   <item>materializes every source node (children + satellites) through the SINGLE canonical
+///     verb <c>CreateOrUpdateNodeRequest</c> — content + prerender persisted, round-tripped through PG;</item>
+///   <item>creates a proper <c>Space</c> partition root as a standard step (welcome page);</item>
+///   <item>provisions ONLY the lowercased schema (no verbatim/capital ghost — the atioz regression);</item>
+///   <item>is idempotent (re-run with unchanged source = no-op);</item>
+///   <item>on a CHANGED source, <b>updates existing nodes and increments their Version</b> (the bug the
+///     old stream-<c>Overwrite</c> path hit: re-asserting the same Version was dropped as not-newer);</item>
+///   <item>fills content over a pre-existing content-NULL row (the migration-backfill shadow → the
+///     exact "/Doc shows no content" repro);</item>
+///   <item>prunes nodes absent from the source (full-replace).</item>
+/// </list>
 /// </summary>
 [Collection("PostgreSql")]
 public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelper output)
@@ -32,11 +41,36 @@ public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelpe
 {
     private readonly PostgreSqlFixture _fixture = fixture;
 
-    // Capitalized partition so the lowercase-schema invariant is observable: schema must be the
-    // lowercased name, and the verbatim capital schema must NEVER be conjured.
-    private readonly string _partition = "Srt" + Guid.NewGuid().ToString("N")[..10];
-
     private const string WelcomeMarker = "Explore the test repo";
+
+    // Mutable source so one test can re-import a CHANGED repo (drives the update/prune cases).
+    // The field initializer uses no instance members (CS0236-safe) and runs before the base ctor
+    // calls ConfigureMesh, so _source is ready in time. Capitalized partition so the lowercase-schema
+    // invariant is observable. _partition is a property (reads _source) to avoid the field-order trap.
+    private readonly FakeRepoSource _source = NewSource("Srt" + Guid.NewGuid().ToString("N")[..10]);
+    private string _partition => _source.Partition;
+
+    private static FakeRepoSource NewSource(string partition) => new(partition)
+    {
+        Root = new MeshNode(partition)
+        {
+            Name = "Test Repo", NodeType = "Space", State = MeshNodeState.Active,
+            Content = new MarkdownContent { Content = $"# Test Repo\n\n{WelcomeMarker} or start a chat." }
+        },
+        Nodes =
+        [
+            new MeshNode("Page1", partition)
+            {
+                NodeType = "Markdown", Name = "Page 1", State = MeshNodeState.Active,
+                Content = new MarkdownContent { Content = "# Page 1\n\nA page." }
+            }
+        ]
+    };
+
+    private IObservable<long> SchemaCount(string schema, CancellationToken ct) =>
+        _fixture.DataSource.ScalarLong(
+            "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = @s",
+            new[] { ("s", (object)schema) }, ct);
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -50,7 +84,7 @@ public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelpe
             .ConfigureServices(services =>
             {
                 services.AddPartitionedPostgreSqlPersistence(csb.ConnectionString);
-                services.AddSingleton<IStaticRepoSource>(new FakeRepoSource(_partition));
+                services.AddSingleton<IStaticRepoSource>(_source);
                 return services;
             })
             .AddRowLevelSecurity()
@@ -58,69 +92,130 @@ public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelpe
             .AddSpaceType();
     }
 
-    private IObservable<long> SchemaCount(string schema, CancellationToken ct) =>
-        _fixture.DataSource.ScalarLong(
-            "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = @s",
-            new[] { ("s", (object)schema) }, ct);
+    private IList<StaticRepoImportResult> Import() =>
+        StaticRepoImporter.ImportAll(Mesh).ToList().Should().Within(120.Seconds()).Emit();
+
+    private MeshNode? Read(string path) =>
+        Mesh.GetMeshNodeStream(path).Where(n => n is not null).Should().Within(30.Seconds()).Emit();
 
     [Fact(Timeout = 120000)]
-    public void Import_CreatesSpaceRoot_WithWelcome_LowercaseSchemaOnly()
+    public void Import_CreatesSpaceRoot_AndChildContent_LowercaseSchemaOnly()
     {
         var ct = TestContext.Current.CancellationToken;
 
-        // First import: materializes the child + creates the Space root.
-        var results = StaticRepoImporter.ImportAll(Mesh)
-            .ToList().Should().Within(120.Seconds()).Emit();
-        var mine = results.Single(r => r.Partition == _partition);
-        mine.Outcome.Should().Be("Imported");
+        Import().Single(r => r.Partition == _partition).Outcome.Should().Be("Imported");
 
-        // The Space partition root exists, served from PG, with the custom welcome reconstructed
-        // onto PreRenderedHtml (the PG read fix) — what the Space Overview renders.
-        var root = Mesh.GetMeshNodeStream(_partition)
-            .Where(n => n is { NodeType: "Space" })
+        // Space root persisted, welcome reconstructed onto PreRenderedHtml (PG read mirror).
+        var root = Mesh.GetMeshNodeStream(_partition).Where(n => n is { NodeType: "Space" })
             .Should().Within(30.Seconds()).Emit();
-        root.Should().NotBeNull();
-        root!.NodeType.Should().Be("Space");
-        root.PreRenderedHtml.Should().NotBeNullOrWhiteSpace(
-            "the Space Overview renders MeshNode.PreRenderedHtml — it must round-trip through PG");
-        root.PreRenderedHtml.Should().Contain(WelcomeMarker);
+        root!.PreRenderedHtml.Should().Contain(WelcomeMarker);
 
-        // Only the lowercased schema was created — never the verbatim capital one (atioz ghost).
+        // Child page persisted WITH content + prerender (the thing /Doc needs).
+        var page = Read($"{_partition}/Page1");
+        page!.NodeType.Should().Be("Markdown");
+        (page.Content as MarkdownContent)!.Content.Should().Contain("A page.");
+        page.PreRenderedHtml.Should().NotBeNullOrWhiteSpace("markdown prerender must round-trip from PG");
+
+        // Only the lowercased schema — never the verbatim capital one (atioz ghost).
         SchemaCount(_partition.ToLowerInvariant(), ct).Should().Within(30.Seconds()).Be(1L);
         SchemaCount(_partition, ct).Should().Within(30.Seconds()).Be(0L);
 
-        // Re-run with the same source is idempotent — it must NOT re-import. Either "Skipped"
-        // (short-circuit saw the Succeeded activity) or "AlreadyRunning" (the eventually-consistent
-        // short-circuit query raced the fire-and-forget MarkSucceeded and fell through to the
-        // content-addressed CreateNode lock, which faulted benignly) — both mean "no re-import".
-        var second = StaticRepoImporter.ImportAll(Mesh)
-            .ToList().Should().Within(60.Seconds()).Emit();
-        second.Single(r => r.Partition == _partition).Outcome.Should().NotBe("Imported");
+        // Idempotent re-run = no re-import.
+        Import().Single(r => r.Partition == _partition).Outcome.Should().NotBe("Imported");
     }
 
-    /// <summary>One child page + a custom Space root with a welcome marker — the Doc-style shape.</summary>
+    [Fact(Timeout = 120000)]
+    public void Reimport_ChangedContent_Updates_AndIncrementsVersion()
+    {
+        Import().Single(r => r.Partition == _partition).Outcome.Should().Be("Imported");
+        var v1 = Read($"{_partition}/Page1")!;
+        v1.Version.Should().BeGreaterThan(0);
+
+        // Change the source → new fingerprint → re-import → CreateOrUpdate UPDATE path.
+        _source.Nodes =
+        [
+            new MeshNode("Page1", _partition)
+            {
+                NodeType = "Markdown", Name = "Page 1", State = MeshNodeState.Active,
+                Content = new MarkdownContent { Content = "# Page 1\n\nEDITED body." }
+            }
+        ];
+        Import().Single(r => r.Partition == _partition).Outcome.Should().Be("Imported");
+
+        var v2 = Mesh.GetMeshNodeStream($"{_partition}/Page1")
+            .Where(n => n?.Content is MarkdownContent mc && mc.Content.Contains("EDITED"))
+            .Should().Within(30.Seconds()).Emit();
+        v2!.Version.Should().BeGreaterThan(v1.Version,
+            "the canonical CreateOrUpdate update must increment Version (the old stream-Overwrite re-asserted the same Version and was dropped)");
+        (v2.Content as MarkdownContent)!.Content.Should().Contain("EDITED body.");
+    }
+
+    [Fact(Timeout = 120000)]
+    public void Import_FillsContent_OverPreExistingContentNullRow()
+    {
+        // First import creates Page1 with content; then blank its content directly in PG to simulate
+        // the migration backfill's content-NULL shadow row, and re-import: the upsert must REFILL it.
+        Import();
+        Read($"{_partition}/Page1").Should().NotBeNull();
+
+        var schema = _partition.ToLowerInvariant();
+        _fixture.DataSource.ExecuteNonQuery(
+            $"UPDATE \"{schema}\".mesh_nodes SET content = NULL WHERE id = 'Page1'",
+            TestContext.Current.CancellationToken).Should().Within(30.Seconds()).Emit();
+
+        // Change source content so the fingerprint differs → re-import runs over the NULL row.
+        _source.Nodes =
+        [
+            new MeshNode("Page1", _partition)
+            {
+                NodeType = "Markdown", Name = "Page 1", State = MeshNodeState.Active,
+                Content = new MarkdownContent { Content = "# Page 1\n\nRefilled body." }
+            }
+        ];
+        Import().Single(r => r.Partition == _partition).Outcome.Should().Be("Imported");
+
+        var refilled = Mesh.GetMeshNodeStream($"{_partition}/Page1")
+            .Where(n => n?.Content is MarkdownContent)
+            .Should().Within(30.Seconds()).Emit();
+        (refilled!.Content as MarkdownContent)!.Content.Should().Contain("Refilled body.");
+    }
+
+    [Fact(Timeout = 120000)]
+    public void Reimport_WithoutNode_PrunesIt()
+    {
+        _source.Nodes =
+        [
+            new MeshNode("Page1", _partition) { NodeType = "Markdown", Name = "Page 1", State = MeshNodeState.Active,
+                Content = new MarkdownContent { Content = "one" } },
+            new MeshNode("Page2", _partition) { NodeType = "Markdown", Name = "Page 2", State = MeshNodeState.Active,
+                Content = new MarkdownContent { Content = "two" } }
+        ];
+        Import();
+        Read($"{_partition}/Page2").Should().NotBeNull();
+
+        // Drop Page2 from the source and re-import — full-replace must prune it.
+        _source.Nodes =
+        [
+            new MeshNode("Page1", _partition) { NodeType = "Markdown", Name = "Page 1", State = MeshNodeState.Active,
+                Content = new MarkdownContent { Content = "one-still" } }
+        ];
+        Import().Single(r => r.Partition == _partition).Outcome.Should().Be("Imported");
+
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var remaining = meshService.Query<MeshNode>(
+                MeshQueryRequest.FromQuery($"path:{_partition} scope:descendants"))
+            .Take(1).Should().Within(30.Seconds()).Emit();
+        remaining.Items.Should().NotContain(n => n.Id == "Page2", "Page2 was removed from the source → pruned");
+    }
+
+    /// <summary>Mutable in-memory repo: children + a customizable Space root.</summary>
     private sealed class FakeRepoSource(string partition) : IStaticRepoSource
     {
         public string Partition => partition;
         public bool Versioned => false;
-
-        public IReadOnlyList<MeshNode> EnumerateSourceNodes() =>
-        [
-            new MeshNode("Page1", partition)
-            {
-                NodeType = "Markdown",
-                Name = "Page 1",
-                State = MeshNodeState.Active,
-                Content = new MarkdownContent { Content = "# Page 1\n\nA page." }
-            }
-        ];
-
-        public MeshNode? PartitionRoot => new(partition)
-        {
-            Name = "Test Repo",
-            NodeType = "Space",
-            State = MeshNodeState.Active,
-            Content = new MarkdownContent { Content = $"# Test Repo\n\n{WelcomeMarker} or start a chat." }
-        };
+        public List<MeshNode> Nodes { get; set; } = [];
+        public MeshNode? Root { get; set; }
+        public IReadOnlyList<MeshNode> EnumerateSourceNodes() => Nodes;
+        public MeshNode? PartitionRoot => Root;
     }
 }
