@@ -47,7 +47,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
             Name = "Test Corporation",
             NodeType = "Markdown"
         };
-        NodeFactory.CreateNode(orgNode).Should().Emit();
+        SeedTopLevel(orgNode);
 
         // Act: global search with no path (like the top search bar)
         var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("scope:descendants sort:LastModified-desc limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
@@ -61,11 +61,11 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public void GlobalSearch_ReturnsOrganizationByName()
     {
         // Arrange
-        NodeFactory.CreateNode(new MeshNode("AcmeCorp")
+        SeedTopLevel(new MeshNode("AcmeCorp")
         {
             Name = "Acme Corporation",
             NodeType = "Markdown"
-        }).Should().Emit();
+        });
 
         // Act: search by text that matches the name
         var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("Acme scope:descendants limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
@@ -79,11 +79,11 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public void GlobalSearch_ReturnsChildNodesUnderOrganization()
     {
         // Arrange: create org + child markdown node
-        NodeFactory.CreateNode(new MeshNode("MegaCorp")
+        SeedTopLevel(new MeshNode("MegaCorp")
         {
             Name = "Mega Corporation",
             NodeType = "Markdown"
-        }).Should().Emit();
+        });
 
         NodeFactory.CreateNode(new MeshNode("readme", "MegaCorp")
         {
@@ -107,11 +107,11 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public void Autocomplete_FindsOrganizationByPrefix()
     {
         // Arrange
-        NodeFactory.CreateNode(new MeshNode("AlphaCorp")
+        SeedTopLevel(new MeshNode("AlphaCorp")
         {
             Name = "Alpha Corporation",
             NodeType = "Markdown"
-        }).Should().Emit();
+        });
 
         // Act: autocomplete with "Alpha" prefix (like typing in search bar)
         var suggestions = MeshQuery
@@ -127,11 +127,11 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public void Autocomplete_FindsOrganizationByPartialName()
     {
         // Arrange
-        NodeFactory.CreateNode(new MeshNode("BetaInc")
+        SeedTopLevel(new MeshNode("BetaInc")
         {
             Name = "Beta Incorporated",
             NodeType = "Markdown"
-        }).Should().Emit();
+        });
 
         // Act: autocomplete with partial name
         var suggestions = MeshQuery
@@ -149,11 +149,11 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public void NodeTypeQuery_FindsOrganizations()
     {
         // Arrange
-        NodeFactory.CreateNode(new MeshNode("GammaCorp")
+        SeedTopLevel(new MeshNode("GammaCorp")
         {
             Name = "Gamma Corp",
             NodeType = "Markdown"
-        }).Should().Emit();
+        });
 
         // Act: search by nodeType
         var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Markdown scope:descendants limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
@@ -169,17 +169,17 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public void GlobalSearch_ReturnsNodesFromMultiplePartitions()
     {
         // Arrange: two orgs in different partitions
-        NodeFactory.CreateNode(new MeshNode("OrgA")
+        SeedTopLevel(new MeshNode("OrgA")
         {
             Name = "Organization A",
             NodeType = "Markdown"
-        }).Should().Emit();
+        });
 
-        NodeFactory.CreateNode(new MeshNode("OrgB")
+        SeedTopLevel(new MeshNode("OrgB")
         {
             Name = "Organization B",
             NodeType = "Markdown"
-        }).Should().Emit();
+        });
 
         // Also create a child in each
         NodeFactory.CreateNode(new MeshNode("doc1", "OrgA")
@@ -210,11 +210,11 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public void TextSearch_FindsNodesAcrossPartitions()
     {
         // Arrange
-        NodeFactory.CreateNode(new MeshNode("DeltaCorp")
+        SeedTopLevel(new MeshNode("DeltaCorp")
         {
             Name = "Delta Corporation",
             NodeType = "Markdown"
-        }).Should().Emit();
+        });
 
         NodeFactory.CreateNode(new MeshNode("report", "DeltaCorp")
         {
@@ -238,11 +238,11 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public void GlobalSearch_WithAccessAssignment_ReturnsGrantedNodes()
     {
         // Arrange: create org + grant current user access
-        NodeFactory.CreateNode(new MeshNode("SecureCorp")
+        SeedTopLevel(new MeshNode("SecureCorp")
         {
             Name = "Secure Corporation",
             NodeType = "Markdown"
-        }).Should().Emit();
+        });
 
         // Grant the admin user (already logged in) Viewer role on SecureCorp
         // — runtime AccessAssignment node via IMeshService.CreateNode.
@@ -264,11 +264,11 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public void RoutingHints_PathRestrictsToPartition()
     {
         // Arrange
-        NodeFactory.CreateNode(new MeshNode("EpsilonCorp")
+        SeedTopLevel(new MeshNode("EpsilonCorp")
         {
             Name = "Epsilon Corp",
             NodeType = "Markdown"
-        }).Should().Emit();
+        });
 
         NodeFactory.CreateNode(new MeshNode("project", "EpsilonCorp")
         {

@@ -38,13 +38,13 @@ public class RecentlyAccessedSearchTest(ITestOutputHelper output) : MonolithMesh
     public void RecentlyAccessed_OrderedByAccessTime_AcrossPartitions()
     {
         // Arrange: create nodes in different partitions
-        NodeFactory.CreateNode(new MeshNode("p1") { Name = "Partition 1", NodeType = "Group" }).Should().Emit();
+        SeedTopLevel(new MeshNode("p1") { Name = "Partition 1", NodeType = "Group" });
         NodeFactory.CreateNode(MeshNode.FromPath("p1/doc-a") with
         {
             Name = "Alpha Doc", NodeType = "Markdown"
         }).Should().Emit();
 
-        NodeFactory.CreateNode(new MeshNode("p2") { Name = "Partition 2", NodeType = "Group" }).Should().Emit();
+        SeedTopLevel(new MeshNode("p2") { Name = "Partition 2", NodeType = "Group" });
         NodeFactory.CreateNode(MeshNode.FromPath("p2/doc-b") with
         {
             Name = "Beta Doc", NodeType = "Markdown"
@@ -116,7 +116,7 @@ public class RecentlyAccessedSearchTest(ITestOutputHelper output) : MonolithMesh
     public void RecentlyAccessed_NoAccess_ReturnsEmpty_OrMainNodes()
     {
         // Arrange: nodes exist but no activity tracked
-        NodeFactory.CreateNode(new MeshNode("noAccess") { Name = "No Access NS", NodeType = "Group" }).Should().Emit();
+        SeedTopLevel(new MeshNode("noAccess") { Name = "No Access NS", NodeType = "Group" });
         NodeFactory.CreateNode(MeshNode.FromPath("noAccess/doc") with
         {
             Name = "Unvisited", NodeType = "Markdown"
