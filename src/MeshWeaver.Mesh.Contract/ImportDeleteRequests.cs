@@ -56,24 +56,13 @@ public record ImportNodesResponse
 }
 
 /// <summary>
-/// Request to import content files into a content collection, posted to the OWNING node's hub
-/// (which has the target collection + <c>IFileContentProvider</c>).
+/// Request to import content files into a content collection.
 /// </summary>
-/// <param name="CollectionName">Target content collection on the node (e.g. <c>"content"</c>).</param>
-/// <param name="SourcePath">Source folder path. Within <see cref="SourceCollection"/> when that is
-/// set; otherwise a server-side disk directory (legacy).</param>
-/// <param name="TargetPath">Target folder path within <paramref name="CollectionName"/>.</param>
+/// <param name="CollectionName">Name of the content collection</param>
+/// <param name="SourcePath">Server-side source directory path</param>
+/// <param name="TargetPath">Target folder path within the collection</param>
 [RequiresPermission(Permission.Create)]
-public record ImportContentRequest(string CollectionName, string SourcePath, string TargetPath) : IRequest<ImportContentResponse>
-{
-    /// <summary>
-    /// Optional <b>source content collection</b> to copy from — e.g. the embedded <c>DocContent</c>
-    /// collection that ships assets in the assembly. When set, the handler copies files from this
-    /// collection's <see cref="ImportContentRequest.SourcePath"/> folder into the target collection
-    /// (collection-to-collection, no disk staging). When null, <c>SourcePath</c> is a disk directory.
-    /// </summary>
-    public string? SourceCollection { get; init; }
-}
+public record ImportContentRequest(string CollectionName, string SourcePath, string TargetPath) : IRequest<ImportContentResponse>;
 
 /// <summary>
 /// Response for content import request.
