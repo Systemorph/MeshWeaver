@@ -957,6 +957,38 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         layoutArea.IsInline.Should().BeTrue();
     }
 
+    // Self-reference slash forms (@@data/, @@schema/) — what the Unified Path page's "Quick
+    // Examples" #4/#5 use. They resolve against the current node (no explicit address), so they
+    // need a currentNodePath on the pipeline. Regression guard for "@@data/ and @@schema/ don't work".
+
+    [Fact(Timeout = 20000)]
+    public void DataSlashSelfReference_WithCurrentNode_ParsesToSelf()
+    {
+        var pipeline = new MarkdownPipelineBuilder()
+            .Use(new LayoutAreaMarkdownExtension("Doc/DataMesh/UnifiedPath")).Build();
+        var document = Markdig.Markdown.Parse("@@data/", pipeline);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("Doc/DataMesh/UnifiedPath");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
+        string.IsNullOrEmpty(layoutArea.Id as string).Should().BeTrue("@@data/ is a self-reference (no type/path)");
+        layoutArea.IsInline.Should().BeTrue();
+    }
+
+    [Fact(Timeout = 20000)]
+    public void SchemaSlashSelfReference_WithCurrentNode_ParsesToSelf()
+    {
+        var pipeline = new MarkdownPipelineBuilder()
+            .Use(new LayoutAreaMarkdownExtension("Doc/DataMesh/UnifiedPath")).Build();
+        var document = Markdig.Markdown.Parse("@@schema/", pipeline);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("Doc/DataMesh/UnifiedPath");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.SchemaAreaName);
+        string.IsNullOrEmpty(layoutArea.Id as string).Should().BeTrue("@@schema/ is a self-reference (no type/path)");
+        layoutArea.IsInline.Should().BeTrue();
+    }
+
     #endregion
 
     #region Interactive Markdown Tests
