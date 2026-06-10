@@ -2,7 +2,7 @@ namespace MeshWeaver.AI;
 
 /// <summary>
 /// Content of the per-user <b>ThreadComposer</b> singleton node at
-/// <c>{userHome}/_Memex/ThreadComposer</c> — the persisted state of the out-of-thread
+/// <c>{userHome}/_Thread/ThreadComposer</c> — the persisted state of the out-of-thread
 /// chat composer (the "new chat" box). Carries the in-progress message text plus the
 /// three composer comboboxes (harness / agent / model) and any reference attachments,
 /// so the user's draft + selection survive a reload server-side (no browser storage).

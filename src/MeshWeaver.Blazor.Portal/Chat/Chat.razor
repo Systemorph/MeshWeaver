@@ -7,7 +7,7 @@
 @inject AccessService AccessService
 
 @* The standalone /chat composer is the per-user ThreadComposer node's default ("")
-   layout area — databinds message text + harness/agent/model to {user}/_Memex/ThreadComposer
+   layout area — databinds message text + harness/agent/model to {user}/_Thread/ThreadComposer
    (see ThreadComposerView). Falls back to a direct ThreadChatControl while the user
    identity is still resolving. *@
 @{ var chatInputArea = GetThreadComposerLayoutArea(); }
@@ -29,7 +29,7 @@ else
     {
         // Durable circuit user first; skip a leaked system-security / hub principal on the
         // AsyncLocal Context (which would point the composer at a non-existent
-        // system-security/_Memex/ThreadComposer). Mirrors ThreadSidePanelContent.ResolveUserHome.
+        // system-security/_Thread/ThreadComposer). Mirrors ThreadSidePanelContent.ResolveUserHome.
         string? userHome = null;
         foreach (var candidate in new[] { AccessService.CircuitContext?.ObjectId, AccessService.Context?.ObjectId })
         {

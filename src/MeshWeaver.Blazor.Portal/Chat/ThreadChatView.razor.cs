@@ -264,18 +264,14 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     // so they survive a reboot. On submit a new thread is cloned from it and the draft
     // cleared. _userHome == AccessContext.ObjectId == the user's home partition (dev
     // login stamps ObjectId = username).
-    // ThreadComposer is a per-user SINGLETON main node living under the user's hidden _Memex
-    // defaults namespace: {userHome}/_Memex/ThreadComposer. `_Memex` is a "dotfile" namespace —
-    // hidden from search/create by convention (see MeshNodeVisibility) — but it is NOT a
-    // satellite suffix, so the write and the path-based read BOTH hit mesh_nodes. (The dead
-    // "_ThreadTemplate"/nodeType:Thread approach routed the write to the `threads` satellite
-    // table while the path-read hit mesh_nodes → the selection never persisted; never reuse it.)
+    // ThreadComposer is a per-user SINGLETON satellite node living under the user's _Thread
+    // partition: {userHome}/_Thread/ThreadComposer. ThreadComposer is registered in
+    // SatelliteTableMapping as a _Thread/threads nodeType, so BOTH its path segment (_Thread)
+    // and its nodeType resolve to the `threads` table — write and read agree, the selection
+    // persists, and the bound layout-area stream never NotFound-OnErrors (the disappear bug).
     // Single source of truth — the read path here MUST equal the seed path
     // (ThreadComposerNodeType.ThreadComposerSeedHandler) and the type, or the singleton splits.
     private const string TemplateNodeId = MeshWeaver.AI.ThreadComposerNodeType.NodeType;
-
-    /// <summary>The user's hidden Memex-defaults namespace (dotfile): <c>{userHome}/_Memex/…</c>.</summary>
-    private const string MemexDefaultsNamespace = MeshWeaver.AI.ThreadComposerNodeType.MemexDefaultsNamespace;
     private string? _userHome;
     private string? _templatePath;
     private readonly System.Reactive.Subjects.Subject<string> _draftChanges = new();
@@ -432,12 +428,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     // ─── Per-user chat template (_ThreadTemplate) ─────────────────────────────
 
     /// <summary>
-    /// The signed-in user's partition — the main node that owns
-    /// <c>{user}/_Memex/ThreadComposer</c> and the namespace a submitted thread is created
+    /// The signed-in user's partition — the partition that owns
+    /// <c>{user}/_Thread/ThreadComposer</c> and the namespace a submitted thread is created
     /// under. Prefer <see cref="AccessService.CircuitContext"/> (the durable per-circuit
     /// identity); <see cref="AccessService.Context"/> (AsyncLocal) is only a fallback and
     /// is filtered for a leaked <c>system-security</c> / hub principal. Trusting
-    /// <c>Context</c> first pointed the composer at <c>system-security/_Memex/ThreadComposer</c>
+    /// <c>Context</c> first pointed the composer at <c>system-security/_Thread/ThreadComposer</c>
     /// and would have created threads under the wrong partition.
     /// </summary>
     private static string? ResolveUserHome(AccessService? accessSvc)

@@ -52,9 +52,9 @@ public static class ModelProviderNodeType
 
     /// <summary>
     /// Per-user satellite namespace for the user's OWN providers, models, and
-    /// selection — the same hidden "dotfile" namespace
+    /// selection — the hidden "dotfile" namespace
     /// (<see cref="ThreadComposerNodeType.MemexDefaultsNamespace"/>, <c>_Memex</c>)
-    /// that already hosts <c>{user}/_Memex/ThreadComposer</c>. User-owned provider /
+    /// for per-user Memex defaults. User-owned provider /
     /// model nodes live at <c>{userPath}/_Memex/{providerName}</c> and
     /// <c>{userPath}/_Memex/{providerName}/{modelId}</c>; the user's selection at
     /// <c>{userPath}/_Memex/_Selection</c>.
@@ -139,7 +139,7 @@ public static class ModelProviderNodeType
             // SubscribeRequests never completed (sglauser deadlock, 2026-06-09; same
             // class as the 2026-06-08 storm). Empty selection == default catalog
             // (root + context + nodeType), the existing behaviour. Mirrors
-            // ThreadComposerSeedHandler / the _Memex/ThreadComposer seed.
+            // ThreadComposerSeedHandler / the _Thread/ThreadComposer seed.
             services.AddSingleton<INodePostCreationHandler>(_ => new ModelProviderSelectionSeedHandler());
             if (!dbSynced)
                 services.AddSingleton<IPartitionStorageProvider>(sp =>

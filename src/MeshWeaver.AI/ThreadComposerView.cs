@@ -8,14 +8,14 @@ namespace MeshWeaver.AI;
 /// Layout view for the per-user <see cref="ThreadComposer"/> node. Registers the chat
 /// composer as the node's <b>default area</b> (<c>""</c>) so it can be addressed and
 /// mounted as
-/// <c>new LayoutAreaControl("{user}/_Memex/ThreadComposer", new LayoutAreaReference(""))</c>
+/// <c>new LayoutAreaControl("{user}/_Thread/ThreadComposer", new LayoutAreaReference(""))</c>
 /// and shown at the bottom of the chat panel.
 ///
 /// <para>The composer is the SAME <see cref="ThreadChatControl"/> the thread view uses,
 /// in out-of-thread (new-chat) compose mode. <c>WithHideEmptyState</c> drops the empty
 /// message-history pane so only the input box renders. The control self-binds its draft
 /// + harness/agent/model selection to this node via <c>ThreadChatView</c>'s template
-/// logic (LoadTemplate / WriteTemplate), which targets <c>{user}/_Memex/ThreadComposer</c>.</para>
+/// logic (LoadTemplate / WriteTemplate), which targets <c>{user}/_Thread/ThreadComposer</c>.</para>
 ///
 /// <para>Mirrors the static-extension shape of <see cref="AgentView.AddAgentView"/> and
 /// <see cref="ThreadLayoutAreas.AddThreadLayoutAreas"/>.</para>

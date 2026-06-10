@@ -10,16 +10,19 @@ namespace MeshWeaver.AI;
 /// <summary>
 /// Per-user <b>ThreadComposer</b> node — the persistent state of a user's chat input box
 /// (draft text + the selected harness / agent / model). A per-user <b>singleton</b> stored at
-/// <c>{userHome}/_Memex/ThreadComposer</c> as a <b>MAIN</b> node (<see cref="MeshNode.IsSatelliteType"/>
-/// = <see langword="false"/> → the partition's <c>mesh_nodes</c> table).
+/// <c>{userHome}/_Thread/ThreadComposer</c> as a <b>satellite</b> node
+/// (<see cref="MeshNode.IsSatelliteType"/> = <see langword="true"/> → the partition's
+/// <c>threads</c> table, alongside <c>Thread</c> / <c>ThreadMessage</c>).
 ///
-/// <para><b>Why under <c>_Memex</c>:</b> <c>_Memex</c> is the user partition's hidden "dotfile"
-/// namespace for Memex defaults / global Memex data (see <see cref="MeshNodeVisibility"/> and
-/// PostgresSchemaArchitecture.md). The leading underscore hides it from search but — crucially —
-/// is NOT a registered satellite suffix, so the write and the path-based read BOTH resolve to
-/// <c>mesh_nodes</c> and the selection actually persists. (The dead <c>_ThreadTemplate</c>/
-/// <c>nodeType:Thread</c> approach routed the write to the <c>threads</c> satellite table while the
-/// path-read hit <c>mesh_nodes</c> → the selection silently never persisted. Never reuse it.)</para>
+/// <para><b>Why under <c>_Thread</c>, and why it must be a registered satellite:</b> the composer
+/// is thread-family state, kept in the <c>_Thread</c> partition consistently with the per-node
+/// composer (<see cref="PathForNode"/>). For the read to find it, <c>ThreadComposer</c> MUST resolve
+/// to the SAME table by BOTH its path segment (<c>_Thread</c> → <c>threads</c>) and its nodeType —
+/// so it is registered in <see cref="SatelliteTableMapping"/> as a <c>_Thread</c>/<c>threads</c>
+/// nodeType. Without that nodeType mapping, the write routed to <c>threads</c> (by path) but the
+/// nodeType resolved to <c>mesh_nodes</c> → the single-node read missed the row → routing
+/// <c>NotFound</c> → the composer's bound layout-area <c>SynchronizationStream</c> OnErrored and the
+/// input box vanished (the 2026-06-10 "ThreadComposer disappears on model-select" bug).</para>
 ///
 /// <para><b>Why a singleton, seeded at onboarding:</b> the node is materialized for every user when
 /// their <c>User</c> partition is created (<see cref="ThreadComposerSeedHandler"/>, a
@@ -35,9 +38,11 @@ public static class ThreadComposerNodeType
     public const string NodeType = "ThreadComposer";
 
     /// <summary>
-    /// The user partition's hidden Memex-defaults namespace segment (a dotfile): the singleton lives at
-    /// <c>{userHome}/_Memex/ThreadComposer</c>. Hidden from search by <see cref="MeshNodeVisibility"/>, but
-    /// NOT a satellite suffix, so write + read both hit <c>mesh_nodes</c>.
+    /// The user partition's hidden Memex-defaults namespace segment (a dotfile), <c>_Memex</c> — a
+    /// non-satellite namespace for per-user defaults (e.g. <c>ModelProvider</c>). Hidden from search by
+    /// <see cref="MeshNodeVisibility"/>. NOTE: the ThreadComposer singleton itself does NOT live here —
+    /// it lives under <c>_Thread</c> (see <see cref="PathFor"/>); this const is retained for the other
+    /// per-user defaults that DO use <c>_Memex</c>.
     /// </summary>
     public const string MemexDefaultsNamespace = "_Memex";
 
@@ -47,7 +52,7 @@ public static class ThreadComposerNodeType
         builder.AddMeshNodes(CreateMeshNode());
         builder.ConfigureServices(services =>
         {
-            // Seed {user}/_Memex/ThreadComposer when a User partition is onboarded so the
+            // Seed {user}/_Thread/ThreadComposer when a User partition is onboarded so the
             // composer's read always resolves (no read-before-create NotFound storm).
             services.AddSingleton<INodePostCreationHandler>(_ => new ThreadComposerSeedHandler());
             return services;
@@ -60,12 +65,11 @@ public static class ThreadComposerNodeType
     {
         Name = "Chat Input",
         Icon = "/static/NodeTypeIcons/message.svg",
-        // Main node, NOT a satellite → mesh_nodes, so the path-based read and the write
-        // resolve to the same table and the selection actually persists. Instances live
-        // under the hidden {user}/_Memex namespace (a dotfile path), so they're already
-        // excluded from search; the type node itself is hidden from the create menu and
-        // search so users never hand-create a ThreadComposer.
-        IsSatelliteType = false,
+        // Satellite node → the partition's `threads` table (registered in SatelliteTableMapping as a
+        // `_Thread`/threads nodeType). Instances live under {user}/_Thread/ThreadComposer; both the
+        // path segment (_Thread) and the nodeType resolve to `threads`, so write and read agree and
+        // the selection persists. Hidden from the create menu and search so users never hand-create one.
+        IsSatelliteType = true,
         ExcludeFromContext = new HashSet<string> { "search", "create" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
@@ -96,7 +100,7 @@ public static class ThreadComposerNodeType
         $"{node}/{ThreadNodeType.ThreadPartition}/{user}/{NodeType}";
 
     /// <summary>
-    /// Seeds the per-user <c>{user}/_Memex/ThreadComposer</c> singleton when a <c>User</c> partition is
+    /// Seeds the per-user <c>{user}/_Thread/ThreadComposer</c> singleton when a <c>User</c> partition is
     /// created. Returned from <see cref="GetAdditionalNodes"/> so it is persisted directly alongside
     /// the user (no hub round-trip, no access-context plumbing) — the onboarding "initialize the
     /// default state if it doesn't exist" step that keeps the composer read from ever hitting a

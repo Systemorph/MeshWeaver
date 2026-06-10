@@ -26,7 +26,7 @@ public sealed record SatelliteTableMapping(string Segment, string Table, params 
     [
         new SatelliteTableMapping("_Activity", "activities", "Activity"),
         new SatelliteTableMapping("_UserActivity", "user_activities", "UserActivity"),
-        new SatelliteTableMapping("_Thread", "threads", "Thread"),
+        new SatelliteTableMapping("_Thread", "threads", "Thread", "ThreadComposer"),
         new SatelliteTableMapping("_ThreadMessage", "threads", "ThreadMessage"),
         new SatelliteTableMapping("_Access", "access", "AccessAssignment"),
         new SatelliteTableMapping("_Tracking", "annotations", "TrackedChange"),

@@ -84,7 +84,7 @@ public static class AIExtensions
             .WithType(typeof(ModelProviderConfiguration), nameof(ModelProviderConfiguration))
             .WithType(typeof(AI.Thread), nameof(AI.Thread))
             .WithType(typeof(ThreadMessage), nameof(ThreadMessage))
-            // ThreadComposer: content of the per-user {user}/_Memex/ThreadComposer composer
+            // ThreadComposer: content of the per-user {user}/_Thread/ThreadComposer composer
             // singleton (message text + harness/agent/model + attachments). Registered
             // mesh-wide so the node serialises across routing/mesh hubs.
             .WithType(typeof(ThreadComposer), nameof(ThreadComposer))

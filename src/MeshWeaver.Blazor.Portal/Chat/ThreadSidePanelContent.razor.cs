@@ -94,7 +94,7 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
     /// <summary>
     /// Out-of-thread composer: the per-user ThreadComposer node's default ("") layout area —
     /// the databound compose box (message text + harness/agent/model + attachments),
-    /// backed by <c>{userHome}/_Memex/ThreadComposer</c> (see <see cref="ThreadComposerView"/>).
+    /// backed by <c>{userHome}/_Thread/ThreadComposer</c> (see <see cref="ThreadComposerView"/>).
     /// Null until the user identity resolves, in which case the caller degrades to the
     /// direct <see cref="GetNewChatControl"/> ThreadChatControl.
     /// </summary>
@@ -108,11 +108,11 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
 
     /// <summary>
     /// The signed-in user's partition — the main node that owns
-    /// <c>{user}/_Memex/ThreadComposer</c>. Prefer <see cref="AccessService.CircuitContext"/>
+    /// <c>{user}/_Thread/ThreadComposer</c>. Prefer <see cref="AccessService.CircuitContext"/>
     /// (the durable per-circuit identity); <see cref="AccessService.Context"/>
     /// (AsyncLocal) is only a fallback and is filtered for a leaked
     /// <c>system-security</c> / hub principal. Trusting <c>Context</c> first pointed
-    /// the composer at a non-existent <c>system-security/_Memex/ThreadComposer</c>, so the
+    /// the composer at a non-existent <c>system-security/_Thread/ThreadComposer</c>, so the
     /// "+" new-chat rendered nothing — the "+ not working" bug.
     /// </summary>
     private string? ResolveUserHome()
