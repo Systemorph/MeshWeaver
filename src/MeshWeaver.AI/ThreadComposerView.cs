@@ -69,12 +69,17 @@ public static class ThreadComposerView
                     h.UpdateData(dataId, instance);
                     OverviewLayoutArea.SetupAutoSave(h, dataId, instance, node);
 
-                    var grid = Controls.LayoutGrid.WithStyle(s => s.WithWidth("100%")).WithSkin(s => s.WithSpacing(2));
+                    // Content-width horizontal row (not a 100%-wide grid) so the chat footer can
+                    // place the pickers, attachment chips and Send button on a single bottom row.
+                    // Each picker is width-capped + shrinkable; the row wraps only when too narrow.
+                    var row = Controls.Stack
+                        .WithOrientation(Orientation.Horizontal)
+                        .WithStyle("gap: 8px; flex-wrap: wrap; align-items: flex-end;");
                     foreach (var prop in SelectorProperties(instance.GetType()))
-                        grid = grid.WithView(
-                            h.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit: true, h, isToggleable: false),
-                            s => s.WithXs(12).WithSm(4));
-                    return (UiControl?)grid;
+                        row = row.WithView(
+                            Controls.Stack.WithStyle("flex: 0 1 180px; min-width: 120px;")
+                                .WithView(h.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit: true, h, isToggleable: false)));
+                    return (UiControl?)row;
                 }));
 
     private static IEnumerable<PropertyInfo> SelectorProperties(Type contentType) =>

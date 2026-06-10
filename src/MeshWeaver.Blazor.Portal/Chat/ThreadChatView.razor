@@ -383,33 +383,10 @@ else
         @{ var inputDimmed = showSubmissionProgress; }
         <div class="thread-chat-input-content @(inputDimmed ? "dimmed" : "")" aria-hidden="@(inputDimmed.ToString().ToLowerInvariant())">
 
-        @* Active agent + model selectors. Sourced from the workspace synced
-           query (agents from namespace:Agent, models from namespace:Model
-           via the same nodeType:Agent|LanguageModel union). Agent and model
-           are INDEPENDENT — switching the agent never changes the model; the
-           user picks each separately and the model choice persists. Slash
-           commands /agent and /model still work (ChatCommandRegistry) and
-           update the same selection state. *@
-        <div class="thread-chat-selectors">
-            @if (!string.IsNullOrEmpty(_templatePath))
-            {
-                <LayoutAreaView @key="@($"composer-sel-{_templatePath}")"
-                                ViewModel="@(new LayoutAreaControl(_templatePath, new LayoutAreaReference(ThreadComposerView.SelectorsArea)))"
-                                Stream="@Stream"
-                                Area="@($"composer-sel-{_templatePath}")" />
-            }
-            @if (!string.IsNullOrEmpty(lastCommandStatus))
-            {
-                <span class="thread-chat-status-msg @(lastCommandStatusIsError ? "error" : "")">@lastCommandStatus</span>
-            }
-        </div>
-
         @* Monaco editor for markdown input with completion. Stays visible during
            execution (Claude.ai pattern) — typing while a round is in flight is
-           allowed; the SubmitMessageRequest gets queued via PendingUserMessages
-           and dispatches when the current round completes. Esc on the editor
-           cancels the in-flight round (CancelExecution); the typed text is
-           preserved for the next send. *@
+           allowed; it queues via PendingUserMessages and dispatches when the round
+           completes. Esc cancels the in-flight round; the typed text is preserved. *@
         <div class="input-container" @onkeydown="@OnInputKeyDown">
             <MonacoEditorView @ref="monacoEditor"
                               Value="@MessageText"
@@ -422,34 +399,49 @@ else
                               CompletionProvider="@GetCompletionConfig()"
                               CompletionCallback="@GetCompletions" />
         </div>
-        <!-- Send button row (agent + model dropdowns removed; use /agent and /model commands) -->
-        <div class="selector-bar">
-            @if (!submissionHandler.IsInputEnabled)
+
+        @* One bottom row: harness/agent/model pickers (data-bound to the ThreadComposer node) +
+           attachment chips + Send (pushed right). The pickers live in ThreadComposerView.SelectorsArea
+           (a content-width horizontal row); /agent /model slash-commands still drive the same node. *@
+        <div class="thread-chat-bottom-row" style="display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 4px;">
+            @if (!string.IsNullOrEmpty(_templatePath))
             {
-                <FluentButton Appearance="FluentAppearance.Accent" Disabled="true" Title="Sending...">
-                    <FluentProgressRing Style="width: 20px; height: 20px;" />
-                </FluentButton>
+                <div class="thread-chat-selectors" style="flex: 0 1 auto; min-width: 0;">
+                    <LayoutAreaView @key="@($"composer-sel-{_templatePath}")"
+                                    ViewModel="@(new LayoutAreaControl(_templatePath, new LayoutAreaReference(ThreadComposerView.SelectorsArea)))"
+                                    Stream="@Stream"
+                                    Area="@($"composer-sel-{_templatePath}")" />
+                </div>
             }
-            else
+            @if (attachments.Count > 0)
             {
-                <FluentButton Appearance="FluentAppearance.Accent" OnClick="SendMessage"
-                              Disabled="@(string.IsNullOrWhiteSpace(MessageText))" Title="Send">
-                    <FluentIcon Value="@(new Icons.Regular.Size20.Send())" Color="Color.Neutral" />
-                </FluentButton>
+                <div class="thread-chat-attachments" style="flex: 0 1 auto;">
+                    <ReferenceChipCollection
+                        Attachments="@attachments"
+                        OnAttachmentRemoved="@OnAttachmentRemoved"
+                        OnChipClick="@OnChipClicked" />
+                </div>
+            }
+            <div class="selector-bar" style="margin-left: auto;">
+                @if (!submissionHandler.IsInputEnabled)
+                {
+                    <FluentButton Appearance="FluentAppearance.Accent" Disabled="true" Title="Sending...">
+                        <FluentProgressRing Style="width: 20px; height: 20px;" />
+                    </FluentButton>
+                }
+                else
+                {
+                    <FluentButton Appearance="FluentAppearance.Accent" OnClick="SendMessage"
+                                  Disabled="@(string.IsNullOrWhiteSpace(MessageText))" Title="Send">
+                        <FluentIcon Value="@(new Icons.Regular.Size20.Send())" Color="Color.Neutral" />
+                    </FluentButton>
+                }
+            </div>
+            @if (!string.IsNullOrEmpty(lastCommandStatus))
+            {
+                <span class="thread-chat-status-msg @(lastCommandStatusIsError ? "error" : "")" style="flex-basis: 100%;">@lastCommandStatus</span>
             }
         </div>
-
-        @* Attachment chips — pinned to the bottom of the input dialog,
-           below the send button. Removable; click navigates to the node. *@
-        @if (attachments.Count > 0)
-        {
-            <div class="thread-chat-attachments">
-                <ReferenceChipCollection
-                    Attachments="@attachments"
-                    OnAttachmentRemoved="@OnAttachmentRemoved"
-                    OnChipClick="@OnChipClicked" />
-            </div>
-        }
         </div> @* /thread-chat-input-content *@
     </div>
     </div>

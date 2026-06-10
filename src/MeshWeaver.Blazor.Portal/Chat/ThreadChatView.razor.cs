@@ -120,13 +120,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 initialContext = value.InitialContext ?? initialContext;
 
                 // Rebind the data-bound composer (and the selection projection) to this thread's
-                // own ThreadComposer once its id arrives. ThreadComposerId is the full composer
-                // path, stamped only after the node exists, so SubscribeComposer never reads a
-                // maybe-absent path.
+                // own ThreadComposer once its id arrives. EnsureComposer creates the node if absent,
+                // then opens the projection — so the embedded selectors area always has a node.
                 if (!string.IsNullOrEmpty(value.ThreadComposerId) && _templatePath != value.ThreadComposerId)
                 {
                     _templatePath = value.ThreadComposerId;
-                    SubscribeComposer();
+                    EnsureComposer();
                 }
             }
 
@@ -211,7 +210,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     /// <summary>
     /// Current selection, projected one-way from the composer node (<see cref="_templatePath"/>)
-    /// by <see cref="SubscribeComposer"/>. Each holds the picked node's PATH; submit + resubmit
+    /// by <see cref="EnsureComposer"/>. Each holds the picked node's PATH; submit + resubmit
     /// pass <see cref="LastSegment"/> of it. The data-bound pickers write the node; the /agent
     /// /model commands and @-agent references write it via <see cref="WriteComposerSelection"/>.
     /// </summary>
@@ -284,14 +283,14 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         // Resolve the composer node: the per-user singleton {userHome}/_Thread/ThreadComposer in
         // compose mode, the thread's OWN ThreadComposer once its id arrives (see the ThreadViewModel
-        // setter). The embedded data-bound selectors area reads + auto-persists it; SubscribeComposer
-        // projects the live harness/agent/model selection into the bound* fields for submit + commands.
+        // setter). EnsureComposer creates it with defaults if absent (robust — checked on every chat
+        // open), then drives the embedded data-bound selectors area + the live selection projection.
         var accessSvc = Hub.ServiceProvider.GetService<AccessService>();
         _userHome = ResolveUserHome(accessSvc);
         if (string.IsNullOrEmpty(threadPath) && !string.IsNullOrEmpty(_userHome))
             _templatePath = MeshWeaver.AI.ThreadComposerNodeType.PathFor(_userHome);
 
-        SubscribeComposer();
+        EnsureComposer();
 
         // Seed initial context attachment from NavigationService (already resolved, no query).
         if (string.IsNullOrEmpty(initialContext))
@@ -363,31 +362,68 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     }
 
     /// <summary>
-    /// Projects the live harness/agent/model selection one-way from the composer node into
-    /// boundHarness/boundAgentPath/boundModelPath. The data-bound selectors area writes the node;
-    /// this view only reads it (for submit + the /agent /model command "current" display).
-    /// Re-subscribes when _templatePath changes (compose → thread). Bad-data tolerant via ContentAs.
+    /// Robust composer bring-up, run every time the chat opens / rebinds (<see cref="_templatePath"/>).
+    /// The data-bound selectors area (embedded in the footer) needs the composer node to EXIST, so we
+    /// reliably create it with default content if absent via <c>MeshQuery.CreateNode</c> (never clobbers
+    /// — rejects an existing node), then open the one-way selection projection into
+    /// boundHarness/boundAgentPath/boundModelPath ONLY after the node is confirmed present. Fully
+    /// reactive (Subscribe, never await); we never read GetMeshNodeStream on a not-yet-present node
+    /// (that NotFound-storms the partition hub). Bad-data tolerant via ContentAs.
     /// </summary>
-    private void SubscribeComposer()
+    private void EnsureComposer()
     {
         composerSubscription?.Dispose();
         boundHarness = boundAgentPath = boundModelPath = null;
         if (string.IsNullOrEmpty(_templatePath))
             return;
-        composerSubscription = Hub.GetMeshNodeStream(_templatePath)
+        var path = _templatePath;
+
+        // Self-heal: existing users predate the onboarding seed (ThreadComposerSeedHandler), so the
+        // composer node may be missing. RELIABLY create it — CreateNode registers a routable node
+        // (unlike GetMeshNodeStream(path).Update, which only patches an EXISTING node and otherwise
+        // NotFound-storms the partition hub — that wedged the portal). CreateNode rejects an existing
+        // node (NodeAlreadyExists), so BOTH success and that benign error mean "node present" — and
+        // ONLY THEN do we open the live read. We never subscribe GetMeshNodeStream on an absent node.
+        MeshQuery.CreateNode(MeshWeaver.Mesh.MeshNode.FromPath(path) with
+            {
+                NodeType = MeshWeaver.AI.ThreadComposerNodeType.NodeType,
+                Name = "Chat Input",
+                Content = new MeshWeaver.AI.ThreadComposer()
+            })
+            .Subscribe(
+                _ => InvokeAsync(() => OpenComposerProjection(path)),
+                ex => InvokeAsync(() =>
+                {
+                    Logger.LogDebug(ex,
+                        "[ThreadChat:{InstanceId}] ensure composer node (benign if already exists) {Path}", _instanceId, path);
+                    OpenComposerProjection(path);
+                }));
+    }
+
+    /// <summary>
+    /// Opens the live one-way projection of the composer selection into bound* — called ONLY after the
+    /// node is confirmed present (created or already-exists), so the read never hits a missing node.
+    /// </summary>
+    private void OpenComposerProjection(string path)
+    {
+        if (_isDisposed || _templatePath != path)
+            return;
+        composerSubscription?.Dispose();
+        composerSubscription = Hub.GetMeshNodeStream(path)
             .Select(n => n.ContentAs<MeshWeaver.AI.ThreadComposer>(Hub.JsonSerializerOptions, Logger))
             .Where(c => c is not null)
             .Subscribe(
                 c => InvokeAsync(() =>
                 {
-                    if (_isDisposed) return;
+                    if (_isDisposed || _templatePath != path) return;
                     boundHarness = c!.Harness;
                     boundAgentPath = c.AgentName;
                     boundModelPath = c.ModelName;
                     StateHasChanged();
                 }),
                 ex => Logger.LogDebug(ex,
-                    "[ThreadChat:{InstanceId}] composer subscription errored for {Path}", _instanceId, _templatePath));
+                    "[ThreadChat:{InstanceId}] composer projection errored for {Path}", _instanceId, path));
+        StateHasChanged();
     }
 
     /// <summary>
