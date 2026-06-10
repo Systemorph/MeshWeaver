@@ -53,27 +53,4 @@ public interface IStaticRepoSource
     /// prerenders the markdown into <c>PreRenderedHtml</c>, which the Space Overview renders.</para>
     /// </summary>
     MeshNode? PartitionRoot => null;
-
-    /// <summary>
-    /// Optional content-collection <b>imports</b> — assets a node references through its content
-    /// collection (e.g. an <c>@@content/logo.svg</c> embed) that ship in an embedded source
-    /// collection (e.g. <c>DocContent</c>) and must be copied into the owning node's runtime
-    /// content collection. After the node upsert the importer posts an
-    /// <see cref="ImportContentRequest"/> per entry (under System) to the owning node's hub, which
-    /// copies the source folder collection→collection. Default empty.
-    /// </summary>
-    IReadOnlyList<StaticContentImport> EnumerateContentImports() => [];
 }
-
-/// <summary>
-/// A content-collection import shipped by an <see cref="IStaticRepoSource"/>: copy the
-/// <paramref name="SourcePath"/> folder of <paramref name="SourceCollection"/> into
-/// <paramref name="TargetCollection"/>/<paramref name="TargetPath"/> on the node at
-/// <paramref name="NodePath"/>. Maps directly onto <see cref="ImportContentRequest"/>.
-/// </summary>
-public record StaticContentImport(
-    string NodePath,
-    string SourceCollection,
-    string SourcePath,
-    string TargetCollection = "content",
-    string TargetPath = "");

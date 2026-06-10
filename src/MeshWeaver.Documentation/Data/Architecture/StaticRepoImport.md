@@ -43,27 +43,19 @@ All writes run under `AccessService.ImpersonateAsSystem` (re-established at each
 
 The importer must be **idempotent over existing rows** (re-imports, eventually-consistent snapshots, and especially the migration backfill's content-NULL shadow rows). Plain `CreateNode` faults on an existing node; a hand-rolled stream-`Overwrite` re-asserts the *same* Version, which the owner drops as not-newer — so content silently never lands. The canonical `CreateOrUpdateNodeRequest` does the right thing for both cases and **increments the Version on update**, so the write is accepted and persists. This is non-negotiable: do not re-implement create/update in the importer.
 
-## Scope: mesh nodes AND content-collection files
+## Scope: mesh nodes vs. content-collection files
 
-The import materializes both **mesh nodes** (a node's `Content` + prerendered HTML, via the node upsert above) and the node's **content-collection files** — the assets a node references through the `content` collection, e.g. an `@@content/logo.svg` image embed or an `@@content/sample.md` include on a doc page.
+The import materializes **mesh nodes** — a node's `Content` (e.g. `MarkdownContent`) and its prerendered HTML. It does **not** yet sync **content-collection files** — the binary/file assets a node references through the `content` (or `assets`, `files`, …) collection, e.g. an `@@content/logo.svg` image embed or an `@@content/sample.md` include on a doc page.
 
-Those files live in a **per-node content collection**, not the node row: `ConfigureDefaultNodeHub` gives every node hub its own `content` collection rooted at `{Storage:BasePath}/content/{nodePath}`, read via `IFileContentProvider.GetFileContent("content", "<file>")` **on that node's hub**. Syncing a file is therefore a **cross-hub write** dispatched to the owning node's hub, distinct from the node upsert.
+Those files live in a **per-node content collection**, not in the node row: `ConfigureDefaultNodeHub` gives every node hub its own `content` collection rooted at `{Storage:BasePath}/content/{nodePath}` (`IsEditable`, `ExposeInChildren`), read via `IFileContentProvider.GetFileContent("content", "<file>")` **on that node's hub**. Because the collection is owned by the per-node hub (not the mesh hub the importer runs on), syncing a file is a **cross-hub write** — `SaveFileContent("content", "<file>", stream)` dispatched to the owning node's hub — distinct from the node upsert above.
 
-### How content files are synced (collection → collection)
+Consequence today: a synced doc page that embeds `@@content/<file>` renders blank on a fresh deployment (the runtime `content` collection — atioz: FileSystem `/mnt/content` — has no file there) until the file is uploaded. Shipping those sample assets requires a content-file sync step on `IStaticRepoSource` (a content-file surface the importer drains), which is **not implemented yet**.
 
-1. A source ships its assets in an **embedded content collection** and declares the imports by overriding `IStaticRepoSource.EnumerateContentImports()` → `StaticContentImport(NodePath, SourceCollection, SourcePath, TargetCollection="content", TargetPath="")`. E.g. `DocumentationStaticRepoSource` ships `logo.svg` + `sample.md` under `Content/DataMesh/UnifiedPath/` (the embedded `DocContent` collection) and imports that folder into the `Doc/DataMesh/UnifiedPath` node's `content` collection.
-2. After the node upsert the importer's `SyncContentImports` posts the **canonical `ImportContentRequest`** per entry, under `ImpersonateAsSystem`, via the fluent API in `MeshWeaver.ContentCollections`:
+> **When it is built, reuse the EXISTING content-import operation — do NOT hand-roll a cross-hub write and do NOT add a parallel verb.** The canonical op already exists: `ImportContentRequest(CollectionName, SourcePath, TargetPath)` (in [`ImportDeleteRequests.cs`](../../../MeshWeaver.Mesh.Contract/ImportDeleteRequests.cs), `[RequiresPermission(Create)]`) imports a **folder** of files from a server-side `SourcePath` into a collection's `TargetPath`, handled on the owning node's hub (which has `IFileContentProvider`) and served back through `/static/{address}/content/<file>`. The static-repo content sync should therefore **ship its content as a folder** and post `ImportContentRequest` per `(node, collection)` under `ImpersonateAsSystem` after the node upsert — exactly as the node upsert reuses `CreateOrUpdateNodeRequest`.
+>
+> **Chosen design (no disk folder): import from an embedded content collection → the node's content collection.** Ship the sample assets in an embedded content collection (the docs already register `DocContent` via `AddEmbeddedResourceContentCollection`; add `logo.svg` / `sample.md` there). The content-import step then copies each file from the embedded source collection into the owning node's runtime `content` collection — collection-to-collection, no staging folder. Reuse the existing `ImportContentRequest` (extend it to accept a *source collection* rather than only a disk `SourcePath`) — **do not introduce a second `ImportContentRequest`** (the type name is wire-registered, so a duplicate collides). Note: `ImportContentRequest` is currently defined + type-registered but has **no handler** in `src/`; implementing this sync includes adding the node-hub handler (reading the source collection via `IContentService`, writing via the node's `IFileContentProvider`).
 
-   ```csharp
-   hub.ImportContent(nodePath)
-      .From("DocContent", "DataMesh/UnifiedPath")  // embedded source collection + folder
-      .To("content")                               // target collection on the node
-      .Post()                                       // → ImportContentRequest to the OWNING node's hub
-   ```
-
-   The handler (registered by `AddContentCollectionsInfrastructure`, so every content-enabled node hub has it) resolves both collections via `IContentService` and copies each file on the file-system `IoPool` — `GetFiles`/`GetContentAsync` on the source, `SaveFileAsync` on the target — then serves it through `/static/{address}/content/<file>`. **No hand-rolled cross-hub `IFileContentProvider` write, and no second `ImportContentRequest`** (the type is wire-registered — a duplicate collides). The embedded source collection (`DocContent`) is exposed on node hubs too (`AddDocumentation`'s `ConfigureDefaultNodeHub`) so the node-hub handler can read it.
-
-This is why a synced doc page's `@@content/<file>` embeds render on a fresh deployment (atioz: FileSystem `/mnt/content`): the importer copies the assets into the runtime `content` collection on boot, alongside the nodes.
+Until then, reference only files that exist in the deployed `content` collection, or embed via a node `Content` field rather than a collection file.
 
 ## The two primitives
 
