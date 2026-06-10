@@ -77,8 +77,20 @@ public static class StaticRepoImporter
         // customize it (the Doc welcome page); otherwise we synthesize a generic Space root. It is
         // included in the fingerprint so editing the welcome re-imports.
         var root = ResolveRoot(source);
-        var fingerprint = PartitionSourceFingerprint.Compute(
+        // Fingerprint over the source NODES + root, then fold in the declared content imports so a
+        // new/changed content-collection import (the @@content/<file> assets) re-triggers the import
+        // — otherwise an already-imported partition short-circuits and the content-sync step (in Run,
+        // after the upsert) never executes. No content imports → unchanged node fingerprint.
+        var contentImports = source.EnumerateContentImports();
+        var nodeFingerprint = PartitionSourceFingerprint.Compute(
             nodes.Append(root).ToArray(), source.Versioned, hub.JsonSerializerOptions);
+        var fingerprint = contentImports.Count == 0
+            ? nodeFingerprint
+            : PartitionSourceFingerprint.Compute(
+                contentImports
+                    .Select(ci => ($"content::{ci.NodePath}/{ci.TargetCollection}/{ci.TargetPath}",
+                                   $"{ci.SourceCollection}/{ci.SourcePath}"))
+                    .Append(("::nodes", nodeFingerprint)));
         var activityId = $"import-{fingerprint}";
         var activityNamespace = $"{source.Partition}/_Activity";
         var activityPath = $"{activityNamespace}/{activityId}";
