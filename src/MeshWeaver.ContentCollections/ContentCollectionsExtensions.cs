@@ -87,7 +87,11 @@ public static class ContentCollectionsExtensions
                                 ? null
                                 : CreateContentCollectionReferenceStream(workspace, reference, configuration)));
                 })
-                .WithHandler<GetDataRequest>(HandleCollectionConfigRequest);
+                .WithHandler<GetDataRequest>(HandleCollectionConfigRequest)
+                // Canonical content import (ImportContentRequest) — so every content-enabled node
+                // hub can receive a collection→collection folder import (e.g. the static-repo
+                // import's content sync from the embedded DocContent). See ContentImportExtensions.
+                .AddContentImportHandler();
         }
 
         /// <summary>

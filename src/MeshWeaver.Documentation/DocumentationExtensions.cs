@@ -70,6 +70,17 @@ public static class DocumentationExtensions
                 typeof(DocumentationExtensions).Assembly,
                 "Content"));
 
+        // Also expose DocContent on every node hub: the static-repo content import handler runs on
+        // the OWNING node's hub and reads DocContent as the SOURCE collection when copying assets
+        // (e.g. the Unified Path page's @@content/logo.svg + sample.md) into the node's runtime
+        // "content" collection. Without this the node hub can't resolve DocContent. See
+        // StaticRepoImport.md + DocumentationStaticRepoSource.EnumerateContentImports.
+        builder.ConfigureDefaultNodeHub(config => config
+            .AddEmbeddedResourceContentCollection(
+                "DocContent",
+                typeof(DocumentationExtensions).Assembly,
+                "Content"));
+
         // Doc namespace caps: read-only docs (no Create/Update/Delete) but
         // discussion + commenting allowed. Previously lived on the legacy
         // DocumentationNodeProvider but that path caused a DI cycle when

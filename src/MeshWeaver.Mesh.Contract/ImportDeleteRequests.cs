@@ -56,13 +56,24 @@ public record ImportNodesResponse
 }
 
 /// <summary>
-/// Request to import content files into a content collection.
+/// Request to import content files into a content collection — handled on the OWNING node's hub
+/// (the only hub where the per-node <c>content</c> collection resolves). When
+/// <see cref="SourceCollection"/> is set, the files are copied collection→collection (e.g. from the
+/// embedded <c>DocContent</c> into the node's <c>content</c>), stream-to-stream so binary assets
+/// (svg/png) survive intact — never via the text content API.
 /// </summary>
-/// <param name="CollectionName">Name of the content collection</param>
-/// <param name="SourcePath">Server-side source directory path</param>
-/// <param name="TargetPath">Target folder path within the collection</param>
+/// <param name="CollectionName">Name of the target content collection (e.g. <c>content</c>).</param>
+/// <param name="SourcePath">Source folder: a path within <see cref="SourceCollection"/> when set, else a server-side disk directory.</param>
+/// <param name="TargetPath">Target folder path within the collection.</param>
 [RequiresPermission(Permission.Create)]
-public record ImportContentRequest(string CollectionName, string SourcePath, string TargetPath) : IRequest<ImportContentResponse>;
+public record ImportContentRequest(string CollectionName, string SourcePath, string TargetPath) : IRequest<ImportContentResponse>
+{
+    /// <summary>
+    /// Optional source <b>content collection</b> to copy from (collection→collection). When null the
+    /// import falls back to a disk <see cref="SourcePath"/> (not implemented by the standard handler).
+    /// </summary>
+    public string? SourceCollection { get; init; }
+}
 
 /// <summary>
 /// Response for content import request.
