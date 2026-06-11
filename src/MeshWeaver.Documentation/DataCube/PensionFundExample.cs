@@ -2,7 +2,6 @@ using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using MeshWeaver.BusinessRules;
 using MeshWeaver.Domain;
-using MeshWeaver.Layout;
 
 namespace MeshWeaver.Documentation.DataCube;
 
@@ -124,6 +123,12 @@ public record BalanceSheetStorage
 {
     /// <summary>Position content by position node path.</summary>
     public required ImmutableDictionary<string, Position> Positions { get; init; }
+
+    /// <summary>
+    /// Position paths in display order — taken from <c>MeshNode.Order</c> on
+    /// the dimension nodes, since ordering lives on the node, not the content.
+    /// </summary>
+    public required ImmutableList<string> OrderedPositions { get; init; }
 
     /// <summary>Atomic amounts (CHF m) by (position path, year path).</summary>
     public required ImmutableDictionary<(string Position, string Year), double> Amounts { get; init; }
@@ -309,6 +314,7 @@ public static class PensionFundSampleData
     public static BalanceSheetStorage Storage => new()
     {
         Positions = Positions,
+        OrderedPositions = OrderedPositions,
         Amounts = Amounts,
         Years = Years,
     };
