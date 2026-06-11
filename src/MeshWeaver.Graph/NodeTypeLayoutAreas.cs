@@ -213,7 +213,9 @@ public static class NodeTypeLayoutAreas
                 skin => skin.WithSize("280px").WithMin("200px").WithMax("400px").WithCollapsible(true)
             )
             .WithView(
-                (h, c) => mainContent(h, c),
+                // The splitter pane wants a non-nullable control stream; a null
+                // emission from the content area renders as the loading state.
+                (h, c) => mainContent(h, c).Select(v => v ?? RenderLoading("Loading...")),
                 skin => skin.WithSize("*")
             );
     }
@@ -349,27 +351,29 @@ public static class NodeTypeLayoutAreas
         var section = Controls.Stack.WithWidth("100%")
             .WithView(BuildSectionHeader("Configuration", configHref, "Open configuration"));
 
-        var hasAny = false;
-        void AddRow(ref LayoutStackControl s, string label, string? value)
+        var rows = new List<(string Label, string? Value)>
         {
-            if (string.IsNullOrWhiteSpace(value)) return;
-            s = (LayoutStackControl)s.WithView(BuildInfoRow(label, value!));
+            ("Default Namespace", def?.DefaultNamespace),
+            ("Children Query", def?.ChildrenQuery),
+            ("Storage Table", def?.StorageTable),
+            ("Owns Partition", def?.OwnsPartition == true ? "Yes" : null),
+            ("Page Max Width", def?.PageMaxWidth),
+            ("Dependencies", def?.Dependencies is { Count: > 0 } deps ? string.Join(", ", deps) : null),
+            ("Configuration Lambda", string.IsNullOrWhiteSpace(def?.Configuration) ? null : "Defined"),
+        };
+
+        var hasAny = false;
+        foreach (var (label, value) in rows)
+        {
+            if (string.IsNullOrWhiteSpace(value)) continue;
+            section = section.WithView(BuildInfoRow(label, value!));
             hasAny = true;
         }
 
-        var stack = section;
-        AddRow(ref stack, "Default Namespace", def?.DefaultNamespace);
-        AddRow(ref stack, "Children Query", def?.ChildrenQuery);
-        AddRow(ref stack, "Storage Table", def?.StorageTable);
-        AddRow(ref stack, "Owns Partition", def?.OwnsPartition == true ? "Yes" : null);
-        AddRow(ref stack, "Page Max Width", def?.PageMaxWidth);
-        AddRow(ref stack, "Dependencies", def?.Dependencies is { Count: > 0 } deps ? string.Join(", ", deps) : null);
-        AddRow(ref stack, "Configuration Lambda", string.IsNullOrWhiteSpace(def?.Configuration) ? null : "Defined");
-
         if (!hasAny)
-            stack = (LayoutStackControl)stack.WithView(Controls.Body("All settings at their defaults.")
+            section = section.WithView(Controls.Body("All settings at their defaults.")
                 .WithStyle("color: var(--neutral-foreground-hint); font-style: italic; padding: 8px 0;"));
-        return stack;
+        return section;
     }
 
     /// <summary>
@@ -423,241 +427,150 @@ public static class NodeTypeLayoutAreas
     }
 
     /// <summary>
-    /// Renders the Configuration area for a NodeType.
-    /// Split view with left navigation menu and main configuration pane.
-    /// Code files are listed as navigation links to their own Code node addresses.
+    /// Renders the Configuration area for a NodeType: the shared <see cref="Shell"/>
+    /// with the editable settings form (<see cref="BuildConfigurationPane"/>) as content.
     /// </summary>
     public static UiControl Configuration(LayoutAreaHost host, RenderingContext ctx)
-    {
-        var hubAddress = host.Hub.Address;
-        var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
-
-        var definitionStream = GetNodeStream(host);
-
-        // Resolve Sources / Tests via CodeQueryResolver — the same queries the
-        // compiler runs — so the side-menu listing is guaranteed to match what
-        // actually compiles. Each emission re-resolves in case the NodeType's
-        // definition changed.
-        var sourcesNodesStream = definitionStream
-            .Select(node =>
-            {
-                if (node == null || meshQuery == null)
-                    return Observable.Return(Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>);
-                var def = node.Content as NodeTypeDefinition;
-                return RunQueries(meshQuery,
-                    CodeQueryResolver.ExpandAll(def?.Sources, CodeQueryResolver.DefaultSources, node.Path));
-            })
-            .Switch();
-
-        var testsNodesStream = definitionStream
-            .Select(node =>
-            {
-                if (node == null || meshQuery == null)
-                    return Observable.Return(Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>);
-                var def = node.Content as NodeTypeDefinition;
-                return RunQueries(meshQuery,
-                    CodeQueryResolver.ExpandAll(def?.Tests, CodeQueryResolver.DefaultTests, node.Path));
-            })
-            .Switch();
-
-        var nodeTypeLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
-            ?.CreateLogger("MeshWeaver.Graph.NodeTypeLayoutAreas");
-
-        // Live observable of NodeType nodes under this namespace.
-        // Catch logs and re-emits empty so a transient query failure degrades
-        // the menu to "no nodeTypes" rather than blanking the whole layout —
-        // BUT it logs at Warning so silent timeouts (which previously hid CI
-        // hangs) surface in test output instead of disappearing.
-        var nodeTypesStream = meshQuery == null
-            ? Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>())
-            : meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"path:{hubPath} nodeType:NodeType scope:descendants"))
-                .Select(change => (IReadOnlyList<MeshNode>)change.Items)
-                .Catch<IReadOnlyList<MeshNode>, Exception>(ex =>
-                {
-                    nodeTypeLogger?.LogWarning(ex,
-                        "NodeType query failed for path={Path}; falling back to empty list",
-                        hubPath);
-                    return Observable.Return((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>());
-                });
-
-        // Live observable of Agent nodes under this namespace.
-        var agentsStream = meshQuery == null
-            ? Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>())
-            : meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"path:{hubPath} nodeType:Agent scope:descendants"))
-                .Select(change => (IReadOnlyList<MeshNode>)change.Items)
-                .Catch<IReadOnlyList<MeshNode>, Exception>(ex =>
-                {
-                    nodeTypeLogger?.LogWarning(ex,
-                        "Agent query failed for path={Path}; falling back to empty list",
-                        hubPath);
-                    return Observable.Return((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>());
-                });
-
-        // Return static Splitter structure with observable nested views
-        return Controls.Splitter
-            .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%").WithHeight("calc(100vh - 100px)"))
-            .WithView(
-                // Left menu - observable, updates when definition or resolved code lists change
-                (h, c) => definitionStream
-                    .CombineLatest(sourcesNodesStream, testsNodesStream, nodeTypesStream, agentsStream)
-                    .Select(tuple =>
-                    {
-                        var (definition, sources, tests, nodeTypes, agents) = tuple;
-                        if (definition == null)
-                            return RenderLoading("Loading...");
-                        return BuildLeftMenu(host, hubAddress, definition, sources, tests, nodeTypes, agents);
-                    }),
-                skin => skin.WithSize("280px").WithMin("200px").WithMax("400px").WithCollapsible(true)
-            )
-            .WithView(
-                // Main pane - shows configuration
-                (h, c) => definitionStream
-                    .Select(definition =>
-                    {
-                        if (definition == null)
-                            return RenderLoading("Loading...");
-                        return BuildConfigurationPane(host, hubAddress, definition);
-                    }),
-                skin => skin.WithSize("*")
-            );
-    }
+        => Shell(host, (h, c) => GetNodeStream(host)
+            .Select(definition => definition == null
+                ? RenderLoading("Loading...")
+                : BuildConfigurationPane(host, host.Hub.Address, definition)));
 
     /// <summary>
-    /// Builds the left navigation menu with Configuration, Code files, Node Types, and Agents entries.
-    /// Sources / Tests lists are the fully resolved outputs of the NodeType's source queries (or the
-    /// defaults), so the user sees exactly what compiles — including shared code pulled in from
-    /// other namespaces via <c>@path</c> shorthand or foreign <c>namespace:</c> queries.
-    /// Search link is placed at the bottom so the MeshSearch children listing is reachable from there
-    /// without visually competing with the configuration-focused entries at the top.
+    /// Renders the instance search for this NodeType inside the shared <see cref="Shell"/> —
+    /// the standard <see cref="MeshNodeLayoutAreas.Search"/> with NodeTypeCatalogMode lists
+    /// and searches the type's instances.
     /// </summary>
-    private static UiControl BuildLeftMenu(
-        LayoutAreaHost host,
+    public static UiControl Search(LayoutAreaHost host, RenderingContext ctx)
+        => Shell(host, MeshNodeLayoutAreas.Search);
+
+    /// <summary>
+    /// Builds the NodeType side menu — the one navigation surface every NodeType area
+    /// shares. Concerns, top to bottom: Overview (landing), Configuration, the source
+    /// tree grouped by query name, the test tree grouped by query name, Releases,
+    /// Instances (search for nodes of this type), and Related (declared dependencies,
+    /// NodeTypes and Agents under this namespace).
+    /// </summary>
+    private static UiControl BuildSideMenu(
         object hubAddress,
         MeshNode node,
-        IReadOnlyCollection<MeshNode>? sources,
-        IReadOnlyCollection<MeshNode>? tests,
-        IReadOnlyCollection<MeshNode>? nodeTypes = null,
-        IReadOnlyCollection<MeshNode>? agents = null)
+        IReadOnlyList<(CodeQueryGroup Group, IReadOnlyList<MeshNode> Nodes)> sourceGroups,
+        IReadOnlyList<(CodeQueryGroup Group, IReadOnlyList<MeshNode> Nodes)> testGroups,
+        IReadOnlyList<MeshNode> nodeTypes,
+        IReadOnlyList<MeshNode> agents)
     {
         var content = node.Content as NodeTypeDefinition;
         var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false))
             .WithStyle("overflow-y: auto; height: 100%;");
 
-        // Configuration link at top — it's the landing area for this view.
-        var configHref = new LayoutAreaReference(ConfigurationArea).ToHref(hubAddress);
-        navMenu = navMenu.WithView(
-            new NavLinkControl("Configuration", FluentIcons.Settings(), configHref)
-        );
+        navMenu = navMenu.WithView(new NavLinkControl("Overview", FluentIcons.Home(),
+            new LayoutAreaReference(OverviewArea).ToHref(hubAddress)));
+        navMenu = navMenu.WithView(new NavLinkControl("Configuration", FluentIcons.Settings(),
+            new LayoutAreaReference(ConfigurationArea).ToHref(hubAddress)));
 
-        // Sources + Tests sections — hierarchical trees of whatever the configured
-        // source/test queries resolved to. Each file is displayed at its relative
-        // path under {node.Path}; foreign files (shared code from other namespaces)
-        // are shown with their full absolute path so their origin is visible.
+        // Sources + Tests trees — the resolved outputs of the configured queries,
+        // grouped by query name (default `src` / `test`), so the user sees exactly
+        // what compiles — including shared code pulled in from other namespaces.
         navMenu = navMenu.WithNavGroup(BuildCodeNavGroup(
-            "Sources", FluentIcons.Code(), node.Path, sources));
+            "Sources", FluentIcons.Code(), node.Path, sourceGroups));
         navMenu = navMenu.WithNavGroup(BuildCodeNavGroup(
-            "Tests", FluentIcons.Beaker(), node.Path, tests));
+            "Tests", FluentIcons.Beaker(), node.Path, testGroups));
 
-        // Node Types section (if any NodeType nodes exist under this namespace)
-        if (nodeTypes != null && nodeTypes.Count > 0)
+        navMenu = navMenu.WithView(new NavLinkControl("Releases", FluentIcons.Box(),
+            new LayoutAreaReference(ReleasesArea).ToHref(hubAddress)));
+        navMenu = navMenu.WithView(new NavLinkControl("Instances", FluentIcons.Search(),
+            new LayoutAreaReference(SearchArea).ToHref(hubAddress)));
+
+        // Related — navigation to related types: declared dependencies (e.g. the
+        // dimensions a cube type references) plus NodeTypes and Agents under this
+        // namespace. Only rendered when there's something to link.
+        var related = new NavGroupControl("Related")
+            .WithIcon(FluentIcons.Link())
+            .WithSkin(s => s.WithExpanded(true));
+        var hasRelated = false;
+
+        if (content?.Dependencies is { Count: > 0 } deps)
         {
-            var typesGroup = new NavGroupControl("Node Types")
-                .WithIcon(FluentIcons.Document())
-                .WithSkin(s => s.WithExpanded(true));
-
-            foreach (var typeNode in nodeTypes.OrderBy(n => n.Order).ThenBy(n => n.Name))
+            foreach (var dep in deps)
             {
-                var typeHref = $"/{typeNode.Path}";
-                typesGroup = typesGroup.WithView(
-                    new NavLinkControl(typeNode.Name ?? typeNode.Id, FluentIcons.DocumentText(), typeHref)
-                );
+                related = related.WithView(new NavLinkControl(
+                    dep.Split('/').LastOrDefault() ?? dep, FluentIcons.Document(), $"/{dep}"));
+                hasRelated = true;
             }
-
-            navMenu = navMenu.WithNavGroup(typesGroup);
         }
 
-        // Agents section (if any Agent nodes exist under this namespace)
-        if (agents != null && agents.Count > 0)
+        foreach (var typeNode in nodeTypes.OrderBy(n => n.Order).ThenBy(n => n.Name))
         {
-            var agentsGroup = new NavGroupControl("Agents")
-                .WithIcon(FluentIcons.Bot())
-                .WithSkin(s => s.WithExpanded(true));
-
-            foreach (var agentNode in agents.OrderBy(n => n.Order).ThenBy(n => n.Name))
-            {
-                var agentHref = $"/{agentNode.Path}";
-                agentsGroup = agentsGroup.WithView(
-                    new NavLinkControl(agentNode.Name ?? agentNode.Id, FluentIcons.Bot(), agentHref)
-                );
-            }
-
-            navMenu = navMenu.WithNavGroup(agentsGroup);
+            related = related.WithView(new NavLinkControl(
+                typeNode.Name ?? typeNode.Id, FluentIcons.DocumentText(), $"/{typeNode.Path}"));
+            hasRelated = true;
         }
 
-        // Dependencies section (if any)
-        if (content?.Dependencies != null && content.Dependencies.Count > 0)
+        foreach (var agentNode in agents.OrderBy(n => n.Order).ThenBy(n => n.Name))
         {
-            var depsGroup = new NavGroupControl("Dependencies")
-                .WithIcon(FluentIcons.Link())
-                .WithSkin(s => s.WithExpanded(false));
-
-            foreach (var dep in content.Dependencies)
-            {
-                depsGroup = depsGroup.WithView(
-                    Controls.Body(dep).WithStyle("padding: 4px 16px; display: block;")
-                );
-            }
-
-            navMenu = navMenu.WithNavGroup(depsGroup);
+            related = related.WithView(new NavLinkControl(
+                agentNode.Name ?? agentNode.Id, FluentIcons.Bot(), $"/{agentNode.Path}"));
+            hasRelated = true;
         }
 
-        // Releases — list of compile activities for this NodeType. Each compile
-        // (success or failure) writes an ActivityLog under {nodeTypePath}/_activity/{logId};
-        // the Releases pane lists them with status + timestamp + a link to drill in.
-        var releasesHref = new LayoutAreaReference(ReleasesArea).ToHref(hubAddress);
-        navMenu = navMenu.WithView(
-            new NavLinkControl("Releases", FluentIcons.History(), releasesHref)
-        );
-
-        // Search at the bottom — inlines with the MeshSearch children listing.
-        var searchHref = new LayoutAreaReference(SearchArea).ToHref(hubAddress);
-        navMenu = navMenu.WithView(
-            new NavLinkControl("Search", FluentIcons.Search(), searchHref)
-        );
+        if (hasRelated)
+            navMenu = navMenu.WithNavGroup(related);
 
         return navMenu;
     }
 
     /// <summary>
-    /// Builds a hierarchical navigation group for a resolved Sources or Tests list. Files
-    /// whose path starts with <c>{rootPath}/</c> are displayed at their relative path
-    /// (folders by namespace segment); files OUTSIDE <c>{rootPath}</c> — shared code pulled
-    /// in via <c>@path</c> or cross-NodeType <c>namespace:</c> queries — are displayed under
-    /// a "(shared)" folder at their absolute path so their origin remains obvious.
+    /// Builds the hierarchical navigation group for the resolved Sources or Tests:
+    /// one sub-group per named query (the <c>name=</c> prefix; default <c>src</c>/<c>test</c>),
+    /// each containing the file tree its queries resolved to. Files under the group's
+    /// namespace root are displayed at their relative path (folders by namespace
+    /// segment); files outside it — shared code pulled in via <c>@path</c> or
+    /// cross-NodeType <c>namespace:</c> queries — go under a "(shared)" folder at their
+    /// absolute path so their origin remains obvious.
     /// </summary>
     internal static NavGroupControl BuildCodeNavGroup(
         string groupLabel,
         Icon groupIcon,
         string rootPath,
-        IReadOnlyCollection<MeshNode>? codeNodes)
+        IReadOnlyList<(CodeQueryGroup Group, IReadOnlyList<MeshNode> Nodes)>? groups)
     {
         var root = new NavGroupControl(groupLabel)
             .WithIcon(groupIcon)
             .WithSkin(s => s.WithExpanded(true));
 
-        if (codeNodes == null || codeNodes.Count == 0)
+        if (groups == null || groups.Count == 0 || groups.All(g => g.Nodes.Count == 0))
         {
             return root.WithView(
                 Controls.Body($"No {groupLabel.ToLowerInvariant()} yet")
                     .WithStyle("padding: 4px 16px; display: block; color: var(--neutral-foreground-hint);"));
         }
 
-        var tree = BuildCodeTreeForNavigation(rootPath, codeNodes);
-        foreach (var child in tree.OrderedChildren())
-            root = AppendCodeTreeNode(root, child);
+        foreach (var (group, nodes) in groups)
+        {
+            var sub = new NavGroupControl(group.Name)
+                .WithIcon(FluentIcons.Folder())
+                .WithSkin(s => s.WithExpanded(true));
+
+            if (nodes.Count == 0)
+            {
+                sub = sub.WithView(
+                    Controls.Body("(empty)")
+                        .WithStyle("padding: 4px 16px; display: block; color: var(--neutral-foreground-hint);"));
+            }
+            else
+            {
+                // Relativise against the group's own namespace root when one is
+                // determinable (so the default `src` group shows files directly,
+                // not nested under a redundant "Source/" folder); otherwise fall
+                // back to the NodeType's path.
+                var basePath = group.BaseNamespace ?? rootPath;
+                var tree = BuildCodeTreeForNavigation(basePath, nodes);
+                foreach (var child in tree.OrderedChildren())
+                    sub = AppendCodeTreeNode(sub, child);
+            }
+
+            root = root.WithGroup(sub);
+        }
 
         return root;
     }
@@ -818,146 +731,192 @@ public static class NodeTypeLayoutAreas
     }
 
     /// <summary>
+    /// Renders the Releases area for a NodeType — the chronological list of
+    /// <c>Release</c> MeshNodes at <c>{nodeTypePath}/Release/{version}</c>, written by
+    /// the CompileWatcher on every successful compile. Each row shows the status,
+    /// version, timestamp, source/test counts, and release-notes excerpt, and links to
+    /// the release's own page (where the sources/tests as-of that version are
+    /// navigable). The header carries the "Create Release" button — the canonical
+    /// request-via-stream-update compile trigger.
+    /// </summary>
+    [Browsable(false)]
+    public static UiControl Releases(LayoutAreaHost host, RenderingContext ctx)
+        => Shell(host, ReleasesContent);
+
+    private static IObservable<UiControl?> ReleasesContent(LayoutAreaHost host, RenderingContext ctx)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var releasesStream = QueryNodesStream(host,
+                $"namespace:{hubPath}/Release nodeType:{ReleaseNodeType.NodeType}")
+            .StartWith((IReadOnlyList<MeshNode>)[]);
+
+        return GetNodeStream(host)
+            .CombineLatest(releasesStream)
+            .Select(tuple =>
+            {
+                var (node, releases) = tuple;
+                if (node == null)
+                    return RenderLoading("Loading…");
+                return BuildReleasesPane(host, node, releases);
+            });
+    }
+
+    private static UiControl BuildReleasesPane(LayoutAreaHost host, MeshNode node, IReadOnlyList<MeshNode> releaseNodes)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var def = node.Content as NodeTypeDefinition;
+
+        var stack = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("padding: 24px; gap: 12px; overflow-y: auto; height: 100%;");
+
+        // Header row: title + Create Release (the compile trigger) + live status badge.
+        var headerRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("justify-content: space-between; align-items: center; gap: 16px;")
+            .WithView(Controls.H2("Releases").WithStyle("margin: 0;"));
+
+        var statusStream = host.Workspace.GetMeshNodeStream()
+            .Select(n => (n?.Content as NodeTypeDefinition)?.CompilationStatus)
+            .DistinctUntilChanged();
+        var statusBadge = (LayoutAreaHost h, RenderingContext rc) => statusStream.Select(status =>
+            (UiControl)Controls.Body(status switch
+            {
+                CompilationStatus.Pending => "Compiling…",
+                CompilationStatus.Compiling => "Compiling…",
+                CompilationStatus.Error => "Last compile: Error",
+                _ => ""
+            }).WithStyle("color: var(--neutral-foreground-hint); font-size: 13px;"));
+
+        var createReleaseButton = Controls.Button("Create Release")
+            .WithAppearance(Appearance.Accent)
+            .WithIconStart(FluentIcons.Play())
+            .WithClickAction(clickCtx =>
+            {
+                // Canonical request-via-stream-update trigger (see
+                // Doc/Architecture/RequestViaStreamUpdate.md): flip RequestedReleaseAt;
+                // the per-NodeType hub's InstallReleaseRequestWatcher reacts and the
+                // CompileWatcher runs Roslyn + writes the Release node.
+                clickCtx.Host.Workspace.GetMeshNodeStream(hubPath).Update(curr =>
+                {
+                    if (curr?.Content is not NodeTypeDefinition cd) return curr!;
+                    return curr with
+                    {
+                        Content = cd with
+                        {
+                            RequestedReleaseAt = DateTimeOffset.UtcNow,
+                            RequestedReleaseForce = true
+                        }
+                    };
+                }).Subscribe(
+                    _ => { },
+                    ex => clickCtx.Host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                        ?.CreateLogger(typeof(NodeTypeLayoutAreas))
+                        .LogWarning(ex, "Release-request write failed for {Path}", hubPath));
+                return Task.CompletedTask;
+            });
+
+        headerRow = headerRow.WithView(Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("gap: 12px; align-items: center;")
+            .WithView(statusBadge, "ReleasesStatusBadge")
+            .WithView(createReleaseButton));
+        stack = stack.WithView(headerRow);
+
+        stack = stack.WithView(Controls.Body(
+                "Every successful compile publishes an immutable release here. Open a " +
+                "release to see its notes, the compile log, and the exact source and " +
+                "test versions that went into it.")
+            .WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 8px;"));
+
+        if (!string.IsNullOrWhiteSpace(def?.ReleaseNotes))
+            stack = stack.WithView(Controls.Body($"Pending release notes: {def!.ReleaseNotes}")
+                .WithStyle("color: var(--neutral-foreground-hint); font-size: 0.9rem; font-style: italic;"));
+
+        var ordered = releaseNodes
+            .Select(n => (Node: n, Release: n.Content as NodeTypeRelease))
+            .OrderByDescending(t => t.Release?.CreatedAt ?? t.Node.CreatedDate)
+            .ToList();
+
+        if (ordered.Count == 0)
+        {
+            stack = stack.WithView(Controls.Body(
+                    "No releases yet. Click 'Create Release' to compile this NodeType — " +
+                    "the release will appear here.")
+                .WithStyle("color: var(--neutral-foreground-hint); font-style: italic;"));
+            return stack;
+        }
+
+        foreach (var (releaseNode, release) in ordered)
+            stack = stack.WithView(BuildReleaseRow(releaseNode, release));
+
+        return stack;
+    }
+
+    /// <summary>
+    /// One release as a clickable card: status badge, version, timestamp,
+    /// source/test counts, and notes excerpt. Links to the Release node's own page
+    /// where the per-version sources/tests are navigable. Shared between the
+    /// Overview's "Latest releases" section and the Releases area.
+    /// </summary>
+    private static UiControl BuildReleaseRow(MeshNode releaseNode, NodeTypeRelease? release)
+    {
+        var failed = string.Equals(release?.Status, "Failed", StringComparison.OrdinalIgnoreCase);
+        var statusLabel = failed ? "Failed" : "Succeeded";
+        var statusColor = failed ? "var(--error)" : "var(--accent-fill-rest)";
+        var versionLabel = release?.Version ?? releaseNode.Name ?? releaseNode.Id;
+        var createdAt = release?.CreatedAt ?? releaseNode.CreatedDate;
+
+        var counts = "";
+        if (release?.SourceVersions is { Count: > 0 } srcs)
+            counts = $"{srcs.Count} source{(srcs.Count == 1 ? "" : "s")}";
+        if (release?.TestVersions is { Count: > 0 } tsts)
+            counts += $"{(counts.Length > 0 ? ", " : "")}{tsts.Count} test{(tsts.Count == 1 ? "" : "s")}";
+
+        var notesExcerpt = release?.Notes?.Content;
+        if (!string.IsNullOrWhiteSpace(notesExcerpt))
+        {
+            notesExcerpt = notesExcerpt!.Trim();
+            var firstBreak = notesExcerpt.IndexOf('\n');
+            if (firstBreak > 0) notesExcerpt = notesExcerpt[..firstBreak];
+            if (notesExcerpt.Length > 200) notesExcerpt = notesExcerpt[..200] + "…";
+        }
+
+        var releaseHref = $"/{releaseNode.Path}";
+        var rowHtml = $"<a href=\"{System.Net.WebUtility.HtmlEncode(releaseHref)}\" " +
+            $"style=\"display: block; padding: 12px 16px; margin-bottom: 8px; " +
+            $"background: var(--neutral-layer-2); border-radius: 4px; " +
+            $"text-decoration: none; color: inherit; border-left: 3px solid {statusColor};\">" +
+            $"<div style=\"display: flex; align-items: center; gap: 12px;\">" +
+            $"<span style=\"font-weight: 600; padding: 2px 10px; border-radius: 12px; " +
+            $"background: {statusColor}20; color: {statusColor}; font-size: 0.85rem;\">" +
+            $"{System.Net.WebUtility.HtmlEncode(statusLabel)}</span>" +
+            $"<span style=\"flex: 1; font-weight: 600;\">{System.Net.WebUtility.HtmlEncode(versionLabel)}</span>" +
+            (counts.Length > 0
+                ? $"<span style=\"color: var(--neutral-foreground-hint); font-size: 0.85rem;\">" +
+                  $"{System.Net.WebUtility.HtmlEncode(counts)}</span>"
+                : "") +
+            $"<span style=\"color: var(--neutral-foreground-hint); font-size: 0.85rem;\">" +
+            $"{createdAt:g}</span>" +
+            $"</div>";
+
+        if (!string.IsNullOrWhiteSpace(notesExcerpt))
+        {
+            rowHtml += $"<div style=\"margin-top: 6px; color: var(--neutral-foreground); " +
+                $"font-size: 0.9rem; line-height: 1.4;\">" +
+                $"{System.Net.WebUtility.HtmlEncode(notesExcerpt)}</div>";
+        }
+
+        rowHtml += "</a>";
+        return Controls.Html(rowHtml);
+    }
+
+    /// <summary>
     /// Builds the main Configuration pane: an editable settings form for the NodeType
     /// (Name, Description, Icon, ChildrenQuery, DefaultNamespace, PageMaxWidth) with
     /// auto-save, plus a read-only preview of the Configuration lambda with an Edit
     /// button that opens the dedicated Monaco editor.
     /// </summary>
-    /// <summary>
-    /// Renders the Releases area for a NodeType — the chronological list of
-    /// compile activities (one per "Create Release" click). Each entry shows
-    /// the release status, timestamp, the user who triggered it, and any
-    /// release notes captured on the activity log. Compile state lives at
-    /// <c>{nodeTypePath}/_activity/{logId}</c> and is written by the
-    /// CompileWatcher in <c>MeshDataSource.InstallCompileWatcher</c> on every
-    /// success-or-failure transition.
-    /// </summary>
-    [Browsable(false)]
-    public static UiControl Releases(LayoutAreaHost host, RenderingContext ctx)
-    {
-        var hubAddress = host.Hub.Address;
-        var hubPath = hubAddress.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
-
-        // Live observable of activity nodes under {nodeTypePath}/_activity. We
-        // filter to category=Compilation client-side because the activity store
-        // keeps every category (compile, save, delete) in the same satellite
-        // table — releases are only the compile entries.
-        var activityStream = meshQuery == null
-            ? Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>())
-            : meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"namespace:{hubPath}/_activity nodeType:Activity"))
-                .Select(change => (IReadOnlyList<MeshNode>)change.Items)
-                .Catch<IReadOnlyList<MeshNode>, Exception>(_ =>
-                    Observable.Return((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>()));
-
-        return Controls.Splitter
-            .WithSkin(s => s.WithOrientation(Orientation.Horizontal)
-                .WithWidth("100%").WithHeight("calc(100vh - 100px)"))
-            .WithView(
-                (h, c) => GetNodeStream(host)
-                    .CombineLatest(activityStream, (def, list) => (def, list))
-                    .Select(t => t.def == null
-                        ? RenderLoading("Loading…")
-                        : BuildLeftMenu(host, hubAddress, t.def, null, null, null, null)),
-                skin => skin.WithSize("280px").WithMin("200px").WithMax("400px").WithCollapsible(true)
-            )
-            .WithView(
-                (h, c) => activityStream.Select(items => BuildReleasesPane(hubAddress, items)),
-                skin => skin.WithSize("*")
-            );
-    }
-
-    private static UiControl BuildReleasesPane(object hubAddress, IReadOnlyList<MeshNode> activities)
-    {
-        var stack = Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("padding: 24px; gap: 16px;");
-
-        stack = stack.WithView(Controls.H2("Releases").WithStyle("margin: 0;"));
-        stack = stack.WithView(Controls.Body(
-            "Every Create Release click writes an activity log here — successes, " +
-            "failures, and the executed-source-queries trace. Click any row to " +
-            "drill into the full log.")
-            .WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 8px;"));
-
-        // Filter to compile activities and order newest-first. Other categories
-        // (e.g. data-change activities) live in the same _activity namespace but
-        // aren't releases. ActivityLog.Category is the only reliable filter —
-        // path/id naming isn't enforced.
-        var compileActivities = activities
-            .Where(n => n.Content is ActivityLog log && log.Category == ActivityCategory.Compilation)
-            .OrderByDescending(n => (n.Content as ActivityLog)?.Start ?? DateTime.MinValue)
-            .ToList();
-
-        if (compileActivities.Count == 0)
-        {
-            stack = stack.WithView(Controls.Body(
-                "No releases yet. Click 'Create Release' on the Configuration view " +
-                "to compile this NodeType — the activity will appear here.")
-                .WithStyle("color: var(--neutral-foreground-hint); font-style: italic;"));
-            return stack;
-        }
-
-        // One row per release: status badge, user, timestamp, notes excerpt,
-        // navigate-to link to the full activity log.
-        foreach (var activityNode in compileActivities)
-        {
-            if (activityNode.Content is not ActivityLog log)
-                continue;
-
-            var statusLabel = log.Status switch
-            {
-                ActivityStatus.Failed => "Error",
-                ActivityStatus.Warning => "Warning",
-                _ => "Ok"
-            };
-            var statusColor = log.Status switch
-            {
-                ActivityStatus.Failed => "var(--error)",
-                ActivityStatus.Warning => "var(--warning)",
-                _ => "var(--accent-fill-rest)"
-            };
-            var userName = log.User?.DisplayName ?? log.User?.Email ?? "System";
-
-            // Release-notes messages: every Info message prefixed "Release
-            // notes: " written by the Create Release click. We render every
-            // matching line so a multi-line note is preserved verbatim.
-            const string notesPrefix = "Release notes:";
-            var notesLines = log.Messages
-                .Where(m => m.Message.StartsWith(notesPrefix, StringComparison.Ordinal))
-                .Select(m => m.Message[notesPrefix.Length..].Trim())
-                .Where(s => !string.IsNullOrEmpty(s));
-            var notes = string.Join("\n", notesLines);
-
-            var activityHref = $"/{activityNode.Path}";
-            var rowHtml = $"<a href=\"{System.Net.WebUtility.HtmlEncode(activityHref)}\" " +
-                $"style=\"display: block; padding: 12px 16px; margin-bottom: 8px; " +
-                $"background: var(--neutral-layer-2); border-radius: 4px; " +
-                $"text-decoration: none; color: inherit; border-left: 3px solid {statusColor};\">" +
-                $"<div style=\"display: flex; align-items: center; gap: 12px;\">" +
-                $"<span style=\"font-weight: 600; padding: 2px 10px; border-radius: 12px; " +
-                $"background: {statusColor}20; color: {statusColor}; font-size: 0.85rem;\">" +
-                $"{System.Net.WebUtility.HtmlEncode(statusLabel)}</span>" +
-                $"<span style=\"flex: 1;\">{System.Net.WebUtility.HtmlEncode(userName)}</span>" +
-                $"<span style=\"color: var(--neutral-foreground-hint); font-size: 0.85rem;\">" +
-                $"{log.Start:g}</span>" +
-                $"</div>";
-
-            if (!string.IsNullOrWhiteSpace(notes))
-            {
-                rowHtml += $"<div style=\"margin-top: 6px; color: var(--neutral-foreground); " +
-                    $"font-size: 0.9rem; line-height: 1.4;\">" +
-                    $"{System.Net.WebUtility.HtmlEncode(notes)}</div>";
-            }
-
-            rowHtml += "</a>";
-            stack = stack.WithView(Controls.Html(rowHtml));
-        }
-
-        return stack;
-    }
-
     private static UiControl BuildConfigurationPane(LayoutAreaHost host, object hubAddress, MeshNode node)
     {
         var definition = node.Content as NodeTypeDefinition;
@@ -1555,22 +1514,6 @@ public static class NodeTypeLayoutAreas
         stack = stack.WithView(buttonRow);
 
         return stack;
-    }
-
-    /// <summary>
-    /// Builds the Create href for a NodeType page.
-    /// Type defaults to the hub's own type path.
-    /// Namespace uses DefaultNamespace if explicitly set; omitted otherwise
-    /// so the Create form uses the current browsing context.
-    /// </summary>
-    private static string BuildCreateHref(string hubPath, NodeTypeDefinition? typeDef)
-    {
-        var qs = $"type={Uri.EscapeDataString(hubPath)}";
-        if (typeDef?.DefaultNamespace != null)
-            qs += $"&namespace={Uri.EscapeDataString(typeDef.DefaultNamespace)}";
-        if (typeDef?.RestrictedToNamespaces is { Count: > 0 } nsRestrictions)
-            qs += $"&namespaces={string.Join(",", nsRestrictions.Select(Uri.EscapeDataString))}";
-        return $"/create?{qs}";
     }
 
     private static UiControl BuildInfoRow(string label, string value)
