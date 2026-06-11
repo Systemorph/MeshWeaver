@@ -14,7 +14,7 @@ Tags:
 
 # Setting Up Model Providers
 
-This is the **operational** guide to getting AI models to show up in the chat picker — for an administrator standing up a space, and for an end user wiring their own key. For the *design* of the Settings → Models UI see [AI Model Provider Settings](ModelProviderSettings.md); for the credential/endpoint wiring at the framework level see [AI Provider Configuration](ProviderConfiguration.md).
+This is the **operational** guide to getting AI models to show up in the chat picker — for an administrator standing up a space, and for an end user wiring their own key. For the *design* of the Settings → Models UI see [AI Model Provider Settings](/Doc/AI/ModelProviderSettings); for the credential/endpoint wiring at the framework level see [AI Provider Configuration](/Doc/AI/ProviderConfiguration).
 
 > **The one-sentence model:** providers and models are **mesh nodes** — `nodeType:ModelProvider` and `nodeType:LanguageModel` — discovered by the picker through `nodeType:` queries. If the picker is empty, it is because no such nodes are visible to you, not because of a hidden config flag.
 
@@ -119,13 +119,13 @@ This is exactly how the shared **Azure AI Foundry (Systemorph)** provider was cr
 }
 ```
 
-The `model` ids must match models actually **deployed** in that Azure AI Foundry resource (serverless / standard deployments), or chat fails with a 404 at request time. The `Provider` string (`AzureFoundry`) selects the chat-client factory; for non-`claude-*` ids that is `AzureFoundryChatClientAgentFactory` (the catch-all). See [model-to-factory routing](ProviderConfiguration.md#model-to-factory-routing).
+The `model` ids must match models actually **deployed** in that Azure AI Foundry resource (serverless / standard deployments), or chat fails with a 404 at request time. The `Provider` string (`AzureFoundry`) selects the chat-client factory; for non-`claude-*` ids that is `AzureFoundryChatClientAgentFactory` (the catch-all). See [model-to-factory routing](/Doc/AI/ProviderConfiguration#model-to-factory-routing).
 
 ---
 
 ## Keys: where the credential lives
 
-A `LanguageModel` node never carries a key. The resolver ([`ChatClientCredentialResolver`](ProviderConfiguration.md)) walks, top wins:
+A `LanguageModel` node never carries a key. The resolver ([`ChatClientCredentialResolver`](/Doc/AI/ProviderConfiguration)) walks, top wins:
 
 1. the model's `ProviderRef` → that `ModelProvider` node's `ApiKey` / `Endpoint`;
 2. the conventional `_Provider/{Provider}` node;
@@ -184,11 +184,11 @@ The Systemorph space ships three tiers, chosen to be **powerful but inexpensive 
 | **Medium** (`standard`) | `DeepSeek-V3-0324` | proven open-weight workhorse, large deployed quota; balanced coding + general use at low cost. |
 | **Low** (`light` / `utility`) | `DeepSeek-V4-Flash` | fast + very cheap open-weight variant, ideal for high-volume classification, extraction, and JSON/structured output. |
 
-All three are deployed on the `s-meshweaver` Azure AI Foundry resource (verify with `az cognitiveservices account deployment list -n s-meshweaver -g rg-meshweaverai`). The tier → model mapping lives in `ModelTier:Heavy/Standard/Light/Utility` config (wired via the Helm overlay for the AKS deployment), so agents tagged `modelTier:` bind to these.
+All three are deployed on the `s-meshweaver` Azure AI Foundry resource (verify with `az cognitiveservices account deployment list -n s-meshweaver -g rg-meshweaverai`). The tier → model mapping lives in `ModelTier:Heavy/Standard/Light/Utility` config (wired via the Helm overlay for the AKS deployment).
 
-> **Claude (Anthropic) works very well — noticeably stronger on the hardest agentic and coding tasks — but it comes at a price.** It is intentionally **not** wired as a shared org key. Each user connects **Claude Code** (the co-hosted CLI, `Features:Ai:Clis:ClaudeCode`) under their own account in **Settings → Models → Connect**, which stores a per-user `{user}/_Provider/ClaudeCode` provider and injects Claude into their picker on their own subscription. Pin Claude per-agent via `PreferredModel` where the quality justifies the spend.
+> **Claude (Anthropic) works very well — noticeably stronger on the hardest agentic and coding tasks — but it comes at a price.** It is intentionally **not** wired as a shared org key. Each user connects **Claude Code** (the co-hosted CLI, `Features:Ai:Clis:ClaudeCode`) under their own account in **Settings → Models → Connect**, which stores a per-user `{user}/_Provider/ClaudeCode` provider and injects Claude into their picker on their own subscription.
 
-Agents pick a tier with `ModelTier` frontmatter; the tier names (`heavy` / `standard` / `light`) resolve through `ModelTier__*` config, so keep the deployed tier mapping and the `Models[]` catalog in sync.
+`modelTier:` frontmatter is a strictly **optional hint** declared only by the built-in background micro-agents (notification triage, description/icon writing, thread naming) — it kicks in solely when no model was selected in the chat composer (the composer selection always wins), resolving through the `ModelTier__*` config. With no tier config the hint is inert. Keep the deployed tier mapping and the `Models[]` catalog in sync where you do configure it.
 
 ---
 
@@ -206,6 +206,6 @@ Work top-down — the first hit is usually the cause:
 
 ## Related
 
-- [AI Model Provider Settings](ModelProviderSettings.md) — the Settings → Models UI design (API vs CLI providers, inline CLI login)
-- [AI Provider Configuration](ProviderConfiguration.md) — framework credential/endpoint wiring and model-to-factory routing
-- [Agentic AI](AgenticAI.md) — how agents are composed and select models
+- [AI Model Provider Settings](/Doc/AI/ModelProviderSettings) — the Settings → Models UI design (API vs CLI providers, inline CLI login)
+- [AI Provider Configuration](/Doc/AI/ProviderConfiguration) — framework credential/endpoint wiring and model-to-factory routing
+- [Agentic AI](/Doc/AI/AgenticAI) — how agents are composed and select models

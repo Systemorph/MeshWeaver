@@ -67,6 +67,41 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
             string.Equals(m, modelName, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
+    /// Resolves the agent's <see cref="AgentConfiguration.ModelTier"/> ("heavy" / "standard" /
+    /// "light" / "utility") to a concrete model via the <c>ModelTier:*</c> config section.
+    /// Returns null when the agent declares no tier, the tier isn't configured, or this
+    /// factory doesn't serve the resolved model (so the caller falls back to its provider
+    /// default instead of creating a client for a model another factory owns).
+    /// Precedence in concrete factories: composer selection (<see cref="CurrentModelName"/>)
+    /// → agent tier → provider default.
+    /// </summary>
+    protected string? ResolveTierModel(AgentConfiguration agentConfig)
+    {
+        if (string.IsNullOrEmpty(agentConfig.ModelTier))
+            return null;
+
+        var configuration = Hub.ServiceProvider.GetService<Microsoft.Extensions.Configuration.IConfiguration>();
+        if (configuration == null)
+            return null;
+
+        var tiers = new ModelTierConfiguration
+        {
+            Heavy = configuration["ModelTier:Heavy"],
+            Standard = configuration["ModelTier:Standard"],
+            Light = configuration["ModelTier:Light"],
+            Utility = configuration["ModelTier:Utility"]
+        };
+
+        var resolved = tiers.Resolve(agentConfig.ModelTier);
+        if (string.IsNullOrEmpty(resolved) || !Supports(resolved))
+            return null;
+
+        Logger.LogDebug("[AgentFactory] Agent {Agent} tier '{Tier}' resolved to model {Model}",
+            agentConfig.Id, agentConfig.ModelTier, resolved);
+        return resolved;
+    }
+
+    /// <summary>
     /// Creates a ChatClientAgent for the given configuration.
     /// </summary>
     /// <summary>
@@ -83,8 +118,10 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
     {
         CurrentModelName = modelName;
 
-        // The model is ALWAYS the one selected in the chat composer (ThreadComposer.ModelName),
-        // threaded through as modelName / CurrentModelName — fully independent of the agent.
+        // The composer selection (ThreadComposer.ModelName → modelName / CurrentModelName) always
+        // wins. When nothing was selected (headless flows: email routing, notification triage,
+        // delegated sub-threads), concrete factories fall back to the agent's ModelTier via
+        // ResolveTierModel, then to their provider default.
 
         // Sync: use raw instructions, skip @@reference resolution (resolved lazily)
         var instructions = GetAgentInstructions(config, hierarchyAgents, chat);
@@ -101,8 +138,10 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
     {
         CurrentModelName = modelName;
 
-        // The model is ALWAYS the one selected in the chat composer (ThreadComposer.ModelName),
-        // threaded through as modelName / CurrentModelName — fully independent of the agent.
+        // The composer selection (ThreadComposer.ModelName → modelName / CurrentModelName) always
+        // wins. When nothing was selected (headless flows: email routing, notification triage,
+        // delegated sub-threads), concrete factories fall back to the agent's ModelTier via
+        // ResolveTierModel, then to their provider default.
 
         var instructions = await GetAgentInstructionsAsync(config, hierarchyAgents, chat);
         return CreateAgentCore(config, chat, existingAgents, hierarchyAgents, instructions, modelName);
@@ -134,11 +173,14 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         }
         else
         {
+            // No plugins declared → READ-ONLY Mesh tools. Write capability is an explicit
+            // grant: declare `plugins: [Mesh]` in the agent definition to get
+            // Create/Update/Patch/EditContent/Delete/Move/Copy/Recycle. (This replaces the
+            // old description-keyword gating — "description contains create/update/delete" —
+            // where rewording an agent's description silently granted or revoked write
+            // access. Capability must never hinge on prose.)
             var meshPlugin = new MeshPlugin(Hub, chat);
-            var needsWriteTools = description.Contains("create", StringComparison.OrdinalIgnoreCase)
-                || description.Contains("update", StringComparison.OrdinalIgnoreCase)
-                || description.Contains("delete", StringComparison.OrdinalIgnoreCase);
-            tools = tools.Concat(needsWriteTools ? meshPlugin.CreateAllTools() : meshPlugin.CreateTools());
+            tools = tools.Concat(meshPlugin.CreateTools());
         }
 
         tools = tools.Append(PlanStorageTool.Create(Hub, chat));

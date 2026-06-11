@@ -85,6 +85,17 @@ public record AgentConfiguration
     public int Order { get; init; }
 
     /// <summary>
+    /// OPTIONAL hint: abstract model tier this agent prefers — "heavy", "standard", "light",
+    /// or "utility". Never required: when unset (the normal case), or when the deployment has
+    /// no <c>ModelTier:*</c> config, model selection is entirely unaffected. When set AND
+    /// configured, it only fills the gap where nobody picked a model (headless flows like
+    /// notification triage or icon/description micro-jobs) — an explicit composer selection
+    /// always wins. Declared only on the built-in background micro-agents; interactive agents
+    /// should leave it unset.
+    /// </summary>
+    public string? ModelTier { get; init; }
+
+    /// <summary>
     /// Optional list of additional plugins this agent should load.
     /// Standard plugins (Chat, Mesh, LayoutArea, Data) are always loaded.
     /// Additional plugins are resolved by name from DI-registered IAgentPlugin services.
@@ -127,6 +138,23 @@ public record AgentPluginReference
     /// If null or empty, all plugin methods are included.
     /// </summary>
     public List<string>? Methods { get; init; }
+
+    /// <summary>
+    /// Parses the frontmatter string form: "PluginName" or "PluginName:Method1,Method2".
+    /// Shared by every agent-definition parser so the syntax stays uniform.
+    /// </summary>
+    public static AgentPluginReference Parse(string s)
+    {
+        var colonIndex = s.IndexOf(':');
+        if (colonIndex < 0)
+            return new AgentPluginReference { Name = s.Trim() };
+
+        return new AgentPluginReference
+        {
+            Name = s[..colonIndex].Trim(),
+            Methods = s[(colonIndex + 1)..].Split(',').Select(m => m.Trim()).ToList()
+        };
+    }
 }
 
 /// <summary>

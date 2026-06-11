@@ -120,8 +120,10 @@ public class AgentFileParser : IFileFormatParser
                 AgentPath = h.AgentPath ?? "",
                 Instructions = h.Instructions
             }).ToList(),
+            Plugins = frontMatter.Plugins?.Select(AgentPluginReference.Parse).ToList(),
             ContextMatchPattern = frontMatter.ContextMatchPattern,
-            Order = frontMatter.Order
+            Order = frontMatter.Order,
+            ModelTier = frontMatter.ModelTier
         };
 
         var node = new MeshNode(id, ns)
@@ -177,7 +179,11 @@ public class AgentFileParser : IFileFormatParser
             {
                 AgentPath = h.AgentPath,
                 Instructions = h.Instructions
-            }).ToList()
+            }).ToList(),
+            Plugins = agentConfig?.Plugins?.Select(p => p.Methods is { Count: > 0 }
+                ? $"{p.Name}:{string.Join(",", p.Methods)}"
+                : p.Name).ToList(),
+            ModelTier = agentConfig?.ModelTier
         };
 
         // Always write YAML block for agent files
@@ -244,8 +250,10 @@ public class AgentFileParser : IFileFormatParser
                 ExposedInNavigator = ExtractBool(element, "exposedInNavigator"),
                 ContextMatchPattern = ExtractString(element, "contextMatchPattern"),
                 Order = ExtractInt(element, "order"),
+                ModelTier = ExtractString(element, "modelTier"),
                 Delegations = ExtractDelegations(element),
-                Handoffs = ExtractHandoffs(element)
+                Handoffs = ExtractHandoffs(element),
+                Plugins = ExtractPlugins(element)
             };
         }
         catch
@@ -294,6 +302,38 @@ public class AgentFileParser : IFileFormatParser
         }
 
         return delegations.Count > 0 ? delegations : null;
+    }
+
+    private static List<AgentPluginReference>? ExtractPlugins(System.Text.Json.JsonElement element)
+    {
+        if (!element.TryGetProperty("plugins", out var pluginsProp) ||
+            pluginsProp.ValueKind != System.Text.Json.JsonValueKind.Array)
+            return null;
+
+        var plugins = new List<AgentPluginReference>();
+        foreach (var item in pluginsProp.EnumerateArray())
+        {
+            switch (item.ValueKind)
+            {
+                case System.Text.Json.JsonValueKind.String:
+                    plugins.Add(AgentPluginReference.Parse(item.GetString()!));
+                    break;
+                case System.Text.Json.JsonValueKind.Object:
+                    var name = ExtractString(item, "name");
+                    if (string.IsNullOrEmpty(name)) continue;
+                    List<string>? methods = null;
+                    if (item.TryGetProperty("methods", out var methodsProp) &&
+                        methodsProp.ValueKind == System.Text.Json.JsonValueKind.Array)
+                        methods = methodsProp.EnumerateArray()
+                            .Where(m => m.ValueKind == System.Text.Json.JsonValueKind.String)
+                            .Select(m => m.GetString()!)
+                            .ToList();
+                    plugins.Add(new AgentPluginReference { Name = name, Methods = methods });
+                    break;
+            }
+        }
+
+        return plugins.Count > 0 ? plugins : null;
     }
 
     private static List<AgentHandoff>? ExtractHandoffs(System.Text.Json.JsonElement element)
@@ -393,8 +433,10 @@ public class AgentFileParser : IFileFormatParser
         public string? ContextMatchPattern { get; set; }
         public int Order { get; set; }
         public string? CustomIconSvg { get; set; }
+        public string? ModelTier { get; set; }
         public List<DelegationFrontMatter>? Delegations { get; set; }
         public List<HandoffFrontMatter>? Handoffs { get; set; }
+        public List<string>? Plugins { get; set; }
     }
 
     /// <summary>

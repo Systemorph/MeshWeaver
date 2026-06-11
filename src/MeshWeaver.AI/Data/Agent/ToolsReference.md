@@ -163,12 +163,13 @@ With any other prefix, it accesses files from a content collection.
 
 ## Search
 
-Searches the mesh using a GitHub-style query syntax. Returns a JSON array of matching nodes (limited to 50).
+Searches the mesh using a GitHub-style query syntax. Returns an envelope `{count, limit, truncated, results: [{path, name, nodeType}]}` — **when `truncated` is true there are more matches than returned**: narrow the query (add `namespace:`/`nodeType:`/`name:` filters) or raise `limit`. Never report a truncated result set as complete.
 
 ### Parameters
 
 - `query` (string, required) — Query string with field filters, wildcards, scoping, sorting
 - `basePath` (string, optional) — Base path to narrow the search scope
+- `limit` (int, optional) — Maximum results to return. Default 50, max 200.
 
 ### Common Patterns
 
@@ -372,10 +373,34 @@ Patch('@MyOrg/MyPage', '{"name": "Renamed Page"}')
 Patch('@MyOrg/MyPage', '{"content": {"text": "Updated markdown content"}}')
 ```
 
-### When to use Patch vs Update
+### When to use Patch vs Update vs EditContent
 
-- **Patch**: Simple field changes (icon, name, category, content). No Get needed.
+- **EditContent**: Any change *inside* a long text — Markdown body or source code. Cheapest and safest.
+- **Patch**: Simple field changes (icon, name, category, short content). No Get needed.
 - **Update**: Complex changes to multiple fields, or when you need full control. Always Get first.
+
+## EditContent
+
+Anchored text edit on a node's primary text content (Markdown body or Code source). Replaces an exact substring — you send only the snippet to change plus enough surrounding context to make it unique, instead of re-emitting the whole document. **Prefer this over Patch for any edit inside a long document or source file**: it costs a fraction of the tokens and cannot corrupt the rest of the content through truncation.
+
+### Parameters
+
+- `path` (string, required) — Path to the node
+- `oldText` (string, required) — The exact text to replace. Copy it **verbatim** from Get, including whitespace and line breaks. Must match exactly once.
+- `newText` (string, required) — The replacement text
+- `replaceAll` (bool, optional) — Replace every occurrence instead of requiring a unique match. Default false.
+
+### Errors are recoverable
+
+- *Not found* → you paraphrased instead of copying. Get the node and copy the exact text.
+- *Occurs N times* → include more surrounding context to make the match unique, or set `replaceAll: true`.
+- *Not editable text* → the node has structured content; use Patch with the full `content` object instead.
+
+### Example
+
+```
+EditContent('@MyOrg/MyPage', 'deadline is March 1', 'deadline is April 15')
+```
 
 ## Delete
 
@@ -508,6 +533,7 @@ Nodes can have satellite data stored in dedicated sub-namespaces with underscore
 | `_Access` | access | AccessAssignment | Permission grants |
 | `_Approval` | approvals | Approval | Approval workflows |
 | `_Tracking` | tracking | TrackedChange | Track changes / collaborative editing |
+| `_Notification` | notifications | Notification | Bell notifications (e.g. thread completion) |
 
 ### Path Patterns
 
@@ -531,7 +557,7 @@ Check whether the user has typed any new messages while the current turn was run
 - Between major steps in a multi-step task (after each tool call in a sequence).
 - Before starting a new file edit / `Update` / `Patch`.
 - Before delegating to another agent.
-- Roughly every 30–60 seconds during long synthesis passes.
+- At natural breakpoints during long synthesis passes.
 
 **When NOT to call:**
 - During a single fast read (`Get` then a one-line reply).
@@ -581,12 +607,12 @@ Chat threads support binary file attachments from content collections. When a `c
 
 ### Delegation
 
-Delegation creates an isolated sub-thread for a target agent. The delegation tool:
-1. Creates a Thread node under the parent message
-2. Posts `SubmitMessageRequest` to the sub-thread
-3. Waits for `ExecutionCompleted` response via callback re-registration
-4. Returns the result to the parent agent
+`delegate_to_agent(agentName, task, context?)` runs the task in an isolated sub-thread:
 
-**Depth limit**: Maximum 2 delegation levels to prevent infinite recursion.
+1. A sub-thread node is created under your current response message. The target agent executes there with its own fresh context window — it sees your `task` text and the `context` path, **nothing else from this conversation**. Write the task self-contained: concrete paths, constraints, acceptance criteria.
+2. The tool result you receive back is the sub-thread's **summary** (the `<summary>` block of its final response), not its full transcript. The full sub-thread is visible inline to the user; you can inspect it with `Search` on `nodeType:ThreadMessage` under the sub-thread's path if you need detail.
+3. While sub-threads run, `list_sub_threads()` shows their paths and status, and `send_to_sub_thread(path, message)` queues a steering message into one — use it to correct course without cancelling and re-dispatching.
 
-**Identity**: All tool calls run with the original user's identity, restored via `AccessContextAIFunction` wrapper.
+**Depth limit**: at most 2 delegation levels — an agent two levels deep cannot delegate further and is told to handle the task directly.
+
+**Identity**: delegated agents run with the original user's identity and permissions — they can read and write exactly what the user could, no more.

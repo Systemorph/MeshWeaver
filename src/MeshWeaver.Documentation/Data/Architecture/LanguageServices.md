@@ -95,14 +95,14 @@ Behind all three sits one `IMeshLanguageService` interface with one in-process i
 
 ## The MCP and Agent Surface
 
-Four tools are exposed via `McpMeshPlugin` for external MCP clients, and via the `Lsp` agent plugin for agents that opt in (Coder declares `plugins: - Lsp`). Method names are identical across both surfaces so prompts can reference a single set of names.
+Two tools are exposed via `McpMeshPlugin` for external MCP clients (`lsp_check_node`, `lsp_diagnostics_for_node`); the in-portal `Lsp` agent plugin additionally carries hover and completions for agents that opt in (Coder declares `plugins: - Lsp`). Hover/completions were removed from the MCP surface in the 2026-06-11 tool-surface compaction — position-based lookups are an IDE interaction shape, and an agent driving JSON tool calls reads source via `get` and runs the pre-flight check instead. `IMeshLanguageService` retains all four capabilities for first-party UI (Monaco) use.
 
-| Tool | Purpose | Returns |
-|---|---|---|
-| `LspCheckNode` | Speculative pre-flight against the NodeType's current source set with one file substituted. Reuses the cached `MetadataReference` set, strips `#r "nuget:..."` directives, resolves any new packages. | `{ok, diagnostics: [...]}` |
-| `LspDiagnosticsForNode` | Diagnostics from the NodeType's current cached compilation — no substitution, no recompile. Faster than `Compile` for "what does Roslyn currently think?" | `{ok, diagnostics: [...]}` |
-| `LspHoverForNode` | QuickInfo (signature + XML doc summary) at a position, rendered as markdown. | `{markdown}` or `{}` |
-| `LspCompletionsForNode` | Code completions at a position, mapped from Roslyn's `WellKnownTags` to LSP-style kinds. | `{items: [{label, kind, insertText, detail?, sortText?}]}` |
+| Tool | Surface | Purpose | Returns |
+|---|---|---|---|
+| `LspCheckNode` | MCP + agent plugin | Speculative pre-flight against the NodeType's current source set with one file substituted. Reuses the cached `MetadataReference` set, strips `#r "nuget:..."` directives, resolves any new packages. | `{ok, diagnostics: [...]}` |
+| `LspDiagnosticsForNode` | MCP + agent plugin | Diagnostics from the NodeType's current cached compilation — no substitution, no recompile. Faster than `Compile` for "what does Roslyn currently think?" | `{ok, diagnostics: [...]}` |
+| `LspHoverForNode` | agent plugin only | QuickInfo (signature + XML doc summary) at a position, rendered as markdown. | `{markdown}` or `{}` |
+| `LspCompletionsForNode` | agent plugin only | Code completions at a position, mapped from Roslyn's `WellKnownTags` to LSP-style kinds. | `{items: [{label, kind, insertText, detail?, sortText?}]}` |
 
 **Position convention.** All positions are **0-based line/character** (LSP convention). Monaco's 1-based coordinates are converted at the JS bridge.
 
@@ -125,7 +125,7 @@ This loop replaces the old blind `Patch → Compile → Recycle → fix` cycle t
 
 > **`#r` support.** The proposed source can include `#r "nuget:PackageId, Version"` directives — the speculative compile strips them and resolves the packages through the same `INuGetAssemblyResolver` the production compile uses. New diagnostics reflect what `Compile` will actually see.
 
-Full Coder workflow is in [Coder.md](xref:Agent/Coder).
+Full Coder workflow is in [Coder.md](/Agent/Coder).
 
 ## Monaco Live Diagnostics
 
@@ -151,7 +151,7 @@ Speculative compiles do **not** cache — every `LspCheckNode` call rebuilds the
 
 ## Reactive Contract
 
-🚨 **Every `IMeshLanguageService` method returns `IObservable<T>`.** The Roslyn `*Async` APIs are wrapped at the seam via `Observable.FromAsync(ct => svc.GetXxxAsync(...))` — the same pattern `MeshNodeCompilationService.CompileCore` uses. MCP and agent tool surfaces bridge to `Task<string>` via `.FirstAsync().ToTask()`, which is the sanctioned exception for external-protocol adapters (see [AsynchronousCalls](xref:Architecture/AsynchronousCalls)). No `await` anywhere in hub-reachable code.
+🚨 **Every `IMeshLanguageService` method returns `IObservable<T>`.** The Roslyn `*Async` APIs are wrapped at the seam via `Observable.FromAsync(ct => svc.GetXxxAsync(...))` — the same pattern `MeshNodeCompilationService.CompileCore` uses. MCP and agent tool surfaces bridge to `Task<string>` via `.FirstAsync().ToTask()`, which is the sanctioned exception for external-protocol adapters (see [AsynchronousCalls](/Doc/Architecture/AsynchronousCalls)). No `await` anywhere in hub-reachable code.
 
 ## What's Deferred
 

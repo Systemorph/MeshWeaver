@@ -9,6 +9,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
+using MeshWeaver.Markdown;
 using MeshWeaver.Layout;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph;
@@ -577,9 +578,11 @@ public class MeshOperations
             Observable.Return<string?>($"Error: Timeout resolving '{remainder}' at {addressPart}"));
     }
 
-    public IObservable<string> Search(string query, string? basePath = null)
+    public IObservable<string> Search(string query, string? basePath = null, int limit = 50)
     {
-        logger.LogInformation("Search called with query={Query}, basePath={BasePath}", query, basePath);
+        logger.LogInformation("Search called with query={Query}, basePath={BasePath}, limit={Limit}", query, basePath, limit);
+
+        limit = Math.Clamp(limit, 1, 200);
 
         var resolvedBase = basePath != null ? ResolvePath(basePath) : null;
         string fullQuery;
@@ -596,14 +599,29 @@ public class MeshOperations
         // Snapshot semantics: Take(1) on Query gives us the Initial change
         // containing every match for this query in one batch — no async enumeration,
         // no FromAsync bridge.
-        return mesh.Query<MeshNode>(new MeshQueryRequest { Query = fullQuery, Limit = 50 })
+        return mesh.Query<MeshNode>(new MeshQueryRequest { Query = fullQuery, Limit = limit })
             .Take(1)
             .Select(change =>
             {
                 var list = change.Items
                     .Select(node => (object)new { node.Path, node.Name, node.NodeType })
                     .ToImmutableList();
-                return JsonSerializer.Serialize(list, hub.JsonSerializerOptions);
+                // Envelope instead of a bare array so truncation is VISIBLE: a result
+                // set that silently stops at the limit reads as "that's everything"
+                // and the agent under-reports. `truncated` + the hint tell it how to
+                // get the rest (narrow the query or raise the limit).
+                var truncated = list.Count >= limit;
+                var payload = new
+                {
+                    count = list.Count,
+                    limit,
+                    truncated,
+                    hint = truncated
+                        ? "Result set hit the limit — there may be more matches. Narrow the query (namespace:/nodeType:/name:) or raise 'limit' (max 200)."
+                        : null,
+                    results = list
+                };
+                return JsonSerializer.Serialize(payload, hub.JsonSerializerOptions);
             })
             .Catch((Exception ex) =>
             {
@@ -634,13 +652,15 @@ public class MeshOperations
             if (meshNode == null)
                 return Observable.Return("Invalid node: deserialized to null.");
 
-            if (string.IsNullOrWhiteSpace(meshNode.Name))
-                return Observable.Return("Error: 'name' property is required. Provide a human-readable display name.");
-
             meshNode = SanitizeNodeId(meshNode);
+            meshNode = NormalizeNamespace(meshNode);
 
-            // Validate content against schema if both nodeType and content are provided.
-            var validationObs = !string.IsNullOrEmpty(meshNode.NodeType) && meshNode.Content != null
+            var identityError = ValidateNodeIdentity(meshNode, "create");
+            if (identityError != null)
+                return Observable.Return(identityError);
+
+            // Validate content against schema when content is provided.
+            var validationObs = meshNode.Content != null
                 ? ValidateContentWithSchema(meshNode)
                 : Observable.Return<string?>(null);
 
@@ -702,26 +722,12 @@ public class MeshOperations
                     continue;
                 }
 
-                var meshNode = SanitizeNodeId(rawNode);
+                var meshNode = NormalizeNamespace(SanitizeNodeId(rawNode));
 
-                if (string.IsNullOrWhiteSpace(meshNode.Id))
+                var identityError = ValidateNodeIdentity(meshNode, "update");
+                if (identityError != null)
                 {
-                    perNode = perNode.Add(Observable.Return(
-                        "Error: node is missing 'id'. Every node requires an id — fetch with Get first if unsure."));
-                    continue;
-                }
-
-                if (string.IsNullOrWhiteSpace(meshNode.Name))
-                {
-                    perNode = perNode.Add(Observable.Return(
-                        $"Error: node at {meshNode.Path} has empty 'name'. Provide a non-empty human-readable display name."));
-                    continue;
-                }
-
-                if (string.IsNullOrEmpty(meshNode.NodeType))
-                {
-                    perNode = perNode.Add(Observable.Return(
-                        $"Error: node at {meshNode.Path} is missing 'nodeType'. Update requires the complete node (from Get). Use Patch for partial updates."));
+                    perNode = perNode.Add(Observable.Return(identityError));
                     continue;
                 }
 
@@ -823,7 +829,10 @@ public class MeshOperations
             return FetchNode(resolvedPath).SelectMany(existing =>
             {
                 if (existing == null)
-                    return Observable.Return($"Error: node not found at {resolvedPath}");
+                    return Observable.Return(
+                        $"Error: node not found at {resolvedPath}. The path must be the node's exact 'path' property " +
+                        "(never its display name). Locate it with Search (e.g. Search('name:\"…the name…\"')) and " +
+                        "retry with the 'path' value from the match; to create a new node instead, use Create.");
 
                 // Content-specific rejections carry the expected schema so agents
                 // can recover on the next call without guessing.
@@ -892,6 +901,131 @@ public class MeshOperations
     }
 
     /// <summary>
+    /// Anchored text edit on a node's primary text content (Markdown body or Code source).
+    /// Replaces an exact substring, so the agent supplies just the snippet to change plus
+    /// enough surrounding context to make it unique — instead of re-emitting the whole
+    /// document through Patch (token cost + truncation corruption on long files).
+    /// Same read-your-writes semantics as Patch. Every failure mode returns a descriptive
+    /// error telling the agent how to recover.
+    /// </summary>
+    public IObservable<string> EditContent(string path, string oldText, string newText, bool replaceAll = false)
+    {
+        logger.LogInformation("EditContent called for path={Path}", path);
+
+        if (string.IsNullOrWhiteSpace(path))
+            return Observable.Return("Error: path is required.");
+        if (string.IsNullOrEmpty(oldText))
+            return Observable.Return(
+                "Error: oldText is required — Get the node and copy the exact text to replace, including whitespace.");
+        if (oldText == newText)
+            return Observable.Return("Error: oldText and newText are identical — nothing to change.");
+
+        return Observable.Defer(() =>
+        {
+            var resolvedPath = ResolvePath(path);
+            return FetchNode(resolvedPath).SelectMany(existing =>
+            {
+                if (existing == null)
+                    return Observable.Return(
+                        $"Error: node not found at {resolvedPath}. The path must be the node's exact 'path' property — " +
+                        "locate it with Search and retry with the 'path' value from the match.");
+
+                var text = existing.Content switch
+                {
+                    MarkdownContent md => md.Content,
+                    CodeConfiguration code => code.Code,
+                    string s => s,
+                    _ => null
+                };
+
+                if (text == null)
+                    return Observable.Return(
+                        $"Error: cannot edit {resolvedPath}: its content is " +
+                        $"{existing.Content?.GetType().Name ?? "empty"}, not editable text. EditContent works on " +
+                        "Markdown and Code nodes; for structured content use Patch with the full 'content' object.");
+
+                var count = CountOccurrences(text, oldText);
+                if (count == 0)
+                    return Observable.Return(
+                        $"Error: the text to replace was not found in {resolvedPath}. Get the node and copy the " +
+                        "exact text — including whitespace and line breaks — then retry. " +
+                        $"(Current content is {text.Length} chars.)");
+                if (count > 1 && !replaceAll)
+                    return Observable.Return(
+                        $"Error: the text to replace occurs {count} times in {resolvedPath}. Include more " +
+                        "surrounding context to make the match unique, or set replaceAll=true to change every occurrence.");
+
+                var newFull = text.Replace(oldText, newText, StringComparison.Ordinal);
+                var merged = existing.Content switch
+                {
+                    MarkdownContent md => WithRerenderedMarkdown(existing, md, newFull),
+                    CodeConfiguration code => existing with { Content = code with { Code = newFull } },
+                    _ => existing with { Content = newFull },
+                };
+
+                var versionBefore = existing.Version;
+                return mesh.UpdateNode(merged)
+                    // Same read-your-writes barrier as Patch — see comment there.
+                    .SelectMany(updated => WaitForReadYourWrites(resolvedPath, versionBefore)
+                        .Select(confirmed =>
+                        {
+                            var after = confirmed ?? updated;
+                            OnNodeChange?.Invoke(new NodeChangeEntry
+                            {
+                                Path = after.Path,
+                                Operation = "Updated",
+                                VersionBefore = versionBefore,
+                                VersionAfter = after.Version,
+                                NodeType = after.NodeType,
+                                NodeName = after.Name
+                            });
+                            var plural = count == 1 ? "" : "s";
+                            return $"Edited: {after.Path} ({count} replacement{plural})";
+                        }))
+                    .Catch((Exception ex) =>
+                        Observable.Return($"Error editing {resolvedPath}: {ex.Message}"));
+            })
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "Error editing node at {Path}", path);
+                return Observable.Return($"Error: {ex.Message}");
+            });
+        });
+    }
+
+    /// <summary>
+    /// Rebuilds the derived markdown artefacts (prerendered HTML, code submissions) after a
+    /// text edit, preserving the record's other fields (authors, tags, thumbnail, abstract).
+    /// Without this, the portal would keep rendering the stale pre-edit HTML.
+    /// </summary>
+    private static MeshNode WithRerenderedMarkdown(MeshNode node, MarkdownContent md, string newText)
+    {
+        var parsed = MarkdownContent.Parse(newText, node.Namespace, node.Path);
+        return node with
+        {
+            Content = md with
+            {
+                Content = newText,
+                PrerenderedHtml = parsed.PrerenderedHtml,
+                CodeSubmissions = parsed.CodeSubmissions
+            },
+            PreRenderedHtml = parsed.PrerenderedHtml,
+        };
+    }
+
+    private static int CountOccurrences(string text, string needle)
+    {
+        var count = 0;
+        var i = 0;
+        while ((i = text.IndexOf(needle, i, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            i += needle.Length;
+        }
+        return count;
+    }
+
+    /// <summary>
     /// Posts a <see cref="PatchDataRequest"/> to the node's hub with the raw JSON
     /// delta. The hub applies the JSON merge patch to its own <c>MeshNodeReference</c>
     /// workspace stream and returns <see cref="PatchDataResponse"/>. Emits the
@@ -957,6 +1091,57 @@ public class MeshOperations
                 cts.Dispose();
             };
         });
+
+    /// <summary>
+    /// Up-front identity validation shared by Create and Update. Returns a descriptive,
+    /// actionable error string when the node is missing 'id', 'nodeType', or 'name', or when
+    /// the namespace is malformed — or null when the node is sound enough to attempt the write.
+    /// Validating BEFORE posting to the mesh turns a routed-to-nowhere grain call (opaque
+    /// timeout, silent no-op) into an immediate, specific answer the agent can act on.
+    /// </summary>
+    private static string? ValidateNodeIdentity(MeshNode node, string operation)
+    {
+        if (string.IsNullOrWhiteSpace(node.Id))
+            return $"Error: cannot {operation}: 'id' is not set. The id is the node's own slug — the final path segment, " +
+                   "no slashes (e.g. \"PricingTool\"). Put the parent path in 'namespace' (e.g. \"ACME/Projects\"); " +
+                   "the node's path is derived as {namespace}/{id}.";
+
+        if (string.IsNullOrWhiteSpace(node.NodeType))
+            return $"Error: cannot {operation} '{node.Path}': 'nodeType' is not set. Every node must declare a nodeType — " +
+                   "it is the path of the type definition that gives the node its shape, views, and behaviour " +
+                   "(e.g. \"Markdown\", \"Code\", \"Organization\"). Discover available types with " +
+                   "Search('nodeType:NodeType') and retry with nodeType set." +
+                   (operation == "update"
+                       ? " If you only meant to change a few fields, use Patch instead — it preserves all fields you don't mention."
+                       : "");
+
+        if (string.IsNullOrWhiteSpace(node.Name))
+            return $"Error: cannot {operation} '{node.Path}': 'name' is not set. Provide a non-empty, human-readable " +
+                   "display name — it is shown as the node's title in the navigator and page heading.";
+
+        var ns = node.Namespace;
+        if (!string.IsNullOrEmpty(ns) && (ns.EndsWith('/') || ns.Contains("//")))
+            return $"Error: cannot {operation} '{node.Id}': namespace '{ns}' is malformed. The namespace is the parent " +
+                   "path, segments separated by single slashes, no trailing slash (e.g. \"ACME/Projects\", \"User/rbuergi\").";
+
+        return null;
+    }
+
+    /// <summary>
+    /// Normalizes agent-emitted namespace noise the same way <see cref="ResolvePath"/> does for
+    /// path arguments: strips a leading '@' / '/' and surrounding whitespace. Models routinely
+    /// copy the namespace out of an absolute reference ("@/ACME/Projects") — that intent is
+    /// unambiguous, so fix it instead of failing the write.
+    /// </summary>
+    private static MeshNode NormalizeNamespace(MeshNode node)
+    {
+        var ns = node.Namespace;
+        if (string.IsNullOrEmpty(ns))
+            return node;
+
+        var normalized = ResolvePath(ns).TrimStart('/');
+        return normalized == ns ? node : node with { Namespace = normalized };
+    }
 
     /// <summary>
     /// Sanitizes a MeshNode's Id: if the Id contains slashes, splits it into proper Id + Namespace.
@@ -1492,6 +1677,33 @@ public class MeshOperations
                 new { status = "Error", message = "path is required" },
                 hub.JsonSerializerOptions));
 
+        // Permission gate: recycling disposes the node's hub (DisposeRequest) and forces
+        // re-initialization — operationally a write on that node. Require Update on the
+        // target so a read-only caller can't bounce other partitions' hubs. With no RLS
+        // wired, the default evaluator grants All and behavior is unchanged. Fail closed
+        // on evaluator errors/timeouts.
+        return hub.CheckPermission(resolvedPath, MeshWeaver.Mesh.Security.Permission.Update)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "Recycle: permission check failed for {Path}", resolvedPath);
+                return Observable.Return(false);
+            })
+            .SelectMany(allowed => allowed
+                ? RecycleCore(resolvedPath)
+                : Observable.Return(JsonSerializer.Serialize(
+                    new
+                    {
+                        status = "Error",
+                        path = resolvedPath,
+                        message = "Recycle requires Update permission on the target node — it disposes the node's hub and forces re-initialization. Ask someone with write access to the node (or a platform admin) to do it."
+                    },
+                    hub.JsonSerializerOptions)));
+    }
+
+    private IObservable<string> RecycleCore(string resolvedPath)
+    {
         try
         {
             // Trigger a fresh compile by flipping CompilationStatus = Pending on

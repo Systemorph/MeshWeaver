@@ -5,7 +5,6 @@ description: Handles email-originated threads. Reads the inbound Email (the thre
 icon: Mail
 category: Agents
 exposedInNavigator: false
-modelTier: standard
 order: 996
 delegations:
   - agentPath: Agent/Coder

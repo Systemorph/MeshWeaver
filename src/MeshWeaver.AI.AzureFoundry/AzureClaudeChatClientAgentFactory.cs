@@ -60,9 +60,9 @@ public class AzureClaudeChatClientAgentFactory(
 
     protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {
-        // Model comes from the chat composer selection.
+        // Composer selection wins; then the agent's ModelTier; first configured model as a last resort.
         var modelName = !string.IsNullOrEmpty(CurrentModelName) ? CurrentModelName
-            : configuration.Models.FirstOrDefault();
+            : ResolveTierModel(agentConfig) ?? configuration.Models.FirstOrDefault();
 
         if (string.IsNullOrEmpty(modelName))
             throw new InvalidOperationException(

@@ -39,9 +39,9 @@ public class AzureOpenAIChatClientAgentFactory(
 
     protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {
-        // Model comes from the chat composer selection; first configured model as a last resort.
+        // Composer selection wins; then the agent's ModelTier; first configured model as a last resort.
         var modelName = !string.IsNullOrEmpty(CurrentModelName) ? CurrentModelName
-            : credentials.Models.FirstOrDefault();
+            : ResolveTierModel(agentConfig) ?? credentials.Models.FirstOrDefault();
 
         if (string.IsNullOrEmpty(modelName))
             throw new InvalidOperationException("No model configured for Azure OpenAI");

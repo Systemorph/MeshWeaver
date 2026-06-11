@@ -99,9 +99,9 @@ public class MeshPluginTest : MonolithMeshTestBase
         var tools = plugin.CreateAllTools();
 
         tools.Should().NotBeNull();
-        // All tools: Get, Search, NavigateTo, Create, Update, Patch, Delete, Move, Copy, GetDiagnostics, Recycle, RunTests
-        tools.Should().HaveCount(12);
 
+        // Name asserts FIRST so a missing tool is named in the failure (a bare count
+        // mismatch hides which one vanished), count check last.
         var toolNames = tools.OfType<AIFunction>().Select(t => t.Name).ToList();
         toolNames.Should().Contain("Get");
         toolNames.Should().Contain("Search");
@@ -109,12 +109,17 @@ public class MeshPluginTest : MonolithMeshTestBase
         toolNames.Should().Contain("Create");
         toolNames.Should().Contain("Update");
         toolNames.Should().Contain("Patch");
+        toolNames.Should().Contain("EditContent");
         toolNames.Should().Contain("Delete");
         toolNames.Should().Contain("Move");
         toolNames.Should().Contain("Copy");
         toolNames.Should().Contain("GetDiagnostics");
         toolNames.Should().Contain("Recycle");
         toolNames.Should().Contain("RunTests");
+
+        // All tools: Get, Search, NavigateTo, Create, Update, Patch, EditContent, Delete, Move, Copy, GetDiagnostics, Recycle, RunTests
+        // (RunTests is present because tests run inside the repo — it is omitted in deployed containers.)
+        tools.Should().HaveCount(13);
     }
 
     #endregion
@@ -223,10 +228,12 @@ public class MeshPluginTest : MonolithMeshTestBase
 
         result.Should().NotBeNullOrEmpty();
         var doc = JsonDocument.Parse(result);
-        doc.RootElement.ValueKind.Should().Be(JsonValueKind.Array);
+        doc.RootElement.ValueKind.Should().Be(JsonValueKind.Object,
+            "search returns a {count, limit, truncated, results} envelope so truncation is visible");
 
-        var nodes = doc.RootElement.EnumerateArray().ToList();
+        var nodes = doc.RootElement.GetProperty("results").EnumerateArray().ToList();
         nodes.Should().NotBeEmpty("should find Agent nodes");
+        doc.RootElement.GetProperty("count").GetInt32().Should().Be(nodes.Count);
 
         // All results should have nodeType Agent
         foreach (var node in nodes)
@@ -245,7 +252,7 @@ public class MeshPluginTest : MonolithMeshTestBase
 
         result.Should().NotBeNullOrEmpty();
         var doc = JsonDocument.Parse(result);
-        var nodes = doc.RootElement.EnumerateArray().ToList();
+        var nodes = doc.RootElement.GetProperty("results").EnumerateArray().ToList();
         nodes.Should().NotBeEmpty("Agent should have children");
 
         // All results should have paths under Agent/
@@ -265,7 +272,9 @@ public class MeshPluginTest : MonolithMeshTestBase
 
         result.Should().NotBeNullOrEmpty();
         var doc = JsonDocument.Parse(result);
-        doc.RootElement.EnumerateArray().ToList().Should().BeEmpty();
+        doc.RootElement.GetProperty("results").EnumerateArray().ToList().Should().BeEmpty();
+        doc.RootElement.GetProperty("count").GetInt32().Should().Be(0);
+        doc.RootElement.GetProperty("truncated").GetBoolean().Should().BeFalse();
     }
 
     #endregion

@@ -37,11 +37,12 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         [Description("Path to data. Relative: @content/file.docx, @MyChild/*. Absolute: @/OrgA/Doc, @/OrgA/content/file.docx. For spaces: \"@content/My File.docx\"")] string path)
         => WithContext(() => ops.Get(ResolveContextPath(path))).FirstAsync().ToTask();
 
-    [Description("Searches the mesh using GitHub-style query syntax.")]
+    [Description("Searches the mesh using GitHub-style query syntax. Returns {count, limit, truncated, results:[{path,name,nodeType}]} — when 'truncated' is true there are more matches than returned; narrow the query or raise 'limit'.")]
     public Task<string> Search(
         [Description("Query string (e.g., 'nodeType:Agent', 'path:ACME scope:descendants', 'name:*sales*')")] string query,
-        [Description("Base path to search from (e.g., @graph). Empty for all.")] string? basePath = null)
-        => WithContext(() => ops.Search(query, basePath != null ? ResolveContextPath(basePath) : null)).FirstAsync().ToTask();
+        [Description("Base path to search from (e.g., @graph). Empty for all.")] string? basePath = null,
+        [Description("Maximum number of results to return. Default 50, max 200.")] int limit = 50)
+        => WithContext(() => ops.Search(query, basePath != null ? ResolveContextPath(basePath) : null, limit)).FirstAsync().ToTask();
 
     [Description("Creates a new node in the mesh. ALWAYS set the 'name' property to a human-readable display name.")]
     public Task<string> Create(
@@ -58,6 +59,14 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         [Description("Path to the node (e.g., @User/rbuergi/my-node)")] string path,
         [Description("JSON object with ONLY the fields to change. Examples: {\"icon\": \"<svg>...</svg>\"}, {\"name\": \"New Name\"}. Include 'content' only if overwriting — and never as null.")] string fields)
         => WithContext(() => ops.Patch(ResolveContextPath(path), fields)).FirstAsync().ToTask();
+
+    [Description("Anchored text edit on a node's content (Markdown body or Code source). Replaces oldText with newText — pass just the snippet to change plus enough surrounding context to make it unique, instead of re-sending the whole document through Patch. Fails with a descriptive error when the text isn't found or isn't unique. Preferred over Patch for any edit inside a long document or source file.")]
+    public Task<string> EditContent(
+        [Description("Path to the node (e.g., @User/rbuergi/my-doc or @ACME/Story/Source/Story.cs)")] string path,
+        [Description("The exact text to replace — copy it verbatim from Get, including whitespace and line breaks. Must match exactly once (or set replaceAll).")] string oldText,
+        [Description("The replacement text.")] string newText,
+        [Description("Replace every occurrence instead of requiring a unique match. Default: false.")] bool replaceAll = false)
+        => WithContext(() => ops.EditContent(ResolveContextPath(path), oldText, newText, replaceAll)).FirstAsync().ToTask();
 
     [Description("Deletes nodes from the mesh by path. Recursive: deleting a parent removes all descendants — pass the subtree root, no need to enumerate children.")]
     public Task<string> Delete(
@@ -234,18 +243,29 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     private string ResolveContextPath(string path) => MeshOperations.ResolveContextPath(chat, path);
 
     /// <summary>
+    /// RunTests only exists where the source repo does: it shells out to `dotnet test`
+    /// against a repo-relative project path, which requires MeshWeaver.slnx upstream of
+    /// the executable. Dev/test machines have it; deployed containers don't — so the
+    /// tool is simply absent from the agent's tool list in production instead of being
+    /// a permanently-erroring trap.
+    /// </summary>
+    private static bool RunTestsAvailable => FindRepoRoot(AppContext.BaseDirectory) is not null;
+
+    /// <summary>
     /// Creates the standard tools for this plugin (read-only operations).
     /// </summary>
     public IList<AITool> CreateTools()
     {
-        return
-        [
+        var tools = new List<AITool>
+        {
             AIFunctionFactory.Create(Get),
             AIFunctionFactory.Create(Search),
             AIFunctionFactory.Create(NavigateTo),
             AIFunctionFactory.Create(GetDiagnostics),
-            AIFunctionFactory.Create(RunTests),
-        ];
+        };
+        if (RunTestsAvailable)
+            tools.Add(AIFunctionFactory.Create(RunTests));
+        return tools;
     }
 
     /// <summary>
@@ -253,20 +273,23 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     /// </summary>
     public IList<AITool> CreateAllTools()
     {
-        return
-        [
+        var tools = new List<AITool>
+        {
             AIFunctionFactory.Create(Get),
             AIFunctionFactory.Create(Search),
             AIFunctionFactory.Create(NavigateTo),
             AIFunctionFactory.Create(Create),
             AIFunctionFactory.Create(Update),
             AIFunctionFactory.Create(Patch),
+            AIFunctionFactory.Create(EditContent),
             AIFunctionFactory.Create(Delete),
             AIFunctionFactory.Create(Move),
             AIFunctionFactory.Create(Copy),
             AIFunctionFactory.Create(GetDiagnostics),
             AIFunctionFactory.Create(Recycle),
-            AIFunctionFactory.Create(RunTests),
-        ];
+        };
+        if (RunTestsAvailable)
+            tools.Add(AIFunctionFactory.Create(RunTests));
+        return tools;
     }
 }
