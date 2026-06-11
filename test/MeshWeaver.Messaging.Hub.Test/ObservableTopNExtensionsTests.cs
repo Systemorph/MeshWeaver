@@ -183,7 +183,11 @@ public class ObservableTopNExtensionsTests
         };
 
         var snapshots = new List<IReadOnlyList<Suggestion>>();
-        items.ToObservable().ScanTopN(5, ScoreComparer).Subscribe(snapshots.Add);
+        var subject = new Subject<Suggestion>();
+        using var sub = subject.ScanTopN(5, ScoreComparer).Subscribe(snapshots.Add);
+        foreach (var item in items)
+            subject.OnNext(item);
+        subject.OnCompleted();
 
         snapshots[^1].Should().HaveCount(3);
         snapshots[^1].Select(s => s.Name).Should().BeEquivalentTo(new[] { "alpha", "beta", "gamma" }, System.Text.Json.JsonSerializerOptions.Default);
@@ -208,7 +212,11 @@ public class ObservableTopNExtensionsTests
         const int n = 1024;
         var items = Enumerable.Range(0, n).Reverse(); // worst case for naive sort
         var sink = new List<IReadOnlyList<int>>();
-        items.ToObservable().ScanTopN(n, counting).Subscribe(sink.Add);
+        var subject = new Subject<int>();
+        using var sub = subject.ScanTopN(n, counting).Subscribe(sink.Add);
+        foreach (var item in items)
+            subject.OnNext(item);
+        subject.OnCompleted();
 
         // Binary insert: ~ sum_{k=1..n} log2(k) ≈ n*log2(n) - n/ln(2)
         // For n=1024: ≈ 1024*10 - 1477 ≈ 8763. A re-sort approach would be ≈ n²/2 ≈ 524k.
@@ -260,8 +268,20 @@ public class ObservableTopNExtensionsTests
 
     private static List<IReadOnlyList<int>> ScanInts(IComparer<int> cmp, int topN, IEnumerable<int> items)
     {
+        // Drive the operator through a Subject with synchronous OnNext pushes — NOT
+        // IEnumerable.ToObservable(), whose drain is scheduler-dependent (CurrentThread
+        // trampoline): when the trampoline is already active on the worker (CI runners
+        // under instrumentation), Subscribe returns BEFORE the drain runs and the
+        // assertions see only the initial empty snapshot (the 2026-06-11 CI failures
+        // Ascending_FirstItemIsBest / Descending_LargestItemIsBest /
+        // EachItemTriggersAFreshSnapshot). ScanTopN itself is synchronous pass-through,
+        // so a synchronous push pins exactly the contract under test, deterministically.
+        var subject = new Subject<int>();
         var snapshots = new List<IReadOnlyList<int>>();
-        items.ToObservable().ScanTopN(topN, cmp).Subscribe(snapshots.Add);
+        using var sub = subject.ScanTopN(topN, cmp).Subscribe(snapshots.Add);
+        foreach (var item in items)
+            subject.OnNext(item);
+        subject.OnCompleted();
         return snapshots;
     }
 

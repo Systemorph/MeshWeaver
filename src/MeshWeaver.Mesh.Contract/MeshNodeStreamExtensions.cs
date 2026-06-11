@@ -406,7 +406,12 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             + $"on hub '{_workspace.Hub.Address}', but none is registered. All non-own "
                             + "MeshNode access must route through the cache (the single shared mirror) — "
                             + "the raw GetRemoteStream fallback is gone."))
-                .CarryAccessContext(_workspace.Hub.ServiceProvider)
+                // restoreNullCapture: a write-result emission must NEVER inherit the
+                // plumbing's ambient identity (system-security from the cache's read
+                // path) into the caller's callback — a nested write there would post
+                // AS SYSTEM. Null capture → callback runs with Context=null and
+                // PostPipeline's `Context ?? CircuitContext` resolves the real user.
+                .CarryAccessContext(_workspace.Hub.ServiceProvider, restoreNullCapture: true)
                 // The post-update emission also goes through the typed
                 // converter — callers chaining `.Select(node => node.Content as MyType)`
                 // off the Update's returned observable get the same typed
@@ -443,7 +448,8 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                         : throw new InvalidOperationException(
                             $"Cross-hub MeshNode overwrite to '{_path}' requires an IMeshNodeStreamCache "
                             + $"on hub '{_workspace.Hub.Address}', but none is registered."))
-                .CarryAccessContext(_workspace.Hub.ServiceProvider)
+                // Same clamp as Update — see the comment there.
+                .CarryAccessContext(_workspace.Hub.ServiceProvider, restoreNullCapture: true)
                 .Select(n => EnsureTypedContent(n, _jsonOptions)),
             $"MeshNodeStreamHandle.Overwrite(path='{_path ?? "<own>"}')",
             _workspace.Hub.ServiceProvider);

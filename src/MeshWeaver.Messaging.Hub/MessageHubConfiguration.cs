@@ -47,14 +47,24 @@ public record MessageHubConfiguration
     public MessageHubConfiguration WithInitializationGate(string name, Predicate<IMessageDelivery>? allowDuringInit = null)
         => this with { InitializationGates = InitializationGates.SetItem(name, allowDuringInit ?? (_ => false)) };
 
+    // Cache the resolved parent hub. Without this, every access went through an Autofac
+    // `GetService<IMessageHub>()` resolve — and DataExtensions.RouteStreamMessage reads
+    // ParentHub on EVERY routed stream message, so under a stream-message storm the
+    // per-message DI resolve dominated CPU (the 155%-CPU routing hot frame in the
+    // 2026-06-11 thread-execution wedge: RouteStreamMessage → get_ParentHub → GetService).
+    // The parent hub never changes for a given configuration, so resolve once and reuse.
+    // (Proven safe via the AccessContext-canary cache-revert diagnostic: the canary fails
+    // identically with or without this cache — the cache is not the cause.)
+    private IMessageHub? _parentHub;
+
     /// <summary>
-    /// Resolves the parent hub by going through DI on the parent scope.
-    /// Do NOT call during disposal — the parent scope may already be disposed,
-    /// and an ObjectDisposedException here pollutes test output. If you need
+    /// The parent hub, resolved once via DI on the parent scope and cached thereafter.
+    /// Do NOT call during disposal before it has been resolved — the parent scope may already
+    /// be disposed, and an ObjectDisposedException here pollutes test output. If you need
     /// the parent hub at disposal time, capture it at construction (e.g.
     /// <see cref="MessageService.ParentHub"/>).
     /// </summary>
-    public IMessageHub? ParentHub => ParentServiceProvider?.GetService<IMessageHub>();
+    public IMessageHub? ParentHub => _parentHub ??= ParentServiceProvider?.GetService<IMessageHub>();
 
     /// <summary>
     /// TaskScheduler used by this hub's message-dispatch ActionBlocks. Each hub is

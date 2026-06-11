@@ -79,10 +79,10 @@ public static class AccessContextCaptureExtensions
     /// <param name="source">Cold observable returned by a framework primitive.</param>
     /// <param name="services">DI scope used to resolve <see cref="AccessService"/>.</param>
     public static IObservable<T> CarryAccessContext<T>(
-        this IObservable<T> source, IServiceProvider services)
+        this IObservable<T> source, IServiceProvider services, bool restoreNullCapture = false)
     {
         var access = services.GetService<AccessService>();
-        return CarryAccessContext(source, access);
+        return CarryAccessContext(source, access, restoreNullCapture);
     }
 
     /// <summary>
@@ -93,7 +93,7 @@ public static class AccessContextCaptureExtensions
     /// overload.
     /// </summary>
     public static IObservable<T> CarryAccessContext<T>(
-        this IObservable<T> source, AccessService? access)
+        this IObservable<T> source, AccessService? access, bool restoreNullCapture = false)
     {
         if (access is null) return source;
 
@@ -109,9 +109,31 @@ public static class AccessContextCaptureExtensions
         // CircuitContext here would leak the Blazor circuit identity into
         // background-Subscribe code paths the user never asked for (the
         // 757d2a296 anti-pattern).
+        //
+        // 🚨 NULL capture, two modes:
+        //
+        // • restoreNullCapture=true (the WRITE-result observables —
+        //   MeshNodeStreamHandle.Update/Overwrite): null is RESTORED AS NULL.
+        //   The emission thread belongs to framework plumbing whose ambient
+        //   AsyncLocal is its own infrastructure identity (the stream cache's
+        //   read path runs ImpersonateAsSystem); passing through let that
+        //   identity leak into the caller's callback — `Context ?? CircuitContext`
+        //   resolved to system-security instead of the circuit user (the hop4
+        //   leak in TypedErrorPropagationTest), and a nested write inside the
+        //   callback would POST AS SYSTEM, an escalation. Clamping re-creates
+        //   the caller's exact state for the callback's duration.
+        //
+        // • restoreNullCapture=false (default — read/query pipelines): null
+        //   passes through UNWRAPPED, preserving the ambient identity at
+        //   emission. ⚠️ Known debt: several ops/MCP flows chain further
+        //   operations inside subscriber callbacks and currently DEPEND on the
+        //   leaked ambient identity (clamping globally broke
+        //   PatchWorkspaceAckTest.Patch_ConcurrentUpdates_NoDeadlock with
+        //   AccessDenied, MeshPlugin Search, and script-execution stamping —
+        //   2026-06-11). Migrating those call sites to explicit impersonation
+        //   is the prerequisite for flipping the default to clamp.
         var captured = access.Context;
-        if (captured is null) return source;
-
+        if (captured is null && !restoreNullCapture) return source;
         return new CarryAccessContextObservable<T>(source, access, captured);
     }
 
@@ -123,7 +145,7 @@ public static class AccessContextCaptureExtensions
     /// touched only for the lifetime of the subscriber's callback.
     /// </summary>
     private sealed class CarryAccessContextObservable<T>(
-        IObservable<T> source, AccessService access, AccessContext captured) : IObservable<T>
+        IObservable<T> source, AccessService access, AccessContext? captured) : IObservable<T>
     {
         public IDisposable Subscribe(IObserver<T> observer) =>
             source.Subscribe(new RestoringObserver<T>(observer, access, captured));
@@ -138,7 +160,7 @@ public static class AccessContextCaptureExtensions
     /// the captured identity.
     /// </summary>
     private sealed class RestoringObserver<T>(
-        IObserver<T> inner, AccessService access, AccessContext captured) : IObserver<T>
+        IObserver<T> inner, AccessService access, AccessContext? captured) : IObserver<T>
     {
         public void OnNext(T value)
         {
