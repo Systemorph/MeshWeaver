@@ -74,7 +74,6 @@ public record Position
 {
     public BalanceSheetSide Side { get; init; }
     public PositionAggregation Aggregation { get; init; }
-    public int Order { get; init; }
     public PositionComponent[]? Components { get; init; }   // Sum operands
 
     [MeshNode("nodeType:PensionFund/Position")]
@@ -83,6 +82,8 @@ public record Position
     public string? Denominator { get; init; }
 }
 ```
+
+Note what the record does **not** carry: no `Id`, no `Name`, no `Description`, no `Order` — all of those already live on the **mesh node itself** (`MeshNode.Name`, `MeshNode.Description`, `MeshNode.Order`). The content holds only what the node doesn't have: the formula model.
 
 The `[MeshNode("query")]` attribute does double duty: it documents that the property holds a **node path**, and the Edit form renders it as the searchable **MeshNodePicker** over exactly the nodes the query matches — here, the members of the Position dimension.
 
