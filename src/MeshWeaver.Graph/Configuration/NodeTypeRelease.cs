@@ -155,11 +155,11 @@ public record NodeTypeRelease
 
     /// <summary>
     /// Snapshot of the <b>source</b> Code nodes that went into this release:
-    /// <c>{codeNodePath → MeshNode.Version}</c> at compile time. Lets the
-    /// release UI navigate to every source file as-of this release (the version
-    /// links into the node's version history). Partitioned from the compiler's
-    /// combined source set by matching against the NodeType's Tests queries —
-    /// see <c>CodeQueryResolver.Matches</c>.
+    /// <c>{codeNodePath → MeshNode.LastModified.UtcTicks}</c> at compile time
+    /// (same value convention as <c>NodeTypeDefinition.CompiledSources</c>).
+    /// Lets the release UI navigate to every source file as-of this release.
+    /// Partitioned from the compiler's combined source set by matching against
+    /// the NodeType's Tests queries — see <c>CodeQueryResolver.Matches</c>.
     /// </summary>
     public IReadOnlyDictionary<string, long>? SourceVersions { get; init; }
 

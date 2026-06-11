@@ -137,6 +137,19 @@ node, its version bumps. The mismatch against the snapshot marks the NodeType
 dirty and triggers a recompile automatically — you never invalidate a cache by
 hand.
 
+### Source and test queries — and naming them
+
+Which Code nodes feed a compile is declared on `NodeTypeDefinition.Sources` /
+`Tests` as mesh queries (defaults: `namespace:Source scope:subtree` /
+`namespace:Test scope:subtree` — the conventional sibling folders). Each entry
+may carry an optional `name=` prefix, e.g.
+`"shared=@SocialMedia/Post/Source/Platform"`. The name is display-only: the
+NodeType side menu groups the resolved files under it (unnamed entries land in
+the default `src` / `test` group), while the compiler strips the prefix and
+behaves identically. `CodeQueryResolver` is the single expansion/grouping
+implementation, so the files shown in the GUI are exactly the files that
+compile.
+
 ---
 
 ## Watching compile progress
@@ -197,6 +210,7 @@ Releases are MeshNodes at `{nodeTypePath}/Release/{version}`, with content type
 | `FrameworkVersion` | The MeshWeaver version this release was built against. |
 | `AssemblyPath` / `PdbPath` | The compiled DLL on disk — stable per `(NodeType, Version)`, never deleted while any ALC may still hold it. |
 | `Status` | `Succeeded` (loadable, candidate for "active release") or `Failed` (kept as history; the previous succeeded release stays active). |
+| `SourceVersions` / `TestVersions` | `{codeNodePath → LastModified.UtcTicks}` snapshots of the source and test files that went into the release — the release page renders them as navigable lists, so every release knows exactly which file versions it was built from. |
 
 `NodeTypeDefinition.LatestReleasePath` always points at the most recent release;
 the full release history is the set of `Release/*` children.

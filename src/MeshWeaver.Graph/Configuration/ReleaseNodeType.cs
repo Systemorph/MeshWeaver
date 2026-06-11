@@ -45,5 +45,6 @@ public static class ReleaseNodeType
             .AddMeshDataSource(source => source
                 .WithContentType<NodeTypeRelease>())
             .AddDefaultLayoutAreas()
+            .AddReleaseViews()
     };
 }
