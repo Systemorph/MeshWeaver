@@ -3,6 +3,7 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Persistence;
 
@@ -33,9 +34,13 @@ public sealed class PersistenceService : IStorageAdapter
 {
     private readonly IReadOnlyList<IPartitionStorageProvider> _allOrdered;
     private readonly IReadOnlyList<IPartitionStorageProvider> _writable;
+    private readonly ILogger<PersistenceService>? _logger;
 
-    public PersistenceService(IEnumerable<IPartitionStorageProvider> providers)
+    public PersistenceService(
+        IEnumerable<IPartitionStorageProvider> providers,
+        ILogger<PersistenceService>? logger = null)
     {
+        _logger = logger;
         // Specific (fixed-namespace) providers iterate first so a /Doc/...
         // path lands on EmbeddedResource before any wildcard gets asked.
         // Within bands, registration order is preserved.
@@ -86,7 +91,18 @@ public sealed class PersistenceService : IStorageAdapter
     /// </summary>
     public IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options)
         => _writable
-            .Select(p => p.Adapter.Write(node, options))
+            .Select(p => p.Adapter.Write(node, options)
+                // Claim diagnostics: which provider actually persisted the node.
+                // Debug-level — flip MeshWeaver...PersistenceService to Debug to
+                // see where a write lands (essential when a wrong provider claims
+                // a path and the node "saves" into a non-durable store).
+                .Do(n =>
+                {
+                    if (n is not null)
+                        _logger?.LogDebug(
+                            "[Persistence] write {Path} claimed by {Provider} (adapter {Adapter})",
+                            node.Path, p.GetType().Name, p.Adapter.GetType().Name);
+                }))
             .Concat()
             .Where(n => n is not null)
             .Take(1)

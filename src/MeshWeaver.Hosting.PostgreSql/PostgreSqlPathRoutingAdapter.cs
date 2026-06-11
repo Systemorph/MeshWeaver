@@ -194,6 +194,12 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
             : Observable.Return<MeshNode?>(null);
 
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
+        // The null emission is the try-then-claim DECLINE signal: PersistenceService
+        // walks writable providers in priority order and takes the first non-null;
+        // when every provider declines it throws "no writable storage provider
+        // accepted the node" (the fail-closed aggregate). Declining here — instead
+        // of throwing — lets lower-priority providers claim paths PG doesn't route
+        // (invalid partition segments). Still NEVER creates a schema.
         => RouteWrite<MeshNode?>(node.Path, a => a.Write(node, options), null);
 
     public IObservable<string> Delete(string path)
