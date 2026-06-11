@@ -1,0 +1,17 @@
+﻿{
+    "id":  "2024-RealEstate",
+    "namespace":  "PensionFund/BalanceSheetEntry",
+    "name":  "RealEstate 2024",
+    "nodeType":  "PensionFund/BalanceSheetEntry",
+    "category":  "Entries",
+    "description":  "RealEstate in 2024: CHF 200 m",
+    "icon":  "\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027 viewBox=\u00270 0 24 24\u0027 fill=\u0027none\u0027 stroke=\u0027currentColor\u0027 stroke-width=\u00272\u0027\u003e\u003cpath d=\u0027M4 4h16v16H4z\u0027/\u003e\u003cpath d=\u0027M4 10h16M10 4v16\u0027/\u003e\u003c/svg\u003e",
+    "isPersistent":  true,
+    "content":  {
+                    "$type":  "BalanceSheetEntry",
+                    "position":  "PensionFund/Position/RealEstate",
+                    "year":  "PensionFund/Year/2024",
+                    "currency":  "PensionFund/Currency/CHF",
+                    "amount":  200
+                }
+}

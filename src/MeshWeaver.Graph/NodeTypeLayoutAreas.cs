@@ -68,11 +68,13 @@ public static class NodeTypeLayoutAreas
         => configuration
             .AddDefaultLayoutAreas()
             .AddNodeTypeView()
-            .AddLayout(layout => layout.WithDefaultArea(SearchArea));
+            .AddLayout(layout => layout.WithDefaultArea(OverviewArea));
 
     /// <summary>
     /// Adds the NodeType views to the hub's layout for NodeType nodes.
-    /// Uses the standard MeshNodeLayoutAreas.Search with NodeTypeCatalogMode to dynamically query instances.
+    /// Every primary area (Overview, Configuration, Releases, Search) renders inside the
+    /// shared <see cref="Shell"/> — one side menu with the type's concerns (source/test
+    /// trees grouped by query name, releases, instances, related types) framing the content.
     /// Includes UCR areas ($Data, $Schema, $Model) for unified content references.
     /// Note: $Content is registered by ContentCollectionsExtensions.AddContentCollections.
     /// </summary>
@@ -81,8 +83,7 @@ public static class NodeTypeLayoutAreas
             .Set(new NodeTypeCatalogMode())  // Enable NodeType catalog mode
             .AddLayout(layout => layout
                 .WithDefaultArea(OverviewArea)
-                .WithView(MeshNodeLayoutAreas.OverviewArea, ListOverview)  // Override default Overview for listings
-                .WithView(SearchArea, MeshNodeLayoutAreas.Search)  // Use standard search
+                .WithView(SearchArea, Search)  // standard instance search, wrapped in the shell
                 .WithView(OverviewArea, Overview)
                 .WithView(ConfigurationArea, Configuration)
                 .WithView(HubConfigViewArea, HubConfigView)
@@ -176,85 +177,249 @@ public static class NodeTypeLayoutAreas
     }
 
     /// <summary>
-    /// List overview for NodeType nodes - used in search results and listings.
+    /// Shared shell for every primary NodeType area: a horizontal splitter with the
+    /// type's side menu (Overview / Configuration / source &amp; test trees / Releases /
+    /// Instances / Related) on the left and the area's content on the right. One menu
+    /// built from one stream combination — every area shows the same, fully populated
+    /// navigation (the previous per-area menus passed nulls and rendered empty
+    /// Sources/Tests sections on some pages).
     /// </summary>
-    [Browsable(false)]
-    public static IObservable<UiControl?> ListOverview(LayoutAreaHost host, RenderingContext _)
+    private static UiControl Shell(
+        LayoutAreaHost host,
+        Func<LayoutAreaHost, RenderingContext, IObservable<UiControl?>> mainContent)
     {
-        return host.Workspace.GetMeshNodeStream().Select(node =>
-        {
-            var typeDef = node?.Content as NodeTypeDefinition;
-            return host.BuildNodeTypeDetailsContent(node, typeDef);
-        });
+        var hubAddress = host.Hub.Address;
+        var hubPath = hubAddress.ToString();
+
+        var sourceGroupsStream = GetCodeGroupsStream(host, tests: false);
+        var testGroupsStream = GetCodeGroupsStream(host, tests: true);
+        var nodeTypesStream = QueryNodesStream(host,
+            $"path:{hubPath} nodeType:NodeType scope:descendants");
+        var agentsStream = QueryNodesStream(host,
+            $"path:{hubPath} nodeType:Agent scope:descendants");
+
+        return Controls.Splitter
+            .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%").WithHeight("calc(100vh - 100px)"))
+            .WithView(
+                (h, c) => GetNodeStream(host)
+                    .CombineLatest(sourceGroupsStream, testGroupsStream, nodeTypesStream, agentsStream)
+                    .Select(tuple =>
+                    {
+                        var (node, sourceGroups, testGroups, nodeTypes, agents) = tuple;
+                        if (node == null)
+                            return RenderLoading("Loading...");
+                        return BuildSideMenu(hubAddress, node, sourceGroups, testGroups, nodeTypes, agents);
+                    }),
+                skin => skin.WithSize("280px").WithMin("200px").WithMax("400px").WithCollapsible(true)
+            )
+            .WithView(
+                (h, c) => mainContent(h, c),
+                skin => skin.WithSize("*")
+            );
     }
 
     /// <summary>
-    /// Builds details content for NodeType nodes with ShowChildrenInDetails support.
+    /// Resolves the NodeType's Sources or Tests into named groups: each
+    /// <see cref="CodeQueryGroup"/> (from the <c>name=</c> prefix, default
+    /// <c>src</c>/<c>test</c>) paired with the live query results for its queries.
+    /// Re-resolves whenever the definition changes, so renames/new queries appear
+    /// without a reload.
     /// </summary>
-    private static UiControl BuildNodeTypeDetailsContent(this LayoutAreaHost host, MeshNode? node, NodeTypeDefinition? typeDef)
+    private static IObservable<IReadOnlyList<(CodeQueryGroup Group, IReadOnlyList<MeshNode> Nodes)>> GetCodeGroupsStream(
+        LayoutAreaHost host, bool tests)
     {
-        // Delegate to the shared BuildDetailsContent which now uses a gear icon
-        return host.BuildDetailsContent(node, typeDef);
-    }
-
-    /// <summary>
-    /// Renders the Overview area for a NodeType.
-    /// Shows the markdown Description from NodeTypeDefinition, followed by
-    /// the children (instances) of this type with a search bar.
-    /// </summary>
-    public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext ctx)
-    {
-        var definitionStream = GetNodeStream(host);
-
-        return definitionStream.Select(node =>
-        {
-            var typeDef = node?.Content as NodeTypeDefinition;
-
-            var outer = Controls.Stack.WithWidth("100%");
-
-            // Header
-            var content = Controls.Stack.WithWidth("100%")
-                .WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host, typeDef));
-            content = content.WithView(MeshNodeLayoutAreas.BuildHeader(host, node, false));
-
-            // Compile-state banner + Compile button — visible WHENEVER the
-            // NodeType has Sources that participate in compilation. Bound to
-            // NodeTypeDefinition.IsDirty (set by InstallSourcesWatcher) +
-            // CompilationStatus / CompilationError (set by the compile
-            // pipeline). One panel covers the three states the user cares
-            // about: up-to-date, dirty (needs compile), error.
-            content = content.WithView(BuildCompileStatusPanel(host, typeDef));
-
-            // Markdown Description
-            if (!string.IsNullOrEmpty(typeDef?.Description))
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
+        return GetNodeStream(host)
+            .Select(node =>
             {
-                content = content.WithView(Controls.Markdown(typeDef.Description));
-            }
+                if (node == null || meshQuery == null)
+                    return Observable.Return<IReadOnlyList<(CodeQueryGroup, IReadOnlyList<MeshNode>)>>([]);
+                var def = node.Content as NodeTypeDefinition;
+                var groups = tests
+                    ? CodeQueryResolver.GroupAll(def?.Tests, CodeQueryResolver.DefaultTests,
+                        node.Path, CodeQueryResolver.DefaultTestGroupName)
+                    : CodeQueryResolver.GroupAll(def?.Sources, CodeQueryResolver.DefaultSources,
+                        node.Path, CodeQueryResolver.DefaultSourceGroupName);
+                if (groups.Count == 0)
+                    return Observable.Return<IReadOnlyList<(CodeQueryGroup, IReadOnlyList<MeshNode>)>>([]);
+                var streams = groups.Select(g =>
+                    RunQueries(meshQuery, g.ExpandedQueries).Select(nodes => (Group: g, Nodes: nodes)));
+                return Observable.CombineLatest(streams)
+                    .Select(list => (IReadOnlyList<(CodeQueryGroup, IReadOnlyList<MeshNode>)>)list.ToList());
+            })
+            .Switch();
+    }
 
-            outer = outer.WithView(content);
+    /// <summary>
+    /// Live query stream that degrades to an empty list on error (logged at Warning so
+    /// silent timeouts surface in test output) — one bad query must not blank the menu.
+    /// </summary>
+    private static IObservable<IReadOnlyList<MeshNode>> QueryNodesStream(LayoutAreaHost host, string query)
+    {
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
+        if (meshQuery == null)
+            return Observable.Return<IReadOnlyList<MeshNode>>([]);
+        var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(NodeTypeLayoutAreas));
+        return meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Select(change => (IReadOnlyList<MeshNode>)change.Items)
+            .Catch<IReadOnlyList<MeshNode>, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "Query '{Query}' failed; falling back to empty list", query);
+                return Observable.Return((IReadOnlyList<MeshNode>)[]);
+            });
+    }
 
-            // Children — use MeshSearch directly (ChildrenArea is not registered for NodeType hubs)
-            var hubPath = host.Hub.Address.ToString();
-            outer = outer.WithView(
-                Controls.Stack
-                    .WithWidth("100%")
-                    .WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host, typeDef) + " margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--neutral-stroke-rest);")
-                    .WithView(Controls.MeshSearch
-                        .WithHiddenQuery(typeDef?.DefaultNamespace != null
-                            ? $"nodeType:{hubPath} namespace:{typeDef.DefaultNamespace}"
-                            : $"nodeType:{hubPath} namespace:{hubPath} scope:descendants")
-                        .WithShowSearchBox(false)
-                        .WithShowEmptyMessage(false)
-                        .WithShowLoadingIndicator(false)
-                        .WithRenderMode(MeshSearchRenderMode.Grouped)
-                        .WithSectionCounts(true)
-                        .WithItemLimit(50)
-                        .WithMaxRows(3)
-                        .WithCollapsibleSections(true)
-                        .WithCreateHref(BuildCreateHref(hubPath, typeDef))));
+    /// <summary>
+    /// Renders the Overview area for a NodeType — the landing page. Inside the shared
+    /// <see cref="Shell"/>: compile status, the markdown Description, a Configuration
+    /// summary, the named source/test queries, and the latest three releases with a
+    /// link to the full release history.
+    /// </summary>
+    public static UiControl Overview(LayoutAreaHost host, RenderingContext ctx)
+        => Shell(host, OverviewContent);
 
-            return (UiControl?)outer;
-        });
+    private static IObservable<UiControl?> OverviewContent(LayoutAreaHost host, RenderingContext ctx)
+    {
+        var hubAddress = host.Hub.Address;
+        var hubPath = hubAddress.ToString();
+
+        // Seeded with empty so the overview renders immediately and fills in the
+        // releases section when the query result lands (subscribe-all-upfront).
+        var releasesStream = QueryNodesStream(host,
+                $"namespace:{hubPath}/Release nodeType:{ReleaseNodeType.NodeType}")
+            .StartWith((IReadOnlyList<MeshNode>)[]);
+
+        return GetNodeStream(host)
+            .CombineLatest(releasesStream)
+            .Select(tuple =>
+            {
+                var (node, releases) = tuple;
+                if (node == null)
+                    return RenderLoading("Loading...");
+                var typeDef = node.Content as NodeTypeDefinition;
+
+                var content = Controls.Stack.WithWidth("100%")
+                    .WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host, typeDef)
+                        + " padding-top: 8px; padding-bottom: 32px; gap: 8px; overflow-y: auto; height: 100%;");
+                content = content.WithView(MeshNodeLayoutAreas.BuildHeader(host, node, false));
+
+                // Compile-state banner + Compile button — the "ability to compile"
+                // affordance on the landing page. Bound to IsDirty / CompilationStatus.
+                content = content.WithView(BuildCompileStatusPanel(host, typeDef));
+
+                // Markdown description from the mesh node's NodeTypeDefinition.
+                if (!string.IsNullOrEmpty(typeDef?.Description))
+                    content = content.WithView(Controls.Markdown(typeDef.Description));
+
+                content = content.WithView(BuildConfigurationSection(hubAddress, node, typeDef));
+                content = content.WithView(BuildQueriesSection("Source queries",
+                    CodeQueryResolver.GroupAll(typeDef?.Sources, CodeQueryResolver.DefaultSources,
+                        node.Path, CodeQueryResolver.DefaultSourceGroupName)));
+                content = content.WithView(BuildQueriesSection("Test queries",
+                    CodeQueryResolver.GroupAll(typeDef?.Tests, CodeQueryResolver.DefaultTests,
+                        node.Path, CodeQueryResolver.DefaultTestGroupName)));
+                content = content.WithView(BuildLatestReleasesSection(hubAddress, releases));
+
+                return (UiControl?)content;
+            });
+    }
+
+    private static UiControl BuildSectionHeader(string title, string? href = null, string? linkLabel = null)
+    {
+        var header = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("justify-content: space-between; align-items: baseline; margin-top: 24px; " +
+                       "padding-bottom: 6px; border-bottom: 1px solid var(--neutral-stroke-divider);")
+            .WithView(Controls.H3(title).WithStyle("margin: 0;"));
+        if (href != null)
+            header = header.WithView(Controls.Markdown($"[{linkLabel ?? "More"} →]({href})")
+                .WithStyle("font-size: 13px;"));
+        return header;
+    }
+
+    /// <summary>
+    /// Configuration summary on the Overview: the notable settings as read-only rows
+    /// plus a link to the full Configuration area where they're edited.
+    /// </summary>
+    private static UiControl BuildConfigurationSection(object hubAddress, MeshNode node, NodeTypeDefinition? def)
+    {
+        var configHref = new LayoutAreaReference(ConfigurationArea).ToHref(hubAddress);
+        var section = Controls.Stack.WithWidth("100%")
+            .WithView(BuildSectionHeader("Configuration", configHref, "Open configuration"));
+
+        var hasAny = false;
+        void AddRow(ref LayoutStackControl s, string label, string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return;
+            s = (LayoutStackControl)s.WithView(BuildInfoRow(label, value!));
+            hasAny = true;
+        }
+
+        var stack = section;
+        AddRow(ref stack, "Default Namespace", def?.DefaultNamespace);
+        AddRow(ref stack, "Children Query", def?.ChildrenQuery);
+        AddRow(ref stack, "Storage Table", def?.StorageTable);
+        AddRow(ref stack, "Owns Partition", def?.OwnsPartition == true ? "Yes" : null);
+        AddRow(ref stack, "Page Max Width", def?.PageMaxWidth);
+        AddRow(ref stack, "Dependencies", def?.Dependencies is { Count: > 0 } deps ? string.Join(", ", deps) : null);
+        AddRow(ref stack, "Configuration Lambda", string.IsNullOrWhiteSpace(def?.Configuration) ? null : "Defined");
+
+        if (!hasAny)
+            stack = (LayoutStackControl)stack.WithView(Controls.Body("All settings at their defaults.")
+                .WithStyle("color: var(--neutral-foreground-hint); font-style: italic; padding: 8px 0;"));
+        return stack;
+    }
+
+    /// <summary>
+    /// Lists the named source/test queries exactly as configured — one line per query,
+    /// grouped label first (<c>src — `namespace:Source scope:subtree`</c>).
+    /// </summary>
+    private static UiControl BuildQueriesSection(string title, IReadOnlyList<CodeQueryGroup> groups)
+    {
+        var section = Controls.Stack.WithWidth("100%")
+            .WithView(BuildSectionHeader(title));
+
+        if (groups.Count == 0)
+        {
+            return section.WithView(Controls.Body("None configured.")
+                .WithStyle("color: var(--neutral-foreground-hint); font-style: italic; padding: 8px 0;"));
+        }
+
+        foreach (var group in groups)
+            foreach (var raw in group.RawQueries)
+                section = section.WithView(
+                    Controls.Markdown($"**{group.Name}** — `{raw}`")
+                        .WithStyle("padding: 2px 0;"));
+        return section;
+    }
+
+    /// <summary>
+    /// The latest three releases (newest first) with a link to the full Releases area.
+    /// </summary>
+    private static UiControl BuildLatestReleasesSection(object hubAddress, IReadOnlyList<MeshNode> releaseNodes)
+    {
+        var releasesHref = new LayoutAreaReference(ReleasesArea).ToHref(hubAddress);
+        var section = Controls.Stack.WithWidth("100%")
+            .WithView(BuildSectionHeader("Latest releases", releasesHref, "All releases"));
+
+        var latest = releaseNodes
+            .Select(n => (Node: n, Release: n.Content as NodeTypeRelease))
+            .OrderByDescending(t => t.Release?.CreatedAt ?? t.Node.CreatedDate)
+            .Take(3)
+            .ToList();
+
+        if (latest.Count == 0)
+        {
+            return section.WithView(Controls.Body(
+                    "No releases yet — use the Compile button above to create the first one.")
+                .WithStyle("color: var(--neutral-foreground-hint); font-style: italic; padding: 8px 0;"));
+        }
+
+        foreach (var (releaseNode, release) in latest)
+            section = section.WithView(BuildReleaseRow(releaseNode, release));
+        return section;
     }
 
     /// <summary>

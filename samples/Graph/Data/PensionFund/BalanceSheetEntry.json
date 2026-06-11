@@ -1,0 +1,18 @@
+﻿{
+    "id":  "BalanceSheetEntry",
+    "namespace":  "PensionFund",
+    "name":  "Balance Sheet Entry",
+    "nodeType":  "NodeType",
+    "category":  "Types",
+    "description":  "Atomic balance-sheet fact: the value of one Position in one Year. Entries are mesh nodes - no Id property; dimension columns store dimension node PATHS.",
+    "icon":  "\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027 viewBox=\u00270 0 24 24\u0027 fill=\u0027none\u0027 stroke=\u0027currentColor\u0027 stroke-width=\u00272\u0027\u003e\u003cpath d=\u0027M4 4h16v16H4z\u0027/\u003e\u003cpath d=\u0027M4 10h16M10 4v16\u0027/\u003e\u003c/svg\u003e",
+    "isPersistent":  true,
+    "content":  {
+                    "$type":  "NodeTypeDefinition",
+                    "id":  "BalanceSheetEntry",
+                    "namespace":  "PensionFund",
+                    "displayName":  "Balance Sheet Entry",
+                    "iconName":  "DocumentTable",
+                    "configuration":  "config =\u003e config.WithContentType\u003cBalanceSheetEntry\u003e().AddDefaultLayoutAreas()"
+                }
+}

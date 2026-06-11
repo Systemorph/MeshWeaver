@@ -92,7 +92,11 @@ public class ScopeCodeGenerator : IIncrementalGenerator
 
         var identityType = interfaceType.TypeArguments[0];
         var stateType = interfaceType.TypeArguments[1]; builder.AppendLine($"using {typeof(Lazy<>).Namespace};");
-        builder.AppendLine($"namespace {namespaceName};");
+        // Scope interfaces compiled from mesh-node Source files live in the
+        // global namespace (top-level types, no namespace declaration) — emit
+        // the namespace line only when there is one.
+        if (!typeSymbol.ContainingNamespace.IsGlobalNamespace)
+            builder.AppendLine($"namespace {namespaceName};");
         builder.AppendLine();
         builder.AppendLine("/// <inheritdoc/>");
         builder.AppendLine($"public partial class {className} : MeshWeaver.BusinessRules.ScopeBase<{typeSymbol}, {identityType}, {stateType}>, {typeSymbol}");

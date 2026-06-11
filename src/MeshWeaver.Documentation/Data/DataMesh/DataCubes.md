@@ -1,15 +1,15 @@
 ---
-Name: Data Cubes — Dimensions, FX Conversion, Slice & Dice
+Name: Data Cubes — A Pension Fund Balance Sheet
 Category: Documentation
-Description: Model a simple data cube with dimension attributes — dimensions as mesh nodes, FX conversion to a group currency, the Edit form and MeshNodePicker dialogs, and live slice-and-dice pivot tables and charts.
+Description: Model a data cube where everything is a mesh node — dimension types with instances, facts without ids, computed positions with formulas evaluated by business-rules scopes, and live slice-and-dice pivot tables and charts.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 4.5v9L12 20l-8-4.5v-9L12 2z"/><path d="M12 2v9m0 0l8-4.5M12 11l-8-4.5M12 20v-9"/></svg>
 ---
 
 # Data Cubes
 
-A **data cube** is the simplest useful analytics shape: facts keyed by a handful of **dimensions**, carrying one or more **measures**. In MeshWeaver the whole cube is mesh content — the fact type is a Code node, the dimensions are mesh nodes, and the analytics are layout areas you can open, edit, and pick from like any other node.
+A **data cube** is the simplest useful analytics shape: facts keyed by a handful of **dimensions**, carrying one or more **measures**. In MeshWeaver the whole cube is mesh content — the dimension *types* are NodeType nodes, the dimension *members* are mesh nodes, the facts are mesh nodes, and even the *formulas* are data on dimension nodes.
 
-This page builds a complete one — **LineOfBusiness × Year × Currency → Amount**, with FX conversion into the group currency (CHF) — and renders every claim live. The working node lives in the FutuRe sample; every number below is pinned by `FxCubeExampleTest` in `test/MeshWeaver.Documentation.Test`.
+This page builds a complete one: the balance sheet of **Helvetia Vorsorge**, a fictional Swiss pension fund — **Position × Year × Currency → Amount**, with computed positions like *Total Assets* and the *Funding Ratio* modelled **out of** the atomic positions and evaluated by business-rules scopes. The working node set ships in `samples/Graph/Data/PensionFund/`; every number below is pinned by `PensionFundExampleTest` in `test/MeshWeaver.Documentation.Test`.
 
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 300" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif">
   <defs>
@@ -19,74 +19,222 @@ This page builds a complete one — **LineOfBusiness × Year × Currency → Amo
   <path d="M120 90l100 35v80l-100-35v-80z" fill="#3949ab"/>
   <path d="M220 125l80-45v80l-80 45v-80z" fill="#283593"/>
   <text x="200" y="72" text-anchor="middle" font-size="11" fill="#fff">Year</text>
-  <text x="150" y="160" text-anchor="middle" font-size="11" fill="#c5cae9" transform="rotate(19,150,160)">Line of Business</text>
+  <text x="150" y="160" text-anchor="middle" font-size="11" fill="#c5cae9" transform="rotate(19,150,160)">Position</text>
   <text x="268" y="160" text-anchor="middle" font-size="11" fill="#9fa8da" transform="rotate(-29,268,160)">Currency</text>
   <line x1="320" y1="140" x2="420" y2="140" stroke="#f57c00" stroke-width="2" marker-end="url(#dc-arr)"/>
-  <text x="370" y="130" text-anchor="middle" font-size="10" fill="#f57c00">FX → CHF</text>
+  <text x="370" y="130" text-anchor="middle" font-size="10" fill="#f57c00">scopes</text>
   <rect x="430" y="40" width="300" height="60" rx="10" fill="#1b5e20"/>
-  <text x="580" y="65" text-anchor="middle" font-size="12" font-weight="bold" fill="#fff">Slice</text>
-  <text x="580" y="84" text-anchor="middle" font-size="10" fill="#a5d6a7">group one dimension, total the measure</text>
+  <text x="580" y="65" text-anchor="middle" font-size="12" font-weight="bold" fill="#fff">Atomic</text>
+  <text x="580" y="84" text-anchor="middle" font-size="10" fill="#a5d6a7">value comes from a fact entry node</text>
   <rect x="430" y="115" width="300" height="60" rx="10" fill="#0d47a1"/>
-  <text x="580" y="140" text-anchor="middle" font-size="12" font-weight="bold" fill="#fff">Dice</text>
-  <text x="580" y="159" text-anchor="middle" font-size="10" fill="#90caf9">fix members → a smaller cube</text>
+  <text x="580" y="140" text-anchor="middle" font-size="12" font-weight="bold" fill="#fff">Sum</text>
+  <text x="580" y="159" text-anchor="middle" font-size="10" fill="#90caf9">Σ weight · value(component position)</text>
   <rect x="430" y="190" width="300" height="60" rx="10" fill="#4a148c"/>
-  <text x="580" y="215" text-anchor="middle" font-size="12" font-weight="bold" fill="#fff">Pivot & Chart</text>
-  <text x="580" y="234" text-anchor="middle" font-size="10" fill="#ce93d8">the same grouping, rendered live</text>
+  <text x="580" y="215" text-anchor="middle" font-size="12" font-weight="bold" fill="#fff">Ratio</text>
+  <text x="580" y="234" text-anchor="middle" font-size="10" fill="#ce93d8">numerator ÷ denominator — the funding ratio</text>
 </svg>
 
 ## The representation — everything is a mesh node
 
-The cube ships exactly like every domain in the samples (`samples/Graph/Data/FutuRe/`): a **NodeType node** declares the type, its **`Source/*.cs` files are Code nodes** compiled at runtime, and **dimension members are mesh nodes** of their own:
+The cube ships exactly like every domain in the samples: each **dimension gets its own NodeType node**, its members are mesh nodes of that type, the **`Source/*.cs` files are Code nodes** compiled at runtime, and the facts are mesh nodes too:
 
 ```text
-FutuRe/
-├── FxCube.json                    ← NodeType node ("config => config.ConfigureFxCube()")
-├── FxCube/Source/
-│   ├── FxCube.cs                  ← Code node: fact record, FX engine, sample facts, hub config
-│   └── FxCubeLayoutAreas.cs       ← Code node: pivot / chart / Edit / dialog views
-├── LineOfBusiness.json            ← the dimension's NodeType node
-├── LineOfBusiness/Source/…        ← the dimension's Code nodes
-└── AmericasIns/LineOfBusiness/
-    ├── AGRICULTURE.json           ← a dimension MEMBER — a mesh node
-    └── …
+PensionFund/
+├── Position.json                   ← the dimension's NodeType node
+├── Position/
+│   ├── Source/Position.cs          ← Code node: the dimension record + formula model
+│   ├── Cash.json … FreeFunds.json  ← 15 atomic position MEMBERS — mesh nodes
+│   └── TotalAssets.json …          ← 6 COMPUTED positions — formulas as node content
+├── Year.json · Year/2024.json …    ← reporting years
+├── Currency.json · Currency/CHF.json …
+├── BalanceSheetEntry.json
+├── BalanceSheetEntry/2024-Cash.json …   ← 30 facts — one node per Position × Year
+└── BalanceSheet.json               ← "config => config.ConfigureBalanceSheet()"
+    └── BalanceSheet/Source/        ← scopes, data loader, layout areas
 ```
 
-Open `FutuRe/FxCube` in a portal with the samples loaded and the views below are its layout areas.
+There is **no Id property anywhere** — a mesh node's identity is its **path**. A fact references its dimensions by *their* paths, and a formula references its operand positions by path. Open `PensionFund/BalanceSheet` in a portal with the samples loaded and the views below are its layout areas.
 
-## 1. Model the fact — dimension attributes
+## 1. Dimension types host their instances
+
+Each dimension is declared by a NodeType node whose `Source/` holds the content record. The Position dimension is the interesting one — it carries the **formula model**:
 
 ```csharp
-public record FxCubeFact
+public enum BalanceSheetSide { Assets, Liabilities, Computed }
+public enum PositionAggregation { Atomic, Sum, Ratio }
+
+public record PositionComponent
 {
-    [Key]
-    public string Id { get; init; } = string.Empty;          // "Property-2024-EUR"
+    [MeshNode("nodeType:PensionFund/Position")]   // ← references another Position NODE
+    public string Position { get; init; } = string.Empty;
+    public double Weight { get; init; } = 1;       //   +1 adds, −1 subtracts
+}
 
-    [Dimension(typeof(string), nameof(LineOfBusiness))]
-    public string LineOfBusiness { get; init; } = string.Empty;
+public record Position
+{
+    public BalanceSheetSide Side { get; init; }
+    public PositionAggregation Aggregation { get; init; }
+    public int Order { get; init; }
+    public PositionComponent[]? Components { get; init; }   // Sum operands
 
-    [Dimension(typeof(string), nameof(Year))]
-    public string Year { get; init; } = string.Empty;
-
-    [Dimension(typeof(string), nameof(Currency))]
-    public string Currency { get; init; } = string.Empty;
-
-    [DisplayFormat(DataFormatString = "{0:N0}")]
-    public double Amount { get; init; }                       // local currency
+    [MeshNode("nodeType:PensionFund/Position")]
+    public string? Numerator { get; init; }                  // Ratio
+    [MeshNode("nodeType:PensionFund/Position")]
+    public string? Denominator { get; init; }
 }
 ```
 
-The `[Dimension]` attributes do double duty: the **pivot builder** discovers these columns as groupable fields, and the **Edit form** renders them as dropdowns. See [Data Modeling](/Doc/DataMesh/DataModeling) for typed dimension records (`[Dimension<Country>]`) backed by a data source.
+The `[MeshNode("query")]` attribute does double duty: it documents that the property holds a **node path**, and the Edit form renders it as the searchable **MeshNodePicker** over exactly the nodes the query matches — here, the members of the Position dimension.
 
-## 2. Dimensions are mesh nodes
+## 2. Formulas are data on dimension nodes
 
-A dimension member is a node — `FutuRe/AmericasIns/LineOfBusiness/AGRICULTURE` is a `FutuRe/LineOfBusiness` node with content, description, governance, and its own page. That means *picking a dimension member is picking a node*: put `[MeshNode]` on a path-valued property and the Edit form renders the searchable **MeshNodePicker** over the dimension nodes:
+Computed positions are ordinary Position nodes whose content holds the formula. *Pension Capital* — the actuarial obligation — is the sum of three other positions:
+
+```json
+{
+  "id": "PensionCapital",
+  "namespace": "PensionFund/Position",
+  "nodeType": "PensionFund/Position",
+  "content": {
+    "$type": "Position",
+    "side": "Computed",
+    "aggregation": "Sum",
+    "components": [
+      { "position": "PensionFund/Position/ActiveMembersCapital", "weight": 1 },
+      { "position": "PensionFund/Position/PensionersCapital",   "weight": 1 },
+      { "position": "PensionFund/Position/TechnicalProvisions", "weight": 1 }
+    ]
+  }
+}
+```
+
+*Available Assets* uses **negative weights** (total assets minus short-term obligations), and the *Funding Ratio* is a `Ratio` position dividing it by *Pension Capital* — the statutory solvency measure of a Swiss pension fund (BVV2 Art. 44). Editing a formula is editing a node: add a component in the GUI and every report recomputes.
+
+## 3. The fact — no Id, dimension columns are node paths
 
 ```csharp
-public record FxCubeFactDraft
+public record BalanceSheetEntry
 {
-    [MeshNode("nodeType:FutuRe/LineOfBusiness")]      // ← picker over the dimension NODES
-    [Display(Name = "Line of Business (mesh node)")]
-    public string? LineOfBusinessPath { get; init; }   //   stores the node PATH
+    [MeshNode("nodeType:PensionFund/Position")]
+    public string Position { get; init; } = string.Empty;   // a node PATH
+
+    [MeshNode("nodeType:PensionFund/Year")]
+    public string Year { get; init; } = string.Empty;
+
+    [MeshNode("nodeType:PensionFund/Currency")]
+    public string Currency { get; init; } = string.Empty;
+
+    [DisplayFormat(DataFormatString = "{0:N1}")]
+    public double Amount { get; init; }                      // CHF m
+}
+```
+
+Thirty entries — 15 atomic positions × 2 years — make up the sample balance sheet, and both years balance by construction (2024: 1,060.0 · 2025: 1,142.0).
+
+## 4. Business rules — scopes evaluate any position
+
+The evaluation engine is one interface from the **business-rules framework** (`MeshWeaver.BusinessRules`): a scope per (position, year), composing other scopes for its operands. The scope *generator* emits the implementations at build time — for sample Code nodes, the NodeType compiler runs it during dynamic compilation:
+
+```csharp
+public record PositionYear(string Position, string Year);
+
+public interface PositionValue : IScope<PositionYear, BalanceSheetStorage>
+{
+    Position Position => GetStorage().Positions[Identity.Position];
+
+    double Value => Position.Aggregation switch
+    {
+        PositionAggregation.Atomic =>
+            GetStorage().Amounts.TryGetValue((Identity.Position, Identity.Year), out var v) ? v : 0,
+
+        PositionAggregation.Sum =>
+            (Position.Components ?? [])
+                .Sum(c => c.Weight * GetScope<PositionValue>(new PositionYear(c.Position, Identity.Year)).Value),
+
+        PositionAggregation.Ratio =>
+            GetScope<PositionValue>(new PositionYear(Position.Denominator!, Identity.Year)).Value is var d && d != 0
+                ? GetScope<PositionValue>(new PositionYear(Position.Numerator!, Identity.Year)).Value / d
+                : 0,
+
+        _ => 0,
+    };
+}
+```
+
+Scope instances are **cached per identity** — *Total Assets* feeds both *Available Assets* and the balance check, yet is computed once. Registration is one line in the node's hub configuration:
+
+```csharp
+config.WithServices(services => services.AddBusinessRules(typeof(PositionValue).Assembly))
+```
+
+and any view evaluates positions through the registry:
+
+```csharp
+var registry = host.Hub.ServiceProvider.CreateScopeRegistry(storage);
+var ratio = registry.GetScope<PositionValue>(
+    new PositionYear("PensionFund/Position/FundingRatio", "PensionFund/Year/2024")).Value;   // ≈ 109.8%
+```
+
+The same recursion, runnable right here — atomic values and formulas exactly as in the sample nodes, folded the way the `PositionValue` scope does:
+
+```csharp --render PensionEvalDemo --show-code
+// The formula model: Sum positions fold weighted components, Ratio divides.
+record Component(string Position, double Weight);
+record Pos(string Agg, Component[]? Components = null, string? Num = null, string? Den = null);
+
+var amounts = new Dictionary<string, double>          // 2024 atomic facts, CHF m
+{
+    ["Cash"] = 50, ["Bonds"] = 400, ["Equities"] = 300, ["RealEstate"] = 200,
+    ["Alternatives"] = 100, ["Receivables"] = 10,
+    ["Payables"] = 15, ["AccruedLiabilities"] = 5, ["EmployerContributionReserve"] = 20,
+    ["NonTechnicalProvisions"] = 10, ["ActiveMembersCapital"] = 600,
+    ["PensionersCapital"] = 280, ["TechnicalProvisions"] = 40,
+    ["ValueFluctuationReserve"] = 80, ["FreeFunds"] = 10,
+};
+
+Component[] Sum1(params string[] ps) => ps.Select(p => new Component(p, 1)).ToArray();
+var positions = new Dictionary<string, Pos>
+{
+    ["TotalAssets"]     = new("Sum", Sum1("Cash", "Bonds", "Equities", "RealEstate", "Alternatives", "Receivables")),
+    ["PensionCapital"]  = new("Sum", Sum1("ActiveMembersCapital", "PensionersCapital", "TechnicalProvisions")),
+    ["AvailableAssets"] = new("Sum", new[] { new Component("TotalAssets", 1),
+        new Component("Payables", -1), new Component("AccruedLiabilities", -1),
+        new Component("EmployerContributionReserve", -1), new Component("NonTechnicalProvisions", -1) }),
+    ["FundingRatio"]    = new("Ratio", Num: "AvailableAssets", Den: "PensionCapital"),
+};
+
+double Value(string p) => positions.TryGetValue(p, out var pos)
+    ? pos.Agg switch
+    {
+        "Sum"   => pos.Components!.Sum(c => c.Weight * Value(c.Position)),
+        "Ratio" => Value(pos.Num!) / Value(pos.Den!),
+        _ => 0,
+    }
+    : amounts[p];                                      // Atomic: read the fact
+
+Controls.Markdown($"""
+| Computed position (2024) | Value |
+|---|---:|
+| Total Assets | {Value("TotalAssets"):N1} |
+| Pension Capital | {Value("PensionCapital"):N1} |
+| Available Assets | {Value("AvailableAssets"):N1} |
+| **Funding Ratio** | **{Value("FundingRatio"):P1}** |
+""")
+```
+
+## 5. Edit on the GUI — one call, no per-field code
+
+`host.Edit(instance)` renders the whole form from the record's attributes. In the sample, the dimension fields carry `[MeshNode]` and render node pickers; here, live from the kernel with selects:
+
+```csharp --render PensionEditDemo --show-code
+using System.ComponentModel.DataAnnotations;
+using MeshWeaver.Layout;
+
+record BalanceSheetEntryDraft
+{
+    [UiControl<SelectControl>(Options = new[] { "Cash", "Bonds", "Equities", "RealEstate" })]
+    [Display(Name = "Position")]
+    public string Position { get; init; } = "Equities";
 
     [UiControl<SelectControl>(Options = new[] { "2024", "2025" })]
     public string Year { get; init; } = "2025";
@@ -94,71 +242,25 @@ public record FxCubeFactDraft
     [UiControl<SelectControl>(Options = new[] { "CHF", "EUR", "USD" })]
     public string Currency { get; init; } = "CHF";
 
-    public double Amount { get; init; }
-}
-```
-
-Use `[Dimension<T>]` when members are typed reference data in a workspace; use `[MeshNode("query")]` when members are mesh nodes with lives of their own (pages, governance, access control). The FutuRe lines of business are the latter. Full picker options (layout, open direction, default-to-first): [Property Attributes](/Doc/GUI/Attributes).
-
-## 3. FX conversion — a pure function over the facts
-
-Local amounts convert into the group currency at **plan** (budget) or **actual** (market) rates — the same shape the full FutuRe profitability cube uses, distilled:
-
-```csharp
-public static IReadOnlyList<FxCubeFact> ConvertToGroupCurrency(
-    IEnumerable<FxCubeFact> facts, FxMode mode)
-    => facts.Select(f => f with
-        {
-            Amount = f.Amount * RateToChf(f.Currency, mode),   // CHF 1.00 · EUR .95/.93 · USD .90/.88
-            Currency = "CHF",
-        })
-        .ToList();
-```
-
-| Rates → CHF | Plan | Actual |
-|---|---|---|
-| CHF | 1.00 | 1.00 |
-| EUR | 0.95 | 0.93 |
-| USD | 0.90 | 0.88 |
-
-## 4. Edit on the GUI — one call, no per-field code
-
-`host.Edit(instance)` renders the whole form from the record's attributes. Live, from the kernel:
-
-```csharp --render FxCubeEditDemo --show-code
-using System.ComponentModel.DataAnnotations;
-using MeshWeaver.Layout;
-
-record FxCubeFactDraft
-{
-    [UiControl<SelectControl>(Options = new[] { "Property", "Casualty", "Specialty" })]
-    [Display(Name = "Line of Business")]
-    public string LineOfBusiness { get; init; } = "Property";
-
-    [UiControl<SelectControl>(Options = new[] { "2024", "2025" })]
-    public string Year { get; init; } = "2025";
-
-    [UiControl<SelectControl>(Options = new[] { "CHF", "EUR", "USD" })]
-    public string Currency { get; init; } = "EUR";
-
-    [DisplayFormat(DataFormatString = "{0:N0}")]
-    public double Amount { get; init; } = 220_000;
+    [DisplayFormat(DataFormatString = "{0:N1}")]
+    [Display(Name = "Amount (CHF m)")]
+    public double Amount { get; init; } = 340.0;
 }
 
-Mesh.Edit(new FxCubeFactDraft(), "fxCubeDraft")
+Mesh.Edit(new BalanceSheetEntryDraft(), "pensionDraft")
 ```
 
-## 5. The picker in a dialog
+## 6. The picker in a dialog
 
-Opening the same form as a **modal dialog** is one click action: build the dialog, write it to the dialog area. (In the FutuRe sample this is the `NewFactDialog` view — its draft uses the real `[MeshNode]` picker over the LineOfBusiness nodes.)
+Opening the same form as a **modal dialog** is one click action — build the dialog, write it to the dialog area. In the sample this is the `NewEntryDialog` view, whose draft uses the real `[MeshNode]` pickers over the Position / Year / Currency nodes:
 
 ```csharp
-Controls.Button("New fact…")
+Controls.Button("New balance sheet entry…")
     .WithClickAction(click =>
     {
         var dialog = Controls.Dialog(
-                click.Host.Edit(new FxCubeFactDraft(), "newFact"),
-                "New FX Cube Fact")
+                click.Host.Edit(new BalanceSheetEntryDraft(), "newEntry"),
+                "New Balance Sheet Entry")
             .WithSize("M")
             .WithClosable(true);
         click.Host.UpdateArea(DialogControl.DialogArea, dialog);   // open
@@ -169,105 +271,86 @@ Controls.Button("New fact…")
 
 Reactive dialog patterns (spinners, conditional sections, server round-trips): [Reactive Dialogs](/Doc/GUI/ReactiveDialogs).
 
-## 6. Slice & dice — the pivot table
+## 7. Slice & dice — the pivot table
 
-Rows by Line of Business, columns by Year, plan-CHF amounts — with totals. Live:
+Rows by Position, columns by Year — with totals. Live:
 
-```csharp --render FxCubePivotDemo --show-code
+```csharp --render PensionPivotDemo --show-code
 using MeshWeaver.Layout.Pivot;
 
-record Fact(string LineOfBusiness, string Year, string Currency, double Amount);
+record Entry(string Position, string Year, double Amount);
 
-var facts = new[]
+var entries = new Dictionary<string, (double Y2024, double Y2025)>
 {
-    new Fact("Property", "2024", "CHF", 100_000), new Fact("Property", "2025", "CHF", 120_000),
-    new Fact("Property", "2024", "EUR", 200_000), new Fact("Property", "2025", "EUR", 220_000),
-    new Fact("Property", "2024", "USD", 300_000), new Fact("Property", "2025", "USD", 320_000),
-    new Fact("Casualty", "2024", "CHF",  80_000), new Fact("Casualty", "2025", "CHF",  90_000),
-    new Fact("Casualty", "2024", "EUR", 160_000), new Fact("Casualty", "2025", "EUR", 170_000),
-    new Fact("Casualty", "2024", "USD", 240_000), new Fact("Casualty", "2025", "USD", 250_000),
-    new Fact("Specialty", "2024", "CHF", 50_000), new Fact("Specialty", "2025", "CHF", 60_000),
-    new Fact("Specialty", "2024", "EUR", 100_000), new Fact("Specialty", "2025", "EUR", 110_000),
-    new Fact("Specialty", "2024", "USD", 150_000), new Fact("Specialty", "2025", "USD", 160_000),
-};
+    ["Cash"] = (50, 60), ["Bonds"] = (400, 410), ["Equities"] = (300, 340),
+    ["RealEstate"] = (200, 210), ["Alternatives"] = (100, 110), ["Receivables"] = (10, 12),
+}
+.SelectMany(kvp => new[] { new Entry(kvp.Key, "2024", kvp.Value.Y2024), new Entry(kvp.Key, "2025", kvp.Value.Y2025) })
+.ToArray();
 
-double PlanRate(string ccy) => ccy switch { "EUR" => 0.95, "USD" => 0.90, _ => 1.00 };
-var planChf = facts.Select(f => f with { Amount = f.Amount * PlanRate(f.Currency), Currency = "CHF" });
-
-planChf.ToPivotGrid(pivot => pivot
-    .GroupRowsBy(f => f.LineOfBusiness)
-    .GroupColumnsBy(f => f.Year)
-    .Aggregate(f => f.Amount, agg => agg.WithFunction(AggregateFunction.Sum))
+entries.ToPivotGrid(pivot => pivot
+    .GroupRowsBy(e => e.Position)
+    .GroupColumnsBy(e => e.Year)
+    .Aggregate(e => e.Amount, agg => agg.WithFunction(AggregateFunction.Sum))
     .WithRowTotals()
     .WithColumnTotals())
 ```
 
-Re-dice it yourself: the field picker on the grid lets you drag `Currency` into rows or columns — the cube re-aggregates live.
+Re-dice it yourself: the field picker on the grid lets you drag dimensions between rows and columns — the cube re-aggregates live.
 
-## 7. Slice & dice — the charts
+## 8. Slice & dice — the charts
 
-The same grouping, charted. Stacked columns — one series per Line of Business across the years:
+The asset side, stacked by position across the years:
 
-```csharp --render FxCubeStackedDemo --show-code
+```csharp --render PensionStackedDemo --show-code
 using MeshWeaver.Layout.Chart;
 
-record Fact(string LineOfBusiness, string Year, string Currency, double Amount);
+record Entry(string Position, string Year, double Amount);
 
-var facts = new[]
+var entries = new Dictionary<string, (double Y2024, double Y2025)>
 {
-    new Fact("Property", "2024", "CHF", 100_000), new Fact("Property", "2025", "CHF", 120_000),
-    new Fact("Property", "2024", "EUR", 200_000), new Fact("Property", "2025", "EUR", 220_000),
-    new Fact("Property", "2024", "USD", 300_000), new Fact("Property", "2025", "USD", 320_000),
-    new Fact("Casualty", "2024", "CHF",  80_000), new Fact("Casualty", "2025", "CHF",  90_000),
-    new Fact("Casualty", "2024", "EUR", 160_000), new Fact("Casualty", "2025", "EUR", 170_000),
-    new Fact("Casualty", "2024", "USD", 240_000), new Fact("Casualty", "2025", "USD", 250_000),
-    new Fact("Specialty", "2024", "CHF", 50_000), new Fact("Specialty", "2025", "CHF", 60_000),
-    new Fact("Specialty", "2024", "EUR", 100_000), new Fact("Specialty", "2025", "EUR", 110_000),
-    new Fact("Specialty", "2024", "USD", 150_000), new Fact("Specialty", "2025", "USD", 160_000),
-};
+    ["Cash"] = (50, 60), ["Bonds"] = (400, 410), ["Equities"] = (300, 340),
+    ["RealEstate"] = (200, 210), ["Alternatives"] = (100, 110), ["Receivables"] = (10, 12),
+}
+.SelectMany(kvp => new[] { new Entry(kvp.Key, "2024", kvp.Value.Y2024), new Entry(kvp.Key, "2025", kvp.Value.Y2025) })
+.ToArray();
 
-double PlanRate(string ccy) => ccy switch { "EUR" => 0.95, "USD" => 0.90, _ => 1.00 };
-var planChf = facts.Select(f => f with { Amount = f.Amount * PlanRate(f.Currency) });
-
-planChf
-    .SliceBy(f => f.Year)
-    .SliceBy(f => f.LineOfBusiness)
-    .ToStackedColumnChart(g => g.Sum(f => f.Amount))
-    .WithTitle("Plan (CHF) by Year and Line of Business")
+entries
+    .SliceBy(e => e.Year)
+    .SliceBy(e => e.Position)
+    .ToStackedColumnChart(g => g.Sum(e => e.Amount))
+    .WithTitle("Assets by Year and Position (CHF m)")
 ```
 
-And the original-currency split as a pie — slicing the *unconverted* cube by Currency:
+And the 2025 asset allocation as a pie — the same chart the sample's `AssetAllocation` view renders from the scopes:
 
-```csharp --render FxCubePieDemo --show-code
+```csharp --render PensionPieDemo --show-code
 using MeshWeaver.Layout.Chart;
 
-record Fact(string Currency, double Amount);
+record Entry(string Position, double Amount);
 
-var facts = new[]
+var assets2025 = new[]
 {
-    new Fact("CHF", 500_000),     // 100+120+80+90+50+60 k
-    new Fact("EUR", 960_000),     // 200+220+160+170+100+110 k
-    new Fact("USD", 1_420_000),   // 300+320+240+250+150+160 k
+    new Entry("Bonds", 410.0), new Entry("Equities", 340.0), new Entry("RealEstate", 210.0),
+    new Entry("Alternatives", 110.0), new Entry("Cash", 60.0), new Entry("Receivables", 12.0),
 };
 
-facts
-    .SliceBy(f => f.Currency)
-    .ToPieChart(g => g.Sum(f => f.Amount))
-    .WithTitle("Local Amounts by Currency")
+assets2025
+    .SliceBy(e => e.Position)
+    .ToPieChart(g => g.Sum(e => e.Amount))
+    .WithTitle("Asset Allocation 2025 (CHF m)")
 ```
 
-## 8. The numbers — pinned by tests
+## 9. The numbers — pinned by tests
 
-Every figure this page renders is asserted in `FxCubeExampleTest` (`test/MeshWeaver.Documentation.Test`), against the same engine that ships in the sample's Code node:
+Every figure this page shows is asserted in `PensionFundExampleTest` (`test/MeshWeaver.Documentation.Test`) — evaluated through the **real generated scopes**, the same engine the sample's Code nodes compile against:
 
-| Slice | Value |
-|---|---:|
-| Local grand total | 2,880,000 |
-| Plan-CHF grand total | 2,690,000 |
-| Actual-CHF grand total | 2,642,400 |
-| Plan-CHF 2024 / 2025 | 1,288,000 / 1,402,000 |
-| Plan-CHF Property / Casualty / Specialty | 1,177,000 / 924,500 / 588,500 |
-| Dice Property × EUR, plan-CHF | 399,000 |
+| Figure | 2024 | 2025 |
+|---|---:|---:|
+| Total Assets = Balance Sheet Sum = Total Liabilities | 1,060.0 | 1,142.0 |
+| Pension Capital | 920.0 | 964.0 |
+| Available Assets | 1,010.0 | 1,084.0 |
+| **Funding Ratio** | **≈ 109.8%** | **≈ 112.4%** |
 
 ## See Also
 

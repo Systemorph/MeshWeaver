@@ -180,12 +180,18 @@ public record NodeTypeDefinition
     /// </list>
     /// Every resolved query is ANDed with <c>nodeType:Code</c>, so non-code
     /// children never leak in. Matches are de-duplicated across entries.
+    /// <para>
+    /// An entry may carry an optional <c>name=</c> prefix, e.g.
+    /// <c>"shared=@SocialMedia/Post/Source/Platform"</c> — the GUI's source tree
+    /// groups the resolved files under that name. Unnamed entries fall into the
+    /// default <c>src</c> group. The name is display-only; the compiler strips it.
+    /// </para>
     /// </summary>
     /// <remarks>
     /// If null or empty, defaults to <c>["namespace:Source scope:subtree"]</c>
-    /// — the conventional <c>Source/</c> sibling folder. Add more entries to pull
-    /// in shared code, e.g.
-    /// <c>["namespace:Source scope:subtree", "@SocialMedia/Post/Source/Platform"]</c>.
+    /// — the conventional <c>Source/</c> sibling folder, shown as group <c>src</c>.
+    /// Add more entries to pull in shared code, e.g.
+    /// <c>["namespace:Source scope:subtree", "shared=@SocialMedia/Post/Source/Platform"]</c>.
     /// (Note: the <c>@@path</c> form used inside a <em>code file's body</em> is a
     /// separate feature — inline include — handled during code-content resolution.)
     /// </remarks>
@@ -193,15 +199,16 @@ public record NodeTypeDefinition
 
     /// <summary>
     /// Locations of the Code nodes classified as tests for this NodeType. Same
-    /// query syntax and expansion rules as <see cref="Sources"/> — see
-    /// <see cref="CodeQueryResolver"/>. Shown under "Tests" in the Configuration
-    /// side menu alongside Sources, and compiled together so tests can reference
-    /// the NodeType's production code.
+    /// query syntax, <c>name=</c> grouping, and expansion rules as
+    /// <see cref="Sources"/> — see <see cref="CodeQueryResolver"/>. Shown under
+    /// "Tests" in the NodeType side menu alongside Sources, and compiled together
+    /// so tests can reference the NodeType's production code.
     /// </summary>
     /// <remarks>
     /// If null or empty, defaults to <c>["namespace:Test scope:subtree"]</c>
-    /// — the conventional <c>Test/</c> sibling folder. Mirrors <see cref="Sources"/>
-    /// so a NodeType with a bespoke Sources list usually wants a bespoke Tests list too.
+    /// — the conventional <c>Test/</c> sibling folder, shown as group <c>test</c>.
+    /// Mirrors <see cref="Sources"/> so a NodeType with a bespoke Sources list
+    /// usually wants a bespoke Tests list too.
     /// </remarks>
     public IReadOnlyList<string>? Tests { get; init; }
 

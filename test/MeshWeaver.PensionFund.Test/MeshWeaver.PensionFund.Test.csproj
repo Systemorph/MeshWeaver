@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{e8b3f2c1-9d4a-4f6e-a7b8-2c3d4e5f6a1b}</ProjectGuid>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <NoWarn>$(NoWarn);xUnit1051</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Pre-copy samples/Graph for tests -->
+    <Content Include="..\..\samples\Graph\**">
+      <Link>SamplesGraph\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Include mesh node source files for compile-time unit testing. The
+         BusinessRules generator below emits the scope implementations for
+         BalanceSheetScopes.cs exactly as the NodeType compiler does at
+         runtime — so a generator/source mismatch fails this build, not the
+         portal. -->
+    <Compile Include="..\..\samples\Graph\Data\PensionFund\Position\Source\Position.cs" Link="MeshNodeSources\Position.cs" />
+    <Compile Include="..\..\samples\Graph\Data\PensionFund\Year\Source\Year.cs" Link="MeshNodeSources\Year.cs" />
+    <Compile Include="..\..\samples\Graph\Data\PensionFund\Currency\Source\Currency.cs" Link="MeshNodeSources\Currency.cs" />
+    <Compile Include="..\..\samples\Graph\Data\PensionFund\BalanceSheetEntry\Source\BalanceSheetEntry.cs" Link="MeshNodeSources\BalanceSheetEntry.cs" />
+    <Compile Include="..\..\samples\Graph\Data\PensionFund\BalanceSheet\Source\BalanceSheetScopes.cs" Link="MeshNodeSources\BalanceSheetScopes.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MeshWeaver.BusinessRules\MeshWeaver.BusinessRules.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.BusinessRules.Generator\MeshWeaver.BusinessRules.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
+  </ItemGroup>
+</Project>

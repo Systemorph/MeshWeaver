@@ -470,6 +470,27 @@ public static class MeshDataSourceExtensions
             var releaseNamespace = $"{nodeTypePath}/Release";
             var releasePath = $"{releaseNamespace}/{version}";
 
+            // Partition the compiler's combined {path → version} snapshot into
+            // source vs. test buckets so the release UI can navigate to each
+            // file as-of this release. Classification runs the NodeType's Tests
+            // queries (path-prefix heuristic — see CodeQueryResolver.Matches);
+            // anything not matching a test query is a source.
+            ImmutableDictionary<string, long>? sourceVersions = null;
+            ImmutableDictionary<string, long>? testVersions = null;
+            if (result.CompiledSources is { Count: > 0 } compiledSources)
+            {
+                var testQueries = CodeQueryResolver.ExpandAll(
+                        (pendingNode.Content as NodeTypeDefinition)?.Tests,
+                        CodeQueryResolver.DefaultTests, nodeTypePath)
+                    .ToList();
+                testVersions = compiledSources
+                    .Where(kv => CodeQueryResolver.Matches(kv.Key, testQueries))
+                    .ToImmutableDictionary();
+                sourceVersions = compiledSources
+                    .Where(kv => !testVersions.ContainsKey(kv.Key))
+                    .ToImmutableDictionary();
+            }
+
             var release = new NodeTypeRelease
             {
                 Path = releasePath,
@@ -496,7 +517,9 @@ public static class MeshDataSourceExtensions
                 // the underlying integer.
                 AssemblyStoreVersion = result.Version,
                 Status = "Succeeded",
-                CompilationActivityPath = activityPath
+                CompilationActivityPath = activityPath,
+                SourceVersions = sourceVersions,
+                TestVersions = testVersions
             };
 
             var node = new MeshNode(version, releaseNamespace)

@@ -1,0 +1,17 @@
+﻿{
+    "id":  "2025-ActiveMembersCapital",
+    "namespace":  "PensionFund/BalanceSheetEntry",
+    "name":  "ActiveMembersCapital 2025",
+    "nodeType":  "PensionFund/BalanceSheetEntry",
+    "category":  "Entries",
+    "description":  "ActiveMembersCapital in 2025: CHF 620 m",
+    "icon":  "\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027 viewBox=\u00270 0 24 24\u0027 fill=\u0027none\u0027 stroke=\u0027currentColor\u0027 stroke-width=\u00272\u0027\u003e\u003cpath d=\u0027M4 4h16v16H4z\u0027/\u003e\u003cpath d=\u0027M4 10h16M10 4v16\u0027/\u003e\u003c/svg\u003e",
+    "isPersistent":  true,
+    "content":  {
+                    "$type":  "BalanceSheetEntry",
+                    "position":  "PensionFund/Position/ActiveMembersCapital",
+                    "year":  "PensionFund/Year/2025",
+                    "currency":  "PensionFund/Currency/CHF",
+                    "amount":  620
+                }
+}

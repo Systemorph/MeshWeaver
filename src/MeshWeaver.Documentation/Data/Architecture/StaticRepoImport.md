@@ -27,6 +27,26 @@ To materialize partition **`P`** from a static repo:
 
 Reference implementations: `DocumentationStaticRepoSource`, `AgentStaticRepoSource`, `ModelStaticRepoSource`. The importer: `StaticRepoImporter`.
 
+## Where the import runs — a dedicated hub, never the mesh router
+
+> **The import runs on its own reachable hub (`import/{meshHubId}`), NEVER the root mesh hub.** The bulk upsert traffic — every `CreateOrUpdateNodeRequest`, plus the inner `CreateNodeRequest` each one self-dispatches — must not be processed on the **root mesh hub's** single action block. That hub is the **irreplaceable router**; the moment it is busy creating import nodes it stops routing, every node op times out, and the whole portal wedges (the **atioz 2026-06-11 outage**: 11× `CreateOrUpdateNodeRequest` + 3× `CreateNodeRequest@mesh/<self>` stale >60s while real user `SubscribeRequest`s starved).
+
+`StaticRepoImporter.ImportAll` therefore creates **one dedicated import hub** and runs the whole import on it — the same reachable-hosted-hub pattern as the [`MeshNodeStreamCache`](/Doc/Architecture/MeshNodeStreamCache) cache hub:
+
+```csharp
+meshHub.GetHostedHub(
+    new Address(ImportAddressType /* "import" */, meshHub.Address.Id),   // process-unique
+    config => config
+        .AddData()                       // IWorkspace, so the upsert-of-existing path can dispatch
+        .WithNodeOperationHandlers()     // Create/CreateOrUpdate handled on THIS action block
+        .WithInitialization(h => h.RegisterForDisposal(routingService.RegisterStream(h))),
+    HostedHubCreation.Always);
+```
+
+- The `import` address-type is declared **stream-routed** — registered **modularly** by the owning module via `MeshBuilder.AddStreamRoutedAddressType(StaticRepoImporter.ImportAddressType)` in **`AddGraph`** (NOT hard-coded into the core `MeshConfiguration.DefaultStreamRoutedAddressTypes`, which keeps only the framework-core `portal`/`client`/`cache`). The silo's `RoutingGrain` dispatches to it over the cluster memory stream, and `RegisterStream` makes responses (query results, `ImportContent` acks) route back.
+- Because the hub carries `WithNodeOperationHandlers`, the bulk upserts are **handled locally on the import hub** (the inner self-posted `CreateNodeRequest` stays on it too). The mesh router only sees the occasional lock-`CreateNode` / read query — never the create storm.
+- Even a **total import failure is isolated**: the boot subscription (`StaticRepoImportHostedService`) is fire-and-forget with an `onError` terminal, so a wedged or failing import can never take down the router. The portal serves regardless.
+
 ## What the importer does, per source, per boot
 
 1. **Resolve the Space root** — `source.PartitionRoot` or a synthesized generic `Space` — and fold it into the source node set.
@@ -34,8 +54,8 @@ Reference implementations: `DocumentationStaticRepoSource`, `AgentStaticRepoSour
 3. **Fingerprint + short-circuit** — `PartitionSourceFingerprint.Compute(nodes + root)`. If a `Succeeded` activity at `{P}/_Activity/import-{fingerprint}` already exists, **stop** (the common case on every boot).
 4. **Lock** — `CreateNode({P}/_Activity/import-{fingerprint})`. The node lifecycle makes the **first caller win**; concurrent replicas get "already exists" and stop. The activity *is* the lock and the durable "version vN imported at T" record.
 5. **Ensure the Space root** (standard step) via the canonical upsert — creating a `Space` triggers eager schema provisioning + the `Admin/Partition/{P}` routing prime + the admin grant; an existing root is updated. This makes the partition routable, listed in `public.top_level_index`, and gives it a landing page.
-6. **Upsert every source node** through **`CreateOrUpdateNodeRequest`** — the single canonical verb (the same one `NodeCopyHelper` uses). It **creates** absent nodes and **updates** existing ones (the owner **re-stamps Version**), running the full pipeline: prerender (`MarkdownContent.Parse`), embedding, satellites, access. User-claimed subtrees (`SyncBehavior != Include`) are skipped.
-7. **Prune (full-replace)** — delete target nodes absent from the source (except governance `_Policy`/`_Access`/`_Activity`), then `MarkSucceeded` / `MarkFailed`.
+6. **Upsert every source node** through **`CreateOrUpdateNodeRequest`** — the single canonical verb (the same one `NodeCopyHelper` uses). It **creates** absent nodes and **updates** existing ones (the owner **re-stamps Version**), running the full pipeline: prerender (`MarkdownContent.Parse`), embedding, satellites, access. User-claimed subtrees (`SyncBehavior != Include`) are skipped. **Each upsert is independently guarded** (per-file `try/catch`): a single node faulting (bad content, a validator reject, a transient owner timeout) logs a `⚠ Failed to import {path}` line **into the import activity** and the import **continues** — the first failure never aborts the rest of the partition. Failures are tallied.
+7. **Prune (full-replace)** — delete target nodes absent from the source (except governance `_Policy`/`_Access`/`_Activity`), then write the **terminal status atomically** via `NodeTypeCompilationActivity.Complete`: **`Succeeded`** when every node imported, **`Warning`** (`"N FAILED (see ⚠ above)"`) when any per-file upsert failed — so the activity log never shows a green Succeeded while hiding failures, and the `⚠` lines pinpoint exactly which files to investigate. A hard fault in provisioning/root/read still `MarkFailed`s the whole run.
 
 All writes run under `AccessService.ImpersonateAsSystem` (re-established at each write's own subscribe, since the System identity must reach the cross-hub write — see [AccessContextPropagation.md](/Doc/Architecture/AccessContextPropagation)).
 
@@ -109,7 +129,8 @@ Export is the inverse and shares the lock: an export activity at `{Partition}/_A
 | Copy/import an existing **mesh** subtree (node + children + satellites) as an activity | `NodeCopyDispatchRequest` + `NodeCopyHelper.CopyNodeTree` (`Force` = overwrite/full-replace) |
 | GUI import / copy / export | `ImportLayoutArea` (Import menu: namespace + Mesh Node/File/Folder), `CopyLayoutArea`, `MarkdownExport` |
 | Activity node + state machine | `ActivityLog` / `ActivityStatus` / `hub.WatchControlPlane` ([ActivityControlPlane.md](/Doc/Architecture/ActivityControlPlane)) |
-| Start/log/finish an activity | `NodeTypeCompilationActivity.Start/AppendLog/MarkSucceeded/MarkFailed` |
+| Start/log/finish an activity | `NodeTypeCompilationActivity.Start/AppendLog/MarkSucceeded/MarkFailed`; `Complete(status, messages)` for an **atomic** terminal-status-plus-log write |
+| A dedicated reachable hub for off-router bulk work | `GetHostedHub(new Address(type, meshHub.Address.Id), …RegisterStream…)` + `AddStreamRoutedAddressType(type)` — the cache-hub / import-hub pattern ([MeshNodeStreamCache.md](/Doc/Architecture/MeshNodeStreamCache)) |
 | Enumerate embedded doc nodes (with content) | `DocumentationNodeProvider.LoadIndexableNodes(jsonOptions)` — **pass the hub's `JsonSerializerOptions`** (camelCase + polymorphic `$type`), else `.json` nodes deserialize bare |
 | Prerender markdown | `MarkdownContent.Parse(content, path, path).PrerenderedHtml` |
 
@@ -128,3 +149,5 @@ Shipped and enabled for `Doc` / `Agent` / `Model` on the distributed portal. The
 - An import over a **content-NULL row refills its content** (the migration-backfill shadow case).
 - A node **absent from the source is pruned** (full-replace).
 - Re-run with an unchanged source is a **no-op** (fingerprint short-circuit).
+- The import runs on the **dedicated `import/{meshHubId}` hub**, not the root mesh hub — the bulk create/upsert traffic never touches the router (verified end-to-end by `OrleansStaticRepoImportTest` / `OrleansContentImportSyncTest`, which complete only because the import hub is reachable).
+- A **single node failing does not abort the import**; it logs a `⚠` line and the activity ends **`Warning`**, not a green `Succeeded`.

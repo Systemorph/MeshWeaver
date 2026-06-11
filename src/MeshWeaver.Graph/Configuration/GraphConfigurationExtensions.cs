@@ -57,6 +57,13 @@ public static class GraphConfigurationExtensions
                 .AddPartitionType()
                 .AddGlobalSettingsType();
 
+            // The static-repo importer runs its bulk create/upsert traffic on a DEDICATED
+            // hub (import/{meshHubId}) so it never floods the root mesh hub's action block —
+            // the router must stay free (atioz 2026-06-11 wedge). Declare its address-type as
+            // stream-routed here, where the importer's module is enabled, so the silo's
+            // RoutingGrain dispatches to it and its responses route back. See StaticRepoImporter.
+            builder.AddStreamRoutedAddressType(StaticRepoImporter.ImportAddressType);
+
             // Register query routing rules for partition + table resolution
             builder
                 // Rule: path/namespace → partition (first path segment)

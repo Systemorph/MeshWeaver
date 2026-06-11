@@ -50,6 +50,10 @@ public class MeshConfiguration(
     ///   <item><c>client</c> — test client hubs / SDK clients.</item>
     ///   <item><c>cache</c> — MeshNodeStreamCache's mesh-node-cache hub.</item>
     /// </list>
+    /// Module-owned host-hub types register themselves via
+    /// <c>MeshBuilder.AddStreamRoutedAddressType</c> (e.g. Graph registers <c>import</c>
+    /// for the static-repo import hub in <c>AddGraph</c>) — they are NOT hard-coded here,
+    /// so this core list stays free of higher-layer knowledge.
     /// </summary>
     public static readonly IReadOnlySet<string> DefaultStreamRoutedAddressTypes =
         new HashSet<string>(StringComparer.Ordinal) { "portal", "client", "cache" };
