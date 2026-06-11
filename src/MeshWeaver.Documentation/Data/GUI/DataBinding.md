@@ -29,7 +29,7 @@ This is non-negotiable, for three reasons:
 
 1. **No deadlocks.** Backend rendering stays purely synchronous — no `await`, no `Task<T>`, no `IAsyncEnumerable`. Every `async`/`await`/`QueryAsync` chain put in a layout area has eventually deadlocked the hub or returned stale content. Removing the backend fetch removes the entire problem class.
 2. **Live updates.** The GUI subscription stays open for the lifetime of the component. Backend-loaded values freeze on first render; cache-subscribed views never go stale.
-3. **CQRS-correct reads.** `GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference())` is the **authoritative** read path — it goes to the owning hub's workspace, never through the lagged read-side index. See [CQRS — Queries, Reads, Writes, Operations](xref:Architecture/CqrsAndContentAccess).
+3. **CQRS-correct reads.** `Hub.GetMeshNodeStream(path)` (backed by the process-wide `IMeshNodeStreamCache`) is the **authoritative** read path — it goes to the owning hub's workspace, never through the lagged read-side index. See [CQRS — Queries, Reads, Writes, Operations](/Doc/Architecture/CqrsAndContentAccess).
 
 ## Responsibility split
 
@@ -59,7 +59,7 @@ The backend layout-area method **must not** be `async Task<UiControl>`. Return `
 
 The canonical Blazor view template — all reads go through the process-wide `IMeshNodeStreamCache`. Multiple views on the same path share **one** upstream subscription; writes through `_cache.Update(path, fn)` are visible to every reader.
 
-> **Access-checked.** `cache.GetStream(path)` is gated by the current user's effective Read permission on the node. The cache asks the owning hub via `GetPermissionRequest`, caches the answer per `(path, userId)` for 30 s, and terminates the observable with `UnauthorizedAccessException` if Read is not granted. Subscribers should handle that error (toast, navigate to AccessDenied, render empty state) rather than letting it propagate. See [AccessContextPropagation.md](../Architecture/AccessContextPropagation.md).
+> **Access-checked.** `cache.GetStream(path)` is gated by the current user's effective Read permission on the node. The cache asks the owning hub via `GetPermissionRequest`, caches the answer per `(path, userId)` for 30 s, and terminates the observable with `UnauthorizedAccessException` if Read is not granted. Subscribers should handle that error (toast, navigate to AccessDenied, render empty state) rather than letting it propagate. See [AccessContextPropagation.md](/Doc/Architecture/AccessContextPropagation).
 
 ```csharp
 public partial class MyView : BlazorView<MyControl, MyView>
@@ -126,7 +126,7 @@ Because the write routes through the **same shared upstream handle** every reade
 
 No separate `DataChangeRequest` is needed for own-node edits inside a bound view.
 
-> **Server-side mirror.** The same rule holds server-side: every mesh-node mutation goes through `workspace.GetMeshNodeStream(path).Update(...)` — which internally routes through the same `IMeshNodeStreamCache`. State machines (compile, thread execution, satellite operations) flip a `RequestedX` field on the node's content; the owning hub's watcher reacts. Full reference: **[Requesting Work via stream.Update()](xref:Architecture/RequestViaStreamUpdate)**.
+> **Server-side mirror.** The same rule holds server-side: every mesh-node mutation goes through `workspace.GetMeshNodeStream(path).Update(...)` — which internally routes through the same `IMeshNodeStreamCache`. State machines (compile, thread execution, satellite operations) flip a `RequestedX` field on the node's content; the owning hub's watcher reacts. Full reference: **[Requesting Work via stream.Update()](/Doc/Architecture/RequestViaStreamUpdate)**.
 
 ---
 

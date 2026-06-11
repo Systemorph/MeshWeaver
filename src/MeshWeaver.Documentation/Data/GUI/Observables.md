@@ -249,6 +249,9 @@ The most important rule: keep dynamic regions small. A large re-render is always
 
     return Task.CompletedTask;  // the handler itself is synchronous
 })
+// Note: the `.Take(1)` above is a one-shot FORM READ inside a click action —
+// fine. NEVER `.Take(1)` a stream that feeds a live-bound view: the binding
+// freezes on the first emission (see Data Binding).
 
 // ❌ Wrong — async handler deadlocks the pump under load
 .WithClickAction(async ctx =>

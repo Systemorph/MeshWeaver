@@ -7,7 +7,7 @@ namespace Memex.Database.Migration.Migrations;
 /// out of the legacy <c>user</c> schema.
 ///
 /// V10 stripped the entire <c>User/&lt;userid&gt;/</c> prefix when moving rows into per-user
-/// schemas. The current convention (see CLAUDE.md and how org partitions like
+/// schemas. The current convention (see AGENTS.md and how org partitions like
 /// <c>partnerre</c>/<c>systemorph</c> store their rows) is that <c>namespace</c> KEEPS the
 /// partition prefix — e.g., <c>(ns='rbuergi/Notes', id='foo')</c>, not <c>(ns='Notes')</c>.
 ///
@@ -162,7 +162,7 @@ public sealed class V14_AddPartitionPrefixToNamespaces : IMigration
             // main_node mirrors the same rule (NULL preserved).
             //
             // The user-identity special case: (node_type='User' AND id=partitionId AND namespace='')
-            // — leave untouched. CLAUDE.md documents this as the documented exception.
+            // — leave untouched. AGENTS.md documents this as the documented exception.
             //
             // partitionId is interpolated (validated source: admin.mesh_nodes ids that we control)
             // because Postgres LIKE patterns with parameters are awkward when we also need

@@ -28,7 +28,7 @@ The most pervasive theme of this release. Every hub-reachable code path now retu
 
 Sanctioned exceptions are exactly two: the persistence boundary (`Observable.FromAsync`) and one-line MCP/SDK adapters that bridge to `Task<string>` for external callers. Everything else stays observable.
 
-> The cold-observable Subscribe contract and the `RequireSubscribeObservable<T>` warning channel that catches missed subscribes at GC are documented in [AsynchronousCalls.md](@/Architecture/AsynchronousCalls).
+> The cold-observable Subscribe contract and the `RequireSubscribeObservable<T>` warning channel that catches missed subscribes at GC are documented in [AsynchronousCalls.md](@/Doc/Architecture/AsynchronousCalls).
 
 ---
 
@@ -46,7 +46,7 @@ workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReferen
 
 Fifteen call sites that read content via the lagged query path were migrated. `GetMeshNodeStream` auto-dispatches own → local collection → remote and is also the right primitive for *waiting for work to finish*.
 
-> Full rationale and migration guide: [CqrsAndContentAccess.md](@/Architecture/CqrsAndContentAccess).
+> Full rationale and migration guide: [CqrsAndContentAccess.md](@/Doc/Architecture/CqrsAndContentAccess).
 
 ---
 
@@ -100,7 +100,7 @@ Operations with inputs, multi-step progress, and an output (export, import, comp
 - The kernel emits `Progress` to the `ActivityLog` feed via `ILogger` — no global state.
 - `WatchControlPlane` centralises the "watch a node, react to `RequestedStatus`" pattern. Imperative watchers were replaced with pure-Rx `WatchSubmission`.
 
-> Reference: [ActivityControlPlane.md](@/Architecture/ActivityControlPlane).
+> Reference: [ActivityControlPlane.md](@/Doc/Architecture/ActivityControlPlane).
 
 ---
 
@@ -121,7 +121,7 @@ Additional improvements:
 - **Parallel, handle-free `MetadataReference` loading** — no `Lazy<T>`, no `GC.Collect` on first compile.
 - **`Source` / `Test`** replace the legacy `_Source` / `_Test` segment names; migration v9 renames existing nodes in-place.
 
-> Reference: [ScriptExecution.md](@/Architecture/ScriptExecution), [ScriptExecutionDemo.md](@/Architecture/ScriptExecutionDemo).
+> Reference: [ScriptExecution.md](@/Doc/Architecture/ScriptExecution), [ScriptExecutionDemo.md](@/Doc/Architecture/ScriptExecutionDemo).
 
 ---
 
@@ -150,7 +150,7 @@ The Model Context Protocol surface graduates into a proper authenticated server.
 
 **Deployment.** Aspire injects the portal endpoint as `Mcp__BaseUrl` — no hard-coded URLs.
 
-> Reference: [McpAuthentication.md](@/AI/McpAuthentication), [ExecuteScript.md](@/AI/ExecuteScript).
+> Reference: [McpAuthentication.md](@/Doc/AI/McpAuthentication), [ExecuteScript.md](@/Doc/AI/ExecuteScript).
 
 ---
 
@@ -158,7 +158,7 @@ The Model Context Protocol surface graduates into a proper authenticated server.
 
 A new first-class operation: **push or pull MeshNodes between MeshWeaver portals over MCP-HTTP**. Built as a standard hub message (no bespoke verb), driven through the usual layout controls. Namespace rewrite on the destination is supported.
 
-> Reference: [CrossInstanceMirror.md](@/Architecture/CrossInstanceMirror).
+> Reference: [CrossInstanceMirror.md](@/Doc/Architecture/CrossInstanceMirror).
 
 ---
 
@@ -173,7 +173,7 @@ A new first-class operation: **push or pull MeshNodes between MeshWeaver portals
 
 This powers the new compile pipeline's source discovery and the side-menu Sources/Tests view.
 
-> Reference: [SyncedQueryDataSource.md](@/DataMesh/SyncedQueryDataSource).
+> Reference: [SyncedQueryDataSource.md](@/Doc/DataMesh/SyncedQueryDataSource).
 
 ---
 
@@ -240,7 +240,7 @@ Additional hardening in this release:
 - **`Memex.Database.Migration`** refactored into one `IMigration` class per version; `launchSettings.json` is included; `db_version` is polled (not container state); the FQDN is passed as an argument.
 - **Aspire 13.2.x** requires `Properties/launchSettings.json` with `"commandName": "Project"` on every AppHost-referenced project — preview2 ships those everywhere.
 
-> Reference: [Deployment.md](@/Architecture/Deployment), [PostgresSchemaArchitecture.md](@/Architecture/PostgresSchemaArchitecture).
+> Reference: [Deployment.md](@/Doc/Architecture/Deployment), [PostgresSchemaArchitecture.md](@/Doc/Architecture/PostgresSchemaArchitecture).
 
 ---
 
@@ -264,7 +264,7 @@ Additional hardening in this release:
 - **Streaming** — `UsageContent` emitted from Azure Claude; durations formatted as h/m/s.
 - **Delegation tool** returns `IAsyncEnumerable<string>`; thread message updates are delta-based.
 
-> Reference: [ProviderConfiguration.md](@/AI/ProviderConfiguration).
+> Reference: [ProviderConfiguration.md](@/Doc/AI/ProviderConfiguration).
 
 ---
 

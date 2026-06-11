@@ -13,14 +13,14 @@ There are three access patterns, each covering a distinct class of operation:
 |---|---|---|
 | Read nodes | Query | `IMeshQuery` |
 | Read/write **one** node by path | Stream | `hub.GetMeshNodeStream(path)` / `workspace.GetMeshNodeStream(path)` |
-| Create node | Factory | `IMeshNodePersistence.CreateNodeAsync` |
-| Update node | Factory | `IMeshNodePersistence.UpdateNodeAsync` |
-| Create transient | Factory | `IMeshNodePersistence.CreateTransientAsync` |
-| Delete node | Factory | `IMeshNodePersistence.DeleteNodeAsync` |
-| CRUD as node identity | Factory | `IMeshNodePersistence.ImpersonateAsNode()` |
-| Read as node identity | Query | `IMeshQuery.ImpersonateAsNode()` |
-| Move node | Message | `MoveNodeRequest` → hub |
-| Update data | Message | `DataChangeRequest` → hub |
+| Create node | Service | `meshService.CreateNode(node).Subscribe(...)` |
+| Update node | Service | `meshService.UpdateNode(node).Subscribe(...)` (routes through `GetMeshNodeStream(path).Update`) |
+| Create-or-update (upsert) | Request | `hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node)).Subscribe(...)` |
+| Create transient | Service | `meshService.CreateTransient(node).Subscribe(...)` |
+| Delete node | Service | `meshService.DeleteNode(path).Subscribe(...)` |
+| Write as system / hub | AccessService | `using (accessService.ImpersonateAsSystem()) { … }` / `ImpersonateAsHub(hub)` |
+| Move node | Message | `hub.Observe(new MoveNodeRequest(src, dst)).Subscribe(...)` |
+| Update typed-entity data | Message | `DataChangeRequest` → hub (EntityStore collections — see [CRUD](/Doc/DataMesh/CRUD)) |
 
 > ### 🚨 One mesh node by path → `GetMeshNodeStream`, never `GetRemoteStream<MeshNode>`
 >
@@ -51,7 +51,7 @@ There are three access patterns, each covering a distinct class of operation:
   <text x="125" y="32" font-family="sans-serif" font-size="13" font-weight="bold" text-anchor="middle" fill="#fff">IMeshQuery</text>
   <text x="125" y="50" font-family="sans-serif" font-size="11" text-anchor="middle" fill="#fff">Reads / Queries</text>
   <rect x="275" y="10" width="210" height="56" rx="10" fill="#43a047"/>
-  <text x="380" y="32" font-family="sans-serif" font-size="13" font-weight="bold" text-anchor="middle" fill="#fff">IMeshNodePersistence</text>
+  <text x="380" y="32" font-family="sans-serif" font-size="13" font-weight="bold" text-anchor="middle" fill="#fff">IMeshService</text>
   <text x="380" y="50" font-family="sans-serif" font-size="11" text-anchor="middle" fill="#fff">Create · Update · Delete</text>
   <rect x="530" y="10" width="210" height="56" rx="10" fill="#f57c00"/>
   <text x="635" y="32" font-family="sans-serif" font-size="13" font-weight="bold" text-anchor="middle" fill="#fff">Message Bus</text>
@@ -108,94 +108,81 @@ Tokens compose freely: `"parent:org type:Team name:Alpha"` matches all Team node
 
 ---
 
-## 2. Creates, Updates, and Deletes — IMeshNodePersistence
+## 2. Creates, Updates, and Deletes — IMeshService (reactive)
 
-Node lifecycle operations route through `IMeshNodePersistence`. All operations travel through the message bus so that security validators (`INodeValidator`, RLS) are enforced for every write.
-
-`IMeshNodePersistence` is registered as a **scoped service** — each hub gets its own instance with the correct `IMessageHub` injected. The caller's identity (`createdBy`, `updatedBy`, `deletedBy`) is automatically resolved from `AccessService.Context.ObjectId`; you do not pass it explicitly.
+Node lifecycle operations route through `IMeshService` and return **`IObservable<MeshNode>`** — cold observables that run on `Subscribe`. All operations travel through the message bus (`CreateNodeRequest` etc.) so that security validators (`INodeValidator`, RLS) are enforced for every write. The caller''s identity is captured automatically from `AccessService.Context` at call time.
 
 ```csharp
-// Resolve from the hub's service provider (scoped — correct hub per level)
-var factory = hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
 
-// Create — identity auto-resolved from the current user
+// Create — identity auto-captured from the current user
 var node = MeshNode.FromPath("org/Acme/NewTeam") with
 {
     Name = "New Team",
     NodeType = "Team"
 };
-var created = await factory.CreateNodeAsync(node, ct: ct);
+meshService.CreateNode(node)
+    .Subscribe(
+        created => logger.LogInformation("Created {Path}", created.Path),
+        ex => logger.LogWarning(ex, "Create failed"));
 
-// Update
-var updated = await factory.UpdateNodeAsync(
-    created with { Name = "Renamed Team" }, ct: ct);
+// Chained create → update: compose with SelectMany — never nest Subscribes
+meshService.CreateNode(node)
+    .SelectMany(created => meshService.UpdateNode(created with { Name = "Renamed Team" }))
+    .Subscribe(_ => { }, ex => logger.LogWarning(ex, "create+update failed"));
 
-// Create a transient node (for UI edit-then-confirm flows)
-var transient = await factory.CreateTransientAsync(node, ct);
+// Transient node (UI edit-then-confirm flows)
+meshService.CreateTransient(node).Subscribe(...);
 
 // Delete — removes the node and all its descendants, bottom to top
-await factory.DeleteNodeAsync("org/Acme/OldTeam", ct: ct);
+meshService.DeleteNode("org/Acme/OldTeam").Subscribe(...);
+
+// Create-or-update (upsert) — single verb when the caller has the full target shape
+hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node))
+    .Subscribe(resp => { /* resp.Message.WasCreated */ }, ex => ...);
 ```
 
 **Behaviour summary:**
 
-- `CreateNodeAsync` — runs `INodeValidator`, sets state to Active.
-- `UpdateNodeAsync` — validates and updates an existing node.
-- `CreateTransientAsync` — persists in Transient state; caller confirms or discards.
-- `DeleteNodeAsync` — removes the node and all descendants (bottom to top).
-- Identity is auto-resolved from `AccessService` — explicit `createdBy`/`updatedBy`/`deletedBy` is optional.
+- `CreateNode` — runs `INodeValidator`, sets state to Active.
+- `UpdateNode` — validates; routes through the canonical `GetMeshNodeStream(path).Update` write path on the owning hub.
+- `CreateTransient` — persists in Transient state; caller confirms or discards.
+- `DeleteNode` — removes the node and all descendants (bottom to top).
+- `CreateOrUpdateNodeRequest` — upsert; checks existence on the handler side and dispatches create or merge-patch update (see [CQRS](/Doc/Architecture/CqrsAndContentAccess)).
+- Identity is auto-captured from `AccessService` and carried across `.Subscribe()` boundaries — see [AccessContextPropagation](/Doc/Architecture/AccessContextPropagation).
 
-### Node identity for writes — ImpersonateAsNode
+### Writing as system / hub — explicit impersonation
 
-By default, `IMeshNodePersistence` operations use the current user's identity. Call `ImpersonateAsNode()` to switch to the hub's own address as the acting principal — useful for infrastructure code that runs without a human in the loop.
+By default every write runs under the calling user''s identity. Infrastructure code with no human in the loop (cache hydration, seeds, sync heartbeats) opts in **explicitly**:
 
 ```csharp
-var factory = hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
-
-// All subsequent operations use the hub's address as identity
-var impersonated = factory.ImpersonateAsNode();
-
-var node = MeshNode.FromPath("system/AutoGenerated") with
+// System identity — Permission.All, well-known "system-security" principal
+using (accessService.ImpersonateAsSystem())
 {
-    Name = "System Node",
-    NodeType = "Markdown"
-};
-var created = await impersonated.CreateNodeAsync(node, ct: ct);
-await impersonated.UpdateNodeAsync(created with { Name = "Updated" }, ct: ct);
-await impersonated.DeleteNodeAsync("system/AutoGenerated", ct: ct);
+    meshService.CreateNode(systemNode).Subscribe(...);
+}
+
+// Hub identity — stamps the hub''s address as principal
+using (accessService.ImpersonateAsHub(hub))
+{
+    meshService.CreateNode(hubOwnedNode).Subscribe(...);
+}
 ```
 
-Key properties:
+`PostPipeline` fails closed when no context is set — a write with neither a user nor an explicit impersonation is rejected, never silently stamped. Full reference: [AccessContextPropagation](/Doc/Architecture/AccessContextPropagation).
 
-- `ImpersonateAsNode()` sets a flag on the same instance — no separate wrapper class.
-- `createdBy`/`updatedBy`/`deletedBy` auto-resolve to `hub.Address.ToFullString()`.
-- `PostOptions.ImpersonateAsHub()` is set, so `AccessContext.ObjectId` becomes the hub's address.
-- The hub must have the appropriate roles/permissions assigned to its address.
-- Calling `ImpersonateAsNode()` on an already-impersonated instance returns itself.
+### Reading as hub / system — the same explicit impersonation
 
-### Node identity for reads — ImpersonateAsNode on IMeshQuery
-
-`IMeshQuery` supports the same `ImpersonateAsNode()` pattern for reads. When impersonated, all queries use the hub's address as `UserId` for RLS filtering — useful when infrastructure code checks node existence before a user context is established.
+Reads scope through the **same** `AccessService` impersonation: wrap the subscription, and every query / stream opened inside the scope runs under that identity for RLS filtering — useful when infrastructure code reads before a user context is established.
 
 ```csharp
-var meshQuery = hub.ServiceProvider.GetRequiredService<IMeshQuery>();
-
-// Query with node identity — bypasses user-level RLS, uses node's own permissions
-var existing = await meshQuery.ImpersonateAsNode()
-    .QueryAsync<MeshNode>($"path:{nodePath}")
-    .FirstOrDefaultAsync(ct);
-
-// Without impersonation — uses the current user's identity from AccessService
-var result = await meshQuery
-    .QueryAsync<MeshNode>($"path:{nodePath}")
-    .FirstOrDefaultAsync(ct);
+// Query with hub identity — RLS filters against the hub's own permissions
+using (accessService.ImpersonateAsHub(hub))
+{
+    meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{nodePath}"))
+        .Subscribe(result => { /* … */ }, ex => logger.LogWarning(ex, "query failed"));
+}
 ```
-
-Key properties:
-
-- Sets `MeshQueryRequest.UserId` to `hub.Address.ToFullString()` on all queries.
-- The node must have Read permission on the target namespace.
-- Calling `ImpersonateAsNode()` on an already-impersonated instance returns itself.
 
 ### Example: aggregating across business-unit sub-hubs (FutuRe)
 
@@ -222,65 +209,70 @@ The `FutuRe/Analysis` group hub needs to read data from two business-unit sub-hu
 
 Apply the same pattern to `FutuRe/EuropeRe/Analysis/FutuRe_Analysis_Access.json`.
 
-**Step 2 — query with node identity:**
+**Step 2 — query with the hub's identity:**
 
 ```csharp
-var meshQuery = hub.ServiceProvider.GetRequiredService<IMeshQuery>();
-var impersonatedQuery = meshQuery.ImpersonateAsNode();
-
 // The parent hub can now read descendants of each sub-hub
-await foreach (var node in impersonatedQuery.QueryAsync<MeshNode>(
-    "path:FutuRe/AsiaRe/Analysis scope:descendants"))
+using (accessService.ImpersonateAsHub(hub))
 {
-    // aggregate sub-hub data
+    meshService.Query<MeshNode>(
+            MeshQueryRequest.FromQuery("path:FutuRe/AsiaRe/Analysis scope:descendants"))
+        .Subscribe(change => { /* aggregate sub-hub data */ },
+                   ex => logger.LogWarning(ex, "aggregation failed"));
 }
 ```
 
-Without `ImpersonateAsNode()`, the query runs under the end user's identity — which may lack access to all sub-hubs. With it, the parent hub reads using its own permissions and can always aggregate across business units.
+Without the impersonation scope, the query runs under the end user's identity — which may lack access to all sub-hubs. With it, the parent hub reads using its own permissions and can always aggregate across business units.
 
 ---
 
 ## 3. Moves and Data Changes — Message-Based
 
-A small number of operations are driven by request messages posted directly to the hub rather than through `IMeshNodePersistence`.
+A small number of operations are driven by request messages posted directly to the hub rather than through `IMeshService`.
 
 ### Moving a node
 
 ```csharp
-var response = await hub.AwaitResponse(
-    new MoveNodeRequest("org/Acme/OldPath", "org/Acme/NewPath"),
-    ct);
-
-if (response.Message is MoveNodeResponse { Node: not null } moveResult)
-{
-    // Move succeeded
-}
+hub.Observe(new MoveNodeRequest("org/Acme/OldPath", "org/Acme/NewPath"))
+    .Subscribe(
+        response =>
+        {
+            if (response.Message is MoveNodeResponse { Node: not null } moveResult)
+            {
+                // Move succeeded
+            }
+        },
+        ex => logger.LogWarning(ex, "Move failed"));
 ```
 
-### Updating data collections
+### Updating data collections (typed entities)
 
 ```csharp
-// Replace a set of entities
+// Replace a set of entities in an EntityStore collection — see /Doc/DataMesh/CRUD
 hub.Post(new DataChangeRequest
 {
     Updates = [updatedEntity]
 });
-
-// Partial update (JSON-merge patch semantics)
-hub.Post(new PatchDataChangeRequest
-{
-    Updates = [partialEntity]
-});
 ```
+
+### Updating a MeshNode's content
+
+```csharp
+// The ONE mutation API — cold observable, the trailing Subscribe runs the write.
+workspace.GetMeshNodeStream(path).Update(node => node with { Content = updated })
+    .Subscribe(_ => { }, ex => logger.LogWarning(ex, "update failed"));
+```
+
+(`PatchDataChangeRequest` is the internal stream-protocol message the framework ships for you — never post it from application code.)
 
 ---
 
 ## Defining Message Types
 
-Request/response messages must implement `IRequest<TResponse>` so the messaging framework can route responses correctly and `AwaitResponse` can infer the response type.
+Request/response messages must implement `IRequest<TResponse>` so the messaging framework can route responses correctly and `hub.Observe` can infer the response type.
 
 ```csharp
-// Request — implements IRequest<TResponse> for type-safe AwaitResponse
+// Request — implements IRequest<TResponse> for type-safe hub.Observe
 public record MoveNodeRequest(string SourcePath, string TargetPath)
     : IRequest<MoveNodeResponse>;
 
@@ -293,16 +285,17 @@ public record MoveNodeResponse
 }
 ```
 
-**Sending and awaiting:**
+**Sending and observing:**
 
 ```csharp
 // TResponse is inferred from IRequest<MoveNodeResponse>
-var response = await hub.AwaitResponse(
-    new MoveNodeRequest("old/path", "new/path"),
-    o => o.WithTarget(targetAddress),
-    ct);
+hub.Observe(new MoveNodeRequest("old/path", "new/path"),
+        o => o.WithTarget(targetAddress))
+    .Subscribe(
+        response => { if (response.Message.Success) { ... } },
+        ex => logger.LogWarning(ex, "Move failed"));
 
-if (response.Message.Success) { ... }
+// Tests bridge to Task via MonolithMeshTestBase.AwaitResponseAsync(request, ...).
 ```
 
 **Registering the handler:**

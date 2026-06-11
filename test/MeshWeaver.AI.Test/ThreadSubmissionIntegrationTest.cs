@@ -28,7 +28,7 @@ namespace MeshWeaver.AI.Test;
 /// Verifies that <c>Submit</c>/<c>CreateThreadAndSubmit</c>/<c>Resubmit</c> drive
 /// the server watcher to create output cells and commit ingested state,
 /// fully via Post + RegisterCallback + workspace stream subscriptions (no QueryAsync writes from the code path).
-/// Test assertions use QueryAsync/FirstAsync â€” allowed per CLAUDE.md for test code only.
+/// Test assertions use QueryAsync/FirstAsync â€” allowed per AGENTS.md for test code only.
 /// </summary>
 public class ThreadSubmissionIntegrationTest : AITestBase
 {
@@ -431,7 +431,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
 
         // Write the composer state exactly like the GUI does — hub.GetMeshNodeStream(path).Update.
         // Null-guard the lambda: the remote handle fires it with node==null until the sync
-        // handshake delivers the initial state (see ResponseStream handshake race in CLAUDE.md).
+        // handshake delivers the initial state (see ResponseStream handshake race in AGENTS.md).
         client.GetMeshNodeStream(chatInputPath).Update(node =>
         {
             var n = node ?? new MeshNode(chatInputPath)
@@ -536,7 +536,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
     /// write propagation, so under cumulative test load a transition that landed
     /// between two polls (or whose re-query lagged) blew the budget. The stream
     /// emits on every commit, so the predicate sees every state transition
-    /// exactly once. See CLAUDE.md → "Never Task.Delay to wait for propagation".
+    /// exactly once. See AGENTS.md → "Never Task.Delay to wait for propagation".
     /// </summary>
     private MeshThread WaitForThread(
         string threadPath,

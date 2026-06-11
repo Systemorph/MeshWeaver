@@ -30,7 +30,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// <summary>
 /// Submit a user message via <c>ThreadSubmission.Submit</c> (which internally
 /// routes through <c>workspace.GetMeshNodeStream(threadPath).Update</c> —
-/// the only sanctioned mutation API, see CLAUDE.md). Observe completion via
+/// the only sanctioned mutation API, see AGENTS.md). Observe completion via
 /// the thread + response-cell streams, the same primitive the GUI databinds
 /// to. No <c>SubmitMessageResponse</c>, no completion callbacks.
 /// </summary>

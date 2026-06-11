@@ -167,12 +167,15 @@ The move is implemented at the persistence layer, handling both same-partition a
 ## Programmatic Move
 
 ```csharp
-var response = await hub.AwaitResponse<MoveNodeResponse>(
-    new MoveNodeRequest("org/acme/old-name", "org/acme/new-name"),
-    o => o.WithTarget(address));
-
-if (response.Message.Success)
-    Console.WriteLine($"Moved to: {response.Message.Node.Path}");
+hub.Observe(new MoveNodeRequest("org/acme/old-name", "org/acme/new-name"),
+        o => o.WithTarget(address))
+    .Subscribe(
+        response =>
+        {
+            if (response.Message.Success)
+                Console.WriteLine($"Moved to: {response.Message.Node.Path}");
+        },
+        ex => logger.LogWarning(ex, "Move failed"));
 ```
 
 ---

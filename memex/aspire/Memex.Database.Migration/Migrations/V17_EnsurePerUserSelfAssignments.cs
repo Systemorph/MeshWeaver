@@ -20,7 +20,7 @@ namespace Memex.Database.Migration.Migrations;
 /// <para>The correct shape after V14 is:</para>
 /// <list type="bullet">
 ///   <item><c>{userId}.access</c> — the satellite table in the user's own Postgres schema</item>
-///   <item>namespace = <c>{userId}/_Access</c> (WITH partition prefix, per CLAUDE.md convention)</item>
+///   <item>namespace = <c>{userId}/_Access</c> (WITH partition prefix, per AGENTS.md convention)</item>
 ///   <item>id = <c>{userId}_Access</c></item>
 ///   <item>main_node = <c>{userId}</c></item>
 ///   <item>content = <c>{"accessObject":"{userId}","displayName":"{userId}","roles":[{"role":"Admin"}]}</c></item>
@@ -76,7 +76,7 @@ public sealed class V17_EnsurePerUserSelfAssignments : IMigration
             if (!hasMeshNodes) continue;
 
             // User identity row: namespace='', node_type='User', id=<userId>
-            // The special case documented in CLAUDE.md and V14.
+            // The special case documented in AGENTS.md and V14.
             string? userId = null;
             await using (var idCmd = ctx.DataSource.CreateCommand($"""
                 SELECT id FROM "{schema.Replace("\"", "\"\"")}".mesh_nodes

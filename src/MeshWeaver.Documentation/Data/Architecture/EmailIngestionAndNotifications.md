@@ -25,8 +25,8 @@ Memex talks to people over real-world channels. Two directions:
 
 This document covers both, the NodeTypes involved, configuration, and how to send a notification from your
 own code (with a runnable sample). For the outbound **credential/Graph** setup specifically, see
-[SendingEmail.md](SendingEmail.md); for the onboarding gate see
-[InvitationOnlyOnboarding.md](InvitationOnlyOnboarding.md).
+[SendingEmail.md](/Doc/Architecture/SendingEmail); for the onboarding gate see
+[InvitationOnlyOnboarding.md](/Doc/Architecture/InvitationOnlyOnboarding).
 
 ---
 
@@ -62,7 +62,7 @@ Key properties:
   thread; no match → start a new one. Replies with accumulating `Re:`/`Fwd:` land in the same thread.
 - **The agent acts on the sender's behalf** (runs with their identity), treats the first line as the
   likely instruction, infers intent with `Search` if absent, and **cuts slop** (forwarding banners, quoted
-  history, signatures). See the [Email Router agent](../../Agent/EmailRouter.md).
+  history, signatures). See the [Email Router agent](/Agent/EmailRouter).
 - **The reply is emailed back** by creating an **Outbound `Email`** node (see §4) — the agent never sends
   mail directly.
 - **Everything is a MeshNode.** Every inbound and outbound mail is persisted as an `Email` node, so the
@@ -94,7 +94,7 @@ The pipeline below the transport is transport-agnostic (*inbound message → fin
 - **Email** (this doc) — Graph mailbox subscription → `EmailInboundProcessor`.
 - **Teams** — a Bot Framework messaging endpoint → `TeamsInboundProcessor`, with the agent's reply read
   back via the shared `ThreadFlow.ObserveResponses` and posted into the chat. See
-  **[TeamsBot.md](../AI/TeamsBot.md)** for setup (Azure Bot + Teams app), config, and security.
+  **[TeamsBot.md](/Doc/AI/TeamsBot)** for setup (Azure Bot + Teams app), config, and security.
 
 ---
 
@@ -117,7 +117,7 @@ deployment that calls `AddGraph()`, with their content types in the mesh TypeReg
 
 ### Triage agent
 
-The [Notification Triage agent](../../Agent/NotificationTriage.md) runs on the **`light`** model tier
+The [Notification Triage agent](/Agent/NotificationTriage) runs on the **`light`** model tier
 (fast + cheap — sized for classification, configured per deployment via `ModelTier:Light`). Given an event
 and a recipient it:
 
@@ -235,7 +235,7 @@ Notes:
 - `IEmailSender.SendEmail` returns a **cold** `IObservable<bool>` — the send only runs on `Subscribe`
   (it is subscribed in the click action above).
 - It is reactive end-to-end — no `await` in the click action (see
-  [AsynchronousCalls.md](AsynchronousCalls.md)).
+  [AsynchronousCalls.md](/Doc/Architecture/AsynchronousCalls)).
 - For an **auditable** send (visible in the mailbox history, retried on restart) prefer creating an
   Outbound `Email` node (§4b) instead of calling `IEmailSender` directly.
 
@@ -264,21 +264,21 @@ Deploy parameters (`Memex.Deploy.AppHost` → `MemexOptions`) map 1:1: `email-en
 
 > **Graph permissions:** the shared-mailbox app registration needs the **application** permissions
 > `Mail.Send` and `Mail.ReadWrite` with tenant-admin consent, and a real licensed/shared mailbox it may
-> act as. Missing consent → Graph 403. See [SendingEmail.md](SendingEmail.md). (The Executive Assistant is
+> act as. Missing consent → Graph 403. See [SendingEmail.md](/Doc/Architecture/SendingEmail). (The Executive Assistant is
 > separate — it uses **per-user delegated** scopes on the sign-in app, not these application permissions;
-> see [ExecutiveAssistant.md](../AI/ExecutiveAssistant.md).)
+> see [ExecutiveAssistant.md](/Doc/AI/ExecutiveAssistant).)
 
 ---
 
 ## 7. Executive Assistant — a mail & calendar agent
 
-The [Executive Assistant agent](../AI/ExecutiveAssistant.md) gives each user a personal assistant over
+The [Executive Assistant agent](/Doc/AI/ExecutiveAssistant) gives each user a personal assistant over
 **their own** mailbox and calendar (triage/write mail, "do my booking"). Unlike the shared `memex@`
 ingestion mailbox — which uses an **application** Graph credential — the EA acts with **per-user,
 just-in-time delegated** consent: the user grants the EA access to *their own* mailbox/calendar only when
 they first use the tool, and every Graph call targets `/me/…` with that user's own delegated token. No
 standing application-wide grant.
 
-See **[ExecutiveAssistant.md](../AI/ExecutiveAssistant.md)** for the full design (consent flow, the
+See **[ExecutiveAssistant.md](/Doc/AI/ExecutiveAssistant)** for the full design (consent flow, the
 `EaCredential` encrypted-token store, tools) and the one-time Azure setup (delegated scopes + the
 `/auth/ea/callback` redirect URI on the sign-in app).

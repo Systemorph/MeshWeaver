@@ -3,11 +3,14 @@ Name: AI Model Provider Settings
 Description: "Settings → Models UX: per-provider-type layout, model lists for API providers, and delegating Claude Code / GitHub Copilot to their CLI login."
 ---
 
+> **The model-provider docs at a glance:** [Model Providers](/Doc/Architecture/ModelProviders) — the architectural pattern · [Provider Configuration](/Doc/AI/ProviderConfiguration) — framework config & chat-client factories · [Model Provider Setup](/Doc/AI/ModelProviderSetup) — operational setup & troubleshooting · [Model Provider Settings](/Doc/AI/ModelProviderSettings) — the settings UI. **This page: the settings UI.**
+
+
 # AI Model Provider Settings
 
 The **Settings → Models** page is the user's single destination for wiring AI into Memex — adding API keys, enabling specific models, and connecting CLI-based providers like Claude Code and GitHub Copilot. This document is the actionable implementation spec: it identifies the exact files to touch, the behavioral seams to introduce, and the testing approach.
 
-> **Setting up models (admin or user)?** This page is the *UI design spec*. For the operational how-to — provider/model mesh nodes, the system/space/user layers, which query goes where in a user's namespace, the open-weight tier choices, and the install-time config gaps — read **[Setting Up Model Providers](ModelProviderSetup.md)**.
+> **Setting up models (admin or user)?** This page is the *UI design spec*. For the operational how-to — provider/model mesh nodes, the system/space/user layers, which query goes where in a user's namespace, the open-weight tier choices, and the install-time config gaps — read **[Setting Up Model Providers](/Doc/AI/ModelProviderSetup)**.
 
 ---
 

@@ -13,6 +13,9 @@ Tags:
   - "Providers"
 ---
 
+> **The model-provider docs at a glance:** [Model Providers](/Doc/Architecture/ModelProviders) — the architectural pattern · [Provider Configuration](/Doc/AI/ProviderConfiguration) — framework config & chat-client factories · [Model Provider Setup](/Doc/AI/ModelProviderSetup) — operational setup & troubleshooting · [Model Provider Settings](/Doc/AI/ModelProviderSettings) — the settings UI. **This page: framework config & chat-client factories.**
+
+
 MeshWeaver speaks to multiple LLM providers — Claude via Anthropic, GPT-class and open-weight models via the Azure AI Services multi-model gateway, embedding models, and more — but the configuration surface is intentionally small: **one shared key, a handful of endpoints, and a short per-provider model list.** This page explains the credential/endpoint wiring and the factory routing. For getting models to actually appear in the picker — provider/model **mesh nodes**, the space/user layers, and the install-time gotchas — read the operational guide first: **[Setting Up Model Providers](/Doc/AI/ModelProviderSetup)**.
 
 > **Why read this?** This page is about *credentials, endpoints, and which factory handles a model*. If your question is "why is the model picker empty / how do I add models," start with [Setting Up Model Providers](/Doc/AI/ModelProviderSetup) — the picker is fed by `ModelProvider` / `LanguageModel` mesh nodes, which this deployment seeds from the config sections below.

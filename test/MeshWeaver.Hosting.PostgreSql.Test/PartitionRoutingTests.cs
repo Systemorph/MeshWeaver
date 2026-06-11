@@ -38,7 +38,7 @@ public class PartitionRoutingTests
     /// Writes to satellite paths must land in the satellite table named by
     /// <see cref="PartitionDefinition.TableMappings"/>, not in the primary
     /// <c>mesh_nodes</c> table. This is the storage-routing rule from
-    /// <c>CLAUDE.md</c>: <c>…/_Access/…</c> → <c>access</c>,
+    /// <c>AGENTS.md</c>: <c>…/_Access/…</c> → <c>access</c>,
     /// <c>…/Source/…</c> → <c>code</c>, etc.
     ///
     /// <para>This test bypasses the partition provider's adapter factory and

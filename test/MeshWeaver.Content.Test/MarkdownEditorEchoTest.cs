@@ -28,7 +28,7 @@ namespace MeshWeaver.Content.Test;
 /// mutation API propagates writes to remote subscribers of the same MeshNode.
 ///
 /// Architectural note: <c>DataChangeRequest</c> with a <c>MeshNode</c> payload was
-/// the old echo-filter test seam, but per CLAUDE.md it is DISCONTINUED (fails at
+/// the old echo-filter test seam, but per AGENTS.md it is DISCONTINUED (fails at
 /// <c>TypeDefinition.GetKey</c>). The echo filter at JsonSynchronizationStream
 /// line 434 still exists and is exercised by every <c>GetMeshNodeStream</c> write
 /// — when the owning hub emits <c>DataChangedEvent</c>, the per-subscriber filter

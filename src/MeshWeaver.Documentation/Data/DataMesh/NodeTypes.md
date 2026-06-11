@@ -93,23 +93,23 @@ Node types are compiled on demand from `Source/*.cs` files. You never redeploy t
 
 The guides in this chapter are ordered by task. If you are new to node types, work through them in the order shown below.
 
-### [Creating Node Types](CreatingNodeTypes)
+### [Creating Node Types](/Doc/DataMesh/CreatingNodeTypes)
 
 The full walkthrough: `Source/` folder layout, the content record, reference data, the NodeType JSON, CSV data, layout areas, and child types. **Start here.**
 
-### [NodeType Configuration Reference](NodeTypeConfiguration)
+### [NodeType Configuration Reference](/Doc/DataMesh/NodeTypeConfiguration)
 
 JSON schema reference for the `NodeTypeDefinition` object: every field, its type, and when to use it.
 
-### [NodeType Compilation & Releases](../Architecture/NodeTypeCompilation)
+### [NodeType Compilation & Releases](/Doc/Architecture/NodeTypeCompilation)
 
 The runtime lifecycle — how a compile is triggered, how to watch progress, how to cancel, where releases live, and how to pin an instance to a fixed release. Covers the verify-before-skip rules (including framework-version freezing) that decide when a recompile is required.
 
-### [NuGet Packages](NodeTypeWithNuGet)
+### [NuGet Packages](/Doc/DataMesh/NodeTypeWithNuGet)
 
 Pull in third-party libraries (Math.NET, Markdig, and more) by dropping a `#r "nuget:..."` directive at the top of any source file.
 
-### [Testing Node Types](NodeTypes/Testing)
+### [Testing Node Types](/Doc/DataMesh/NodeTypes/Testing)
 
 Stand up a `MonolithMeshTestBase` test project against a samples directory, render layout areas against a real client, and assert on the streaming response.
 
@@ -117,7 +117,7 @@ Stand up a `MonolithMeshTestBase` test project against a samples directory, rend
 
 ## Prerequisites
 
-This chapter assumes familiarity with [Data Modeling](DataModeling), [Unified Path](UnifiedPath), and [CRUD](CRUD).
+This chapter assumes familiarity with [Data Modeling](/Doc/DataMesh/DataModeling), [Unified Path](/Doc/DataMesh/UnifiedPath), and [CRUD](/Doc/DataMesh/CRUD).
 
 ---
 

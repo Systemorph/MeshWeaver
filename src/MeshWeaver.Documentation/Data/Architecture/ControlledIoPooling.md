@@ -12,7 +12,7 @@ Tags:
   - "Orleans"
 ---
 
-> **Read first:** [Asynchronous Calls](AsynchronousCalls) and [Orleans Task Scheduler](OrleansTaskScheduler). This page is the I/O-edge counterpart to those two — where the actor model meets real, blocking work.
+> **Read first:** [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) and [Orleans Task Scheduler](/Doc/Architecture/OrleansTaskScheduler). This page is the I/O-edge counterpart to those two — where the actor model meets real, blocking work.
 
 ## The problem
 
@@ -248,7 +248,7 @@ Earlier guidance carved storage and Postgres out of the pool and left them on pl
 
 **Per-adapter pools, cap = the connection count.** A Postgres storage adapter holds a single Npgsql connection (`MaxPoolSize=1`); its pool is named `pg:{adapter}` and capped at **1**, so the `IIoPool` gate *is* that one connection ("hook into the pg pool") rather than a redundant bound stacked on top of it. The naming + cap live in `IoPoolNames.PostgresAdapterPrefix` / `IoPoolOptions.MaxConcurrencyFor`. This sidesteps the old worry about a mis-sized gate deadlocking against the driver pool: the gate and the driver pool are the same size (1), by construction.
 
-The cost concern that originally justified the carve-out (a `SubscribeOn` hop on every hot read under a constrained CI ThreadPool) is real and must be measured as adapters migrate — but the answer is to size the per-adapter pools correctly, **not** to fall back to bare `FromAsync`. New code (e.g. `PostgreSqlPartitionStorageProvider.EnsurePartitionProvisioned`) is pooled from day one; the remaining hot-path query/storage `FromAsync` sites are migration debt, not a sanctioned pattern.
+The cost concern that originally justified the carve-out (a `SubscribeOn` hop on every hot read under a constrained CI ThreadPool) is real — the answer is to size the per-adapter pools correctly, **not** to fall back to bare `FromAsync`. The migration is finished: every query/storage leaf is pooled (see "The sweep is complete" below), and new code (e.g. `PostgreSqlPartitionStorageProvider.EnsurePartitionProvisioned`) is pooled from day one.
 
 ---
 
@@ -334,8 +334,8 @@ if (disposeQueue is not null)
 
 "Only drainage of async pipelines is allowed": the `await` lives at that one (two-phase) drain, the work
 stays reactive. Same principle as `IIoPool` — the async boundary is pushed to the edge and bounded; it is
-never an ambient `await` mid-flow. Full order + failure mode: [Mesh Lifecycle](MeshLifecycle). See also
-[Asynchronous Calls](AsynchronousCalls).
+never an ambient `await` mid-flow. Full order + failure mode: [Mesh Lifecycle](/Doc/Architecture/MeshLifecycle). See also
+[Asynchronous Calls](/Doc/Architecture/AsynchronousCalls).
 
 ---
 
@@ -355,6 +355,6 @@ never an ambient `await` mid-flow. Full order + failure mode: [Mesh Lifecycle](M
 
 ## Cross-references
 
-- [Asynchronous Calls](AsynchronousCalls) — rule 9, "the async boundary lives at the real I/O edge".
-- [Aggregating Providers](AggregatingProviders) — "the async boundary lives at the I/O edge", pool-at-the-edge.
-- [Orleans Task Scheduler](OrleansTaskScheduler) — per-hub schedulers and the `SubscribeOn` offload this complements.
+- [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) — rule 9, "the async boundary lives at the real I/O edge".
+- [Aggregating Providers](/Doc/Architecture/AggregatingProviders) — "the async boundary lives at the I/O edge", pool-at-the-edge.
+- [Orleans Task Scheduler](/Doc/Architecture/OrleansTaskScheduler) — per-hub schedulers and the `SubscribeOn` offload this complements.

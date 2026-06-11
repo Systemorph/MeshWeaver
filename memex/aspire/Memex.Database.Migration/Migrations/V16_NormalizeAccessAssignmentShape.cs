@@ -39,7 +39,7 @@ public sealed class V16_NormalizeAccessAssignmentShape : IMigration
         // Discover every schema that has an `access` satellite. AccessAssignment
         // rows live in `{partition}.access`, NOT `{partition}.mesh_nodes` (the
         // path segment `_Access` routes them to the satellite per
-        // CLAUDE.md → "Satellite tables are routed by path segment, not nodeType").
+        // AGENTS.md → "Satellite tables are routed by path segment, not nodeType").
         var schemas = new List<string>();
         await using (var cmd = ctx.DataSource.CreateCommand("""
             SELECT t.table_schema FROM information_schema.tables t

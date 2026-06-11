@@ -8,12 +8,12 @@ Category: Architecture
 # Invitation-Only Onboarding
 
 By default the Memex portal is **open** — anyone who authenticates may self-provision an account
-through `/onboarding` (see [Memex Cloud Deployment → Onboarding](MemexCloudDeployment.md)).
+through `/onboarding` (see [Memex Cloud Deployment → Onboarding](/Doc/Architecture/MemexCloudDeployment)).
 **Invitation-only mode** narrows this: an admin invites an email address, the system emails that
 person from the M365 mailbox the portal sends and receives as, and only an invited email may complete
 onboarding. Every other email is refused at the gate.
 
-Turn it on with one flag (see [Feature Flags](FeatureFlags.md)):
+Turn it on with one flag (see [Feature Flags](/Doc/Architecture/FeatureFlags)):
 
 ```bash
 Features__Onboarding__InvitationOnly=true
@@ -46,11 +46,11 @@ Features__Onboarding__InvitationOnly=true
 
 Invitations are MeshNodes of type **`Invitation`** stored in the always-present **Admin** partition
 at `Admin/Invitation/{slug}` (the slug is the lowercased email with non-alphanumerics replaced by
-`_`). The content record is [`Invitation`](../../../../src/MeshWeaver.Mesh.Contract/Invitation.cs):
+`_`). The content record is `Invitation`:
 `Email`, `InvitedBy`, `InvitedAt`, `Status` (`Pending`/`Accepted`/`Revoked`), `AcceptedAt`, `Note`.
 
 The onboarding gate must find an invitation **by email, globally, before the user has any identity**.
-That works because [`InvitationNodeType`](../../../../src/MeshWeaver.Graph/Configuration/InvitationNodeType.cs)
+That works because `InvitationNodeType`
 registers a query-routing rule sending the path-less lookup to the Admin partition — the exact
 proven pattern `User → Auth` and `Role → Admin` use:
 
@@ -64,19 +64,19 @@ builder.AddQueryRoutingRule(query =>
 > **Why not the auth-mirror trigger?** The V27 auth-mirror trigger only mirrors
 > `User/Group/Role/VUser/ApiToken` into the `auth` schema; it would **silently drop** `Invitation`
 > rows. Admin-partition storage + the routing rule avoids any schema/migration change. See
-> [Postgres Schema Architecture](PostgresSchemaArchitecture.md).
+> [Postgres Schema Architecture](/Doc/Architecture/PostgresSchemaArchitecture).
 
 All invitation writes (create, accept, revoke) target the Admin partition where the caller has no
-rights, so [`InvitationService`](../../../../memex/Memex.Portal.Shared/Authentication/InvitationService.cs)
+rights, so `InvitationService`
 wraps them in `accessService.ImpersonateAsSystem()` — the same infrastructure-write pattern as
-`UserOnboardingService.CreateUser`. See [Access Context Propagation](AccessContextPropagation.md).
+`UserOnboardingService.CreateUser`. See [Access Context Propagation](/Doc/Architecture/AccessContextPropagation).
 
 ---
 
 ## The onboarding gate
 
 The **security boundary** is the `CreateUser` call in
-[`Onboarding.razor`](../../../../memex/Memex.Portal.Shared/Pages/Onboarding.razor), not the UI. The
+`Onboarding.razor`, not the UI. The
 gate adds an invitation synced query alongside the existing first-user / username / email checks and,
 when `InvitationOnly` is on and this is not the first user, refuses unless a Pending invitation
 matches the email. On success it chains `InvitationService.MarkAccepted`. The page renders the form
@@ -87,7 +87,7 @@ real gate is at `CreateUser`).
 
 ## The admin Invitations tab
 
-[`InvitationsSettingsTab`](../../../../memex/Memex.Portal.Shared/Settings/InvitationsSettingsTab.cs)
+`InvitationsSettingsTab`
 adds an **Invitations** tab under the **Administration** settings group. It is gated exactly like the
 existing **Global Administration** tab: the provider yields it only when the viewer is the node owner
 **and** holds root-level `Permission.All`. Registered via `ConfigureDefaultNodeHub`, that gate means
@@ -102,7 +102,7 @@ email), lists all invitations with their status, and **Revoke**s a Pending one.
 
 The portal had no email infrastructure; this feature adds a small sender that reuses your M365
 tenant. It is configured by the **`Email`** section and **disabled by default** — when disabled, a
-[`NoOpEmailSender`](../../../../memex/Memex.Portal.Shared/Email/NoOpEmailSender.cs) logs the would-be
+`NoOpEmailSender` logs the would-be
 send and reports success, so local dev and tests never send mail.
 
 | Key | Type | Default | Notes |
@@ -114,7 +114,7 @@ send and reports success, so local dev and tests never send mail.
 | `Email:ClientSecret` | string | `""` | App-registration client secret (keep in Key Vault). |
 | `Email:UseManagedIdentity` | bool | `false` | When `true`, authenticate via `DefaultAzureCredential` (managed identity) instead of a client secret. |
 
-[`GraphEmailSender`](../../../../memex/Memex.Portal.Shared/Email/GraphEmailSender.cs) calls Graph
+`GraphEmailSender` calls Graph
 `/users/{mailbox}/sendMail`. It bridges the async Graph call to the codebase's reactive convention
 via `Observable.FromAsync` — the sender is not hub-reachable, so this is the sanctioned boundary
 (same shape as other HttpClient outbound integrations).
@@ -132,7 +132,7 @@ distinct from the delegated sign-in app. Recommended:
 4. **Production:** prefer `Email:UseManagedIdentity=true` and grant the managed identity the
    `Mail.Send` app role; keep no secret in config. **Self-host:** supply `TenantId`/`ClientId`/
    `ClientSecret` (the secret belongs in Key Vault — see
-   [Memex Cloud Deployment → Secrets](MemexCloudDeployment.md)).
+   [Memex Cloud Deployment → Secrets](/Doc/Architecture/MemexCloudDeployment)).
 
 ```json
 {
@@ -172,7 +172,7 @@ enforced, but no email goes out (the admin shares the portal link out-of-band).
 
 ## Testing & verification
 
-- **Unit** — [`InvitationServiceTests`](../../../../test/MeshWeaver.Auth.Test/InvitationServiceTests.cs)
+- **Unit** — `InvitationServiceTests`
   (real mesh, no mocks): `CreateInvitation` writes a queryable Admin-partition node;
   `FindPendingInvitation` returns it (null when absent); `Revoke`/`MarkAccepted` flip status; the
   NoOp sender returns success without sending.
@@ -184,7 +184,7 @@ enforced, but no email goes out (the admin shares the portal link out-of-band).
 
 ## Related
 
-- [Feature Flags](FeatureFlags.md) — the `Features` section reference (the `InvitationOnly` flag and onboarding modes).
-- [Postgres Schema Architecture](PostgresSchemaArchitecture.md) — partitions, schemas, and the auth-mirror trigger.
-- [Access Context Propagation](AccessContextPropagation.md) — why invitation writes impersonate as System.
-- [Synced Mesh-Node Queries](SyncedMeshNodeQueries.md) — `workspace.GetQuery`, used by the gate and the tab.
+- [Feature Flags](/Doc/Architecture/FeatureFlags) — the `Features` section reference (the `InvitationOnly` flag and onboarding modes).
+- [Postgres Schema Architecture](/Doc/Architecture/PostgresSchemaArchitecture) — partitions, schemas, and the auth-mirror trigger.
+- [Access Context Propagation](/Doc/Architecture/AccessContextPropagation) — why invitation writes impersonate as System.
+- [Synced Mesh-Node Queries](/Doc/Architecture/SyncedMeshNodeQueries) — `workspace.GetQuery`, used by the gate and the tab.

@@ -64,7 +64,7 @@ This page covers three things:
   <text x="380" y="310" text-anchor="middle" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity="0.5" font-style="italic">All entry points converge on the Activity hub; the Executor child hub runs scripts off-thread and pushes incremental snapshots back.</text>
 </svg>
 *Script execution architecture: three entry points converge on the Activity hub, which delegates to a child Executor hub and streams progress snapshots back to subscribers.*
-> **Lifting an existing operation onto script execution?** Read *[Activity Control Plane → Operations as scripts](ActivityControlPlane#operations-as-scripts--the-canonical-shape-for-export-import-compile-)* first. That section is the canonical shape for export, import, compile, mirror, and similar operations: form-bound inputs via `JsonPointerReference` → patch `RequestedStatus = Running` → activity-driven progress → result panel subscribes to the same activity. This page documents the lower-level mechanics; that page documents the user-facing pattern.
+> **Lifting an existing operation onto script execution?** Read *[Activity Control Plane → Operations as scripts](/Doc/Architecture/ActivityControlPlane#operations-as-scripts--the-canonical-shape-for-export-import-compile-)* first. That section is the canonical shape for export, import, compile, mirror, and similar operations: form-bound inputs via `JsonPointerReference` → patch `RequestedStatus = Running` → activity-driven progress → result panel subscribes to the same activity. This page documents the lower-level mechanics; that page documents the user-facing pattern.
 
 ---
 
@@ -255,7 +255,7 @@ var liveMessageCount = stream
     .DistinctUntilChanged();
 ```
 
-> **Never query for the activity log** with `IMeshService.QueryAsync("path:...")`. The query path is eventually consistent and will lag behind the workspace stream — you may miss intermediate snapshots or read a stale `Status`. `GetRemoteStream` bypasses the index and observes the owning hub's workspace directly. See [CqrsAndContentAccess.md](CqrsAndContentAccess).
+> **Never query for the activity log** with `IMeshService.QueryAsync("path:...")`. The query path is eventually consistent and will lag behind the workspace stream — you may miss intermediate snapshots or read a stale `Status`. `GetRemoteStream` bypasses the index and observes the owning hub's workspace directly. See [CqrsAndContentAccess.md](/Doc/Architecture/CqrsAndContentAccess).
 
 ---
 
@@ -326,7 +326,7 @@ header
 
 | Pitfall | What goes wrong | Fix |
 |---|---|---|
-| `await` inside a click handler wrapping `ExecuteScriptRequest` | Click actions must be synchronous. | Use `hub.Post(...)` (fire-and-forget) or `hub.Observe(...).Subscribe(...)`. See [AsynchronousCalls.md](AsynchronousCalls). |
+| `await` inside a click handler wrapping `ExecuteScriptRequest` | Click actions must be synchronous. | Use `hub.Post(...)` (fire-and-forget) or `hub.Observe(...).Subscribe(...)`. See [AsynchronousCalls.md](/Doc/Architecture/AsynchronousCalls). |
 | Subscribing only to `SubmitCodeResponse` | That's the completion ack — it carries no progress. | Subscribe to the activity log via `GetRemoteStream`. |
 | Polling `IMeshService.QueryAsync` for activity status | Eventually consistent, will lag. | Use `GetRemoteStream` — it observes the owning hub's workspace directly. |
 | `Console.WriteLine` from heavy parallel loops | Every line becomes an activity-log message; flooding the log overwhelms subscribers and may DoS the workspace. | Aggregate before logging — one line per step, not per iteration. |

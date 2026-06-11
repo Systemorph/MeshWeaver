@@ -383,7 +383,7 @@ public class ThreadPathResolutionTest
         threadRow.Should().NotBeNull(
             "the deepest path in the IN-list IS the thread row in `testorg.threads`; " +
             "the query MUST route to the satellite table by path segment (per " +
-            "CLAUDE.md \"Satellite table routing by path segment\")");
+            "AGENTS.md \"Satellite table routing by path segment\")");
         threadRow!.NodeType.Should().Be("Thread");
     }
 

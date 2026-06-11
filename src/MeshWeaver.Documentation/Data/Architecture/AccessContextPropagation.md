@@ -198,7 +198,7 @@ After this phase, application code runs with `AccessService.Context = delivery.A
 
 ### Phase 5 — Handler runs under user identity
 
-The handler body executes synchronously (or as a single observable chain — no `await`; see [AsynchronousCalls.md](AsynchronousCalls.md)). Every read of `AccessService.Context` returns the originating user. Every check (`securityService.HasPermission(...)`, `RlsNodeValidator.Validate(...)`) is evaluated under the right principal.
+The handler body executes synchronously (or as a single observable chain — no `await`; see [AsynchronousCalls.md](/Doc/Architecture/AsynchronousCalls)). Every read of `AccessService.Context` returns the originating user. Every check (`securityService.HasPermission(...)`, `RlsNodeValidator.Validate(...)`) is evaluated under the right principal.
 
 ### Phase 6 — Handler posts → back to Phase 2 (chain continues)
 

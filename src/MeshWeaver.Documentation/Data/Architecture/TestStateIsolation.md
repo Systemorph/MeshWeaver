@@ -128,7 +128,7 @@ Even with a clean static seed, tests still create runtime nodes (the `CreateThre
 
 Disposing at test end tears down the per-node hub cleanly: the `ActionBlock` completes, the subscription unwires, and in Orleans `Hub.RegisterForDisposal(_ => DeactivateOnIdle())` triggers grain deactivation (`MessageHubGrain.cs:105`). The next test sees a fresh routing table at the same path.
 
-> **🚨 Disposal is not finished when `Dispose()` returns — drain BOTH halves first.** `IMessageHub.Dispose()` only *kicks off* reactive teardown. Before the test base tears down the service scope it must await **(1)** `IMessageHub.DisposalCompleted` (action blocks + message round-trips) **and (2)** `IoPoolRegistry.WhenDrained` (offloaded `IIoPool` I/O on the ThreadPool, which `DisposalCompleted` does **not** cover). Dispose the scope while a straggler `IIoPool` op is still running and its continuation resolves a dead Autofac scope → `ObjectDisposedException: …LifetimeScope… already disposed`, which xUnit reports as a run-aborting **"catastrophic failure."** The canonical helper is `mesh.TeardownAsync(timeout)`; the full order + failure mode is in [Mesh Lifecycle](MeshLifecycle).
+> **🚨 Disposal is not finished when `Dispose()` returns — drain BOTH halves first.** `IMessageHub.Dispose()` only *kicks off* reactive teardown. Before the test base tears down the service scope it must await **(1)** `IMessageHub.DisposalCompleted` (action blocks + message round-trips) **and (2)** `IoPoolRegistry.WhenDrained` (offloaded `IIoPool` I/O on the ThreadPool, which `DisposalCompleted` does **not** cover). Dispose the scope while a straggler `IIoPool` op is still running and its continuation resolves a dead Autofac scope → `ObjectDisposedException: …LifetimeScope… already disposed`, which xUnit reports as a run-aborting **"catastrophic failure."** The canonical helper is `mesh.TeardownAsync(timeout)`; the full order + failure mode is in [Mesh Lifecycle](/Doc/Architecture/MeshLifecycle).
 
 ```csharp
 public class MyOrleansTest(SharedOrleansFixture fixture, ITestOutputHelper output)
@@ -215,7 +215,7 @@ If any of these appear, you either missed a runtime-created path in the dispose 
 
 ## Cross-References
 
-- [Writing Tests](WritingTests) — the broader test-authoring guide; this page covers the shared-fixture special case.
-- [Debugging Message Flow](DebuggingMessageFlow) — what to grep when a test fails because a previous test polluted state.
-- [Asynchronous Calls](AsynchronousCalls) — disposal must respect the actor model: never `await` a dispose chain inside a hub handler.
-- [Satellite Node Patterns](SatelliteNodePatterns) — `IStaticNodeProvider` is also the right place for satellite NodeType configs where no runtime mutation is expected.
+- [Writing Tests](/Doc/Architecture/WritingTests) — the broader test-authoring guide; this page covers the shared-fixture special case.
+- [Debugging Message Flow](/Doc/Architecture/DebuggingMessageFlow) — what to grep when a test fails because a previous test polluted state.
+- [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) — disposal must respect the actor model: never `await` a dispose chain inside a hub handler.
+- [Satellite Node Patterns](/Doc/Architecture/SatelliteNodePatterns) — `IStaticNodeProvider` is also the right place for satellite NodeType configs where no runtime mutation is expected.

@@ -211,7 +211,7 @@ Delete the `ACME/` directory and add your own data. The portal loads whatever is
 
 ### Moving to Production Auth
 
-The DevLogin page is active only when `ASPNETCORE_ENVIRONMENT=Development`. In production, configure Microsoft or Google OAuth in the Aspire AppHost. See [Deployment](Deployment) for secrets management and redirect URI setup.
+The DevLogin page is active only when `ASPNETCORE_ENVIRONMENT=Development`. In production, configure Microsoft or Google OAuth in the Aspire AppHost. See [Deployment](/Doc/Architecture/Deployment) for secrets management and redirect URI setup.
 
 ## Monolith vs. Distributed
 

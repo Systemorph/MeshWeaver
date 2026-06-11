@@ -5,7 +5,7 @@ Description: "Patterns and hard rules for composing async work safely in hub han
 
 # Asynchronous Calls in MeshWeaver
 
-> **For GUI rendering, see [Data Binding](xref:GUI/DataBinding) — that is the authoritative pattern.** Layout areas declare bindings; the Blazor view subscribes via `GetRemoteStream<MeshNode, MeshNodeReference>`. The rules on this page cover hub-handler and service code, where you still need to compose async work safely.
+> **For GUI rendering, see [Data Binding](/Doc/GUI/DataBinding) — that is the authoritative pattern.** Layout areas declare bindings; the Blazor view subscribes via `Hub.GetMeshNodeStream(path)` (the shared `IMeshNodeStreamCache` handle). The rules on this page cover hub-handler and service code, where you still need to compose async work safely.
 
 ---
 <svg viewBox="0 0 760 320" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
@@ -178,7 +178,7 @@ Obtain a pool with `hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPool
 
 ### Every `Observable.FromAsync` converts — the only one that survives is inside `IoPool`
 
-🚨 **`Observable.FromAsync` is forbidden in `src/`** (see [ControlledIoPooling](ControlledIoPooling.md)). There is no "keep it" category — the single sanctioned occurrence is sealed inside `IoPool`. The earlier "Postgres owns a pool, keep `FromAsync`" carve-out is **rescinded**.
+🚨 **`Observable.FromAsync` is forbidden in `src/`** (see [ControlledIoPooling](/Doc/Architecture/ControlledIoPooling)). There is no "keep it" category — the single sanctioned occurrence is sealed inside `IoPool`. The earlier "Postgres owns a pool, keep `FromAsync`" carve-out is **rescinded**.
 
 | Category | Examples | Action |
 |---|---|---|
@@ -288,7 +288,7 @@ workspace.GetMeshNodeStream().Update(node =>
 });
 ```
 
-Full treatment with the read-side rule and helpers (`EnsureTypedContent`, `EnsureSerialisedContent`): [CqrsAndContentAccess.md → "Content is always typed at the GetMeshNodeStream boundary"](xref:Architecture/CqrsAndContentAccess).
+Full treatment with the read-side rule and helpers (`EnsureTypedContent`, `EnsureSerialisedContent`): [CqrsAndContentAccess.md → "Content is always typed at the GetMeshNodeStream boundary"](/Doc/Architecture/CqrsAndContentAccess).
 
 ---
 
@@ -420,22 +420,30 @@ return Observable.CombineLatest(cellLookups)
 
 ---
 
-## 🚨 `Stream.Take(1)` is the wrong primitive for a one-shot read
+## One-shot reads compose on `GetMeshNodeStream` — the cache makes them cheap
 
-A stream is a **subscription** — `GetMeshNodeStream(path)` / `GetRemoteStream<MeshNode, MeshNodeReference>` posts a `SubscribeRequest`, receives the initial frame, then stays subscribed for live updates. Calling `.Take(1)` on it snapshots the first frame and immediately unsubscribes — you paid for a subscription you immediately threw away, and the next caller pays again.
+`workspace.GetMeshNodeStream(path)` is backed by the process-wide `IMeshNodeStreamCache`: **one shared upstream handle per path**. A `.Take(1)` completes *your* subscription; the upstream stays alive for every other reader (and the writer). So a one-shot read is just the same stream, completed after the first useful emission:
 
-For a one-shot read in a handler or click action, post `GetDataRequest(new MeshNodeReference())` to the node's address — a true request/response with no subscription overhead.
+```csharp
+workspace.GetMeshNodeStream(path)
+    .Where(node => node is not null)
+    .Take(1)
+    .Timeout(TimeSpan.FromSeconds(10))
+    .Subscribe(node => /* snapshot */, ex => logger.LogWarning(ex, "read failed"));
+```
+
+(The old "don't `.Take(1)` a stream" warning applies to **per-call** subscriptions like `GetRemoteStream<MeshNode, …>` — which is exactly why that surface is discouraged for MeshNode reads; see [CQRS](/Doc/Architecture/CqrsAndContentAccess).)
 
 **Decision matrix for reading mesh state:**
 
 | What you need | Primitive |
 |---|---|
-| **Single node, live** (view re-renders on changes) | `workspace.GetMeshNodeStream(path)` / `GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference())` — **stay subscribed** (no `.Take(1)`) |
-| **Single node, one-shot** (handler, helper, click) | `hub.Post(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))` + `RegisterCallback` |
+| **Single node, live** (view re-renders on changes) | `workspace.GetMeshNodeStream(path)` — **stay subscribed** (no `.Take(1)`) |
+| **Single node, one-shot** (handler, helper, click) | `workspace.GetMeshNodeStream(path).Where(n => n is not null).Take(1).Timeout(...)` |
 | **Set / listing, live** (dashboard, autocomplete) | `meshService.Query<T>(MeshQueryRequest.FromQuery(...))` — emits initial set + deltas |
 | **Set / listing, one-shot** (MCP tool, CLI, HTTP endpoint) | `meshService.QueryAsync<T>(...)` — ONLY when the caller exits after the snapshot |
 
-Simple rule: **streams subscribe, requests fetch.** Don't `.Take(1)` a stream to fake a fetch.
+🚨 **Never `.Take(1)` a display stream** — a live-bound view that snapshots freezes on the first emission (rule 8 below). `.Take(1)` is for genuine one-shot reads and read-modify-write chains only.
 
 ### When `.Take(N)` is the right primitive: read-modify-write inside `SelectMany`
 
@@ -482,7 +490,7 @@ If you find yourself using `.Take(N)` outside a `SelectMany` that immediately pr
 
 3. **Use `hub.Observe(...)` instead of `RegisterCallback` / `AwaitResponse`.** The Task-returning overloads are `[Obsolete]`. Production code MUST use `hub.Observe(delivery)` (already-posted) or `hub.Observe(request, options?)` (also posts) — both return `IObservable<IMessageDelivery[<TResponse>]>`. `DeliveryFailure` flows via `OnError`; no Task-await deadlock surface, no silently-skipped callback.
 
-4. **Never `.QueryAsync<MeshNode>($"path:X").FirstOrDefaultAsync()` to read a known node.** Queries go through a lagged read-side index. For a known path: live = `GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference()).Subscribe(...)`; one-shot = `hub.GetMeshNode(path, timeout?)`.
+4. **Never `.QueryAsync<MeshNode>($"path:X").FirstOrDefaultAsync()` to read a known node.** Queries go through a lagged read-side index. For a known path: live = `workspace.GetMeshNodeStream(path).Subscribe(...)`; one-shot = the same stream with `.Where(n => n is not null).Take(1).Timeout(...)` (or the `hub.GetMeshNode(path, timeout?)` convenience, which wraps it null-on-absent).
 
 5. **Never wrap a Task-returning query in `Observable.FromAsync(() => query.QueryAsync(...).FirstOrDefaultAsync().AsTask())`.** This is fake-reactive — it runs through the lagged index and returns stale content.
 
@@ -492,7 +500,7 @@ If you find yourself using `.Take(N)` outside a `SelectMany` that immediately pr
 
 8. **🚨 NO `.Take(1)` on display streams.** A `.Take(1)` snapshots and unsubscribes — the view freezes on the first emission and **stops updating**. For display, stay subscribed. The only `.Take(1)` that is ever right is a one-shot read in a read-modify-write chain (see above).
 
-9. **🚨 The async boundary lives at the real I/O edge — defer it as deep as possible.** `async` / `await` / `IAsyncEnumerable` bridge across a *genuine* I/O wait (Postgres, file-system, network). In-memory work is never async: anything that only touches in-process state projects synchronously and lifts to `IObservable<T>` via `IEnumerable<T>.ToObservable()`. An `async IAsyncEnumerable` method that never awaits I/O is a bug. Only the leaf that actually performs I/O is allowed to be async, and it bridges back to the observable contract at one sealed point (`Observable.Create` + `await foreach`), pooling at that edge via the shared **`IIoPool`** governor (`MeshWeaver.Mesh.Threading`). Litmus test: before writing `async`, name the I/O it awaits — if you can't, delete it and return `IObservable<T>`. Full treatment: [Aggregating Providers → "The async boundary lives at the I/O edge"](AggregatingProviders).
+9. **🚨 The async boundary lives at the real I/O edge — defer it as deep as possible.** `async` / `await` / `IAsyncEnumerable` bridge across a *genuine* I/O wait (Postgres, file-system, network). In-memory work is never async: anything that only touches in-process state projects synchronously and lifts to `IObservable<T>` via `IEnumerable<T>.ToObservable()`. An `async IAsyncEnumerable` method that never awaits I/O is a bug. Only the leaf that actually performs I/O is allowed to be async, and it bridges back to the observable contract at one sealed point (`Observable.Create` + `await foreach`), pooling at that edge via the shared **`IIoPool`** governor (`MeshWeaver.Mesh.Threading`). Litmus test: before writing `async`, name the I/O it awaits — if you can't, delete it and return `IObservable<T>`. Full treatment: [Aggregating Providers → "The async boundary lives at the I/O edge"](/Doc/Architecture/AggregatingProviders).
 
 ---
 
@@ -520,14 +528,13 @@ var node = hub.GetWorkspace().GetStream(new MeshNodeReference())?.Current?.Value
 ### ✅ Right — the one way to obtain a known MeshNode
 
 ```csharp
-// Direct subscription to the owning hub's workspace reference.
+// Direct subscription to the owning hub via the shared per-path handle.
 // Authoritative, live, no staleness, no query index involved.
 var workspace = hub.GetWorkspace();
-return workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-        new Address(path), new MeshNodeReference())
+return workspace.GetMeshNodeStream(path)
+    .Where(node => node is not null)            // skip pre-init frame
     .Take(1)                                    // one emission then complete
-    .Timeout(TimeSpan.FromSeconds(10))          // bound the wait
-    .Select(change => change.Value);            // unwrap ChangeItem<MeshNode>
+    .Timeout(TimeSpan.FromSeconds(10));         // bound the wait
 ```
 
 This is also how you **wait for work to finish** — subscribe until a field in the node's content flips to a completion state, then `.Take(1)`. No polling loop. No repeated queries.
@@ -536,7 +543,7 @@ This is also how you **wait for work to finish** — subscribe until a field in 
 
 Even when a query is the right idea (listings, filters, existence checks), **do not `await` the `IAsyncEnumerable<T>`** version — use `IMeshService.Query<T>`. It returns `IObservable<QueryResultChange<T>>` with an initial full set and then incremental deltas, composing with `Select` / `Where` / `Subscribe` like every other mesh observable.
 
-> **Even `Query` is wrong inside a layout area for displaying values.** Declare a binding and let the Blazor view subscribe. See [Data Binding](xref:GUI/DataBinding). Backend rendering code should be fully synchronous and side-effect-free.
+> **Even `Query` is wrong inside a layout area for displaying values.** Declare a binding and let the Blazor view subscribe. See [Data Binding](/Doc/GUI/DataBinding). Backend rendering code should be fully synchronous and side-effect-free.
 
 **`QueryAsync` breaks the update flow.** It is a one-shot snapshot — the view freezes. If a row is added, removed, or mutated, the list doesn't change. `Query` emits the initial set plus a delta for every subsequent change, so the downstream chain stays live.
 
@@ -640,28 +647,30 @@ meshService.CreateNode(new MeshNode(id, namespace)
     error => logger.LogError(error, "Node creation failed"));
 
 // State update in the handler body (grain scheduler) — safe
-hub.GetWorkspace().UpdateMeshNode(node => node with
+hub.GetWorkspace().GetMeshNodeStream().Update(node => node with
 {
     Content = content with { Messages = content.Messages.Add(id) }
-});
+}).Subscribe(_ => { }, ex => logger.LogWarning(ex, "Update failed"));
 
 return delivery.Processed();
 ```
 
 ### Never do state updates in Subscribe callbacks
 
-Subscribe callbacks run on **arbitrary threads**. State updates (`workspace.UpdateMeshNode`) require the hub's scheduler. Mixing these causes deadlocks — this is not framework-specific; you don't control which thread a callback runs on.
+Subscribe callbacks run on **arbitrary threads**. Direct workspace mutation requires the hub's scheduler. Mixing these causes deadlocks — this is not framework-specific; you don't control which thread a callback runs on.
 
 ```csharp
-// WRONG — callback runs on unknown thread, state update needs hub scheduler:
+// WRONG — callback runs on unknown thread, direct mutation needs hub scheduler:
 meshService.CreateNode(node).Subscribe(_ =>
 {
-    workspace.UpdateMeshNode(n => ...); // ← deadlock: wrong thread
+    /* direct workspace mutation here */ // ← deadlock: wrong thread
 });
 
-// CORRECT — separate concerns: fire-and-forget for I/O, state update in handler body:
-meshService.CreateNode(node).Subscribe();  // fire-and-forget
-hub.GetWorkspace().UpdateMeshNode(n => ...);  // handler body = hub scheduler
+// CORRECT — separate concerns: fire-and-forget for I/O, state update composed
+// (GetMeshNodeStream().Update is itself a cold observable — chain, don't nest):
+meshService.CreateNode(node)
+    .SelectMany(_ => workspace.GetMeshNodeStream().Update(n => ...))
+    .Subscribe(_ => { }, ex => logger.LogWarning(ex, "create+update failed"));
 ```
 
 The principle: **I/O is fire-and-forget; state changes happen where you control the thread.**
@@ -725,17 +734,16 @@ public IObservable<TokenResult> CreateToken(string label)
 public IObservable<bool> DeleteToken(string path)
 {
     var workspace = hub.GetWorkspace();
-    return workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-            new Address(path), new MeshNodeReference())
+    return workspace.GetMeshNodeStream(path)
         .Take(1)
         .Timeout(TimeSpan.FromSeconds(10))
-        .SelectMany(change => change.Value is null
+        .SelectMany(node => node is null
             ? Observable.Return(false)
             : nodeFactory.DeleteNode(path));
 }
 ```
 
-See *[CQRS — Queries vs. Content Access](CqrsAndContentAccess)* for the full rule.
+See *[CQRS — Queries vs. Content Access](/Doc/Architecture/CqrsAndContentAccess)* for the full rule.
 
 ### Static handlers compose — don't wrap them in a service for "DI cleanliness"
 
@@ -873,7 +881,7 @@ workspace.GetMeshNodeStream(path)
 
 ## 🚨 Blazor / GUI rule — no `await` ever, stay in observables
 
-> **Full treatment in [Blazor Async — `Subscribe`, not `await`](BlazorAsync).** That article is the practical playbook: lifecycle hooks, click handlers, parallel queries, multi-step flows, and the channel bridge for IAsyncEnumerable-shaped APIs. Read it before touching any `.razor` / `.razor.cs` file.
+> **Full treatment in [Blazor Async — `Subscribe`, not `await`](/Doc/Architecture/BlazorAsync).** That article is the practical playbook: lifecycle hooks, click handlers, parallel queries, multi-step flows, and the channel bridge for IAsyncEnumerable-shaped APIs. Read it before touching any `.razor` / `.razor.cs` file.
 
 Never `await` a mesh operation in a Blazor component lifecycle method, click handler, autocomplete callback, or anywhere else. `Task.FromResult(snapshot)` is no better — it freezes the snapshot at call time and ignores live updates.
 
@@ -1002,42 +1010,31 @@ For reading any node by path (own or remote), use `workspace.GetMeshNodeStream(p
 
 ---
 
-## 🚨 Writing a remote MeshNode — pick the right primitive
+## 🚨 Writing any MeshNode — ONE primitive: `GetMeshNodeStream(path).Update(...)`
 
-### One-shot fire-and-forget mutation — `DataChangeRequest`
-
-When the caller just wants to push one update and walk away:
+Own node or someone else's, server-side application code always writes the same way:
 
 ```csharp
-// ✅ Right for one-shot writes — owning hub's data layer handles DataChangeRequest
-//    natively: applies the patch, persists, and broadcasts to subscribers.
-//    No subscription required, no SubscribeRequest round trip.
-hub.Post(new DataChangeRequest { Updates = [updatedNode] },
-    o => o.WithTarget(new Address(updatedNode.Path)));
+workspace.GetMeshNodeStream(path).Update(node =>
+{
+    // Bad-data tolerance: an existing node whose content can't be read is
+    // left alone — never clobbered with a fresh instance.
+    var content = node.ContentAs<MyContent>(hub.JsonSerializerOptions, logger);
+    if (node.Content is not null && content is null) return node;
+    content ??= new MyContent();
+    return node with { Content = content with { Status = "updated" } };
+})
+.Subscribe(_ => { }, ex => logger.LogWarning(ex, "Update failed for {Path}", path));
 ```
 
-### Long-standing subscription that also writes — `GetRemoteStream + Update`
+The handle auto-dispatches:
 
-When the caller is already subscribed to the remote stream (live editor, collaborative session) and wants to push edits back through the same channel:
+- **`path == this hub's address`** — the write goes through the local data source (`UpdateOwn`).
+- **`path != this hub's address`** — the write routes to the owning per-node hub via the process-wide `IMeshNodeStreamCache`: it diffs `current` vs `update(current)` and ships only the RFC 7396 JSON-merge patch. The owner serialises every mirror's write through its single-threaded action block, and merges the patch against its CURRENT state — concurrent writers touching different fields both land; there is no last-write-wins on the whole node.
 
-```csharp
-// ✅ Right for long-standing streams — the patch goes through the same stream
-//    the view is rendering from; the echo updates the view without an extra read.
-var remote = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-    new Address(targetPath), new MeshNodeReference());
-remote.Update(current => current with { Name = "Renamed", LastModifiedBy = me });
-// Keep the subscription alive — the editor renders subsequent updates from it.
-```
+Because the cache hands out one shared handle per path, repeated writes do **not** re-subscribe — there is no per-write `SubscribeRequest` churn, and readers (including the GUI) observe every write in order on the same handle.
 
-### Don't use `GetRemoteStream + Update` for one-shot writes
-
-Subscribing just to push one update is wasteful: it incurs a `SubscribeRequest` round trip, allocates the subscription, and then disposes it. For nodes whose per-node hub isn't separately activated, the `SubscribeRequest` gets `DeliveryFailure` and the write is silently dropped — `DataChangeRequest` doesn't have that failure mode.
-
-**Rule of thumb:** if you're not also reading from the stream, use `DataChangeRequest`.
-
-### `workspace.UpdateMeshNode(...)` is own-hub only
-
-The local `UpdateMeshNode` extension writes through the data source's MeshNode partition stream — there's no remote variant. For remote, choose between `DataChangeRequest` (one-shot) or `GetRemoteStream + Update` (subscribed).
+**Don't** post `DataChangeRequest` / `PatchDataRequest` yourself for MeshNode writes — those are the internal plumbing `stream.Update` rides on, not an application surface. (Blazor views bind via `Hub.GetMeshNodeStream(path)` — the same shared cache handle — and push edits back through it; see [Data Binding](/Doc/GUI/DataBinding).)
 
 ---
 
@@ -1048,51 +1045,43 @@ For any view that reads and writes the same MeshNode (collaborative editor, dash
 ```csharp
 public partial class MyEditor : BlazorView<MyControl, MyEditor>
 {
-    private ISynchronizationStream<MeshNode>? _nodeStream;
-
     protected override void BindData()
     {
         base.BindData();
 
-        var workspace = Hub.GetWorkspace();
-        try
-        {
-            _nodeStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(BoundNodePath), new MeshNodeReference());
-            AddBinding(_nodeStream
-                .Where(change => change.Value != null)
-                .Select(change => change.Value!.Content as MarkdownContent)
-                .DistinctUntilChanged()
-                .Subscribe(content =>
+        // Read via the process-wide shared handle (IMeshNodeStreamCache) —
+        // the same handle every other reader AND the writer use for this path.
+        AddBinding(Hub.GetMeshNodeStream(BoundNodePath)
+            .Where(node => node is not null)
+            .Select(node => node!.Content as MarkdownContent)
+            .DistinctUntilChanged()
+            .Subscribe(content =>
+            {
+                if (content?.Content is { } text && text != RawContent)
                 {
-                    if (content?.Content is { } text && text != RawContent)
-                    {
-                        RawContent = text;
-                        InvokeAsync(StateHasChanged);
-                    }
-                }));
-        }
-        catch
-        {
-            DataBind(ViewModel.Value, x => x.RawContent, defaultValue: "");
-        }
+                    RawContent = text;
+                    InvokeAsync(StateHasChanged);
+                }
+            }));
     }
 
     private Task SaveAsync(string newContent)
     {
-        if (_nodeStream == null) return Task.FromResult(false);
-        _nodeStream.Update(current =>
-            current with { Content = new MarkdownContent { Content = newContent } });
-        return Task.FromResult(true);
+        // Write through the SAME shared handle the read subscription is on —
+        // every reader observes the patch in order.
+        Hub.GetMeshNodeStream(BoundNodePath).Update(current =>
+                current with { Content = new MarkdownContent { Content = newContent } })
+            .Subscribe(_ => { }, ex => Logger.LogWarning(ex, "save failed"));
+        return Task.CompletedTask;
     }
 }
 ```
 
 **Why this is the right shape:**
 
-- `GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference())` is the per-node reducer — direct, no FirstOrDefault on a collection, no per-emission filter.
-- The stream is held as a field — one `SubscribeRequest` at view init; the subscription stays alive until the view is disposed.
-- `_nodeStream.Update(...)` writes through the same stream the view is rendering from — the patch goes to the owning hub, which broadcasts the echo, updating the view without an extra read.
+- `Hub.GetMeshNodeStream(path)` resolves the per-node reducer through the shared cache — direct, no FirstOrDefault on a collection, no per-emission filter, one upstream subscription process-wide no matter how many views are open.
+- `AddBinding(...)` registers the subscription with the base class; it is disposed on component teardown while the upstream cache entry stays alive.
+- `Update(...)` writes through the same handle the view is rendering from — the patch goes to the owning hub, which broadcasts the echo, updating the view without an extra read. `Update` is cold: the trailing `Subscribe` is what makes the write happen.
 
 ### Anti-patterns that show up in views
 
@@ -1134,18 +1123,20 @@ workspace.GetRemoteStream<MeshNode>(new Address(addr))
 
 ## 🚨 Decision rule — single op vs. long-standing stream
 
+Both shapes use the **same primitive** for MeshNodes — `workspace.GetMeshNodeStream(path)` — the difference is only how long you stay subscribed:
+
 | Caller shape | Use |
 |---|---|
-| **Single operation** — handler builds value once; HTTP / MCP / CLI endpoints; click actions; one-shot writes | `hub.Post(new DataChangeRequest { … }, o => o.WithTarget(addr))` |
-| **Long-standing stream** — anything that re-renders or re-computes when data changes; all layout areas; live editors; dashboards; collaborative views; streaming autocomplete | `workspace.GetRemoteStream<T, TRef>(addr, ref)` + `.Subscribe(...)` (and `.Update(...)` for write-back) |
+| **Single operation** — handler builds value once; HTTP / MCP / CLI endpoints; click actions; one-shot writes | `workspace.GetMeshNodeStream(path).Update(fn).Subscribe(...)` (write) · `.Where(n => n is not null).Take(1).Timeout(...)` (read) |
+| **Long-standing stream** — anything that re-renders or re-computes when data changes; all layout areas; live editors; dashboards; collaborative views; streaming autocomplete | `workspace.GetMeshNodeStream(path)` + `.Subscribe(...)` — **stay subscribed**, push edits back via `.Update(...)` on the same handle |
 
-> **Rule of thumb:** if any downstream code re-renders when data changes, you need a long-standing stream. One-shot writes use `DataChangeRequest`.
+> **Rule of thumb:** if any downstream code re-renders when data changes, stay subscribed. (`DataChangeRequest` is the typed-**entity** mutation message for EntityStore collections — see [CRUD](/Doc/DataMesh/CRUD) — not a MeshNode write surface.)
 
 The rule applies symmetrically:
 
-- **Layout areas always subscribe to a stream** and push edits back through `stream.Update(...)` — never `DataChangeRequest` for a write the area is also rendering.
+- **Layout areas always subscribe to a stream** and push edits back through `stream.Update(...)` on the same handle they render from.
 - **Autocomplete** that streams suggestions incrementally uses a long-standing stream subscription.
-- **MCP tools** and **`MeshPlugin` tool methods** are always one-shot — write via `DataChangeRequest`, read via `QueryAsync` / `Get`.
+- **MCP tools** and **`MeshPlugin` tool methods** are one-shot — internally they ride the same reactive surface (`MeshOperations`), bridging to `Task` only at the MCP boundary.
 - **HTTP / CLI endpoints** that render once and close are one-shot.
 
 ### MeshNode write semantics: routing-supplied stream + sample-debounced save
@@ -1181,8 +1172,7 @@ await persistence.SaveNode(node);
 |---|---|
 | Read own MeshNode | `workspace.GetMeshNodeStream()` |
 | Read MeshNode at any path | `workspace.GetMeshNodeStream(path)` (auto-dispatches own / local collection / remote) |
-| Update remote MeshNode | `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference()).Update(current => updated)` |
-| Update own MeshNode (in handler) | `workspace.UpdateMeshNode(node => updated)` |
+| Update MeshNode at any path | `workspace.GetMeshNodeStream(path).Update(node => updated).Subscribe(...)` — same auto-dispatch |
 | Create node | `meshService.CreateNode(node).Subscribe(...)` |
 | Delete node | `meshService.DeleteNode(path).Subscribe(...)` |
 
@@ -1190,17 +1180,18 @@ await persistence.SaveNode(node);
 
 ## Workspace Updates (Non-Blocking)
 
-`workspace.UpdateMeshNode` applies an update function to the current node state atomically — no blocking, no subscription:
+`workspace.GetMeshNodeStream(path).Update(fn)` applies the update function to the current node state atomically on the owning hub's action block — no blocking. It returns a **cold** `RequireSubscribeObservable<MeshNode>`: the write only runs on `Subscribe`, and a handle that is garbage-collected without ever being subscribed logs a warning on the `MeshWeaver.Mesh.RequireSubscribe` channel.
 
 ```csharp
-workspace.UpdateMeshNode(node =>
+workspace.GetMeshNodeStream(path).Update(node =>
 {
-    var content = node.Content as MyContent ?? new MyContent();
+    var content = node.ContentAs<MyContent>(hub.JsonSerializerOptions, logger) ?? new MyContent();
     return node with
     {
         Content = content with { Status = "updated" }
     };
-});
+})
+.Subscribe(_ => { }, ex => logger.LogWarning(ex, "Update failed for {Path}", path));
 ```
 
 ---
@@ -1220,9 +1211,9 @@ streamCache.Update(path, fn).Subscribe(_ =>
     meshService.CreateNode(child).Subscribe(_ => { }));
 ```
 
-The mechanism is `IObservable<T>.CarryAccessContext(IServiceProvider)` in `src/MeshWeaver.Messaging.Hub/AccessContextCaptureExtensions.cs`, applied inside each framework primitive (not at the callsite). Full reference: [AccessContextPropagation.md](AccessContextPropagation.md).
+The mechanism is `IObservable<T>.CarryAccessContext(IServiceProvider)` in `src/MeshWeaver.Messaging.Hub/AccessContextCaptureExtensions.cs`, applied inside each framework primitive (not at the callsite). Full reference: [AccessContextPropagation.md](/Doc/Architecture/AccessContextPropagation).
 
-Legitimate hub-internal writes that must bypass user identity (cache hydration, SyncStream heartbeats) opt in explicitly via `accessService.ImpersonateAsSystem()` or `accessService.ImpersonateAsHub(hub)` / `PostOptions.ImpersonateAsHub`. PostPipeline fails closed otherwise — the silent hub-self-impersonation fallback was deleted 2026-05-21.
+Legitimate hub-internal writes that must bypass user identity (cache hydration, SyncStream heartbeats) opt in explicitly via `accessService.ImpersonateAsSystem()` or `accessService.ImpersonateAsHub(hub)` / `PostOptions.ImpersonateAsHub`. PostPipeline fails closed otherwise.
 
 ---
 
@@ -1234,11 +1225,11 @@ Legitimate hub-internal writes that must bypass user identity (cache hydration, 
 | `hub.Observe(request).Subscribe(onNext, onError)` | Yes | Reactive request/response; DeliveryFailure → onError |
 | `hub.Observe(delivery).Subscribe(...)` | Yes | Same, when the delivery was already posted |
 | `meshService.CreateNode(...).Subscribe()` | Yes | Fire-and-forget, no callback logic |
-| `workspace.UpdateMeshNode(...)` in handler body | Yes | Runs on grain scheduler |
+| `workspace.GetMeshNodeStream(path).Update(...).Subscribe(...)` in handler body | Yes | Runs on grain scheduler |
 | `hub.RegisterCallback(...)` | **OBSOLETE** | Use `hub.Observe(...)` — RegisterCallback's Task short-circuits DeliveryFailure → callback silently never fires → caller hangs |
 | `await hub.AwaitResponse(...)` | **OBSOLETE / NO** | Use `hub.Observe(request).Subscribe(...)` in production; `MonolithMeshTestBase.AwaitResponseAsync(...)` in tests |
 | `Observable.FromAsync(() => hub.RegisterCallback(...))` | **NEVER** | Bridges Task into Rx; continuation captures sync-context → deadlock. Use `hub.Observe(...)` |
-| `workspace.UpdateMeshNode(...)` in Subscribe callback | **NO** | Wrong thread in Orleans, deadlocks |
+| Direct workspace mutation in a Subscribe callback | **NO** | Wrong thread in Orleans, deadlocks — compose the next write into the observable chain instead |
 | `meshService.QueryAsync(...)` | **NO** | Blocks waiting for response |
 | `await someTask` | **NO** | Blocks the hub scheduler |
 | `hub.InvokeAsync(...)` | **NO** | Schedules on potentially blocked scheduler |
@@ -1267,26 +1258,26 @@ Sometimes you genuinely need long-running I/O — streaming an AI response, for 
 - All **messages** go through the parent hub — never post to the execution hub.
 - The execution hub is purely for hosting the blocking I/O — it should never own state.
 
-> **Streaming content into a thread message: use a long-lived `GetRemoteStream(...).Update(...)` from the writer.** Posting `UpdateThreadMessageContent` (or any per-chunk message) between hubs creates the deadlock surface that `OrleansReentrancyTest.ToolCall_DuringStreaming_DoesNotDeadlock` exists to catch. See [Thread Execution Streaming](xref:Architecture/ThreadExecutionStreaming) for the full design and [Per-Hub TaskScheduler](xref:Architecture/OrleansTaskScheduler) for the threading-model rules.
+> **Streaming content into a thread message: push every delta through `GetMeshNodeStream(path).Update(...)` from the writer.** Posting `UpdateThreadMessageContent` (or any per-chunk message) between hubs creates the deadlock surface that `OrleansReentrancyTest.ToolCall_DuringStreaming_DoesNotDeadlock` exists to catch. See [Thread Execution Streaming](/Doc/Architecture/ThreadExecutionStreaming) for the full design and [Per-Hub TaskScheduler](/Doc/Architecture/OrleansTaskScheduler) for the threading-model rules.
 
 ```csharp
-// In HandleSubmitMessage (runs on thread hub):
-var executionHub = hub.GetHostedHub(new Address($"{hub.Address}/_Exec"), ...);
-executionHub.Post(request);  // Only message to execution hub: start the work
+// In the submission watcher (runs on thread hub) — invoke directly and
+// subscribe; completion is gated on the terminal Status write:
+ThreadExecution.ExecuteMessageAsync(execHub, roundParams, accessContext)
+    .Subscribe(_ => { }, ex => logger.LogWarning(ex, "round failed"));
 
 // In ExecuteMessageAsync (runs on _Exec hub):
-var parentHub = hub.Configuration.ParentHub!;
-var workspace = parentHub.GetWorkspace();
+var parentHub = hub.Configuration.ParentHub!;   // _Exec has no AddData — route via parent
 
-// Open the per-message remote stream once at start, hold for the streaming run.
-var responseStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-    new Address(responsePath), new MeshNodeReference());
+// Push every delta through the SHARED per-path handle — fire-and-forget per chunk.
+parentHub.GetMeshNodeStream(responsePath)
+    .Update(node => node with { Content = (ThreadMessage)node.Content with { Text = ... } })
+    .Subscribe(_ => { }, ex => logger.LogWarning(ex, "push failed"));
 
-// Push every delta through the stream — fire-and-forget.
-responseStream.Update(node => node with { Content = (ThreadMessage)node.Content with { Text = ... } });
-
-// Thread-state updates stay on parentHub.UpdateMeshNode.
-parentHub.GetWorkspace().UpdateMeshNode(node => node with { /* IsExecuting, etc. */ });
+// Thread-state updates use the same primitive on the thread node.
+parentHub.GetMeshNodeStream(threadPath)
+    .Update(node => node with { /* IsExecuting, etc. */ })
+    .Subscribe(_ => { }, ex => logger.LogWarning(ex, "state update failed"));
 ```
 
-The parent hub's scheduler is free (the handler returned `delivery.Processed()` immediately). State updates and callbacks process normally on it. Per-message content writes flow through the workspace stream so the renderer sees them without the writer paying for a hub-to-hub round trip per chunk.
+The parent hub's scheduler is free — the streaming loop runs on `_Exec`, and the watcher's subscription completes only when the round's terminal status lands. Per-message content writes flow through the shared stream handle so the renderer sees them without the writer paying for a hub-to-hub round trip per chunk.

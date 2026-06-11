@@ -62,7 +62,7 @@ Every assignment is a MeshNode whose placement and content together determine wh
 
 | Field | Meaning |
 |---|---|
-| `path` | Where the assignment lives — must be **`{scope}/_Access/{id}`** (or `_Access/{id}` for global). |
+| `path` | Where the assignment lives — must be **`{scope}/_Access/{id}`** (`Admin/_Access/{id}` for platform admins — see Recipe 2). |
 | `mainNode` | The path the assignment scopes to. Must equal `{scope}` from the `path` above. |
 | `accessObject` | The user or group this grants permissions to. Matched against `userId`. |
 | `roles[].role` | The role names the user gets at this scope — typically `Admin` or `Editor`. |
@@ -71,7 +71,7 @@ Every assignment is a MeshNode whose placement and content together determine wh
 > The `PermissionEvaluator`'s `SatelliteAccessRule` uses `mainNode` to decide which partition or subtree the assignment binds to. If `mainNode` is empty for a non-global assignment, the assignment is **silently ignored** and the user gets zero permissions.  
 > **Symptom:** `Access denied: user 'X' lacks Read permission on '{scope}/Y'` even though an `AccessAssignment` exists at `{scope}/_Access/X_Access`.
 
-> 🚨 **The namespace must end in `/_Access`** (or equal `_Access` exactly for global assignments).  
+> 🚨 **The namespace must end in `/_Access`.**  
 > The `PermissionEvaluator`'s synced query only routes namespaces that match this pattern, and nodes with an `_Access` segment land in the partition's `access` table. Place the node anywhere else and it never reaches the security pipeline.
 
 ---
@@ -144,15 +144,15 @@ mcp update --nodes '[{
 
 ---
 
-## Recipe 2 — Grant a user Global Admin
+## Recipe 2 — Grant a user Global (Platform) Admin
 
-Global Admin means Admin everywhere. The assignment lives at the root `_Access` namespace with no scope prefix, and `mainNode` is left empty.
+Global/platform admin has **one** canonical shape: an `AccessAssignment` granting the `Admin` role **on the Admin partition** — namespace `Admin/_Access`, `mainNode` left empty. This is exactly what `GlobalAdminSeed` (config-driven admins via `Auth:GlobalAdmins`) and `UserOnboardingService.GrantPlatformAdmin` (first user) write, and what `hub.IsGlobalAdmin()` reads.
 
 ```bash
 mcp create --node '{
-  "id": "rbuergi_GlobalAdmin",
-  "namespace": "_Access",
-  "name": "rbuergi Global Admin",
+  "id": "rbuergi_Access",
+  "namespace": "Admin/_Access",
+  "name": "rbuergi — Admin",
   "nodeType": "AccessAssignment",
   "mainNode": "",
   "content": {
@@ -164,7 +164,9 @@ mcp create --node '{
 }'
 ```
 
-`SatelliteAccessRule` treats a root-level `Admin` role as Admin across the entire mesh.
+`PermissionEvaluator`'s global-admin short-circuit turns `Permission.All` at scope `Admin` into the platform-admin gates (`hub.IsGlobalAdmin()`, admin tabs, invites, config).
+
+> 🚨 **Never grant at the root `_Access` namespace.** A root-level `Admin` assignment is the *data-superuser* shape — standing `Permission.All` on every partition's data — and is deliberately **not** how platform admins are provisioned. Platform admins manage the platform; emergency cross-partition data access goes through explicit elevation (break-glass), never a standing grant. See [AccessControl](/Doc/Architecture/AccessControl) → "The Admin partition".
 
 ---
 

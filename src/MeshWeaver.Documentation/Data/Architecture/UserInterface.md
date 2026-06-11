@@ -145,20 +145,21 @@ A counter incrementing once sends a single-operation patch rather than re-sendin
 
 ## Handling User Interactions
 
-User interactions become hub messages. When a button is clicked, the browser sends `OnClick` to the Portal, which forwards a `ClickedEvent` to the hub and invokes the registered action:
+User interactions become hub messages. When a button is clicked, the browser sends `OnClick` to the Portal, which forwards a `ClickedEvent` to the hub and invokes the registered action. Click handlers are **synchronous** — compose any follow-up work as an observable and `Subscribe`:
 
 ```csharp
 Controls.Button("Save")
-    .WithClickAction(async context =>
+    .WithClickAction(context =>
     {
-        // context.Area   – which control was clicked
+        // context.Area    – which control was clicked
         // context.Payload – custom data attached to the event
-        // context.Hub    – hub reference for posting messages
-        await context.Hub.Post(new SaveRequest(data));
+        // context.Hub     – hub reference for posting messages
+        context.Hub.Post(new SaveRequest(data));   // fire-and-forget — no await
+        return Task.CompletedTask;
     })
 ```
 
-> **Note:** Inside hub-reachable code, prefer the reactive pattern (`IObservable<T>`) over `async`/`await`. The `async` lambda above is shown for illustration; production handlers compose `IObservable` chains and call `Subscribe`. See [AsynchronousCalls.md](AsynchronousCalls) for the canonical patterns.
+> 🚨 **Never `async context => await ...`.** An `await` on a mesh operation inside a click handler runs on the hub's scheduler and deadlocks it. The handler body is synchronous; anything that produces a result is an `IObservable<T>` chain ending in `.Subscribe(...)`. See [AsynchronousCalls.md](/Doc/Architecture/AsynchronousCalls) for the canonical patterns.
 
 ---
 

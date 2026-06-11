@@ -98,7 +98,7 @@ public static class AIExtensions
             // Public submission flow is ThreadSubmission.Submit → ThreadInput.AppendUserInput
             // (writes PendingUserMessages); the submission watcher reacts and invokes
             // ExecuteMessageAsync directly as a method (no wire message).
-            // See CLAUDE.md → "GetMeshNodeStream().Update() is the ONLY mutation API"
+            // See AGENTS.md → "GetMeshNodeStream().Update() is the ONLY mutation API"
             // and Doc/Architecture/RequestViaStreamUpdate.md.
             // Thread mutation triggers and intent payloads (ResubmitIntent,
             // FailureRecord, RequestedResubmit / RequestedDeleteFromMessageId /

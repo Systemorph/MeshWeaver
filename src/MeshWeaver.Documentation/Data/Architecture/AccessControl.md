@@ -96,7 +96,7 @@ Readers that gate on it: `AdminMenuGate` (Invitations / Inbox tabs), `UserNodeTy
 
 # Public API — start here
 
-Application code calls two extension methods on `IMessageHub`. Both return `IObservable<T>` — compose them with `CombineLatest`/`Select`, never `await`. Full reference: [PermissionApi](PermissionApi).
+Application code calls two extension methods on `IMessageHub`. Both return `IObservable<T>` — compose them with `CombineLatest`/`Select`, never `await`. Full reference: [PermissionApi](/Doc/Architecture/PermissionApi).
 
 ```csharp
 using MeshWeaver.Mesh;
@@ -193,7 +193,7 @@ public enum Permission
 
 # Permission evaluation
 
-Permissions are evaluated **inside the per-node hub of the resource being accessed**, against a locally-cached `EffectiveAssignments` collection. The cache is populated by virtual data sources (see [Virtual Data Sources](../DataMesh/VirtualDataSources)) that sync from two places: the hub's own `_Access` subtree, and the parent hub's `EffectiveAssignments` collection. That aggregate is in turn exposed for *its* children to sync from.
+Permissions are evaluated **inside the per-node hub of the resource being accessed**, against a locally-cached `EffectiveAssignments` collection. The cache is populated by virtual data sources (see [Virtual Data Sources](/Doc/DataMesh/VirtualDataSources)) that sync from two places: the hub's own `_Access` subtree, and the parent hub's `EffectiveAssignments` collection. That aggregate is in turn exposed for *its* children to sync from.
 
 **No storage walk on the read path. No cache TTL. Live updates via `IDataChangeNotifier`.**
 
@@ -364,7 +364,7 @@ Access control uses these shipped node types:
 
 `PermissionEvaluator` is registered **scoped per per-node hub**, never as a singleton. Each instance closes over the hub's `IWorkspace` and answers reads from the synced virtual collections listed above. Content writes go through `workspace.GetMeshNodeStream(path).Update(...)` (the merge patch routes to the owning hub); node-lifecycle writes post `CreateNodeRequest` / `DeleteNodeRequest` through the hub's `IMessageHub`. Both surface the result as an observable.
 
-Roles and baseline AccessAssignments follow the [Extensible Defaults](ExtensibleDefaults) pattern — built-ins ship via `IStaticNodeProvider` (read-only `_Policy` at the root namespace), mesh-level extensions live as user-created MeshNodes, and both layers project into the hub's local synced collection via the same three-query union that Agent and Model use. The evaluator reads from that collection — no per-process role cache, no `Timeout` fallback.
+Roles and baseline AccessAssignments follow the [Extensible Defaults](/Doc/Architecture/ExtensibleDefaults) pattern — built-ins ship via `IStaticNodeProvider` (read-only `_Policy` at the root namespace), mesh-level extensions live as user-created MeshNodes, and both layers project into the hub's local synced collection via the same three-query union that Agent and Model use. The evaluator reads from that collection — no per-process role cache, no `Timeout` fallback.
 
 ## Effective-assignments lookup: the 4-query union
 
@@ -426,7 +426,7 @@ private IObservable<IEnumerable<MeshNode>> ObserveEffectiveAssignments(
 
 Closest-wins + deny + `BreaksInheritance` semantics still apply when the unioned MeshNode set is folded into per-user permissions — the fold walks the scope hierarchy in the projection, exactly as the existing `ComputeRoleState` does today; only the *source* changes.
 
-**No `Task` returns anywhere on the surface** — every method returns `IObservable<T>` (`Unit` for fire-and-forget writes). Bridging to `Task` from hub-reachable code is the canonical deadlock pattern (see [Asynchronous Calls](AsynchronousCalls)); the only sanctioned bridge is at the test edge or grain-lifecycle boundary.
+**No `Task` returns anywhere on the surface** — every method returns `IObservable<T>` (`Unit` for fire-and-forget writes). Bridging to `Task` from hub-reachable code is the canonical deadlock pattern (see [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls)); the only sanctioned bridge is at the test edge or grain-lifecycle boundary.
 
 ```csharp
 public abstract class PermissionEvaluator
@@ -461,7 +461,7 @@ Writes (`AddUserRole`, `SetPolicy`, …) **update the hub's local workspace stre
 ┌──────────────────────────────────────┐
 │  PermissionEvaluator.AddUserRole(...)   │
 └──────────────────┬───────────────────┘
-                   │ workspace.UpdateMeshNode (or stream.Update for collections)
+                   │ workspace.GetMeshNodeStream(path).Update(...)
                    ▼
 ┌──────────────────────────────────────┐
 │  Hub's local workspace stream         │
@@ -486,7 +486,9 @@ public IObservable<Unit> AddUserRole(string userId, string roleId,
     var node = BuildAccessAssignmentNode(...);
     // The stream update IS the write. Persistence + downstream hubs
     // observe it.
-    return workspace.UpdateMeshNode(node).Select(_ => Unit.Default);
+    return workspace.GetMeshNodeStream(node.Path)
+        .Update(_ => node)
+        .Select(_ => Unit.Default);   // caller subscribes — cold until then
 }
 ```
 
@@ -710,7 +712,7 @@ Every message in MeshWeaver carries an `AccessContext` that identifies the **pri
 2. **User in scope** — if an authenticated user identity is set on `AccessService.Context` (or `CircuitContext` as fallback), attach it.
 3. **Fail closed** — if neither applies, the message goes out with `null` `AccessContext`; downstream AccessControl denies. The "stamp hub-self as principal" fallback was removed 2026-05-21 because it silently masked the prod EventCalendar bug.
 
-Per-message, per-delivery — the identity baton. The full propagation model is documented in [AccessContextPropagation.md](AccessContextPropagation.md); read it before adding any new impersonation callsite.
+Per-message, per-delivery — the identity baton. The full propagation model is documented in [AccessContextPropagation.md](/Doc/Architecture/AccessContextPropagation); read it before adding any new impersonation callsite.
 
 ## Sanctioned dedicated identities — the only sanctioned override
 
@@ -720,7 +722,7 @@ When code legitimately runs as a component (cache hydrator, redistributor hub, o
 2. **Grant** that identity ONLY the specific operations it actually needs via per-NodeType access rules.
 3. **Test** the boundary — every misuse must yield `UnauthorizedAccessException` with a meaningful message.
 
-This is the `IsPortalIdentity` pattern (User-node onboarding) generalised: every sanctioned bypass is a single, named, controlled seat — never a wildcard like "all `sync/*` get protocol perms". See [AccessContextPropagation.md → Sanctioned exceptions](AccessContextPropagation.md#sanctioned-exceptions--fine-grained-exact-controlled) for the define / grant / test contract.
+This is the `IsPortalIdentity` pattern (User-node onboarding) generalised: every sanctioned bypass is a single, named, controlled seat — never a wildcard like "all `sync/*` get protocol perms". See [AccessContextPropagation.md → Sanctioned exceptions](/Doc/Architecture/AccessContextPropagation#sanctioned-exceptions--fine-grained-exact-controlled) for the define / grant / test contract.
 
 ```csharp
 // Pattern — define an internal constant
@@ -761,15 +763,14 @@ When `HandleCreateNodeRequest` (and its `Update/Delete/CopyNodeRequest` siblings
 
 So the principal that ran through the baton ends up on the stored row's `CreatedBy`. For user-driven writes this is the user's ObjectId; for sanctioned-identity-driven writes it is the dedicated address — auditable, visible in logs and queries.
 
-## `IMeshService.ImpersonateAsNode()` — legacy surface
+## Choosing the acting identity
 
-`IMeshService.ImpersonateAsNode()` used to switch the operation's identity to the hub's own address. This is the old "hub-as-principal" model deprecated by the 2026-05-22 cleanup. New code should prefer:
+When an operation needs an identity other than the calling user, pick from these — in order of preference:
 
 - **Sanctioned dedicated identity** if there's a defined role for the operation (`cache/mesh-node-cache`, `portal/onboarding`).
 - **`accessService.ImpersonateAsSystem()`** if the operation is genuinely system infrastructure with no narrower seat.
-- **Carry the user's identity** if the operation is user-initiated and the identity-loss is a bug.
-
-Existing `ImpersonateAsNode()` callsites are tracked in `Doc/Architecture/AccessContextPropagation.md` → audit list as of 2026-05-22.
+- **`accessService.ImpersonateAsHub(hub)`** when the hub itself is the natural principal (its address gets the permissions).
+- **Carry the user's identity** if the operation is user-initiated — losing it is a bug, not a reason to impersonate.
 
 ---
 

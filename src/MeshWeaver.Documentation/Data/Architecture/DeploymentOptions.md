@@ -26,7 +26,7 @@ How to change what runs at **memex.systemorph.com**, from "instant, no redeploy"
 | Key Vault | `Systemorph` (`https://systemorph.vault.azure.net`) | holds `AzureFoundry-ApiKey` (set) |
 | Images | `ghcr.io/systemorph/memex-portal-ai:latest` (+ lean `memex-portal`, `memex-migration`) | built **only by CI** (`release-images.yml`) on a `v*.*.*` **tag push** |
 | portal-ai base | bakes `@anthropic-ai/claude-code` + `@github/copilot` CLIs | the `claude` CLI is present in the running pod |
-| AI model picker | fed by `ModelProvider` / `LanguageModel` **mesh nodes** | see [Setting Up Model Providers](../AI/ModelProviderSetup.md) |
+| AI model picker | fed by `ModelProvider` / `LanguageModel` **mesh nodes** | see [Setting Up Model Providers](/Doc/AI/ModelProviderSetup) |
 
 ## Option A — Live config via mesh nodes (no redeploy) ✅ used now
 
@@ -132,5 +132,5 @@ az aks command invoke -g memex-aks-rg -n memexaks-cluster \
 
 ## Related
 
-- [Setting Up Model Providers](../AI/ModelProviderSetup.md) — the node model + which query goes where
-- [AI Provider Configuration](../AI/ProviderConfiguration.md) — credential/endpoint wiring + factory routing
+- [Setting Up Model Providers](/Doc/AI/ModelProviderSetup) — the node model + which query goes where
+- [AI Provider Configuration](/Doc/AI/ProviderConfiguration) — credential/endpoint wiring + factory routing

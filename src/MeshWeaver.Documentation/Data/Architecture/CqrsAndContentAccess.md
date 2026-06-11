@@ -1,7 +1,7 @@
 ---
 NodeType: Markdown
 Name: "CQRS — Queries, Reads, Writes, Operations"
-Abstract: "Queries find sets of nodes; GetMeshNodeStream reads a single node's live content; writes go through PatchDataChangeRequest on the owning hub. Operations are named request types handled on the owning hub — the implementation stays private."
+Abstract: "Queries find sets of nodes; GetMeshNodeStream reads a single node's live content; writes go through GetMeshNodeStream(path).Update — the framework ships a merge patch to the owning hub. Operations are named request types handled on the owning hub — the implementation stays private."
 Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#c62828'/><path d='M12 5v5M9 8l3-3 3 3' stroke='white' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/><path d='M5 19l4-4M19 19l-4-4' stroke='white' stroke-width='2' stroke-linecap='round'/><circle cx='6' cy='18' r='1.5' fill='white'/><circle cx='18' cy='18' r='1.5' fill='white'/><circle cx='12' cy='12' r='1.5' fill='white'/></svg>"
 Thumbnail: "images/DataMesh.svg"
 Authors:
@@ -63,7 +63,7 @@ MeshWeaver applies CQRS at every layer: **queries** route through a read-side in
   <text x="495" y="143" font-family="sans-serif" font-size="10" fill="#90a4ae">index sync</text>
   <line x1="558" y1="155" x2="482" y2="155" stroke="#1e88e5" stroke-width="1.5" marker-end="url(#arr-blue)"/>
   <line x1="480" y1="170" x2="558" y2="232" stroke="#f57c00" stroke-width="2" marker-end="url(#arr-orange)"/>
-  <text x="490" y="212" font-family="sans-serif" font-size="10" fill="#ffb74d" transform="rotate(30,490,212)">PatchDataChangeRequest</text>
+  <text x="490" y="212" font-family="sans-serif" font-size="10" fill="#ffb74d" transform="rotate(30,490,212)">stream.Update → merge patch</text>
   <text x="380" y="295" font-family="sans-serif" font-size="11" fill="#90a4ae" text-anchor="middle" font-style="italic">Queries find sets (eventually consistent); GetMeshNodeStream reads a single node's live content from its owning hub.</text>
 </svg>
 
@@ -71,11 +71,11 @@ MeshWeaver applies CQRS at every layer: **queries** route through a read-side in
 
 | Intent | Primitive |
 |---|---|
-| **Bind a UI control to a node** | Declare a path-bound control (`new MeshNodeThumbnailControl { NodePath = path }`) or `JsonPointerReference`. The Blazor view subscribes via `IMeshNodeStreamCache` — layout-area code never loads the node. See [Data Binding](xref:GUI/DataBinding). |
+| **Bind a UI control to a node** | Declare a path-bound control (`new MeshNodeThumbnailControl { NodePath = path }`) or `JsonPointerReference`. The Blazor view subscribes via `IMeshNodeStreamCache` — layout-area code never loads the node. See [Data Binding](/Doc/GUI/DataBinding). |
 | **Find a set of nodes** | `mesh.Query<T>(request)` — reactive, live, composes with `Select`/`Where`/`Subscribe`. (The one-shot `QueryAsync` form is discouraged in hub-reachable code; see below.) |
-| **Read a known node's content (one-shot)** | `hub.Post(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(addr))` + `hub.Observe` |
+| **Read a known node's content (one-shot)** | `workspace.GetMeshNodeStream(path).Where(n => n is not null).Take(1).Timeout(...)` — same stream, completed after the first emission |
 | **Subscribe to a node's live updates** | `hub.GetMeshNodeStream(path)` / `workspace.GetMeshNodeStream(path)` |
-| **Write to a node** | `hub.Post(new PatchDataChangeRequest(...), o => o.WithTarget(addr))` (or `DataChangeRequest` for full updates) |
+| **Write to a node** | `workspace.GetMeshNodeStream(path).Update(node => updated).Subscribe(...)` — the framework ships the merge patch |
 | **Perform an operation on a node** | Named request type handled on the owning hub — e.g. `ExecuteScriptRequest`, `MoveNodeRequest`, `ImportRequest` |
 
 > **Read this once and remember it:** *queries are for sets*. A query that happens to return exactly one row is still a query — and still carries the same consistency caveats.
@@ -110,9 +110,9 @@ Queries route through a **read-side index** — a cached projection that is even
 
 That lag is *acceptable* for browsing and autocomplete. It is *lethal* for content access.
 
-> **Layout areas should bind, not fetch.** The lag problem disappears entirely when the GUI subscribes directly to `GetMeshNodeStream(path)` — the view shows the authoritative current state and re-renders on every change. See [Data Binding](xref:GUI/DataBinding) for the bind-by-path pattern.
+> **Layout areas should bind, not fetch.** The lag problem disappears entirely when the GUI subscribes directly to `GetMeshNodeStream(path)` — the view shows the authoritative current state and re-renders on every change. See [Data Binding](/Doc/GUI/DataBinding) for the bind-by-path pattern.
 
-`GetDataRequest(new MeshNodeReference())` goes straight to the **owning hub's workspace** — the source of truth. No staleness. It also activates the hub if it was cold; no pre-subscribe needed.
+`GetMeshNodeStream(path)` goes straight to the **owning hub's workspace** — the source of truth. No staleness. Subscribing also activates the hub if it was cold.
 
 ---
 
@@ -126,7 +126,7 @@ That lag is *acceptable* for browsing and autocomplete. It is *lethal* for conte
 |---|---|---|
 | A query to enumerate paths / names / nodeTypes | `await foreach (var n in adapter.Query(queries)) yield return n.Path;` | Read `n.Content` |
 | A known **path**, want the live MeshNode | `workspace.GetMeshNodeStream(path)` | `adapter.Query($"path:{path}")` and read `.Content` |
-| A known path, want a one-shot read | `hub.Post(GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))` + `hub.Observe(...)` | Anything that goes through the index |
+| A known path, want a one-shot read | `workspace.GetMeshNodeStream(path).Where(n => n is not null).Take(1).Timeout(...)` | Anything that goes through the index |
 | Recursive subtree operation (Copy, Move, Delete…) | `hub.Post(CopyNodeRequest / MoveNodeRequest / DeleteNodeRequest, WithTarget(sourcePath))` — the owning hub uses `GetMeshNodeStream` internally | Load every node from the query result and write each one |
 
 **Treat `MeshNode.Content` on a query row as if the column does not exist.** Project to the metadata you need — `Path`, `Name`, `NodeType`, `Icon`, `LastModified`, `Version`, `State` — and stop. If your call site needs `Content`, you are at the wrong layer: either reshape it to use `GetMeshNodeStream`, or send the work to the owning hub via a named request type.
@@ -167,7 +167,7 @@ await foreach (var row in mesh.QueryAsync<MeshNode>(
 
 When the projection is not enough — you actually need `Content` for a specific path (compiler input, document viewer, edit form) — fetch *that one node* through `workspace.GetMeshNodeStream(path)`. One authoritative read per path, never a subtree-wide content load.
 
-The recompile design that this rule supports is in [project_recompile_via_synced_versions](xref:Architecture/RecompileViaSyncedVersions) — the NodeType keeps a `{sourcePath → version}` snapshot from the synced query, and a divergent emission triggers re-fetch and recompile. Nothing in the catalog row's `Content` is consulted.
+The recompile design that this rule supports is described in [NodeTypeCompilation](/Doc/Architecture/NodeTypeCompilation) — the NodeType keeps a `{sourcePath → version}` snapshot from the synced query, and a divergent emission triggers re-fetch and recompile. Nothing in the catalog row's `Content` is consulted.
 
 ### 🚨 Staleness lives on the owner — never query to check "is this stale?"
 
@@ -286,7 +286,7 @@ The `DeleteNodeRequest` / `MoveNodeRequest` / `CopyNodeRequest` types are define
 
 ## 🚨 No "pedestrian queries" — use synced queries
 
-If a component needs to **react** to a set of MeshNodes (a list, a filter, a catalog, a picker, a compiler input set), do **not** call `meshService.QueryAsync` / `IMeshQueryCore.Query` directly. Use the synced-query pattern from [Synced Mesh Node Queries](SyncedMeshNodeQueries.md):
+If a component needs to **react** to a set of MeshNodes (a list, a filter, a catalog, a picker, a compiler input set), do **not** call `meshService.QueryAsync` / `IMeshQueryCore.Query` directly. Use the synced-query pattern from [Synced Mesh Node Queries](/Doc/Architecture/SyncedMeshNodeQueries):
 
 ```csharp
 IObservable<IReadOnlyList<MeshNode>> stream = workspace.GetQuery(
@@ -327,7 +327,7 @@ If you find yourself reading `MeshNode.Content` out of a one-shot `meshService.Q
 
 Revocation propagates within the TTL window. The permission cache is not invalidated reactively — subscribers can keep listening past a revocation event for up to 30 s before the next `GetStream` issues a fresh probe and surfaces the denial.
 
-Full propagation model: [AccessContextPropagation.md](AccessContextPropagation.md).
+Full propagation model: [AccessContextPropagation.md](/Doc/Architecture/AccessContextPropagation).
 
 ---
 
@@ -363,7 +363,7 @@ workspace.GetMeshNodeStream().Update(node =>
 });
 ```
 
-The handle's deserialisation wrap eliminates the `JsonElement` case at the boundary. Callers no longer need the `?? new TFoo()` fallback — if `Content` is genuinely absent or wrong-shaped, the pattern match fails cleanly and the lambda can return `node` unchanged.
+The handle's deserialisation wrap eliminates the `JsonElement` case at the boundary. If `Content` is genuinely absent or wrong-shaped, the pattern match fails cleanly and the lambda returns `node` unchanged — never a `?? new TFoo()` fallback that would clobber the stored content.
 
 **Where the wrap lives:** `MeshNodeStreamHandle.TypedContentObserver` (read path) + `MeshNodeStreamHandle.Update`'s `wrappedUpdate` (write path) in `src/MeshWeaver.Mesh.Contract/MeshNodeStreamExtensions.cs`. Helpers `EnsureTypedContent(node, options)` and `EnsureSerialisedContent(node, options)` are reusable by any other primitive that needs the same shape guarantee.
 
@@ -391,71 +391,65 @@ On the server side, `workspace.GetMeshNodeStream(path)` is the canonical single-
 
 Going around the cache (e.g. opening `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, ...)` directly inside a Blazor view) opens a **separate** upstream handle — writes through one are invisible to readers of the other, and the per-view subscription cost scales with the number of visible views. Always use the cache.
 
-The list-rendering shape (one Blazor view per id, each binding to its own cache stream) is documented separately: **[Item-Template + MeshNode Stream Binding](xref:GUI/ItemTemplateMeshNodeStreamBinding)**. The canonical example is the thread chat view — N visible messages, N cache subscriptions, zero per-message layout-area round-trips.
+The list-rendering shape (one Blazor view per id, each binding to its own cache stream) is documented separately: **[Item-Template + MeshNode Stream Binding](/Doc/GUI/DataBinding/ItemTemplate)**. The canonical example is the thread chat view — N visible messages, N cache subscriptions, zero per-message layout-area round-trips.
 
 ---
 
-## One-shot reads (`GetDataRequest` + `Observe`)
+## One-shot reads — compose on `GetMeshNodeStream`
 
-The canonical pattern for "give me this node's current MeshNode right now":
+The canonical pattern for "give me this node's current MeshNode right now" is the **same stream**, completed after the first useful emission:
 
 ```csharp
-var delivery = hub.Post(
-    new GetDataRequest(new MeshNodeReference()),
-    o => o.WithTarget(new Address(path)));
-
-hub.Observe(delivery, (d, _) =>
-{
-    if (d is IMessageDelivery<GetDataResponse> response
-        && response.Message.Data is MeshNode node)
-    {
-        // Use node.Content, node.Version, etc. — authoritative, no lag.
-    }
-    return Task.FromResult(d);
-}, cancellationToken);
+workspace.GetMeshNodeStream(path)
+    .Where(node => node is not null)
+    .Take(1)
+    .Timeout(TimeSpan.FromSeconds(10))
+    .Subscribe(
+        node =>
+        {
+            // Use node.Content, node.Version, etc. — authoritative, no lag.
+        },
+        ex => logger.LogWarning(ex, "read failed for {Path}", path));
 ```
 
-No `Query`, no `await`, no `FromAsync` bridge. The target hub activates on receipt of the message, responds with a `GetDataResponse` wrapping the current `MeshNode`, and your callback fires.
+No `Query`, no `await`, no `FromAsync` bridge, no separate request type. The owning hub activates on subscribe, the first emission is its authoritative current state, and `Take(1)` completes the subscription. (For an optional node that may not exist, don't point an exact-path stream at it — read via a query, which is empty-on-absent; an exact-path subscribe to a missing node NotFound-storms the owner.)
 
 ---
 
-## Live updates (`GetRemoteStream`)
+## Live updates — stay subscribed on `GetMeshNodeStream`
 
-Use `GetRemoteStream` when you want to *react* to writes — render a view, wait for a job to finish, watch progress roll in.
+Use the same stream when you want to *react* to writes — render a view, wait for a job to finish, watch progress roll in.
 
 ```csharp
-workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-        new Address(jobPath), new MeshNodeReference())
-    .Where(change =>
-        change.Value?.Content is JobStatus { State: "Done" or "Failed" })
+workspace.GetMeshNodeStream(jobPath)
+    .Where(node => node?.Content is JobStatus { State: "Done" or "Failed" })
     .Take(1)
     .Subscribe(final =>
         logger.LogInformation("Job finished: {State}",
-            ((JobStatus)final.Value!.Content!).State));
+            ((JobStatus)final!.Content!).State));
 ```
 
 The first emission is the current state; subsequent emissions arrive as the hub applies writes. `Where(...).Take(1)` waits until a condition is true and then completes — no polling loop, no `Task.Delay`.
 
 ---
 
-## Writes (`PatchDataChangeRequest`)
+## Writes — `GetMeshNodeStream(path).Update(...)`
 
-Writes flow to the owning hub as data changes, not as node CRUD:
+Application code writes through the stream handle; the framework turns the lambda into a patch on the owning hub:
 
 ```csharp
-hub.Post(
-    new PatchDataChangeRequest(
-        StreamId: targetAddress.ToString(),
-        Version: expectedVersion,
-        Change: new RawJson(patchJson),
-        ChangeType: ChangeType.Patch,
-        ChangedBy: userId),
-    o => o.WithTarget(targetAddress));
+workspace.GetMeshNodeStream(targetPath).Update(node =>
+{
+    var content = node.ContentAs<MyContent>(hub.JsonSerializerOptions, logger);
+    if (node.Content is not null && content is null) return node;  // never clobber unreadable content
+    return node with { Content = (content ?? new MyContent()) with { Status = "done" } };
+})
+.Subscribe(_ => { }, ex => logger.LogWarning(ex, "Update failed for {Path}", targetPath));
 ```
 
-Never go through `mesh.QueryAsync` + merge in memory + `mesh.UpdateNode`. The index read is stale; the merge loses concurrent writes; the full-node replace overwrites anything you didn't explicitly read. Let the owning hub apply the patch on its authoritative state.
+Under the hood the handle diffs `current` vs `update(current)` and ships an RFC 7396 JSON-merge patch (`PatchDataChangeRequest` on the stream protocol) to the owning hub, which merges it against its authoritative state on its single-threaded action block. That plumbing is **internal** — application code never posts `PatchDataChangeRequest`/`PatchDataRequest` itself.
 
-For full-node updates use `DataChangeRequest.WithUpdates(fullNode)`.
+Never go through `mesh.QueryAsync` + merge in memory + a full-node write. The index read is stale; the merge loses concurrent writes; the full-node replace overwrites anything you didn't explicitly read. Let the owning hub apply the patch on its authoritative state.
 
 ---
 
@@ -613,7 +607,7 @@ return request.Processed();   // handler returns immediately
 |---|---|
 | `hub.Post(...)` — fire a message | ✅ sync |
 | `hub.Observe(delivery, callback)` — register; callback fires later | ✅ sync |
-| `workspace.UpdateMeshNode(fn)` — apply an update | ✅ sync |
+| `workspace.GetMeshNodeStream(path).Update(fn).Subscribe(...)` — apply an update | ✅ sync subscribe; write runs on the owner's action block |
 | `hub.GetWorkspace().GetStream(ref)?.Select(...).Where(...).Take(1).Subscribe(...)` — reactive read | ✅ |
 | `hub.GetWorkspace().GetStream(ref)?.Current?.Value` — snapshot read | ❌ null on cold workspaces |
 | `await anything` | ❌ never |
@@ -628,15 +622,15 @@ return request.Processed();   // handler returns immediately
 | List nodes under X (paths / metadata only) | `mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(...))` — project to `Path` / `Name` / etc. **never read `.Content`** |
 | Does node X exist? | `Query` + check `Items.Count` |
 | Give me node X's MeshNode (live) | `workspace.GetMeshNodeStream(X)` — the **only** non-stale read path |
-| Give me node X's MeshNode (once) | `hub.Post(GetDataRequest(new MeshNodeReference()), WithTarget(X))` + `Observe` |
-| Keep me updated on node X's MeshNode | `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(X, new MeshNodeReference())` |
-| Patch node X | `hub.Post(PatchDataChangeRequest(...), WithTarget(X))` |
-| Replace node X wholesale | `hub.Post(DataChangeRequest{...}.WithUpdates(fullNode), WithTarget(X))` |
+| Give me node X's MeshNode (once) | `workspace.GetMeshNodeStream(X).Where(n => n is not null).Take(1).Timeout(...)` |
+| Keep me updated on node X's MeshNode | `workspace.GetMeshNodeStream(X)` — stay subscribed (no `.Take(1)`) |
+| Patch node X | `workspace.GetMeshNodeStream(X).Update(node => updated).Subscribe(...)` |
+| Replace node X wholesale (create-or-update) | `hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(fullNode)).Subscribe(...)` |
 | Run the script on Code node X | `hub.Post(ExecuteScriptRequest(), WithTarget(X))` + `Observe<ExecuteScriptResponse>` |
 | Wait until the run finishes | `workspace.GetRemoteStream` on X's output area until a terminal condition |
 | Move/Copy node X (incl. subtree) | `hub.Post(MoveNodeRequest / CopyNodeRequest, WithTarget(X))` — owning hub reads its own state via `GetMeshNodeStream`, fans out per-child requests, never queries for content |
 | Delete node X (incl. subtree) | `hub.Post(DeleteNodeRequest, WithTarget(X))` — recursive variant queries for **paths only** then fires one `DeleteNodeRequest` per descendant address |
-| Stream content into node X during execution (AI streaming, long-running output) | Open `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(X, new MeshNodeReference())` once at start, push every delta via `.Update(node => node with { Content = ... })`, dispose at end. See [Thread Execution Streaming](xref:Architecture/ThreadExecutionStreaming) for the canonical writer + renderer pair. |
+| Stream content into node X during execution (AI streaming, long-running output) | Push every delta via `workspace.GetMeshNodeStream(X).Update(node => node with { Content = ... }).Subscribe(...)` — the shared cache handle the readers bind to. See [Thread Execution Streaming](/Doc/Architecture/ThreadExecutionStreaming) for the canonical writer + renderer pair. |
 
 ---
 
@@ -691,14 +685,13 @@ Observable.Merge(paths.Select(p =>
         hub.Observe(new DeleteNodeRequest(p), o => o.WithTarget(new Address(p)))))
     .Subscribe(_ => { }, err => logger.LogError(err, "delete fan-out failed"));
 
-// ✅ One-shot content read — authoritative.
-var delivery = hub.Post(new GetDataRequest(new MeshNodeReference()),
-    o => o.WithTarget(new Address(path)));
-hub.Observe(delivery, (d, _) => { /* ... */ return Task.FromResult(d); });
+// ✅ One-shot content read — authoritative, same stream as live reads.
+workspace.GetMeshNodeStream(path)
+    .Where(n => n is not null).Take(1).Timeout(TimeSpan.FromSeconds(10))
+    .Subscribe(node => { /* ... */ }, ex => logger.LogWarning(ex, "read failed"));
 
-// ✅ Live updates.
-workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-    new Address(path), new MeshNodeReference());
+// ✅ Live updates — Blazor views bind to the same shared handle (see Data Binding).
+workspace.GetMeshNodeStream(path);
 
 // ✅ Named operation — caller never references the kernel.
 hub.Post(new ExecuteScriptRequest(), o => o.WithTarget(new Address(codeNodePath)));
@@ -708,6 +701,6 @@ hub.Post(new ExecuteScriptRequest(), o => o.WithTarget(new Address(codeNodePath)
 
 ## Related reading
 
-- [Asynchronous Calls](AsynchronousCalls) — the hub's single-threaded scheduler and why `await` deadlocks it.
-- [Workspace references](WorkspaceReferences) — catalogue of `WorkspaceReference<T>` shapes and what each one emits.
-- [Data access patterns](DataAccessPatterns) — which DI service to use for what.
+- [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) — the hub's single-threaded scheduler and why `await` deadlocks it.
+- [Workspace references](/Doc/Architecture/WorkspaceReferences) — catalogue of `WorkspaceReference<T>` shapes and what each one emits.
+- [Data access patterns](/Doc/Architecture/DataAccessPatterns) — which DI service to use for what.

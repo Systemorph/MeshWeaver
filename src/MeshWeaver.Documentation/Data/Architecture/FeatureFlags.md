@@ -8,7 +8,7 @@ Category: Architecture
 # Feature Flags
 
 Memex deployments are shaped by **deploy-time capability toggles** bound from the `Features`
-configuration section into [`MemexFeatureOptions`](../../../../memex/Memex.Portal.Shared/MemexFeatureOptions.cs).
+configuration section into `MemexFeatureOptions`.
 A flag declares which capabilities a deployment ships — independent of whether a given credential
 key happens to be present. **A disabled flag is the operator's intent and wins even if a key is
 configured.**
@@ -55,11 +55,11 @@ Configuration is layered (last wins):
 | `Features:Ai:Clis:ClaudeCode` | bool | `true` | Ships the co-hosted Claude Code CLI provider (per-user Connect login). |
 | `Features:Ai:Clis:Copilot` | bool | `true` | Ships the co-hosted GitHub Copilot CLI provider. |
 | `Features:Onboarding:AllowSelfOnboarding` | bool | `true` | When `false`, registration is **closed** — only the first-ever user may onboard. |
-| `Features:Onboarding:InvitationOnly` | bool | `false` | When `true`, only an email with a Pending invitation may onboard. See [Invitation-Only Onboarding](InvitationOnlyOnboarding.md). |
+| `Features:Onboarding:InvitationOnly` | bool | `false` | When `true`, only an email with a Pending invitation may onboard. See [Invitation-Only Onboarding](/Doc/Architecture/InvitationOnlyOnboarding). |
 | `Features:Orleans:Clustering` | string | `AzureTables` | Cluster-membership provider: `AzureTables`, `AdoNet` (PostgreSQL), or `Localhost` (single in-process silo; dev only). |
 
 A related, separate section — `Email` — configures outbound system mail (used by invitations). It
-is documented in [Invitation-Only Onboarding → Email](InvitationOnlyOnboarding.md#sending-email-microsoft-graph).
+is documented in [Invitation-Only Onboarding → Email](/Doc/Architecture/InvitationOnlyOnboarding#sending-email-microsoft-graph).
 
 ---
 
@@ -83,7 +83,7 @@ if (features.Ai.Clis.ClaudeCode)
 bring their own keys via Model Providers) — surfaced as a startup warning, not a hard failure.
 
 API providers work **bring-your-own-key** (users add endpoint + key per provider under
-**Settings → Models**); see [Model Providers](ModelProviders.md). The co-hosted CLIs require the
+**Settings → Models**); see [Model Providers](/Doc/Architecture/ModelProviders). The co-hosted CLIs require the
 per-user Connect login.
 
 ---
@@ -102,7 +102,7 @@ onboard (and become platform admin), so the platform can never lock itself out.
 
 `InvitationOnly` **takes precedence**: when it is on, the gate is "has a Pending invitation"
 regardless of `AllowSelfOnboarding`. The security boundary is enforced at the `CreateUser` call in
-`Onboarding.razor` (not just the UI). Full treatment: [Invitation-Only Onboarding](InvitationOnlyOnboarding.md).
+`Onboarding.razor` (not just the UI). Full treatment: [Invitation-Only Onboarding](/Doc/Architecture/InvitationOnlyOnboarding).
 
 ---
 
@@ -135,13 +135,13 @@ kubectl -n memex set env deployment/memex-portal-deployment \
   Features__Ai__Clis__Copilot=false
 ```
 
-See [Memex Cloud Deployment → Enable / Configure AI Providers](MemexCloudDeployment.md) for the
+See [Memex Cloud Deployment → Enable / Configure AI Providers](/Doc/Architecture/MemexCloudDeployment) for the
 full operational walkthrough.
 
 ---
 
 ## Related
 
-- [Invitation-Only Onboarding](InvitationOnlyOnboarding.md) — the `InvitationOnly` flag end-to-end + `Email` configuration.
-- [Extensible Defaults](ExtensibleDefaults.md) — system defaults + mesh-level extensions (the pattern behind several capabilities).
-- [Memex Cloud Deployment](MemexCloudDeployment.md) — operating these flags in production.
+- [Invitation-Only Onboarding](/Doc/Architecture/InvitationOnlyOnboarding) — the `InvitationOnly` flag end-to-end + `Email` configuration.
+- [Extensible Defaults](/Doc/Architecture/ExtensibleDefaults) — system defaults + mesh-level extensions (the pattern behind several capabilities).
+- [Memex Cloud Deployment](/Doc/Architecture/MemexCloudDeployment) — operating these flags in production.

@@ -112,7 +112,7 @@ The stamp is not optional and not add-only. The owning hub's data source (`MeshN
 - the change feed and every subscriber's **monotonicity guard** key off `Version`; a frame whose version did **not** advance is indistinguishable from a duplicate and is dropped, so it never reaches subscribers' mirrors;
 - a node that an UPDATE left at its incoming version therefore emits a "nothing-new" frame and the reconciled value is silently lost — **the read-your-writes-after-update bug**. Create worked (adds were stamped); update/patch did not. The fix stamps the update branch too. Pinned by `MeshNodeStreamEmissionTest` (a node-stream re-emit + replay regression).
 
-**Only the owner mints a version.** A client/subscriber writing a node it does not own (a cross-hub `GetMeshNodeStream(path).Update(...)`) **carries the base version it last observed** and lets the owner assign the fresh value on apply — it never increments client-side. A pre-incremented client version (the old `Math.Max(existing, …) + 1`) ships a frame whose base is already out of date by the time it lands, and the owner's version-guarded merge mishandles it. See [DataSyncAndCrdt](DataSyncAndCrdt.md) §2 ("a subscriber never mints a version").
+**Only the owner mints a version.** A client/subscriber writing a node it does not own (a cross-hub `GetMeshNodeStream(path).Update(...)`) **carries the base version it last observed** and lets the owner assign the fresh value on apply — it never increments client-side. A pre-incremented client version (the old `Math.Max(existing, …) + 1`) ships a frame whose base is already out of date by the time it lands, and the owner's version-guarded merge mishandles it. See [DataSyncAndCrdt](/Doc/Architecture/DataSyncAndCrdt) §2 ("a subscriber never mints a version").
 
 **Write through the live lambda parameter.** `stream.Update(node => node with { … })` must transform the node it is handed — the live, owner-reconciled value — never discard it and slam a separately-read full node (`_ => fetchedNode`). The owner computes the diff it applies against that live value; a discarded parameter bases the diff on a stale snapshot and can clobber a concurrent edit.
 
@@ -141,4 +141,4 @@ A freshly created node gets `Version = 1` unless the caller explicitly supplied 
 
 ## What This Is Not
 
-This is in-mesh change tracking for the live `MeshNode` graph. It is entirely unrelated to **data versioning** of the *content* held by NodeTypes — historical queries, time-travel, and `@path@V{n}` snapshots are a separate concern covered in [DataVersioning](DataVersioning.md).
+This is in-mesh change tracking for the live `MeshNode` graph. It is entirely unrelated to **data versioning** of the *content* held by NodeTypes — historical queries, time-travel, and `@path@V{n}` snapshots are a separate concern covered in [DataVersioning](/Doc/Architecture/DataVersioning).

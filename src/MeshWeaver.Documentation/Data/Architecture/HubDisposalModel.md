@@ -27,7 +27,7 @@ Tags:
 > else is an observable.
 >
 > For *debugging* a disposal that hangs or leaks, see
-> [Debugging Disposal, Storms and Leaks](xref:Architecture/DebuggingDisposalAndLeaks).
+> [Debugging Disposal, Storms and Leaks](/Doc/Architecture/DebuggingDisposalAndLeaks).
 > This page is the **model** — how shutdown is built and how to add to it.
 
 ---
@@ -39,7 +39,7 @@ A hub processes every message on a single-threaded `ActionBlock` (the actor turn
 response to drain, for hosted hubs to finish, for a `Task.Delay` poll tick — it
 **blocks the very thread that has to dequeue the thing it is waiting for.** That is
 the same self-deadlock described in
-[Asynchronous Calls](xref:Architecture/AsynchronousCalls), and it is exactly why
+[Asynchronous Calls](/Doc/Architecture/AsynchronousCalls), and it is exactly why
 disposal used to wedge under load.
 
 The fix is structural, not a bigger timeout: **the shutdown handler returns
@@ -234,7 +234,7 @@ pipeline* — and even it is expressed as `IObservable`, awaited reactively:
 
 1. **Mesh-level IO pools** (`IIoPool` / `IoPoolRegistry`) — the in-flight DB / blob /
    file / HTTP work. These drain at the mesh boundary, not per hub. The sanctioned
-   async edge (see [Controlled IO Pooling](xref:Architecture/ControlledIoPooling)).
+   async edge (see [Controlled IO Pooling](/Doc/Architecture/ControlledIoPooling)).
 2. **A reactive dispose action that flushes** — e.g. `MeshNodeTypeSource` registers
    `RegisterForDisposal(hub => FlushPendingWrites().Timeout(10s)…)`. This **must**
    finish before teardown (a per-node hub disposing mid-write would otherwise lose

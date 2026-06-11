@@ -454,7 +454,7 @@ public class SyncedQueryTest(ITestOutputHelper output)
     /// </para>
     ///
     /// <para>
-    /// The robust pattern (per CLAUDE.md "stream.Where(...).Take(1)"):
+    /// The robust pattern (per AGENTS.md "stream.Where(...).Take(1)"):
     /// callers that need post-update freshness MUST <c>.Where</c> on a property
     /// that carries the update (Name here, LastModified for compile sources)
     /// and only <c>.Take(1)</c> after the predicate matches. This test asserts

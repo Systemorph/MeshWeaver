@@ -12,6 +12,8 @@ Tags:
   - "Automation"
 ---
 
+> **Scope:** this page is the *concepts and philosophy* of agentic AI — what it is, where it goes wrong, and the human-in-the-loop principles MeshWeaver builds on. For the *technical implementation* (agent definitions, MeshPlugin tools, orchestration, MCP integration), see [Agentic AI Architecture](/Doc/Architecture/AgenticAI).
+
 ## What is Agentic AI?
 
 Agentic AI is the shift from AI that *responds* to AI that *acts*. Rather than waiting to answer a prompt, an agentic system pursues goals, makes decisions, and uses tools — all with varying degrees of autonomy.

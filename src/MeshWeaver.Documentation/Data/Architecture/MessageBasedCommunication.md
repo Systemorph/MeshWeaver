@@ -85,6 +85,8 @@ flowchart LR
 | **Layout Handlers** | Produce UI components for the Blazor front-end |
 | **Workflow Handlers** | Orchestrate multi-step business processes |
 
+Handler bodies are **synchronous**: do the work (or start an `IObservable<T>` chain and `Subscribe`) and return the processed delivery immediately — never `async Task` with an `await` on a mesh operation (it deadlocks the single-threaded action block; see [AsynchronousCalls](/Doc/Architecture/AsynchronousCalls)). Callers consume responses reactively via `hub.Observe<TResponse>(request).Subscribe(...)`.
+
 ### 3. Request / Response Pattern
 
 Every interaction follows a typed request/response contract. The caller sends a request message; the hub processes it and replies with a strongly-typed response — no shared memory, no callbacks, no locks.

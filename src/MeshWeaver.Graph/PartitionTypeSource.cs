@@ -104,11 +104,11 @@ public record PartitionTypeSource<T> : TypeSourceWithType<T, PartitionTypeSource
     }
 
     /// <summary>
-    /// <c>IStorageAdapter.GetPartitionObjectsAsync</c> is a pure DB hit (file system /
-    /// SQL / in-memory dictionary) — no hub round-trip — so wrapping with
-    /// <see cref="Observable.FromAsync{TResult}(Func{System.Threading.CancellationToken,Task{TResult}})"/>
-    /// is sanctioned per <c>Doc/Architecture/AsynchronousCalls.md</c>. The framework
-    /// subscribes to the returned observable; the gate opens on emission.
+    /// Pure reactive composition: <c>IMeshNodePersistenceCore.GetPartitionObjects</c>
+    /// already returns an <c>IObservable</c> (the async DB leaf is bridged through
+    /// <c>IIoPool</c> inside the persistence core — see
+    /// <c>Doc/Architecture/ControlledIoPooling.md</c>). The framework subscribes to
+    /// the returned observable; the gate opens on emission.
     /// </summary>
     protected override IObservable<InstanceCollection> Initialize(
         WorkspaceReference<InstanceCollection> reference,

@@ -7,11 +7,11 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # Reactive Test Assertions
 
-MeshWeaver is reactive end-to-end: services, handlers, layout areas, and activities return `IObservable<T>` and never `await` (see [Asynchronous Calls](AsynchronousCalls)). Its tests follow the same principle — **you assert on the stream directly, with no `await`**.
+MeshWeaver is reactive end-to-end: services, handlers, layout areas, and activities return `IObservable<T>` and never `await` (see [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls)). Its tests follow the same principle — **you assert on the stream directly, with no `await`**.
 
 All test assertions flow through `MeshWeaver.Reactive.Assertions`, a FluentAssertions-shaped library wired in via a global `using` and project reference in `test/Directory.Build.props`. The names and chaining patterns (`.And` / `.Which`, trailing `because` args) are familiar. What is different is that the **observable assertions block inside the assertion itself**, so test methods stay synchronous (`void`).
 
-For the surrounding test-writing rules, see [Writing Tests](WritingTests).
+For the surrounding test-writing rules, see [Writing Tests](/Doc/Architecture/WritingTests).
 
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 310" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
   <defs>
@@ -150,7 +150,7 @@ Use this only for a *real* async boundary such as `AIFunction.InvokeAsync` — n
 
 ## 4. Asserting an Expected Error — `.Materialize()`
 
-`.Should().Emit()` and `.Match()` wrap an `OnError` inside a `MeshWeaverAssertionException` — they do **not** rethrow the original exception type. To assert that a stream errors with a specific type, fold `OnError` into a value using `.Materialize()`:
+`.Should().Emit()` and `.Match()` wrap an `OnError` inside an `ObservableAssertionException` — they do **not** rethrow the original exception type. To assert that a stream errors with a specific type, fold `OnError` into a value using `.Materialize()`:
 
 ```csharp
 var error = source.Take(1).Materialize()
@@ -223,13 +223,13 @@ The familiar names, chaining, and `because` arguments carry over unchanged:
 - **Action / async:** `Throw<T>().WithMessage(...) / NotThrow / ThrowAsync<T>() / NotThrowAsync`
 - **Time helpers:** `10.Seconds()`, `200.Milliseconds()`, `1.5.Minutes()`
 
-`AssertionScope` collects failures and throws on dispose. All failures throw `MeshWeaverAssertionException`.
+`AssertionScope` collects failures and throws on dispose. All failures throw `AssertionException` (stream expectations throw the derived `ObservableAssertionException`).
 
 ---
 
 ## 9. Test as If You Were Inside an Activity
 
-Production work runs on an **activity hub** — its own sandbox with its own `AccessContext`, single-threaded action block, and `Status` / `RequestedStatus` lifecycle (see [Activity Control Plane](ActivityControlPlane)). A test that calls an internal method directly on the test thread skips that context and can pass while production fails — the recurring `AccessContext`-propagation bug follows exactly this pattern.
+Production work runs on an **activity hub** — its own sandbox with its own `AccessContext`, single-threaded action block, and `Status` / `RequestedStatus` lifecycle (see [Activity Control Plane](/Doc/Architecture/ActivityControlPlane)). A test that calls an internal method directly on the test thread skips that context and can pass while production fails — the recurring `AccessContext`-propagation bug follows exactly this pattern.
 
 Drive the work the way production does: **set the control property, observe the result reactively**.
 
@@ -249,10 +249,7 @@ This exercises the real control plane: the owning hub's watcher reacts to `Reque
 
 ## 10. Extending the Library
 
-The library lives in two projects:
-
-- `src/MeshWeaver.Reactive.Assertions` — core surface; `System.Reactive` only
-- `src/MeshWeaver.Reactive.Assertions.Json` — equivalency and JSON helpers
+The library lives in `src/MeshWeaver.Reactive.Assertions` (`System.Reactive` only) — the observable surface in `ObservableAssertions.cs`, the value surface in `ObjectAssertions.cs` / `CollectionAssertions.cs` / `MoreAssertions.cs`, and the equivalency + JSON helpers in `Equivalency.cs` / `JsonAssertions.cs`.
 
 If a genuinely missing assertion is blocking a test, **add it to the library with a unit test in `test/MeshWeaver.Reactive.Assertions.Test` that exercises both the pass and the fail path** — do not work around it with `await` in the test body.
 
@@ -260,7 +257,7 @@ If a genuinely missing assertion is blocking a test, **add it to the library wit
 
 ## See Also
 
-- [Writing Tests](WritingTests) — surrounding rules: void bodies, CQRS-correct reads, the init-ping nuance, Orleans clients
-- [Asynchronous Calls](AsynchronousCalls) — why nothing in hub-reachable code is `async`
-- [Activity Control Plane](ActivityControlPlane) — operations as content patches on an activity node
+- [Writing Tests](/Doc/Architecture/WritingTests) — surrounding rules: void bodies, CQRS-correct reads, the init-ping nuance, Orleans clients
+- [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) — why nothing in hub-reachable code is `async`
+- [Activity Control Plane](/Doc/Architecture/ActivityControlPlane) — operations as content patches on an activity node
 - `src/MeshWeaver.Reactive.Assertions/ObservableAssertions.cs` — the `Emit / Match / Be / Complete / NotEmit / Within` implementation

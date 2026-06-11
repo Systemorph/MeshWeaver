@@ -125,7 +125,7 @@ Before the current scoring contract, `MeshQuery.MergeProviderObservables` ordere
 
 ## See Also
 
-- [AggregatingProviders.md](Doc/Architecture/AggregatingProviders.md) — the broader pattern for multi-provider aggregation in MeshWeaver (autocomplete, menus, search).
-- [QuerySyntax.md](Doc/DataMesh/QuerySyntax.md) — the query language `OrderBy` / `Skip` / `Limit` semantics.
+- [AggregatingProviders.md](/Doc/Architecture/AggregatingProviders) — the broader pattern for multi-provider aggregation in MeshWeaver (autocomplete, menus, search).
+- [QuerySyntax.md](/Doc/DataMesh/QuerySyntax) — the query language `OrderBy` / `Skip` / `Limit` semantics.
 - `src/MeshWeaver.Data/Completion/FuzzyScorer.cs` — the fzf-style scorer used by the static provider for text-search queries.
 - `src/MeshWeaver.Mesh.Contract/Query/PathProximity.cs` — the namespace-distance boost used by the PostgreSQL providers.

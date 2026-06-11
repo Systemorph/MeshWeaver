@@ -9,7 +9,7 @@ Icon: /static/DocContent/DataMesh/DataConfiguration/icon.svg
 
 A *virtual data source* bridges the reactive world of `IObservable<T>` and the workspace's `EntityStore`. Instead of seeding data from a static snapshot or a persistence read, the hub subscribes to a live stream — and every emission is folded directly into the workspace. Code inside the hub reads the result through the standard `workspace.GetStream<T>()` API, with no idea whether the backing data came from a database or a computed reactive pipeline.
 
-The infrastructure lives in [`VirtualDataSource`](xref:MeshWeaver.Data.VirtualDataSource), built on [`VirtualTypeSource<T>`](xref:MeshWeaver.Data.VirtualTypeSource`1). Two registration helpers ship with it:
+The infrastructure lives in `VirtualDataSource`, built on `VirtualTypeSource<T>`. Two registration helpers ship with it:
 <svg viewBox="0 0 760 200" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
 <defs>
 <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
@@ -42,8 +42,8 @@ The infrastructure lives in [`VirtualDataSource`](xref:MeshWeaver.Data.VirtualDa
 
 | Helper | Use when |
 |---|---|
-| [`WithVirtualType<T>(...)`](xref:MeshWeaver.Data.VirtualDataSource.WithVirtualType``1) | General case — any `IObservable<IEnumerable<T>>` is fair game. |
-| [`WithMeshQuery<T>(query)`](xref:MeshWeaver.Graph.SyncedQueryDataSourceExtensions.WithMeshQuery``1) | Most common case — a mesh-query result set kept live in the workspace. Documented in [Synced Query Data Source](SyncedQueryDataSource). |
+| `WithVirtualType<T>(...)` | General case — any `IObservable<IEnumerable<T>>` is fair game. |
+| `WithMeshQuery<T>(query)` | Most common case — a mesh-query result set kept live in the workspace. Documented in [Synced Query Data Source](/Doc/DataMesh/SyncedQueryDataSource). |
 
 ---
 
@@ -61,7 +61,7 @@ A virtual data source earns its keep when a hub needs a *local view* of somethin
 - **Per-node hubs** (access-control design) sync their `LocalAccessAssignments` and the parent hub's `EffectiveAssignments`, then merge them into a combined `EffectiveAssignments` that child hubs in turn inherit.
 
 > **Not a fit for virtual data sources?**
-> - Need a one-shot read of a single `MeshNode`? Use [`hub.GetMeshNode`](xref:MeshWeaver.Mesh.MeshNodeStreamExtensions.GetMeshNode).
+> - Need a one-shot read of a single `MeshNode`? Use `hub.GetMeshNode`.
 > - Need to *write*? Update content via `workspace.GetMeshNodeStream(path).Update(...)` (or `IMeshService.UpdateNode`, which uses `stream.Update` internally); create via `CreateNodeRequest` through `IMeshService` — virtual collections are read-only mirrors.
 
 ---
@@ -76,7 +76,7 @@ config.AddData(data => data
             collectionName: "MyCollection")));
 ```
 
-The stream provider receives the hub's [`IWorkspace`](xref:MeshWeaver.Data.IWorkspace), so it can compose with other workspace state. The table below shows the most common shapes:
+The stream provider receives the hub's `IWorkspace`, so it can compose with other workspace state. The table below shows the most common shapes:
 
 | Pattern | Stream provider expression |
 |---|---|
@@ -95,7 +95,7 @@ Multiple virtual types per data source, and multiple virtual data sources per hu
 Understanding what happens under the hood makes it easier to reason about timing and disposal:
 
 1. **Hub starts** — `DataContext` initialises all registered data sources.
-2. **Subscription opens** — [`SetupDataSourceStream`](xref:MeshWeaver.Data.VirtualDataSource.SetupDataSourceStream*) subscribes to the stream provider and folds every emission into the workspace via `stream.Update(...)`. The subscription stays open for the life of the data source.
+2. **Subscription opens** — `SetupDataSourceStream` subscribes to the stream provider and folds every emission into the workspace via `stream.Update(...)`. The subscription stays open for the life of the data source.
 3. **Consumers subscribe** — hub-internal code subscribes to `workspace.GetStream(...)` and remains subscribed; no `Take(1)`, no draining after the first value.
 4. **Hub disposes** — the subscription is torn down automatically.
 
@@ -129,7 +129,7 @@ Subscribers receive the latest snapshot immediately on subscribe (thanks to `Rep
 
 ## Cross-hub virtual data sources (parent-sync pattern)
 
-A virtual data source's stream provider can subscribe to any other hub via [`workspace.GetRemoteStream<TReduced, TRef>`](xref:MeshWeaver.Data.IWorkspace.GetRemoteStream*). This is how the access-control system is wired: every per-node hub pulls its parent's `EffectiveAssignments` collection and then surfaces a merged view — `parent ∪ local` — for its own children to consume in turn.
+A virtual data source's stream provider can subscribe to any other hub via `workspace.GetRemoteStream<TReduced, TRef>`. This is how the access-control system is wired: every per-node hub pulls its parent's `EffectiveAssignments` collection and then surfaces a merged view — `parent ∪ local` — for its own children to consume in turn.
 
 ```csharp
 var parentAddress = new Address(parentPath);
@@ -185,8 +185,8 @@ MeshWeaver.Layout.Controls.Markdown(@"
 
 ## Related
 
-- [Synced Query Data Source](SyncedQueryDataSource) — `WithMeshQuery<T>`, the most common virtual-source shape.
-- [Data Configuration](DataConfiguration) — broader data-source patterns (`AddSource`, `AddHubSource`, `WithInitialData`).
-- [Access Control](../Architecture/AccessControl) — the per-node-hub cache pattern in production use.
-- [CQRS & Content Access](../Architecture/CqrsAndContentAccess) — why query mirrors are preferred over re-querying on every read.
-- [Asynchronous Calls](../Architecture/AsynchronousCalls) — why `workspace.GetStream(...)` is the right primitive in hub-reachable code.
+- [Synced Query Data Source](/Doc/DataMesh/SyncedQueryDataSource) — `WithMeshQuery<T>`, the most common virtual-source shape.
+- [Data Configuration](/Doc/DataMesh/DataConfiguration) — broader data-source patterns (`AddSource`, `AddHubSource`, `WithInitialData`).
+- [Access Control](/Doc/Architecture/AccessControl) — the per-node-hub cache pattern in production use.
+- [CQRS & Content Access](/Doc/Architecture/CqrsAndContentAccess) — why query mirrors are preferred over re-querying on every read.
+- [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) — why `workspace.GetStream(...)` is the right primitive in hub-reachable code.

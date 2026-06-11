@@ -41,7 +41,7 @@ This page covers two archetypes you'll write for every node type:
   <text x="680" y="60" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" fill-opacity=".85">GetRemoteStream</text>
   <rect x="620" y="148" width="120" height="52" rx="10" fill="#f57c00"/>
   <text x="680" y="172" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Request/Response</text>
-  <text x="680" y="188" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" fill-opacity=".85">AwaitResponse</text>
+  <text x="680" y="188" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" fill-opacity=".85">AwaitResponseAsync</text>
 </svg>
 *Integration test flow: a test class boots an in-process monolith mesh, routes to the per-node hub via a PingRequest, then exercises either layout-area rendering or request/response.*
 
@@ -124,8 +124,8 @@ public class MatrixViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var address = new Address("MathDemo/Matrix/Example");
 
         // Initialize the hub first — required for routing to hit the per-node hub.
-        await client.AwaitResponse(new PingRequest(),
-            o => o.WithTarget(address), TestContext.Current.CancellationToken);
+        await AwaitResponseAsync(new PingRequest(),
+            o => o.WithTarget(address), hub: client);
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Inverse");
@@ -169,7 +169,7 @@ See `TodoViewsTest.CreateArea_WithTypeParam_ShouldRenderCreateForm` for a comple
 
 ## Archetype 2 — request/response and simulation
 
-When your node type registers a custom handler — for example `config.WithHandler<RunSimulationRequest>(HandleRunSimulation)` in `Source/MyHub.cs` — test it the same way the UI would invoke it: `client.AwaitResponse<TResponse>(request, o => o.WithTarget(address))`. This exercises the real routing and serialization path, not a mocked seam.
+When your node type registers a custom handler — for example `config.WithHandler<RunSimulationRequest>(HandleRunSimulation)` in `Source/MyHub.cs` — test it through the test base's `AwaitResponseAsync<TResponse>(request, o => o.WithTarget(address), hub: client)` (the sanctioned `hub.Observe(...).FirstAsync().ToTask(ct)` bridge — `AwaitResponse` itself is `[Obsolete]` and deadlocks). This exercises the real routing and serialization path, not a mocked seam.
 
 ```csharp
 [Fact(Timeout = 15_000)]
@@ -178,10 +178,10 @@ public async Task RunSimulation_ReturnsExpectedYield()
     var client = GetClient();
     var address = new Address("MathDemo/Matrix/Example");
 
-    var response = await client.AwaitResponse<SimulationResult>(
+    var response = await AwaitResponseAsync(
         new RunSimulationRequest(trials: 1_000),
         o => o.WithTarget(address),
-        TestContext.Current.CancellationToken);
+        hub: client);
 
     response.Message.Yield.Should().BeApproximately(0.042, 0.001);
 }
@@ -225,6 +225,6 @@ dotnet test
 
 ## Related
 
-- [Creating Node Types](CreatingNodeTypes) — how to build the thing you're testing
-- [NuGet Packages](NodeTypeWithNuGet) — `#r "nuget:..."` in `Source/*.cs`
-- [Interactive Markdown](InteractiveMarkdown) — test interactive markdown too
+- [Creating Node Types](/Doc/DataMesh/CreatingNodeTypes) — how to build the thing you're testing
+- [NuGet Packages](/Doc/DataMesh/NodeTypeWithNuGet) — `#r "nuget:..."` in `Source/*.cs`
+- [Interactive Markdown](/Doc/DataMesh/InteractiveMarkdown) — test interactive markdown too

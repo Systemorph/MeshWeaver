@@ -5,6 +5,8 @@ Description: How AI agents collaborate within the mesh — self-guided discovery
 Icon: /static/DocContent/Architecture/AgenticAI/icon.svg
 ---
 
+> **Scope:** this page is the *technical architecture* — how agents are defined, what tools they get, and how they collaborate inside the mesh. For the concepts-and-philosophy companion (what agentic AI is, traps, human-in-the-loop), see [Agentic AI — concepts](/Doc/AI/AgenticAI).
+
 MeshWeaver integrates AI agents as first-class citizens. Agents can query data, navigate structures, execute tasks, and collaborate with one another — all through the same unified mesh references that every other component uses.
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 400" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
   <defs>

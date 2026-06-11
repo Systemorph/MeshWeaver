@@ -38,7 +38,7 @@ public class CollaborationPluginGrainFailureTest(ITestOutputHelper output) : Mon
     /// Foundational contract: posting a <see cref="CreateSuggestedEditRequest"/> to an
     /// address with no registered hub must raise <see cref="DeliveryFailureException"/>
     /// when using <c>AwaitResponse</c> â€” this test uses the test-only await style that
-    /// CLAUDE.md permits in test code. Production plugin code must NOT use
+    /// AGENTS.md permits in test code. Production plugin code must NOT use
     /// <c>AwaitResponse</c>; it uses Post + RegisterCallback + TCS instead (exercised
     /// by the plugin-level tests below). This test locks the routing contract that
     /// the plugin callback's <c>DeliveryFailure</c> branch depends on.

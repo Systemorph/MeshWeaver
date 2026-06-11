@@ -6,6 +6,8 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 ---
 
 Satellite entities — Comments, Threads, Tracked Changes — are secondary nodes that live under a primary content node. They share a consistent set of patterns for data modeling, handler implementation, access control, and reactive testing. This page is the canonical reference for all three.
+
+> **Two satellite pages, two scopes:** this page covers the **data model, handler, access-control, and test patterns**. Its companion [Satellite Node Patterns](/Doc/Architecture/SatelliteNodePatterns) covers the **operational invariants** — hub ownership, persistence routing, and the table-routing rules. Read this one when building a satellite feature; read the other when debugging where a satellite lives and who owns it.
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 320" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
   <defs>
     <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
@@ -54,7 +56,7 @@ A parent node holds an `ImmutableList<string>` of child IDs. The layout area rea
 | Thread | `Messages: ImmutableList<string>` | `ThreadMessage` |
 | Comment | `Replies: ImmutableList<string>` | Reply `Comment` |
 
-When a child is created, the handler appends its ID to the parent list via `workspace.UpdateMeshNode()`. The update flows immediately into every subscribed Blazor client through the sync stream — no polling, no page refresh.
+When a child is created, the handler appends its ID to the parent list via `workspace.GetMeshNodeStream(parentPath).Update(...)`. The update flows immediately into every subscribed Blazor client through the sync stream — no polling, no page refresh.
 
 ### Top-level vs. reply detection
 
@@ -69,81 +71,71 @@ Satellite entity handlers **must be fully synchronous**. Running `await` inside 
 ### Reference implementation
 
 ```csharp
-// SubmitMessageRequest was deleted 2026-05-25. The submission watcher invokes
-// ExecuteMessageAsync directly after writing PendingUserMessages via stream.Update
-// on the thread node — no wire message, no handler dispatch.
-internal static void ExecuteMessageAsync(
+// The submission watcher invokes ExecuteMessageAsync directly after writing
+// PendingUserMessages via stream.Update on the thread node — no wire message,
+// no handler dispatch. It returns IObservable<Unit>; the watcher subscribes and
+// treats completion (gated on the terminal Status write) as "round done".
+internal static IObservable<Unit> ExecuteMessageAsync(
     IMessageHub hub,
     RoundParams request,
     AccessContext? userAccessContext)
 {
     var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-    var workspace = hub.GetWorkspace();  // Capture BEFORE Subscribe
+    var workspace = hub.GetWorkspace();  // Capture on the handler thread
 
     // 1) Start both node creates concurrently (IObservable — cold until Subscribe)
     var inputObs  = meshService.CreateNode(new MeshNode(...));
     var outputObs = meshService.CreateNode(new MeshNode(...));
 
-    // 2) Zip waits for both, then fires the callback exactly once
-    inputObs.Zip(outputObs).Subscribe(
-        pair =>
+    // 2) Zip waits for both; 3) COMPOSE the parent update into the chain —
+    //    never mutate inside a Subscribe callback (wrong thread in Orleans).
+    return inputObs.Zip(outputObs)
+        .SelectMany(_ => workspace.GetMeshNodeStream().Update(node =>
         {
-            // 3) Update parent — append child IDs to tracking list
-            workspace.UpdateMeshNode(node =>
+            var thread = node.ContentAs<Thread>(hub.JsonSerializerOptions, logger);
+            if (node.Content is not null && thread is null) return node;  // never clobber
+            thread ??= new Thread();
+            return node with
             {
-                var thread = node.Content as Thread ?? new Thread();
-                return node with
+                Content = thread with
                 {
-                    Content = thread with
-                    {
-                        Messages = thread.Messages.AddRange([userMsgId, responseMsgId])
-                    }
-                };
-            });
-
-            // 4) Post response INSIDE the callback — nodes exist before caller is notified
-            hub.Post(new Response { Success = true }, o => o.ResponseFor(delivery));
-        },
-        error =>
-        {
-            hub.Post(new Response { Success = false, Error = error.Message },
-                o => o.ResponseFor(delivery));
-        });
-
-    // 5) Return immediately — response is posted from the callback above
-    return delivery.Processed();
+                    Messages = thread.Messages.AddRange([userMsgId, responseMsgId])
+                }
+            };
+        }))
+        .Select(_ => Unit.Default);
+    // The CALLER subscribes — errors flow to its OnError, completion signals done.
 }
 ```
 
 ### Handler rules
 
-1. **Synchronous signature** — return `IMessageDelivery`, never `async Task<IMessageDelivery>`.
-2. **No `await` anywhere in the message pipeline** — `await` deadlocks in Orleans. This applies to handlers, Blazor components, layout areas, and any code on the hub execution path. Use `Post` + `RegisterCallback` instead of `AwaitResponse`.
+1. **Synchronous signature, observable result** — return `IObservable<T>` (or `void` for fire-and-forget), never `async Task<T>`.
+2. **No `await` anywhere in the message pipeline** — `await` deadlocks in Orleans. This applies to handlers, Blazor components, layout areas, and any code on the hub execution path. Request/response is `hub.Observe<TResponse>(request).Subscribe(onNext, onError)` — `RegisterCallback` and `AwaitResponse` are `[Obsolete]` and deadlock.
 3. **No permission checks in handlers or layout areas** — access control is enforced by the delivery pipeline via partition access policies. If a user lacks the `Comment` or `Thread` permission, the request is rejected before reaching the handler. Handlers assume the caller is authorized.
-4. **Never use `IMeshStorage` or persistence directly** — use `IMeshService` for CRUD and `workspace.UpdateMeshNode()` for in-memory workspace updates.
-5. **Capture `workspace` before `Subscribe`** — `var workspace = hub.GetWorkspace()` must be called on the handler thread, not inside the callback closure.
-6. **Post the response inside the callback** — the caller needs to know the operation completed; posting before the observable fires gives a false success.
-7. **Wrap the `onNext` body in `try/catch`** — if `workspace.UpdateMeshNode()` or any callback code throws and you do not catch it, the caller hangs indefinitely waiting for a response that never comes.
-8. **Use `meshService.CreateNode()`** — returns `IObservable<MeshNode>`; internally uses `Post` + `RegisterCallback`.
-9. **Use `workspace.UpdateMeshNode()`** — updates the in-memory stream and triggers persistence via the debounced `MeshNodeTypeSource`.
+4. **Never use `IMeshStorage` or persistence directly** — use `IMeshService` for CRUD and `workspace.GetMeshNodeStream(path).Update(...)` for node updates.
+5. **Capture `workspace` on the handler thread** — `var workspace = hub.GetWorkspace()` must be called in the handler body, not inside a callback closure.
+6. **Compose, don't nest** — chain dependent writes with `SelectMany` into one observable; mutating state inside a `Subscribe` callback runs on the wrong thread and deadlocks (see [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls)).
+7. **Subscribe with an error handler** — `Update`/`CreateNode` are cold; the side effect only runs on Subscribe, and an unhandled OnError means a silent failure.
 
 ### Blazor component pattern
 
-Blazor components follow the same rule: `Post` + `RegisterCallback`, never `AwaitResponse`.
+Blazor components follow the same rule — observe, never await:
 
 ```csharp
-// CORRECT: fire-and-forget with callback
-var delivery = Hub.Post(new CreateCommentRequest { ... },
-    o => o.WithTarget(new Address(hubAddress)));
-Hub.RegisterCallback<CreateCommentResponse>(delivery!, response =>
-{
-    if (!response.Message.Success)
-        logger?.LogWarning("Failed: {Error}", response.Message.Error);
-    return response;
-});
+// CORRECT: reactive request/response
+Hub.Observe<CreateCommentResponse>(new CreateCommentRequest { ... },
+        o => o.WithTarget(new Address(hubAddress)))
+    .Subscribe(
+        response =>
+        {
+            if (!response.Message.Success)
+                logger?.LogWarning("Failed: {Error}", response.Message.Error);
+        },
+        ex => logger?.LogWarning(ex, "CreateComment failed"));
 
 // WRONG: AwaitResponse blocks the Blazor circuit if response never arrives
-await Hub.AwaitResponse(request, o => o.WithTarget(address), default);  // DEADLOCK
+await Hub.AwaitResponse(request, o => o.WithTarget(address), default);  // DEADLOCK ([Obsolete])
 ```
 
 ### Anti-patterns to avoid
@@ -159,30 +151,23 @@ private static async Task<IMessageDelivery> Handle(IMessageHub hub, ...)
 var persistence = hub.ServiceProvider.GetService<IMeshStorage>();
 await persistence.SaveNodeAsync(node, ct);  // WRONG
 
-// WRONG: posting response before async operation completes
+// WRONG: posting response before the work completes
 hub.Post(response, o => o.ResponseFor(request));  // too early
 meshService.CreateNode(node).Subscribe(...);       // not done yet
 
-// WRONG: no error handling — caller hangs forever if callback throws
+// WRONG: mutating state inside the Subscribe callback — wrong thread, deadlocks
 meshService.CreateNode(node).Subscribe(_ =>
 {
-    workspace.UpdateMeshNode(...);  // throws? response never posted!
+    /* direct workspace mutation */            // ← composes into the chain instead
     hub.Post(response, o => o.ResponseFor(request));
 });
 
-// CORRECT: always post a response, success or failure
-meshService.CreateNode(node).Subscribe(_ =>
-{
-    try
-    {
-        workspace.UpdateMeshNode(...);
-        hub.Post(successResponse, o => o.ResponseFor(request));
-    }
-    catch (Exception ex)
-    {
-        hub.Post(failureResponse, o => o.ResponseFor(request));
-    }
-});
+// CORRECT: compose the dependent write, respond from the chain's terminal events
+meshService.CreateNode(node)
+    .SelectMany(_ => workspace.GetMeshNodeStream(parentPath).Update(n => ...))
+    .Subscribe(
+        _  => hub.Post(successResponse, o => o.ResponseFor(request)),
+        ex => hub.Post(failureResponse, o => o.ResponseFor(request)));
 ```
 
 ---
@@ -228,7 +213,8 @@ childStream.Subscribe(change =>
 {
     using var _ = accessService?.SwitchAccessContext(userAccessContext);
     // Operations here run under the correct user identity
-    workspace.UpdateMeshNode(node => { ... });
+    workspace.GetMeshNodeStream(parentPath).Update(node => { ... })
+        .Subscribe(_ => { }, ex => logger.LogWarning(ex, "update failed"));
 });
 ```
 
@@ -256,16 +242,17 @@ meshService.CreateNode(subThreadNode).Subscribe(_ =>
         if (childThread == null) return;
 
         // Mirror child progress into the parent node
-        workspace.UpdateMeshNode(node => { ... merge child progress ... });
+        workspace.GetMeshNodeStream(parentPath).Update(node => { ... merge child progress ... })
+            .Subscribe(_ => { }, ex => logger.LogWarning(ex, "mirror failed"));
 
         // On completion, resolve the TCS
         if (!childThread.IsExecuting)
             tcs.TrySetResult(new DelegationResult { ... });
     });
 
-    // 3. Submit via stream.Update on the sub-thread (SubmitMessageRequest
-    //    deleted 2026-05-25). The sub-thread's submission watcher reacts to
-    //    PendingUserMessages and invokes ExecuteMessageAsync directly.
+    // 3. Submit via stream.Update on the sub-thread. The sub-thread's
+    //    submission watcher reacts to PendingUserMessages and invokes
+    //    ExecuteMessageAsync directly.
     ThreadInput.AppendUserInput(workspace, childAddress.Path, userMessage);
 },
 error => tcs.TrySetResult(new DelegationResult { Success = false }));
@@ -411,8 +398,9 @@ public record UpdateMyContent { public string Text { get; init; } }
 // 2. Register a handler ON the target hub (runs on the target grain)
 config.WithHandler<UpdateMyContent>((hub, delivery) =>
 {
-    hub.GetWorkspace().UpdateMeshNode(node =>
-        node with { Content = /* updated content */ });
+    hub.GetWorkspace().GetMeshNodeStream().Update(node =>
+        node with { Content = /* updated content */ })
+        .Subscribe(_ => { }, ex => logger.LogWarning(ex, "update failed"));
     return delivery.Processed();
 });
 
@@ -421,4 +409,4 @@ hub.Post(new UpdateMyContent { Text = "hello" },
     o => o.WithTarget(new Address(targetPath)));
 ```
 
-**Why this works:** `workspace.UpdateMeshNode()` updates the **local** data source stream on the target grain, which fires a `DataChangedEvent` on the sync stream. Blazor clients that subscribed via `GetRemoteStream` receive this event over SignalR and re-render without any polling. The update path is: grain workspace → sync stream → Orleans routing → Blazor SignalR → UI render.
+**Why this works:** `GetMeshNodeStream().Update(...)` on the own node updates the **local** data source stream on the target grain, which fires a `DataChangedEvent` on the sync stream. Blazor clients that subscribed via `GetRemoteStream` receive this event over SignalR and re-render without any polling. The update path is: grain workspace → sync stream → Orleans routing → Blazor SignalR → UI render.

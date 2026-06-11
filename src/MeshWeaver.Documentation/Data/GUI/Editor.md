@@ -135,6 +135,8 @@ The editor chooses a control for each property based on its declared type:
 | `bool` | Checkbox | `public bool Enabled { get; init; }` |
 | `DateTime` | Date/time picker | `public DateTime BirthDate { get; init; }` |
 
+These defaults apply **only when no override attribute is present** — `[UiControl<T>]`, `[Dimension<T>]`, `[MeshNode]`, `[MeshNodeCollection]`, `[Markdown]`, and `[ContentItem]` each substitute their own control. See [Property Attributes](../Attributes) for the full catalogue.
+
 ---
 
 # Supported Attributes
@@ -149,6 +151,10 @@ Apply any of these attributes directly to a property to alter how the field rend
 | `[Browsable(false)]` | Hides the property entirely — it is never rendered |
 | `[Range(min, max)]` | Restricts numeric input to the given inclusive range |
 | `[Editable(false)]` | Renders the value as read-only; the user cannot change it |
+| `[MeshNode("query")]` | Searchable mesh-node picker; stores the selected node's path |
+| `[MeshNodeCollection("query")]` | Full-width inline chip collection of node references |
+| `[Markdown]` | Markdown display + editor with preview / track-changes options |
+| `[ContentItem("collection")]` | Text field + Browse button over a content collection |
 
 ---
 

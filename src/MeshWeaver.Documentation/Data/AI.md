@@ -122,9 +122,9 @@ Slash commands work too: `/agent <name>`, `/model <name>`, `/help`.
 
 | Topic | What you'll learn |
 |-------|------------------|
-| [Agentic AI](AI/AgenticAI) | Philosophy, delegation vs handoff, human-agent collaboration patterns |
-| [MeshPlugin Tools](AI/Tools/MeshPlugin) | Full tool reference with call shapes and path syntax |
-| [Execute Script](AI/ExecuteScript) | How agents run C# scripts inside the mesh kernel |
-| [MCP Authentication](AI/McpAuthentication) | OAuth flow for external MCP clients connecting to MeshWeaver |
-| [Provider Configuration](AI/ProviderConfiguration) | Endpoints, keys, model tiers, and how to add a new provider |
-| [Model Provider Settings](AI/ModelProviderSettings) | Per-user and per-agent model selection in the Settings UI |
+| [Agentic AI](/Doc/AI/AgenticAI) | Philosophy, delegation vs handoff, human-agent collaboration patterns |
+| [MeshPlugin Tools](/Doc/AI/Tools/MeshPlugin) | Full tool reference with call shapes and path syntax |
+| [Execute Script](/Doc/AI/ExecuteScript) | How agents run C# scripts inside the mesh kernel |
+| [MCP Authentication](/Doc/AI/McpAuthentication) | OAuth flow for external MCP clients connecting to MeshWeaver |
+| [Provider Configuration](/Doc/AI/ProviderConfiguration) | Endpoints, keys, model tiers, and how to add a new provider |
+| [Model Provider Settings](/Doc/AI/ModelProviderSettings) | Per-user and per-agent model selection in the Settings UI |
