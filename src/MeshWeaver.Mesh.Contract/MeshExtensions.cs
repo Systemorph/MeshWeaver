@@ -186,6 +186,26 @@ public static class MeshExtensions
             return request.Processed();
         }
 
+        // FAIL CLOSED on missing storage: a create that cannot persist must error,
+        // never ack. The old fallback (save = Observable.Return(node)) reported
+        // Success while writing NOTHING — on the 2026-06-11 atioz portal every MCP
+        // create was acked "Created: …" and silently lost. Storage-less meshes are
+        // not a supported mode (tests use AddInMemoryPersistence); a null adapter
+        // here is always a wiring defect on the responding hub — name it loudly.
+        if (persistence == null)
+        {
+            logger.LogError(
+                "[CreateNode] REFUSED {Path}: no IStorageAdapter on hub {Hub} — the create would be acked but never persisted. " +
+                "Register persistence (AddPartitioned*Persistence / AddInMemoryPersistence) on this hub's service provider.",
+                request.Message.Node.Path, hub.Address);
+            hub.Post(
+                CreateNodeResponse.Fail(
+                    $"No storage adapter on hub '{hub.Address}' — refusing to create '{request.Message.Node.Path}' because it could not be persisted.",
+                    NodeCreationRejectionReason.Unknown),
+                o => o.ResponseFor(request));
+            return request.Processed();
+        }
+
         var createRequest = request.Message;
 
         // Surface the AccessContext that travelled with the message delivery.

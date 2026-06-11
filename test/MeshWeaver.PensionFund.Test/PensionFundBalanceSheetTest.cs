@@ -4,11 +4,14 @@ using System.IO;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
+using MeshWeaver.Hosting.Activity;
 using MeshWeaver.Hosting.Monolith;
+using MeshWeaver.Hosting.Security;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Layout;
@@ -61,10 +64,15 @@ public class PensionFundBalanceSheetTest(ITestOutputHelper output) : MonolithMes
             })
             .Build();
 
+        // Same fixture shape as FutuReAnalysisTest — the canonical sample-render
+        // test setup (activity tracking, row-level security, the 'storage'
+        // content collection, per-node attachments mapping).
         return builder
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(dataDirectory)
             .AddPensionFund()
+            .AddActivityTracking()
+            .AddRowLevelSecurity()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>
@@ -80,7 +88,20 @@ public class PensionFundBalanceSheetTest(ITestOutputHelper output) : MonolithMes
                 return services;
             })
             .AddGraph()
-            .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
+            .ConfigureHub(hub => hub.AddContentCollection(_ => new ContentCollectionConfig
+            {
+                SourceType = "FileSystem",
+                Name = "storage",
+                BasePath = graphPath,
+                ExposeInChildren = true,
+            }))
+            .ConfigureDefaultNodeHub(config =>
+            {
+                var nodePath = config.Address.ToString();
+                return config
+                    .MapContentCollection("attachments", "storage", $"attachments/{nodePath}")
+                    .AddDefaultLayoutAreas();
+            });
     }
 
     /// <summary>
@@ -93,7 +114,10 @@ public class PensionFundBalanceSheetTest(ITestOutputHelper output) : MonolithMes
             .WithRequestTimeout(TimeSpan.FromSeconds(120))
             .AddLayoutClient();
 
-    private const string BalanceSheetPath = "PensionFund/BalanceSheet";
+    // The report INSTANCE node (nodeType PensionFund/BalanceSheet) — layout
+    // areas attach to instances of a NodeType, not to the NodeType definition
+    // node (same shape as FutuRe/Analysis for FutuRe/GroupAnalysis).
+    private const string BalanceSheetPath = "PensionFund/Statement";
 
     /// <summary>Watchdog headroom for the cold dynamic compile (sources + scope generator).</summary>
     protected override TimeSpan TestHardDeadline => TimeSpan.FromSeconds(150);

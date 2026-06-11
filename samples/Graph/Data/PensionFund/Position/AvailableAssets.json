@@ -21,23 +21,24 @@
                                        {
                                            "$type":  "PositionComponent",
                                            "position":  "PensionFund/Position/Payables",
-                                           "weight":  "-1"
+                                           "weight":  -1
                                        },
                                        {
                                            "$type":  "PositionComponent",
                                            "position":  "PensionFund/Position/AccruedLiabilities",
-                                           "weight":  "-1"
+                                           "weight":  -1
                                        },
                                        {
                                            "$type":  "PositionComponent",
                                            "position":  "PensionFund/Position/EmployerContributionReserve",
-                                           "weight":  "-1"
+                                           "weight":  -1
                                        },
                                        {
                                            "$type":  "PositionComponent",
                                            "position":  "PensionFund/Position/NonTechnicalProvisions",
-                                           "weight":  "-1"
+                                           "weight":  -1
                                        }
                                    ]
                 }
 }
+

@@ -49,11 +49,12 @@ PensionFund/
 ├── Currency.json · Currency/CHF.json …
 ├── BalanceSheetEntry.json
 ├── BalanceSheetEntry/2024-Cash.json …   ← 30 facts — one node per Position × Year
-└── BalanceSheet.json               ← "config => config.ConfigureBalanceSheet()"
-    └── BalanceSheet/Source/        ← scopes, data loader, layout areas
+├── BalanceSheet.json               ← "config => config.ConfigureBalanceSheet()"
+│   └── BalanceSheet/Source/        ← scopes, data loader, layout areas
+└── Statement.json                  ← the report INSTANCE (nodeType PensionFund/BalanceSheet)
 ```
 
-There is **no Id property anywhere** — a mesh node's identity is its **path**. A fact references its dimensions by *their* paths, and a formula references its operand positions by path. Open `PensionFund/BalanceSheet` in a portal with the samples loaded and the views below are its layout areas.
+There is **no Id property anywhere** — a mesh node's identity is its **path**. A fact references its dimensions by *their* paths, and a formula references its operand positions by path. The views attach to **instances** of the BalanceSheet type, not to the type definition itself: open `PensionFund/Statement` in a portal with the samples loaded and the views below are its layout areas.
 
 ## 1. Dimension types host their instances
 
