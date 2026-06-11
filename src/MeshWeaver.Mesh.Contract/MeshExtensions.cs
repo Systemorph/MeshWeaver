@@ -397,8 +397,8 @@ public static class MeshExtensions
                             return Observable.Defer(() =>
                             {
                                 var enriched = newNode;
-                                logger.LogDebug("[CreateNode] step=save-start path={Path} persistence={HasPersistence}",
-                                    enriched.Path, persistence != null);
+                                logger.LogDebug("[CreateNode] step=save-start path={Path} persistence={HasPersistence} adapter={Adapter}",
+                                    enriched.Path, persistence != null, persistence?.GetType().Name);
                                 // Commit-then-publish: Created event fires inside the helper's
                                 // .Do operator, which runs only after the storage write emits
                                 // (post-commit). No-persistence fallback skips the publish —

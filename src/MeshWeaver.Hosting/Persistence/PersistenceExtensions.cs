@@ -524,7 +524,9 @@ public static class PersistenceExtensions
         // PersistenceService bundles all IPartitionStorageProvider adapters.
         // Pure delegation by path — no cache, no init, no factory wrapper.
         services.AddSingleton<IStorageAdapter>(sp =>
-            new PersistenceService(sp.GetServices<IPartitionStorageProvider>()));
+            new PersistenceService(
+                sp.GetServices<IPartitionStorageProvider>(),
+                sp.GetService<ILogger<PersistenceService>>()));
 
         // Default adapter-backed query provider — pedestrian exact-path probes
         // every backend needs in the IMeshQueryProvider fan-in. Native query
