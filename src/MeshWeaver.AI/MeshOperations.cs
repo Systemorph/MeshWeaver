@@ -608,20 +608,21 @@ public class MeshOperations
                     .ToImmutableList();
                 // Envelope instead of a bare array so truncation is VISIBLE: a result
                 // set that silently stops at the limit reads as "that's everything"
-                // and the agent under-reports. `truncated` + the hint tell it how to
-                // get the rest (narrow the query or raise the limit).
+                // and the agent under-reports. Composed explicitly via JsonObject —
+                // the hub serializer options drop empty collections, which would strip
+                // the 'results' key from a zero-hit response and break consumers.
                 var truncated = list.Count >= limit;
-                var payload = new
+                var payload = new JsonObject
                 {
-                    count = list.Count,
-                    limit,
-                    truncated,
-                    hint = truncated
-                        ? "Result set hit the limit — there may be more matches. Narrow the query (namespace:/nodeType:/name:) or raise 'limit' (max 200)."
-                        : null,
-                    results = list
+                    ["count"] = list.Count,
+                    ["limit"] = limit,
+                    ["truncated"] = truncated,
+                    ["results"] = JsonSerializer.SerializeToNode(list, hub.JsonSerializerOptions) ?? new JsonArray(),
                 };
-                return JsonSerializer.Serialize(payload, hub.JsonSerializerOptions);
+                if (truncated)
+                    payload["hint"] =
+                        "Result set hit the limit — there may be more matches. Narrow the query (namespace:/nodeType:/name:) or raise 'limit' (max 200).";
+                return payload.ToJsonString();
             })
             .Catch((Exception ex) =>
             {
