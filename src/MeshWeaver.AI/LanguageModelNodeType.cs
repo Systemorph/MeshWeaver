@@ -83,17 +83,26 @@ public static class LanguageModelNodeType
             // resolution while BuiltInAgentProvider (using plain AddSingleton)
             // worked. Match the AgentProvider pattern so both follow the
             // same path.
-            services.AddSingleton<IStaticNodeProvider>(sp => sp.GetRequiredService<BuiltInLanguageModelProvider>());
-            // Partition routing â€” the same instance feeds the routing core's
-            // "Model" partition. The partition's StaticNodeStorageAdapter is
-            // its storage of record; no SeedIfAbsent fan-in required. Skipped when
-            // the partition is DB-synced (PG serves it instead).
+            // 🚨 Gate the IStaticNodeProvider (feeds FindStaticNode) on !dbSynced, same as the
+            // partition provider below — leaving it registered while the "Model" partition is
+            // DB-synced made the importer's inner CreateNode see the built-in catalog/_Provider
+            // nodes as already-present and fail "Node already exists" (atioz 2026-06-11: Model
+            // imported 4 / failed 2, incl. Model/_Policy + _Provider/Anthropic). The
+            // BuiltInLanguageModelProvider singleton stays (the import source wraps it); the
+            // LanguageModel/ModelProvider NodeType defs stay via AddMeshNodes. See AddAgentType.
             if (!dbSynced)
+            {
+                services.AddSingleton<IStaticNodeProvider>(sp => sp.GetRequiredService<BuiltInLanguageModelProvider>());
+                // Partition routing â€” the same instance feeds the routing core's
+                // "Model" partition. The partition's StaticNodeStorageAdapter is
+                // its storage of record; no SeedIfAbsent fan-in required. Skipped when
+                // the partition is DB-synced (PG serves it instead).
                 services.AddSingleton<IPartitionStorageProvider>(sp =>
                     new StaticNodePartitionStorageProvider(
                         RootNamespace,
                         sp.GetRequiredService<BuiltInLanguageModelProvider>(),
                         description: "Built-in language model catalog (read-only)."));
+            }
             return services;
         });
 
