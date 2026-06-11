@@ -28,10 +28,10 @@ The hub already exposes `IObservable<T>` on its public surface (`IRoutingService
 The `ActionBlock` exists for exactly one reason: to **serialize asynchronous handler
 continuations** onto a single logical thread. Once every handler is a *synchronous*
 `IObservable` that completes inline on `Subscribe` (the case after this migration — see
-[AsynchronousCalls.md](xref:Architecture/AsynchronousCalls) rule #1 and #9), there are no
+[AsynchronousCalls.md](/Doc/Architecture/AsynchronousCalls) rule #1 and #9), there are no
 async continuations to serialize, and a plain lock-guarded queue (one turn at a time) is
 sufficient and simpler. Genuine async (Postgres, blob, file, compile) is already isolated
-behind [`IIoPool`](xref:Architecture/AsynchronousCalls) — those leaves stay async and bridge
+behind [`IIoPool`](/Doc/Architecture/AsynchronousCalls) — those leaves stay async and bridge
 to `IObservable` at the pool, never on the turn loop.
 
 ## Target architecture
@@ -115,7 +115,7 @@ the Orleans propagation suite) exists to pin exactly this.
 
 A handler must **never** block the turn thread on I/O. When it hits a genuinely-async leaf
 (Postgres, blob, file, compile, a cross-hub round-trip), it **returns a promise — a
-`ReplaySubject<T>(1)` — and outsources the async work to the [`IIoPool`](xref:Architecture/AsynchronousCalls)**.
+`ReplaySubject<T>(1)` — and outsources the async work to the [`IIoPool`](/Doc/Architecture/AsynchronousCalls)**.
 The synchronous part of the turn completes immediately; the async result resolves later and
 **re-enters the hub as a posted message**, so hub state is still only ever touched on the single
 turn thread:
@@ -174,7 +174,7 @@ results re-enter as messages) — just expressed in `IObservable` + a plain queu
 
 ## Docs to update prominently when each stage lands
 
-- [AsynchronousCalls.md](xref:Architecture/AsynchronousCalls) — the routing/pipeline section,
+- [AsynchronousCalls.md](/Doc/Architecture/AsynchronousCalls) — the routing/pipeline section,
   and the line ~187 table (routing moves from "leave as-is" to "observable by composition").
-- [MessageBasedCommunication.md](xref:Architecture/MessageBasedCommunication) — handler return type.
+- [MessageBasedCommunication.md](/Doc/Architecture/MessageBasedCommunication) — handler return type.
 - `CLAUDE.md` reactive-pattern rules — `DeliveryHandler` replaces `AsyncDelivery`.
