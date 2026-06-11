@@ -1,0 +1,15 @@
+﻿{
+    "id":  "Statement",
+    "namespace":  "PensionFund",
+    "name":  "Balance Sheet - Helvetia Vorsorge",
+    "nodeType":  "PensionFund/BalanceSheet",
+    "category":  "Reports",
+    "description":  "The scope-computed balance sheet: statement, key figures (funding ratio per BVV2 Art. 44), asset allocation, and the new-entry dialog.",
+    "order":  1,
+    "icon":  "\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027 viewBox=\u00270 0 24 24\u0027 fill=\u0027none\u0027 stroke=\u0027currentColor\u0027 stroke-width=\u00272\u0027\u003e\u003cpath d=\u0027M12 3v18M5 7l7-4 7 4M5 7v4a7 7 0 0 0 14 0V7\u0027/\u003e\u003cpath d=\u0027M3 21h18\u0027/\u003e\u003c/svg\u003e",
+    "isPersistent":  true,
+    "content":  {
+                    "$type":  "BalanceSheetReport",
+                    "commentary":  "Funding improved year over year: the 2025 funding ratio of ~112.4% exceeds the value-fluctuation-reserve target, leaving free funds intact."
+                }
+}
