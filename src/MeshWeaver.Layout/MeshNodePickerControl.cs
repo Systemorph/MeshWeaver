@@ -1,3 +1,5 @@
+using MeshWeaver.Domain;
+
 namespace MeshWeaver.Layout;
 
 /// <summary>
@@ -56,4 +58,31 @@ public record MeshNodePickerControl(object Data)
 
     public MeshNodePickerControl WithItems(params object[] items)
         => this with { Items = items };
+
+    /// <summary>
+    /// Visual density of the picker (full card vs. compact). Defaults to
+    /// <see cref="MeshNodePickerLayout.Default"/>.
+    /// </summary>
+    public MeshNodePickerLayout Layout { get; init; }
+
+    /// <summary>
+    /// Direction the dropdown opens (down by default; up for bottom-anchored fields
+    /// such as the chat composer).
+    /// </summary>
+    public MeshNodePickerOpenDirection Open { get; init; }
+
+    /// <summary>
+    /// When true and no value is set, the picker auto-selects (and persists) the first
+    /// available result as the default.
+    /// </summary>
+    public bool DefaultToFirst { get; init; }
+
+    public MeshNodePickerControl WithLayout(MeshNodePickerLayout layout)
+        => this with { Layout = layout };
+
+    public MeshNodePickerControl WithOpenDirection(MeshNodePickerOpenDirection open)
+        => this with { Open = open };
+
+    public MeshNodePickerControl WithDefaultToFirst(bool defaultToFirst = true)
+        => this with { DefaultToFirst = defaultToFirst };
 }

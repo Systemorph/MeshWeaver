@@ -83,7 +83,7 @@ public class InboxToolIntegrationTest : AITestBase
         var result = (await tool.InvokeAsync(new AIFunctionArguments(), ct))?.ToString();
 
         result.Should().Contain("hello mid-stream");
-        result.Should().Contain("follow-up");
+        result.Should().Contain("💬", "in-flight messages are returned with the user-input marker (no boilerplate framing)");
 
         // Verify state: PendingUserMessages drained, msgId added to IngestedMessageIds.
         var afterDrain = await WaitForOwnAsync(threadHub,
@@ -115,7 +115,7 @@ public class InboxToolIntegrationTest : AITestBase
         var tool = InboxTool.CreateCheckInboxTool(threadHub);
         var result = (await tool.InvokeAsync(new AIFunctionArguments(), ct))?.ToString();
 
-        result.Should().Contain("3 follow-up messages");
+        result.Should().Contain("💬", "in-flight messages are returned with the user-input marker");
         var firstIdx = result!.IndexOf("first", StringComparison.Ordinal);
         var secondIdx = result.IndexOf("second", StringComparison.Ordinal);
         var thirdIdx = result.IndexOf("third", StringComparison.Ordinal);
@@ -156,18 +156,18 @@ public class InboxToolIntegrationTest : AITestBase
             "once a message has been delivered to the agent it must NOT be redelivered on the next call");
     }
 
-    // â”€â”€â”€ A7: clean mid-execution output-cell transition â”€â”€â”€
+    // â”€â”€â”€ Mid-execution: in-flight message delivered inline, NO output-cell split â”€â”€â”€
 
     /// <summary>
-    /// A7 — while a round is streaming into response cell R1, a follow-up message
-    /// arrives and the agent calls <c>check_inbox</c>. The clean output-cell
-    /// transition must freeze R1 (Completed), place the interrupting user cell
-    /// after it, and switch streaming to a FRESH cell R2 — final ordering
-    /// <c>[R1 completed] → [U] → [R2 streaming]</c>. The agent's continuation
-    /// streams into R2, NOT the frozen R1.
+    /// While a round is streaming into response cell R1, a follow-up message arrives and the
+    /// agent calls <c>check_inbox</c>. The redesigned tool drains the follow-up (pending →
+    /// ingested) and delivers it Claude-Code-style — returned to the agent and appended inline
+    /// to the SAME response cell with a marker — rather than freezing R1 and switching to a
+    /// fresh cell. So no second response cell appears and the round completes on R1 itself
+    /// (its final text carries the agent's continuation, not a frozen partial).
     /// </summary>
     [Fact]
-    public async Task CheckInbox_DrainMidExecution_FreezesR1_InputsInMiddle_SwitchesToNewOutputCell()
+    public async Task CheckInbox_DrainMidExecution_DeliversInline_NoCellSplit()
     {
         var ct = TestContext.Current.CancellationToken;
         var threadPath = await SeedEmptyThreadAsync(ct);
@@ -175,8 +175,7 @@ public class InboxToolIntegrationTest : AITestBase
         var client = GetClient();
         var ws = Mesh.GetWorkspace();
 
-        // Round 1 — the fake client streams after a 5 s delay, so the round stays
-        // Executing long enough to drive a mid-stream check_inbox.
+        // Round 1 — the fake client streams after a delay, so the round stays Executing.
         client.SubmitMessage(threadPath, "First question",
             modelName: "inbox-fake-slow", createdBy: "rbuergi@systemorph.com");
 
@@ -184,8 +183,7 @@ public class InboxToolIntegrationTest : AITestBase
             t => t.IsExecuting && !string.IsNullOrEmpty(t.ActiveMessageId), 10_000, ct);
         var r1 = executing.ActiveMessageId!;
 
-        // Wait until R1 is actually streaming — by then the round's
-        // ActiveResponseSegment.ResponseText is wired, so check_inbox will split.
+        // Wait until R1 is actually streaming (ActiveResponseSegment.ResponseText wired).
         await ws.GetMeshNodeStream($"{threadPath}/{r1}")
             .Select(n => (n?.Content as ThreadMessage)?.Text)
             .Where(txt => !string.IsNullOrEmpty(txt) && txt!.Contains("Generating response"))
@@ -198,44 +196,24 @@ public class InboxToolIntegrationTest : AITestBase
             t => t.PendingUserMessages.Count > 0, 5_000, ct);
         var u2 = queued.PendingUserMessages.Keys.Single();
 
-        // Mid-execution check_inbox → A7 clean output-cell transition.
+        // Mid-execution check_inbox → drain + inline delivery (no split).
         var tool = InboxTool.CreateCheckInboxTool(threadHub);
         var toolResult = (await tool.InvokeAsync(new AIFunctionArguments(), ct))?.ToString();
-        toolResult.Should().Contain("Follow-up");
+        toolResult.Should().Contain("Follow-up", "the tool returns the in-flight message text to the agent");
 
-        // ActiveMessageId switched to a NEW response cell; the follow-up drained.
-        var afterSplit = await WaitForThreadAsync(threadPath,
-            t => !string.IsNullOrEmpty(t.ActiveMessageId)
-                 && t.ActiveMessageId != r1
-                 && t.IngestedMessageIds.Contains(u2),
-            10_000, ct);
-        var r2 = afterSplit.ActiveMessageId!;
-        r2.Should().NotBe(r1, "check_inbox mid-execution must switch streaming to a fresh response cell");
+        // The follow-up drained (pending → ingested) — same drain guarantee as the idle path.
+        var afterDrain = await WaitForThreadAsync(threadPath,
+            t => t.IngestedMessageIds.Contains(u2), 10_000, ct);
+        afterDrain.PendingUserMessages.Should().NotContainKey(u2);
 
-        // Ordering: [r1 … u2 … r2] — the interrupting user cell in the middle.
-        var idxR1 = afterSplit.Messages.IndexOf(r1);
-        var idxU2 = afterSplit.Messages.IndexOf(u2);
-        var idxR2 = afterSplit.Messages.IndexOf(r2);
-        idxR1.Should().BeGreaterThanOrEqualTo(0);
-        idxU2.Should().BeGreaterThan(idxR1, "the interrupting user message lands AFTER the frozen response cell");
-        idxR2.Should().BeGreaterThan(idxU2, "the new response cell lands AFTER the user message");
-
-        // R1 is frozen to a terminal Completed status (never regresses).
-        var r1Status = await ws.GetMeshNodeStream($"{threadPath}/{r1}")
-            .Select(n => (n?.Content as ThreadMessage)?.Status)
-            .Where(s => s == ThreadMessageStatus.Completed)
-            .Take(1).Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
-        r1Status.Should().Be(ThreadMessageStatus.Completed,
-            "the in-flight cell is frozen Completed when check_inbox splits");
-
-        // The agent's continuation streams into R2 (NOT the frozen R1) and the
-        // round completes there.
-        var r2Final = await ws.GetMeshNodeStream($"{threadPath}/{r2}")
+        // The round completes on R1 itself — no fresh cell was created (the old A7 split would
+        // have frozen R1 with partial text and streamed "slow ack" into a separate R2).
+        var r1Final = await ws.GetMeshNodeStream($"{threadPath}/{r1}")
             .Select(n => n?.Content as ThreadMessage)
             .Where(m => m is { Status: ThreadMessageStatus.Completed })
             .Take(1).Timeout(TimeSpan.FromSeconds(15)).ToTask(ct);
-        r2Final!.Text.Should().Contain("slow ack",
-            "the continuation streams into the NEW cell, not the frozen one");
+        r1Final!.Text.Should().Contain("slow ack",
+            "the agent's continuation streams into the SAME cell and completes there (no split)");
     }
 
     // â”€â”€â”€ Cancel-then-restart: ESC with pending messages â”€â”€â”€
@@ -438,7 +416,7 @@ public class InboxToolIntegrationTest : AITestBase
 
     /// <summary>
     /// Resolves the thread hub via the in-process MeshService. Required because
-    /// <see cref="InboxTool.CheckInbox"/> reads the OWN node from the
+    /// <c>check_inbox</c> reads the OWN node from the
     /// hub's workspace.
     /// </summary>
     private async Task<IMessageHub> GetThreadHubAsync(string threadPath, CancellationToken ct)
@@ -503,7 +481,7 @@ public class InboxToolIntegrationTest : AITestBase
 
     /// <summary>
     /// Stream-based wait on the thread hub's OWN node stream — the EXACT stream
-    /// <see cref="InboxTool.CheckInbox"/> reads (<c>threadHub.GetWorkspace().GetMeshNodeStream()</c>).
+    /// <c>check_inbox</c> reads (<c>threadHub.GetWorkspace().GetMeshNodeStream()</c>).
     /// The mesh-side <see cref="WaitForThreadAsync"/> uses a separate remote stream
     /// with its own replay buffer, so a condition satisfied there isn't guaranteed
     /// visible on the tool's own stream yet. Gating the tool call on the OWN stream

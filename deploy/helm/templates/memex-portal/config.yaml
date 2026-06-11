@@ -46,6 +46,14 @@ data:
   # Per-user co-hosted Claude Code config root (the /mnt/users RWX share): each user's `claude`
   # login + .credentials.json live under {root}/{userId}/.claude. Drives the Connect login dir.
   ClaudeCode__ConfigDirRoot: "{{ .Values.config.memex_portal.ClaudeCode__ConfigDirRoot }}"
+  # ---- AI provider feature flags --------------------------------------------
+  # Gate whether each provider's catalog source is registered at all
+  # (MemexConfiguration: `if (features.Ai.Providers.Anthropic) AddAnthropic()`).
+  # Default "true" (provider on) so existing envs are unchanged; set "false"
+  # per-env to drop the provider entirely — no catalog source → it vanishes from
+  # the model picker and its Model/<id> nodes never seed. atioz sets this false
+  # (Claude there is per-user Claude Code, NOT a wired API provider).
+  Features__Ai__Providers__Anthropic: "{{ .Values.config.memex_portal.Features__Ai__Providers__Anthropic | default "true" }}"
   # ---- AI: extra non-secret knobs (optional; default empty) -----------------
   # Order is an int — empty string fails Int32 binding, so default to "0" (NOT "").
   Anthropic__Order: "{{ .Values.config.memex_portal.Anthropic__Order | default "0" }}"

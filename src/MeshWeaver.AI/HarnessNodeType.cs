@@ -49,14 +49,19 @@ public static class HarnessNodeType
 
     /// <summary>
     /// Resolves the registered <see cref="IHarness"/> for <paramref name="harnessId"/>
-    /// (the value stored in <see cref="Thread.SelectedHarness"/>), or null when none
-    /// matches — in which case execution uses the default MeshWeaver agent/model path.
+    /// (the value stored in <see cref="Thread.SelectedHarness"/> — a bare id or a picked
+    /// node PATH like <c>Harness/MeshWeaver</c>, normalized via <see cref="SelectionId.IdOf"/>),
+    /// or null when none matches — in which case execution uses the default MeshWeaver
+    /// agent/model path.
     /// </summary>
-    public static IHarness? ResolveHarness(IServiceProvider services, string? harnessId) =>
-        string.IsNullOrEmpty(harnessId)
+    public static IHarness? ResolveHarness(IServiceProvider services, string? harnessId)
+    {
+        var id = SelectionId.IdOf(harnessId);
+        return string.IsNullOrEmpty(id)
             ? null
             : services.GetServices<IHarness>()
-                .FirstOrDefault(h => string.Equals(h.Id, harnessId, StringComparison.OrdinalIgnoreCase));
+                .FirstOrDefault(h => string.Equals(h.Id, id, StringComparison.OrdinalIgnoreCase));
+    }
 
     /// <summary>The type-definition node for nodeType="Harness".</summary>
     public static MeshNode CreateMeshNode() => new(NodeType)

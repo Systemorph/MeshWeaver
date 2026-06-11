@@ -45,6 +45,12 @@ public static class HubThreadExtensions
     /// pre-seeded with <see cref="MeshThread.PendingUserMessages"/> so the
     /// submission watcher dispatches the first round as soon as the thread
     /// hub activates — no second round-trip.
+    ///
+    /// <para><paramref name="composer"/>, when supplied, is COPIED onto the created
+    /// thread as <see cref="MeshThread.Composer"/> — the thread's own data-bound
+    /// chat-input state — with the draft + attachments emptied (the draft became the
+    /// first message) and the navigation signal cleared. This is how the out-of-thread
+    /// composer's selection (harness/agent/model paths) carries into the thread.</para>
     /// </summary>
     public static void StartThread(
         this IMessageHub hub,
@@ -60,7 +66,8 @@ public static class HubThreadExtensions
         Action<string>? onError = null,
         string? mainNode = null,
         string? speakingId = null,
-        string? harness = null)
+        string? harness = null,
+        ThreadComposer? composer = null)
     {
         ArgumentNullException.ThrowIfNull(hub);
         if (string.IsNullOrEmpty(namespacePath))
@@ -95,7 +102,12 @@ public static class HubThreadExtensions
             PendingModelName = modelName,
             PendingHarness = harness,
             PendingContextPath = contextPath,
-            PendingAttachments = attachments
+            PendingAttachments = attachments,
+            // The thread's own composer: selection survives, draft is consumed by the
+            // first message, the navigate-signal never carries over.
+            Composer = composer is null
+                ? null
+                : composer with { MessageContent = null, Attachments = null, OpenThreadPath = null }
         };
         threadNode = threadNode with { Content = seededThread };
 
@@ -174,6 +186,85 @@ public static class HubThreadExtensions
             logger?.LogWarning(ex, "[SubmitMessage] AppendUserInput threw for {ThreadPath}", threadPath);
             onError?.Invoke($"SubmitMessage failed: {ex.Message}");
         }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    // Submit from the thread's composer (drain + empty, one atomic update)
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Submits the thread's own composer (<see cref="MeshThread.Composer"/>) as the next
+    /// user message — ONE atomic <c>stream.Update</c> on the thread node that
+    /// (a) builds the user message from <paramref name="userText"/> (or, when null, the
+    /// composer's persisted <see cref="ThreadComposer.MessageContent"/> draft) carrying the
+    /// composer's harness/agent/model selection (picked node paths — normalized at the
+    /// execution boundary), (b) queues it via <see cref="ThreadInput.ApplyUserInput"/>
+    /// (<see cref="MeshThread.PendingUserMessages"/> + <c>Pending*</c> hints), and
+    /// (c) EMPTIES the composer (draft + attachments). The per-thread submission watcher
+    /// reacts to the resulting state change and dispatches the round.
+    ///
+    /// <para>No-op when there is no text to submit. <paramref name="contextPath"/> and
+    /// <paramref name="attachments"/> override the composer's persisted values when supplied
+    /// (the Blazor chat passes its live nav context + attachment chips).</para>
+    /// </summary>
+    public static void SubmitComposer(
+        this IMessageHub hub,
+        string threadPath,
+        string? userText = null,
+        string? contextPath = null,
+        IReadOnlyList<string>? attachments = null,
+        string? createdBy = null,
+        string? authorName = null,
+        Action<string>? onError = null)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        if (string.IsNullOrEmpty(threadPath))
+        {
+            onError?.Invoke("SubmitComposer requires threadPath.");
+            return;
+        }
+
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.AI.HubThreadExtensions");
+        var msgId = Guid.NewGuid().ToString("N")[..8];
+
+        hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
+        {
+            var t = node.ContentAs<MeshThread>(hub.JsonSerializerOptions, logger);
+            // Existing node whose content can't be recovered → leave it alone, NEVER clobber.
+            if (node.Content is not null && t is null)
+                return node;
+            t ??= new MeshThread();
+            var c = t.Composer ?? new ThreadComposer();
+            var text = !string.IsNullOrWhiteSpace(userText) ? userText : c.MessageContent;
+            if (string.IsNullOrWhiteSpace(text))
+                return node; // nothing to submit — no-op (byte-identical node dedupes downstream)
+
+            var message = ThreadInput.CreateUserMessage(
+                text!,
+                createdBy: createdBy,
+                authorName: authorName,
+                agentName: c.AgentName,
+                modelName: c.ModelName,
+                contextPath: contextPath ?? c.ContextPath,
+                attachments: attachments ?? c.Attachments,
+                harness: c.Harness);
+
+            return node with
+            {
+                Content = ThreadInput.ApplyUserInput(t, msgId, message) with
+                {
+                    Composer = c with { MessageContent = null, Attachments = null }
+                }
+            };
+        }).Subscribe(
+            _ => { },
+            ex =>
+            {
+                logger?.LogWarning(ex,
+                    "SubmitComposer: thread Update failed for {ThreadPath}", threadPath);
+                onError?.Invoke($"SubmitComposer failed: {ex.Message}");
+            });
     }
 
     // ═════════════════════════════════════════════════════════════════════

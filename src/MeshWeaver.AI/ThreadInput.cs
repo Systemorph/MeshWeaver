@@ -58,6 +58,31 @@ public static class ThreadInput
         };
 
     /// <summary>
+    /// Pure: applies a user input to a thread's state — adds <paramref name="msgId"/> to
+    /// <see cref="Thread.UserMessageIds"/> (preserving submission order), stashes the
+    /// message in <see cref="Thread.PendingUserMessages"/> (the queue the inbox drains),
+    /// and refreshes the <c>Pending*</c> dispatch hints. Shared by
+    /// <see cref="AppendUserInput"/> and <c>HubThreadExtensions.SubmitComposer</c> so both
+    /// submission paths produce byte-identical thread state.
+    /// </summary>
+    public static MeshThread ApplyUserInput(MeshThread thread, string msgId, ThreadMessage message)
+    {
+        var userIds = thread.UserMessageIds.Contains(msgId)
+            ? thread.UserMessageIds
+            : thread.UserMessageIds.Add(msgId);
+        return thread with
+        {
+            UserMessageIds = userIds,
+            PendingUserMessages = thread.PendingUserMessages.SetItem(msgId, message),
+            PendingAgentName = message.AgentName ?? thread.PendingAgentName,
+            PendingModelName = message.ModelName ?? thread.PendingModelName,
+            PendingHarness = message.Harness ?? thread.PendingHarness,
+            PendingContextPath = message.ContextPath ?? thread.PendingContextPath,
+            PendingAttachments = message.Attachments ?? thread.PendingAttachments
+        };
+    }
+
+    /// <summary>
     /// Appends a user message into <see cref="Thread.PendingUserMessages"/> on
     /// <paramref name="threadPath"/>. Returns the generated message id.
     ///
@@ -67,7 +92,7 @@ public static class ThreadInput
     /// <see cref="Thread.Messages"/> — both happen later, at ingestion time,
     /// when the inbox drains the queue. See
     /// <c>ThreadSubmissionServer.DispatchRound</c> (round-start ingestion)
-    /// and <see cref="InboxTool.CheckInbox"/> (mid-stream ingestion).</para>
+    /// and <c>check_inbox</c> (mid-stream ingestion).</para>
     ///
     /// <para><b>GUI binding.</b> While an entry sits in
     /// <see cref="Thread.PendingUserMessages"/> the chat view renders it as a
@@ -125,23 +150,7 @@ public static class ThreadInput
             if (node.Content is not null && thread is null)
                 return node;
             thread ??= new MeshThread();
-            var userIds = thread.UserMessageIds.Contains(msgId)
-                ? thread.UserMessageIds
-                : thread.UserMessageIds.Add(msgId);
-            var pending = thread.PendingUserMessages.SetItem(msgId, message);
-            return node with
-            {
-                Content = thread with
-                {
-                    UserMessageIds = userIds,
-                    PendingUserMessages = pending,
-                    PendingAgentName = message.AgentName ?? thread.PendingAgentName,
-                    PendingModelName = message.ModelName ?? thread.PendingModelName,
-                    PendingHarness = message.Harness ?? thread.PendingHarness,
-                    PendingContextPath = message.ContextPath ?? thread.PendingContextPath,
-                    PendingAttachments = message.Attachments ?? thread.PendingAttachments
-                }
-            };
+            return node with { Content = ApplyUserInput(thread, msgId, message) };
         }).Subscribe(
             updated => logger?.LogInformation(
                 "[AppendUserInput] ON_NEXT for {ThreadPath} msgId={MsgId} — userIds={UserIds} pending={Pending}",

@@ -1003,7 +1003,9 @@ public class AgentChatClient : IAgentChat
     /// <inheritdoc />
     public void SetSelectedAgent(string? agentName)
     {
-        currentAgentName = agentName;
+        // Accept the picked node PATH ("Agent/Coder") or the bare name — the agents
+        // dictionary is keyed by name, which is the last path segment.
+        currentAgentName = SelectionId.IdOf(agentName);
     }
 
     public void SetContext(AgentContext? applicationContext)
@@ -1049,9 +1051,11 @@ public class AgentChatClient : IAgentChat
     public AgentChatClient Initialize(string? contextPath, string? modelName = null, string? nodeTypePath = null)
     {
         // Normalize at entry so satellite paths (e.g. "ACME/Project/_Thread/<slug>") collapse to
-        // their main-node path before any downstream query/cache key uses them.
+        // their main-node path before any downstream query/cache key uses them. The model may
+        // arrive as the picked node PATH ("_Provider/Anthropic/claude-…") — factories match the
+        // bare model id (last segment).
         contextPath = NormalizeContextPath(contextPath);
-        currentModelName = modelName;
+        currentModelName = SelectionId.IdOf(modelName);
         lastLoadedContextPath = contextPath;
         // Default the NodeType-search namespace to the context node's NodeType when the
         // caller didn't supply one. AgentPickerProjection.BuildAgentQueries will only
@@ -1328,7 +1332,7 @@ public class AgentChatClient : IAgentChat
         // the end. The previous shape mutated the shared `agents` field per
         // iteration (one-by-one SetItem) — every concurrent SelectAgent
         // saw a PARTIAL dict, biased toward agents added first
-        // (Researcher, Versioning, DescriptionWriter, …). The default
+        // (Researcher, DescriptionWriter, …). The default
         // Assistant is added LAST per `OrderAgentsForCreation`, so during
         // the window, SelectAgent's `loadedAgents[0]` lookup (which finds
         // "Assistant" in loadedAgents) ran `agents.TryGetValue("Assistant")`

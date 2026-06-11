@@ -83,16 +83,6 @@ public record ThreadViewModel
     /// </summary>
     public string? CreatedBy { get; init; }
 
-    /// <summary>
-    /// Id of the thread's own ThreadComposer composer node (<see cref="Thread.ThreadComposerId"/>).
-    /// When set, the composer persists its draft + harness/agent/model selection to the
-    /// thread's <c>{ThreadPath}/{ThreadComposerId}</c> node instead of the per-user singleton.
-    /// Null until the server-side Thread view has lazily created it — the view binds the
-    /// per-thread ThreadComposer path ONLY when this is non-null, so it never reads a
-    /// maybe-absent path (no NotFound storm).
-    /// </summary>
-    public string? ThreadComposerId { get; init; }
-
     public virtual bool Equals(ThreadViewModel? other)
     {
         if (other is null) return false;
@@ -111,7 +101,6 @@ public record ThreadViewModel
                && SelectedModelName == other.SelectedModelName
                && SelectedHarness == other.SelectedHarness
                && CreatedBy == other.CreatedBy
-               && ThreadComposerId == other.ThreadComposerId
                && Messages.SequenceEqual(other.Messages)
                && (StreamingToolCalls ?? []).SequenceEqual(other.StreamingToolCalls ?? [])
                && PendingMessageTexts.SequenceEqual(other.PendingMessageTexts);
@@ -134,7 +123,6 @@ public record ThreadViewModel
         hash.Add(SelectedModelName);
         hash.Add(SelectedHarness);
         hash.Add(CreatedBy);
-        hash.Add(ThreadComposerId);
         foreach (var msg in Messages)
             hash.Add(msg);
         if (StreamingToolCalls != null)

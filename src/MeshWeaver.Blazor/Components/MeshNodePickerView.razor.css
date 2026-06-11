@@ -192,3 +192,54 @@
     font-size: 11px;
     color: var(--neutral-foreground-hint, #666);
 }
+
+/* Open-upward dropdown — for bottom-anchored fields (e.g. the chat composer). */
+.mesh-node-picker-dropdown--top {
+    top: auto;
+    bottom: 100%;
+    margin-top: 0;
+    margin-bottom: 2px;
+}
+
+/* Thin / compact variant — small icon, name only, minimal vertical footprint. */
+.mesh-node-picker--thin .mesh-node-picker-selected {
+    min-height: 28px;
+    padding: 2px 6px;
+}
+
+.mesh-node-picker--thin .mesh-node-picker-input {
+    min-height: 28px;
+    padding: 4px 8px;
+    font-size: 13px;
+}
+
+.mesh-node-picker--thin .mesh-node-picker-avatar {
+    width: 18px;
+    height: 18px;
+    min-width: 18px;
+    font-size: 10px;
+}
+
+.mesh-node-picker--thin ::deep .mesh-node-picker-avatar-img,
+.mesh-node-picker--thin ::deep .mesh-node-picker-avatar-icon {
+    width: 18px;
+    height: 18px;
+    min-width: 18px;
+}
+
+.mesh-node-picker--thin .mesh-node-picker-selected-card {
+    gap: 6px;
+}
+
+.mesh-node-picker--thin .mesh-node-picker-name {
+    font-size: 12px;
+}
+
+/* Hide the secondary node-type line to save vertical space. */
+.mesh-node-picker--thin .mesh-node-picker-type {
+    display: none;
+}
+
+.mesh-node-picker--thin .mesh-node-picker-clear {
+    padding: 2px;
+}

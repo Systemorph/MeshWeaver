@@ -893,7 +893,10 @@ public static class EditorExtensions
             editCtrl = new MeshNodePickerControl(jsonPointer)
             {
                 Queries = MeshNodeAttribute.ResolveQueries(meshNodeAttr.Queries, nodeNamespace, nodeNamespace),
-                Required = isRequired
+                Required = isRequired,
+                Layout = meshNodeAttr.Layout,
+                Open = meshNodeAttr.Open,
+                DefaultToFirst = meshNodeAttr.DefaultToFirst
             };
         }
         else if (propType.IsIntegerType() || propType.IsRealType())

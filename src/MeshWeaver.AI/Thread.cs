@@ -210,18 +210,20 @@ public record Thread
     public string? CreatedBy { get; init; }
 
     /// <summary>
-    /// Id of this thread's own <c>ThreadComposer</c> composer node, a child at
-    /// <c>{threadPath}/{ThreadComposerId}</c>. <see langword="null"/> until the thread is
-    /// first rendered, at which point the Thread view lazily creates the ThreadComposer and
-    /// stamps its id here.
+    /// The thread's own composer — the data-bound chat-input state INSIDE this thread
+    /// (draft + harness/agent/model selection as picked node paths + attachments). Copied
+    /// from the user's out-of-thread composer (<c>{user}/_Thread/ThreadComposer</c>) when
+    /// the thread is created (<c>HubThreadExtensions.StartThread</c>), with the draft
+    /// emptied (the draft became the first message).
     ///
-    /// <para>Tracking the id on the thread node — rather than blindly reading a fixed
-    /// ThreadComposer path — is what keeps the read safe: every reader gates on this
-    /// known-present id instead of pointing <c>GetMeshNodeStream</c> at a maybe-absent
-    /// path, which Orleans-NotFound-storms (see feedback_optional_node_query_not_access).
-    /// Null here ⇒ "not created yet, create on render"; non-null ⇒ the node exists.</para>
+    /// <para>Embedded ON the thread content — deliberately NOT a separate satellite node —
+    /// so reads can never hit a missing node (no NotFound storm, no lazy-create/stamp
+    /// machinery) and submission drains it atomically: <c>hub.SubmitComposer</c> moves
+    /// <see cref="ThreadComposer.MessageContent"/> into <see cref="PendingUserMessages"/>
+    /// and empties the composer in ONE <c>stream.Update</c>. Null on legacy threads —
+    /// readers treat null as an empty composer.</para>
     /// </summary>
-    public string? ThreadComposerId { get; init; }
+    public ThreadComposer? Composer { get; init; }
 
     /// <summary>
     /// The thread's main output — the dedicated summary the agent produces at

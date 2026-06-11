@@ -1,9 +1,11 @@
 using System.Collections.Generic;
+using System.Text.Json;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.AI;
 
@@ -98,6 +100,44 @@ public static class ThreadComposerNodeType
     /// </summary>
     public static string PathForNode(string node, string user) =>
         $"{node}/{ThreadNodeType.ThreadPartition}/{user}/{NodeType}";
+
+    /// <summary>
+    /// The composer state carried by <paramref name="node"/>, discriminated by
+    /// <see cref="MeshNode.NodeType"/>: a <c>ThreadComposer</c> node's own content, or a
+    /// <c>Thread</c> node's embedded <see cref="Thread.Composer"/> (empty composer when the
+    /// thread predates the embed). Null for any other node or unreadable content
+    /// (bad-data tolerant via <c>ContentAs</c> — never throws on a degraded JsonElement).
+    /// </summary>
+    public static ThreadComposer? ComposerOf(MeshNode? node, JsonSerializerOptions options, ILogger? logger = null)
+        => node?.NodeType switch
+        {
+            NodeType => node.ContentAs<ThreadComposer>(options, logger),
+            ThreadNodeType.NodeType => node.ContentAs<Thread>(options, logger) is { } thread
+                ? thread.Composer ?? new ThreadComposer()
+                : node.Content is null ? new ThreadComposer() : null,
+            _ => null
+        };
+
+    /// <summary>
+    /// Writes <paramref name="composer"/> back onto <paramref name="node"/> in the shape
+    /// <see cref="ComposerOf"/> reads it from: whole content for a <c>ThreadComposer</c> node,
+    /// <see cref="Thread.Composer"/> for a <c>Thread</c> node. An existing node whose content
+    /// can't be recovered is left alone — NEVER clobbered.
+    /// </summary>
+    public static MeshNode WithComposer(MeshNode node, ThreadComposer composer, JsonSerializerOptions options, ILogger? logger = null)
+    {
+        if (node.NodeType == ThreadNodeType.NodeType)
+        {
+            var thread = node.ContentAs<Thread>(options, logger);
+            if (node.Content is not null && thread is null)
+                return node; // unreadable → leave alone
+            return node with { Content = (thread ?? new Thread()) with { Composer = composer } };
+        }
+        if (node.Content is not null
+            && node.ContentAs<ThreadComposer>(options, logger) is null)
+            return node; // unreadable → leave alone
+        return node with { Content = composer };
+    }
 
     /// <summary>
     /// Seeds the per-user <c>{user}/_Thread/ThreadComposer</c> singleton when a <c>User</c> partition is

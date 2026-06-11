@@ -2,7 +2,7 @@
 @using MeshWeaver.Mesh
 @inherits FormComponentBase<MeshNodePickerControl, MeshNodePickerView, string>
 
-<div class="mesh-node-picker">
+<div class="mesh-node-picker@(IsThin ? " mesh-node-picker--thin" : "")">
     @if (Label != null)
     {
         <FluentLabel Weight="Microsoft.FluentUI.AspNetCore.Components.FontWeight.Bold" Style="margin-bottom: 4px;">@Label</FluentLabel>
@@ -40,7 +40,7 @@
     @if (_isSearchOpen)
     {
         <div class="mesh-node-picker-overlay" @onclick="CloseSearch"></div>
-        <div class="mesh-node-picker-dropdown">
+        <div class="mesh-node-picker-dropdown@(OpensUp ? " mesh-node-picker-dropdown--top" : "")">
             @if (_isLoading)
             {
                 <FluentProgressRing Style="margin: 16px auto; display: block;" />

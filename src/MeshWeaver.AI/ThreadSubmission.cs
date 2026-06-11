@@ -662,7 +662,12 @@ internal static class ThreadSubmissionServer
                         config => config,
                         HostedHubCreation.Always);
 
-                    ThreadExecution.ExecuteMessageAsync(executionHub!,
+                    // 🚨 ExecuteMessageAsync now returns a COLD IObservable<Unit> — the round runs
+                    // ONLY on Subscribe, completes when the terminal Status write lands, and faults
+                    // via OnError. Subscribe here (no fire-and-forget) and own the subscription on
+                    // the thread-hub workspace (the round's natural lifetime owner, matching the
+                    // disposal the method used to register internally).
+                    var execSub = ThreadExecution.ExecuteMessageAsync(executionHub!,
                         new ThreadExecution.RoundParams(
                             ThreadPath: threadPath,
                             ResponseMessageId: responseMsgId,
@@ -673,7 +678,63 @@ internal static class ThreadSubmissionServer
                             Harness: dispatch.Harness,
                             ContextPath: dispatch.ContextPath,
                             Attachments: dispatch.Attachments),
-                        userCtx);
+                        userCtx)
+                        .Subscribe(
+                            _ => { },
+                            ex =>
+                            {
+                                logger?.LogWarning(ex,
+                                    "[ThreadSubmission] Agent round faulted for {ResponseMsgId} on {ThreadPath}",
+                                    responseMsgId, threadPath);
+                                // 🚨 An escaped fault means the round's OWN terminal handling did
+                                // NOT run (or its terminal write failed — the gate faults on that
+                                // too). Without a terminal write here the node stays Executing
+                                // forever: onFailure only rolls back a StartingExecution claim (it
+                                // must never undo a running round), so the fault path would
+                                // reintroduce the stuck-Executing wedge this refactor kills.
+                                // Write the terminal state deterministically: response cell →
+                                // Error, thread → Idle — guarded on (Executing, THIS round's
+                                // ActiveMessageId) so a newer round is never clobbered.
+                                ThreadExecution.UpdateResponseCell(
+                                    hub, responsePath, threadPath, responseMsgId, mainEntity,
+                                    msg => msg with
+                                    {
+                                        Text = string.IsNullOrEmpty(msg.Text)
+                                            ? $"*Error: {ex.Message}*"
+                                            : $"{msg.Text}\n\n*Error: {ex.Message}*",
+                                        Status = ThreadMessageStatus.Error,
+                                        CompletedAt = DateTime.UtcNow
+                                    },
+                                    logger);
+                                hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(n =>
+                                {
+                                    var t = n.ContentAs<MeshThread>(hub.JsonSerializerOptions, logger);
+                                    // Existing node whose content can't be recovered → leave it alone.
+                                    if (n.Content is not null && t is null)
+                                        return n;
+                                    t ??= new MeshThread();
+                                    return t.Status == ThreadExecutionStatus.Executing
+                                           && t.ActiveMessageId == responseMsgId
+                                        ? n with
+                                        {
+                                            Content = t with
+                                            {
+                                                Status = ThreadExecutionStatus.Idle,
+                                                ActiveMessageId = null,
+                                                ExecutionStartedAt = null,
+                                                ExecutionStatus = null,
+                                                Summary = $"Error: {ex.Message}"
+                                            }
+                                        }
+                                        : n;
+                                }).Subscribe(
+                                    _ => { },
+                                    termEx => logger?.LogError(termEx,
+                                        "[ThreadSubmission] terminal-state write after faulted round FAILED for {ThreadPath} — node may be stuck Executing",
+                                        threadPath));
+                                onFailure?.Invoke();
+                            });
+                    hub.GetWorkspace().AddDisposable(execSub);
                 },
                 ex =>
                 {

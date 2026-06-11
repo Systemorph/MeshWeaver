@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
@@ -7,6 +8,8 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.Blazor.Portal.SidePanel;
 using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Blazor.Portal.Chat;
 
@@ -23,6 +26,7 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
     [Inject] private INavigationService NavigationService { get; set; } = null!;
     [Inject] private AccessService AccessService { get; set; } = null!;
     [Inject] private IMeshNodeStreamCache StreamCache { get; set; } = null!;
+    [Inject] private IMeshService MeshQuery { get; set; } = null!;
     [Inject] private IMessageHub Hub { get; set; } = null!;
 
     [Parameter] public EventCallback OnCloseRequested { get; set; }
@@ -34,16 +38,21 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
     private string? lastPrimaryPath;
     private IDisposable? _navContextSubscription;
     private NavigationContext? _currentNavContext;
+    private IDisposable? _composerObserver;
+    private string? _observedComposerPath;
+    private ILogger<ThreadSidePanelContent>? _logger;
 
     protected override void OnInitialized()
     {
         base.OnInitialized();
+        _logger = Hub.ServiceProvider.GetService<ILogger<ThreadSidePanelContent>>();
         selectedThreadPath = SidePanelState.ContentPath;
         SidePanelState.OnStateChanged += OnSidePanelStateChanged;
         // Subscribe to navigation-context stream — emits current value on subscribe
         // (ReplaySubject(1)) so we don't need a separate snapshot read.
         _navContextSubscription = NavigationService.NavigationContext
             .Subscribe(ctx => { _currentNavContext = ctx; OnNavigationContextChanged(ctx); });
+        EnsureComposerObserver();
     }
 
     private void OnSidePanelStateChanged()
@@ -61,16 +70,110 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
         var newPrimary = ctx?.PrimaryPath;
         if (newPrimary == lastPrimaryPath) return;
         lastPrimaryPath = newPrimary;
+        EnsureComposerObserver();
         // Only rebuild when showing the new-chat control (no selected thread).
-        // An in-flight thread keeps its own context.
+        // An in-flight thread keeps its own context. The composer node carries the
+        // context so Send (a server-side click with no circuit access) creates the
+        // thread under {MainNodeOf(context)}/_Thread/… — write it on every change.
         if (string.IsNullOrEmpty(selectedThreadPath))
+        {
+            WriteComposerContext(newPrimary);
             InvokeAsync(StateHasChanged);
+        }
+    }
+
+    /// <summary>
+    /// Persists the current navigation context onto the per-user composer node
+    /// (<see cref="ThreadComposer.ContextPath"/>), normalized to the main node (satellite
+    /// segments like <c>_Thread</c>/<c>_Comment</c> stripped). Idempotent — skips the write
+    /// when unchanged; unreadable content is left alone, never clobbered.
+    /// </summary>
+    private void WriteComposerContext(string? primaryPath)
+    {
+        var userHome = ResolveUserHome();
+        if (string.IsNullOrEmpty(userHome)) return;
+        var contextPath = NormalizeContextPath(primaryPath);
+        StreamCache.Update(ThreadComposerNodeType.PathFor(userHome), n =>
+        {
+            var c = n.ContentAs<ThreadComposer>(Hub.JsonSerializerOptions, _logger);
+            if (n.Content is not null && c is null) return n;
+            c ??= new ThreadComposer();
+            return c.ContextPath == contextPath ? n : n with { Content = c with { ContextPath = contextPath } };
+        }, Hub.JsonSerializerOptions).Subscribe(
+            _ => { },
+            ex => _logger?.LogDebug(ex, "[ThreadSidePanel] composer context write failed"));
+    }
+
+    /// <summary>
+    /// The main-node form of a navigation path: everything before the first satellite
+    /// (<c>_</c>-prefixed) segment — e.g. <c>acme/X/_Thread/y</c> → <c>acme/X</c>.
+    /// </summary>
+    private static string? NormalizeContextPath(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return null;
+        var segments = path.Split('/');
+        for (var i = 0; i < segments.Length; i++)
+            if (segments[i].StartsWith('_'))
+                return i == 0 ? null : string.Join('/', segments, 0, i);
+        return path;
+    }
+
+    /// <summary>
+    /// Observes the per-user composer node for <see cref="ThreadComposer.OpenThreadPath"/> —
+    /// the data-bound navigation signal the Send click stamps (the click runs on the composer
+    /// node's server hub and cannot reach circuit services). On signal: show the thread in the
+    /// panel and clear the field. The node is ensured present first (CreateNode is a no-op
+    /// "already exists" for the onboarding-seeded singleton) so the stream read never points
+    /// at a maybe-absent node.
+    /// </summary>
+    private void EnsureComposerObserver()
+    {
+        var userHome = ResolveUserHome();
+        if (string.IsNullOrEmpty(userHome)) return;
+        var path = ThreadComposerNodeType.PathFor(userHome);
+        if (_observedComposerPath == path) return;
+        _observedComposerPath = path;
+
+        MeshQuery.CreateNode(MeshNode.FromPath(path) with
+            {
+                NodeType = ThreadComposerNodeType.NodeType,
+                Name = "Chat Input",
+                Content = new ThreadComposer()
+            })
+            .Subscribe(
+                _ => InvokeAsync(() => OpenComposerObserver(path)),
+                _ => InvokeAsync(() => OpenComposerObserver(path)));
+    }
+
+    private void OpenComposerObserver(string path)
+    {
+        if (_observedComposerPath != path) return;
+        _composerObserver?.Dispose();
+        _composerObserver = Hub.GetMeshNodeStream(path)
+            .Select(n => ThreadComposerNodeType.ComposerOf(n, Hub.JsonSerializerOptions, _logger)?.OpenThreadPath)
+            .Where(p => !string.IsNullOrEmpty(p))
+            .DistinctUntilChanged()
+            .Subscribe(
+                threadPath => InvokeAsync(() =>
+                {
+                    SidePanelState.SetContentPath(threadPath);
+                    selectedThreadPath = threadPath;
+                    StateHasChanged();
+                    // Consume the signal so it doesn't re-fire on the next subscribe.
+                    StreamCache.Update(path, n =>
+                    {
+                        var c = n.ContentAs<ThreadComposer>(Hub.JsonSerializerOptions, _logger);
+                        return c?.OpenThreadPath is null ? n : n with { Content = c with { OpenThreadPath = null } };
+                    }, Hub.JsonSerializerOptions).Subscribe(_ => { }, _ => { });
+                }),
+                ex => _logger?.LogDebug(ex, "[ThreadSidePanel] composer observer errored for {Path}", path));
     }
 
     public void Dispose()
     {
         SidePanelState.OnStateChanged -= OnSidePanelStateChanged;
         _navContextSubscription?.Dispose();
+        _composerObserver?.Dispose();
     }
 
     /// <summary>
@@ -145,11 +248,14 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
         {
             StreamCache.Update(ThreadComposerNodeType.PathFor(userHome), n =>
             {
-                if (n.Content is not ThreadComposer ci) return n;
+                // ContentAs: tolerate a degraded JsonElement; unreadable → leave alone.
+                var ci = n.ContentAs<ThreadComposer>(Hub.JsonSerializerOptions, _logger);
+                if (ci is null) return n;
                 if (string.IsNullOrEmpty(ci.MessageContent)
-                    && (ci.Attachments is null || ci.Attachments.Count == 0))
+                    && (ci.Attachments is null || ci.Attachments.Count == 0)
+                    && ci.OpenThreadPath is null)
                     return n;
-                return n with { Content = ci with { MessageContent = null, Attachments = null } };
+                return n with { Content = ci with { MessageContent = null, Attachments = null, OpenThreadPath = null } };
             }, Hub.JsonSerializerOptions).Subscribe(_ => { }, _ => { });
         }
 

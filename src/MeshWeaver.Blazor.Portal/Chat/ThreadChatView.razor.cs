@@ -120,13 +120,14 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 threadPath = value.ThreadPath ?? threadPath;
                 initialContext = value.InitialContext ?? initialContext;
 
-                // Rebind the data-bound composer (and the selection projection) to this thread's
-                // own ThreadComposer once its id arrives. EnsureComposer creates the node if absent,
-                // then opens the projection — so the embedded selectors area always has a node.
-                if (!string.IsNullOrEmpty(value.ThreadComposerId) && _templatePath != value.ThreadComposerId)
+                // Inside a thread the composer lives ON the thread node (Thread.Composer) —
+                // bind the embedded selectors area + the selection projection to the THREAD
+                // path. The thread node is the node we're rendering, so it is guaranteed
+                // present (no maybe-absent read, no lazy-create/stamp machinery).
+                if (!string.IsNullOrEmpty(value.ThreadPath) && _templatePath != value.ThreadPath)
                 {
-                    _templatePath = value.ThreadComposerId;
-                    EnsureComposer();
+                    _templatePath = value.ThreadPath;
+                    OpenComposerProjection(value.ThreadPath);
                 }
             }
 
@@ -210,21 +211,21 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private IReadOnlyList<ModelInfo> availableModels = [];
 
     /// <summary>
-    /// Current selection, projected one-way from the composer node (<see cref="_templatePath"/>)
-    /// by <see cref="EnsureComposer"/>. Each holds the picked node's PATH; submit + resubmit
-    /// pass <see cref="LastSegment"/> of it. The data-bound pickers write the node; the /agent
-    /// /model commands and @-agent references write it via <see cref="WriteComposerSelection"/>.
+    /// Current selection, projected one-way from the bound composer state (<see cref="_templatePath"/>).
+    /// Each holds the picked node's PATH and flows through submit/resubmit UN-resolved — the
+    /// execution boundary normalizes paths to ids (SelectionId.IdOf). The data-bound pickers write
+    /// the composer themselves; the /agent /model commands and @-agent references write it via
+    /// <see cref="WriteComposerSelection"/>.
     /// </summary>
     private string? boundHarness;
     private string? boundAgentPath;
     private string? boundModelPath;
     private IDisposable? composerSubscription;
 
-    // ─── Per-user chat input (ThreadComposer) ───
-    // The harness/agent/model selection persists on a stable ThreadComposer node — the per-user
-    // singleton {userHome}/_Thread/ThreadComposer in compose mode, the thread's OWN ThreadComposer
-    // (ThreadViewModel.ThreadComposerId) inside a thread. The composer's data-bound selectors area
-    // (embedded below) reads + auto-persists it the standard way.
+    // ─── Composer binding target ───
+    // Out of a thread: the per-user singleton composer NODE {userHome}/_Thread/ThreadComposer.
+    // Inside a thread: the THREAD path — the composer is embedded on the thread content
+    // (Thread.Composer) and the thread hub serves the same data-bound Selectors area.
     private string? _userHome;
     private string? _templatePath;
 
@@ -288,16 +289,22 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         // Set initial title
         UpdateSidePanelTitle();
 
-        // Resolve the composer node: the per-user singleton {userHome}/_Thread/ThreadComposer in
-        // compose mode, the thread's OWN ThreadComposer once its id arrives (see the ThreadViewModel
-        // setter). EnsureComposer creates it with defaults if absent (robust — checked on every chat
-        // open), then drives the embedded data-bound selectors area + the live selection projection.
+        // Resolve the composer binding: the per-user singleton {userHome}/_Thread/ThreadComposer
+        // in compose mode (EnsureComposer creates it with defaults if absent, then projects);
+        // inside a thread the composer is EMBEDDED on the thread node (Thread.Composer) — bind
+        // the thread path directly (the node we're rendering is guaranteed present).
         var accessSvc = Hub.ServiceProvider.GetService<AccessService>();
         _userHome = ResolveUserHome(accessSvc);
-        if (string.IsNullOrEmpty(threadPath) && !string.IsNullOrEmpty(_userHome))
+        if (!string.IsNullOrEmpty(threadPath))
+        {
+            _templatePath = threadPath;
+            OpenComposerProjection(threadPath);
+        }
+        else if (!string.IsNullOrEmpty(_userHome))
+        {
             _templatePath = MeshWeaver.AI.ThreadComposerNodeType.PathFor(_userHome);
-
-        EnsureComposer();
+            EnsureComposer();
+        }
 
         // Seed initial context attachment from NavigationService (already resolved, no query).
         if (string.IsNullOrEmpty(initialContext))
@@ -453,7 +460,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     /// <summary>
     /// Opens the live one-way projection of the composer selection into bound* — called ONLY after the
-    /// node is confirmed present (created or already-exists), so the read never hits a missing node.
+    /// node is confirmed present (created or already-exists; a thread node is the node being rendered),
+    /// so the read never hits a missing node. <see cref="MeshWeaver.AI.ThreadComposerNodeType.ComposerOf"/>
+    /// discriminates by NodeType: a ThreadComposer node's own content, or the thread's embedded
+    /// <c>Thread.Composer</c>.
     /// </summary>
     private void OpenComposerProjection(string path)
     {
@@ -461,7 +471,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             return;
         composerSubscription?.Dispose();
         composerSubscription = Hub.GetMeshNodeStream(path)
-            .Select(n => n.ContentAs<MeshWeaver.AI.ThreadComposer>(Hub.JsonSerializerOptions, Logger))
+            .Select(n => MeshWeaver.AI.ThreadComposerNodeType.ComposerOf(n, Hub.JsonSerializerOptions, Logger))
             .Where(c => c is not null)
             .Subscribe(
                 c => InvokeAsync(() =>
@@ -478,11 +488,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     }
 
     /// <summary>
-    /// Writes a harness/agent/model selection onto the composer node — the imperative entry point
-    /// for the /agent and /model slash-commands and @-agent references (the visual pickers write the
-    /// node themselves). Values are node PATHS (agent/harness) or the model Id; a null arg leaves that
-    /// field untouched. Creates the node on first write. Bad-data tolerant: an unreadable node is left
-    /// alone, never clobbered.
+    /// Writes a harness/agent/model selection onto the bound composer state — the imperative entry
+    /// point for the /agent and /model slash-commands and @-agent references (the visual pickers
+    /// write the node themselves). Values are node PATHS (or bare ids — execution normalizes); a
+    /// null arg leaves that field untouched. Targets the composer node out of a thread and the
+    /// thread's embedded <c>Thread.Composer</c> inside one. Bad-data tolerant: an unreadable node
+    /// is left alone, never clobbered.
     /// </summary>
     private void WriteComposerSelection(string? harness = null, string? agentPath = null, string? modelName = null)
     {
@@ -490,7 +501,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             return;
         Hub.GetMeshNodeStream(_templatePath).Update(node =>
         {
-            var existing = node.ContentAs<MeshWeaver.AI.ThreadComposer>(Hub.JsonSerializerOptions, Logger);
+            var existing = MeshWeaver.AI.ThreadComposerNodeType.ComposerOf(node, Hub.JsonSerializerOptions, Logger);
             if (node?.Content is not null && existing is null)
                 return node!;
             var updated = (existing ?? new MeshWeaver.AI.ThreadComposer()) with
@@ -499,13 +510,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 AgentName = agentPath ?? existing?.AgentName,
                 ModelName = modelName ?? existing?.ModelName
             };
-            return node?.Content is not null
-                ? node with { Content = updated }
-                : MeshWeaver.Mesh.MeshNode.FromPath(_templatePath!) with
-                {
-                    NodeType = MeshWeaver.AI.ThreadComposerNodeType.NodeType,
-                    Content = updated
-                };
+            return MeshWeaver.AI.ThreadComposerNodeType.WithComposer(
+                node!, updated, Hub.JsonSerializerOptions, Logger);
         }).Subscribe(
             _ => { },
             ex => Logger.LogDebug(ex,
@@ -767,16 +773,27 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             {
                 showSubmissionProgress = isCompact;
                 Logger.LogInformation("[Chat] Creating thread + submitting message");
+                // Selections flow as the picked node PATHS — execution normalizes to ids
+                // at its boundary (SelectionId.IdOf). The composer snapshot is copied onto
+                // the created thread (Thread.Composer) so the in-thread selectors continue
+                // the same selection.
                 Hub.StartThread(
                     namespacePath: ns,
                     userText: userMessageText!,
-                    agentName: LastSegment(boundAgentPath),
-                    modelName: LastSegment(boundModelPath) ?? DefaultModelId(),
+                    agentName: boundAgentPath,
+                    modelName: boundModelPath ?? DefaultModelId(),
                     contextPath: initialContext,
                     attachments: capturedAttachments,
                     createdBy: createdBy,
                     authorName: authorName,
-                    harness: LastSegment(boundHarness) ?? Harnesses.MeshWeaver,
+                    harness: boundHarness ?? Harnesses.MeshWeaver,
+                    composer: new MeshWeaver.AI.ThreadComposer
+                    {
+                        Harness = boundHarness,
+                        AgentName = boundAgentPath,
+                        ModelName = boundModelPath,
+                        ContextPath = initialContext
+                    },
                     onCreated: node => InvokeAsync(() =>
                     {
                         if (_isDisposed) return;
@@ -802,17 +819,18 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             else
             {
                 Logger.LogInformation("[Chat] Submitting to thread {Thread}", threadPath);
-                Hub.SubmitMessage(
+                // Drain through the thread's embedded composer (Thread.Composer): the
+                // harness/agent/model selection comes from the composer the selectors area
+                // is data-bound to, the typed text + live context/attachments are passed
+                // explicitly, and the composer empties itself in the same atomic update.
+                Hub.SubmitComposer(
                     threadPath: threadPath,
                     userText: userMessageText!,
-                    agentName: LastSegment(boundAgentPath),
-                    modelName: LastSegment(boundModelPath) ?? DefaultModelId(),
                     contextPath: initialContext,
                     attachments: capturedAttachments,
                     createdBy: createdBy,
                     authorName: authorName,
-                    onError: onError,
-                    harness: LastSegment(boundHarness) ?? Harnesses.MeshWeaver);
+                    onError: onError);
             }
 
             // Claude-Code-style queue: input stays enabled so the user can keep typing while
@@ -1782,8 +1800,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 Type = ThreadMessageType.AgentResponse
             }
         }), o => o.WithTarget(new Address(threadPath)));
+        // Picked node PATHS flow through — execution normalizes to ids at its boundary.
         Hub.ResubmitMessage(threadPath, id, newUserText: state.Text ?? "",
-            agentName: LastSegment(boundAgentPath), modelName: LastSegment(boundModelPath) ?? DefaultModelId(), harness: LastSegment(boundHarness));
+            agentName: boundAgentPath, modelName: boundModelPath ?? DefaultModelId(), harness: boundHarness);
     }
 
     private void DeleteFromMessage(string id)

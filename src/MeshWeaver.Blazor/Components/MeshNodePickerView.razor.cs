@@ -2,6 +2,7 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.Data;
+using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Catalog;
 using MeshWeaver.Mesh;
@@ -27,8 +28,17 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
     private int _inputKey;
     private const int DebounceMs = 200;
 
+    // Default-to-first: when [MeshNode(DefaultToFirst = true)] and no value is set, load once and
+    // auto-select the first result. _defaultApplied guards it to at most once per component.
+    private bool _defaultApplied;
+    private bool _selectFirstOnLoad;
+
     private MeshNode[]? BoundItems { get; set; }
     private bool HasItems => BoundItems is { Length: > 0 };
+
+    // Compact "thin" rendering + open-upward dropdown, driven by the control's Layout/Open.
+    private bool IsThin => ViewModel?.Layout == MeshNodePickerLayout.Thin;
+    private bool OpensUp => ViewModel?.Open == MeshNodePickerOpenDirection.Up;
 
     protected override void BindData()
     {
@@ -62,6 +72,25 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
         {
             ResolveSelectedNode();
         }
+        else if (string.IsNullOrEmpty(Value)
+                 && ViewModel is { DefaultToFirst: true }
+                 && !_defaultApplied
+                 && (GetQueries().Length > 0 || HasItems))
+        {
+            ApplyDefaultSelection();
+        }
+    }
+
+    /// <summary>
+    /// Opt-in default ([MeshNode(DefaultToFirst = true)]): when no value is selected, load results
+    /// once and auto-select the first as the persisted default. Runs at most once per component;
+    /// FinaliseLoadResults performs the selection when the batch arrives. Does not open the dropdown.
+    /// </summary>
+    private void ApplyDefaultSelection()
+    {
+        _defaultApplied = true;
+        _selectFirstOnLoad = true;
+        LoadResultsAsync();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -210,7 +239,21 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
         finally
         {
             _isLoading = false;
-            _ = InvokeAsync(StateHasChanged);
+            _ = InvokeAsync(() =>
+            {
+                // DefaultToFirst: select the first result as the persisted default — only if still
+                // unset (the user may have picked something while results loaded).
+                if (_selectFirstOnLoad)
+                {
+                    _selectFirstOnLoad = false;
+                    if (string.IsNullOrEmpty(Value) && _results.Count > 0)
+                    {
+                        SelectNode(_results[0]);
+                        return;
+                    }
+                }
+                StateHasChanged();
+            });
         }
     }
 

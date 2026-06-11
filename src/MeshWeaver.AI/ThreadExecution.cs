@@ -628,16 +628,12 @@ internal static class ThreadExecution
     /// Per-round mutable handle to the response cell currently being streamed
     /// into. Stored on the parent thread hub via <c>hub.Set</c> for the duration
     /// of a round. The streaming writer reads <see cref="ResponseMsgId"/> and
-    /// <see cref="TextBaseline"/> on every push so <see cref="InboxTool.CheckInbox"/>
-    /// can switch the target mid-round (the clean output-cell transition): it
-    /// freezes the current cell, inserts the drained user cells, allocates a new
-    /// cell, points <see cref="ResponseMsgId"/> at it, and bumps
-    /// <see cref="TextBaseline"/> to the accumulated length so far. The writer
-    /// then streams only <c>fullText[TextBaseline..]</c> into the new cell — a
-    /// stale buffered push carrying the pre-split text slices to empty, so the
-    /// timer-thread <c>Sample</c> push can't pollute the new cell.
-    /// <see cref="ResponseText"/> is the live accumulator the splitter reads the
-    /// current length from (null outside the streaming window).
+    /// <see cref="TextBaseline"/> on every push. <c>check_inbox</c> (mid-round)
+    /// appends any in-flight user message directly into <see cref="ResponseText"/>
+    /// (the live accumulator) with a marker, so the agent's continuation renders
+    /// below the user's interjection in the SAME response cell — Claude-Code style,
+    /// no separate cells and no output-cell split. <see cref="ResponseText"/> is
+    /// null outside the streaming window.
     /// </summary>
     internal sealed class ActiveResponseSegment(string responseMsgId)
     {
@@ -663,11 +659,31 @@ internal static class ThreadExecution
         string? ContextPath,
         IReadOnlyList<string>? Attachments);
 
-    internal static void ExecuteMessageAsync(
+    /// <summary>
+    /// Runs ONE agent round as a cold observable that completes when the round's terminal
+    /// Status write settles (OnError when the round faults or its terminal write fails).
+    /// <para>🚨 SUBSCRIBE EXACTLY ONCE per round. The pipeline is cold with heavy side effects
+    /// per subscription — a second Subscribe launches a SECOND round (double pool invoke,
+    /// double client init, duplicate cell writes). The single call site
+    /// (<c>ThreadSubmissionServer.CommitRoundAndExecute</c>) guards with
+    /// <c>didCommitThisEmission</c>; any new caller must provide an equivalent single-fire
+    /// guarantee.</para>
+    /// </summary>
+    internal static IObservable<System.Reactive.Unit> ExecuteMessageAsync(
         IMessageHub hub,
         RoundParams request,
         AccessContext? userAccessContext)
     {
+        // Selections may arrive as picked node PATHS ("Harness/MeshWeaver",
+        // "_Provider/Anthropic/claude-…", "Agent/Coder") — the composer flows them
+        // end-to-end un-resolved. Execution, factories, and the persisted cell stamps
+        // all match bare ids (the last path segment), so normalize ONCE at this boundary.
+        request = request with
+        {
+            AgentName = SelectionId.IdOf(request.AgentName),
+            ModelName = SelectionId.IdOf(request.ModelName),
+            Harness = SelectionId.IdOf(request.Harness)
+        };
         var parentHub = hub.Configuration.ParentHub!;
         var threadPath = request.ThreadPath;
         var logger = parentHub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
@@ -921,7 +937,10 @@ internal static class ThreadExecution
             clientObs = Observable.Return(c);
         }
 
-        var initSub = clientObs.Take(1).Subscribe(chatClient =>
+        // Composed, returned round observable — completes when the round reaches a terminal
+        // Status (Completed/Cancelled/Error) and surfaces real faults via OnError. The submission
+        // watcher Subscribes to this (no fire-and-forget): it owns the subscription + disposal.
+        return clientObs.Take(1).SelectMany(chatClient =>
         {
             // Initialize is sync (binds the chat client to the workspace's shared
             // synced agent collection). Wait for the first WhenInitialized
@@ -938,10 +957,10 @@ internal static class ThreadExecution
             // "executing". 60s is generous; the workspace-cached synced
             // query should emit Initial within seconds even on cold start.
             chatClient.Initialize(request.ContextPath, request.ModelName);
-            chatClient.WhenInitialized
+            return chatClient.WhenInitialized
                 .Take(1)
                 .Timeout(TimeSpan.FromSeconds(60))
-                .Subscribe(client =>
+                .SelectMany(client =>
                 {
                 logger.LogDebug("[ThreadExec] Agents ready for {ThreadPath}, starting execution", threadPath);
 
@@ -1019,7 +1038,7 @@ internal static class ThreadExecution
                     contextNodeObs = Observable.Return<MeshNode?>(null);
                 }
 
-                contextNodeObs.Subscribe(contextNode =>
+                return contextNodeObs.SelectMany(contextNode =>
                 {
                     if (!string.IsNullOrEmpty(request.ContextPath))
                     {
@@ -1051,7 +1070,7 @@ internal static class ThreadExecution
                 // doesn't track history at all. So if every round only sent the
                 // new user message, the agent would never see prior turns —
                 // ChatHistoryTest catches exactly this regression.
-                LoadFullConversationHistoryFromMesh(parentHub, threadPath,
+                return LoadFullConversationHistoryFromMesh(parentHub, threadPath,
                         excludeUserMessageId: request.UserMessageId,
                         excludeResponseMessageId: responseMsgId,
                         logger)
@@ -1069,7 +1088,7 @@ internal static class ThreadExecution
                             threadPath);
                         return Observable.Return<IReadOnlyList<ChatMessage>>(Array.Empty<ChatMessage>());
                     })
-                    .Subscribe(history =>
+                    .SelectMany(history =>
                 {
                     var chatHistory = history.ToImmutableList();
 
@@ -1306,12 +1325,20 @@ internal static class ThreadExecution
                 // fine throttle (see IoPoolOptions.Ai). Unbounded fallback when no registry is wired
                 // (DI-less tests) — still offloads, just no cap.
                 // See Doc/Architecture/ControlledIoPooling.md → "Streaming an agent response into a cell".
+                // Completes when the round's terminal Status write SETTLES: OnNext+OnCompleted when
+                // the terminal write (success/cancel/error) COMMITS, OnError when the terminal write
+                // itself FAILS — so the watcher's fault path (which writes the terminal state
+                // deterministically; see ThreadSubmission.CommitRoundAndExecute's onError) takes over
+                // instead of the round masquerading as cleanly finished while the node still says
+                // Executing. AsyncSubject replays its terminal signal to a late subscriber, closing
+                // the race where the write lands before `.SelectMany(_ => roundCompletion)` subscribes.
+                var roundCompletion = new System.Reactive.Subjects.AsyncSubject<System.Reactive.Unit>();
                 var aiPool = parentHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Ai)
                     ?? IoPool.Unbounded;
                 // poolCt (the pool's cancellation) is intentionally unused — the round's
                 // own executionCts.Token (below) is authoritative and is cancelled on hub
                 // disposal, so cancellation flows through it regardless of the pool token.
-                aiPool.Invoke(async poolCt =>
+                return aiPool.Invoke(async poolCt =>
                 {
                     // Re-seed user AccessContext at the task-launch boundary. Inside this lambda we
                     // run the streaming loop + tool calls + responseStream.Update, all of which
@@ -1651,9 +1678,21 @@ internal static class ThreadExecution
                         Summary = summaryText
                     }).Subscribe(
                         _ => { },
-                        ex => execLogger?.LogWarning(ex,
-                            "UpdateThreadExecution(Idle/Completed): stream.Update failed for {ThreadPath}",
-                            threadPath));
+                        ex =>
+                        {
+                            execLogger?.LogWarning(ex,
+                                "UpdateThreadExecution(Idle/Completed): stream.Update failed for {ThreadPath}",
+                                threadPath);
+                            // The terminal write FAILED — the node may still say Executing. Fault
+                            // the gate so the watcher's onError writes the terminal state
+                            // deterministically (no reliance on the stuck-round watchdog).
+                            roundCompletion.OnError(ex);
+                        },
+                        () =>
+                        {
+                            roundCompletion.OnNext(System.Reactive.Unit.Default);
+                            roundCompletion.OnCompleted();
+                        });
                     // Notify parent via SubmitMessageResponse so delegation callback resolves.
                     // Must post on the _Exec hub (hub) — the SubmitMessageResponse handler
                     // is registered there and forwards to the thread hub via ResponseFor.
@@ -1703,9 +1742,19 @@ internal static class ThreadExecution
                             Summary = cancelSummary
                         }).Subscribe(
                             _ => { },
-                            ex => execLogger?.LogWarning(ex,
-                                "UpdateThreadExecution(Idle/Cancelled): stream.Update failed for {ThreadPath}",
-                                threadPath));
+                            ex =>
+                            {
+                                execLogger?.LogWarning(ex,
+                                    "UpdateThreadExecution(Idle/Cancelled): stream.Update failed for {ThreadPath}",
+                                    threadPath);
+                                // Terminal write failed → fault the gate (see Completed branch).
+                                roundCompletion.OnError(ex);
+                            },
+                            () =>
+                            {
+                                roundCompletion.OnNext(System.Reactive.Unit.Default);
+                                roundCompletion.OnCompleted();
+                            });
                         NotifyParentCompletion(parentHub, threadPath, cancelText, false, cancelNodeChanges);
                         EmitCompletionNotification(parentHub, threadPath, "Cancelled", request.AgentName);
                     }
@@ -1736,8 +1785,14 @@ internal static class ThreadExecution
                         var errorNodeChangesLocal = errorNodeChanges;
                         pushErrorObs.Subscribe(
                             _ => { },
-                            pushEx => execLogger?.LogWarning(pushEx,
-                                "PushToResponseMessage(Error) failed for {ThreadPath}", threadPath),
+                            pushEx =>
+                            {
+                                execLogger?.LogWarning(pushEx,
+                                    "PushToResponseMessage(Error) failed for {ThreadPath}", threadPath);
+                                // The error-cell push faulted, so the inner Idle write never runs —
+                                // fault the gate so the watcher's onError writes the terminal state.
+                                roundCompletion.OnError(pushEx);
+                            },
                             () =>
                             {
                                 // Summary invariant for the Error path — non-empty.
@@ -1751,13 +1806,20 @@ internal static class ThreadExecution
                                     Summary = errorSummary
                                 }).Subscribe(
                                     _ => { },
-                                    updEx => execLogger?.LogWarning(updEx,
-                                        "UpdateThreadExecution(Idle/Error): stream.Update failed for {ThreadPath}",
-                                        threadPath),
+                                    updEx =>
+                                    {
+                                        execLogger?.LogWarning(updEx,
+                                            "UpdateThreadExecution(Idle/Error): stream.Update failed for {ThreadPath}",
+                                            threadPath);
+                                        // Terminal write failed → fault the gate (see Completed branch).
+                                        roundCompletion.OnError(updEx);
+                                    },
                                     () =>
                                     {
                                         NotifyParentCompletion(parentHub, threadPath, errorTextLocal, false, errorNodeChangesLocal);
                                         EmitCompletionNotification(parentHub, threadPath, errorTextLocal, request.AgentName);
+                                        roundCompletion.OnNext(System.Reactive.Unit.Default);
+                                        roundCompletion.OnCompleted();
                                     });
                             });
                     }
@@ -1781,28 +1843,30 @@ internal static class ThreadExecution
                     }
                     return System.Reactive.Unit.Default;
                 })
-                .Subscribe(
-                    _ => { },
-                    streamingEx =>
+                // Gate completion on the terminal Status write LANDING (roundCompletion fires from
+                // each terminal path's UpdateThreadExecution), then surface real faults to the caller
+                // (the submission watcher) via OnError instead of swallowing them. Disposal-race
+                // exceptions during teardown stay swallowed.
+                .SelectMany(_ => roundCompletion)
+                .Catch<System.Reactive.Unit, Exception>(streamingEx =>
                     {
-                        // 🚨 Observe the streaming round's escaped exceptions. The GetService calls
-                        // + the catch/error handlers inside can throw ObjectDisposedException when
-                        // the hub's DI scope is torn down mid-round (test-class dispose / Orleans
-                        // grain deactivation). Disposal-race exceptions are expected during teardown
-                        // and swallowed here; anything else is logged so real faults stay visible.
-                        // (Replaces the Task.Run + ContinueWith observation now that the round runs
-                        // on the bounded AI IoPool — onError carries the single escaped exception.)
                         var disposalRace = streamingEx is ObjectDisposedException
                             || (streamingEx is InvalidOperationException ioe
                                 && ioe.Message.Contains("disposed", StringComparison.OrdinalIgnoreCase));
-                        if (!disposalRace)
-                            logger.LogError(streamingEx,
-                                "[ThreadExec] streaming round faulted for {ThreadPath}", threadPath);
+                        if (disposalRace)
+                            return Observable.Empty<System.Reactive.Unit>();
+                        logger.LogError(streamingEx,
+                            "[ThreadExec] streaming round faulted for {ThreadPath}", threadPath);
+                        return Observable.Throw<System.Reactive.Unit>(streamingEx);
                     });
-                    }); // end of LoadFullConversationHistory.Subscribe
-                }); // end of contextNodeObs.Subscribe
-                }, // end of WhenInitialized.Subscribe onNext
-                ex =>
+                    }); // end of LoadFullConversationHistory.SelectMany
+                }); // end of contextNodeObs.SelectMany
+                })
+                // Agent-init stall/error: recover (unstick the UI + stamp the cell) and COMPLETE
+                // the round without faulting the chain — the watcher treats an init-stall as a
+                // settled (Idle) round, exactly as the prior void method did (it never told the
+                // watcher). A Timeout/init error short-circuits the SelectMany above and lands here.
+                .Catch<System.Reactive.Unit, Exception>(ex =>
                 {
                     // 🚨 Agent-init stalled or errored — surface and unstick the UI.
                     // Without this, IsExecuting stays true forever and the user sees
@@ -1852,12 +1916,9 @@ internal static class ThreadExecution
 
                     NotifyParentCompletion(parentHub, threadPath,
                         $"Agent initialization stalled: {ex.Message}", success: false);
+                    return Observable.Empty<System.Reactive.Unit>();
                 });
-        }); // end of clientObs.Subscribe
-
-        // Register subscription for disposal — use parentHub's workspace
-        // (this is the thread hub's own workspace, the natural lifetime owner).
-        parentHub.GetWorkspace().AddDisposable(initSub);
+        }); // end of clientObs.SelectMany
     }
 
     /// <summary>
