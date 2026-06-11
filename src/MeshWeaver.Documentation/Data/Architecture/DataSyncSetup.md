@@ -18,9 +18,9 @@ Tags:
 
 This is the **how-to manual** for getting MeshNodes into a partition by *syncing*
 them from a source. For the synchronization *protocol* (versions, conflict
-resolution, the monotonicity guard) see [DataSyncAndCrdt.md](DataSyncAndCrdt.md);
+resolution, the monotonicity guard) see [DataSyncAndCrdt.md](/Doc/Architecture/DataSyncAndCrdt);
 for the static-repo import *mechanism* (fingerprint, content-addressed Activity
-lock) see [StaticRepoImport.md](StaticRepoImport.md). This page tells you how to
+lock) see [StaticRepoImport.md](/Doc/Architecture/StaticRepoImport). This page tells you how to
 **set one up** and the one rule you must not break.
 
 ---
@@ -45,7 +45,7 @@ lock) see [StaticRepoImport.md](StaticRepoImport.md). This page tells you how to
   out of date (§3). It is **never the live serving copy**.
 - A **sync target** is the partition's persisted nodes. The **owning hub is
   authoritative** — the per-node hub at the node's path for mesh nodes (see
-  [DataSyncAndCrdt.md §1](DataSyncAndCrdt.md)). This is the single runtime source
+  [DataSyncAndCrdt.md §1](/Doc/Architecture/DataSyncAndCrdt)). This is the single runtime source
   for query and persistence.
 
 > These are MeshNodes we ship/own — built-in **agents**, **language models**,
@@ -63,7 +63,7 @@ lock) see [StaticRepoImport.md](StaticRepoImport.md). This page tells you how to
 Today a synced collection's source *and* target both answer queries (and both get
 persisted). That double-source is why a value-equality **dedup** exists on the
 sync stream — and that dedup is harmful: it also swallows a legitimate roll-back
-`Full` (see [DataSyncAndCrdt.md §6, §10](DataSyncAndCrdt.md)). Fix the *source*,
+`Full` (see [DataSyncAndCrdt.md §6, §10](/Doc/Architecture/DataSyncAndCrdt)). Fix the *source*,
 not the symptom:
 
 | Role | Sync | Query | Persistence |
@@ -108,7 +108,7 @@ modified — `PartitionSourceFingerprint.Compute(nodes, versioned)`. Versioned
 sources hash `(path, version)`; unversioned ones hash `(path, contentHash)`. The
 run is a content-addressed Activity (`{Partition}/_Activity/import-{fingerprint}`)
 so concurrent replicas converge to one execution — full mechanism in
-[StaticRepoImport.md](StaticRepoImport.md).
+[StaticRepoImport.md](/Doc/Architecture/StaticRepoImport).
 
 ---
 
@@ -152,7 +152,7 @@ ref to an **immutable git tag** (`v$(PlatformVersion)`, e.g. `v3.0.0-rc1`) and s
 and a boot at the same tag is a no-op (§3). No clone, no working copy: the GitHub
 REST API (`git/trees/{ref}?recursive=1` for the listing) + `raw.githubusercontent.com`
 (for content) is enough for a public repo, and all HTTP goes through `IIoPool`
-(never `Observable.FromAsync` — see [ControlledIoPooling.md](ControlledIoPooling.md)).
+(never `Observable.FromAsync` — see [ControlledIoPooling.md](/Doc/Architecture/ControlledIoPooling)).
 
 > 🥚 **The chicken-and-egg: pin a TAG, not the build's own commit.** A build cannot
 > embed *its own* commit SHA — the hash does not exist until after the commit, and a
@@ -160,7 +160,7 @@ REST API (`git/trees/{ref}?recursive=1` for the listing) + `raw.githubuserconten
 > derived from its `PlatformVersion` (`v3.0.0-rc1`), not a baked-in SHA. The tag is
 > created at release time, *after* the commit, and GitHub resolves tag→commit at sync
 > time. The tag must be **immutable** (annotated, never force-moved) so the fingerprint
-> is sound. Tag-triggered GitHub Actions ([ReleaseProcess.md](ReleaseProcess.md))
+> is sound. Tag-triggered GitHub Actions ([ReleaseProcess.md](/Doc/Architecture/ReleaseProcess))
 > build the clean-versioned image on the same `v*` tag — so code, image, and synced
 > content all key off one tag.
 
@@ -172,7 +172,7 @@ from the DB like any other node.
 
 > ⚠️ **The "stop compiling docs" cutover is gated, not global.** Adding a GitHub
 > *source* is additive and safe. *Demoting* the embedded doc-serving path is the
-> separate Phase-4 cutover in [StaticRepoImport.md](StaticRepoImport.md): the
+> separate Phase-4 cutover in [StaticRepoImport.md](/Doc/Architecture/StaticRepoImport): the
 > monolith serves docs in-process from the embedded overlay today and must keep
 > working, while the distributed/PG path is the one that needs the DB-materialized
 > copy. So switch serving to the partition **opt-in on the distributed path**,
@@ -276,9 +276,9 @@ deployment can **break the sync and make it its own**.
 
 ## 7. See also
 
-- [DataSyncAndCrdt.md](DataSyncAndCrdt.md) — the sync protocol: owning-hub
+- [DataSyncAndCrdt.md](/Doc/Architecture/DataSyncAndCrdt) — the sync protocol: owning-hub
   authority, versions, conflict resolution, why single-sourcing removes the dedup.
-- [StaticRepoImport.md](StaticRepoImport.md) — the import mechanism: fingerprint,
+- [StaticRepoImport.md](/Doc/Architecture/StaticRepoImport) — the import mechanism: fingerprint,
   content-addressed Activity lock, canonical upsert, prune.
-- [ExtensibleDefaults.md](ExtensibleDefaults.md) — system defaults + mesh-level
+- [ExtensibleDefaults.md](/Doc/Architecture/ExtensibleDefaults) — system defaults + mesh-level
   extensions (agents, models) the static repo seeds.

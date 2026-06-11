@@ -12,7 +12,7 @@ Tags:
   - "ActorModel"
 ---
 
-> **Read first:** [Asynchronous Calls](AsynchronousCalls). This page is the threading-model substrate that those rules rest on.
+> **Read first:** [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls). This page is the threading-model substrate that those rules rest on.
 
 ## The model
 
@@ -153,7 +153,7 @@ async IMessageDelivery Handle(...) {
 
 The `await foreach` holds hub X's action block and prevents it from processing the next message. If the response that advances `MoveNextAsync` also needs to be processed by hub X, the hub is busy holding its own handler's task — a same-hub deadlock.
 
-The sanctioned mitigation is `Task.Run` to detach the long-running body from the action block. That pattern is used by `ThreadExecution.ExecuteMessageAsync` for streaming bodies that contain awaits needing the actor's own scheduler to complete. See [Thread Execution Streaming](ThreadExecutionStreaming) for the worked example.
+The sanctioned mitigation is `Task.Run` to detach the long-running body from the action block. That pattern is used by `ThreadExecution.ExecuteMessageAsync` for streaming bodies that contain awaits needing the actor's own scheduler to complete. See [Thread Execution Streaming](/Doc/Architecture/ThreadExecutionStreaming) for the worked example.
 
 ## `SubscribeOn(TaskPoolScheduler.Default)` inside a grain-hosted service
 
@@ -180,7 +180,7 @@ cache.GetQuery(id, queries)
 
 The `SubscribeOn` at the cache layer does not widen this risk — upstream change-feed emissions were already arriving from background threads regardless. The offload shifts only the *subscribe-time work*, which is precisely what you want off the grain.
 
-> This `SubscribeOn` offload is the **query-construction** half of keeping the grain free. Its leaf-execution counterpart is the [Controlled I/O Pooling](ControlledIoPooling) primitive (`IIoPool`), which applies the same `SubscribeOn(TaskPoolScheduler.Default)` move plus a concurrency bound so actual file / blob / HTTP leaf work both runs off the grain *and* cannot fan out unboundedly.
+> This `SubscribeOn` offload is the **query-construction** half of keeping the grain free. Its leaf-execution counterpart is the [Controlled I/O Pooling](/Doc/Architecture/ControlledIoPooling) primitive (`IIoPool`), which applies the same `SubscribeOn(TaskPoolScheduler.Default)` move plus a concurrency bound so actual file / blob / HTTP leaf work both runs off the grain *and* cannot fan out unboundedly.
 
 ## Offloading a CPU leaf off the action block — `Task.Run`, identity, and why the gated pool can wedge
 
@@ -225,7 +225,7 @@ rules came out of fixing it:
 
 ## Cross-references
 
-- [Asynchronous Calls](AsynchronousCalls) — the actor-model rules this scheduling model implements.
-- [Controlled I/O Pooling](ControlledIoPooling) — bounds the leaf I/O that this scheduling model offloads.
-- [Thread Execution Streaming](ThreadExecutionStreaming) — the streaming-loop pattern that depends on this isolation.
-- [Debugging Message Flow](DebuggingMessageFlow) — how to recognise a scheduler-sharing deadlock in trace logs.
+- [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) — the actor-model rules this scheduling model implements.
+- [Controlled I/O Pooling](/Doc/Architecture/ControlledIoPooling) — bounds the leaf I/O that this scheduling model offloads.
+- [Thread Execution Streaming](/Doc/Architecture/ThreadExecutionStreaming) — the streaming-loop pattern that depends on this isolation.
+- [Debugging Message Flow](/Doc/Architecture/DebuggingMessageFlow) — how to recognise a scheduler-sharing deadlock in trace logs.

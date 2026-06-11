@@ -17,7 +17,7 @@ Tags:
 # Connecting Microsoft Teams
 
 The Teams bot is a **bidirectional** channel: a person messages the bot in Teams, a Memex agent answers
-**in the same chat**. It reuses the same pipeline as the [email channel](../Architecture/EmailIngestionAndNotifications.md)
+**in the same chat**. It reuses the same pipeline as the [email channel](/Doc/Architecture/EmailIngestionAndNotifications)
 — *inbound message → find-or-create a thread → agent → reply* — so a Teams chat is just another front end
 onto an agent thread. It ships **inert** and turns on only when an admin provisions an Azure Bot and sets
 `Teams:Enabled`.
@@ -49,7 +49,7 @@ Key points:
 
 - **One Teams conversation = one agent thread.** The `conversationId` is matched to its thread via a
   `TeamsConversation` link node (`{threadPath}/_TeamsConversation/…`); new → `StartThread`, existing →
-  `SubmitMessage` — the canonical [thread extensions](../Architecture/ThreadOperations.md).
+  `SubmitMessage` — the canonical [thread extensions](/Doc/Architecture/ThreadOperations).
 - **The agent runs as the mapped Memex user.** Teams users are mapped by **AAD object id** to a `User`
   node (`content.objectId`); an unmapped sender gets a polite "no account" reply.
 - **The reply is read, not re-emitted.** `TeamsReplySender` uses **`ThreadFlow.ObserveResponses`** — the
@@ -115,7 +115,7 @@ Deploy parameters (`Memex.Deploy.AppHost`): `teams-enabled`, `teams-app-id`, `te
 
 ## Notifications over Teams
 
-The [notification system](../Architecture/EmailIngestionAndNotifications.md#3-the-notification-system)
+The [notification system](/Doc/Architecture/EmailIngestionAndNotifications#3-the-notification-system)
 already models a `Teams` channel kind; once the bot is connected, a recipient's
-[notification rules](../GUI/NotificationPreferences.md) can escalate notifications into Teams the same way
+[notification rules](/Doc/GUI/NotificationPreferences) can escalate notifications into Teams the same way
 they do email.

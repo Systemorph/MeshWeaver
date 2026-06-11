@@ -5,7 +5,7 @@ Description: Hands-on companion to "Script Execution" — an interactive markdow
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 L12 22"/><path d="M3 7 L21 17"/><path d="M3 17 L21 7"/></svg>
 ---
 
-This page is the working companion to the [Script Execution](Doc/Architecture/ScriptExecution) reference. It runs a small **fireworks** script through the same kernel pipeline that powers `ExecuteScriptRequest` on Code nodes — but inline as an interactive markdown cell, so you can see the script source, the progress messages, and the rendered output side by side.
+This page is the working companion to the [Script Execution](/Doc/Architecture/ScriptExecution) reference. It runs a small **fireworks** script through the same kernel pipeline that powers `ExecuteScriptRequest` on Code nodes — but inline as an interactive markdown cell, so you can see the script source, the progress messages, and the rendered output side by side.
 
 ## What you'll observe
 
@@ -83,7 +83,7 @@ The interactive markdown cell above runs on the page's transient kernel session.
 
 ## Doing this from your own code or an MCP agent
 
-The same pipeline is available three ways. See [Script Execution](Doc/Architecture/ScriptExecution) for full details, rules of thumb, and progress-emission conventions:
+The same pipeline is available three ways. See [Script Execution](/Doc/Architecture/ScriptExecution) for full details, rules of thumb, and progress-emission conventions:
 
 - **From C#:** `hub.Post(new ExecuteScriptRequest(), o => o.WithTarget(codeNodeAddress))`. Subscribe to the `ActivityLog` returned in the response.
 - **From an MCP agent:** call the `execute_script` tool with the path of an executable Code node. Same activity creation, same streaming.
@@ -91,7 +91,7 @@ The same pipeline is available three ways. See [Script Execution](Doc/Architectu
 
 ## Cancelling a long-running script
 
-Per the [Activity Control Plane](Doc/Architecture/ActivityControlPlane), cancellation is a **content patch**, not a separate message. The user clicks "Cancel" → the click handler patches `RequestedStatus = Cancelled` on the activity → the activity hub's watcher dispatches the internal cancel → the script's `Ct` trips → status flips to `Cancelled`.
+Per the [Activity Control Plane](/Doc/Architecture/ActivityControlPlane), cancellation is a **content patch**, not a separate message. The user clicks "Cancel" → the click handler patches `RequestedStatus = Cancelled` on the activity → the activity hub's watcher dispatches the internal cancel → the script's `Ct` trips → status flips to `Cancelled`.
 
 For the script itself to be cancellable mid-flight, **pass `Ct` into every cancellable async call**:
 

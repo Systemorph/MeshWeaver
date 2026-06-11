@@ -7,7 +7,7 @@ Icon: /static/DocContent/DataMesh/DataConfiguration/icon.svg
 
 # Synced Query Data Source
 
-A *synced query data source* is a live collection that lives inside a hub's workspace and stays in sync with a mesh query. The framework subscribes to [`IMeshQueryProvider.Query<T>`](xref:MeshWeaver.Mesh.Services.IMeshQueryProvider.Query``1) when the hub starts, seeds the workspace's `EntityStore` with the initial result set, and continuously folds **Added / Updated / Removed** deltas into that same store via [`IDataChangeNotifier`](xref:MeshWeaver.Mesh.Services.IDataChangeNotifier).
+A *synced query data source* is a live collection that lives inside a hub's workspace and stays in sync with a mesh query. The framework subscribes to `IMeshQueryProvider.Query<T>` when the hub starts, seeds the workspace's `EntityStore` with the initial result set, and continuously folds **Added / Updated / Removed** deltas into that same store via `IDataChangeNotifier`.
 
 The payoff: hub-internal code — validators, layout areas, compile pipelines, access checks — reads its source data through the standard `workspace.GetStream<T>()` / `workspace.GetStream(new CollectionReference("name"))` surface. No `Observe` round-trip, no CQRS staleness lag, no `Observable.FromAsync` at every leaf. By the time the hub handles its first message, the synced collection is already populated.
 
@@ -61,7 +61,7 @@ Use a synced query data source whenever a hub needs a *local view* of nodes that
 | **Aggregator hubs** | Cross-namespace dashboards built from `nodeType:Order status:Open`, rendered straight from the workspace stream |
 | **System defaults + extensions** | Agent, Model, Role — static built-ins appear on first subscribe via `IStaticNodeProvider`; user-created instances stream in as Added / Updated / Removed deltas |
 
-For system-default / mesh-extension composition, see [Extensible Defaults](../Architecture/ExtensibleDefaults).
+For system-default / mesh-extension composition, see [Extensible Defaults](/Doc/Architecture/ExtensibleDefaults).
 
 > **Tip:** Use `workspace.GetMeshNodeStream(path)` for one-shot single-node reads and for nodes you never keep in a collection. The synced collection shines for sets you read repeatedly — and it is bidirectional, so writes work through the same surface.
 
@@ -69,11 +69,11 @@ For system-default / mesh-extension composition, see [Extensible Defaults](../Ar
 
 ## How it works
 
-The data source is built on [`VirtualDataSource.WithVirtualType<T>`](xref:MeshWeaver.Data.VirtualDataSource.WithVirtualType``1) — the framework primitive for "this collection comes from an `IObservable` stream." The mesh adds a thin extension method [`WithMeshQuery`](xref:MeshWeaver.Graph.SyncedQueryDataSourceExtensions.WithMeshQuery*) that composes three pieces:
+The data source is built on `VirtualDataSource.WithVirtualType<T>` — the framework primitive for "this collection comes from an `IObservable` stream." The mesh adds a thin extension method `WithMeshQuery` that composes three pieces:
 
 **1. Subscribe to each mesh query**
 
-One [`IMeshQueryCore.Query<MeshNode>`](xref:MeshWeaver.Mesh.Services.IMeshQueryCore.Query``1) subscription per query string. Multi-query collections are fine — the result is their union. Each `QueryResultChange<MeshNode>` carries `Initial` / `Reset` / `Added` / `Updated` / `Removed` deltas together with the matching `MeshNode` payloads.
+One `IMeshQueryCore.Query<MeshNode>` subscription per query string. Multi-query collections are fine — the result is their union. Each `QueryResultChange<MeshNode>` carries `Initial` / `Reset` / `Added` / `Updated` / `Removed` deltas together with the matching `MeshNode` payloads.
 
 **2. Fold deltas into a path-keyed dictionary**
 
@@ -98,7 +98,7 @@ config.AddData(data => data
         collectionName: "Sources")));
 ```
 
-Multiple synced collections per hub are fine — each goes into its own virtual data source. The canonical example is `MeshDataSource` registration in [`MeshDataSourceExtensions.AddMeshDataSource`](xref:MeshWeaver.Graph.MeshDataSourceExtensions): every per-node hub automatically gets `Sources` and `Tests` synced collections derived from the hub's path.
+Multiple synced collections per hub are fine — each goes into its own virtual data source. The canonical example is `MeshDataSource` registration in `MeshDataSourceExtensions.AddMeshDataSource`: every per-node hub automatically gets `Sources` and `Tests` synced collections derived from the hub's path.
 
 ### API reference — extension methods
 
@@ -116,7 +116,7 @@ public static VirtualDataSource WithMeshQuery<T>(
 
 | Parameter | Description |
 |---|---|
-| `query` | Mesh query string in the standard syntax (see [Query Syntax](QuerySyntax)). Common shapes: `namespace:X scope:subtree nodeType:Y`, `path:X`, `path:X scope:descendants`. |
+| `query` | Mesh query string in the standard syntax (see [Query Syntax](/Doc/DataMesh/QuerySyntax)). Common shapes: `namespace:X scope:subtree nodeType:Y`, `path:X`, `path:X scope:descendants`. |
 | `collectionName` | Workspace collection name. Defaults to `typeof(T).Name` (or `nameof(MeshNode)` on the non-generic overload). Required when the same `T` appears in multiple synced collections — for example, `Sources` and `Tests` both hold `MeshNode`. |
 
 The non-generic overload is the everyday case (a collection of `MeshNode`). The generic overload accepts a content type and projects via `OfType<T>` — useful when the query selects a single content shape.
@@ -144,7 +144,7 @@ var sub = collection.Subscribe(snapshot =>
 
 Every emission is the full current collection, not individual deltas — the `Scan` inside `SyncedQueryMeshNodes` already merged them. The observable is `Replay(1).RefCount()`, so a late subscriber gets the cached latest snapshot immediately, and upstream subscriptions are shared across every consumer of the same id.
 
-> For a single-node read by path, use [`workspace.GetMeshNodeStream(path)`](xref:MeshWeaver.Mesh.MeshNodeStreamExtensions.GetMeshNodeStream*). `GetQuery` is for *collections*, not for known-path lookups.
+> For a single-node read by path, use `workspace.GetMeshNodeStream(path)`. `GetQuery` is for *collections*, not for known-path lookups.
 
 ### Write — Update on the per-node remote stream
 
@@ -297,7 +297,7 @@ public async Task DataChangeRequestOnSubscriber_PropagatesToOwningHub()
 
 ## Related
 
-- [Query Syntax](QuerySyntax) — the query strings you pass to `WithMeshQuery`.
-- [Data Configuration](DataConfiguration) — broader data-source patterns (`AddSource`, `AddHubSource`, `WithInitialData`).
-- [CQRS](../Architecture/CqrsAndContentAccess) — why this is preferred over re-querying on every read.
-- [Asynchronous Calls](../Architecture/AsynchronousCalls) — why `workspace.GetStream(...)` is the right primitive in hub-reachable code.
+- [Query Syntax](/Doc/DataMesh/QuerySyntax) — the query strings you pass to `WithMeshQuery`.
+- [Data Configuration](/Doc/DataMesh/DataConfiguration) — broader data-source patterns (`AddSource`, `AddHubSource`, `WithInitialData`).
+- [CQRS](/Doc/Architecture/CqrsAndContentAccess) — why this is preferred over re-querying on every read.
+- [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) — why `workspace.GetStream(...)` is the right primitive in hub-reachable code.

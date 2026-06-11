@@ -13,7 +13,7 @@ This mechanism works in two places:
 | `Source/*.cs` files in a node type | Package resolves at node-type compilation time |
 | Interactive markdown code cells | Package resolves before the kernel compiles the cell |
 
-Both routes go through the same `NuGetAssemblyResolver`. See also [NuGet Packages](NugetPackages) for the interactive-markdown side of the story.
+Both routes go through the same `NuGetAssemblyResolver`. See also [NuGet Packages](/Doc/DataMesh/NugetPackages) for the interactive-markdown side of the story.
 <svg viewBox="0 0 760 320" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
   <defs>
     <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
@@ -261,6 +261,6 @@ NuGet packages often pull in transitive assemblies that aren't referenced by you
 
 ## Related
 
-- [NuGet Packages](NugetPackages) — the same `#r "nuget:..."` directive inside interactive markdown code cells.
-- [Creating Node Types](CreatingNodeTypes) — the base walkthrough for defining content types and layout areas.
-- [Interactive Markdown](InteractiveMarkdown) — how code cells execute.
+- [NuGet Packages](/Doc/DataMesh/NugetPackages) — the same `#r "nuget:..."` directive inside interactive markdown code cells.
+- [Creating Node Types](/Doc/DataMesh/CreatingNodeTypes) — the base walkthrough for defining content types and layout areas.
+- [Interactive Markdown](/Doc/DataMesh/InteractiveMarkdown) — how code cells execute.

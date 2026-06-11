@@ -7,6 +7,8 @@ Icon: /static/DocContent/DataMesh/CRUD/icon.svg
 
 MeshWeaver models data mutations as reactive messages flowing through a typed workspace. Rather than imperative method calls, you describe *what changed* and the workspace propagates the delta to every subscriber automatically — no polling, no manual refresh.
 
+> **Scope: this page covers typed-entity CRUD** — instances (`TodoItem`, `Project`, …) living in a workspace's **EntityStore** collections. It is **not** the API for mutating MeshNodes. A MeshNode's lifecycle goes through `CreateNodeRequest`/`DeleteNodeRequest`/`MoveNodeRequest`, and a MeshNode's content is mutated exclusively via `workspace.GetMeshNodeStream(path).Update(current => modified).Subscribe(...)` — see [Node Operations](/Doc/DataMesh/NodeOperations) and [CQRS — Queries vs. Content Access](/Doc/Architecture/CqrsAndContentAccess).
+
 <svg viewBox="0 0 760 260" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
   <defs>
     <marker id="crud-arrow" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
@@ -91,18 +93,6 @@ var request = DataChangeRequest.Create([newTodo], changedBy: "user-123");
 workspace.RequestChange(request, activity, delivery);
 ```
 
-## Unified Reference API
-
-You can also create entities via the path-based reference API:
-
-```csharp
-var request = new UpdateUnifiedReferenceRequest(
-    Reference: "data:TodoItems/" + newTodo.Id,
-    Data: newTodo
-);
-await hub.InvokeAsync(request);
-```
-
 ## Create Flow
 
 ```mermaid
@@ -127,9 +117,33 @@ sequenceDiagram
 
 # Read
 
-MeshWeaver offers both live subscriptions and one-time queries. Prefer subscriptions for UI code — the workspace delivers updates the moment data changes.
+Everything is a live stream. The same primitive serves both "keep me updated" and "give me the current state" — there is no separate snapshot API to keep consistent.
 
-## Reactive Subscription
+## Canonical node access — `GetMeshNodeStream(path)`
+
+Any node — own, local, or remote — is read through `workspace.GetMeshNodeStream(path)`. It is live and authoritative (served by the owning hub, no index lag), and the **same handle accepts writes** via `.Update(...)`:
+
+```csharp
+// Live subscription — emits the current node, then every subsequent change:
+workspace.GetMeshNodeStream("acme/TodoLists/work")
+    .Where(node => node is not null)
+    .Subscribe(node =>
+    {
+        var list = node.ContentAs<TodoList>(hub.JsonSerializerOptions, logger);
+        // render / react
+    });
+
+// One-shot read — same primitive, complete after the first emission:
+workspace.GetMeshNodeStream(path)
+    .Where(node => node is not null)
+    .Take(1)
+    .Timeout(TimeSpan.FromSeconds(10))
+    .Subscribe(node => /* use the snapshot */);
+```
+
+Never read a known node through `QueryAsync` — queries are an eventually-consistent index for *sets*, stale right after a write. See [CQRS — Queries vs. Content Access](/Doc/Architecture/CqrsAndContentAccess).
+
+## Reactive Subscription — typed collections
 
 Subscribe to a typed collection as an `IObservable` that emits the full current set on every change:
 
@@ -143,15 +157,7 @@ workspace.GetObservable<TodoItem>()
     });
 ```
 
-## One-Time Retrieval
-
-When you need a snapshot without ongoing updates, use `GetDataRequest`:
-
-```csharp
-var request = new GetDataRequest(new CollectionReference("TodoItems"));
-var response = await hub.InvokeAsync<GetDataResponse>(request);
-var todos = response.Data as IEnumerable<TodoItem>;
-```
+For a one-shot collection snapshot, compose on the same stream — `workspace.GetObservable<TodoItem>().Take(1).Timeout(...)` — instead of a request/response round-trip.
 
 ## Reference Types
 
@@ -232,30 +238,22 @@ var snapshotRequest = DataChangeRequest.Update(
 );
 ```
 
-## Unified Reference API
+## Updating node content — `GetMeshNodeStream(path).Update(...)`
+
+When the thing you are updating is a **node's content** (not an entity inside a collection), use the canonical mutation API — the same handle you read from:
 
 ```csharp
-var request = new UpdateUnifiedReferenceRequest(
-    Reference: "data:TodoItems/todo-1",
-    Data: updatedTodo
-);
-await hub.InvokeAsync(request);
+workspace.GetMeshNodeStream("acme/TodoLists/work").Update(node =>
+{
+    var list = node.ContentAs<TodoList>(hub.JsonSerializerOptions, logger);
+    if (node.Content is not null && list is null) return node;  // never clobber unreadable content
+    list ??= new TodoList();
+    return node with { Content = list with { Title = "Updated Title" } };
+})
+.Subscribe(_ => { }, ex => logger.LogWarning(ex, "update failed"));
 ```
 
-> **The collection must exist.** A `data:` update is rejected with
-> `Success = false` (and a descriptive `Error`) when the path addresses nothing the
-> workspace can write to:
-> - **Unknown collection** — the collection is owned by no registered type source and
->   is not a content provider (e.g. a bare reference like `"invalid"`, which the parser
->   defaults to the `data:` prefix → collection `"invalid"`). It is *not* silently
->   committed as a vacuous success.
-> - **Empty path** — `Reference` is null/empty (`"Path cannot be empty"`).
-> - **Default data reference** — `"data:"` with no collection (`"Cannot update the
->   default data reference directly"`).
-> - **Unknown prefix** — anything other than `data`/`content`/`area`.
->
-> Only a collection a `TypeSource` projects (data) or an `IFileContentProvider` serves
-> (content) is a valid write target.
+`Update` is **cold** — the write only happens on `Subscribe`. Cross-hub writes ship an RFC 7396 JSON-merge patch to the owning hub, so concurrent writers touching different fields both land.
 
 ## Workspace Extension Methods
 
@@ -282,19 +280,14 @@ var request = DataChangeRequest.Delete([todoToDelete], changedBy: "user-123");
 workspace.RequestChange(request, activity, delivery);
 ```
 
-## Unified Reference API
-
-```csharp
-var request = new DeleteUnifiedReferenceRequest("data:TodoItems/todo-1");
-await hub.InvokeAsync(request);
-```
-
 ## Workspace Extension Methods
 
 ```csharp
 workspace.Delete(todoToDelete, activity, delivery);
 workspace.Delete([todo1, todo2], activity, delivery);
 ```
+
+Deleting a **node** (as opposed to an entity in a collection) is a lifecycle operation: `hub.Observe<DeleteNodeResponse>(new DeleteNodeRequest(path)).Subscribe(...)` — see [Node Operations](/Doc/DataMesh/NodeOperations).
 
 ---
 

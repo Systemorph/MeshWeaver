@@ -186,7 +186,7 @@ what changed:
 ## 8. Reading & writing a mesh node (the public surface)
 
 Application code never touches `GetRemoteStream<MeshNode>` (forbidden — it does
-not converge; see [CqrsAndContentAccess.md](CqrsAndContentAccess.md)). The one
+not converge; see [CqrsAndContentAccess.md](/Doc/Architecture/CqrsAndContentAccess)). The one
 API is `hub.GetMeshNodeStream(path)` / `workspace.GetMeshNodeStream(path)`, which
 routes every cross-hub read and write through the shared `IMeshNodeStreamCache`
 — one process-wide upstream per path, so reads and writes share the same live

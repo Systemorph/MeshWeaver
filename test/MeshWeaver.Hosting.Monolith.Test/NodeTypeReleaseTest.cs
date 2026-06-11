@@ -26,7 +26,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// </list>
 ///
 /// Drives the request via the canonical "node mutations go through
-/// <c>stream.Update(...)</c>" pattern (see CLAUDE.md +
+/// <c>stream.Update(...)</c>" pattern (see AGENTS.md +
 /// <c>Doc/Architecture/RequestViaStreamUpdate.md</c>). The bespoke
 /// <c>CreateReleaseRequest</c> handler used to race the per-NodeType hub's
 /// compile watcher and wedge the hub on CI; the stream-update path is

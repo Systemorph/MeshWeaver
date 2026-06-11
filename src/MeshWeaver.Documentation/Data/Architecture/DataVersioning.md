@@ -132,16 +132,18 @@ Access historical Snowflake data through versioned entity references:
 
 ```csharp
 // Query a claim as it existed on a specific date
-var historicalClaim = await hub.AwaitResponse(
-    new GetDataRequest(
-        new VersionedEntityReference(
-            Collection: "Claim",
-            Id: 12345,
-            AsOf: new DateTime(2024, 6, 1)
-        )
-    ),
-    o => o.WithTarget(new Address("Insurance/2024/Property"))
-);
+hub.Observe<GetDataResponse>(
+        new GetDataRequest(
+            new VersionedEntityReference(
+                Collection: "Claim",
+                Id: 12345,
+                AsOf: new DateTime(2024, 6, 1)
+            )
+        ),
+        o => o.WithTarget(new Address("Insurance/2024/Property")))
+    .Subscribe(
+        response => { /* historical claim in response.Message.Data */ },
+        ex => logger.LogWarning(ex, "historical read failed"));
 ```
 
 ---

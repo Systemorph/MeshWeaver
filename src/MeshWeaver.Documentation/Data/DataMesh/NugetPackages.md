@@ -110,7 +110,7 @@ If the package ID is unknown, the version does not exist, or the kernel cannot r
 
 ## Also in node types
 
-The same `#r "nuget:..."` directive works at the top of any `Source/*.cs` file in a node type. See [NuGet Packages in Node Types](NodeTypeWithNuGet) for the end-to-end walkthrough.
+The same `#r "nuget:..."` directive works at the top of any `Source/*.cs` file in a node type. See [NuGet Packages in Node Types](/Doc/DataMesh/NodeTypeWithNuGet) for the end-to-end walkthrough.
 
 ## Deployment — no SDK required
 
@@ -123,6 +123,6 @@ The restore is a pure library operation. It does not shell out to `dotnet restor
 
 ## Related
 
-- [Interactive Markdown](InteractiveMarkdown) — how code cells and `--render` areas work
-- [NuGet Packages in Node Types](NodeTypeWithNuGet) — same directive inside `Source/*.cs` files
-- [Data Modeling](DataModeling) — referencing your own schema types from a code cell
+- [Interactive Markdown](/Doc/DataMesh/InteractiveMarkdown) — how code cells and `--render` areas work
+- [NuGet Packages in Node Types](/Doc/DataMesh/NodeTypeWithNuGet) — same directive inside `Source/*.cs` files
+- [Data Modeling](/Doc/DataMesh/DataModeling) — referencing your own schema types from a code cell

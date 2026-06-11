@@ -7,7 +7,7 @@ namespace Memex.Portal.Shared.Authentication;
 /// <summary>
 /// In-memory store for OAuth authorization codes with PKCE support.
 /// Codes expire after 5 minutes and are single-use (consumed on exchange).
-/// Uses ConcurrentDictionary for thread-safe mutation (per CLAUDE.md exception).
+/// Uses ConcurrentDictionary for thread-safe mutation (per AGENTS.md exception).
 /// </summary>
 internal class OAuthCodeStore
 {

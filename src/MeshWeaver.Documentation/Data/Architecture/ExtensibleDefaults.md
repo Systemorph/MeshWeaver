@@ -22,9 +22,9 @@ Apply Extensible Defaults whenever a feature has:
 
 | Entity | NodeType | Root namespace | Static provider | Picker projection |
 |--------|----------|----------------|-----------------|-------------------|
-| Agent | `Agent` | `Agent` | [`BuiltInAgentProvider`](xref:MeshWeaver.AI.BuiltInAgentProvider) | [`AgentPickerProjection.BuildAgentQueries`](xref:MeshWeaver.AI.AgentPickerProjection.BuildAgentQueries*) |
+| Agent | `Agent` | `Agent` | `BuiltInAgentProvider` | `AgentPickerProjection.BuildAgentQueries` |
 | Language Model | `LanguageModel` | `Model` | `BuiltInModelProvider` | `AgentPickerProjection.BuildModelQueries` |
-| Role | `Role` | `Role` | [`RoleNodeType.BuiltInRolesProvider`](xref:MeshWeaver.Graph.Configuration.RoleNodeType) | *(to follow Agent/Model)* |
+| Role | `Role` | `Role` | `RoleNodeType.BuiltInRolesProvider` | *(to follow Agent/Model)* |
 
 ---
 
@@ -100,7 +100,7 @@ Apply Extensible Defaults whenever a feature has:
 
 `scope:selfAndAncestors` on queries (2) and (3) means a hub at `acme/team/proj` sees extensions defined at `acme/team/proj`, `acme/team`, `acme`, and the root — closest-wins behaviour is the caller's responsibility (the same convention used by AccessAssignment).
 
-The union is computed by [`MeshQueryEngine`](xref:MeshWeaver.Hosting.Persistence.Query.MeshQueryEngine) inside a single `IMeshQueryCore.Query` call — see [Synced Query Data Source](../DataMesh/SyncedQueryDataSource) for the delta protocol. Static-provider nodes participate via [`StaticNodeQueryProvider`](xref:MeshWeaver.Hosting.Persistence.Query.StaticNodeQueryProvider), so a query against `namespace:Agent` returns built-in Agents without touching persistence.
+The union is computed by `MeshQueryEngine` inside a single `IMeshQueryCore.Query` call — see [Synced Query Data Source](/Doc/DataMesh/SyncedQueryDataSource) for the delta protocol. Static-provider nodes participate via `StaticNodeQueryProvider`, so a query against `namespace:Agent` returns built-in Agents without touching persistence.
 
 ---
 
@@ -159,11 +159,11 @@ builder.ConfigureServices(services =>
 
 ### 2. NodeType — the extension surface
 
-Register the NodeType MeshNode itself so the routing layer knows the content type and how to host the per-instance hub. This is the same shape every NodeType uses — see [`RoleNodeType.AddRoleType`](xref:MeshWeaver.Graph.Configuration.RoleNodeType.AddRoleType*).
+Register the NodeType MeshNode itself so the routing layer knows the content type and how to host the per-instance hub. This is the same shape every NodeType uses — see `RoleNodeType.AddRoleType`.
 
 ### 3. Picker / projection — the consumer entry point
 
-A small static helper that builds the three query strings and projects the resulting MeshNode snapshot into the typed view the feature actually needs. Modelled on [`AgentPickerProjection`](xref:MeshWeaver.AI.AgentPickerProjection):
+A small static helper that builds the three query strings and projects the resulting MeshNode snapshot into the typed view the feature actually needs. Modelled on `AgentPickerProjection`:
 
 ```csharp
 public static class RolePickerProjection
@@ -210,7 +210,7 @@ Using the same query id everywhere means a single shared upstream subscription v
 | Mistake | Symptom | What this pattern enforces |
 |---------|---------|----------------------------|
 | Per-user `MemoryCache` with a `Timeout()` fallback. | First permission check after process start waits the full timeout (e.g. 2 s) while the upstream synced query warms; the fallback emits empty roles and the UI looks "logged out". | The `Replay(1)` is fed by the static provider's nodes *synchronously* on first subscribe — there is no warm-up window to time out against. |
-| Reading the entity via `IMeshQueryCore.QueryAsync` (CQRS read side). | Index-lag staleness after writes; missed Initial emissions. | Reads come from the local workspace's synced collection, which folds `Added`/`Updated`/`Removed` deltas verbatim. See [CQRS and Content Access](CqrsAndContentAccess). |
+| Reading the entity via `IMeshQueryCore.QueryAsync` (CQRS read side). | Index-lag staleness after writes; missed Initial emissions. | Reads come from the local workspace's synced collection, which folds `Added`/`Updated`/`Removed` deltas verbatim. See [CQRS and Content Access](/Doc/Architecture/CqrsAndContentAccess). |
 | Calling `ConfigResolver.ResolveConfigurationAsync` on every per-node activation. | Every grain activation does a Postgres round-trip plus an async resolution before the hub can answer any messages. | The static repo carries enough state for activation; user extensions arrive lazily via the same synced collection. |
 | Application-level caching (e.g. `PermissionEvaluator._userScopeRolesCache`). | Cache invalidation is its own deadlock surface; runtime updates need a separate invalidation hook. | No application cache. The synced collection *is* the cache, kept consistent by `IDataChangeNotifier`. |
 
@@ -224,15 +224,15 @@ Today `PermissionEvaluator` hand-rolls a per-user `MemoryCache` over a synced Ac
 2. **Add `BuiltInAccessAssignmentProvider`** for baseline assignments (e.g. `Public → Viewer` on shipped namespaces), so the synced collection has a non-empty Initial on a blank mesh.
 3. **Replace `PermissionEvaluator.GetUserScopeRolesStream`** with a workspace-local consumer of the same `workspace.GetQuery(id, BuildRoleAssignmentQueries(...))` projection that Agent and Model use. No `Timeout`, no `Catch`-to-empty fallback — the `Replay(1)` snapshot is already populated when the first permission check arrives.
 
-See [Access Control](AccessControl) for the role / assignment data model and the per-hub `PermissionEvaluator` that consumes the projection.
+See [Access Control](/Doc/Architecture/AccessControl) for the role / assignment data model and the per-hub `PermissionEvaluator` that consumes the projection.
 
 ---
 
 ## References
 
-- [`AgentPickerProjection`](xref:MeshWeaver.AI.AgentPickerProjection) — canonical caller (Agent & Model).
-- [`BuiltInAgentProvider`](xref:MeshWeaver.AI.BuiltInAgentProvider), [`RoleNodeType.BuiltInRolesProvider`](xref:MeshWeaver.Graph.Configuration.RoleNodeType) — static repo examples.
-- [`StaticNodeQueryProvider`](xref:MeshWeaver.Hosting.Persistence.Query.StaticNodeQueryProvider) — how static nodes fold into `IMeshQueryCore`.
-- [Synced Query Data Source](../DataMesh/SyncedQueryDataSource) — delta protocol, gating, Replay semantics.
-- [Access Control](AccessControl) — the role/permission evaluator that will consume this pattern.
-- [CQRS and Content Access](CqrsAndContentAccess) — when to use synced collections vs `GetRemoteStream` vs `QueryAsync`.
+- `AgentPickerProjection` — canonical caller (Agent & Model).
+- `BuiltInAgentProvider`, `RoleNodeType.BuiltInRolesProvider` — static repo examples.
+- `StaticNodeQueryProvider` — how static nodes fold into `IMeshQueryCore`.
+- [Synced Query Data Source](/Doc/DataMesh/SyncedQueryDataSource) — delta protocol, gating, Replay semantics.
+- [Access Control](/Doc/Architecture/AccessControl) — the role/permission evaluator that will consume this pattern.
+- [CQRS and Content Access](/Doc/Architecture/CqrsAndContentAccess) — when to use synced collections vs `GetRemoteStream` vs `QueryAsync`.

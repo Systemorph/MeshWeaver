@@ -1,7 +1,7 @@
 ---
 NodeType: Markdown
 Name: "Thread Execution & Message Rendering — Fully Data-Bound"
-Abstract: "How AI thread execution writes streaming content into a thread message and how the GUI renders it. The writer opens a long-lived GetRemoteStream and pushes deltas via .Update. The layout area ships a path-bound control. The Blazor view subscribes to the same per-message stream and renders directly — single source of truth, no per-chunk hub posts, no layout data section, no JsonPointerReference chain."
+Abstract: "How AI thread execution writes streaming content into a thread message and how the GUI renders it. The writer pushes deltas through the shared per-path stream handle (hub.GetMeshNodeStream, backed by IMeshNodeStreamCache) via .Update. The layout area ships a path-bound control. The Blazor view subscribes to the same shared handle and renders directly — single source of truth, no per-chunk hub posts, no layout data section, no JsonPointerReference chain."
 Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#00695c'/><rect x='4' y='6' width='12' height='8' rx='2' fill='white'/><rect x='8' y='12' width='12' height='8' rx='2' fill='white'/></svg>"
 Authors:
   - "Roland Buergi"
@@ -12,7 +12,7 @@ Tags:
   - "DataBinding"
 ---
 
-> **Read first:** [Asynchronous Calls](AsynchronousCalls) · [CQRS — Queries vs. Content Access](CqrsAndContentAccess) · [Data Binding](xref:GUI/DataBinding) · [Per-Hub TaskScheduler](OrleansTaskScheduler)
+> **Read first:** [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) · [CQRS — Queries vs. Content Access](/Doc/Architecture/CqrsAndContentAccess) · [Data Binding](/Doc/GUI/DataBinding) · [Per-Hub TaskScheduler](/Doc/Architecture/OrleansTaskScheduler)
 
 ## The one-sentence architecture
 
@@ -22,9 +22,9 @@ The writer, the layout area, and the Blazor view all touch the **same** per-mess
 
 | Side | Responsibility | Primitive |
 |---|---|---|
-| **Writer** — AI execution on `_Exec` | Open a long-lived remote stream at start. Push every delta via `.Update(...)`. Dispose at end. | `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference())` + `.Update(node => node with { Content = ... })` |
+| **Writer** — AI execution on `_Exec` | Push every delta via `.Update(...)` through the thread hub's shared per-path handle. | `parentHub.GetMeshNodeStream(responsePath).Update(node => node with { Content = ... })` — backed by the process-wide `IMeshNodeStreamCache` |
 | **Layout area** — backend | Return a path-bound bubble control. No data-section transform, no subscribe-and-republish. | `new ThreadMessageBubbleControl { NodePath = $"{threadPath}/{messageId}" }` |
-| **Blazor view** — renderer | Hold a `_nodeStream` field. Subscribe in `BindData()`. Re-render on every emission. | Same `GetRemoteStream<MeshNode, MeshNodeReference>` — symmetric with the writer |
+| **Blazor view** — renderer | Subscribe in `BindData()` via `AddBinding`. Re-render on every emission. | `Hub.GetMeshNodeStream(ViewModel.NodePath)` — the **same** cache handle the writer pushes through |
 
 ## Data flow
 
@@ -66,68 +66,55 @@ _Exec hub ──responseStream.Update(...)──► owning per-node hub
                                                     └─ subscribers (incl. the Blazor view) re-render
 ```
 
-The flow is one-way and fire-and-forget from the writer's perspective. The writer's action block is never blocked waiting for a return path. Tool-call hub round-trips are orthogonal — they run on entirely different schedulers.
+Per-chunk pushes are one-way and fire-and-forget — the writer's action block is never blocked waiting for a return path. Only the **terminal** status write is composed into the round's completion gate (the `IObservable<Unit>` the submission watcher subscribes to). Tool-call hub round-trips are orthogonal — they run on entirely different schedulers.
 
-## Writer side: open the stream, push deltas, dispose
+## Writer side: route every push through the shared stream handle
 
 ```csharp
-// SubmitMessageRequest was deleted 2026-05-25 — ExecuteMessageAsync is now a
-// direct method call (not a hub handler). The submission watcher subscriber
-// invokes it after writing PendingUserMessages via stream.Update.
-internal static void ExecuteMessageAsync(
+// ExecuteMessageAsync is a direct method call (not a hub handler). The
+// submission watcher invokes it after draining PendingUserMessages via
+// stream.Update, and SUBSCRIBES to the returned observable: it completes
+// when the terminal Status write has landed — that completion is how the
+// watcher knows the round is over.
+internal static IObservable<Unit> ExecuteMessageAsync(
     IMessageHub hub, RoundParams request, AccessContext? userAccessContext)
 {
-    var parentHub  = hub.Configuration.ParentHub!;
-    var workspace  = parentHub.GetWorkspace();
-    var responsePath = $"{request.ThreadPath}/{request.ResponseMessageId}";
+    var parentHub = hub.Configuration.ParentHub!;   // the thread hub — _Exec has no AddData
+    var segment   = new ActiveResponseSegment(request.ResponseMessageId);
+    parentHub.Set(segment);   // check_inbox reaches this to split cells mid-round
 
-    // Open the per-message remote stream once at start. Hold for the whole run.
-    // The owning per-node hub activates on subscribe (it has the MeshNodeReference
-    // reducer because ThreadMessageNodeType registers WithContentType<ThreadMessage>()).
-    var responseStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-        new Address(responsePath), new MeshNodeReference());
-
-    // Closure-state accumulator. The writer owns the running text + tool-call log
-    // locally and ships the whole content on every push — no read-modify-write.
-    var responseText = new StringBuilder();
-    var toolCallLog  = ImmutableList<ToolCallEntry>.Empty;
-
-    void PushUpdate()
-    {
-        responseStream.Update(node =>
-        {
-            if (node?.Value?.Content is not ThreadMessage current) return node;
-            return node with
+    // Every push routes through parentHub.GetMeshNodeStream — the process-wide
+    // IMeshNodeStreamCache hands out ONE shared handle per path, the same handle
+    // the GUI's ThreadMessageBubbleView reads from. (A per-run
+    // workspace.GetRemoteStream would open a SECOND upstream handle whose writes
+    // the GUI never sees — that was a real bug, since fixed.)
+    IObservable<MeshNode> PushToResponseMessage(string text, /* tool calls, status, … */)
+        => parentHub.GetMeshNodeStream($"{request.ThreadPath}/{segment.ResponseMsgId}")
+            .Update(node =>
             {
-                Value = node.Value with
-                {
-                    Content = current with
-                    {
-                        Text      = responseText.ToString(),
-                        ToolCalls = toolCallLog,
-                        // ... other fields the streaming loop accumulates
-                    }
-                }
-            };
-        });
-    }
+                // Bad-data tolerance: never clobber a node whose content can't be read.
+                var current = node.ContentAs<ThreadMessage>(parentHub.JsonSerializerOptions, logger);
+                if (node?.Content is not null && current is null) return node;
+                current ??= new ThreadMessage { Role = "assistant", Status = ThreadMessageStatus.Streaming, … };
+                return node with { Content = current with { Text = …, ToolCalls = …, Status = … } };
+            });
 
-    // Drive the streaming loop. Every throttle tick / tool-result / completion
-    // calls PushUpdate(); no parentHub.Post per chunk.
-
-    // Dispose at end (success / cancel / error — all paths).
-    hub.RegisterForDisposal(_ => (responseStream as IDisposable)?.Dispose());
-
-    return delivery.Processed();
+    // Streaming chunks: Subscribe(...) fire-and-forget — the writer's action
+    // block never waits. Terminal status: the returned IObservable<MeshNode> is
+    // COMPOSED into the round's completion gate, so ExecuteMessageAsync only
+    // completes after the Completed/Cancelled/Error write has landed.
+    return clientObs.Take(1).SelectMany(chatClient => /* streaming loop */ …);
 }
 ```
 
-Four things worth noting about this shape:
+Things worth noting about this shape:
 
-- **The text accumulator is closure-state, not workspace-state.** The writer never reads the message's current `Text` from the stream and appends to it — it owns the string locally and ships the whole thing each time. Re-pushes of identical content become no-op patches.
-- **`responseStream.Update(...)` is fire-and-forget.** No `await`, no callback. The owning hub validates and broadcasts; the writer continues immediately.
-- **The stream is opened once and lives for the entire run.** Subscribe once, use for every chunk, dispose at the end — not per-chunk.
-- **Throttling is still important.** `stream.Update` is cheap, but the synchronization protocol serializes per chunk. The loop therefore pushes every ~3 s (or on tool-call events) to avoid hammering subscribers.
+- **The round is an observable, not a fire-and-forget void.** The submission watcher subscribes to the returned `IObservable<Unit>`; completion is gated on the terminal `Status` write. Streaming-chunk pushes stay fire-and-forget (`.Subscribe(...)`) for throughput.
+- **One shared handle per path.** `parentHub.GetMeshNodeStream(path)` resolves the process-wide `IMeshNodeStreamCache` — reader (GUI) and writer share the same upstream subscription, so every push is visible to every reader in order.
+- **The text accumulator is closure-state, not workspace-state.** The writer owns the running text locally and ships the whole content each push — no read-modify-write against the stream.
+- **The update lambda defends its fields.** Terminal `Status` can't regress to `Streaming` (a late buffered push would flicker the UI), `Text` only grows while streaming, `ToolCalls` are merged by delegation path (a concurrent terminal stamp must not be clobbered), and `UpdatedNodes` accumulate by path. Unreadable content degrades via `ContentAs<T>` instead of being overwritten.
+- **Mid-round interruptions go through `ActiveResponseSegment`.** The `check_inbox` tool freezes the current cell, switches the segment to a fresh response cell, and subsequent pushes follow it — see [ThreadOperations](/Doc/Architecture/ThreadOperations).
+- **Throttling is still important.** `stream.Update` is cheap, but the synchronization protocol serializes per chunk; the loop samples (~100 ms) rather than pushing per token.
 
 ## Layout-area side: ship a path-bound template
 
@@ -177,14 +164,14 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
             return;
         }
 
-        // Canonical path: subscribe to the per-message remote stream — same primitive
-        // the writer uses. The patch the writer ships arrives here and the view re-renders.
-        _nodeStream = Hub.GetWorkspace().GetRemoteStream<MeshNode, MeshNodeReference>(
-            new Address(ViewModel.NodePath), new MeshNodeReference());
+        // Canonical path: subscribe to the shared per-path handle — the SAME
+        // IMeshNodeStreamCache entry the writer pushes through. The patch the
+        // writer ships arrives here and the view re-renders.
+        var stream = Hub.GetMeshNodeStream(ViewModel.NodePath);
 
-        AddBinding(_nodeStream
-            .Where(c => c.Value?.Content is ThreadMessage)
-            .Select(c => (Node: c.Value!, Msg: (ThreadMessage)c.Value!.Content!))
+        AddBinding(stream
+            .Where(node => node?.Content is ThreadMessage)
+            .Select(node => (Node: node, Msg: (ThreadMessage)node.Content!))
             .DistinctUntilChanged(t => (t.Msg.Text, t.Msg.ToolCalls, t.Msg.UpdatedNodes))
             .Subscribe(t =>
             {
@@ -201,10 +188,10 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
 
 Key shape:
 
-- `_nodeStream` is a **field**, not a local. `AddBinding(...)` registers the subscription with the base class so it is automatically disposed on component teardown.
+- **`AddBinding(...)` owns the lifetime.** The base class disposes the subscription on component teardown; the upstream cache entry stays alive for the process — no view-local handle field needed.
 - **No `.Take(1)`.** The view stays subscribed for its lifetime; every chunk-tick from the writer triggers a re-render.
 - **No `JsonPointerReference` indirection.** The control's `NodePath` is the only binding the layout area declares; the view does the resolve.
-- **Symmetric with the writer.** The writer calls `.Update(...)` on the stream; the owning hub broadcasts; this view — which holds an identical `GetRemoteStream` handle — receives the emission and re-renders.
+- **Same handle as the writer.** The writer's `parentHub.GetMeshNodeStream(path).Update(...)` and this view's `Hub.GetMeshNodeStream(path)` resolve the identical process-wide `IMeshNodeStreamCache` entry — one upstream subscription, every write visible to every reader, in order.
 
 ## Anti-patterns
 
@@ -218,8 +205,8 @@ Key shape:
 
 ## Cross-references
 
-- [Asynchronous Calls](AsynchronousCalls) — the actor-model rules this page applies.
-- [Per-Hub TaskScheduler](OrleansTaskScheduler) — the threading model that keeps writer, reader, and per-node hub on independent schedulers.
-- [CQRS — Queries vs. Content Access](CqrsAndContentAccess) — the decision matrix listing `GetRemoteStream(...).Update(...)` as the streaming-write primitive.
-- [Data Binding](xref:GUI/DataBinding) — the bind-by-path / bind-by-value contract applied here to thread messages.
+- [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) — the actor-model rules this page applies.
+- [Per-Hub TaskScheduler](/Doc/Architecture/OrleansTaskScheduler) — the threading model that keeps writer, reader, and per-node hub on independent schedulers.
+- [CQRS — Queries vs. Content Access](/Doc/Architecture/CqrsAndContentAccess) — the decision matrix listing `GetMeshNodeStream(path).Update(...)` as the streaming-write primitive.
+- [Data Binding](/Doc/GUI/DataBinding) — the bind-by-path / bind-by-value contract applied here to thread messages.
 - `src/MeshWeaver.Blazor/Components/CollaborativeMarkdownView.razor.cs:70-146` — the canonical `_nodeStream` template; the thread-message view uses the same shape.

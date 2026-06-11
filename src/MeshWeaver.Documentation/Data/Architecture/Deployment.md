@@ -11,12 +11,20 @@ MeshWeaver has **two distinct deploy routes**. They target different infrastruct
 
 | Route | Target | How | Doc |
 |---|---|---|---|
-| **AKS** | Shared cluster `memexaks-cluster` — the `memex` portal namespace | Build images → `az aks command invoke` `kubectl set image` + rollout | [DeploymentAKS.md](DeploymentAKS.md) |
-| **Azure Container Apps** | .NET Aspire `test` / `prod` modes (ACA, Sweden Central) | `tools/deploy.sh prod\|test` (wraps `aspire deploy` + migration-exit + db-version gate) | [DeploymentContainerApps.md](DeploymentContainerApps.md) |
+| **AKS** | Shared cluster `memexaks-cluster` — the `memex` portal namespace | Build images → `az aks command invoke` `kubectl set image` + rollout | [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS) |
+| **Azure Container Apps** | .NET Aspire `test` / `prod` modes (ACA, Sweden Central) | `tools/deploy.sh prod\|test` (wraps `aspire deploy` + migration-exit + db-version gate) | [DeploymentContainerApps.md](/Doc/Architecture/DeploymentContainerApps) |
 
-**Which one?** If you're shipping a code update to the `memex` portal on the shared AKS cluster → AKS doc. If you're deploying an Aspire-orchestrated `test`/`prod` Container Apps environment → Container Apps doc. The two routes provision and run on different platforms (raw AKS deployments + Helm vs. ACA via Aspire), with different update mechanics; they are not interchangeable.
+**Which doc do I need?**
 
-The sections below (local run, Azure AD, secrets, project layout) are **shared** across both routes.
+| Scenario | Read |
+|---|---|
+| Ship a code update to the `memex` portal on the shared AKS cluster | [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS) |
+| Deploy an Aspire-orchestrated `test`/`prod` Container Apps environment | [DeploymentContainerApps.md](/Doc/Architecture/DeploymentContainerApps) |
+| Understand the private-AKS-cluster architecture & operations behind the shared portal | [MemexCloudDeployment.md](/Doc/Architecture/MemexCloudDeployment) |
+| Add a **new tenant environment** on the existing shared AKS platform | [OnboardingNewEnvironment.md](/Doc/Architecture/OnboardingNewEnvironment) |
+| Instance-specific configuration options (`memex.systemorph.com`) | [DeploymentOptions.md](/Doc/Architecture/DeploymentOptions) |
+
+The two routes provision and run on different platforms (raw AKS deployments + Helm vs. ACA via Aspire), with different update mechanics; they are not interchangeable. The sections below (local run, Azure AD, secrets, project layout) are **shared** across both routes.
 
 ---
 
@@ -48,7 +56,8 @@ Microsoft authentication requires an app registration in Microsoft Entra ID (Azu
 
 1. **Azure Portal** → **App registrations** → select your app (or create one)
 2. Under **Authentication** → **Platform configurations** → **Web**, add redirect URIs:
-   - `http://localhost:5000/signin-microsoft` (local development)
+   - `https://localhost:7122/signin-microsoft` (local Monolith — HTTP fallback port 5022)
+   - `https://localhost:7202/signin-microsoft` (local Aspire portal — HTTP fallback port 5202)
    - `https://<your-deployed-domain>/signin-microsoft` (deployed environments)
 3. Note the **Application (client) ID** and **Directory (tenant) ID** from the **Overview** page
 4. Under **Certificates & secrets**, create a client secret

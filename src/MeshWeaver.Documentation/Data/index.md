@@ -42,3 +42,5 @@ graph LR
 | **[Data Mesh](DataMesh)** | Node types, the query syntax, collaborative editing, and data modeling |
 | **[GUI](GUI)** | Controls, layout areas, data binding, and reactive observables |
 | **[AI Integration](AI)** | Agents, MCP tools, and natural-language access to your mesh |
+
+New to the vocabulary? The **[Glossary](Glossary)** defines every core term in one breath each — mesh node, partition, satellite, hub, stream, and friends.

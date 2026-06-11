@@ -229,7 +229,7 @@ hub.AwaitResponse(...).Result          // Even worse — sync-over-async
 Task.Result / Task.Wait()              // Blocks the action block
 ```
 
-Check [DebuggingMessageFlow.md](DebuggingMessageFlow.md) for trace tags that reveal where a message stopped flowing.
+Check [DebuggingMessageFlow.md](/Doc/Architecture/DebuggingMessageFlow) for trace tags that reveal where a message stopped flowing.
 
 ### Prevention
 
@@ -237,7 +237,7 @@ Check [DebuggingMessageFlow.md](DebuggingMessageFlow.md) for trace tags that rev
 - **No `TaskCompletionSource` in hub code** — if you find one, replace it with an observable chain.
 - **Subscribe immediately in the handler body** — cold observables silently do nothing if not subscribed (the framework logs a `MeshWeaver.Mesh.RequireSubscribe` warning at GC time).
 
-> Full patterns and the mistake ledger live in [AsynchronousCalls.md](AsynchronousCalls.md).
+> Full patterns and the mistake ledger live in [AsynchronousCalls.md](/Doc/Architecture/AsynchronousCalls).
 
 ---
 

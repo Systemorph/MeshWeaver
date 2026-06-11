@@ -140,9 +140,9 @@ var sub = thread
 // Caller owns `sub` and disposes when the wait is no longer relevant.
 ```
 
-> **100% reactive end-to-end.** No `FirstAsync().ToTask(ct)`, no `await`, no `Task<T>` boundary in application code. The UI re-renders when the stream ticks; a worker waiting for a round chains via `SelectMany`. See [AsynchronousCalls](AsynchronousCalls) → "Why `await` Deadlocks in Hub Handlers".
+> **100% reactive end-to-end.** No `FirstAsync().ToTask(ct)`, no `await`, no `Task<T>` boundary in application code. The UI re-renders when the stream ticks; a worker waiting for a round chains via `SelectMany`. See [AsynchronousCalls](/Doc/Architecture/AsynchronousCalls) → "Why `await` Deadlocks in Hub Handlers".
 
-Tests bridge to `Task` exactly once at the assertion edge — see [WritingTests](WritingTests). `ThreadFlow.SubmitAndWait` packages submit + wait into one observable for that test-edge use.
+Tests bridge to `Task` exactly once at the assertion edge — see [WritingTests](/Doc/Architecture/WritingTests). `ThreadFlow.SubmitAndWait` packages submit + wait into one observable for that test-edge use.
 
 ## One-shot callbacks on `StartThread`
 
@@ -177,7 +177,7 @@ Key properties:
 - `Cancelled` is a distinct, visible terminal status that re-dispatches like `Idle` when new input is queued.
 - Cancellation is requested by setting `RequestedStatus = Cancelled` (GUI Stop button, or a parent cancelling a sub-thread). The cancel watcher cancels the CTS; the streaming loop's terminal write flips `Status → Cancelled` and clears `RequestedStatus`.
 
-**Wake-up recovery** (`InitializeThreadLifecycle`): on hub activation the thread reads its own node's first stream emission and drives any non-terminal state to valid once — a pending `RequestedStatus = Cancelled` is honoured, an interrupted `Executing` round **resumes its existing response cell** (re-entering `StartingExecution`; `DispatchAfterClaim` reuses `ActiveMessageId`), and `Idle` / `Cancelled` with pending input is left for the submission watcher. See [ActivityControlPlane](ActivityControlPlane) → "Wake-up recovery".
+**Wake-up recovery** (`InitializeThreadLifecycle`): on hub activation the thread reads its own node's first stream emission and drives any non-terminal state to valid once — a pending `RequestedStatus = Cancelled` is honoured, an interrupted `Executing` round **resumes its existing response cell** (re-entering `StartingExecution`; `DispatchAfterClaim` reuses `ActiveMessageId`), and `Idle` / `Cancelled` with pending input is left for the submission watcher. See [ActivityControlPlane](/Doc/Architecture/ActivityControlPlane) → "Wake-up recovery".
 
 ### Mid-execution inbox drain (A7)
 
@@ -195,7 +195,7 @@ The streaming writer targets a per-round `ActiveResponseSegment` whose `Response
 
 ### Migrating from the deleted API
 
-The legacy `SubmitContext` / `ResubmitContext` parameter-bag records and the old `ThreadSubmission.Submit` / `CreateThreadAndSubmit` / `Resubmit` / `ApplyResubmit` / `ApplyDeleteFromMessage` / `MarkThreadDone` / `ApplyRecordSubmissionFailure` static methods were deleted on 2026-05-27.
+The `IMessageHub` extensions above are the complete submission surface — there is no other entry point.
 
 > Build errors of the form `'ThreadSubmission' does not contain a definition for 'Submit'` mean the callsite has not been migrated yet. Replace it with the corresponding `hub.X(…)` extension listed in [The extension surface](#the-extension-surface) above.
 
@@ -231,7 +231,7 @@ thread forever:
 
 Every child sub-thread runs the same recovery recursively, so a parent's
 re-observation is guaranteed to fire. See
-[DebuggingMessageFlow → resurrection on init](DebuggingMessageFlow) for the trace
+[DebuggingMessageFlow → resurrection on init](/Doc/Architecture/DebuggingMessageFlow) for the trace
 signature: continuous work then silence = missed observation, not a lock.
 
 ## Harness, agent, and model selection
@@ -299,7 +299,7 @@ affordance on top of server-side access control — not a replacement for it.
 
 ## See also
 
-- [RequestViaStreamUpdate](RequestViaStreamUpdate) — the canonical "stream.Update + watcher" pattern this surface is built on
-- [ActivityControlPlane](ActivityControlPlane) — the `Status` / `RequestedStatus` pattern thread state uses, and its matching recovery-on-init
-- [AsynchronousCalls](AsynchronousCalls) — why everything returns `IObservable<T>` and how tests bridge to `Task`
-- [DebuggingMessageFlow](DebuggingMessageFlow) — diagnosing a hang that is really a missed observation
+- [RequestViaStreamUpdate](/Doc/Architecture/RequestViaStreamUpdate) — the canonical "stream.Update + watcher" pattern this surface is built on
+- [ActivityControlPlane](/Doc/Architecture/ActivityControlPlane) — the `Status` / `RequestedStatus` pattern thread state uses, and its matching recovery-on-init
+- [AsynchronousCalls](/Doc/Architecture/AsynchronousCalls) — why everything returns `IObservable<T>` and how tests bridge to `Task`
+- [DebuggingMessageFlow](/Doc/Architecture/DebuggingMessageFlow) — diagnosing a hang that is really a missed observation

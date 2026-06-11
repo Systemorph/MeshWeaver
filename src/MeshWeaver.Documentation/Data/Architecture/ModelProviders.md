@@ -6,6 +6,9 @@ description: How AI provider credentials live in the mesh — _Provider satellit
 icon: /static/NodeTypeIcons/sparkle.svg
 ---
 
+> **The model-provider docs at a glance:** [Model Providers](/Doc/Architecture/ModelProviders) — the architectural pattern · [Provider Configuration](/Doc/AI/ProviderConfiguration) — framework config & chat-client factories · [Model Provider Setup](/Doc/AI/ModelProviderSetup) — operational setup & troubleshooting · [Model Provider Settings](/Doc/AI/ModelProviderSettings) — the settings UI. **This page: the architectural pattern.**
+
+
 # Model Providers and BYO Credentials
 
 Every AI provider credential — system default *and* user-supplied — is a MeshNode stored under the `_Provider` satellite. The chat-client factory resolves credentials through the same live synced query the model picker already uses.
@@ -110,7 +113,7 @@ builder
 "namespace:{nodeTypePath}/_Provider nodeType:LanguageModel|ModelProvider scope:descendants"
 ```
 
-> 🚨 **CRITICAL — identical type filters across queries.** The synced collection's all-Initial gating breaks when a multi-query mixes **different** `nodeType` filters. Keep the filter identical; vary only `namespace` and `scope`. See [SyncedMeshNodeQueries.md](SyncedMeshNodeQueries.md) for the full gating contract.
+> 🚨 **CRITICAL — identical type filters across queries.** The synced collection's all-Initial gating breaks when a multi-query mixes **different** `nodeType` filters. Keep the filter identical; vary only `namespace` and `scope`. See [SyncedMeshNodeQueries.md](/Doc/Architecture/SyncedMeshNodeQueries) for the full gating contract.
 
 ---
 
@@ -177,7 +180,7 @@ Each layer is rebuilt on demand over the workspace's per-id `GetQuery` cache (`R
 
 ## See also
 
-- [SyncedMeshNodeQueries.md](SyncedMeshNodeQueries.md) — the synced collection's all-Initial gating contract
-- [ExtensibleDefaults.md](ExtensibleDefaults.md) — system defaults + mesh extensions pattern
-- [CqrsAndContentAccess.md](CqrsAndContentAccess.md) — when to use synced queries vs `GetMeshNodeStream` vs `QueryAsync`
-- [AccessControl.md](AccessControl.md) — `Permission.Api` and per-partition RLS
+- [SyncedMeshNodeQueries.md](/Doc/Architecture/SyncedMeshNodeQueries) — the synced collection's all-Initial gating contract
+- [ExtensibleDefaults.md](/Doc/Architecture/ExtensibleDefaults) — system defaults + mesh extensions pattern
+- [CqrsAndContentAccess.md](/Doc/Architecture/CqrsAndContentAccess) — when to use synced queries vs `GetMeshNodeStream` vs `QueryAsync`
+- [AccessControl.md](/Doc/Architecture/AccessControl) — `Permission.Api` and per-partition RLS

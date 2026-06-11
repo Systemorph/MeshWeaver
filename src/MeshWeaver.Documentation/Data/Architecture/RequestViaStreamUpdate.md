@@ -9,7 +9,7 @@ Description: "Canonical pattern for all mesh-node mutations: use workspace.GetMe
 
 The single rule: mutate the target node's state via `workspace.GetMeshNodeStream(path).Update(current => modified)`. A server-side watcher on the owning hub picks up the change and dispatches any side-effect work. Results are published by writing back to the same node, and the synchronization protocol propagates them cluster-wide automatically.
 
-**Reads use the same stream.** Server-side, [`IMeshNodeStreamCache`](xref:Hosting/MeshNodeStreamCache) hands out a single shared stream per node. Client-side, the Blazor view holds an `ISynchronizationStream<MeshNode>` (see [GUI Data Binding](xref:GUI/DataBinding)). Read and write share one stream — there is no separate read API to keep in sync.
+**Reads use the same stream.** Server-side, `IMeshNodeStreamCache` (`src/MeshWeaver.Hosting/MeshNodeStreamCache.cs`) hands out a single shared stream per node. Client-side, the Blazor view holds an `ISynchronizationStream<MeshNode>` (see [GUI Data Binding](/Doc/GUI/DataBinding)). Read and write share one stream — there is no separate read API to keep in sync.
 
 **Why this is mandatory, not merely preferred.** Every recent "hub becomes unresponsive after the second operation" CI failure — CodeEditRecompile, NodeTypeRelease, LinkedInPullActions, ThreadAgentIntegration in run 26036857424 — traced back to bespoke request/response handlers racing the watcher: two concurrent activities, leaked callbacks, wedged hub. The stream-based pattern is race-free by construction.
 <svg viewBox="0 0 760 310" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
@@ -93,7 +93,7 @@ This is safe only when the patch is **idempotent under merge** — applying it t
 
 > **Design rule:** Cross-hub mutations should be a single `stream.Update(...)` on the target node. The owning hub's action-block serialisation guarantees race-free merge; RFC 7396 patch semantics ensure you touch only the fields you intend to change.
 
-**The thread refactor as the canonical example.** The full resubmit/delete-from/record-failure flow once posted bespoke trigger messages, then briefly used intent-field payloads (`RequestedResubmit`, `RequestedDeleteFromMessageId`, `PendingFailures`) consumed by per-operation watchers. Today, the **full mutation is inline** inside the hub extension method's `stream.Update` lambda — truncate `Messages`, re-queue `PendingUserMessages`, etc., all in one patch. See [ThreadOperations.md](ThreadOperations) for the public API (`hub.ResubmitMessage`, `hub.DeleteFromMessage`, `hub.RecordSubmissionFailure`).
+**The thread refactor as the canonical example.** The full resubmit/delete-from/record-failure flow once posted bespoke trigger messages, then briefly used intent-field payloads (`RequestedResubmit`, `RequestedDeleteFromMessageId`, `PendingFailures`) consumed by per-operation watchers. Today, the **full mutation is inline** inside the hub extension method's `stream.Update` lambda — truncate `Messages`, re-queue `PendingUserMessages`, etc., all in one patch. See [ThreadOperations.md](/Doc/Architecture/ThreadOperations) for the public API (`hub.ResubmitMessage`, `hub.DeleteFromMessage`, `hub.RecordSubmissionFailure`).
 
 ---
 
@@ -111,7 +111,7 @@ Use when the trigger is an arbitrary "this state needs work now" predicate — f
 GetMeshNodeStream → DistinctUntilChanged(fingerprint) → Where(needsDispatch) → SelectMany(dispatch)
 ```
 
-The canonical reference for both helpers is [ActivityControlPlane.md](ActivityControlPlane) (see § "Generalising: `WatchSubmission`" and § "Anti-patterns to remove on sight"). If you find yourself reaching for `Throttle(...)`, `Interlocked.CompareExchange`, or a manual `Subject` + flag, that's the signal you should be calling one of these helpers instead.
+The canonical reference for both helpers is [ActivityControlPlane.md](/Doc/Architecture/ActivityControlPlane) (see § "Generalising: `WatchSubmission`" and § "Anti-patterns to remove on sight"). If you find yourself reaching for `Throttle(...)`, `Interlocked.CompareExchange`, or a manual `Subject` + flag, that's the signal you should be calling one of these helpers instead.
 
 ---
 
@@ -139,9 +139,14 @@ The canonical reference for both helpers is [ActivityControlPlane.md](ActivityCo
 
 ```csharp
 // MeshWeaver.AI/ThreadInput.cs — AppendUserInput
-workspace.UpdateMeshNode(node =>
+workspace.GetMeshNodeStream(threadPath).Update(node =>
 {
-    var thread = node.Content as MeshThread ?? new MeshThread();
+    // Bad-data tolerance: an existing node whose content can't be read is
+    // left alone — NEVER clobbered with a fresh MeshThread.
+    var thread = node.ContentAs<MeshThread>(workspace.Hub.JsonSerializerOptions, logger);
+    if (node.Content is not null && thread is null)
+        return node;
+    thread ??= new MeshThread();
     return node with
     {
         Content = thread with
@@ -151,10 +156,12 @@ workspace.UpdateMeshNode(node =>
             // ... other pending fields ...
         }
     };
-});
+}).Subscribe(
+    _ => { },
+    ex => logger?.LogWarning(ex, "AppendUserInput failed for {ThreadPath}", threadPath));
 ```
 
-The caller writes the request *into* the thread node's state. `PendingUserMessages` is the request payload. No `IRequest<TResponse>` is posted. No callback is registered. The work is requested by the very act of mutating the node.
+The caller writes the request *into* the thread node's state. `PendingUserMessages` is the request payload. No `IRequest<TResponse>` is posted. No callback is registered. The work is requested by the very act of mutating the node. Note the trailing **`.Subscribe(...)`** — `Update` returns a cold observable and the write only happens on subscribe; forgetting it means the submission silently never lands.
 
 ### Server — the dispatch watcher
 
@@ -171,7 +178,7 @@ The watcher subscribes once at hub init. `DistinctUntilChanged` on the fingerpri
 
 ### Result publication
 
-The dispatched work writes its progress and final result back onto the same node (or a satellite node it owns) via `workspace.UpdateMeshNode(...)`. The result reaches every subscriber automatically:
+The dispatched work writes its progress and final result back onto the same node (or a satellite node it owns) via `workspace.GetMeshNodeStream(path).Update(...)`. The result reaches every subscriber automatically:
 
 - **Local:** other subscribers on the same hub see the next emission of the `MeshNodeReference` reducer.
 - **Cross-silo / clients:** `SyncedMeshNodeQuery` and `GetRemoteStream<MeshNode, MeshNodeReference>` subscribers see the change via the synchronization protocol — no explicit broadcast needed.
@@ -187,41 +194,31 @@ The dispatched work writes its progress and final result back onto the same node
 > **Note:** The current production code in `NodeTypeService.cs` still uses an `Interlocked.CompareExchange(ref triggered, 1, 0)` flag to guard the one-shot `Pending` trigger. That is the imperative anti-pattern and is being migrated to the shape below. The example shows the **target** form: split the chain into a one-shot trigger pipeline and a terminal-status observation pipeline, both reactive.
 
 ```csharp
-// Subscribe to the per-NodeType remote stream.
+// Subscribe to the per-NodeType node via the shared handle.
 // Trigger pipeline: takes the first emission whose CompilationStatus is null/Unknown
-// and writes a single stream.Update flipping it to Pending.
+// and composes one stream.Update flipping it to Pending.
 // .Take(1) makes the trigger inherently one-shot — no `triggered` flag, no CompareExchange.
 // Observation pipeline: waits for terminal status (Ok / Error) on the same stream.
-var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-    new Address(nodeType), new MeshNodeReference());
+var stream = workspace.GetMeshNodeStream(nodeTypePath);
 
 var trigger = stream
-    .Select(change => change?.Value)
     .Where(node => node?.Content is NodeTypeDefinition def
         && (def.CompilationStatus is null || def.CompilationStatus == CompilationStatus.Unknown))
     .Take(1)
-    .Do(_ => stream.Update(current =>
+    .SelectMany(_ => stream.Update(current =>
         current?.Content is NodeTypeDefinition d
             && (d.CompilationStatus is null || d.CompilationStatus == CompilationStatus.Unknown)
-            ? new ChangeItem<MeshNode>(
-                Value: current with { Content = d with { CompilationStatus = CompilationStatus.Pending } },
-                ChangedBy: WellKnownUsers.System,
-                StreamId: stream.StreamId,
-                ChangeType: ChangeType.Full,
-                Version: stream.Hub.Version,
-                Updates: null)
-            : null))
-    .IgnoreElements()
-    .Select(_ => default(MeshNode)!);
+            ? current with { Content = d with { CompilationStatus = CompilationStatus.Pending } }
+            : current))      // no-op when someone else already flipped it
+    .IgnoreElements();
 
 var terminal = stream
-    .Select(change => change?.Value)
     .Where(node => node?.Content is NodeTypeDefinition def
         && (def.CompilationStatus == CompilationStatus.Ok
             || def.CompilationStatus == CompilationStatus.Error))
     .Take(1);
 
-return trigger.Merge(terminal)
+return trigger.Merge(terminal!)
     .Take(1)
     .Timeout(TimeSpan.FromSeconds(30));
 ```
@@ -241,7 +238,7 @@ hub.WatchSubmission(
 
 // Compile is an IObservable<Unit> that flips Pending → Compiling, runs
 // compilationService.CompileAndGetConfigurations, then writes the terminal
-// (Ok / Error) status + AssemblyLocation back via workspace.UpdateMeshNode.
+// (Ok / Error) status + AssemblyLocation back via GetMeshNodeStream().Update.
 // Because the fingerprint is CompilationStatus, the watcher's own writes
 // are filtered out by DistinctUntilChanged — no Throttle needed, no reentrancy guard.
 ```

@@ -207,7 +207,7 @@ For test setup specifically: `MessageHubConfiguration.TypeRegistry` is mutable p
 
 - **`Take(1).Timeout(15s)` on a never-emitting source** — results in a 15-second wait followed by `TimeoutException`. Always pair `Timeout` with `Catch` so the chain emits a sentinel value rather than dying.
 
-- **`Subscribe` callbacks run on arbitrary threads.** State updates that need the hub scheduler must happen in the **handler body**, not inside a `Subscribe` callback. See [AsynchronousCalls.md](AsynchronousCalls).
+- **`Subscribe` callbacks run on arbitrary threads.** State updates that need the hub scheduler must happen in the **handler body**, not inside a `Subscribe` callback. See [AsynchronousCalls.md](/Doc/Architecture/AsynchronousCalls).
 
 ---
 
@@ -248,7 +248,7 @@ silently dies and the operation parks forever:
 
 1. **One-shot with a give-up.** `stream.Take(1).Timeout(15s).Subscribe(...)` —
    if the loaded-state emission is dropped during the subscribe handshake (see
-   [the init-gate-drops-patches note](xref:Architecture/AsynchronousCalls)) or
+   [the init-gate-drops-patches note](/Doc/Architecture/AsynchronousCalls)) or
    merely arrives late under load, the `Timeout` fires `onError`, the recovery
    **gives up, and never retries**. The node stays non-terminal forever.
 2. **Lost on reactivation.** The observer lives only in the agent-loop / grain

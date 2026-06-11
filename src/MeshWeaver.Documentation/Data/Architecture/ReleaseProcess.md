@@ -17,7 +17,7 @@ Tags:
 # Release Process & Versioning
 
 One number, two channels. The whole scheme lives in
-[`Directory.Build.props`](../../../../Directory.Build.props) and applies to every
+`Directory.Build.props` and applies to every
 project in the solution.
 
 ---
@@ -39,7 +39,7 @@ This is the single maintained version, set centrally. **Override it at build tim
 
 It is also the **data-sync content-version**: a release tagged `v$(PlatformVersion)`
 is what a deployed binary syncs its docs/seed nodes from
-([DataSyncSetup.md §3](DataSyncSetup.md)). Code and content ship in lockstep.
+([DataSyncSetup.md §3](/Doc/Architecture/DataSyncSetup)). Code and content ship in lockstep.
 
 ---
 
@@ -87,9 +87,9 @@ into the assemblies. Keep them equal for a release.)
 You don't run `pack`/`publish` by hand for a release. Pushing a **`v*.*.*` tag**
 fires two tag-gated workflows (both derive `VERSION` from the tag):
 
-- [`.github/workflows/release-packages.yml`](../../../../.github/workflows/release-packages.yml)
+- `.github/workflows/release-packages.yml`
   → packs with `-p:Version=$VERSION` and pushes the NuGet packages (clean `3.0.0-rc1`).
-- [`.github/workflows/release-images.yml`](../../../../.github/workflows/release-images.yml)
+- `.github/workflows/release-images.yml`
   → builds the container images **with `-p:Version=$VERSION`** so the binaries carry
   the clean tag version, and pushes to **GHCR**
   (`ghcr.io/<owner>/memex-portal-ai`, `memex-portal`, `memex-migration`) tagged
@@ -102,7 +102,7 @@ git tag v3.0.0-rc1 && git push origin v3.0.0-rc1
 ```
 
 The deployed image's binaries then carry `3.0.0-rc1`, and data-sync pulls content
-from that same `v3.0.0-rc1` tag ([DataSyncSetup.md §4c](DataSyncSetup.md)) — one tag,
+from that same `v3.0.0-rc1` tag ([DataSyncSetup.md §4c](/Doc/Architecture/DataSyncSetup)) — one tag,
 one consistent code + image + content.
 
 ---
@@ -126,12 +126,12 @@ We stay in **pre-release** (`-rcN`) and iterate until it's right, then graduate.
 > force-moved): both the release artifacts *and* the data-sync content key off it, so
 > moving a tag silently ships different content under the same version. The tag — not
 > the build's own commit — is the sync ref (the chicken-and-egg, see
-> [DataSyncSetup.md §4c](DataSyncSetup.md)); GitHub resolves tag→commit at sync time.
+> [DataSyncSetup.md §4c](/Doc/Architecture/DataSyncSetup)); GitHub resolves tag→commit at sync time.
 
 ---
 
 ## 5. See also
 
-- [DataSyncSetup.md](DataSyncSetup.md) — the platform version doubles as the
+- [DataSyncSetup.md](/Doc/Architecture/DataSyncSetup) — the platform version doubles as the
   content-version for static-repo / GitHub data-sync.
-- [Deployment.md](Deployment.md) — where the built images go (AKS vs Container Apps).
+- [Deployment.md](/Doc/Architecture/Deployment) — where the built images go (AKS vs Container Apps).

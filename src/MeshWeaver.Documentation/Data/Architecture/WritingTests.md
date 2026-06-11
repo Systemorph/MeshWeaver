@@ -15,11 +15,11 @@ Before writing a test, review the invariants every test must respect:
 
 | Document | What it covers |
 |---|---|
-| [Asynchronous Calls](AsynchronousCalls) | Why hub-reachable code is `IObservable<T>`, never `Task<T>` |
-| [Reactive Test Assertions](ReactiveTestAssertions) | Full assertion API, the §2a deadlock rule, legitimately-async cases |
-| [CQRS — Queries vs. Content Access](CqrsAndContentAccess) | Why a query is the wrong read immediately after a write |
-| [Data Binding](xref:GUI/DataBinding) | Layout areas declare, views subscribe — tests assert against the subscription path |
-| [Test State Isolation](TestStateIsolation) | Required when tests share a cluster fixture or `ICollectionFixture<>` |
+| [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) | Why hub-reachable code is `IObservable<T>`, never `Task<T>` |
+| [Reactive Test Assertions](/Doc/Architecture/ReactiveTestAssertions) | Full assertion API, the §2a deadlock rule, legitimately-async cases |
+| [CQRS — Queries vs. Content Access](/Doc/Architecture/CqrsAndContentAccess) | Why a query is the wrong read immediately after a write |
+| [Data Binding](/Doc/GUI/DataBinding) | Layout areas declare, views subscribe — tests assert against the subscription path |
+| [Test State Isolation](/Doc/Architecture/TestStateIsolation) | Required when tests share a cluster fixture or `ICollectionFixture<>` |
 
 <svg viewBox="0 0 760 260" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
   <defs>
@@ -81,10 +81,10 @@ Before writing a test, review the invariants every test must respect:
 > Assert on the observable: `obs.Should().Within(10.Seconds()).Match(x => predicate)`. The assertion subscribes, blocks up to the timeout, and returns the matched emission. No `async Task`, no `await`, no `.FirstAsync().ToTask()` anywhere in the body.
 
 > **Rule 2 — A blocking `.Should()` and an `await` cannot coexist in the same method.**
-> xUnit runs an `async Task` test under a SynchronizationContext; a blocking reactive assertion holds that thread while the hub tries to deliver the emission on it — deadlock. The moment a method uses `.Should().Emit()/.Match()/.Be()`, it must be `void` with every `await` removed. (See [Reactive Test Assertions §2](ReactiveTestAssertions) for the small set of methods that legitimately stay `async` — and why they must *not* use a blocking assertion.)
+> xUnit runs an `async Task` test under a SynchronizationContext; a blocking reactive assertion holds that thread while the hub tries to deliver the emission on it — deadlock. The moment a method uses `.Should().Emit()/.Match()/.Be()`, it must be `void` with every `await` removed. (See [Reactive Test Assertions §2](/Doc/Architecture/ReactiveTestAssertions) for the small set of methods that legitimately stay `async` — and why they must *not* use a blocking assertion.)
 
 > **Rule 3 — Reads after writes use a stream, never a query.**
-> A query goes through the lagged read-side index and returns stale content immediately after a write. Read a known node with `ReadNode(path).Should().Emit()` (from the test base), or `workspace.GetMeshNodeStream(path)` / `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference())`.
+> A query goes through the lagged read-side index and returns stale content immediately after a write. Read a known node with `ReadNode(path).Should().Emit()` (from the test base), or `workspace.GetMeshNodeStream(path)`.
 
 > **Rule 4 — Queries are only for sets and existence.**
 > Listing children, counting matches, "namespace is empty" — all legitimate uses of `Query`. Reading a specific node's *content* is not.
@@ -169,7 +169,7 @@ ReadNode(orgId).Should().Match(n => n is null);
 
 ## The Reactive Assertion Surface
 
-From `MeshWeaver.Reactive.Assertions` (globally imported in every test project). Full reference: [Reactive Test Assertions](ReactiveTestAssertions).
+From `MeshWeaver.Reactive.Assertions` (globally imported in every test project). Full reference: [Reactive Test Assertions](/Doc/Architecture/ReactiveTestAssertions).
 
 | Call | Meaning |
 |---|---|
@@ -329,13 +329,13 @@ The shared `OrleansTestBase` exposes a synchronous `GetClient(...)` that wires t
 
 When a test fails on CI but passes locally, **don't label it a flake and skip it.** Every CI-only failure investigated in this repo traced to a real bug: an eventually-consistent index read too eagerly; a hot `Subject` that should have been a `ReplaySubject`; an `AccessContext` lost across the post-pipeline boundary; an init ping removed from a hub that doesn't self-activate. Skipping hides the bug; running it on CI is exactly what surfaced it.
 
-Fix the bug. Re-running a hung test "to see if it was a flake" hides the race — see [Debugging Message Flow](DebuggingMessageFlow) for the trace tags to grep instead.
+Fix the bug. Re-running a hung test "to see if it was a flake" hides the race — see [Debugging Message Flow](/Doc/Architecture/DebuggingMessageFlow) for the trace tags to grep instead.
 
 ---
 
 ## Coverage Expectations
 
-[`Coder.md`](xref:Agent/Coder) sets the bar for NodeTypes and data models: **a test per invariant, per branch, per boundary, per degenerate input** — plus a serialization round-trip. A NodeType with a single happy-path test is demoed, not tested.
+[`Coder.md`](/Agent/Coder) sets the bar for NodeTypes and data models: **a test per invariant, per branch, per boundary, per degenerate input** — plus a serialization round-trip. A NodeType with a single happy-path test is demoed, not tested.
 
 ---
 
@@ -350,7 +350,7 @@ dotnet test test/MeshWeaver.Acme.Test --no-build --no-restore --filter "FullyQua
 
 The xUnit v3 adapter matches `FullyQualifiedName~`, **not** `ClassName~`. Never use `--verbosity minimal` when a failure is possible — it hides stack traces.
 
-**Workflow: run → read → fix → run once more.** Do not re-run a hung test two or three times "to see what happens" — grep the `MESSAGE_FLOW:` trace in [Debugging Message Flow](DebuggingMessageFlow) instead.
+**Workflow: run → read → fix → run once more.** Do not re-run a hung test two or three times "to see what happens" — grep the `MESSAGE_FLOW:` trace in [Debugging Message Flow](/Doc/Architecture/DebuggingMessageFlow) instead.
 
 ---
 
@@ -364,8 +364,8 @@ The xUnit v3 adapter matches `FullyQualifiedName~`, **not** `ClassName~`. Never 
 
 ## References
 
-- [Reactive Test Assertions](ReactiveTestAssertions) — assertion API, §2a deadlock rule, legitimately-async catalogue
-- [Asynchronous Calls](AsynchronousCalls) — why hub-reachable code is `IObservable<T>`, never `Task<T>`
-- [CQRS — Queries vs. Content Access](CqrsAndContentAccess) — why `ReadNode` is the right read after a write
-- [Debugging Message Flow](DebuggingMessageFlow) — reading the framework's own trace when a test hangs
+- [Reactive Test Assertions](/Doc/Architecture/ReactiveTestAssertions) — assertion API, §2a deadlock rule, legitimately-async catalogue
+- [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) — why hub-reachable code is `IObservable<T>`, never `Task<T>`
+- [CQRS — Queries vs. Content Access](/Doc/Architecture/CqrsAndContentAccess) — why `ReadNode` is the right read after a write
+- [Debugging Message Flow](/Doc/Architecture/DebuggingMessageFlow) — reading the framework's own trace when a test hangs
 - `src/MeshWeaver.Hosting.Monolith.TestBase/MonolithMeshTestBase.cs` — the base every monolith test inherits

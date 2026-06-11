@@ -9,7 +9,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 Every activity state-transition in MeshWeaver — cancel, restart, or any `RequestedStatus` flip — goes through extension methods on `IMessageHub` defined in `src/MeshWeaver.Mesh.Contract/HubActivityExtensions.cs`. Tests, GUI click handlers, MCP agents, and plugins all call these methods. There is no other public entry point.
 
-> This page covers the **client side**: how callers request a transition. For the server side — the watcher that consumes the flip and drives the internal transition — see [Activity Control Plane](ActivityControlPlane).
+> This page covers the **client side**: how callers request a transition. For the server side — the watcher that consumes the flip and drives the internal transition — see [Activity Control Plane](/Doc/Architecture/ActivityControlPlane).
 
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 260" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
   <defs>
@@ -40,7 +40,7 @@ Every activity state-transition in MeshWeaver — cancel, restart, or any `Reque
   <line x1="450" y1="205" x2="402" y2="205" stroke="currentColor" stroke-opacity=".4" stroke-width="1.2" stroke-dasharray="5,3" marker-end="url(#arr)"/>
   <rect x="230" y="178" width="160" height="50" rx="10" fill="none" stroke="#26a69a" stroke-opacity=".7" stroke-width="1.5"/>
   <text x="310" y="199" font-family="sans-serif" font-size="12" fill="#26a69a" text-anchor="middle" font-weight="bold">Observer / UI</text>
-  <text x="310" y="215" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity=".6" text-anchor="middle">GetRemoteStream.Subscribe</text>
+  <text x="310" y="215" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity=".6" text-anchor="middle">GetMeshNodeStream.Subscribe</text>
   <text x="390" y="204" font-family="sans-serif" font-size="9" fill="currentColor" fill-opacity=".5" text-anchor="middle">stream tick</text>
 </svg>
 
@@ -55,7 +55,7 @@ Before consolidation, every cancel button rolled its own five-line lambda — a 
 | Reason | Detail |
 |---|---|
 | **Single source of truth** | Every cancel, restart, and status flip goes through one implementation. |
-| **No verb-shaped messages** | There is no `CancelActivityRequest` or `RestartActivityRequest`. All mutations write `RequestedStatus` to the activity node, and the [activity control plane](ActivityControlPlane) reacts. |
+| **No verb-shaped messages** | There is no `CancelActivityRequest` or `RestartActivityRequest`. All mutations write `RequestedStatus` to the activity node, and the [activity control plane](/Doc/Architecture/ActivityControlPlane) reacts. |
 | **Discoverable** | Type `hub.` and IntelliSense surfaces the full surface. No need to know `HubActivityExtensions` exists. |
 
 ---
@@ -88,14 +88,13 @@ hub.CancelActivity(activityPath, onError: msg => ShowToast(msg));
 
 ## Observing the result
 
-The mutation methods are fire-and-forget. To observe the outcome, subscribe to the activity node's remote stream — the same stream the running-activities UI strip already binds to.
+The mutation methods are fire-and-forget. To observe the outcome, subscribe to the activity node's stream — the same shared handle the running-activities UI strip already binds to.
 
-> **The flow is 100% reactive end-to-end.** No `FirstAsync().ToTask(ct)`, no `await`, no `Task<T>` boundary. The UI re-renders when the stream ticks; a worker waiting for a terminal state chains via `SelectMany`. See [AsynchronousCalls](AsynchronousCalls) → "Why `await` Deadlocks in Hub Handlers".
+> **The flow is 100% reactive end-to-end.** No `FirstAsync().ToTask(ct)`, no `await`, no `Task<T>` boundary. The UI re-renders when the stream ticks; a worker waiting for a terminal state chains via `SelectMany`. See [AsynchronousCalls](/Doc/Architecture/AsynchronousCalls) → "Why `await` Deadlocks in Hub Handlers".
 
 ```csharp
-var sub = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-        new Address(activityPath), new MeshNodeReference())
-    .Select(c => c.Value?.Content as ActivityLog)
+var sub = workspace.GetMeshNodeStream(activityPath)
+    .Select(node => node?.Content as ActivityLog)
     .Where(log => log is { } l && l.Status != ActivityStatus.Running)
     .Take(1)
     .Subscribe(
@@ -107,7 +106,7 @@ var sub = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
 // (component dispose, parent scope dispose, etc.).
 ```
 
-Tests bridge to `Task` exactly once at the assertion edge — see [WritingTests](WritingTests). Application code stays observable throughout.
+Tests bridge to `Task` exactly once at the assertion edge — see [WritingTests](/Doc/Architecture/WritingTests). Application code stays observable throughout.
 
 ---
 
@@ -142,6 +141,6 @@ The running script receives the cancellation, throws `OperationCanceledException
 
 ## See also
 
-- [Activity Control Plane](ActivityControlPlane) — the `Status` / `RequestedStatus` pattern and how to wire your own NodeType to it
-- [Thread Operations](ThreadOperations) — the matching `IMessageHub` surface for thread mutations (same shape)
-- [RequestViaStreamUpdate](RequestViaStreamUpdate) — the underlying `stream.Update` mechanism every method here is built on
+- [Activity Control Plane](/Doc/Architecture/ActivityControlPlane) — the `Status` / `RequestedStatus` pattern and how to wire your own NodeType to it
+- [Thread Operations](/Doc/Architecture/ThreadOperations) — the matching `IMessageHub` surface for thread mutations (same shape)
+- [RequestViaStreamUpdate](/Doc/Architecture/RequestViaStreamUpdate) — the underlying `stream.Update` mechanism every method here is built on

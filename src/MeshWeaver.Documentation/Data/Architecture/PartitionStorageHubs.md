@@ -255,7 +255,7 @@ public interface IPartitionStorageProvider
 }
 ```
 
-> The old `Adapter { get; }` getter on `IPartitionStorageProvider` is removed. There is no "the adapter" anymore — only adapters bound to a specific `(schema, table)`.
+> There is no single "the adapter" on `IPartitionStorageProvider` — only adapters bound to a specific `(schema, table)`.
 
 ---
 
@@ -270,6 +270,6 @@ public interface IPartitionStorageProvider
 
 ## See Also
 
-- [Partitioned Persistence](PartitionedPersistence.md) — the original routing model this design evolved from
-- [Asynchronous Calls](AsynchronousCalls.md) — the actor-pattern primitives this builds on
-- [Postgres Schema Architecture](PostgresSchemaArchitecture.md) — the schema layout for tables and satellite paths
+- [Partitioned Persistence](/Doc/Architecture/PartitionedPersistence) — the original routing model this design evolved from
+- [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) — the actor-pattern primitives this builds on
+- [Postgres Schema Architecture](/Doc/Architecture/PostgresSchemaArchitecture) — the schema layout for tables and satellite paths

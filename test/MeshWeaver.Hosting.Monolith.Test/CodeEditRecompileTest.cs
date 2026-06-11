@@ -231,7 +231,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     /// All node mutations (Source update, recompile trigger, pin set / clear) go
     /// through <c>workspace.GetMeshNodeStream(path).Update(...)</c> on the shared
     /// <see cref="MonolithMeshTestBase.Mesh"/> workspace — the canonical pattern
-    /// from CLAUDE.md + <c>Doc/Architecture/RequestViaStreamUpdate.md</c>. The
+    /// from AGENTS.md + <c>Doc/Architecture/RequestViaStreamUpdate.md</c>. The
     /// older shape (per-call <c>GetClient(c => c.AddData())</c> +
     /// <c>NodeFactory.UpdateNode</c> + <c>CreateReleaseRequest</c>) piled up
     /// per-client MeshNodeReference subscriptions on the per-NodeType hub; CI

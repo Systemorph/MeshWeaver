@@ -61,6 +61,23 @@ MeshWeaver is a distributed platform for building data-driven applications with 
   </div>
 </div>
 
+## Topic map
+
+The catalog below lists every page; these are the load-bearing reads per theme.
+
+| Theme | Start here | Go deeper |
+|---|---|---|
+| **Reactive core** | [Asynchronous Calls](AsynchronousCalls) — the no-`await` rulebook | [Actor Model](ActorModel) · [Controlled I/O Pooling](ControlledIoPooling) · [Initialization Gates](InitializationGates) · [Aggregating Providers](AggregatingProviders) · [Hub Disposal Model](HubDisposalModel) |
+| **Reading & writing nodes** | [CQRS — Queries vs. Content Access](CqrsAndContentAccess) | [MeshNode Stream Cache](MeshNodeStreamCache) · [Request via Stream Update](RequestViaStreamUpdate) · [Data Access Patterns](DataAccessPatterns) · [Workspace References](WorkspaceReferences) |
+| **Storage & partitions** | [Postgres Schema Architecture](PostgresSchemaArchitecture) | [Partition Storage Routing](PartitionStorageRouting) · [Partition Storage Hubs](PartitionStorageHubs) · [Partitioned Persistence](PartitionedPersistence) · [Static Repo Import](StaticRepoImport) · [Vector Search](VectorSearch) |
+| **Security** | [Access Control](AccessControl) | [Granting Access](GrantingAccess) · [AccessContext Propagation](AccessContextPropagation) · [Permission API](PermissionApi) · [Invitation-Only Onboarding](InvitationOnlyOnboarding) |
+| **Threads, activities & AI** | [Thread Operations](ThreadOperations) | [Thread Execution Streaming](ThreadExecutionStreaming) · [Activity Control Plane](ActivityControlPlane) · [Activity Operations](ActivityOperations) · [Notifications](Notifications) · [Agentic AI](AgenticAI) · [Script Execution](ScriptExecution) |
+| **UI** | [User Interface](UserInterface) | [Blazor Data Binding](BlazorDataBinding) · [Blazor Async](BlazorAsync) · [Available Controls](UserInterface/AvailableControls) |
+| **Node types** | [Adding a New Node Type](AddingANewNodeType) | [Node Type Compilation](NodeTypeCompilation) · [Language Services](LanguageServices) · [Extensible Defaults](ExtensibleDefaults) |
+| **Testing & debugging** | [Writing Tests](WritingTests) | [Reactive Test Assertions](ReactiveTestAssertions) · [Test State Isolation](TestStateIsolation) · [Debugging Message Flow](DebuggingMessageFlow) · [Debugging Disposal & Leaks](DebuggingDisposalAndLeaks) |
+| **Deployment & ops** | [Deployment](Deployment) (the router) | [AKS](DeploymentAKS) · [Container Apps](DeploymentContainerApps) · [Local Dev Workflow](LocalDevWorkflow) · [Onboarding a New Environment](OnboardingNewEnvironment) · [Release Process](ReleaseProcess) |
+| **Contributing docs** | [Authoring Documentation](AuthoringDocumentation) | [Specifying Software](SpecifyingSoftware) · [Glossary](/Doc/Glossary) |
+
 ## Getting started
 
-New to the platform? Read [Specifying Software](SpecifyingSoftware) to learn how to write iterative specifications closely aligned with implementation, then explore the full catalog of architecture topics above.
+New to the platform? Read [Specifying Software](SpecifyingSoftware) to learn how to write iterative specifications closely aligned with implementation, skim the [Glossary](/Doc/Glossary) for the vocabulary, then explore the full catalog of architecture topics above.

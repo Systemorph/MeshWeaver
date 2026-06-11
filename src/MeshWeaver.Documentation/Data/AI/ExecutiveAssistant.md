@@ -18,7 +18,7 @@ Tags:
 
 The **Executive Assistant (EA)** is a personal agent that works your **own** mailbox and calendar on your
 behalf — triage and write mail, read your inbox, and "do your booking" (schedule / reschedule / cancel
-meetings). It also helps you manage your [notification preferences](../GUI/NotificationPreferences.md).
+meetings). It also helps you manage your [notification preferences](/Doc/GUI/NotificationPreferences).
 
 ## Least-privilege by design: per-user, just-in-time consent
 
@@ -47,7 +47,7 @@ The EA agent declares the `Mesh` + `ExecutiveAssistant` plugins. The `ExecutiveA
 
 Example asks: *"Book 30 min with Alice next Tuesday afternoon and invite her"*, *"reply to the vendor that
 we accept"*, *"clear my Friday"*, *"email me when an approval needs me"* (the last manages your
-[notification rules](../GUI/NotificationPreferences.md)).
+[notification rules](/Doc/GUI/NotificationPreferences)).
 
 ## Architecture
 

@@ -175,7 +175,7 @@ an EF query, or an HTTP fetch.
 It is **forbidden** over hub round-trips: `hub.RegisterCallback`, `hub.AwaitResponse`,
 `meshService.QueryAsync`, `workspace.GetRemoteStream(...).Take(1).ToTask()`, or anything
 whose `Task` completion depends on the hub's own action block making forward progress.
-See [Asynchronous Calls](AsynchronousCalls) for the full rule.
+See [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) for the full rule.
 
 ---
 
@@ -198,12 +198,12 @@ bridges to `Task<EntityStore>` exactly **once** at the `WithInitialization(...)`
 |---|---|---|
 | `TypeSource` (base) | User callback `InitializationFunction` (Task) | `Observable.FromAsync` — sanctioned, opaque user callback. |
 | `MeshNodeTypeSource` | `IStorageService.GetNode` (already `IObservable`) | None — pure `.FirstAsync().Select(...)`. |
-| `TypeSourceWithTypeWithDataStorage<T>` | `IDataStorage.Query<T>().ToDictionaryAsync` (DB) | `Observable.FromAsync` — sanctioned, pure DB. |
+| `TypeSourceWithTypeWithDataStorage<T>` | `IDataStorage.Query<T>().ToDictionaryAsync` (DB) | `IIoPool.Invoke` — the async DB leaf bridges through the pool (see [ControlledIoPooling](/Doc/Architecture/ControlledIoPooling)). |
 | `VirtualDataSource.VirtualTypeSource` | `StreamUpdates()` (already `IObservable`) | None — `.Take(1).Timeout(...).Select(...)`. |
-| `PartitionTypeSource<T>` | `IStorageService.GetPartitionObjectsAsync` (DB) | `Observable.FromAsync` — sanctioned, pure DB. |
+| `PartitionTypeSource<T>` | `IStorageService.GetPartitionObjectsAsync` (DB) | `IIoPool.Invoke` — same pooled bridge. |
 
-The legacy `Task<InstanceCollection> InitializeAsync(...)` surface has been removed from
-the interface, eliminating the temptation to await inside implementations.
+`ITypeSource.Initialize` is `IObservable<InstanceCollection>` — implementations compose
+reactively; there is no `Task`-returning surface to await.
 
 ---
 
@@ -382,9 +382,9 @@ public static class MeshNodeExtensions
 
 ## Related
 
-- [Asynchronous Calls in MeshWeaver](AsynchronousCalls) — the broader rule: no `await`
+- [Asynchronous Calls in MeshWeaver](/Doc/Architecture/AsynchronousCalls) — the broader rule: no `await`
   of hub round-trips anywhere in mesh-reachable code.
-- [CQRS — Queries vs. Content Access](CqrsAndContentAccess) — queries are lagged and
+- [CQRS — Queries vs. Content Access](/Doc/Architecture/CqrsAndContentAccess) — queries are lagged and
   not the right primitive for known-path content reads, regardless of gating.
 - `src/MeshWeaver.Graph/MeshNodeTypeSource.cs` — canonical reactive `Initialize`
   implementation that opens `MeshNodeInitGateName`.

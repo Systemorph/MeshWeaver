@@ -54,7 +54,7 @@ public static class DocumentationExtensions
                 Namespace = DocumentationNodeProvider.RootNamespace,
                 // Schema MUST be the lowercased namespace. A null Schema makes EnsureSchemaAsync
                 // provision the namespace VERBATIM ("Doc" capital) while the router/writes hit the
-                // lowercased "doc" — a ghost-schema case collision (42P01). See CLAUDE.md →
+                // lowercased "doc" — a ghost-schema case collision (42P01). See AGENTS.md →
                 // "Postgres: One Schema Per Partition".
                 Schema = DocumentationNodeProvider.RootNamespace.ToLowerInvariant(),
                 DataSource = "EmbeddedResource",

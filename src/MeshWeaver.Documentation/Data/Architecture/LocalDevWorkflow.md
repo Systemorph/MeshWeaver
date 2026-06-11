@@ -224,7 +224,7 @@ Navigate to `https://localhost:17200/structuredlogs?level=info` and filter by:
 | `category contains GrainKeepAlive` | Heartbeat traffic — high volume suggests a stream leak |
 | `Message contains SLOW_DISPATCH` | Per-message latency > 500 ms (instrumented in `MessageHub.HandleMessageAsync` and `OrleansRoutingService.DispatchObservable`) |
 | `Message contains "Allocating agent"` | Chat starting — should be followed by `[ThreadExec]` lines |
-| `Message contains "Could not deserialize"` | Type-registry mismatch — see [DebuggingMessageFlow.md](DebuggingMessageFlow.md) |
+| `Message contains "Could not deserialize"` | Type-registry mismatch — see [DebuggingMessageFlow.md](/Doc/Architecture/DebuggingMessageFlow) |
 
 For distributed traces across resources, open `https://localhost:17200/traces` and click any trace to see span timing across the AppHost, Portal, and Postgres boundary.
 

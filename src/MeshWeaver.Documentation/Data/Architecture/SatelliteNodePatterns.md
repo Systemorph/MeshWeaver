@@ -10,6 +10,8 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 A **satellite node** is any node whose `MainNode` points to a parent node. Threads and their messages, documents and their comments, approvals, activities — all follow this shape. The pattern gives each child its own hub, its own persistence, and a well-defined ownership boundary.
 
 This page covers the invariants that every satellite type must respect, the pitfalls that are easy to hit, and reference examples from the two canonical implementations: Thread/ThreadMessage and Comment/Reply.
+
+> **Two satellite pages, two scopes:** this page covers the **operational invariants** — hub ownership, persistence/table routing, content-update mechanics. Its companion [Satellite Entity Patterns](/Doc/Architecture/SatelliteEntityPatterns) covers the **data model, handler, access-control, and test patterns**. Build with that one; debug ownership/persistence with this one.
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 340" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
   <defs>
     <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">

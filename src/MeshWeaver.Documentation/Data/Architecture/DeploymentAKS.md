@@ -7,7 +7,7 @@ Icon: Cloud
 
 # Deploying to AKS
 
-This is **one of two deploy routes** for MeshWeaver. Use it for the shared portals on the **AKS cluster `memexaks-cluster`** (resource group `memex-aks-rg`, region swedencentral) — the `memex` namespace, backed by the Postgres Flexible Server, with container images in ACR `meshweaver.azurecr.io`. For the Azure Container Apps route (Aspire `test`/`prod` modes via `tools/deploy.sh`), see [DeploymentContainerApps.md](DeploymentContainerApps.md). These are **different routes to different targets**, not old-vs-new — pick the one that matches where you're deploying.
+This is **one of two deploy routes** for MeshWeaver. Use it for the shared portals on the **AKS cluster `memexaks-cluster`** (resource group `memex-aks-rg`, region swedencentral) — the `memex` namespace, backed by the Postgres Flexible Server, with container images in ACR `meshweaver.azurecr.io`. For the Azure Container Apps route (Aspire `test`/`prod` modes via `tools/deploy.sh`), see [DeploymentContainerApps.md](/Doc/Architecture/DeploymentContainerApps). These are **different routes to different targets**, not old-vs-new — pick the one that matches where you're deploying.
 
 > **The cluster is private.** `kubectl` is not reachable directly — every command runs through `az aks command invoke -g memex-aks-rg -n memexaks-cluster --command "…"`, which executes inside the cluster's API-server-side runner.
 
@@ -62,4 +62,4 @@ Container names are `memex-portal` and `memex-migration`; deployments are `memex
 
 ---
 
-For Azure AD app registration and secrets (shared across both routes), see [Deployment.md](Deployment.md).
+For Azure AD app registration and secrets (shared across both routes), see [Deployment.md](/Doc/Architecture/Deployment).

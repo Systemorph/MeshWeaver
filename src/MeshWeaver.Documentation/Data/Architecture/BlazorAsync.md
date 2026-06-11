@@ -6,7 +6,7 @@ Description: "Practical playbook for using IObservable<T> with Subscribe in Blaz
 
 > **TL;DR** Every mesh / hub call returns `IObservable<T>`. You `Subscribe(...)` to it — never `await`, never `.ToTask()`, never `.FirstAsync().ToTask()`, never `.FirstOrDefaultAsync()`. State updates from your Subscribe callback always go through `InvokeAsync(...)` so they run on the Blazor circuit's dispatcher.
 
-This is the companion article to [Asynchronous Calls](AsynchronousCalls), which covers deadlock semantics in hub-handler code. This page is the practical playbook for Blazor components, layout-area views, and click-action handlers.
+This is the companion article to [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls), which covers deadlock semantics in hub-handler code. This page is the practical playbook for Blazor components, layout-area views, and click-action handlers.
 <svg viewBox="0 0 760 320" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
   <defs>
     <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
@@ -77,7 +77,7 @@ There are two distinct failure modes — one is a deadlock, the other is a stale
 
 The Blazor circuit dispatcher and the mesh hub's `ActionBlock` both pump messages through scheduling primitives that, under load, can end up serialising work onto the same thread. Awaiting a hub round-trip inside a Blazor component method blocks the dispatcher waiting for a response that has to flow *back through that same dispatcher*. Under any concurrent load — multiple users, parallel queries from one page, even rapid keystrokes — this deadlocks deterministically.
 
-This is the same root cause as the hub-handler deadlock described in [Asynchronous Calls](AsynchronousCalls), with one extra layer: the awaiting context is the Blazor circuit rather than a hub `ActionBlock`. The deadlock surface is real even though the path is shorter.
+This is the same root cause as the hub-handler deadlock described in [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls), with one extra layer: the awaiting context is the Blazor circuit rather than a hub `ActionBlock`. The deadlock surface is real even though the path is shorter.
 
 ### 2. Stale data — `Task<T>` is a snapshot, not a subscription
 
@@ -100,12 +100,12 @@ public partial class MyView : ComponentBase, IDisposable
     protected override void OnParametersSet()      // sync — never OnParametersSetAsync
     {
         _sub?.Dispose();
-        _sub = Workspace
-            .GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(BoundPath), new MeshNodeReference())
-            .Subscribe(change =>
+        // Shared per-path handle (IMeshNodeStreamCache) — same stream every
+        // other reader and the writer use for this path.
+        _sub = Hub.GetMeshNodeStream(BoundPath)
+            .Subscribe(node =>
             {
-                _node = change.Value;
+                _node = node;
                 InvokeAsync(StateHasChanged);
             });
     }
@@ -302,6 +302,6 @@ Everything else — every `await` whose right-hand side touches `IMessageHub`, `
 
 ## Cross-references
 
-- [Asynchronous Calls](AsynchronousCalls) — the master doc on hub-handler deadlock semantics; this article specialises that to the Blazor surface.
-- [Blazor Data Binding](BlazorDataBinding) — how layout-area paths bind to Razor view fields, and the canonical view-side stream patterns.
-- [CQRS — Queries vs. Content Access](CqrsAndContentAccess) — when to use `QueryAsync` / `Query` vs. `GetMeshNode` / `GetRemoteStream`.
+- [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) — the master doc on hub-handler deadlock semantics; this article specialises that to the Blazor surface.
+- [Blazor Data Binding](/Doc/Architecture/BlazorDataBinding) — how layout-area paths bind to Razor view fields, and the canonical view-side stream patterns.
+- [CQRS — Queries vs. Content Access](/Doc/Architecture/CqrsAndContentAccess) — when to use `QueryAsync` / `Query` vs. `GetMeshNode` / `GetRemoteStream`.

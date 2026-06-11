@@ -484,7 +484,7 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
     // GetDataStream → DataChangeRequest) that production code does NOT use —
     // see src/MeshWeaver.Layout/Domain/EditLayoutArea.cs:181, which writes via
     // `stream.Subscribe → host.UpdateData` (no debounce, no DataChangeRequest).
-    // The canonical write path per CLAUDE.md is
+    // The canonical write path per AGENTS.md is
     //   workspace.GetMeshNodeStream(path).Update(current => …)
     // for MeshNode data and `workspace.Update(...)` for data-source instances —
     // not a hand-rolled debounce + Observe<DataChangeResponse>. The tests also

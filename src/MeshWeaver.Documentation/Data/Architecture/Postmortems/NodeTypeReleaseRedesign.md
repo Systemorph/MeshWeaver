@@ -29,7 +29,7 @@ That sounds simple, but there are four failure modes that compound one another.
 `release.Path`. `InvalidateCache` looks up by `nodeName`, finds nothing, skips
 the GC sweep, and `File.Delete` on the cached `.dll` throws
 `UnauthorizedAccessException`. This is why
-[`CodeEditRecompileTest` is still `[Skip]`-ed](../../test/MeshWeaver.Hosting.Monolith.Test/CodeEditRecompileTest.cs).
+`CodeEditRecompileTest` (`test/MeshWeaver.Hosting.Monolith.Test`) is still `[Skip]`-ed.
 
 **No observable feedback.** Users have no signal while a compile is running,
 when it finishes, or whether it succeeded. Diagnostics are read on demand via
@@ -122,7 +122,7 @@ public sealed record Release : ActivityLog("NodeTypeRelease")
 ```
 
 `Release` derives from `ActivityLog` so the existing
-[Activity Control Plane](ActivityControlPlane) machinery — observable progress
+[Activity Control Plane](/Doc/Architecture/ActivityControlPlane) machinery — observable progress
 via `workspace.GetMeshNodeStream(releasePath)`, cancellation via
 `RequestedStatus = Cancelled`, and real-time message streaming — comes for free.
 

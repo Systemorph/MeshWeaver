@@ -88,5 +88,5 @@ Whenever the user's permissions change *or* the node content changes, the combin
 
 ## See also
 
-- [AccessControl](AccessControl) — `AccessAssignment` node shape and recursive scope walk.
-- [AccessContextPropagation](AccessContextPropagation) — how identity flows across hub boundaries.
+- [AccessControl](/Doc/Architecture/AccessControl) — `AccessAssignment` node shape and recursive scope walk.
+- [AccessContextPropagation](/Doc/Architecture/AccessContextPropagation) — how identity flows across hub boundaries.

@@ -7,7 +7,7 @@ Icon: Cloud
 
 # Deploying to Azure Container Apps
 
-This is **one of two deploy routes**. Use it for the **.NET Aspire `test` / `prod` modes**, which provision and run on **Azure Container Apps** (Sweden Central) — the AppHost (`memex/aspire/Memex.AppHost`) is the single source of truth for every resource (PostgreSQL, Blob Storage, Orleans clustering, Application Insights). For the shared AKS-cluster portal (`memex` namespace), see [DeploymentAKS.md](DeploymentAKS.md). These are **different routes to different targets** — choose by where you're deploying.
+This is **one of two deploy routes**. Use it for the **.NET Aspire `test` / `prod` modes**, which provision and run on **Azure Container Apps** (Sweden Central) — the AppHost (`memex/aspire/Memex.AppHost`) is the single source of truth for every resource (PostgreSQL, Blob Storage, Orleans clustering, Application Insights). For the shared AKS-cluster portal (`memex` namespace), see [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS). These are **different routes to different targets** — choose by where you're deploying.
 
 ## Deployment Modes
 
@@ -25,7 +25,7 @@ The AppHost supports four modes, selected via `--mode <mode>`:
 1. **Azure CLI** authenticated — `az login`
 2. **Aspire CLI** installed — `dotnet tool install -g aspire`
 3. **Docker** running (builds container images)
-4. **Secrets** configured in the AppHost project (see [Deployment.md](Deployment.md) → Secrets Management)
+4. **Secrets** configured in the AppHost project (see [Deployment.md](/Doc/Architecture/Deployment) → Secrets Management)
 5. **dotnet-script** installed for the post-deploy DB version check — `dotnet tool install -g dotnet-script`
 
 ## 🚨 Always use `tools/deploy.sh` — never bare `aspire deploy`

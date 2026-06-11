@@ -10,9 +10,9 @@ Category: Architecture
 A "new environment" is an additional Memex portal — its own domain, database, and
 sign-in — running on the **shared AKS cluster** (`memexaks-cluster` / `memex-aks-rg`,
 swedencentral). `memex.meshweaver.cloud` is the worked example; it lives under
-[`deploy/aks/envs/<env>/`](../../../../deploy/aks/envs).
+`deploy/aks/envs/<env>/`.
 The shared platform (cluster, ingress, Postgres server, Key Vault, ACR) is brought up
-once — see the [AKS deploy runbook](../../../../deploy/aks/DEPLOY-RUNBOOK.md); this guide
+once — see the AKS deploy runbook (`deploy/aks/DEPLOY-RUNBOOK.md` in the repository); this guide
 adds an environment on top of it.
 
 ## Shared vs. separate
@@ -30,7 +30,7 @@ adds an environment on top of it.
 
 ## 1. Scaffold the env folder
 
-Copy an existing env folder under [`deploy/aks/envs/`](../../../../deploy/aks/envs) to `deploy/aks/envs/<env>/`:
+Copy an existing env folder under `deploy/aks/envs/` to `deploy/aks/envs/<env>/`:
 
 | File | What to change |
 |---|---|
@@ -88,7 +88,7 @@ curl -sS -k -o /dev/null -w "%{http_code}\n" --resolve <host>:443:$INGRESS_IP ht
   overrides the image's baked `appsettings.json` default (e.g. the inlined LinkedIn id).
 - **Invitation-only** (`Features__Onboarding__InvitationOnly=true`): the **first** user (empty
   user table) always bootstraps to **global admin** — the gate exempts the first user, so the
-  env can never lock itself out — then invites others. See [Invitation-Only Onboarding](InvitationOnlyOnboarding.md).
+  env can never lock itself out — then invites others. See [Invitation-Only Onboarding](/Doc/Architecture/InvitationOnlyOnboarding).
 - **Email** (`Email__Enabled=true` + Graph `Mail.Send` app): invitations email. The mailbox the
   portal sends and receives as (`Email__MailboxAddress`) must be a **real mailbox in the tenant**
   (`meshweaver.cloud` is not a mailbox domain; `no-reply@systemorph.com` does not exist — use a
@@ -106,7 +106,7 @@ For a portal moving off another platform (e.g. ACA → AKS), in addition to the 
 3. **Content**: copy the blob content collection → the `/mnt/content` Azure Files share.
 4. Verify on the ingress IP (`--resolve`), then cut DNS over, keeping the old platform as rollback.
 
-See [Memex Cloud Deployment](MemexCloudDeployment.md) for the prod-grade specifics.
+See [Memex Cloud Deployment](/Doc/Architecture/MemexCloudDeployment) for the prod-grade specifics.
 
 ## 🚨 Gotchas (learned the hard way)
 
@@ -133,6 +133,6 @@ See [Memex Cloud Deployment](MemexCloudDeployment.md) for the prod-grade specifi
 
 ## Related
 
-- [AKS Deploy Runbook](../../../../deploy/aks/DEPLOY-RUNBOOK.md) — the one-time shared-platform bring-up.
-- [Memex Cloud Deployment](MemexCloudDeployment.md) · [Deployment Options](DeploymentOptions.md)
-- [Invitation-Only Onboarding](InvitationOnlyOnboarding.md) · [Feature Flags](FeatureFlags.md)
+- AKS Deploy Runbook — `deploy/aks/DEPLOY-RUNBOOK.md` in the repository — the one-time shared-platform bring-up.
+- [Memex Cloud Deployment](/Doc/Architecture/MemexCloudDeployment) · [Deployment Options](/Doc/Architecture/DeploymentOptions)
+- [Invitation-Only Onboarding](/Doc/Architecture/InvitationOnlyOnboarding) · [Feature Flags](/Doc/Architecture/FeatureFlags)

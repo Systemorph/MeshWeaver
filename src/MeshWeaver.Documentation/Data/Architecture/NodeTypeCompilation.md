@@ -17,9 +17,9 @@ instance to a specific build, and the rules that decide when a NodeType must be
 recompiled.
 
 > For *authoring* a NodeType (folder layout, content record, layout areas, CSV
-> data) see [Creating Node Types](../DataMesh/CreatingNodeTypes). For the design
+> data) see [Creating Node Types](/Doc/DataMesh/CreatingNodeTypes). For the design
 > rationale behind the release model see the
-> [NodeType Release Redesign](Postmortems/NodeTypeReleaseRedesign) postmortem.
+> [NodeType Release Redesign](/Doc/Architecture/Postmortems/NodeTypeReleaseRedesign) postmortem.
 
 <svg viewBox="0 0 760 340" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
   <defs>
@@ -173,7 +173,7 @@ outcome: `Compiling` while in flight, then `Ok` or `Error` (with
 ## Cancelling a compile
 
 Compilation is an Activity, so it cancels through the **Activity Control Plane**
-(see [ActivityControlPlane](ActivityControlPlane)) — patch the activity's
+(see [ActivityControlPlane](/Doc/Architecture/ActivityControlPlane)) — patch the activity's
 `RequestedStatus`, never post a bespoke cancel message:
 
 ```csharp
@@ -188,7 +188,7 @@ down; the activity and the NodeType settle to `Cancelled` / the previous status.
 ## Where releases live
 
 Releases are MeshNodes at `{nodeTypePath}/Release/{version}`, with content type
-[`NodeTypeRelease`](xref:MeshWeaver.Graph.Configuration.NodeTypeRelease):
+`NodeTypeRelease`:
 
 | Field | Description |
 |---|---|

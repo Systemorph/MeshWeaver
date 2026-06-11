@@ -139,7 +139,7 @@ Log.LogWarning("Row {Row} skipped: {Reason}", i, reason);
 Log.LogError("Import failed: {Message}", ex.Message);
 ```
 
-Each call appends a message to the run's `ActivityLog` MeshNode. The `ExecuteScriptResponse` carries the log's path in the `activityLog` field. Clients subscribe to that path via `GetRemoteStream<MeshNode, MeshNodeReference>` and see each `ActivityLog.Messages` entry arrive in real time — the same shape used by Thread streams.
+Each call appends a message to the run's `ActivityLog` MeshNode. The `ExecuteScriptResponse` carries the log's path in the `activityLog` field. Clients subscribe to that path via `workspace.GetMeshNodeStream(activityLogPath)` and see each `ActivityLog.Messages` entry arrive in real time — the same shape used by Thread streams.
 
 When the script finishes, `ActivityLog.Status` flips to `Succeeded` / `Warning` / `Failed` — the terminal signal UIs and agents watch for.
 
@@ -240,6 +240,6 @@ MeshWeaver.Layout.Controls.Stack
 
 ## Related
 
-- [MCP Authentication](McpAuthentication) — how to mint tokens so an MCP client can call `ExecuteScript` at all.
-- [Interactive markdown](../DataMesh/InteractiveMarkdown) — the markdown-driven equivalent used from `.md` files instead of button or tool calls.
-- [Agentic AI](AgenticAI) — the broader agent-plugin story that `ExecuteScript` slots into.
+- [MCP Authentication](/Doc/AI/McpAuthentication) — how to mint tokens so an MCP client can call `ExecuteScript` at all.
+- [Interactive markdown](/Doc/DataMesh/InteractiveMarkdown) — the markdown-driven equivalent used from `.md` files instead of button or tool calls.
+- [Agentic AI](/Doc/AI/AgenticAI) — the broader agent-plugin story that `ExecuteScript` slots into.

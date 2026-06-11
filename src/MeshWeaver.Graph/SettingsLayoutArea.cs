@@ -773,7 +773,7 @@ public static class SettingsLayoutArea
                         return;
 
                     // Write through the shared cache so every reader of the
-                    // node's stream sees the change (CLAUDE.md "NodeMutations:
+                    // node's stream sees the change (AGENTS.md "NodeMutations:
                     // stream.Update only"). updatedMeta.ApplyTo composes the
                     // patch inside the cache.Update lambda against the live
                     // node — applying the metadata patch on top of whichever
@@ -783,7 +783,11 @@ public static class SettingsLayoutArea
                     {
                         var cache = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
                         cache.Update(metaPath, current => updatedMeta.ApplyTo(current), host.Hub.JsonSerializerOptions)
-                            .Subscribe(_ => { }, _ => { });
+                            .Subscribe(
+                                _ => { },
+                                ex => host.Hub.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()
+                                    ?.CreateLogger(typeof(SettingsLayoutArea))
+                                    .LogWarning(ex, "Metadata auto-save failed for {Path}", metaPath));
                     }
                 }));
     }

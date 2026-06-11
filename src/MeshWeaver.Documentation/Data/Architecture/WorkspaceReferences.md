@@ -89,16 +89,15 @@ var nodes = workspace.GetStream<MeshNode>();
 
 ### Remote stream (another hub)
 
-```csharp
-// Observable of all MeshNodes on a remote hub
-var nodes = workspace.GetRemoteStream<MeshNode>(new Address(path));
+`GetRemoteStream<TValue, TReference>` is the generic cross-hub reducer subscription (layout areas, custom references, collections):
 
-// Typed reference with write-back support
-var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-    new Address(path), new MeshNodeReference());
+```csharp
+// Generic typed reference with write-back support
+var stream = workspace.GetRemoteStream<UiControl, LayoutAreaReference>(
+    new Address(path), new LayoutAreaReference("Overview"));
 ```
 
-> **Tip:** Prefer the two-type overload (`GetRemoteStream<TValue, TReference>`) whenever you need to write back. It wires the `PatchFunction` automatically, so `stream.Update(...)` propagates changes to the owning hub.
+> 🚨 **For a MeshNode by path, do NOT use `GetRemoteStream<MeshNode, …>`** — use `workspace.GetMeshNodeStream(path)` (the shared `IMeshNodeStreamCache` handle, read + `.Update(...)` write-back on one stream). The `GetRemoteStream<MeshNode>` forms are discouraged and reserved for framework plumbing; see [CQRS](/Doc/Architecture/CqrsAndContentAccess) and [Data Access Patterns](/Doc/Architecture/DataAccessPatterns).
 
 ---
 
@@ -176,35 +175,39 @@ private static ChangeItem<MeshNode> PatchMeshNode(
 
 ## Updating via Streams
 
-### `UpdateMeshNode` extension (recommended)
+### `GetMeshNodeStream(path).Update(...)` (the canonical mutation API)
 
-`UpdateMeshNode` handles both local and remote cases with a single, consistent call:
+One call handles own, local-collection, and remote nodes — the handle auto-dispatches. It returns a **cold** observable; the write only runs on `Subscribe`:
 
 ```csharp
-// Update on own hub (uses GetStream locally)
-workspace.UpdateMeshNode(null, threadPath, node =>
-    node with { Content = updatedContent });
+// Own node (this hub):
+workspace.GetMeshNodeStream().Update(node =>
+        node with { Content = updatedContent })
+    .Subscribe(_ => { }, ex => logger.LogWarning(ex, "update failed"));
 
-// Update on a remote hub (uses GetRemoteStream with MeshNodeReference)
-workspace.UpdateMeshNode(new Address(remotePath), remotePath, node =>
-    node with { Content = updatedContent });
+// Any other node — same API; the write routes to the owning hub as a
+// RFC 7396 JSON-merge patch via the process-wide IMeshNodeStreamCache:
+workspace.GetMeshNodeStream(remotePath).Update(node =>
+        node with { Content = updatedContent })
+    .Subscribe(_ => { }, ex => logger.LogWarning(ex, "update failed"));
 
 // Typed content update — unpacks and repacks Content for you
-workspace.UpdateMeshNode<MyContentType>(new Address(path), path,
-    (node, content) => node with
-    {
-        Content = content with { Title = "Updated" }
-    });
+// (MeshNodeExtensions in MeshWeaver.Graph; delegates to the same handle):
+workspace.UpdateMeshNode<MyContentType>(path,
+        (node, content) => node with
+        {
+            Content = content with { Title = "Updated" }
+        })
+    .Subscribe(_ => { }, ex => logger.LogWarning(ex, "update failed"));
 ```
 
 ### Direct stream update
 
-When you already hold an `EntityStore` stream, you can call `UpdateMeshNode` directly on it:
+When you already hold an `EntityStore` stream (inside data-source plumbing), `MeshNodeExtensions.UpdateMeshNode` applies the change to the store directly:
 
 ```csharp
-var stream = workspace.GetStream(typeof(MeshNode));
-stream.UpdateMeshNode(nodePath, node =>
-    node with { Content = updatedContent });
+stream.UpdateMeshNode(node =>
+    node with { Content = updatedContent }, nodePath);
 ```
 
 ---

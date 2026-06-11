@@ -12,6 +12,9 @@ Tags:
   - "Installation"
 ---
 
+> **The model-provider docs at a glance:** [Model Providers](/Doc/Architecture/ModelProviders) — the architectural pattern · [Provider Configuration](/Doc/AI/ProviderConfiguration) — framework config & chat-client factories · [Model Provider Setup](/Doc/AI/ModelProviderSetup) — operational setup & troubleshooting · [Model Provider Settings](/Doc/AI/ModelProviderSettings) — the settings UI. **This page: operational setup & troubleshooting.**
+
+
 # Setting Up Model Providers
 
 This is the **operational** guide to getting AI models to show up in the chat picker — for an administrator standing up a space, and for an end user wiring their own key. For the *design* of the Settings → Models UI see [AI Model Provider Settings](/Doc/AI/ModelProviderSettings); for the credential/endpoint wiring at the framework level see [AI Provider Configuration](/Doc/AI/ProviderConfiguration).

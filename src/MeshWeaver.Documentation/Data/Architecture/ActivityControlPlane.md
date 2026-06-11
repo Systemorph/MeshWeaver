@@ -95,7 +95,7 @@ sequenceDiagram
     participant Activity as Activity hub
     participant Executor as Kernel executor
 
-    User->>Activity: workspace.UpdateMeshNode(<br/>RequestedStatus=Cancelled)
+    User->>Activity: GetMeshNodeStream(path).Update(<br/>RequestedStatus=Cancelled)
     Activity->>Activity: own MeshNodeReference ticks
     Activity->>Executor: CancelScriptRequest (internal)
     Executor->>Executor: cts.Cancel() → script throws OCE
@@ -282,7 +282,7 @@ hub.GetWorkspace().GetMeshNodeStream().Update(node =>
 
 **Why "each hub owns its own state":** the intent field lives on the same node as the state field. The owning hub is the only writer; cross-hub coordination is impossible because no other hub knows about the field. Read-only views (UI, MCP) can show "request pending" by checking `Requested<X> is not null && Status == Idle`.
 
-Ship the round-orchestration steps as small `IObservable<Unit>` builders (`CreateUserCells`, `CommitRound`, `DispatchToExec`). Each step is one `Hub.Observe(..., target)` or `workspace.UpdateMeshNode(...)` followed by `.Select(_ => Unit.Default)`.
+Ship the round-orchestration steps as small `IObservable<Unit>` builders (`CreateUserCells`, `CommitRound`, `DispatchToExec`). Each step is one `Hub.Observe(..., target)` or `workspace.GetMeshNodeStream(path).Update(...)` followed by `.Select(_ => Unit.Default)`.
 
 ---
 
@@ -366,7 +366,7 @@ hub.GetWorkspace().GetMeshNodeStream(activityPath!)
 
 > **Do NOT** write the activity's `Status`/`Content` from *outside* the activity hub (e.g. `workspace.GetMeshNodeStream(activityPath).Update(node with { Content = … })` from another hub) — that bypasses the activity hub's reducer and the `RequestedStatus` control plane, and races the per-node hub's own view of its content. The terminal write above is fine *because the activity hub issues it on its own stream*; external callers flip `RequestedStatus` instead and let the reducer react.
 >
-> **Do NOT** call `IStorageAdapter.Write` directly — same race, and worse because persistence is invisible to the per-node hub's `MeshNodeReference` cache. The next `GetDataRequest` returns the pre-patch content.
+> **Do NOT** call `IStorageAdapter.Write` directly — same race, and worse because persistence is invisible to the per-node hub's `MeshNodeReference` cache. The next read off the node stream returns the pre-patch content.
 
 `NodeTypeCompilationActivity.MarkSucceeded` / `MarkFailed` in `MeshWeaver.Graph.Configuration` is the canonical implementation — copy its shape (`Update` through `GetMeshNodeStream`, with a best-effort `try/catch` that logs and swallows so observability never breaks the work).
 
@@ -404,7 +404,7 @@ The pattern inside scripts (and inside any worker hub doing long-running work):
 
 - **Never `Thread.Sleep` and never `Task.Delay(ms)` without `Ct`.** Both ignore cancellation and are indistinguishable from a hung script while they wait.
 
-Subscribers (UI stripes, activity-details views, agents watching their job) read the same content via `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference())` and project whatever field they care about (`Messages.Count`, `Status`, `RequestedStatus`, your own progress field). One source of truth, one observation pattern, no parallel "events" channel.
+Subscribers (UI stripes, activity-details views, agents watching their job) read the same content via `workspace.GetMeshNodeStream(activityPath)` and project whatever field they care about (`Messages.Count`, `Status`, `RequestedStatus`, your own progress field). One source of truth, one observation pattern, no parallel "events" channel.
 
 ---
 
@@ -433,12 +433,12 @@ sequenceDiagram
     participant Result as Result panel
 
     User->>Form: enters inputs
-    Form->>Activity: workspace.UpdateMeshNode(<br/>set Inputs + RequestedStatus=Running)
+    Form->>Activity: GetMeshNodeStream(path).Update(<br/>set Inputs + RequestedStatus=Running)
     Form->>Activity: ExecuteScriptRequest →<br/>code-node template
     Activity->>Kernel: SubmitCodeRequest
     Kernel->>Activity: ActivityLog.Messages += "Working…"
     loop progress
-        Activity-->>Result: GetRemoteStream tick
+        Activity-->>Result: GetMeshNodeStream tick
     end
     Kernel->>Activity: Status = Succeeded + Output
     Activity-->>Result: terminal snapshot → render output
@@ -447,10 +447,10 @@ sequenceDiagram
 Five pieces, all of which already exist in the framework — no new infrastructure required:
 
 1. **The script template** — a `Code` MeshNode, e.g. `Doc/Templates/Code/ExportPdf`.
-2. **The form** — a layout area whose fields bind to inputs via `JsonPointerReference`; the form auto-saves to the activity content via `workspace.UpdateMeshNode` debounced (see *[Asynchronous Calls](AsynchronousCalls)* — "Reactive in click actions").
+2. **The form** — a layout area whose fields bind to inputs via `JsonPointerReference`; the form auto-saves to the activity content via the node stream's `Update` (debounced) (see *[Asynchronous Calls](/Doc/Architecture/AsynchronousCalls)* — "Reactive in click actions").
 3. **The trigger** — a click handler that posts `ExecuteScriptRequest` against the Code template. Sync, fire-and-forget, no `await`.
-4. **The activity** — created automatically by the script-execution path; see *[Script Execution](ScriptExecution)*.
-5. **The result panel** — subscribes to the activity via `GetRemoteStream<MeshNode, MeshNodeReference>` and projects `Messages` plus the terminal output.
+4. **The activity** — created automatically by the script-execution path; see *[Script Execution](/Doc/Architecture/ScriptExecution)*.
+5. **The result panel** — subscribes to the activity via `GetMeshNodeStream(activityPath)` and projects `Messages` plus the terminal output.
 
 ### Worked example: export-as-script
 
@@ -471,10 +471,10 @@ var md       = (src?.Content as MarkdownContent)?.Content ?? "";
 
 Log.LogInformation("Resolving branding");
 var branding = await Mesh.GetWorkspace()
-    .GetRemoteStream<MeshNode, MeshNodeReference>(
-        new Address(inputs.BrandNodePath), new MeshNodeReference())
-    .Take(1).Select(c => (c.Value?.Content as CorporateIdentity).ToOptions())
-    .ToTask(Ct);
+    .GetMeshNodeStream(inputs.BrandNodePath)
+    .Where(n => n is not null).Take(1)
+    .Select(n => (n!.Content as CorporateIdentity).ToOptions())
+    .ToTask(Ct);   // top-level await is OK in a kernel Script
 
 Log.LogInformation("Rendering");
 var doc   = new DocumentBuilder().Build(src!.Name, [(src.Name, md)], inputs.Options, branding);
@@ -507,7 +507,7 @@ return Controls.Stack
         .WithClickAction(ctx => Trigger(ctx, activityPath)));
 ```
 
-The form **never reads its own state inside the click action** — `JsonPointerReference` and auto-save handle that. The click is O(1) (see *[Asynchronous Calls](AsynchronousCalls)* — "Reactive in click actions: use `stream.Update`, not `Take(1) + Subscribe + UpdateMeshNode`").
+The form **never reads its own state inside the click action** — `JsonPointerReference` and auto-save handle that. The click is O(1) (see *[Asynchronous Calls](/Doc/Architecture/AsynchronousCalls)* — "Reactive in click actions: use `stream.Update`, not `Take(1) + Subscribe + manual node write").
 
 #### 3. The click handler — patch `RequestedStatus = Running` and submit
 
@@ -528,9 +528,8 @@ private static Task Trigger(ClickAction ctx, string activityPath)
 
 ```csharp
 return host.Hub.GetWorkspace()
-    .GetRemoteStream<MeshNode, MeshNodeReference>(
-        new Address(activityPath), new MeshNodeReference())
-    .Select(change => change.Value?.Content as ActivityLog)
+    .GetMeshNodeStream(activityPath)
+    .Select(node => node?.Content as ActivityLog)
     .Where(log => log is not null)
     .Select(log => Render(log!));
 ```
@@ -541,7 +540,7 @@ return host.Hub.GetWorkspace()
 
 Because the operation runs as an Activity, all standard control-plane operations are inherited with no extra code:
 
-- **Cancel** = `workspace.UpdateMeshNode(... with RequestedStatus = Cancelled)` on the activity. The kernel-hosted run sees `Ct` flip and exits.
+- **Cancel** = `hub.CancelActivity(activityPath)` — writes `RequestedStatus = Cancelled` onto the activity node via its stream. The kernel-hosted run sees `Ct` flip and exits.
 - **Retry** = create a new run by patching `RequestedStatus = Running` again on a fresh activity. The form panel does this by posting another `ExecuteScriptRequest`.
 - **Status / live progress** = `Status` + `Messages` on the same content the form already binds to.
 
@@ -563,9 +562,9 @@ If the operation has any of these: form inputs to collect, multiple steps, progr
 
 1. **Identify the inputs.** Whatever the request type carried becomes the activity's content record (`ExportInputs`, `ImportInputs`, …) — the same shape, at rest on a MeshNode instead of in flight on a message.
 2. **Write the template script.** Move the handler body into a `.csx`-shaped string on a Code MeshNode; swap the request fields for `(Mesh.GetMeshNode(Mesh.NodePath).Content as XxxInputs)`; replace `hub.Post(response)` with `return result;`.
-3. **Bind the form.** Every input the handler used to read off the request becomes a `JsonPointerReference` field on the form, written to the activity content via auto-save (debounced `UpdateMeshNode`).
+3. **Bind the form.** Every input the handler used to read off the request becomes a `JsonPointerReference` field on the form, written to the activity content via auto-save (debounced `stream.Update`).
 4. **Click submits.** The click patches `RequestedStatus = Running` (or posts `ExecuteScriptRequest` against the template Code node). No `await`, no synchronous reads of form state.
-5. **Result panel subscribes.** The bottom half of the layout area subscribes to the activity stream via `GetRemoteStream<MeshNode, MeshNodeReference>`, switches on `Status`, projects progress and terminal output.
+5. **Result panel subscribes.** The bottom half of the layout area subscribes to the activity stream via `GetMeshNodeStream(activityPath)`, switches on `Status`, projects progress and terminal output.
 6. **Delete the request type and handler.** Or keep it as a transitional shim marked `[Obsolete]` if external callers still depend on it — but the new path is the script.
 
 If a step in the migration feels awkward, that's a sign the operation isn't a good fit — re-check the table above.
@@ -630,8 +629,8 @@ process, the activity is stuck `Running` forever and every observer (`Take(1)` o
 the activity stream, a parent waiting on it) parks.
 
 Apply the **same resurrection contract as threads** (see
-[ThreadOperations → resurrection on activation](ThreadOperations) and
-[DebuggingMessageFlow → resurrection on init](DebuggingMessageFlow)) on the activity
+[ThreadOperations → resurrection on activation](/Doc/Architecture/ThreadOperations) and
+[DebuggingMessageFlow → resurrection on init](/Doc/Architecture/DebuggingMessageFlow)) on the activity
 hub's init:
 
 - **Re-establish, never give up** on the loaded-state read — no

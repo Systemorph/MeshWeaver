@@ -269,7 +269,7 @@ See `test/MeshWeaver.Hosting.Monolith.Test/LanguageModelSyncedQueryTest.cs` for 
 
 ## Consuming the New Type's Instances
 
-Anything that reads `nodeType:LanguageModel` (or any synced collection of MeshNodes) **must** go through `workspace.GetQuery(id, queries...)` — the `SyncedQueryMeshNodes` API. See **[Synced Mesh Node Queries](SyncedMeshNodeQueries.md)** for the full rationale and canonical patterns.
+Anything that reads `nodeType:LanguageModel` (or any synced collection of MeshNodes) **must** go through `workspace.GetQuery(id, queries...)` — the `SyncedQueryMeshNodes` API. See **[Synced Mesh Node Queries](/Doc/Architecture/SyncedMeshNodeQueries)** for the full rationale and canonical patterns.
 
 The short version:
 

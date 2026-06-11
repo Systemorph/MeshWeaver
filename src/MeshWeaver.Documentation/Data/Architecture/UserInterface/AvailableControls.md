@@ -258,6 +258,33 @@ Controls.DatePicker("startDate")
 
 ---
 
+### MeshNodePickerControl
+
+Searchable picker for mesh nodes. Renders search results as cards (via `MeshSearchView`) and stores the **selected node's path** as the form value. The standard surface behind the [`[MeshNode]` attribute](/Doc/GUI/Attributes) — prefer the attribute on data models; construct the control directly only in hand-built layout areas.
+
+```csharp
+new MeshNodePickerControl(new JsonPointerReference("/assigneePath"))
+    .WithQueries("nodeType:User namespace:acme", "nodeType:Group path:acme scope:selfAndAncestors")
+    .WithMaxResults(10)
+    .WithEmptyOption("Root (top-level)")
+    .WithLayout(MeshNodePickerLayout.Thin)
+    .WithOpenDirection(MeshNodePickerOpenDirection.Up)
+    .WithDefaultToFirst()
+```
+
+| Property | Type | Description |
+|---|---|---|
+| `Queries` | `string[]?` | Query strings run in parallel and merged; the user's typed text is appended to each (see [Query Syntax](/Doc/DataMesh/QuerySyntax)) |
+| `Namespace` | `object?` | Namespace to scope the search to |
+| `MaxResults` | `object?` | Maximum results shown in the dropdown |
+| `Items` | `object[]?` | Fixed `MeshNode` set merged with query results (deduplicated by path) — for small known sets like creatable types or roles |
+| `EmptyOptionLabel` | `string?` | When set, adds a top option that selects the empty value `""` |
+| `Layout` | `MeshNodePickerLayout` | `Default` (full card) or `Thin` (compact row) |
+| `Open` | `MeshNodePickerOpenDirection` | `Down` (default) or `Up` for bottom-anchored fields (chat composer) |
+| `DefaultToFirst` | `bool` | Auto-select (and persist) the first result when no value is set |
+
+---
+
 ## Display Controls
 
 Display controls present data to the user without expecting direct edits.

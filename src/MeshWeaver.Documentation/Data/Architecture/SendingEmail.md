@@ -8,7 +8,7 @@ Category: Architecture
 # Sending Email
 
 The mesh can send outbound mail through a single framework abstraction,
-[`IEmailSender`](../../../../src/MeshWeaver.Mesh.Contract/IEmailSender.cs). The concrete sender is
+`IEmailSender`. The concrete sender is
 registered by the host — the portal ships a Microsoft Graph implementation (`GraphEmailSender`) and a
 `NoOpEmailSender` for when email is disabled — so callers never reference a mail SDK or a specific
 mailbox provider.
@@ -22,7 +22,7 @@ Mail is **reactive end-to-end**: `SendEmail` returns a cold `IObservable<bool>` 
 
 Every mesh script (Code node, interactive markdown cell, or MCP `execute_script`) gets the `Mesh`
 global (an `IMessageHub`). The framework extension
-[`Mesh.SendEmail(...)`](../../../../src/MeshWeaver.Mesh.Contract/HubEmailExtensions.cs) resolves the
+`Mesh.SendEmail(...)` resolves the
 registered sender and sends — no DI lookup, no SDK types:
 
 ```csharp
@@ -36,7 +36,7 @@ Mesh.SendEmail(
 ```
 
 `SendEmail` is in the `MeshWeaver.Mesh` namespace, which the kernel imports by default — so the call
-works unqualified in any script. See [Script Execution](ScriptExecution.md) for the `Mesh`/`Log`/`Ct`
+works unqualified in any script. See [Script Execution](/Doc/Architecture/ScriptExecution) for the `Mesh`/`Log`/`Ct`
 globals and progress conventions.
 
 > **Graceful degradation.** On a deployment with no `IEmailSender` registered (or `Email:Enabled=false`),
@@ -46,8 +46,8 @@ globals and progress conventions.
 ### Using it for notifications
 
 This is the building block for "notify by email" flows — pair it with the in-app
-[Notification](SatelliteEntityPatterns.md) node, or call it from an
-[operation-as-script](ActivityControlPlane.md) when a long job finishes:
+[Notification](/Doc/Architecture/SatelliteEntityPatterns) node, or call it from an
+[operation-as-script](/Doc/Architecture/ActivityControlPlane) when a long job finishes:
 
 ```csharp
 Log.LogInformation("Rollup complete — notifying owner");
@@ -74,14 +74,14 @@ public sealed class Inviter(IEmailSender email) { /* email.SendEmail(...).Subscr
 ```
 
 Do **not** `await`/`.ToTask()` it inside hub-reachable code — keep the chain reactive
-(see [Asynchronous Calls](AsynchronousCalls.md)). Tests may bridge with `.FirstAsync().ToTask()`.
+(see [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls)). Tests may bridge with `.FirstAsync().ToTask()`.
 
 ---
 
 ## Configuration
 
 Bound from the `Email` section into
-[`EmailOptions`](../../../../src/MeshWeaver.Mesh.Contract/EmailOptions.cs). **Disabled by default** —
+`EmailOptions`. **Disabled by default** —
 when off, the host registers `NoOpEmailSender`, which logs the would-be send and reports success, so
 local dev and tests never send mail.
 
@@ -115,7 +115,7 @@ services.AddSingleton<IEmailSender>(email.Enabled
 
 ## The Microsoft Graph reference sender
 
-[`GraphEmailSender`](../../../../memex/Memex.Portal.Shared/Email/GraphEmailSender.cs) calls Graph
+`GraphEmailSender` calls Graph
 `/users/{mailbox}/sendMail` using the `Mail.Send` **application** permission, bridging the async Graph
 call to the reactive surface via `Observable.FromAsync`. Credentials come from `EmailOptions`:
 `DefaultAzureCredential` (managed identity) in production, or a `ClientSecretCredential` for self-host.
@@ -124,7 +124,7 @@ The one-time Azure setup — a dedicated app registration, **admin-consented `Ma
 **`Mail.ReadWrite`** when inbound is enabled), a real shared mailbox the portal sends and receives
 as, and (recommended) an Exchange **Application Access Policy** scoping the app to only that mailbox —
 is covered in
-[Invitation-Only Onboarding → Sending email](InvitationOnlyOnboarding.md#sending-email-microsoft-graph).
+[Invitation-Only Onboarding → Sending email](/Doc/Architecture/InvitationOnlyOnboarding#sending-email-microsoft-graph).
 
 ### Swapping the implementation
 
@@ -136,7 +136,7 @@ the `IEmailSender` singleton and every `Mesh.SendEmail(...)` call routes through
 
 ## Related
 
-- [Script Execution](ScriptExecution.md) — the `Mesh`/`Log`/`Ct` globals and progress conventions.
-- [Invitation-Only Onboarding](InvitationOnlyOnboarding.md) — the first consumer; full Graph/Azure setup.
-- [Feature Flags](FeatureFlags.md) — deploy-time capability toggles.
-- [Asynchronous Calls](AsynchronousCalls.md) — why mail stays `IObservable<T>` in hub-reachable code.
+- [Script Execution](/Doc/Architecture/ScriptExecution) — the `Mesh`/`Log`/`Ct` globals and progress conventions.
+- [Invitation-Only Onboarding](/Doc/Architecture/InvitationOnlyOnboarding) — the first consumer; full Graph/Azure setup.
+- [Feature Flags](/Doc/Architecture/FeatureFlags) — deploy-time capability toggles.
+- [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) — why mail stays `IObservable<T>` in hub-reachable code.

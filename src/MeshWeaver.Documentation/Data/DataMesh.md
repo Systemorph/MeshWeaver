@@ -271,6 +271,7 @@ MeshWeaver provides a complete set of building blocks for Data Mesh, each docume
 | [CRUD Operations](CRUD) | Type-safe create, read, update, and delete for any product |
 | [Node Operations](NodeOperations) | Export, import, copy, and move node subtrees |
 | [Data Modeling](DataModeling) | C# records as the schema contract between producers and consumers |
+| [Data Cubes](DataCubes) | Dimensions, FX conversion, and live slice-and-dice pivot tables and charts |
 | [Satellite Entities](SatelliteEntities) | Comments, approvals, access, and audit trails attached to any node |
 | [Interactive Markdown](InteractiveMarkdown) | Embed live data and charts directly inside documentation |
 | [NuGet Packages](NugetPackages) | Reference any NuGet package from interactive markdown with `#r "nuget:..."` |

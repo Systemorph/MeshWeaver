@@ -8,7 +8,7 @@ Icon: /static/DocContent/Architecture/icon.svg
 > 🚨 **TL;DR — `public.mesh_nodes` is empty by design.**
 > Every mesh node lives in a **per-partition schema** (`acme.mesh_nodes`, `user.mesh_nodes`, `dav.mesh_nodes`, …). The `public` schema holds only infrastructure tables (`partition_access`, `searchable_schemas`, `user_effective_permissions`, …). Querying `public.mesh_nodes` always returns zero rows, no matter how full the mesh is.
 
-This page is the deep companion to [Partitioned Persistence](xref:Architecture/PartitionedPersistence). That doc covers the routing layer that sits in front of the database; this one covers what is actually in the database.
+This page is the deep companion to [Partitioned Persistence](/Doc/Architecture/PartitionedPersistence). That doc covers the routing layer that sits in front of the database; this one covers what is actually in the database.
 
 <svg viewBox="0 0 760 440" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="12">
   <defs>

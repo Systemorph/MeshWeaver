@@ -17,7 +17,7 @@ namespace MeshWeaver.Mesh.Services;
 /// caller can <c>Subscribe(onNext, onError)</c> and let the chain run on
 /// the producer's scheduler. Boundaries that genuinely require a Task
 /// (Orleans grain activation, ASP.NET request hooks) bridge once at the
-/// edge with <c>.FirstAsync().ToTask(ct)</c> per CLAUDE.md.
+/// edge with <c>.FirstAsync().ToTask(ct)</c> per AGENTS.md.
 /// </para>
 /// </summary>
 public interface IMeshNodeHubFactory

@@ -119,7 +119,7 @@ collection.Subscribe(snapshot =>
 | Live list of MeshNodes for a UI dropdown / picker | `workspace.GetQuery(id, queries...)` ← here |
 | Live list of MeshNodes for a derived synced collection | `workspace.GetQuery(id, queries...)` ← here |
 | One-shot "give me all nodes matching X right now" | `IMeshService.QueryAsync` |
-| Read a specific node by path (especially after a write) | `workspace.GetMeshNodeStream(path)` — see [CqrsAndContentAccess](CqrsAndContentAccess.md) |
+| Read a specific node by path (especially after a write) | `workspace.GetMeshNodeStream(path)` — see [CqrsAndContentAccess](/Doc/Architecture/CqrsAndContentAccess) |
 | Autocomplete / prefix search | `IMeshService.AutocompleteAsync` |
 
 > **The rule of thumb:** if you would otherwise call `IMeshService.Query` and manually merge multiple query streams' `QueryResultChange<T>` events into a path-keyed dictionary — stop. That is exactly what `GetQuery` does, correctly, already. Using `Query` directly for this purpose is **always** a bug because:
@@ -153,7 +153,7 @@ workspace.GetQuery($"agents:{contextPath}",
 
 > 🚨 **CRITICAL — Every query in a single `GetQuery` call MUST carry the same `nodeType:` filter.** Vary only namespace and scope. Mixing different `nodeType:` filters across queries in one call breaks the all-Initial gate — the synced collection never emits its first snapshot.
 >
-> The canonical shape is what `AgentPickerProjection.BuildAgentQueries` / `BuildModelQueries` produce: one nodeType filter, varying namespaces and scopes. See [ModelProviders.md](ModelProviders.md) for a worked example.
+> The canonical shape is what `AgentPickerProjection.BuildAgentQueries` / `BuildModelQueries` produce: one nodeType filter, varying namespaces and scopes. See [ModelProviders.md](/Doc/Architecture/ModelProviders) for a worked example.
 
 ---
 
@@ -175,7 +175,7 @@ ReferenceEquals(first, second).Should().BeTrue();
 
 If your nodes carry typed content (`AgentConfiguration`, `ModelDefinition`, etc.), make sure the type is registered in the hub's `TypeRegistry`. The synced query deserialises `MeshNode.Content` using the hub's `JsonSerializerOptions`. A missing TypeRegistry entry means `Content` arrives as a raw `JsonElement`, your `is T` casts fail silently, and the collection appears empty even though the snapshot has items.
 
-See [AddingANewNodeType](AddingANewNodeType.md) → step 4 for the wiring.
+See [AddingANewNodeType](/Doc/Architecture/AddingANewNodeType) → step 4 for the wiring.
 
 ---
 
@@ -298,7 +298,7 @@ workspace.GetQuery(Guid.NewGuid(), "...")
 
 ## See also
 
-- [AddingANewNodeType](AddingANewNodeType.md) — how to introduce a new node type so its instances surface in synced queries
-- [CqrsAndContentAccess](CqrsAndContentAccess.md) — when to use synced queries vs `GetMeshNodeStream` (single-node) vs `QueryAsync` (one-shot)
-- [AsynchronousCalls](AsynchronousCalls.md) — `IObservable` patterns and why you never `await` inside hub-reachable code
-- [ModelProviders](ModelProviders.md) — worked example of `BuildAgentQueries` / `BuildModelQueries` using the multi-query pattern correctly
+- [AddingANewNodeType](/Doc/Architecture/AddingANewNodeType) — how to introduce a new node type so its instances surface in synced queries
+- [CqrsAndContentAccess](/Doc/Architecture/CqrsAndContentAccess) — when to use synced queries vs `GetMeshNodeStream` (single-node) vs `QueryAsync` (one-shot)
+- [AsynchronousCalls](/Doc/Architecture/AsynchronousCalls) — `IObservable` patterns and why you never `await` inside hub-reachable code
+- [ModelProviders](/Doc/Architecture/ModelProviders) — worked example of `BuildAgentQueries` / `BuildModelQueries` using the multi-query pattern correctly

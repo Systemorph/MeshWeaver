@@ -152,7 +152,7 @@ mesh
 
 > **Dependency rule:** Providers are constructed from the parent service collection only. They **MUST NOT** depend on `IMessageHub` or `IMeshQueryCore` — they run during persistence init, before (or during) the singleton `IMessageHub` factory. Re-entering that factory was the cyclic-DI root cause of the Documentation stack overflow that this redesign retired.
 
-Each provider also declares which **query contexts** it participates in (`search`, `create`, `autocomplete`, `browse` — see [QuerySyntax](Doc/DataMesh/QuerySyntax.md) for the `context:` qualifier vocabulary). Consumers running with `context:search` skip every partition whose context set does not include `search`. This is a partition-level participation gate that complements the per-node `ExcludeFromContext` flag.
+Each provider also declares which **query contexts** it participates in (`search`, `create`, `autocomplete`, `browse` — see [QuerySyntax](/Doc/DataMesh/QuerySyntax) for the `context:` qualifier vocabulary). Consumers running with `context:search` skip every partition whose context set does not include `search`. This is a partition-level participation gate that complements the per-node `ExcludeFromContext` flag.
 
 ## 2. PartitionDefinition nodes (config-time, declared)
 
@@ -209,7 +209,7 @@ public sealed class MyNodeTypeProvider : IStaticNodeProvider
 services.AddSingleton<IStaticNodeProvider, MyNodeTypeProvider>();
 ```
 
-See [Test State Isolation](TestStateIsolation) for the test-fixture pattern.
+See [Test State Isolation](/Doc/Architecture/TestStateIsolation) for the test-fixture pattern.
 
 # Satellite Tables and Sub-Namespaces
 

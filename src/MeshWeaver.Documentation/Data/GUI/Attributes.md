@@ -205,6 +205,91 @@ public record Address
 
 ---
 
+### `[MeshNode]`
+
+Marks a `string` property as a reference to a **mesh node**. The Editor renders a searchable `MeshNodePickerControl`; the selected node's **path** is stored as the property value. This is the standard way to pick a node — never hand-build a select + search.
+
+```csharp
+public record TaskItem
+{
+    // Multiple queries run in parallel and merge; the user's typed text is appended to each.
+    [MeshNode("nodeType:User namespace:{node.namespace}")]
+    public string? AssigneePath { get; init; }
+
+    // Compact picker opening upwards, auto-selecting the first result when unset —
+    // the shape the chat composer uses for its agent/model pickers.
+    [MeshNode("nodeType:Agent namespace:Agent",
+        Layout = MeshNodePickerLayout.Thin,
+        Open = MeshNodePickerOpenDirection.Up,
+        DefaultToFirst = true)]
+    public string? AgentPath { get; init; }
+}
+```
+
+| Option | Effect |
+|---|---|
+| `Queries` (ctor args) | Query strings (see [Query Syntax](/Doc/DataMesh/QuerySyntax)) run in parallel and merged. Template variables `{node.namespace}` / `{node.path}` resolve against the editing context at render time; `{node.PropertyName}` resolves against the bound object. |
+| `Layout` | `Default` (full card: avatar, name, node-type subtitle) or `Thin` (small icon + name, minimal padding for tight rows). |
+| `Open` | `Down` (default) or `Up` — open the dropdown above the field when it is anchored to the bottom of the viewport. |
+| `DefaultToFirst` | Opt-in: when no value is set, auto-select (and persist) the first available result. |
+
+The read-only rendering is a plain label showing the stored path.
+
+---
+
+### `[MeshNodeCollection]`
+
+The collection counterpart of `[MeshNode]`: marks a collection property as holding mesh-node references. The Editor renders a full-width inline collection section — existing entries as chips, with add/remove actions when the property is editable. Queries use the same syntax and template variables as `[MeshNode]`.
+
+```csharp
+public record Team
+{
+    [MeshNodeCollection("nodeType:User namespace:{node.namespace}")]
+    public ImmutableList<string> MemberPaths { get; init; } = [];
+}
+```
+
+---
+
+### `[Markdown]`
+
+Renders a `string` property as markdown: `MarkdownControl` for display, `MarkdownEditorControl` for editing (own edit button by default — `SeparateEditView = true`).
+
+```csharp
+public record Article
+{
+    [Markdown(EditorHeight = "400px", ShowPreview = true, TrackChanges = false,
+        Placeholder = "Write the article body…")]
+    public string Body { get; init; } = "";
+}
+```
+
+| Option | Default | Effect |
+|---|---|---|
+| `EditorHeight` | `"300px"` | Height of the editor area |
+| `ShowPreview` | `true` | Side-by-side preview while editing |
+| `TrackChanges` | `false` | Enable tracked-changes annotations |
+| `Placeholder` | "Enter content…" | Hint shown when empty |
+
+---
+
+### `[ContentItem]`
+
+Marks a `string` property as a reference to a file in a **content collection** (image URL, attachment, …). The Editor renders a text field with a **Browse** button that opens a modal file browser over the node's content collection.
+
+```csharp
+public record Profile
+{
+    [ContentItem]               // browses the default "content" collection
+    public string? AvatarUrl { get; init; }
+
+    [ContentItem("uploads")]    // browse a specific collection
+    public string? AttachmentPath { get; init; }
+}
+```
+
+---
+
 ## Default Type-to-Control Mapping
 
 When no override attribute is present, the Editor picks the most appropriate control for each property type:
@@ -215,6 +300,8 @@ When no override attribute is present, the Editor picks the most appropriate con
 | `int`, `double`, `decimal` | `NumberFieldControl` |
 | `bool` | `CheckBoxControl` |
 | `DateTime` | `DateTimeControl` |
+
+These defaults apply **only when no override attribute is present** — `[UiControl<T>]`, `[Dimension<T>]`, `[MeshNode]`, `[MeshNodeCollection]`, `[Markdown]`, and `[ContentItem]` all take precedence.
 
 ---
 
@@ -261,7 +348,11 @@ MeshWeaver.Layout.Controls.Stack
         "| `[Range(min, max)]` | Numeric bounds validation |\n" +
         "| `[Editable(false)]` | Read-only display |\n" +
         "| `[UiControl<T>]` | Override rendered control type |\n" +
-        "| `[Dimension<T>]` | Dropdown from data source |"
+        "| `[Dimension<T>]` | Dropdown from data source |\n" +
+        "| `[MeshNode(\"query\")]` | Searchable mesh-node picker (stores the path) |\n" +
+        "| `[MeshNodeCollection(\"query\")]` | Inline chip collection of node references |\n" +
+        "| `[Markdown]` | Markdown display + editor |\n" +
+        "| `[ContentItem]` | Text field + Browse over a content collection |"
     ))
 ```
 
