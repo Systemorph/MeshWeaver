@@ -43,15 +43,22 @@ public sealed class PersistenceService : IStorageAdapter
         _logger = logger;
         // Specific (fixed-namespace) providers iterate first so a /Doc/...
         // path lands on EmbeddedResource before any wildcard gets asked.
-        // Within bands, registration order is preserved.
+        // Within bands, higher IPartitionStorageProvider.Priority claims first
+        // (durable backends = 100, in-memory catch-all = 0); ties preserve
+        // registration order (OrderByDescending is stable). Without the
+        // priority sort, the in-memory wildcard that AddOrleansMeshServices
+        // registers as a baseline claimed every write ahead of a Postgres
+        // provider registered later — the atioz 2026-06-11 silent create-loss.
         var all = providers.ToList();
         var specific = all
             .Where(p => p.PartitionDefinition != null
                         && !string.IsNullOrEmpty(p.PartitionDefinition.Namespace))
+            .OrderByDescending(p => p.Priority)
             .ToList();
         var wildcard = all
             .Where(p => p.PartitionDefinition == null
                         || string.IsNullOrEmpty(p.PartitionDefinition.Namespace))
+            .OrderByDescending(p => p.Priority)
             .ToList();
         _allOrdered = specific.Concat(wildcard).ToList();
         _writable = _allOrdered.Where(p => !p.IsReadOnly).ToList();
@@ -90,27 +97,40 @@ public sealed class PersistenceService : IStorageAdapter
     /// for "must always know where to save" without a central registry.
     /// </summary>
     public IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options)
-        => _writable
-            .Select(p => p.Adapter.Write(node, options)
-                // Claim diagnostics: which provider actually persisted the node.
-                // Debug-level — flip MeshWeaver...PersistenceService to Debug to
-                // see where a write lands (essential when a wrong provider claims
-                // a path and the node "saves" into a non-durable store).
-                .Do(n =>
-                {
-                    if (n is not null)
-                        _logger?.LogDebug(
-                            "[Persistence] write {Path} claimed by {Provider} (adapter {Adapter})",
-                            node.Path, p.GetType().Name, p.Adapter.GetType().Name);
-                }))
-            .Concat()
-            .Where(n => n is not null)
-            .Take(1)
-            .DefaultIfEmpty()
+        => TryWriteFrom(node, options, 0)
             .SelectMany(n => n is not null
                 ? Observable.Return(n)
                 : Observable.Throw<MeshNode>(new InvalidOperationException(
                     $"Could not save '{node.Path}': no writable storage provider accepted the node.")));
+
+    /// <summary>
+    /// Sequential try-then-claim, race-free: provider <c>i + 1</c> is subscribed
+    /// ONLY after provider <c>i</c> explicitly declined (emitted null / completed
+    /// empty). The previous <c>Concat + Take(1)</c> shape advanced to the next
+    /// provider on the claimer's synchronous OnCompleted before Take's
+    /// unsubscribe landed — a synchronously-emitting claimer (InMemory) raced a
+    /// second provider into a DOUBLE WRITE.
+    /// </summary>
+    private IObservable<MeshNode?> TryWriteFrom(MeshNode node, JsonSerializerOptions options, int index)
+        => index >= _writable.Count
+            ? Observable.Return<MeshNode?>(null)
+            : Observable.Defer(() => _writable[index].Adapter.Write(node, options))
+                .Take(1)
+                .DefaultIfEmpty()
+                .SelectMany(n =>
+                {
+                    if (n is null)
+                        return TryWriteFrom(node, options, index + 1);
+                    // Claim diagnostics: which provider actually persisted the
+                    // node. Debug-level — flip MeshWeaver...PersistenceService to
+                    // Debug to see where a write lands (essential when a wrong
+                    // provider claims a path into a non-durable store).
+                    var p = _writable[index];
+                    _logger?.LogDebug(
+                        "[Persistence] write {Path} claimed by {Provider} (adapter {Adapter})",
+                        node.Path, p.GetType().Name, p.Adapter.GetType().Name);
+                    return Observable.Return<MeshNode?>(n);
+                });
 
     /// <summary>
     /// Fan out across every writable adapter: each self-checks containment

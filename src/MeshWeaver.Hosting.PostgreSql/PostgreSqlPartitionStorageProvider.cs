@@ -106,6 +106,10 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     public bool IsReadOnly => false;
 
     /// <inheritdoc/>
+    /// <remarks>Durable backend - claims ahead of the in-memory wildcard catch-all.</remarks>
+    public int Priority => 100;
+
+    /// <inheritdoc/>
     public ImmutableHashSet<string> Contexts { get; }
 
     public PostgreSqlPartitionStorageProvider(

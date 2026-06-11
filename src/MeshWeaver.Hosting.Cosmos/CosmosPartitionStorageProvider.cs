@@ -23,6 +23,10 @@ public sealed class CosmosPartitionStorageProvider : IPartitionStorageProvider
     public bool IsReadOnly => false;
 
     /// <inheritdoc/>
+    /// <remarks>Durable backend - claims ahead of the in-memory wildcard catch-all.</remarks>
+    public int Priority => 100;
+
+    /// <inheritdoc/>
     public IStorageAdapter Adapter { get; }
 
     /// <inheritdoc/>

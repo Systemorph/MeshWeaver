@@ -23,6 +23,15 @@ public sealed class InMemoryPartitionStorageProvider : IPartitionStorageProvider
     public bool IsReadOnly => false;
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Default 0 — the in-memory catch-all must NEVER claim ahead of a durable
+    /// backend (Priority 100). Scoped providers (a non-null <c>matches</c>
+    /// predicate) may pass a higher value to claim their slice first — e.g. the
+    /// compile-watcher Release store at 150.
+    /// </remarks>
+    public int Priority { get; }
+
+    /// <inheritdoc/>
     public IStorageAdapter Adapter { get; }
 
     /// <inheritdoc/>
@@ -51,14 +60,17 @@ public sealed class InMemoryPartitionStorageProvider : IPartitionStorageProvider
         InMemoryStorageAdapter adapter,
         IEnumerable<string>? contexts = null,
         Func<string, bool>? matches = null,
-        string name = "InMemory")
+        string name = "InMemory",
+        int priority = 0)
     {
-        // TODO(stage2): when IStorageAdapter.Write becomes IObservable<MeshNode?>,
-        // wrap `adapter` in PathFilteringStorageAdapter that returns null for paths
-        // failing `matches`. For Stage 1 the predicate is ignored — Release-segment
-        // routing is temporarily broken until Stage 2 lands.
-        _ = matches;
-        Adapter = adapter;
+        // A scoped provider declines paths outside its predicate (the decorator
+        // emits null → the try-then-claim chain moves on); the unscoped
+        // catch-all claims everything but only at Priority 0 — i.e. after every
+        // durable backend has declined.
+        Adapter = matches is null
+            ? adapter
+            : new PathFilteringStorageAdapter(adapter, matches);
+        Priority = priority;
         Name = name;
         Contexts = contexts != null
             ? ImmutableHashSet.CreateRange(StringComparer.OrdinalIgnoreCase, contexts)
