@@ -13,9 +13,9 @@ Tags:
   - "Providers"
 ---
 
-MeshWeaver speaks to multiple LLM providers — Claude via Anthropic, GPT-class and open-weight models via the Azure AI Services multi-model gateway, embedding models, and more — but the configuration surface is intentionally small: **one shared key, a handful of endpoints, and a short per-provider model list.** This page explains the credential/endpoint wiring and the factory routing. For getting models to actually appear in the picker — provider/model **mesh nodes**, the space/user layers, and the install-time gotchas — read the operational guide first: **[Setting Up Model Providers](ModelProviderSetup.md)**.
+MeshWeaver speaks to multiple LLM providers — Claude via Anthropic, GPT-class and open-weight models via the Azure AI Services multi-model gateway, embedding models, and more — but the configuration surface is intentionally small: **one shared key, a handful of endpoints, and a short per-provider model list.** This page explains the credential/endpoint wiring and the factory routing. For getting models to actually appear in the picker — provider/model **mesh nodes**, the space/user layers, and the install-time gotchas — read the operational guide first: **[Setting Up Model Providers](/Doc/AI/ModelProviderSetup)**.
 
-> **Why read this?** This page is about *credentials, endpoints, and which factory handles a model*. If your question is "why is the model picker empty / how do I add models," start with [Setting Up Model Providers](ModelProviderSetup.md) — the picker is fed by `ModelProvider` / `LanguageModel` mesh nodes, which this deployment seeds from the config sections below.
+> **Why read this?** This page is about *credentials, endpoints, and which factory handles a model*. If your question is "why is the model picker empty / how do I add models," start with [Setting Up Model Providers](/Doc/AI/ModelProviderSetup) — the picker is fed by `ModelProvider` / `LanguageModel` mesh nodes, which this deployment seeds from the config sections below.
 
 <svg viewBox="0 0 760 320" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
   <defs>
@@ -74,7 +74,7 @@ MeshWeaver speaks to multiple LLM providers — Claude via Anthropic, GPT-class 
 
 ## One Azure Foundry Key, Two Providers
 
-A single Aspire parameter — `azure-foundry-key`, declared in [`memex/aspire/Memex.AppHost/Program.cs:51`](../../../../memex/aspire/Memex.AppHost/Program.cs) — backs both the Anthropic and AzureAIS credentials:
+A single Aspire parameter — `azure-foundry-key`, declared in `memex/aspire/Memex.AppHost/Program.cs:51` — backs both the Anthropic and AzureAIS credentials:
 
 | Env var | Provider | Endpoint path |
 |---|---|---|
@@ -102,16 +102,15 @@ The embedding pair establishes the canonical pattern — a sibling `endpoint` + 
 
 ---
 
-## Models Live in Agent Definitions, Not in Config
+## Model Selection — Composer First, Tier as Optional Fallback
 
-Two things select a model, at two different layers. **An agent** picks its model from its own definition (below); **a deployment** advertises which models exist by listing them in each provider's `{Section}:Models` config, which `BuiltInLanguageModelProvider` turns into `LanguageModel` mesh nodes for the picker (see [Setting Up Model Providers](ModelProviderSetup.md)). The Aspire AppHost ships `Anthropic__Models__0..2` (= the three `ModelTier` ids) for exactly that reason — keep the catalog in sync with the tier params. What the AppHost does *not* do is hardcode model ids in framework C#. The authoritative source for "which model should *this agent* use" is the agent's own definition:
+Two things select a model, at two different layers. **A deployment** advertises which models exist by listing them in each provider's `{Section}:Models` config, which `BuiltInLanguageModelProvider` turns into `LanguageModel` mesh nodes for the picker (see [Setting Up Model Providers](/Doc/AI/ModelProviderSetup)). What the AppHost does *not* do is hardcode model ids in framework C#.
 
-- **`AgentConfiguration.PreferredModel`** — a pinned model name for this specific agent.
-- **`AgentConfiguration.ModelTier`** — `"heavy"`, `"standard"`, or `"light"`, resolved through the Aspire parameters `ModelTier__Heavy`, `ModelTier__Standard`, and `ModelTier__Light`.
+Which model a conversation actually runs on resolves in this order (see `ChatClientAgentFactory.ResolveTierModel` and the concrete factories):
 
-Factories such as `AzureOpenAIChatClientAgentFactory` and `AzureClaudeChatClientAgentFactory` read agent config when constructing the chat client.
-
-> **The agent's `PreferredModel` wins over the global chat-dropdown selection (`CurrentModelName`).** This is intentional — agents are tuned for specific models. The dropdown is for the user's free-form chat with the default agent, not a global override for all agents.
+1. **The chat composer selection** (`ThreadComposer.ModelName` → `CurrentModelName`) — the user's explicit pick always wins.
+2. **The agent's `AgentConfiguration.ModelTier`** — a strictly **optional** hint (`"heavy"` / `"standard"` / `"light"` / `"utility"`), resolved through the `ModelTier:*` config (Aspire parameters `ModelTier__Heavy/Standard/Light/Utility`). It only fills the gap where nobody picked a model — headless flows like notification triage and the icon/description/thread-naming micro-jobs. Only the built-in background micro-agents declare it; interactive agents leave it unset. With no tier declared or no `ModelTier:*` config, this step is a no-op.
+3. **The provider's first configured model** — the last-resort default.
 
 ---
 
@@ -119,9 +118,9 @@ Factories such as `AzureOpenAIChatClientAgentFactory` and `AzureClaudeChatClient
 
 The picker is **node-based**, not factory-based. `AgentPickerProjection` runs `nodeType:LanguageModel|ModelProvider` queries over the `_Provider` namespaces (system, the user's selected providers) and shows the resulting `LanguageModel` nodes, grouped by provider. Those nodes come from two places: the system catalog `BuiltInLanguageModelProvider` materialises from each `{Section}:Models` config list, and space/user `ModelProvider` nodes authored in the mesh.
 
-So an empty picker means **no provider/model nodes are visible to the user** — almost always because the deployment carries no `{Section}:Models` config signal (the classic Helm/AKS gap) or the user's `_Provider/_Selection` points at a provider that doesn't exist. The full diagnosis + fix is in **[Setting Up Model Providers → Troubleshooting](ModelProviderSetup.md#troubleshooting-an-empty-picker)**.
+So an empty picker means **no provider/model nodes are visible to the user** — almost always because the deployment carries no `{Section}:Models` config signal (the classic Helm/AKS gap) or the user's `_Provider/_Selection` points at a provider that doesn't exist. The full diagnosis + fix is in **[Setting Up Model Providers → Troubleshooting](/Doc/AI/ModelProviderSetup#troubleshooting-an-empty-picker)**.
 
-> Don't try to mirror "everything the provider sells." List a short, curated set in `{Section}:Models` (the deployment's catalog) and let agents pin specifics via `PreferredModel`.
+> Don't try to mirror "everything the provider sells." List a short, curated set in `{Section}:Models` (the deployment's catalog) — the user picks from it in the composer.
 
 ---
 
@@ -153,5 +152,5 @@ To wire in a new provider (a second Azure OpenAI deployment, a hosted local mode
 
 ## Related
 
-- [Agentic AI](AgenticAI.md) — what agents are and how they're composed
-- [MCP Authentication](McpAuthentication.md) — how external clients authenticate to MeshWeaver
+- [Agentic AI](/Doc/AI/AgenticAI) — what agents are and how they're composed
+- [MCP Authentication](/Doc/AI/McpAuthentication) — how external clients authenticate to MeshWeaver

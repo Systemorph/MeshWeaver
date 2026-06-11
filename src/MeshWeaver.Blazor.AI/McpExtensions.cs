@@ -35,7 +35,8 @@ public static class McpExtensions
     {
         services.AddMcpServer()
             .WithHttpTransport()
-            .WithToolsFromAssembly(typeof(McpMeshPlugin).Assembly);
+            .WithToolsFromAssembly(typeof(McpMeshPlugin).Assembly)
+            .WithResourcesFromAssembly(typeof(McpResources).Assembly);
 
         // BindConfiguration resolves IConfiguration from DI at options
         // construction — works wherever the standard ASP.NET host is running,
