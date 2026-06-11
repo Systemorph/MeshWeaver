@@ -1,0 +1,16 @@
+﻿{
+    "id":  "TechnicalProvisions",
+    "namespace":  "PensionFund/Position",
+    "name":  "Technical Provisions",
+    "nodeType":  "PensionFund/Position",
+    "category":  "Positions",
+    "description":  "Actuarial provisions: longevity, conversion-rate losses, death and disability fluctuations.",
+    "order":  17,
+    "icon":  "\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027 viewBox=\u00270 0 24 24\u0027 fill=\u0027none\u0027 stroke=\u0027currentColor\u0027 stroke-width=\u00272\u0027\u003e\u003crect x=\u00274\u0027 y=\u00274\u0027 width=\u002716\u0027 height=\u002716\u0027 rx=\u00272\u0027/\u003e\u003cpath d=\u0027M8 12h8\u0027/\u003e\u003c/svg\u003e",
+    "isPersistent":  true,
+    "content":  {
+                    "$type":  "Position",
+                    "side":  "Liabilities",
+                    "aggregation":  "Atomic"
+                }
+}

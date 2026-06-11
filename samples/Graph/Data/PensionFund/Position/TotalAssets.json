@@ -1,0 +1,48 @@
+﻿{
+    "id":  "TotalAssets",
+    "namespace":  "PensionFund/Position",
+    "name":  "Total Assets",
+    "nodeType":  "PensionFund/Position",
+    "category":  "Positions",
+    "description":  "Total Assets = sum of all atomic asset positions.",
+    "order":  21,
+    "icon":  "\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027 viewBox=\u00270 0 24 24\u0027 fill=\u0027none\u0027 stroke=\u0027currentColor\u0027 stroke-width=\u00272\u0027\u003e\u003crect x=\u00274\u0027 y=\u00274\u0027 width=\u002716\u0027 height=\u002716\u0027 rx=\u00272\u0027/\u003e\u003cpath d=\u0027M8 12h8\u0027/\u003e\u003c/svg\u003e",
+    "isPersistent":  true,
+    "content":  {
+                    "$type":  "Position",
+                    "side":  "Computed",
+                    "aggregation":  "Sum",
+                    "components":  [
+                                       {
+                                           "$type":  "PositionComponent",
+                                           "position":  "PensionFund/Position/Cash",
+                                           "weight":  1
+                                       },
+                                       {
+                                           "$type":  "PositionComponent",
+                                           "position":  "PensionFund/Position/Bonds",
+                                           "weight":  1
+                                       },
+                                       {
+                                           "$type":  "PositionComponent",
+                                           "position":  "PensionFund/Position/Equities",
+                                           "weight":  1
+                                       },
+                                       {
+                                           "$type":  "PositionComponent",
+                                           "position":  "PensionFund/Position/RealEstate",
+                                           "weight":  1
+                                       },
+                                       {
+                                           "$type":  "PositionComponent",
+                                           "position":  "PensionFund/Position/Alternatives",
+                                           "weight":  1
+                                       },
+                                       {
+                                           "$type":  "PositionComponent",
+                                           "position":  "PensionFund/Position/Receivables",
+                                           "weight":  1
+                                       }
+                                   ]
+                }
+}

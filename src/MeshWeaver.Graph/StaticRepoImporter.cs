@@ -30,6 +30,15 @@ public static class StaticRepoImporter
     private const int BatchSize = 16;
 
     /// <summary>
+    /// Address-type prefix of the dedicated import hub (<c>import/{meshHubId}</c>). Declared
+    /// stream-routed via <c>MeshBuilder.AddStreamRoutedAddressType(ImportAddressType)</c> in
+    /// <c>AddGraph</c> so the silo's RoutingGrain dispatches to it over the cluster memory stream
+    /// (and responses route back). Owned by this module — NOT hard-coded into the core
+    /// <see cref="MeshConfiguration.DefaultStreamRoutedAddressTypes"/>. See <see cref="CreateImportHub"/>.
+    /// </summary>
+    public const string ImportAddressType = "import";
+
+    /// <summary>
     /// "Sync context init" — imports EVERY registered <see cref="IStaticRepoSource"/> resolved from
     /// the hub. No-op when none is registered (so a host that registers no source is untouched).
     /// Runs under <see cref="AccessService.ImpersonateAsSystem"/> so the import's overwrite / create /
@@ -50,18 +59,73 @@ public static class StaticRepoImporter
 
         logger?.LogInformation("[StaticRepoImport] sync-context init: {Count} source(s).", sources.Length);
         var accessService = hub.ServiceProvider.GetService<AccessService>();
+
+        // 🚨 The bulk create/upsert traffic of an import MUST NOT run on the ROOT MESH HUB's
+        // action block. The mesh hub is the irreplaceable router; flooding it with
+        // CreateOrUpdateNodeRequest (each fanning out an inner self-posted CreateNodeRequest)
+        // stalls ALL routing → every node op 60s-times-out → portal-wide wedge (atioz 2026-06-11:
+        // 11× CreateOrUpdateNodeRequest + 3× CreateNodeRequest@mesh/<self> stale >60s while real
+        // user SubscribeRequests starved). Run the whole import on a DEDICATED reachable hub
+        // instead — see CreateImportHub. Its own single-threaded action block serialises the
+        // import; the mesh hub stays free to route.
+        var importHub = CreateImportHub(hub, logger);
+
         // Establish System identity for the whole import subscription so each source's writes
         // capture it (CarryAccessContext) — disposed when the import completes.
         return Observable.Using(
             () => accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
+            // 🚨 Per-SOURCE isolation: one source faulting must NOT abort the others. Each
+            // Import is guarded; a failure logs + yields a "Failed" result and the Concat
+            // continues to the next source. (Per-FILE isolation lives one level deeper, in
+            // Run's upsert loop, so a single bad node never fails its whole partition.)
             _ => sources
-                .Select(s => Import(hub, s, logger)
+                .Select(s => Import(importHub, s, logger)
                     .Catch<StaticRepoImportResult, Exception>(ex =>
                     {
                         logger?.LogWarning(ex, "[StaticRepoImport] source {Partition} failed.", s.Partition);
                         return Observable.Return(new StaticRepoImportResult(s.Partition, string.Empty, "Failed"));
                     }))
                 .Concat());
+    }
+
+    /// <summary>
+    /// Creates (or returns the existing) DEDICATED import hub — the reachable hosted hub the whole
+    /// static-repo import runs on, so its bulk <see cref="CreateOrUpdateNodeRequest"/> /
+    /// <see cref="CreateNodeRequest"/> traffic is processed on THIS hub's action block, never the
+    /// root mesh hub's (the router must stay free — see <see cref="ImportAll"/>).
+    ///
+    /// <para>Same reachable-hosted-hub pattern as <c>MeshNodeStreamCache</c>'s cache hub:</para>
+    /// <list type="bullet">
+    ///   <item>A PROCESS-UNIQUE address <c>import/{meshHubId}</c> — the <c>import</c> address-type is
+    ///     declared stream-routed in <see cref="MeshConfiguration.DefaultStreamRoutedAddressTypes"/>,
+    ///     so the silo's RoutingGrain dispatches to it via the cluster memory stream (keyed by the
+    ///     mesh hub's Id so each process gets its own subscription).</item>
+    ///   <item><c>WithInitialization(... RegisterStream(hub))</c> — registers the hub with the routing
+    ///     service BEFORE any request is posted, so responses (query results, ImportContent acks)
+    ///     route back to it instead of falling into the mesh-type NotFound trap.</item>
+    ///   <item><c>WithNodeOperationHandlers()</c> — the node create/upsert handlers, so the import's
+    ///     posts are handled locally on this hub (and the handler's inner self-posted
+    ///     <c>CreateNodeRequest</c> stays on this hub too, never the mesh hub).</item>
+    ///   <item><c>AddData()</c> — an <see cref="IWorkspace"/> so the upsert-of-existing path
+    ///     (<c>hub.GetMeshNodeStream(path).Update</c>) can dispatch through the shared
+    ///     <c>IMeshNodeStreamCache</c>.</item>
+    /// </list>
+    /// <see cref="HostedHubCreation.Always"/> + the stable address makes this idempotent: repeated
+    /// <see cref="ImportAll"/> calls (and direct test <see cref="Import"/> calls that pass the mesh
+    /// hub) reuse the one hub.
+    /// </summary>
+    private static IMessageHub CreateImportHub(IMessageHub meshHub, ILogger? logger)
+    {
+        var routingService = meshHub.ServiceProvider.GetRequiredService<IRoutingService>();
+        var importAddress = new Address(ImportAddressType, meshHub.Address.Id);
+        logger?.LogInformation("[StaticRepoImport] dedicated import hub at {Address} (off the mesh router).", importAddress);
+        return meshHub.GetHostedHub(
+            importAddress,
+            config => config
+                .AddData()
+                .WithNodeOperationHandlers()
+                .WithInitialization(h => h.RegisterForDisposal(routingService.RegisterStream(h))),
+            HostedHubCreation.Always)!;
     }
 
     public static IObservable<StaticRepoImportResult> Import(
@@ -211,7 +275,7 @@ public static class StaticRepoImporter
                         {
                             logger?.LogDebug(
                                 "[StaticRepoImport] {Partition}: skip claimed {Path}", source.Partition, path);
-                            return Observable.Return(0);
+                            return Observable.Return((Imported: 0, Failed: 0));
                         }
 
                         var materialized = Materialize(sourceNode);
@@ -221,11 +285,31 @@ public static class StaticRepoImporter
                                 CreatedDate = target.CreatedDate,
                                 CreatedBy = target.CreatedBy
                             };
-                        return Upsert(hub, materialized);
+                        // 🚨 Per-FILE isolation. A single node's upsert faulting (bad content, a
+                        // validator reject, a transient owner timeout) must NOT abort the whole
+                        // partition import — the first failure used to propagate through Merge and
+                        // kill every remaining node. Guard each create: log the exact path to the
+                        // logger AND append a per-file ⚠ line to the import activity (so the failure
+                        // is diagnosable from the activity log after the fact), then count it as a
+                        // Failed and continue. The Failed tally drives the terminal Warning status
+                        // below — the activity never reports a green Succeeded while hiding failures.
+                        return Upsert(hub, materialized)
+                            .Select(_ => (Imported: 1, Failed: 0))
+                            .Catch<(int Imported, int Failed), Exception>(ex =>
+                            {
+                                logger?.LogWarning(ex,
+                                    "[StaticRepoImport] {Partition}: upsert of {Path} failed (continuing).",
+                                    source.Partition, path);
+                                NodeTypeCompilationActivity.AppendLog(hub, activityPath,
+                                    $"⚠ Failed to import {path}: {ex.Message}", logger!,
+                                    Microsoft.Extensions.Logging.LogLevel.Warning);
+                                return Observable.Return((Imported: 0, Failed: 1));
+                            });
                     })
                     .ToObservable()
                     .Merge(BatchSize)
-                    .Sum();
+                    .Aggregate((Imported: 0, Failed: 0),
+                        (acc, x) => (acc.Imported + x.Imported, acc.Failed + x.Failed));
 
                 return upserted.SelectMany(count =>
                 {
@@ -263,13 +347,30 @@ public static class StaticRepoImporter
                         // collection→collection into each owning node — AFTER the node upsert.
                         SyncContentImports(hub, source, logger).Select(contentCount =>
                         {
-                            NodeTypeCompilationActivity.AppendLog(hub, activityPath,
-                                $"Imported {count} node(s), pruned {prunedCount}, synced {contentCount} content file(s).", logger!);
-                            NodeTypeCompilationActivity.MarkSucceeded(hub, activityPath, logger!);
+                            // 🚨 Terminal status reflects per-file outcomes: ANY failed upsert →
+                            // Warning (the ⚠ lines above pinpoint which files), all-clear →
+                            // Succeeded. Written via Complete so the status + summary land in ONE
+                            // atomic Update — a reader observing the terminal status always sees the
+                            // full diagnostic log (no torn "Succeeded but the ⚠ lines didn't land yet").
+                            var failed = count.Failed;
+                            var status = failed > 0 ? ActivityStatus.Warning : ActivityStatus.Succeeded;
+                            var summary = failed > 0
+                                ? $"Imported {count.Imported} node(s), {failed} FAILED (see ⚠ above), pruned {prunedCount}, synced {contentCount} content file(s)."
+                                : $"Imported {count.Imported} node(s), pruned {prunedCount}, synced {contentCount} content file(s).";
+                            NodeTypeCompilationActivity.Complete(hub, activityPath, status,
+                                new[]
+                                {
+                                    new LogMessage(summary,
+                                        failed > 0
+                                            ? Microsoft.Extensions.Logging.LogLevel.Warning
+                                            : Microsoft.Extensions.Logging.LogLevel.Information)
+                                },
+                                logger!);
                             logger?.LogInformation(
-                                "[StaticRepoImport] {Partition}: imported {Count}, pruned {Pruned}, content {Content} at {Fingerprint}.",
-                                source.Partition, count, prunedCount, contentCount, fingerprint);
-                            return new StaticRepoImportResult(source.Partition, fingerprint, "Imported", count);
+                                "[StaticRepoImport] {Partition}: imported {Count}, failed {Failed}, pruned {Pruned}, content {Content} at {Fingerprint}.",
+                                source.Partition, count.Imported, failed, prunedCount, contentCount, fingerprint);
+                            return new StaticRepoImportResult(source.Partition, fingerprint,
+                                failed > 0 ? "ImportedWithErrors" : "Imported", count.Imported);
                         }));
                 });
             })

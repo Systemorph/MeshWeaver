@@ -1098,13 +1098,13 @@ internal class MeshNodeCompilationService(
 
         var assemblyName = $"DynamicNode_{nodeName}";
 
-        var compilation = CSharpCompilation.Create(
+        var compilation = RunSourceGenerators(CSharpCompilation.Create(
             assemblyName,
             syntaxTrees: [syntaxTree],
             references: references,
             options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
                 .WithOptimizationLevel(OptimizationLevel.Debug)
-                .WithPlatform(Platform.AnyCpu));
+                .WithPlatform(Platform.AnyCpu)), ct);
 
         string? actualPath;
         if (cacheService.IsDiskCacheEnabled)
@@ -1119,6 +1119,24 @@ internal class MeshNodeCompilationService(
 
         logger.LogInformation("Successfully compiled assembly for {NodePath} to {ActualPath}", node.Path, actualPath);
         return actualPath;
+    }
+
+    /// <summary>
+    /// Runs the in-process Roslyn source generators over a dynamic-node
+    /// compilation before Emit — currently the MeshWeaver.BusinessRules
+    /// <c>ScopeCodeGenerator</c>, which emits the concrete implementations for
+    /// <c>IScope&lt;TIdentity, TState&gt;</c> interfaces declared in node Source.
+    /// A compilation that doesn't reference <c>IScope</c> passes through
+    /// unchanged (the generator no-ops), so this costs nothing for ordinary
+    /// node types. This is what lets Source code nodes use the business-rules
+    /// scopes framework: declare the interface, the compiler generates the
+    /// proxy, and <c>services.AddBusinessRules(assembly)</c> discovers it.
+    /// </summary>
+    private static CSharpCompilation RunSourceGenerators(CSharpCompilation compilation, CancellationToken ct)
+    {
+        var driver = CSharpGeneratorDriver.Create(new BusinessRules.Generator.ScopeCodeGenerator());
+        driver.RunGeneratorsAndUpdateCompilation(compilation, out var updated, out _, ct);
+        return (CSharpCompilation)updated;
     }
 
     /// <summary>
@@ -1251,13 +1269,13 @@ internal class MeshNodeCompilationService(
 
         var assemblyName = sanitizedPath;
 
-        var compilation = CSharpCompilation.Create(
+        var compilation = RunSourceGenerators(CSharpCompilation.Create(
             assemblyName,
             syntaxTrees: [syntaxTree],
             references: references,
             options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
                 .WithOptimizationLevel(OptimizationLevel.Debug)
-                .WithPlatform(Platform.AnyCpu));
+                .WithPlatform(Platform.AnyCpu)), ct);
 
         // Emit to release folder
         await using var dllStream = File.Create(dllPath);
