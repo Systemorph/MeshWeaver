@@ -847,7 +847,11 @@ public static class NodeTypeLayoutAreas
                                 RequestedReleaseForce = upToDate,
                             }
                         };
-                    }).Subscribe(_ => { }, _ => { });
+                    }).Subscribe(
+                        _ => { },
+                        ex => ctx.Host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                            ?.CreateLogger(typeof(NodeTypeLayoutAreas))
+                            .LogWarning(ex, "Release-request write failed for {Path}", nodeTypePath));
                     return Task.CompletedTask;
                 }));
 
@@ -858,7 +862,11 @@ public static class NodeTypeLayoutAreas
             {
                 ctx.Host.Hub.Observe(new RunTestsRequest(),
                     o => o.WithTarget(ctx.Host.Hub.Address))
-                    .Subscribe(_ => { }, _ => { });
+                    .Subscribe(
+                        _ => { },
+                        ex => ctx.Host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                            ?.CreateLogger(typeof(NodeTypeLayoutAreas))
+                            .LogWarning(ex, "RunTestsRequest failed on {Hub}", ctx.Host.Hub.Address));
                 return Task.CompletedTask;
             });
 
@@ -1532,7 +1540,11 @@ public static class NodeTypeLayoutAreas
                             }
                         };
                     })
-                    .Subscribe(_ => { }, _ => { });
+                    .Subscribe(
+                        _ => { },
+                        ex => host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                            ?.CreateLogger(typeof(NodeTypeLayoutAreas))
+                            .LogWarning(ex, "Compile-trigger write failed for {Path}", hubPath));
                 return Task.CompletedTask;
             });
         panel = panel.WithView(compileButton);

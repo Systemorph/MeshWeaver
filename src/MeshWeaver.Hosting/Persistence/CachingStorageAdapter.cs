@@ -7,6 +7,7 @@ using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Persistence;
 
@@ -23,6 +24,7 @@ public class CachingStorageAdapter : IStorageAdapter
     private readonly Func<JsonSerializerOptions, JsonSerializerOptions>? _writeOptionsModifier;
     private readonly FileFormatParserRegistry _parserRegistry = new();
     private readonly IoPoolRegistry? _ioPoolRegistry;
+    private readonly ILogger<CachingStorageAdapter>? _logger;
     // The Read leaf is bridged to IObservable through this pool — never via a
     // bare Observable.FromAsync, which deadlocks under a blocking subscriber.
     // See IoPoolExtensions and Doc/Architecture/AsynchronousCalls.md.
@@ -40,11 +42,13 @@ public class CachingStorageAdapter : IStorageAdapter
     public CachingStorageAdapter(
         string baseDirectory,
         Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null,
-        IoPoolRegistry? ioPoolRegistry = null)
+        IoPoolRegistry? ioPoolRegistry = null,
+        ILogger<CachingStorageAdapter>? logger = null)
     {
         _baseDirectory = Path.GetFullPath(baseDirectory);
         _writeOptionsModifier = writeOptionsModifier;
         _ioPoolRegistry = ioPoolRegistry;
+        _logger = logger;
         _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
         Directory.CreateDirectory(_baseDirectory);
         _snapshot = new DirectorySnapshot(_baseDirectory);
@@ -383,7 +387,13 @@ public class CachingStorageAdapter : IStorageAdapter
                         obj = SetObjectId(obj, id);
                     }
                 }
-                catch (JsonException) { }
+                catch (JsonException ex)
+                {
+                    // A malformed cached file means this object silently vanishes
+                    // from the partition — that must be visible, not swallowed.
+                    _logger?.LogWarning(ex,
+                        "Skipping unparseable cached JSON object {Path}", cachedRelPath);
+                }
 
                 if (obj != null)
                     yield return obj;
@@ -397,7 +407,13 @@ public class CachingStorageAdapter : IStorageAdapter
                     var filePath = Path.Combine(_baseDirectory, cachedRelPath.Replace('/', Path.DirectorySeparatorChar));
                     config = await _parserRegistry.CSharpParser.ParseCodeConfigurationAsync(filePath, content, ct);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    // A failed code-config parse silently drops the node type from
+                    // the partition — log it so the absence is diagnosable.
+                    _logger?.LogWarning(ex,
+                        "Skipping unparseable cached code configuration {Path}", cachedRelPath);
+                }
 
                 if (config != null)
                     yield return config;

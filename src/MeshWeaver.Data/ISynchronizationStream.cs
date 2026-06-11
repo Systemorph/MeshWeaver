@@ -76,7 +76,6 @@ public interface ISynchronizationStream<TStream>
     /// </summary>
     void Update(Func<TStream?, ChangeItem<TStream>?> update, Action<Exception> exceptionCallback);
     void Update(Func<TStream?, ChangeItem<TStream>?> update) => Update(update, _ => { });
-    void Update(Func<TStream?, CancellationToken, Task<ChangeItem<TStream>?>> update, Action<Exception> exceptionCallback);
 
     /// <summary>
     /// 🚨 Canonical VALUE-based write. The caller supplies only a pure value

@@ -135,13 +135,18 @@ public class OrleansPostgresLifecycleTest(ITestOutputHelper output)
         // broadcast + workspace catalog plus the schema-existence
         // invalidation from partition_changes).
         var storageB = siloB.GetRequiredService<IStorageAdapter>();
-        MeshNode? readBack = null;
-        for (var i = 0; i < 30 && readBack is null; i++)
-        {
-            try { readBack = await storageB.Read(path, System.Text.Json.JsonSerializerOptions.Default).FirstAsync().ToTask(ct); }
-            catch { /* during partition init readBack may transiently throw */ }
-            if (readBack is null) await Task.Delay(500, ct);
-        }
+        // Probe-driven wait on the actual condition (WritingTests.md — no for+Task.Delay
+        // poll loop): re-read on an interval, treating the transient partition-init
+        // throw as "not yet", and complete on the first non-null read.
+        var readBack = await Observable.Interval(TimeSpan.FromMilliseconds(250))
+            .StartWith(0L)
+            .SelectMany(_ => storageB.Read(path, System.Text.Json.JsonSerializerOptions.Default)
+                .FirstAsync()
+                .Catch((Exception _) => Observable.Return<MeshNode?>(null)))
+            .Where(n => n is not null)
+            .FirstAsync()
+            .Timeout(15.Seconds())
+            .ToTask(ct);
         readBack.Should().NotBeNull(
             "after partition_changes invalidation + mesh_node_changes propagation, silo B must see the write");
     }

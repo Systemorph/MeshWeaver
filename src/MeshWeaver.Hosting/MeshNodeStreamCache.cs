@@ -655,7 +655,23 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             var lazy = new Lazy<UpdateQueueEntry>(() =>
             {
                 var subject = new Subject<UpdateRequest>();
-                var sub = BuildUpdateQueueObservable(path, subject).Subscribe();
+                // 🚨 onError is mandatory. Per-request failures route to req.Result
+                // (Materialize() below shields the Concat), so a fault HERE means the
+                // queue plumbing itself died — the Subject then has no consumer and
+                // every later write for this path would enqueue into the void with the
+                // caller hanging on its result. Surface loudly and evict the dead
+                // entry so the next write builds a fresh queue (the same lifecycle as
+                // sliding-expiry eviction — no timer, no resubscribe of the faulted
+                // pipeline; the fault itself stays visible in the log).
+                var sub = BuildUpdateQueueObservable(path, subject).Subscribe(
+                    _ => { },
+                    ex =>
+                    {
+                        logger.LogError(ex,
+                            "[UpdateQueue] queue pipeline FAULTED path={Path} — evicting dead queue",
+                            path);
+                        _updateQueues.Remove(path);
+                    });
                 return new UpdateQueueEntry(subject, sub);
             }, LazyThreadSafetyMode.ExecutionAndPublication);
             // Eviction (sliding-expiry timeout, manual Remove, or process

@@ -22,17 +22,6 @@ public static class NavMenuExtensions
                     config)
         );
     public static LayoutDefinition WithNavMenu(this LayoutDefinition layout,
-        Func<NavMenuControl, LayoutAreaHost, RenderingContext, Task<NavMenuControl>> config)
-        => layout.WithRenderer(a => a.Area == NavMenu,
-            (ObservableRenderer)((h, c, store) =>
-                LayoutAreaHost.FromViewBuilder(_ => h.ConfigBasedRenderer(
-                    c,
-                    store,
-                    NavMenu,
-                    () => new(),
-                    config)))
-        );
-    public static LayoutDefinition WithNavMenu(this LayoutDefinition layout,
         object title, string href, Icon? icon = null)
         => layout.WithNavMenu((menu, _, _) => menu.WithNavLink(title, href, icon!));
 

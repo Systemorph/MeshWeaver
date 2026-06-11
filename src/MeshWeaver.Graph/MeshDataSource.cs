@@ -349,10 +349,35 @@ public static class MeshDataSourceExtensions
                         if (!result.IsValid)
                             failures = failures.Add(result);
                     },
+                    ex =>
+                    {
+                        // Fail closed: a throwing validator is a denial, not a pass-through.
+                        // Without this handler the fault was unobserved and the caller sat
+                        // on the request timeout instead of getting a clean error response.
+                        hub.ServiceProvider.GetService<ILoggerFactory>()
+                            ?.CreateLogger(typeof(MeshDataSource))
+                            .LogWarning(ex,
+                                "Read validator faulted for {MessageType} on {Hub} — failing closed",
+                                delivery.Message.GetType().Name, hub.Address);
+                        hub.Post(
+                            new GetDataResponse(null, 0)
+                            {
+                                Error = $"Validation failed: {ex.Message}"
+                            },
+                            o => o.ResponseFor(delivery));
+                    },
                     () =>
                     {
                         if (failures.IsEmpty)
-                            next.Invoke(delivery, ct).Subscribe();
+                            // onError is mandatory: a faulted downstream chain would
+                            // otherwise vanish unobserved inside the validator pipeline.
+                            next.Invoke(delivery, ct).Subscribe(
+                                _ => { },
+                                ex => hub.ServiceProvider.GetService<ILoggerFactory>()
+                                    ?.CreateLogger(typeof(MeshDataSource))
+                                    .LogError(ex,
+                                        "Downstream pipeline faulted after validator pass for {MessageType} on {Hub}",
+                                        delivery.Message.GetType().Name, hub.Address));
                         else
                             hub.Post(
                                 new GetDataResponse(null, 0)
@@ -672,7 +697,13 @@ public static class MeshDataSourceExtensions
                     {
                         hub.GetWorkspace().GetMeshNodeStream()
                             .Update(_ => newNode)
-                            .Subscribe(_ => { }, _ => { });
+                            .Subscribe(
+                                _ => { },
+                                ex => hub.ServiceProvider.GetService<ILoggerFactory>()
+                                    ?.CreateLogger(typeof(MeshDataSource))
+                                    .LogWarning(ex,
+                                        "Own-node refresh from change notification failed on {Hub}",
+                                        hub.Address));
                     }
                     catch
                     {

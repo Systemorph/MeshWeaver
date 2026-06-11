@@ -6,6 +6,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -97,7 +98,11 @@ public static class NotificationLayoutAreas
                     {
                         var current = n.Content as Notification ?? notification;
                         return n with { Content = current with { IsRead = !current.IsRead } };
-                    }, ctx.Host.Hub.JsonSerializerOptions).Subscribe(_ => { }, _ => { });
+                    }, ctx.Host.Hub.JsonSerializerOptions).Subscribe(
+                        _ => { },
+                        ex => ctx.Host.Hub.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()
+                            ?.CreateLogger(typeof(NotificationLayoutAreas).FullName!)
+                            .LogWarning(ex, "IsRead toggle failed for {Path}", notificationPath));
                 }
                 return Task.CompletedTask;
             }));

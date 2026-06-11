@@ -10,6 +10,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -463,7 +464,11 @@ public static class CommentLayoutAreas
                 {
                     var c = n.Content as Comment ?? comment;
                     return n with { Content = c with { Status = CommentStatus.Resolved } };
-                }, host.Hub.JsonSerializerOptions).Subscribe(_ => { }, _ => { });
+                }, host.Hub.JsonSerializerOptions).Subscribe(
+                    _ => { },
+                    ex => host.Hub.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()
+                        ?.CreateLogger(typeof(CommentLayoutAreas).FullName!)
+                        .LogWarning(ex, "Comment resolve failed for {Path}", ownPath));
                 return Task.CompletedTask;
             });
     }

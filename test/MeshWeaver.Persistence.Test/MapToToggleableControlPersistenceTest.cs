@@ -25,13 +25,12 @@ namespace MeshWeaver.Persistence.Test;
 /// Tests for MapToToggleableControl data persistence through the monolith mesh.
 /// Uses serialization between nodes to verify real-world scenarios.
 ///
-/// IMPORTANT: These tests are EXPECTED TO FAIL to demonstrate a bug where:
-/// 1. UpdatePointer correctly updates the local data stream
-/// 2. Auto-save detects the change and sends DataChangeRequest
-/// 3. BUT the changes are NOT persisted to the underlying data store
-/// 4. When getting a fresh stream, it returns the original (unchanged) data
-///
-/// The tests should be updated to PASS once the bug is fixed.
+/// History: these tests originally documented a bug where UpdatePointer edits were
+/// not persisted to the data store. The bug is fixed; the tests now assert the
+/// full edit → auto-save → persist → fresh-read round-trip, waiting on the actual
+/// persisted condition (WritingTests.md) rather than fixed propagation sleeps.
+/// The emission-count tests keep their bounded Task.Delay observation windows —
+/// those are sanctioned "confirm no emission storm happened" negative waits.
 /// </summary>
 [Collection("MapToToggleableControlPersistence")]
 public class MapToToggleableControlPersistenceTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -249,24 +248,21 @@ public class MapToToggleableControlPersistenceTest(ITestOutputHelper output) : M
         Output.WriteLine($"Updating title to: {newTitle}");
         layoutStream.UpdatePointer(newTitle, "/data/\"test_content\"", new JsonPointerReference("title"));
 
-        // Wait for auto-save debounce (100ms) + network + processing
-        Output.WriteLine("Waiting for auto-save...");
-        await Task.Delay(1000);
-
-        // Get FRESH instance from the data store via workspace stream
-        // This goes through the mesh with serialization
-        var updatedItems = await workspace
+        // Wait on the actual condition (no propagation sleep): the remote stream
+        // emits the persisted entity carrying the new title.
+        Output.WriteLine("Waiting for auto-save to land in the data store...");
+        var updatedEntity = await workspace
             .GetRemoteStream<TestContent>(hostAddress)!
+            .Select(items => items.FirstOrDefault(e => e.Id == "test-1"))
+            .Where(e => e is not null && e.Title == newTitle)
+            .FirstAsync()
             .Timeout(10.Seconds())
-            .FirstAsync();
-
-        var updatedEntity = updatedItems.FirstOrDefault(e => e.Id == "test-1");
+            .ToTask();
         Output.WriteLine($"Updated entity from stream: Title={updatedEntity?.Title ?? "null"}");
 
-        // THIS ASSERTION SHOULD FAIL - demonstrates the bug
         updatedEntity.Should().NotBeNull();
         updatedEntity!.Title.Should().Be(newTitle,
-            "The title should be persisted to the data store through the monolith mesh, but it's not - this demonstrates the bug");
+            "the title must be persisted to the data store through the monolith mesh");
     }
 
     /// <summary>
@@ -305,22 +301,20 @@ public class MapToToggleableControlPersistenceTest(ITestOutputHelper output) : M
         Output.WriteLine($"Updating DueDate to: {newDate}");
         layoutStream.UpdatePointer(newDate, "/data/\"test_content\"", new JsonPointerReference("dueDate"));
 
-        // Wait for auto-save
-        await Task.Delay(1000);
-
-        // Get fresh instance
-        var updatedItems = await workspace
+        // Wait on the actual condition (no propagation sleep): the remote stream
+        // emits the persisted entity carrying the new date.
+        var updatedEntity = await workspace
             .GetRemoteStream<TestContent>(hostAddress)!
+            .Select(items => items.FirstOrDefault(e => e.Id == "test-1"))
+            .Where(e => e is not null && e.DueDate == newDate)
+            .FirstAsync()
             .Timeout(10.Seconds())
-            .FirstAsync();
-
-        var updatedEntity = updatedItems.FirstOrDefault(e => e.Id == "test-1");
+            .ToTask();
         Output.WriteLine($"Updated DueDate from stream: {updatedEntity?.DueDate}");
 
-        // THIS ASSERTION SHOULD FAIL
         updatedEntity.Should().NotBeNull();
         updatedEntity!.DueDate.Should().Be(newDate,
-            "The DueDate should be persisted through the monolith mesh, but it's not - this demonstrates the bug");
+            "the DueDate must be persisted through the monolith mesh");
     }
 
     /// <summary>
@@ -375,8 +369,16 @@ public class MapToToggleableControlPersistenceTest(ITestOutputHelper output) : M
         Output.WriteLine("Making edit to trigger workspace stream...");
         layoutStream.UpdatePointer("Test Edit", "/data/\"test_content\"", new JsonPointerReference("title"));
 
-        // Wait for workspace to process and emit
-        await Task.Delay(500);
+        // Wait for the workspace round-trip on the actual signal — the layout data
+        // stream emitting the edited title — instead of a fixed sleep.
+        await layoutStream
+            .Reduce(new JsonPointerReference("/data/\"test_content\""))!
+            .Where(x => x.Value.ValueKind != JsonValueKind.Undefined
+                && x.Value.TryGetProperty("title", out var t)
+                && t.GetString() == "Test Edit")
+            .FirstAsync()
+            .Timeout(10.Seconds())
+            .ToTask();
 
         // Check if still in edit mode
         var controlAfterEdit = await layoutStream
@@ -386,9 +388,8 @@ public class MapToToggleableControlPersistenceTest(ITestOutputHelper output) : M
 
         Output.WriteLine($"Control after workspace emit: {controlAfterEdit?.GetType().Name}");
 
-        // THIS ASSERTION SHOULD FAIL - workspace emit resets edit state
         controlAfterEdit.Should().BeOfType<TextFieldControl>(
-            "Edit state should survive workspace stream emit, but it resets to readonly - this demonstrates the bug");
+            "edit state must survive the workspace stream emit instead of resetting to readonly");
     }
 
     /// <summary>

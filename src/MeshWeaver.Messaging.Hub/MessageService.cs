@@ -767,7 +767,13 @@ public class MessageService : IMessageService
 
                 if (delivery.Message is ExecutionRequest er)
                     // Caller-supplied async error callback — fire it off the turn; don't block.
-                    er.ExceptionCallback.Invoke(e).ToObservable().Subscribe(_ => { }, _ => { });
+                    // The callback's OWN failure must still be visible: swallowing it here
+                    // hides both the callback bug and the original execution error.
+                    er.ExceptionCallback.Invoke(e).ToObservable().Subscribe(
+                        _ => { },
+                        cbEx => logger.LogWarning(cbEx,
+                            "ExceptionCallback for ExecutionRequest itself threw in {Address}; original execution error: {Original}",
+                            Address, e.Message));
                 else
                 {
                     logger.LogError("An exception occurred during the processing of {Delivery} after {Duration}ms. Exception: {Exception}. Address: {Address}.",

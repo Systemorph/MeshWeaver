@@ -70,12 +70,12 @@ public record VirtualDataSource(object Id, IWorkspace Workspace)
                         };
 
                         // Update the stream with the new collection
-                        stream.Update((store, _) =>
+                        stream.Update(store =>
                         {
                             var newStore = (store ?? new EntityStore())
                                 .WithCollection(typeSource.CollectionName, collection);
-                            return Task.FromResult<ChangeItem<EntityStore>?>(
-                                new ChangeItem<EntityStore>(newStore, Id.ToString()!, stream.StreamId, ChangeType.Full, stream.Hub.Version, []));
+                            return (ChangeItem<EntityStore>?)
+                                new ChangeItem<EntityStore>(newStore, Id.ToString()!, stream.StreamId, ChangeType.Full, stream.Hub.Version, []);
                         }, _ => { });
                     })
             );
