@@ -445,7 +445,12 @@ public static class PersistenceExtensions
                 adapter: new InMemoryStorageAdapter(
                     sp.GetService<ILoggerFactory>()?.CreateLogger<InMemoryStorageAdapter>()),
                 matches: ContainsReleaseSegment,
-                name: "InMemory:Release"));
+                name: "InMemory:Release",
+                // Above the durable backends (100): Release nodes must stay
+                // in-memory even though FileSystem/PG would claim them. The
+                // matches predicate (now enforced by PathFilteringStorageAdapter)
+                // scopes the claim to /Release/ paths only.
+                priority: 150));
 
         // One shared FileSystemStorageAdapter + wildcard provider — handles every
         // first-segment partition rooted at baseDirectory. No factory, no per-segment

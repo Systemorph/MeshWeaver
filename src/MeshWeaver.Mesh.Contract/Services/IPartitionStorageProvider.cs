@@ -90,6 +90,21 @@ public interface IPartitionStorageProvider
     PartitionDefinition? PartitionDefinition => null;
 
     /// <summary>
+    /// Claim precedence among providers of the same specificity band:
+    /// <c>PersistenceService</c> walks specific (fixed-namespace) providers
+    /// before wildcards, and within each band higher <see cref="Priority"/>
+    /// claims first (ties keep registration order). DURABLE backends
+    /// (Postgres, FileSystem, Cosmos, AzureBlob) return <c>100</c> so they
+    /// always beat the in-memory wildcard catch-all (default <c>0</c>) that
+    /// <c>AddOrleansMeshServices</c> registers as a baseline — without this,
+    /// registration order decided, and a host that wired its durable backend
+    /// AFTER the Orleans defaults silently persisted every node into RAM
+    /// (the 2026-06-11 atioz create-loss: acked, searchable nowhere, gone on
+    /// restart).
+    /// </summary>
+    int Priority => 0;
+
+    /// <summary>
     /// Builds an <see cref="IStorageAdapter"/> scoped to a specific
     /// <c>(def, table)</c> pair. Called by the partition-storage-hub layer
     /// when it spawns a per-table hub for <c>(def.Schema, table)</c>.
