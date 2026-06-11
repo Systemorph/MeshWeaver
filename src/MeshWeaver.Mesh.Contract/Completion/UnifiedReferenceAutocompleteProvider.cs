@@ -3,6 +3,8 @@ using System.Text.Json;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Mesh.Completion;
 
@@ -106,12 +108,24 @@ internal class UnifiedReferenceAutocompleteProvider(
     /// progressive nature (one snapshot per provider advance) without flattening to items. Errors
     /// collapse to an empty snapshot so a failing child can't stall the composing CombineLatest.
     /// </summary>
-    private static IObservable<IReadOnlyCollection<AutocompleteItem>> SnapshotItems(
+    private IObservable<IReadOnlyCollection<AutocompleteItem>> SnapshotItems(
         IObservable<IReadOnlyCollection<QueryResult>> source,
         Func<QueryResult, AutocompleteItem> toItem)
         => source
             .Select(rows => (IReadOnlyCollection<AutocompleteItem>)rows.Select(toItem).ToList())
-            .Catch(Observable.Return(AutocompleteSnapshots.Empty));
+            // Collapse to empty so a failing child can't stall the composing
+            // CombineLatest — but keep the fault greppable (Debug: autocomplete
+            // is high-frequency; a down backend would otherwise spam Warning).
+            .Catch((Exception ex) =>
+            {
+                LogBranchFault(ex);
+                return Observable.Return(AutocompleteSnapshots.Empty);
+            });
+
+    private void LogBranchFault(Exception ex)
+        => hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(UnifiedReferenceAutocompleteProvider))
+            .LogDebug(ex, "Autocomplete branch faulted — returning empty snapshot");
 
     /// <summary>
     /// Provides suggestions using relative paths from the current node context.
@@ -286,7 +300,11 @@ internal class UnifiedReferenceAutocompleteProvider(
     {
         var meshRows = meshQuery != null
             ? meshQuery.Autocomplete("", prefix, AutocompleteMode.RelevanceFirst, 15)
-                .Catch(Observable.Return(EmptyRows))
+                .Catch((Exception ex) =>
+                {
+                    LogBranchFault(ex);
+                    return Observable.Return(EmptyRows);
+                })
             : Observable.Return(EmptyRows);
 
         // One snapshot per meshRows emission (progressive). Each snapshot is the FULL current set:

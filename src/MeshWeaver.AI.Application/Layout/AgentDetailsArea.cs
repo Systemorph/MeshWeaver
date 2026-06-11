@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
@@ -16,7 +15,7 @@ public static class AgentDetailsArea
         return layout.WithView(nameof(AgentDetails), AgentDetails);
     }
 
-    public static async Task<UiControl?> AgentDetails(LayoutAreaHost host, RenderingContext ctx, CancellationToken ct)
+    public static IObservable<UiControl?> AgentDetails(LayoutAreaHost host, RenderingContext ctx)
     {
         // Extract agent name from LayoutAreaReference.Id
         var agentName = ExtractAgentNameFromLayoutAreaId(host.Reference.Id);
@@ -25,24 +24,27 @@ public static class AgentDetailsArea
         // (AgentPickerProjection.ObserveAgents) — never IMeshService.Query /
         // QueryAsync, those miss static-provider fan-out, dedup, and the Initial
         // gating that produces "empty Agent dropdown" bugs.
+        // Fully reactive — composed Select, no await/ToTask (AsynchronousCalls.md).
         var workspace = host.Hub.GetWorkspace();
-        var agentDisplayInfos = await AgentPickerProjection
+        return AgentPickerProjection
             .ObserveAgents(workspace, host.Hub, currentPath: null, nodeTypePath: null)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(10))
-            .ToTask(ct);
-        var agents = agentDisplayInfos.Select(a => a.AgentConfiguration).ToList();
-        var agent = agents.FirstOrDefault(a => a.Id == agentName);
+            .Select(agentDisplayInfos =>
+            {
+                var agents = agentDisplayInfos.Select(a => a.AgentConfiguration).ToList();
+                var agent = agents.FirstOrDefault(a => a.Id == agentName);
 
-        if (agent == null)
-        {
-            return Controls.Stack
-                .WithView(Controls.Title("Agent Details", 2), "Title")
-                .WithView(Controls.Text($"Agent '{agentName}' not found. Please verify the agent name and try again."), "ErrorMessage")
-                .WithView(Controls.NavLink("Agents", $"{host.Hub.Address}/Overview"), "BackLink");
-        }
+                if (agent == null)
+                {
+                    return (UiControl?)Controls.Stack
+                        .WithView(Controls.Title("Agent Details", 2), "Title")
+                        .WithView(Controls.Text($"Agent '{agentName}' not found. Please verify the agent name and try again."), "ErrorMessage")
+                        .WithView(Controls.NavLink("Agents", $"{host.Hub.Address}/Overview"), "BackLink");
+                }
 
-        return await CreateAgentDetailsView(agent, agents, host);
+                return CreateAgentDetailsView(agent, agents, host);
+            });
     }
 
     private static string ExtractAgentNameFromLayoutAreaId(object? id)
@@ -52,14 +54,14 @@ public static class AgentDetailsArea
         return id?.ToString() ?? "";
     }
 
-    private static Task<UiControl?> CreateAgentDetailsView(AgentConfiguration agent, IReadOnlyList<AgentConfiguration> agents, LayoutAreaHost host)
+    private static UiControl? CreateAgentDetailsView(AgentConfiguration agent, IReadOnlyList<AgentConfiguration> agents, LayoutAreaHost host)
     {
         var markdown = GenerateAgentDetailsMarkdown(agent, agents, host);
 
-        return Task.FromResult<UiControl?>(Controls.Stack
+        return Controls.Stack
             .WithView(Controls.NavLink("Agents", $"{host.Hub.Address}/Overview"), "BackLink")
             .WithView(Controls.Markdown(markdown), "Content")
-            .WithView(CreateDelegationsSection(agent, agents, host)));
+            .WithView(CreateDelegationsSection(agent, agents, host));
     }
 
     private static string GenerateAgentDetailsMarkdown(AgentConfiguration agent, IReadOnlyList<AgentConfiguration> agents, LayoutAreaHost host)

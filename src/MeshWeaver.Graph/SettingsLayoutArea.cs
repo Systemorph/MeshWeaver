@@ -11,6 +11,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -786,7 +787,7 @@ public static class SettingsLayoutArea
                             .Subscribe(
                                 _ => { },
                                 ex => host.Hub.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()
-                                    ?.CreateLogger(typeof(SettingsLayoutArea))
+                                    ?.CreateLogger(typeof(SettingsLayoutArea).FullName!)
                                     .LogWarning(ex, "Metadata auto-save failed for {Path}", metaPath));
                     }
                 }));

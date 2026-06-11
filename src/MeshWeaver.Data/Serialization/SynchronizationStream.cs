@@ -162,20 +162,6 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         }
         var capturedContext = CaptureCallerAccessContext(hub);
         hub.Post(
-            new UpdateStreamRequest((stream, _) => Task.FromResult(update.Invoke(stream)), exceptionCallback),
-            opt => capturedContext is null ? opt : opt.WithAccessContext(capturedContext));
-    }
-
-    public void Update(Func<TStream?, CancellationToken, Task<ChangeItem<TStream>?>> update,
-        Action<Exception> exceptionCallback)
-    {
-        if (!TryGetActiveHub(out var hub))
-        {
-            SignalDisposedToProducer(exceptionCallback);
-            return;
-        }
-        var capturedContext = CaptureCallerAccessContext(hub);
-        hub.Post(
             new UpdateStreamRequest(update, exceptionCallback),
             opt => capturedContext is null ? opt : opt.WithAccessContext(capturedContext));
     }
@@ -665,9 +651,14 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             {
                 hub.Dispose();
                 return delivery.Processed();
-            }).WithHandler<UpdateStreamRequest>(async (hub, request, ct) =>
+            }).WithHandler<UpdateStreamRequest>((hub, request) =>
             {
-                var update = request.Message.UpdateAsync;
+                // Fully synchronous — the update func is a pure in-memory transform
+                // (IO-producing callers pool their IO FIRST and pass only the result,
+                // see ContentCollection.UpdateArticle). No async handler: an awaited
+                // update on the hub action block is the deadlock class
+                // AsynchronousCalls.md exists to kill.
+                var update = request.Message.Update;
                 var exceptionCallback = request.Message.ExceptionCallback;
                 try
                 {
@@ -675,7 +666,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                     // This ensures we have the latest state including any updates that occurred
                     // while previous updates were being processed
                     var currentValue = Current is null ? default : Current.Value;
-                    var newChangeItem = await update.Invoke(currentValue, ct);
+                    var newChangeItem = update.Invoke(currentValue);
 
                     // SetCurrent will be called with the computed result
                     // The Message Hub serializes these messages, so only one UpdateStreamRequest
@@ -1013,7 +1004,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     }
 
     [PreventLogging]
-    public record UpdateStreamRequest([property: JsonIgnore] Func<TStream?, CancellationToken, Task<ChangeItem<TStream>?>> UpdateAsync, [property: JsonIgnore] Action<Exception> ExceptionCallback);
+    public record UpdateStreamRequest([property: JsonIgnore] Func<TStream?, ChangeItem<TStream>?> Update, [property: JsonIgnore] Action<Exception> ExceptionCallback);
 
     /// <summary>
     /// Synchronisation-protocol message that propagates a state change to the

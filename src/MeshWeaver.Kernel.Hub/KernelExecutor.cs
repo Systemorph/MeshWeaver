@@ -376,24 +376,26 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             .WithEmitDebugInformation(true);
     }
 
-    private static readonly HashSet<string> _probingDirs = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly object _probingDirLock = new();
-    private static bool _probingResolverInstalled;
-
-    private static void InstallRuntimeProbe(IEnumerable<string> dirs)
+    /// <summary>
+    /// Per-hub assembly probing resolver — NO static state (NoStaticState.md). The
+    /// probing-dir set and the <see cref="AssemblyLoadContext.Default"/> Resolving
+    /// hook live and die with the kernel hub: the hook is removed on hub disposal,
+    /// so package dirs never bleed across meshes/tests.
+    /// </summary>
+    internal sealed class AssemblyProbingResolver : IDisposable
     {
-        lock (_probingDirLock)
-        {
-            foreach (var dir in dirs) _probingDirs.Add(dir);
-            if (_probingResolverInstalled) return;
-            _probingResolverInstalled = true;
+        private readonly HashSet<string> probingDirs = new(StringComparer.OrdinalIgnoreCase);
+        private readonly object gate = new();
+        private readonly Func<AssemblyLoadContext, System.Reflection.AssemblyName, System.Reflection.Assembly?> handler;
 
-            AssemblyLoadContext.Default.Resolving += (ctx, name) =>
+        public AssemblyProbingResolver()
+        {
+            handler = (ctx, name) =>
             {
                 var dllName = name.Name + ".dll";
-                lock (_probingDirLock)
+                lock (gate)
                 {
-                    foreach (var d in _probingDirs)
+                    foreach (var d in probingDirs)
                     {
                         var candidate = Path.Combine(d, dllName);
                         if (File.Exists(candidate))
@@ -405,7 +407,32 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                 }
                 return null;
             };
+            AssemblyLoadContext.Default.Resolving += handler;
         }
+
+        public void AddDirectories(IEnumerable<string> dirs)
+        {
+            lock (gate)
+                foreach (var dir in dirs)
+                    probingDirs.Add(dir);
+        }
+
+        public void Dispose() => AssemblyLoadContext.Default.Resolving -= handler;
+    }
+
+    private void InstallRuntimeProbe(IEnumerable<string> dirs)
+    {
+        // Get-or-create on the hub's property bag. A concurrent first-install can
+        // create two resolvers — benign: both consult their own dir sets, both
+        // unhook at hub disposal; no wrong assembly can resolve.
+        var resolver = publicHub.Get<AssemblyProbingResolver>();
+        if (resolver is null)
+        {
+            resolver = new AssemblyProbingResolver();
+            publicHub.Set(resolver);
+            publicHub.RegisterForDisposal(resolver);
+        }
+        resolver.AddDirectories(dirs);
     }
 
     private async Task<string> ResolveNuGetReferencesAsync(string source, CancellationToken ct)

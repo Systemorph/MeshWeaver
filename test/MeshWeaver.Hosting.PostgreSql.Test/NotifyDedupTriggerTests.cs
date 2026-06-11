@@ -1,5 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -65,17 +67,18 @@ public class NotifyDedupTriggerTests(IsolatedPostgreSqlFixture fixture) : IAsync
 
     private int Count() { lock (_received) return _received.Count; }
 
-    private async Task<int> NewNotificationsSinceAsync(int baseline, TimeSpan timeout)
-    {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            var delta = Count() - baseline;
-            if (delta > 0) return delta;
-            await Task.Delay(20);
-        }
-        return Count() - baseline;
-    }
+    private Task<int> NewNotificationsSinceAsync(int baseline, TimeSpan timeout)
+        // Probe-driven wait (WritingTests.md — no hand-rolled while+Task.Delay): the
+        // NOTIFY payloads land in a plain list via callback, so an interval probe
+        // re-checks the count, completes on the first positive delta, and falls
+        // back to the then-current delta when the window closes without one.
+        => Observable.Interval(TimeSpan.FromMilliseconds(20))
+            .StartWith(0L)
+            .Select(_ => Count() - baseline)
+            .Where(delta => delta > 0)
+            .FirstAsync()
+            .Timeout(timeout, Observable.Defer(() => Observable.Return(Count() - baseline)))
+            .ToTask();
 
     private async Task<int> NewNotificationsAfterDelay(int baseline, TimeSpan window)
     {

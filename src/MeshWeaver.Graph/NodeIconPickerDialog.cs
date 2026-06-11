@@ -9,6 +9,7 @@ using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -164,7 +165,11 @@ public static class NodeIconPickerDialog
                     cache.Update(iconPath, n =>
                         n with { Icon = string.IsNullOrWhiteSpace(newIcon) ? null : newIcon },
                         ctx.Host.Hub.JsonSerializerOptions)
-                        .Subscribe(_ => { }, _ => { });
+                        .Subscribe(
+                            _ => { },
+                            ex => ctx.Host.Hub.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()
+                                ?.CreateLogger(typeof(NodeIconPickerDialog).FullName!)
+                                .LogWarning(ex, "Icon save failed for {Path}", iconPath));
                 }
                 ctx.Host.UpdateArea(DialogControl.DialogArea, null);
             });

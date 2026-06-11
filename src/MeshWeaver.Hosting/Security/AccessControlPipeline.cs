@@ -192,7 +192,13 @@ public static class AccessControlPipeline
                             // All checks passed — invoke next. next is a cold
                             // IObservable now; Subscribe to run the downstream side
                             // effect (the old Task was hot/already-running).
-                            next.Invoke(delivery, ct).Subscribe();
+                            // onError is mandatory: a faulted downstream chain would
+                            // otherwise vanish unobserved inside the security pipeline.
+                            next.Invoke(delivery, ct).Subscribe(
+                                _ => { },
+                                ex => logger?.LogError(ex,
+                                    "AccessControlPipeline: downstream pipeline faulted after permission pass for {MessageType} on {Hub}",
+                                    delivery.Message.GetType().Name, hub.Address));
                         });
 
                 return Observable.Return(delivery.Forwarded());

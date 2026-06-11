@@ -3,8 +3,11 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.ContentCollections;
 
@@ -136,25 +139,40 @@ public class ContentCollection : IDisposable
 
     protected void UpdateArticle(string path)
     {
-        markdownStream.Update(async (x, ct) =>
-        {
-            var tuple = await provider.GetStreamWithMetadataAsync(path, ct);
-            if (tuple.Stream is null)
-                return null;
-            var article = await ParseArticleAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct);
-            if (article is null)
-                return null;
-            var key = article.Path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? article.Path[..^3] : article.Path;
-            return new ChangeItem<InstanceCollection>(x!.SetItem(key, article), markdownStream.StreamId, Hub.Version);
-
-        }, ex =>
-        {
-            // The stream errors incoming pushes once it (or its hub) is disposing — typically a
-            // FileSystemWatcher event racing collection teardown. Close the incoming stream at the
-            // source so no further events flow into a disposed hub. See Doc/Architecture/HubDisposalModel.
-            if (ex is ObjectDisposedException)
-                monitorDisposable?.Dispose();
-        });
+        // The file read + parse is the IO leaf — pooled OFF the hub; only the parsed
+        // in-memory article flows into the (synchronous) stream Update. The stream's
+        // UpdateStreamRequest handler is await-free by contract.
+        var ioPool = Hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
+                     ?? IoPool.Unbounded;
+        ioPool.Invoke(async ct =>
+            {
+                var tuple = await provider.GetStreamWithMetadataAsync(path, ct);
+                if (tuple.Stream is null)
+                    return null;
+                return await ParseArticleAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct);
+            })
+            .Subscribe(
+                article =>
+                {
+                    if (article is null)
+                        return;
+                    var key = article.Path.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
+                        ? article.Path[..^3]
+                        : article.Path;
+                    markdownStream.Update(
+                        x => new ChangeItem<InstanceCollection>(x!.SetItem(key, article), markdownStream.StreamId, Hub.Version),
+                        ex =>
+                        {
+                            // The stream errors incoming pushes once it (or its hub) is disposing — typically a
+                            // FileSystemWatcher event racing collection teardown. Close the incoming stream at the
+                            // source so no further events flow into a disposed hub. See Doc/Architecture/HubDisposalModel.
+                            if (ex is ObjectDisposedException)
+                                monitorDisposable?.Dispose();
+                        });
+                },
+                ex => Hub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger(typeof(ContentCollection))
+                    .LogWarning(ex, "UpdateArticle failed reading {Path} in collection {Collection}", path, Collection));
     }
 
     private async Task<MarkdownElement?> ParseArticleAsync(Stream? stream, string path, DateTime lastModified, CancellationToken ct)

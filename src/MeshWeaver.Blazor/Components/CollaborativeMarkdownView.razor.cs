@@ -416,7 +416,11 @@ public partial class CollaborativeMarkdownView
             if (_cache == null || string.IsNullOrEmpty(BoundNodePath)) return Task.FromResult(false);
             Hub.GetMeshNodeStream(BoundNodePath).Update(current =>
                 current with { Content = new MarkdownContent { Content = newContent } })
-                .Subscribe(_ => { }, _ => { /* errors surface via the handle's logger */ });
+                .Subscribe(
+                    _ => { },
+                    ex => Hub.ServiceProvider.GetService<ILoggerFactory>()
+                        ?.CreateLogger("MeshWeaver.Blazor.CollaborativeMarkdownView")
+                        .LogWarning(ex, "Content save failed for {Path}", BoundNodePath));
             return Task.FromResult(true);
         }
         catch
@@ -587,7 +591,11 @@ public partial class CollaborativeMarkdownView
         {
             if (n.Content is not Comment c) return n;
             return n with { Content = c with { Status = CommentStatus.Resolved } };
-        }).Subscribe(_ => { }, _ => { });
+        }).Subscribe(
+            _ => { },
+            ex => Hub.ServiceProvider.GetService<ILoggerFactory>()
+                ?.CreateLogger("MeshWeaver.Blazor.CollaborativeMarkdownView")
+                .LogWarning(ex, "Comment resolve failed for {Path}", path));
     }
 
     private void DeleteComment(string markerId)

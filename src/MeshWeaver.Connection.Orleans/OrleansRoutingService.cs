@@ -260,7 +260,19 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             // Orleans stream handlers must return Task; the AsyncDelivery callback
             // is a cold IObservable now — Subscribe to run the delivery (the hub
             // queues it), then signal Orleans the message was accepted.
-            callback.Invoke(v, CancellationToken.None).Subscribe();
+            // 🚨 onError is mandatory: we return Task.CompletedTask below, so Orleans
+            // considers the item accepted and nothing retries — a faulted delivery
+            // here IS a lost message and must be loud, never an unobserved rethrow.
+            callback.Invoke(v, CancellationToken.None).Subscribe(
+                _ => { },
+                ex =>
+                {
+                    logger.LogError(ex,
+                        "Delivery callback faulted for {MessageType} ({Id}) on stream {Address} — message dropped",
+                        v.Message?.GetType().Name, v.Id, address);
+                    OrleansRouteTrace.Write(
+                        $"OrleansRoutingService.STREAM_CALLBACK FAULTED addr={address} msg={v.Message?.GetType().Name} id={v.Id} ex={ex.Message}");
+                });
             return Task.CompletedTask;
         });
         subscriptionTask.ContinueWith(t =>

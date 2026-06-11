@@ -312,7 +312,11 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
                 // Subscribe drives the flush — observable returns Unit when all
                 // ops have settled. Disposable retained so FlushOnDispose can
                 // wait on in-flight subscriptions during hub teardown.
-                var sub = FlushPendingWrites().Subscribe(_ => { }, _ => { });
+                // A faulted flush is unpersisted data — must never be silent.
+                var sub = FlushPendingWrites().Subscribe(
+                    _ => { },
+                    ex => _logger?.LogWarning(ex,
+                        "Debounced flush of pending writes failed for {HubPath}", _hubPath));
                 _pendingFlushSubscriptions.Add(sub);
             }, null, DebounceInterval, Timeout.InfiniteTimeSpan);
         }

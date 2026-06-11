@@ -77,21 +77,6 @@ public static class LayoutHelperExtensions
                 context with { Area = area }, menu, store)
             ;
     }
-    public static async Task<EntityStoreAndUpdates> ConfigBasedRenderer<TControl>(this LayoutAreaHost host,
-        RenderingContext context,
-        EntityStore store,
-        string area,
-        Func<TControl> factory,
-        Func<TControl, LayoutAreaHost, RenderingContext, Task<TControl>> config)
-        where TControl : UiControl
-    {
-        var menu = store.GetLayoutArea<TControl>(area) ?? factory();
-        menu = await config(menu, host, context);
-        return host.RenderArea(
-                context with { Area = area }, menu, store)
-            ;
-    }
-
     internal static bool DataEquality(object data, object otherData)
     {
         if (data is null)

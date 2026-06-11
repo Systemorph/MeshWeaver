@@ -366,7 +366,12 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
                     return;
                 foreach (var path in dict.Keys)
                     if (warmed.Add(path))
-                        warmCache.GetStream(path, options).Take(1).Subscribe(_ => { }, _ => { });
+                        // Warming is best-effort (an RLS denial here is normal noise),
+                        // but a failure must not be invisible — Debug keeps it greppable.
+                        warmCache.GetStream(path, options).Take(1).Subscribe(
+                            _ => { },
+                            ex => diagLogger?.LogDebug(ex,
+                                "[SyncedQuery] grain warm failed for {Path}", path));
             })
             .DistinctUntilChanged()
             .Select(dict => (IEnumerable<MeshNode>)dict.Values);

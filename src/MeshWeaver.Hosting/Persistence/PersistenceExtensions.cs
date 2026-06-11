@@ -369,7 +369,9 @@ public static class PersistenceExtensions
     {
         builder.ConfigureServices(services =>
         {
-            services.AddSingleton<IStorageAdapter>(new CachingStorageAdapter(baseDirectory, writeOptionsModifier));
+            services.AddSingleton<IStorageAdapter>(sp => new CachingStorageAdapter(
+                baseDirectory, writeOptionsModifier,
+                logger: sp.GetService<Microsoft.Extensions.Logging.ILogger<CachingStorageAdapter>>()));
             return services.AddCoreAndWrapperServices();
         });
         return builder.RegisterMeshQueryCoreOnMeshHub();

@@ -147,7 +147,11 @@ public static class ApprovalLayoutAreas
                         ApprovalDate = DateTimeOffset.UtcNow
                     }
                 };
-            }, host.Hub.JsonSerializerOptions).Subscribe(_ => { }, _ => { });
+            }, host.Hub.JsonSerializerOptions).Subscribe(
+                _ => { },
+                ex => host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger(typeof(ApprovalLayoutAreas))
+                    .LogWarning(ex, "Approval status write failed for {Path}", approvalPath));
         }
 
         // Activity + notification — chain as Observables, no await in a click handler.

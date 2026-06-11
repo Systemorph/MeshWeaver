@@ -8,6 +8,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.AI;
 
@@ -158,7 +159,11 @@ public static class AiSettingsNodeType
                     Name = "AI Settings",
                     Content = defaults
                 })
-            .Subscribe(_ => { }, _ => { });
+            .Subscribe(
+                _ => { },
+                ex => services.GetService<ILoggerFactory>()
+                    ?.CreateLogger(typeof(AiSettingsNodeType))
+                    .LogWarning(ex, "EnsureExists: AiSettings create-on-absent failed for {Path}", path));
     }
 
     /// <summary>

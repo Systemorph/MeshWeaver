@@ -6,6 +6,8 @@ namespace MeshWeaver.Blazor.Radzen;
 
 public partial class RadzenPivotGridView : RadzenViewBase<PivotGridControl, RadzenPivotGridView>
 {
+    [Inject] private DynamicTypeGenerator TypeGenerator { get; set; } = null!;
+
     private PivotConfiguration? Configuration { get; set; }
     private object? RawData { get; set; }
     private Type? DataItemType { get; set; }
@@ -38,7 +40,7 @@ public partial class RadzenPivotGridView : RadzenViewBase<PivotGridControl, Radz
 
             // Generate a type based on the configuration using DynamicTypeGenerator
             var properties = GetPropertiesFromConfiguration(Configuration);
-            DataItemType = DynamicTypeGenerator.GenerateType(properties);
+            DataItemType = TypeGenerator.GenerateType(properties);
 
             // Deserialize to the generated type
             var listType = typeof(List<>).MakeGenericType(DataItemType);

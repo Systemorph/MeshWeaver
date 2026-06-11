@@ -9,11 +9,17 @@ namespace MeshWeaver.Blazor;
 /// <summary>
 /// Generates POCO types at runtime with specified properties.
 /// Useful for creating strongly-typed objects from dynamic configurations.
+///
+/// Instance service — register as a singleton (see RadzenServiceExtensions); the
+/// memoization cache is an instance field so it dies with the host's ServiceProvider
+/// (NoStaticState.md — no process-wide static cache, no Clear() test hook). Generated
+/// assemblies are collectible (<see cref="AssemblyBuilderAccess.RunAndCollect"/>) so
+/// cached types can unload once the cache and all instances are gone.
 /// </summary>
-public static class DynamicTypeGenerator
+public sealed class DynamicTypeGenerator
 {
-    private static readonly Dictionary<string, Type> TypeCache = new();
-    private static readonly object CacheLock = new();
+    private readonly Dictionary<string, Type> typeCache = new();
+    private readonly object cacheLock = new();
 
     /// <summary>
     /// Generates or retrieves a cached type with the specified properties.
@@ -21,20 +27,20 @@ public static class DynamicTypeGenerator
     /// <param name="properties">List of property names and their CLR type names</param>
     /// <param name="typeName">Optional custom type name (auto-generated if not provided)</param>
     /// <returns>A Type with the specified properties</returns>
-    public static Type GenerateType(IEnumerable<(string Name, string TypeName)> properties, string? typeName = null)
+    public Type GenerateType(IEnumerable<(string Name, string TypeName)> properties, string? typeName = null)
     {
         var propList = properties.ToList();
 
         // Create a cache key based on the properties
         var cacheKey = string.Join(";", propList.Select(p => $"{p.Name}:{p.TypeName}"));
 
-        lock (CacheLock)
+        lock (cacheLock)
         {
-            if (TypeCache.TryGetValue(cacheKey, out var cachedType))
+            if (typeCache.TryGetValue(cacheKey, out var cachedType))
                 return cachedType;
 
             var generatedType = GenerateTypeInternal(propList, typeName);
-            TypeCache[cacheKey] = generatedType;
+            typeCache[cacheKey] = generatedType;
             return generatedType;
         }
     }
@@ -43,7 +49,7 @@ public static class DynamicTypeGenerator
     {
         var assemblyName = new AssemblyName("DynamicTypes");
         var assemblyBuilder = AssemblyBuilder.DefineDynamicAssembly(
-            assemblyName, AssemblyBuilderAccess.Run);
+            assemblyName, AssemblyBuilderAccess.RunAndCollect);
         var moduleBuilder = assemblyBuilder.DefineDynamicModule("MainModule");
 
         var actualTypeName = typeName ?? $"DynamicType_{Guid.NewGuid():N}";
@@ -103,16 +109,5 @@ public static class DynamicTypeGenerator
 
         propertyBuilder.SetGetMethod(getterBuilder);
         propertyBuilder.SetSetMethod(setterBuilder);
-    }
-
-    /// <summary>
-    /// Clears the type cache. Use sparingly as existing instances of cached types will remain valid.
-    /// </summary>
-    public static void ClearCache()
-    {
-        lock (CacheLock)
-        {
-            TypeCache.Clear();
-        }
     }
 }

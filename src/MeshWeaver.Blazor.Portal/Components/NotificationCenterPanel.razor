@@ -3,6 +3,8 @@
 @using MeshWeaver.Mesh
 @using MeshWeaver.Mesh.Services
 @using MeshWeaver.Messaging
+@using Microsoft.Extensions.DependencyInjection
+@using Microsoft.Extensions.Logging
 @using Microsoft.FluentUI.AspNetCore.Components
 @inject IMeshService MeshQuery
 @inject IMeshNodeStreamCache StreamCache
@@ -221,7 +223,12 @@
         {
             if (n.Content is not Notification current || current.IsRead) return n;
             return n with { Content = current with { IsRead = true } };
-        }, Hub.JsonSerializerOptions).Subscribe(_ => { }, _ => { });
+        }, Hub.JsonSerializerOptions).Subscribe(
+            _ => { },
+            ex => Hub.ServiceProvider
+                .GetService<Microsoft.Extensions.Logging.ILoggerFactory>()
+                ?.CreateLogger("MeshWeaver.Blazor.Portal.NotificationCenterPanel")
+                .LogWarning(ex, "Mark-read failed for {Path}", node.Path));
     }
 
     private void MarkAllRead()

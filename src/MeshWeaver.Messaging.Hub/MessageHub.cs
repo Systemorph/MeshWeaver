@@ -1102,7 +1102,13 @@ public sealed class MessageHub : IMessageHub
                     return Observable.Return(Unit.Default);
                 }
             });
-            Observable.Merge(legs).Subscribe(_ => { }, _ => { });
+            // Each leg is Catch-wrapped above, so a fault here is unexpected — log it
+            // rather than swallowing (an empty onError hides plumbing bugs in Merge).
+            Observable.Merge(legs).Subscribe(
+                _ => { },
+                ex => TryLog(LogLevel.Warning,
+                    "[DISPOSE-ACTION] {Address}: dispose-action merge faulted: {Type}: {Message}",
+                    Address, ex.GetType().Name, ex.Message));
         }
 
         // 2. Synchronous teardown of every registered subscription / Action cleanup —

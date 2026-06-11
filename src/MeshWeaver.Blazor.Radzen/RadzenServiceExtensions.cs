@@ -13,6 +13,9 @@ public static class RadzenServiceExtensions
     public static IServiceCollection AddRadzenServices(this IServiceCollection services)
     {
         services.AddRadzenComponents();
+        // Instance type-generator (memoization cache lives and dies with this
+        // ServiceProvider — no process-wide static cache, see NoStaticState.md).
+        services.AddSingleton<DynamicTypeGenerator>();
         return services;
     }
 }

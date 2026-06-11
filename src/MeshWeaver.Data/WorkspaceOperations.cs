@@ -133,12 +133,13 @@ public static class WorkspaceOperations
             var subActivity = activity?.StartSubActivity(ActivityCategory.DataUpdate);
 
 
-            // Use async update to allow proper retry logic if state changed during computation
-            stream!.Update((store, _) =>
+            // Synchronous update — the transform is pure in-memory; the stream's
+            // handler serializes UpdateStreamRequests, so no retry logic is needed.
+            stream!.Update(store =>
                 {
                     var result = UpdateDataChangeRequest(store, change, logger, stream, subActivity, group);
                     subActivity?.Complete();
-                    return Task.FromResult(result);
+                    return result;
                 },
                 ex =>
                 {

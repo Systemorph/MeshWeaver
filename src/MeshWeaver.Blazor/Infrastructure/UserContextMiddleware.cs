@@ -234,7 +234,17 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
                 new ValidateTokenRequest(rawToken),
                 o => o.WithTarget(tokenAddress))
             .Select(d => (ValidateTokenResponse?)d.Message)
-            .Catch((Exception _) => Observable.Return<ValidateTokenResponse?>(null));
+            // Fail closed (null = not authenticated) but NEVER silently: an
+            // infrastructure fault here is otherwise indistinguishable from an
+            // invalid token, which makes auth incidents undiagnosable.
+            .Catch((Exception ex) =>
+            {
+                hub.ServiceProvider.GetService<ILogger<UserContextMiddleware>>()
+                    ?.LogWarning(ex,
+                        "Token validation via {TokenAddress} faulted — treating token as invalid (hashPrefix={HashPrefix})",
+                        tokenAddress, hashPrefix);
+                return Observable.Return<ValidateTokenResponse?>(null);
+            });
     }
 
     /// <summary>

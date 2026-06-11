@@ -7,6 +7,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reactive;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.AI.Application;
 
@@ -55,12 +56,33 @@ public static class AgentsApplicationExtensions
         // stall the CombineLatest (it must still complete).
         AutocompleteSnapshots.Combine(
                 providers.Select(p => p.GetItems(query, contextPath)
-                    .Catch(Observable.Return(AutocompleteSnapshots.Empty))),
+                    // Collapse to empty so one bad provider can't stall the
+                    // CombineLatest — Debug-logged so the fault stays greppable.
+                    .Catch((Exception ex) =>
+                    {
+                        hub.ServiceProvider.GetService<ILoggerFactory>()
+                            ?.CreateLogger(typeof(AgentsApplicationExtensions))
+                            .LogDebug(ex, "Autocomplete provider {Provider} faulted — returning empty",
+                                p.GetType().Name);
+                        return Observable.Return(AutocompleteSnapshots.Empty);
+                    })),
                 AutocompleteTopN)
             .LastAsync()
-            .Subscribe(snapshot => hub.Post(
-                new AutocompleteResponse(snapshot.ToList()),
-                o => o.ResponseFor(request)));
+            .Subscribe(
+                snapshot => hub.Post(
+                    new AutocompleteResponse(snapshot.ToList()),
+                    o => o.ResponseFor(request)),
+                ex =>
+                {
+                    // The caller is waiting on a response — answer empty rather
+                    // than letting it time out, and log the combine fault.
+                    hub.ServiceProvider.GetService<ILoggerFactory>()
+                        ?.CreateLogger(typeof(AgentsApplicationExtensions))
+                        .LogWarning(ex, "Autocomplete combine faulted for query '{Query}'", query);
+                    hub.Post(
+                        new AutocompleteResponse([]),
+                        o => o.ResponseFor(request));
+                });
 
         return request.Processed();
     }
