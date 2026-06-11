@@ -150,6 +150,17 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
             Mesh.GetEffectivePermissions("org/removeproject", "removetest")
                 .Should().Match(p => p == Permission.All);
 
+            // org/removeproject must always keep at least one administrator
+            // (SpaceAdminInvariantValidator); seed a co-admin so removing 'removetest' is
+            // not the last-admin removal (which is correctly rejected). Wait until the
+            // read-side surface the validator reads (IMeshService.Query) shows the co-admin.
+            var coAdmin = AssignmentNodeFactory.UserRole("removeproject_coadmin", "Admin", "org/removeproject");
+            meshService.CreateNode(coAdmin).Should().Emit();
+            meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{coAdmin.Path}"))
+                .Where(c => c.Items.Any(n => n.Id == coAdmin.Id))
+                .Take(1).Timeout(TimeSpan.FromSeconds(10))
+                .Should().Emit();
+
             meshService.DeleteNode(assignment.Path!).Should().Emit();
 
             // Wait for the synced query to drop the deleted node (eventual consistency).

@@ -125,6 +125,18 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
             accessObject: "Carol");
         meshService.CreateNode(carolAdmin).Should().Emit();
 
+        // ACME must always keep at least one administrator (SpaceAdminInvariantValidator),
+        // so seed a co-admin before removing Carol's Admin — otherwise deleting Carol's
+        // (sole) ACME admin is correctly rejected as "last administrator". Wait until the
+        // read-side surface the validator reads (IMeshService.Query) shows the co-admin so
+        // the delete below isn't racing eventual consistency.
+        var acmeCoAdmin = AssignmentNodeFactory.UserRole("AcmeCoAdmin", "Admin", "ACME");
+        meshService.CreateNode(acmeCoAdmin).Should().Emit();
+        meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{acmeCoAdmin.Path}"))
+            .Where(c => c.Items.Any(n => n.Id == acmeCoAdmin.Id))
+            .Take(1).Timeout(10.Seconds())
+            .Should().Emit();
+
         // Wait for the runtime grant to surface so Admin is part of Carol's
         // permissions before we delete it again.
         Mesh.GetEffectivePermissions("ACME", "Carol")

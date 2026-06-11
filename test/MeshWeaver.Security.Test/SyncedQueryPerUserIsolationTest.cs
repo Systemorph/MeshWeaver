@@ -50,11 +50,26 @@ public class SyncedQueryPerUserIsolationTest(ITestOutputHelper output) : Monolit
     {
         // Grant the test runner Admin on TestPartition so the setup writes go
         // through; the actual assertions then switch identity to Alice/Bob.
+        //
+        // Seed this access-rights grant under System — the same identity every
+        // other seed write in this file uses (the per-test ImpersonateAsSystem
+        // blocks). TestData is a static-seeded partition (AddMeshNodes), so its
+        // schema is never provisioned via the Space/User flow. Routing this first
+        // write through a NON-System identity sends it through PartitionWriteGuard's
+        // existence-probe + cold-partition provisioning path, which races partition
+        // state and intermittently wedged the create past the 10s assertion (the CI
+        // flake on SyncedQuery_SystemImpersonation_SharesCacheAcrossCallers). System
+        // is the documented identity for eager partition provisioning and bypasses
+        // the guard, so the grant lands deterministically.
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        meshService.CreateNode(
-            AssignmentNodeFactory.UserRole(
-                Mesh.Address.ToFullString(), "Admin", TestPartition))
-            .Should().Emit();
+        using (accessService.ImpersonateAsSystem())
+        {
+            meshService.CreateNode(
+                AssignmentNodeFactory.UserRole(
+                    Mesh.Address.ToFullString(), "Admin", TestPartition))
+                .Should().Emit();
+        }
         return Task.CompletedTask;
     }
 
