@@ -509,12 +509,25 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
 
         if (!registry.TryGetType(typeName, out var typeDef) || typeDef?.Type == null)
         {
-            if (!typeName.Contains('.'))
+            var shortName = typeName.Contains('.') ? typeName.Split('.').Last() : null;
+            if (shortName is null
+                || !registry.TryGetType(shortName, out typeDef) || typeDef?.Type == null)
+            {
+                // 🚨 Bad-data tolerance contract: degrade to JsonElement but LOUDLY.
+                // This is the OWNING hub failing to type its OWN node's content — the
+                // discriminator is unresolvable on the one registry that is canonical
+                // for this node (mesh root chain + this NodeType's content types), so
+                // the node will render empty and refuse content edits everywhere.
+                // Silent degradation here is exactly how the atioz 2026-06-12
+                // '$type: MarkdownConfiguration' rows went undiagnosed.
+                _logger?.LogWarning(
+                    "MeshNodeTypeSource[{HubPath}]: content discriminator '$type': '{TypeName}' " +
+                    "is not a registered type on the owning hub — content stays an untyped " +
+                    "JsonElement (renders empty, not editable). The row needs repair: rewrite " +
+                    "the content with the NodeType's declared content type.",
+                    _hubPath, typeName);
                 return node;
-
-            var shortName = typeName.Split('.').Last();
-            if (!registry.TryGetType(shortName, out typeDef) || typeDef?.Type == null)
-                return node;
+            }
         }
 
         try
