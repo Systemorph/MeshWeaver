@@ -245,8 +245,7 @@ public record Project
 - `[Required]` — Validation
 - `[MeshNodeProperty(nameof(MeshNode.Name))]` — Maps to MeshNode.Name
 - `[MeshNodeProperty(nameof(MeshNode.Icon))]` — Maps to MeshNode.Icon
-- `[Dimension<Category>]` — References a lookup type
-- `[Dimension(typeof(Supplier))]` — Alternative dimension syntax (for int keys)
+- `[MeshNode("nodeType:ACME/Category")]` — References another mesh node. The editor renders a `MeshNodePickerControl`; the property is a `string` storing the referenced node's PATH. The query argument always uses the **full path of the referenced NodeType** (`nodeType:ACME/Category`, never a bare `Category`). Multiple queries merge; `{node.namespace}` / `{node.Property}` template variables resolve at edit time; options: `Layout = MeshNodePickerLayout.Thin`, `Open = MeshNodePickerOpenDirection.Up`, `DefaultToFirst = true`. This is the canonical cross-node reference — see the balance-sheet facts in [Data Cubes](@/Doc/DataMesh/DataCubes).
 - `[Markdown(EditorHeight = "200px")]` — Rich text field
 - `[UiControl(Style = "width: 200px;")]` — Form layout control
 - `[Browsable(false)]` — Hidden from UI

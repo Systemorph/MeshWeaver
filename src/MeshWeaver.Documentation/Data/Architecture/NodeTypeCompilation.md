@@ -16,7 +16,7 @@ compile, how to watch or cancel it, where releases are stored, how to pin an
 instance to a specific build, and the rules that decide when a NodeType must be
 recompiled.
 
-> For *authoring* a NodeType (folder layout, content record, layout areas, CSV
+> For *authoring* a NodeType (namespace layout, content record, layout areas, CSV
 > data) see [Creating Node Types](/Doc/DataMesh/CreatingNodeTypes). For the design
 > rationale behind the release model see the
 > [NodeType Release Redesign](/Doc/Architecture/Postmortems/NodeTypeReleaseRedesign) postmortem.
@@ -141,7 +141,7 @@ hand.
 
 Which Code nodes feed a compile is declared on `NodeTypeDefinition.Sources` /
 `Tests` as mesh queries (defaults: `namespace:Source scope:subtree` /
-`namespace:Test scope:subtree` — the conventional sibling folders). Each entry
+`namespace:Test scope:subtree` — the conventional sibling namespaces). Each entry
 may carry an optional `name=` prefix, e.g.
 `"shared=@SocialMedia/Post/Source/Platform"`. The name is display-only: the
 NodeType side menu groups the resolved files under it (unnamed entries land in
