@@ -24,7 +24,7 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
     private const string CookieName = "meshweaver_virtual_user";
 
     private static readonly string[] ExcludedPrefixes =
-        ["/_framework", "/_content", "/_blazor", "/static/", "/favicon.ico", "/mcp", "/bootstrap"];
+        ["/_framework", "/_content", "/_blazor", "/static/", "/favicon.ico", "/mcp", "/bootstrap", "/healthz"];
 
     public async Task InvokeAsync(HttpContext context)
     {
@@ -73,9 +73,18 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
                     return;
                 }
 
-                // First request in this circuit — ensure VUser node exists.
-                // Runs once per page load; subsequent requests reuse CircuitContext above.
-                await EnsureVirtualUserNodeAsync(portalApp, virtualUserId);
+                // 🚨 Mint the VUser NODE only on cookie ROUND-TRIP (isNew == false):
+                // the node (a mesh write + a per-node hub graph) is created the
+                // first time the cookie COMES BACK, proving a cookie-keeping
+                // browser session. First-contact requests get the cookie + an
+                // in-memory guest context only. Without this gate, every
+                // cookie-less client minted a fresh node PER REQUEST — kube-probe
+                // alone created ~15 VUsers/minute (and any crawler does the same),
+                // leaking 10,000+ hubs until the portal wedged at 100% CPU
+                // (2026-06-12 atioz outage). A real visitor's node exists by
+                // their second request — before the Blazor circuit needs it.
+                if (!isNew)
+                    await EnsureVirtualUserNodeAsync(portalApp, virtualUserId);
 
                 var portalIdentity = portalApp.Hub.Address.ToFullString();
                 var virtualContext = new AccessContext

@@ -618,6 +618,27 @@ public static class MemexConfiguration
         // in local dev it's a no-op since no proxy sets those headers.
         app.UseForwardedHeaders();
 
+        // 🚨 /healthz MUST short-circuit before the identity pipeline and before
+        // any Blazor page rendering. Kubernetes probes used to hit "/" — every
+        // probe request carries no cookies, so VirtualUserMiddleware minted a
+        // fresh guest VUser (mesh node + per-node hub graph) AND the probe
+        // forced a full server-side page prerender (layout-area sync hubs that
+        // no circuit ever disposes). At readiness-probe cadence (5 s) the portal
+        // accumulated 10,000+ leaked MessageHubs in ~25 minutes, the hosted-hub
+        // collection lock became the hot path of every routed stream message,
+        // and the instance wedged at 100% CPU — the 2026-06-12 atioz outage.
+        // Point ALL probes here; the endpoint answers without touching identity,
+        // the mesh, or the renderer.
+        app.Use((ctx, next) =>
+        {
+            if (ctx.Request.Path.Equals("/healthz", StringComparison.OrdinalIgnoreCase))
+            {
+                ctx.Response.StatusCode = StatusCodes.Status200OK;
+                return ctx.Response.WriteAsync("ok");
+            }
+            return next();
+        });
+
         // `@/` is a markdown-authoring / autocomplete prefix — not a URL segment.
         // Authors occasionally leak `@/` into raw HTML hrefs or users paste broken links.
         // Permanent-redirect `/@/X` → `/X` so those never 404.
