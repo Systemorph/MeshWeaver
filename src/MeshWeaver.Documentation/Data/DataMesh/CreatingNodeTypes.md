@@ -13,7 +13,7 @@ MeshWeaver's NodeType system lets you define richly typed data models — comple
 
 ## How a NodeType Is Structured
 
-Every NodeType lives in a folder under a namespace. Source code goes in `Source/` and xUnit tests in `Test/`. The JSON definition file sits at the same level as the folder it describes:
+Every NodeType lives in its own namespace. Source code goes in the `Source/` namespace and xUnit tests in `Test/`. The JSON definition file sits at the same level as the namespace it describes:
 
 <svg viewBox="0 0 760 300" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
   <defs>
@@ -22,7 +22,7 @@ Every NodeType lives in a folder under a namespace. Source code goes in `Source/
     </marker>
   </defs>
   <rect x="20" y="20" width="160" height="260" rx="10" fill="#263238" stroke="#546e7a" stroke-width="1.5"/>
-  <text x="100" y="46" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#eceff1">Source/ Folder</text>
+  <text x="100" y="46" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#eceff1">Source/ Namespace</text>
   <rect x="34" y="58" width="132" height="30" rx="6" fill="#1e88e5"/>
   <text x="100" y="78" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">Content Record</text>
   <rect x="34" y="98" width="132" height="30" rx="6" fill="#43a047"/>
@@ -76,7 +76,7 @@ samples/Graph/Data/
           TodoLayoutAreas.cs  # Child layout areas
 ```
 
-> **Key idea**: the `Source/` folder is compiled at startup. Every `.cs` file you put there becomes live code — content types, dimension types, layout areas, and data loaders all coexist in this single directory.
+> **Key idea**: the `Source/` namespace is compiled at startup. Every `.cs` Code node you put there becomes live code — content types, dimension types, layout areas, and data loaders all coexist in this single namespace.
 
 ---
 
@@ -124,7 +124,8 @@ public enum ProjectStatus
 | `[Required]` | Validation — field must be set |
 | `[MeshNodeProperty(nameof(MeshNode.Name))]` | Maps the field to the MeshNode's `Name` property |
 | `[MeshNodeProperty(nameof(MeshNode.Icon))]` | Maps the field to the MeshNode's `Icon` property |
-| `[Dimension<Category>]` | References a lookup / dimension type |
+| `[MeshNode("nodeType:ACME/Category")]` | References another mesh node — renders a `MeshNodePicker`, stores the node's PATH. The query always uses the **full path of the referenced NodeType** (see [Data Cubes](/Doc/DataMesh/DataCubes)) |
+| `[Dimension<Category>]` | References an in-hub lookup / dimension type seeded via `WithType<T>(t => t.WithInitialData(...))` |
 | `[Markdown(EditorHeight = "200px")]` | Renders a rich text editor for this field |
 | `[UiControl(Style = "width: 200px;")]` | Controls form layout width |
 | `[Browsable(false)]` | Hides the field from all UI |
@@ -233,7 +234,7 @@ public record Status
 
 ## Step 3: Create the NodeType Definition (JSON)
 
-The JSON file at the parent folder level wires everything together. The `configuration` field holds a C# lambda expression that is compiled and executed at startup:
+The JSON file in the parent namespace wires everything together. The `configuration` field holds a C# lambda expression that is compiled and executed at startup:
 
 ```json
 {

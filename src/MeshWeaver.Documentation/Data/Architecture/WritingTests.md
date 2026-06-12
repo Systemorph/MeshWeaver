@@ -358,7 +358,7 @@ The xUnit v3 adapter matches `FullyQualifiedName~`, **not** `ClassName~`. Never 
 
 - Framework code lives in `src/`, tests in `test/`, with one `*.Test` project per production project where it makes sense.
 - Shared fixtures live in `src/MeshWeaver.Hosting.Monolith.TestBase` and the Orleans test base.
-- NodeType tests live in the NodeType's `Test/` folder (`Namespace/Type/Test/TypeTest.cs`).
+- NodeType tests live in the NodeType's `Test/` namespace (`Namespace/Type/Test/TypeTest.cs`).
 
 ---
 
