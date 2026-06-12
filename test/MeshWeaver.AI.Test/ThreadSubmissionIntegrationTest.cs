@@ -265,10 +265,14 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         // Observe: during round 1 execution, all three new user ids should appear in Messages
         // and UserMessageIds, but NOT yet in IngestedMessageIds â€” the server holds them back
         // because the thread is busy.
+        // Registration budget only — nothing below depends on "within 3s"
+        // semantics (the assertions explicitly tolerate round 1 having already
+        // finished). 3s under-budgeted the 2-core CI runner while the slow-model
+        // round executes concurrently; the wait is burned only on the slow path.
         var pendingState = WaitForThread(
             threadPath,
             t => t.UserMessageIds.Count == 4,
-            timeoutMs: 3_000);
+            timeoutMs: 15_000);
 
         // If we're quick enough, round 1 is still executing here. Either way, we can assert
         // that u2/u3/u4 are NOT yet ingested while u1 already is (or that all 4 are ingested
