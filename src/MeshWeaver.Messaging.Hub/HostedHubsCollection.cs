@@ -31,31 +31,64 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     {
         if (messageHubs.TryGetValue(address, out var hub))
             return hub;
-        lock (locker)
+
+        // 🚨 Never-create lookups are PURE READS and must not touch any lock:
+        // RouteStreamMessage probes this per stream message per parent-chain
+        // level (HostedHubCreation.Never). The previous shape funneled every
+        // MISS into the global creation lock — and hub CONSTRUCTION also ran
+        // inside that lock — so any creation burst (post-deploy enrichment,
+        // prerender sync hubs) convoyed every routed stream message behind it.
+        // dotnet-stack proof, twice on 2026-06-12 atioz: the hottest frame was
+        // Monitor.Enter_Slowpath ← GetHub ← RouteStreamMessage ← DrainOne,
+        // once pegging the drain thread at 99.9% CPU (10k-hub storm) and once
+        // burning an Orleans grain turn for minutes (the AgenticPension space
+        // "wedge": queue backing up behind a multi-minute drain turn).
+        if (create != HostedHubCreation.Always)
+            return null;
+
+        if (IsDisposing)
         {
-            if (messageHubs.TryGetValue(address, out hub))
-                return hub;
-
-            if (IsDisposing)
-            {
-                logger.LogWarning("Rejecting hosted hub creation for address {Address} in Host {Host} during disposal - collection is disposing", address, Host);
-                return null;
-            }
-
-            if (create == HostedHubCreation.Always)
-            {
-                var newHub = CreateHub(address, config);
-                if (newHub != null)
-                {
-                    messageHubs[address] = newHub;
-                    try { _hubAdded.OnNext(newHub); } catch { /* never throw on notification */ }
-                    return newHub;
-                }
-            }
-
+            logger.LogWarning("Rejecting hosted hub creation for address {Address} in Host {Host} during disposal - collection is disposing", address, Host);
             return null;
         }
+
+        // Per-address single-flight; CONSTRUCTION RUNS OUTSIDE ANY GLOBAL LOCK.
+        // Concurrent creators of the SAME address share one Lazy (second caller
+        // blocks only on that address); creators of different addresses never
+        // contend. The factory re-checks messageHubs so a creator racing the
+        // post-construction cleanup below cannot build a duplicate hub.
+        var lazy = creations.GetOrAdd(address, a => new Lazy<IMessageHub?>(() =>
+        {
+            if (messageHubs.TryGetValue(a, out var existing))
+                return existing;
+            if (IsDisposing)
+            {
+                logger.LogWarning("Rejecting hosted hub creation for address {Address} in Host {Host} during disposal - collection is disposing", a, Host);
+                return null;
+            }
+            var newHub = CreateHub(a, config);
+            if (newHub != null)
+            {
+                messageHubs[a] = newHub;
+                try { _hubAdded.OnNext(newHub); } catch { /* never throw on notification */ }
+            }
+            return newHub;
+        }, LazyThreadSafetyMode.ExecutionAndPublication));
+
+        var created = lazy.Value;
+        // The Lazy only guards single-flight DURING construction — messageHubs is
+        // the steady-state map (same as before). Dropping the entry afterwards
+        // also restores the old retry semantics when creation failed/was refused.
+        creations.TryRemove(address, out _);
+        return created;
     }
+
+    /// <summary>
+    /// Per-address construction single-flight (see <see cref="GetHub"/>). Entries
+    /// live only for the duration of one construction; <see cref="messageHubs"/>
+    /// remains the steady-state registry.
+    /// </summary>
+    private readonly ConcurrentDictionary<Address, Lazy<IMessageHub?>> creations = new(AddressComparer.Instance);
 
     public void Add(IMessageHub hub)
     {
