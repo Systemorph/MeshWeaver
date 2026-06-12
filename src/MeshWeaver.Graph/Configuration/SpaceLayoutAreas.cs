@@ -58,8 +58,13 @@ public static class SpaceLayoutAreas
 
         if (IsSystemorph(spacePath))
             shell = shell.WithView(BuildSystemorphHighlights(spacePath));
-        else
-            shell = shell.WithView(BuildDashboardGrid(spacePath));
+
+        // Catalog: the namespace-tree Children area rendered directly below the body.
+        // Using Controls.LayoutArea keeps it outside the markdown body so the parser
+        // doesn't need node-path context (@@(...) in a static string can't resolve).
+        shell = shell.WithView(
+            Controls.LayoutArea(host.Hub.Address, new LayoutAreaReference("Children"))
+                .WithStyle($"{ContentMaxWidth} padding-bottom: 32px;"));
 
         return shell;
     }

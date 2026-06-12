@@ -78,10 +78,10 @@ public static class BalanceSheetLayoutAreas
             var sb = new StringBuilder();
             sb.Append("| Position |");
             foreach (var y in years) sb.Append($" {Name(storage, y)} |");
-            sb.AppendLine();
+            sb.Append("\n");
             sb.Append("|---|");
             foreach (var _ in years) sb.Append("---:|");
-            sb.AppendLine();
+            sb.Append("\n");
 
             void Row(string path, Position position, bool bold)
             {
@@ -95,24 +95,22 @@ public static class BalanceSheetLayoutAreas
                         : $"{value:N1}";
                     sb.Append(bold ? $" **{text}** |" : $" {text} |");
                 }
-                sb.AppendLine();
+                sb.Append("\n");
             }
 
             void Section(BalanceSheetSide side)
             {
-                // OrderedPositions carries MeshNode.Order — display order is
-                // node metadata, not content.
                 foreach (var path in storage.OrderedPositions
                              .Where(p => storage.Positions[p].Side == side))
                     Row(path, storage.Positions[path],
                         storage.Positions[path].Aggregation != PositionAggregation.Atomic);
             }
 
-            sb.AppendLine($"| **Assets** |{string.Concat(Enumerable.Repeat(" |", years.Length))}");
+            sb.Append($"| **Assets** |{string.Concat(Enumerable.Repeat(" |", years.Length))}\n");
             Section(BalanceSheetSide.Assets);
-            sb.AppendLine($"| **Liabilities** |{string.Concat(Enumerable.Repeat(" |", years.Length))}");
+            sb.Append($"| **Liabilities** |{string.Concat(Enumerable.Repeat(" |", years.Length))}\n");
             Section(BalanceSheetSide.Liabilities);
-            sb.AppendLine($"| **Computed** |{string.Concat(Enumerable.Repeat(" |", years.Length))}");
+            sb.Append($"| **Computed** |{string.Concat(Enumerable.Repeat(" |", years.Length))}\n");
             Section(BalanceSheetSide.Computed);
 
             return (UiControl)Controls.Markdown($"### Balance Sheet (CHF m)\n\n{sb}");

@@ -132,10 +132,6 @@ public static class SpaceNodeType
           kick off an agent, or draft content together.
 
         Once you're ready, replace this text with whatever fits your space best.
-
-        ---
-
-        @@("area:Children")
         """;
 
     public static TBuilder AddSpaceType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
