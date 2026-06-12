@@ -78,6 +78,17 @@ public static class SchemaInitialization
         await using (var ensureApiToken = dataSource.CreateCommand("SELECT public.ensure_partition_schema('apitoken')"))
             await ensureApiToken.ExecuteNonQueryAsync();
 
+        // VUser (virtual-user) partition. VirtualUserMiddleware creates a VUser/{id} node for
+        // every cookie-less request (bots, prefetchers, anonymous visitors); like ApiToken, VUser
+        // is not an OwnsPartition type and the router never lazily CREATE-SCHEMAs, so without
+        // this explicit create a fresh DB (e.g. atioz 2026-06-11) has no `vuser` schema and every
+        // anonymous request fails its VUser create with `42P01: relation "vuser.mesh_nodes" does
+        // not exist` (made loudly visible by the create fail-closed gate; before that the creates
+        // were silently acked-and-lost). Same single-source-of-truth DDL proc as Space creation
+        // uses. Idempotent.
+        await using (var ensureVUser = dataSource.CreateCommand("SELECT public.ensure_partition_schema('vuser')"))
+            await ensureVUser.ExecuteNonQueryAsync();
+
         // NOTE: the framework schemas `auth` (V27 access-object mirror) and `system_access`
         // (global/root-scope grants) are NOT created here. The portal's
         // PostgreSqlPartitionSubscriptionHostedService provisions them (and every other
@@ -104,13 +115,13 @@ public static class SchemaInitialization
             )
             -- Framework schemas are NOT content partitions — they must never make a fresh DB
             -- look non-fresh (which would run the legacy `user`-schema repair chain instead of
-            -- fast-forwarding). admin = versions/catalogs; auth = access-object mirror;
-            -- apitoken = token-validation index; system_* = global satellite scopes;
-            -- portal/kernel = legacy session schemas.
-            AND s.schema_name NOT IN (
-                'public', 'admin', 'auth', 'apitoken', 'system_access', 'system_activity',
-                'system_user_activity', 'system_thread', 'portal', 'kernel',
-                'information_schema', 'pg_catalog', 'pg_toast')
+            -- fast-forwarding). Only schemas that can exist BEFORE the first migration run
+            -- belong here: public (root), admin (created by this very function), and the
+            -- partitions this function provisions explicitly (apitoken, vuser) plus auth
+            -- (access-object mirror). The DbVersionGate keeps the portal from boot-provisioning
+            -- anything else ahead of the migration, so the former system_*/portal/kernel/pg_*
+            -- entries were dead defensiveness and are gone.
+            AND s.schema_name NOT IN ('public', 'admin', 'auth', 'apitoken', 'vuser')
             AND s.schema_name NOT LIKE '%\_versions' ESCAPE '\'
             """);
         var schemaCount = (long)(await cmd.ExecuteScalarAsync())!;

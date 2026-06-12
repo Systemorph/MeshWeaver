@@ -11,8 +11,12 @@
     @* Guard: Blazor's parameter pipeline transiently feeds a null ViewModel (navigation / stream
        tear-down — see SetParametersAsync). The render path must mirror that guard, else NamedArea
        (which reads ViewModel.SpinnerType) NREs and tears down the whole circuit. A re-render arrives
-       once ViewModel repopulates. *@
-    @if (ViewModel is not null && Area is not null)
+       once ViewModel repopulates.
+       Do NOT also guard on Area: a null Area is the LEGITIMATE bare-node-URL case — it means
+       "render the node's default area". The server resolves it and stores the indirection under
+       the empty key, and NamedArea.GetArea() normalizes null to "". Guarding on Area blanked every
+       plain node page portal-wide (regression 7359ba42f, fixed 2026-06-12). *@
+    @if (ViewModel is not null)
     {
         <NamedAreaView Stream="@AreaStream" ViewModel="@NamedArea" Area="@NamedArea.GetArea()" Top="@Top" />
     }
