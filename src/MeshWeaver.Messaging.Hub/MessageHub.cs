@@ -220,6 +220,17 @@ public sealed class MessageHub : IMessageHub
                         Address, ex.Message);
                 }
             });
+        // 🚨 The fallback the doc-comment promises must actually exist: register
+        // the scanner in the disposables composite so the FINAL teardown always
+        // kills it, even on disposal paths that never execute the Quiescing case
+        // body. Without this, the per-hub 5s Observable.Interval (whose closure
+        // captures `this`) survives disposal and the TimerQueue strong-root pins
+        // the disposed hub forever — the exact ClrMD chain MeshHub_IsCollected
+        // caught in CI run 27431445179: TimerQueue → Rx PeriodicTimer →
+        // DisplayClass40_0 → MessageHub[RunLevel=6]. Double-dispose with the
+        // explicit Quiescing-phase dispose is harmless (Rx subscriptions are
+        // idempotent).
+        disposables.Add(staleCallbackScannerSub);
     }
 
     private readonly ThreadSafeLinkedList<AsyncDelivery> rules = new();
