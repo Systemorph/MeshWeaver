@@ -74,17 +74,7 @@ internal static class ThreadSubmission
             return null;
         if (thread.PendingUserMessages.IsEmpty) return null;
 
-        // Drain the entire pending queue into one round. Order follows
-        // UserMessageIds (submission order); orphan pending entries not yet in
-        // UserMessageIds are appended at the end (defensive, shouldn't happen).
-        var idsBuilder = ImmutableList.CreateBuilder<string>();
-        foreach (var id in thread.UserMessageIds)
-            if (thread.PendingUserMessages.ContainsKey(id) && !idsBuilder.Contains(id))
-                idsBuilder.Add(id);
-        foreach (var id in thread.PendingUserMessages.Keys)
-            if (!idsBuilder.Contains(id))
-                idsBuilder.Add(id);
-        var ids = idsBuilder.ToImmutable();
+        var ids = ComputeDrainIds(thread);
         if (ids.IsEmpty) return null;
 
         // 🚨 Deterministic per-claim response cell id — NOT a fresh Guid.
@@ -113,6 +103,26 @@ internal static class ThreadSubmission
     // ═════════════════════════════════════════════════════════════════════
     // Server-side API — invoked from thread hub initialization
     // ═════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// The full drain set for one inbox round: every pending entry, ordered by
+    /// UserMessageIds (submission order); orphan pending entries not yet in
+    /// UserMessageIds are appended at the end (defensive, shouldn't happen).
+    /// Shared by <see cref="PlanNextRound"/> and the round-commit staleness
+    /// check in <c>CommitRoundAndExecute</c> — both MUST compute the identical
+    /// sequence for the same thread state.
+    /// </summary>
+    internal static ImmutableList<string> ComputeDrainIds(MeshThread thread)
+    {
+        var idsBuilder = ImmutableList.CreateBuilder<string>();
+        foreach (var id in thread.UserMessageIds)
+            if (thread.PendingUserMessages.ContainsKey(id) && !idsBuilder.Contains(id))
+                idsBuilder.Add(id);
+        foreach (var id in thread.PendingUserMessages.Keys)
+            if (!idsBuilder.Contains(id))
+                idsBuilder.Add(id);
+        return idsBuilder.ToImmutable();
+    }
 
     /// <summary>
     /// Installs a continuous subscription on the thread hub's workspace.
@@ -599,6 +609,15 @@ internal static class ThreadSubmissionServer
                         && t.ActiveMessageId == responseMsgId
                     : t.Status == ThreadExecutionStatus.StartingExecution;
                 if (!canLaunch) { didCommitThisEmission = false; return node; }
+                // NOTE (do NOT add a SequenceEqual staleness bail here): bailing
+                // when the CURRENT drain set differs from this dispatch's plan
+                // sounds safe but parks the claim forever when pending changed
+                // after the latest plan — no in-flight dispatch matches the new
+                // state and nothing re-fires the watcher (validated empirically:
+                // the bail variant froze Cancel_With*Pending at StartingExecution
+                // in 5/6 class runs). A stale dispatch that commits still drains
+                // only ids present in BOTH the plan and current pending; leftover
+                // entries re-dispatch when the round settles.
                 didCommitThisEmission = true;
 
                 // User ids in dispatch order, then the response id last.

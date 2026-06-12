@@ -208,7 +208,12 @@ public class MeshHubDisposalLeakTest(ITestOutputHelper output) : MonolithMeshTes
                         catch (Exception e) { extra = $"  [RunLevel read err: {e.Message}]"; }
                         try
                         {
-                            var addr = obj.ReadObjectField("<Address>k__BackingField");
+                            // MessageHub.Address => Configuration.Address — the hub has no
+                            // address field of its own; read through the config object.
+                            var config = obj.ReadObjectField("<Configuration>k__BackingField");
+                            var addr = config.IsValid
+                                ? config.ReadObjectField("<Address>k__BackingField")
+                                : default;
                             if (addr.IsValid)
                             {
                                 // Address stores Segments (string[]); Type/Id are computed.
