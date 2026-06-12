@@ -447,12 +447,18 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             address, reference);
 
-        var control = stream
+        // The NodeType GUI shell wraps every primary area in a side-menu splitter;
+        // the search control renders in the shell's CONTENT pane (last pane).
+        var shell = stream
             .GetControlStream(reference.Area!)
             .Should().Within(50.Seconds())
-            .Match(x => x is not null);
+            .Match(x => x is SplitterControl s && s.Areas.Count >= 2);
+        var contentAreaId = ((SplitterControl)shell!).Areas.Last().Area.ToString()!;
 
-        var searchControl = control.Should().BeOfType<MeshSearchControl>().Subject;
+        var searchControl = (MeshSearchControl)stream
+            .GetControlStream(contentAreaId)
+            .Should().Within(50.Seconds())
+            .Match(x => x is MeshSearchControl)!;
         searchControl.HiddenQuery.Should().NotBeNull("Search should have a hidden query");
 
         var hiddenQuery = searchControl.HiddenQuery!.ToString()!;
@@ -487,12 +493,17 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             address, reference);
 
-        var control = stream
+        // Shell splitter → content pane, same as the group-level test above.
+        var shell = stream
             .GetControlStream(reference.Area!)
             .Should().Within(50.Seconds())
-            .Match(x => x is not null);
+            .Match(x => x is SplitterControl s && s.Areas.Count >= 2);
+        var contentAreaId = ((SplitterControl)shell!).Areas.Last().Area.ToString()!;
 
-        var searchControl = control.Should().BeOfType<MeshSearchControl>().Subject;
+        var searchControl = (MeshSearchControl)stream
+            .GetControlStream(contentAreaId)
+            .Should().Within(50.Seconds())
+            .Match(x => x is MeshSearchControl)!;
         searchControl.HiddenQuery.Should().NotBeNull("Search should have a hidden query");
 
         var hiddenQuery = searchControl.HiddenQuery!.ToString()!;
