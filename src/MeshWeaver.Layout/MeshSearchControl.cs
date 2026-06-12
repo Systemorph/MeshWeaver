@@ -21,7 +21,17 @@ public enum MeshSearchRenderMode
     /// <summary>
     /// Grouped by category - results grouped under category headings.
     /// </summary>
-    Grouped
+    Grouped,
+
+    /// <summary>
+    /// Namespace catalog - results organized by their namespace hierarchy.
+    /// Sub-namespaces render as nested collapsible sections (with counts);
+    /// nodes render as thumbnail cards. Levels load lazily: only the direct
+    /// children of the root namespace are queried up front, deeper levels are
+    /// queried on folder expand. Typing in the search box switches to a
+    /// subtree search whose results are grouped by relative namespace.
+    /// </summary>
+    NamespaceTree
 }
 
 /// <summary>

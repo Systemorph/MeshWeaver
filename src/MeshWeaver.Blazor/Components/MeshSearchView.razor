@@ -62,7 +62,54 @@
     }
 
     <div class="mesh-search-results">
-        @if (_isLoading && !IsPrecomputedMode && BoundShowLoadingIndicator)
+        @if (IsNamespaceTreeMode)
+        {
+            @if (TreeHasSearchText)
+            {
+                @* Subtree search: flat results regrouped into nested namespace sections *@
+                @if (_treeSearchLoading && _treeSearchItems == null)
+                {
+                    @RenderTreeLoading()
+                }
+                else if (_treeSearchItems == null || _treeSearchItems.Count == 0)
+                {
+                    <FluentLabel Typo="Microsoft.FluentUI.AspNetCore.Components.Typography.Body" Style="color: var(--neutral-foreground-hint);">No items found.</FluentLabel>
+                }
+                else
+                {
+                    @RenderTreeItems(_treeSearchItems, TreeRootNamespace, 0, false)
+                }
+            }
+            else if (TreeRootIsLoading)
+            {
+                @if (BoundShowLoadingIndicator)
+                {
+                    @RenderTreeLoading()
+                }
+            }
+            else if (TreeRootIsEmpty)
+            {
+                @if (BoundShowEmptyMessage)
+                {
+                    @if (ShowCreateButton)
+                    {
+                        <div class="mesh-search-empty-create" @onclick="HandleCreateClick">
+                            <div class="mesh-search-empty-title">Nothing here yet</div>
+                            <div class="mesh-search-empty-hint">Click to create your first item</div>
+                        </div>
+                    }
+                    else
+                    {
+                        <FluentLabel Typo="Microsoft.FluentUI.AspNetCore.Components.Typography.Body" Style="color: var(--neutral-foreground-hint);">No items found.</FluentLabel>
+                    }
+                }
+            }
+            else
+            {
+                @RenderTreeLevel(TreeRootNamespace, 0)
+            }
+        }
+        else if (_isLoading && !IsPrecomputedMode && BoundShowLoadingIndicator)
         {
             <div class="mesh-search-area-grid">
                 @for (var i = 0; i < 3; i++)
@@ -212,4 +259,124 @@
         Hub.Post(new NavigationRequest($"/{node.Path}") { Target = "SidePanel" },
             o => o.WithTarget(new MeshWeaver.Messaging.Address(targetAddress)));
     }
+
+    // ----- Namespace tree rendering (MeshSearchRenderMode.NamespaceTree) -----
+
+    private RenderFragment RenderTreeLoading() => __builder =>
+    {
+        <div class="mesh-search-tree-loading">
+            <div class="mesh-search-skeleton-line" style="width: 40%;"></div>
+            <div class="mesh-search-skeleton-line" style="width: 60%;"></div>
+        </div>
+    };
+
+    /// <summary>Renders one lazily-loaded namespace level (queried on expand).</summary>
+    private RenderFragment RenderTreeLevel(string ns, int depth) => __builder =>
+    {
+        if (!_treeLevels.TryGetValue(ns, out var level) || level.IsLoading)
+        {
+            @RenderTreeLoading()
+            return;
+        }
+
+        if (level.Items.Count == 0)
+        {
+            <div class="mesh-search-tree-empty">Empty</div>
+            return;
+        }
+
+        @RenderTreeItems(level.Items, ns, depth, true)
+    };
+
+    /// <summary>
+    /// Renders folders as collapsible sections (same look as the grouped sections)
+    /// and leaves as the usual thumbnail-card grid. <paramref name="lazy"/>: folder
+    /// content comes from the per-level cache (browse mode) vs. inline children
+    /// (search mode, fully expanded by default).
+    /// </summary>
+    private RenderFragment RenderTreeItems(IReadOnlyList<NamespaceTreeItem> items, string levelKey, int depth, bool lazy) => __builder =>
+    {
+        var folders = items.OfType<NamespaceTreeFolder>().ToList();
+        var leaves = items.OfType<NamespaceTreeLeaf>().ToList();
+        var showCounts = BoundSections?.ShowCounts ?? true;
+
+        @foreach (var folder in folders)
+        {
+            var isExpanded = lazy
+                ? _expandedFolders.Contains(folder.Path)
+                : IsSearchTreeFolderExpanded(folder.Path);
+            var countLabel = lazy ? FormatTreeCount(folder.Count) : folder.Count.ToString();
+            var folderPath = folder.Path;
+
+            var isLazy = lazy;
+            <div class="mesh-search-section mesh-search-tree-section">
+                <div class="mesh-search-section-header"
+                     @onclick="() => OnTreeFolderHeaderClick(folderPath, isLazy)">
+                    <span class="@(isExpanded ? "mesh-search-collapse-icon expanded" : "mesh-search-collapse-icon")">&#x25b6;</span>
+                    <span class="mesh-search-tree-folder-glyph">
+                        <FluentIcon Value="@(new Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size16.Folder())" />
+                    </span>
+                    <span class="mesh-search-section-label">@folder.Name</span>
+                    @if (showCounts)
+                    {
+                        <span class="mesh-search-tree-count">@countLabel</span>
+                    }
+                    @if (folder.Node != null)
+                    {
+                        <a class="mesh-search-tree-open" href="/@folder.Path" title="Open @folder.Name"
+                           @onclick:stopPropagation="true">&#x2197;</a>
+                    }
+                </div>
+                @if (isExpanded)
+                {
+                    <div class="mesh-search-tree-children">
+                        @if (lazy)
+                        {
+                            @RenderTreeLevel(folder.Path, depth + 1)
+                        }
+                        else
+                        {
+                            @RenderTreeItems(folder.Children, folder.Path, depth + 1, false)
+                        }
+                    </div>
+                }
+            </div>
+        }
+
+        @if (leaves.Count > 0)
+        {
+            var groupKey = $"tree:{levelKey}";
+            var maxVisible = GetMaxVisibleItems(groupKey);
+            var visibleLeaves = maxVisible.HasValue ? leaves.Take(maxVisible.Value).ToList() : leaves;
+            var hiddenCount = leaves.Count - visibleLeaves.Count;
+
+            <div class="mesh-search-grid-wrapper">
+                <div class="mesh-search-area-grid" style="@CardGridStyle">
+                    @foreach (var leaf in visibleLeaves)
+                    {
+                        @RenderCard(leaf.Node)
+                    }
+                </div>
+            </div>
+
+            @if (hiddenCount > 0)
+            {
+                <div class="mesh-search-show-more">
+                    <button type="button" class="mesh-search-toggle-rows" @onclick="() => ToggleGroupExpanded(groupKey)">
+                        Show all @leaves.Count
+                    </button>
+                </div>
+            }
+            else if (_expandedRowGroups.Contains(groupKey)
+                     && BoundMaxRows.HasValue
+                     && leaves.Count > BoundMaxRows.Value * (BoundMaxColumns ?? 3))
+            {
+                <div class="mesh-search-show-more">
+                    <button type="button" class="mesh-search-toggle-rows" @onclick="() => ToggleGroupExpanded(groupKey)">
+                        Show less
+                    </button>
+                </div>
+            }
+        }
+    };
 }

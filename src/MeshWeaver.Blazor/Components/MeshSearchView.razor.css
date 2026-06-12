@@ -327,6 +327,67 @@
     font-size: 0.85rem;
 }
 
+/* Namespace tree (MeshSearchRenderMode.NamespaceTree) */
+.mesh-search-tree-section {
+    margin-bottom: 12px;
+}
+
+.mesh-search-tree-folder-glyph {
+    display: flex;
+    align-items: center;
+    color: var(--accent-foreground-rest, #0078d4);
+}
+
+.mesh-search-tree-count {
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1;
+    padding: 3px 8px;
+    border-radius: 10px;
+    background: var(--neutral-fill-secondary-rest, #e8e8e8);
+    color: var(--neutral-foreground-hint, #666);
+}
+
+.mesh-search-tree-open {
+    margin-left: auto;
+    color: var(--neutral-foreground-hint, #666);
+    text-decoration: none;
+    font-size: 0.9rem;
+    padding: 0 4px;
+    border-radius: 4px;
+    opacity: 0.5;
+    transition: opacity 0.15s, color 0.15s;
+}
+
+.mesh-search-section-header:hover .mesh-search-tree-open {
+    opacity: 1;
+}
+
+.mesh-search-tree-open:hover {
+    color: var(--accent-foreground-rest, #0078d4);
+}
+
+.mesh-search-tree-children {
+    margin: 4px 0 8px 11px;
+    padding: 4px 0 4px 16px;
+    border-left: 2px solid var(--neutral-stroke-rest, #e0e0e0);
+}
+
+.mesh-search-tree-empty {
+    color: var(--neutral-foreground-hint, #888);
+    font-size: 0.85rem;
+    font-style: italic;
+    padding: 4px 0;
+}
+
+.mesh-search-tree-loading {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px 0;
+    max-width: 480px;
+}
+
 /* Skeleton loading placeholders */
 .mesh-search-skeleton-avatar {
     width: 48px;

@@ -778,9 +778,11 @@ public static class MeshNodeLayoutAreas
     }
 
     /// <summary>
-    /// Renders the Children view showing child nodes as thumbnails without search.
-    /// Groups children by NodeType (default) or Category if set, excludes NodeType nodes.
-    /// Uses MeshSearchControl for unified search/catalog functionality.
+    /// Renders the Children view as a mesh catalog: child nodes organized by their
+    /// namespace hierarchy (NamespaceTree render mode). Sub-namespaces show as
+    /// nested collapsible sections with counts; levels load lazily on expand.
+    /// The search box is visible — typing switches to a subtree search whose
+    /// results are grouped by relative namespace.
     /// Includes a "Create Sub-Node" button when the user has Create permission.
     /// </summary>
     [Browsable(false)]
@@ -789,20 +791,16 @@ public static class MeshNodeLayoutAreas
         var hubPath = host.Hub.Address.ToString();
 
         return Controls.MeshSearch
-            .WithTitle("Associated")
+            .WithTitle("Catalog")
             // Exclude NodeType definitions — they belong to type admin, not the
             // Organization/instance catalog — and enable ReactiveMode so moves,
             // renames, and new children show up without an F5.
             .WithHiddenQuery($"namespace:{hubPath} is:main context:search -nodeType:NodeType")
             .WithReactiveMode(true)
-            .WithShowSearchBox(false)
+            .WithShowSearchBox(true)
             .WithShowEmptyMessage(false)
             .WithShowLoadingIndicator(false)
-            .WithRenderMode(MeshSearchRenderMode.Grouped)
-            // Group by Category first — falls back to NodeType inside the view
-            // for nodes without an explicit category, so curated section names
-            // ("Marketing", "Demo", etc.) drive the headings when set.
-            .WithGroupBy("Category")
+            .WithRenderMode(MeshSearchRenderMode.NamespaceTree)
             .WithSectionCounts(true)
             .WithItemLimit(50)
             .WithMaxRows(3)

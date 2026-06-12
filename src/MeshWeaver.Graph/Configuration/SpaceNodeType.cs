@@ -108,6 +108,11 @@ public static class SpaceNodeType
     /// PreRenderedHtml of its own. Plain markdown — no pseudo-HTML.
     /// Per-Space overrides live in each Space's own <c>index.md</c>
     /// (set on <see cref="MeshNode.PreRenderedHtml"/>).
+    /// <para>The trailing <c>@@("area:Children")</c> line embeds the mesh catalog
+    /// (the namespace-tree Children layout area) as a regular markdown section —
+    /// the reference is relative, so it resolves against the Space's own path at
+    /// render time. A space owner who authors their own page simply omits (or
+    /// deletes) that line to drop the catalog.</para>
     /// </summary>
     public const string WelcomeMarkdown = """
         # Welcome
@@ -127,6 +132,10 @@ public static class SpaceNodeType
           kick off an agent, or draft content together.
 
         Once you're ready, replace this text with whatever fits your space best.
+
+        ---
+
+        @@("area:Children")
         """;
 
     public static TBuilder AddSpaceType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder

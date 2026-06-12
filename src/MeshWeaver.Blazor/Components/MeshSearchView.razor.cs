@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using System.Collections.Immutable;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Reactive.Linq;
 using Microsoft.AspNetCore.Components;
@@ -126,7 +127,29 @@ public partial class MeshSearchView : IDisposable
             return false;
         }
     }
-    private MeshSearchRenderMode BoundRenderMode => ViewModel?.RenderMode is MeshSearchRenderMode mode ? mode : MeshSearchRenderMode.Grouped;
+    private MeshSearchRenderMode BoundRenderMode
+    {
+        get
+        {
+            switch (ViewModel?.RenderMode)
+            {
+                case MeshSearchRenderMode mode:
+                    return mode;
+                case string s when Enum.TryParse<MeshSearchRenderMode>(s, true, out var parsed):
+                    return parsed;
+                // Controls round-trip through the synchronization stream as JSON;
+                // enums serialize as strings (EnumMemberJsonStringEnumConverter).
+                case JsonElement { ValueKind: JsonValueKind.String } je
+                    when Enum.TryParse<MeshSearchRenderMode>(je.GetString(), true, out var fromJson):
+                    return fromJson;
+                case JsonElement { ValueKind: JsonValueKind.Number } jn
+                    when jn.TryGetInt32(out var n) && Enum.IsDefined(typeof(MeshSearchRenderMode), n):
+                    return (MeshSearchRenderMode)n;
+                default:
+                    return MeshSearchRenderMode.Grouped;
+            }
+        }
+    }
 
     // Config objects
     private SectionConfig? BoundSections => ViewModel?.Sections;
@@ -220,7 +243,10 @@ public partial class MeshSearchView : IDisposable
             _currentValue = BoundVisibleQuery;
             if (!IsPrecomputedMode)
             {
-                LoadResults();
+                if (IsNamespaceTreeMode)
+                    LoadTreeSearch();
+                else
+                    LoadResults();
             }
         }
 
@@ -229,7 +255,10 @@ public partial class MeshSearchView : IDisposable
             _lastBoundHiddenQuery = BoundHiddenQuery;
             if (!IsPrecomputedMode)
             {
-                LoadResults();
+                if (IsNamespaceTreeMode)
+                    ResetTree();
+                else
+                    LoadResults();
             }
         }
 
@@ -268,6 +297,13 @@ public partial class MeshSearchView : IDisposable
                 return;
             }
 
+            // Namespace tree mode: lazily load the first level only.
+            if (IsNamespaceTreeMode)
+            {
+                InitializeTree();
+                return;
+            }
+
             // Reactive mode: subscribe to Query for live updates
             if (BoundReactiveMode)
             {
@@ -286,7 +322,10 @@ public partial class MeshSearchView : IDisposable
         _currentValue = value;
         if (BoundLiveSearch && !IsPrecomputedMode)
         {
-            LoadResults();
+            if (IsNamespaceTreeMode)
+                LoadTreeSearch();
+            else
+                LoadResults();
         }
         return Task.CompletedTask;
     }
@@ -300,7 +339,10 @@ public partial class MeshSearchView : IDisposable
 
         if (!IsPrecomputedMode)
         {
-            LoadResults();
+            if (IsNamespaceTreeMode)
+                LoadTreeSearch();
+            else
+                LoadResults();
         }
 
         // Update URL if we're on the search page so the URL is shareable
@@ -828,6 +870,324 @@ public partial class MeshSearchView : IDisposable
     private MeshNodeCardControl GetCardControl(MeshNode node) =>
         MeshNodeCardControl.FromNode(node, node.Path, BoundItemArea, BoundDisableNavigation);
 
+    #region Namespace tree mode (MeshSearchRenderMode.NamespaceTree)
+
+    /// <summary>One lazily-loaded namespace level: direct children resolved into folders/leaves.</summary>
+    private sealed record TreeLevel(bool IsLoading, ImmutableList<NamespaceTreeItem> Items)
+    {
+        public static readonly TreeLevel Loading = new(true, ImmutableList<NamespaceTreeItem>.Empty);
+    }
+
+    /// <summary>Direct-children count probes cap out here; the badge shows "99+" at the cap.</summary>
+    private const int FolderCountProbeCap = 100;
+
+    private ImmutableDictionary<string, TreeLevel> _treeLevels =
+        ImmutableDictionary<string, TreeLevel>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase);
+    private ImmutableHashSet<string> _expandedFolders =
+        ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase);
+    private ImmutableDictionary<string, IDisposable> _treeLevelSubscriptions =
+        ImmutableDictionary<string, IDisposable>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase);
+    private ImmutableList<IDisposable> _treeProbeSubscriptions = ImmutableList<IDisposable>.Empty;
+    private IDisposable? _treeSearchSubscription;
+    private ImmutableList<NamespaceTreeItem>? _treeSearchItems;
+    private bool _treeSearchLoading;
+
+    private bool IsNamespaceTreeMode =>
+        BoundRenderMode == MeshSearchRenderMode.NamespaceTree && !IsPrecomputedMode;
+
+    private bool TreeHasSearchText => !string.IsNullOrWhiteSpace(_currentValue);
+
+    /// <summary>The catalog root — the namespace: of the hidden query (fallback: Namespace property).</summary>
+    private string TreeRootNamespace
+    {
+        get
+        {
+            var match = Regex.Match(BoundHiddenQuery, @"(?:^|\s)namespace:(\S+)");
+            if (match.Success)
+                return match.Groups[1].Value.Trim('/');
+            return BoundNamespace.Trim('/');
+        }
+    }
+
+    private ILogger? TreeLogger =>
+        Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.MeshSearchView");
+
+    /// <summary>
+    /// Per-level query: the hidden query's filters with namespace: forced to
+    /// <paramref name="ns"/> and any scope: stripped (levels are always direct children).
+    /// </summary>
+    private string BuildTreeLevelQuery(string ns)
+    {
+        var query = Regex.Replace(BoundHiddenQuery, @"(?:^|\s)scope:\S+", " ");
+        query = Regex.IsMatch(query, @"(?:^|\s)namespace:\S+")
+            ? Regex.Replace(query, @"(?:^|\s)namespace:\S+", $" namespace:{ns}")
+            : $"namespace:{ns} {query}";
+        return Regex.Replace(query, @"\s+", " ").Trim();
+    }
+
+    /// <summary>
+    /// Subtree search query for typed text: same filters, namespace: at the root,
+    /// scope:descendants, plus the user's search terms.
+    /// </summary>
+    private string BuildTreeSearchQuery()
+        => Regex.Replace($"{BuildTreeLevelQuery(TreeRootNamespace)} scope:descendants {_currentValue.Trim()}", @"\s+", " ").Trim();
+
+    private void InitializeTree()
+    {
+        LoadTreeLevel(TreeRootNamespace);
+        if (TreeHasSearchText)
+            LoadTreeSearch();
+    }
+
+    /// <summary>Disposes all tree subscriptions and reloads from the (possibly changed) root.</summary>
+    private void ResetTree()
+    {
+        DisposeTreeSubscriptions();
+        _treeLevels = _treeLevels.Clear();
+        _expandedFolders = _expandedFolders.Clear();
+        _treeSearchItems = null;
+        InitializeTree();
+    }
+
+    private void DisposeTreeSubscriptions()
+    {
+        foreach (var subscription in _treeLevelSubscriptions.Values)
+            subscription.Dispose();
+        _treeLevelSubscriptions = _treeLevelSubscriptions.Clear();
+        foreach (var probe in _treeProbeSubscriptions)
+            probe.Dispose();
+        _treeProbeSubscriptions = ImmutableList<IDisposable>.Empty;
+        _treeSearchSubscription?.Dispose();
+        _treeSearchSubscription = null;
+    }
+
+    /// <summary>
+    /// Subscribes the live direct-children query for one namespace level. Each
+    /// structural emission re-probes child counts and rebuilds the level's items.
+    /// </summary>
+    private void LoadTreeLevel(string ns)
+    {
+        if (_treeLevelSubscriptions.TryGetValue(ns, out var existing))
+            existing.Dispose();
+
+        _treeLevels = _treeLevels.SetItem(ns, TreeLevel.Loading);
+
+        // Live per-emission snapshot of the level's direct children, keyed by path.
+        var levelNodes = ImmutableDictionary<string, MeshNode>.Empty
+            .WithComparers(StringComparer.OrdinalIgnoreCase);
+
+        var subscription = MeshQuery
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(BuildTreeLevelQuery(ns)))
+            .Subscribe(
+                change =>
+                {
+                    switch (change.ChangeType)
+                    {
+                        case QueryChangeType.Initial:
+                        case QueryChangeType.Reset:
+                            levelNodes = change.Items
+                                .Where(n => !string.IsNullOrEmpty(n.Path))
+                                .Aggregate(
+                                    ImmutableDictionary<string, MeshNode>.Empty
+                                        .WithComparers(StringComparer.OrdinalIgnoreCase),
+                                    (map, n) => map.SetItem(n.Path, n));
+                            break;
+                        case QueryChangeType.Added:
+                        case QueryChangeType.Updated:
+                            foreach (var n in change.Items.Where(n => !string.IsNullOrEmpty(n.Path)))
+                                levelNodes = levelNodes.SetItem(n.Path, n);
+                            break;
+                        case QueryChangeType.Removed:
+                            foreach (var n in change.Items.Where(n => !string.IsNullOrEmpty(n.Path)))
+                                levelNodes = levelNodes.Remove(n.Path);
+                            break;
+                        default:
+                            return;
+                    }
+                    ProbeTreeChildCounts(ns, levelNodes.Values.ToImmutableList());
+                },
+                ex =>
+                {
+                    TreeLogger?.LogWarning(ex, "Namespace tree level query failed for {Namespace}", ns);
+                    InvokeAsync(() =>
+                    {
+                        _treeLevels = _treeLevels.SetItem(
+                            ns, new TreeLevel(false, ImmutableList<NamespaceTreeItem>.Empty));
+                        StateHasChanged();
+                    });
+                });
+
+        _treeLevelSubscriptions = _treeLevelSubscriptions.SetItem(ns, subscription);
+    }
+
+    /// <summary>
+    /// Fires one direct-children existence/count probe per child node and resolves
+    /// the level once all probes answered. Subscribe-all-upfront (CombineLatest)
+    /// per AsynchronousCalls.md; each probe Catches to a 0-count sentinel so one
+    /// failing probe degrades a single folder to a leaf instead of wedging the level.
+    /// </summary>
+    private void ProbeTreeChildCounts(string ns, ImmutableList<MeshNode> nodes)
+    {
+        if (nodes.Count == 0)
+        {
+            InvokeAsync(() =>
+            {
+                _treeLevels = _treeLevels.SetItem(
+                    ns, new TreeLevel(false, ImmutableList<NamespaceTreeItem>.Empty));
+                StateHasChanged();
+            });
+            return;
+        }
+
+        var probes = nodes
+            .Where(n => !string.IsNullOrEmpty(n.Path))
+            .Select(n =>
+            {
+                var path = n.Path;
+                return MeshQuery
+                    .Query<MeshNode>(MeshQueryRequest.FromQuery(
+                        $"{BuildTreeLevelQuery(path)} limit:{FolderCountProbeCap}"))
+                    .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+                    .Take(1)
+                    .Select(c => (Path: path, Count: c.Items.Count))
+                    .Timeout(TimeSpan.FromSeconds(10))
+                    .Catch((Exception ex) =>
+                    {
+                        TreeLogger?.LogWarning(ex, "Child-count probe failed for {Path}", path);
+                        return Observable.Return((Path: path, Count: 0));
+                    });
+            })
+            .ToArray();
+
+        var probeSubscription = Observable.CombineLatest(probes)
+            .Take(1)
+            .Subscribe(counts => InvokeAsync(() =>
+            {
+                var countMap = counts.ToImmutableDictionary(
+                    c => c.Path, c => c.Count, StringComparer.OrdinalIgnoreCase);
+                _treeLevels = _treeLevels.SetItem(
+                    ns, new TreeLevel(false, NamespaceTreeBuilder.BuildLevel(ns, nodes, countMap)));
+                StateHasChanged();
+            }));
+        _treeProbeSubscriptions = _treeProbeSubscriptions.Add(probeSubscription);
+    }
+
+    private void OnTreeFolderHeaderClick(string folderPath, bool lazy)
+    {
+        if (lazy)
+            ToggleTreeFolder(folderPath);
+        else
+            ToggleSearchTreeFolder(folderPath);
+    }
+
+    private void ToggleTreeFolder(string folderPath)
+    {
+        if (_expandedFolders.Contains(folderPath))
+        {
+            _expandedFolders = _expandedFolders.Remove(folderPath);
+        }
+        else
+        {
+            _expandedFolders = _expandedFolders.Add(folderPath);
+            if (!_treeLevels.ContainsKey(folderPath))
+                LoadTreeLevel(folderPath);
+        }
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Typed-text mode: one live subtree query; results are relativised to the root
+    /// and grouped into nested namespace sections via <see cref="NamespaceTreeBuilder.Build"/>.
+    /// Clearing the text returns to the lazily-loaded browse levels (still cached).
+    /// </summary>
+    private void LoadTreeSearch()
+    {
+        _treeSearchSubscription?.Dispose();
+        _treeSearchSubscription = null;
+
+        if (!TreeHasSearchText)
+        {
+            _treeSearchItems = null;
+            _treeSearchLoading = false;
+            StateHasChanged();
+            return;
+        }
+
+        _treeSearchLoading = true;
+        StateHasChanged();
+
+        var root = TreeRootNamespace;
+        var resultNodes = ImmutableDictionary<string, MeshNode>.Empty
+            .WithComparers(StringComparer.OrdinalIgnoreCase);
+
+        _treeSearchSubscription = MeshQuery
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(BuildTreeSearchQuery()))
+            .Subscribe(
+                change =>
+                {
+                    switch (change.ChangeType)
+                    {
+                        case QueryChangeType.Initial:
+                        case QueryChangeType.Reset:
+                            resultNodes = change.Items
+                                .Where(n => !string.IsNullOrEmpty(n.Path))
+                                .Aggregate(
+                                    ImmutableDictionary<string, MeshNode>.Empty
+                                        .WithComparers(StringComparer.OrdinalIgnoreCase),
+                                    (map, n) => map.SetItem(n.Path, n));
+                            break;
+                        case QueryChangeType.Added:
+                        case QueryChangeType.Updated:
+                            foreach (var n in change.Items.Where(n => !string.IsNullOrEmpty(n.Path)))
+                                resultNodes = resultNodes.SetItem(n.Path, n);
+                            break;
+                        case QueryChangeType.Removed:
+                            foreach (var n in change.Items.Where(n => !string.IsNullOrEmpty(n.Path)))
+                                resultNodes = resultNodes.Remove(n.Path);
+                            break;
+                        default:
+                            return;
+                    }
+                    var items = NamespaceTreeBuilder.Build(root, resultNodes.Values.ToImmutableList());
+                    InvokeAsync(() =>
+                    {
+                        _treeSearchItems = items;
+                        _treeSearchLoading = false;
+                        StateHasChanged();
+                    });
+                },
+                ex =>
+                {
+                    TreeLogger?.LogWarning(ex, "Namespace tree search failed: {Query}", BuildTreeSearchQuery());
+                    InvokeAsync(() =>
+                    {
+                        _treeSearchItems = ImmutableList<NamespaceTreeItem>.Empty;
+                        _treeSearchLoading = false;
+                        StateHasChanged();
+                    });
+                });
+    }
+
+    private static string FormatTreeCount(int count)
+        => count >= FolderCountProbeCap ? $"{FolderCountProbeCap - 1}+" : count.ToString();
+
+    /// <summary>Search-mode folders default to expanded; the toggle reuses _collapsedGroups.</summary>
+    private bool IsSearchTreeFolderExpanded(string folderPath)
+        => !_collapsedGroups.Contains($"tree:{folderPath}");
+
+    private void ToggleSearchTreeFolder(string folderPath)
+        => ToggleGroup($"tree:{folderPath}");
+
+    private bool TreeRootIsLoading =>
+        !_treeLevels.TryGetValue(TreeRootNamespace, out var level) || level.IsLoading;
+
+    private bool TreeRootIsEmpty =>
+        _treeLevels.TryGetValue(TreeRootNamespace, out var level)
+        && !level.IsLoading
+        && level.Items.Count == 0;
+
+    #endregion
+
     private void ToggleSearchOptions()
     {
         _showSearchOptions = !_showSearchOptions;
@@ -837,16 +1197,21 @@ public partial class MeshSearchView : IDisposable
         }
     }
 
-    private async Task ApplySearchOptions()
+    private Task ApplySearchOptions()
     {
         _overriddenHiddenQuery = _editableHiddenQuery;
         _showSearchOptions = false;
-        LoadResults();
+        if (IsNamespaceTreeMode)
+            ResetTree();
+        else
+            LoadResults();
         UpdateSearchUrl();
+        return Task.CompletedTask;
     }
 
     public void Dispose()
     {
         _reactiveSubscription?.Dispose();
+        DisposeTreeSubscriptions();
     }
 }

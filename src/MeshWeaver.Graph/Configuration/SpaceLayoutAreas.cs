@@ -178,7 +178,11 @@ public static class SpaceLayoutAreas
 
     /// <summary>
     /// Dashboard grid mirroring the UserActivity layout but scoped to this space's partition:
-    /// Latest Threads, Items, Activity Feed.
+    /// Latest Threads, Activity Feed, Recent Updates. The content catalog is NOT
+    /// hard-wired here anymore — it ships as a deletable <c>@@("area:Children")</c>
+    /// section inside the space's markdown body (see
+    /// <see cref="SpaceNodeType.WelcomeMarkdown"/>), so each space owner controls
+    /// whether and where the catalog appears.
     /// </summary>
     private static UiControl BuildDashboardGrid(string spacePath)
     {
@@ -187,9 +191,6 @@ public static class SpaceLayoutAreas
 
         // Latest Threads — full width
         grid = grid.WithView(BuildLatestThreads(spacePath), skin => skin.WithXs(12));
-
-        // Items in this space — full width, grouped by type
-        grid = grid.WithView(BuildItems(spacePath), skin => skin.WithXs(12));
 
         // Activity feed — 2/3 width on desktop
         grid = grid.WithView(BuildActivityFeed(spacePath), skin => skin.WithXs(12).WithSm(8));
@@ -326,27 +327,6 @@ public static class SpaceLayoutAreas
             .WithReactiveMode(true)
             .WithCreateNodeType("Thread")
             .WithCreateNamespace(spacePath);
-    }
-
-    /// <summary>
-    /// Child content of the space, grouped by node type. Mirrors the standard catalog view
-    /// but with a create-page affordance so empty spaces invite content creation.
-    /// </summary>
-    private static UiControl BuildItems(string spacePath)
-    {
-        return Controls.MeshSearch
-            .WithTitle("Content")
-            .WithHiddenQuery($"namespace:{spacePath} is:main context:search scope:descendants sort:LastModified-desc")
-            .WithShowSearchBox(true)
-            .WithShowEmptyMessage(true)
-            .WithRenderMode(MeshSearchRenderMode.Grouped)
-            .WithSectionCounts(true)
-            .WithItemLimit(60)
-            .WithMaxRows(3)
-            .WithMaxColumns(4)
-            .WithCollapsibleSections(true)
-            .WithReactiveMode(true)
-            .WithCreateHref($"/create?type=Markdown&namespace={Uri.EscapeDataString(spacePath)}");
     }
 
     /// <summary>
