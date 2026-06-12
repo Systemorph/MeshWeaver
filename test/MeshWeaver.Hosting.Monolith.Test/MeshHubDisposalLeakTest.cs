@@ -199,8 +199,34 @@ public class MeshHubDisposalLeakTest(ITestOutputHelper output) : MonolithMeshTes
                     }
                     else if (tn.EndsWith(".MessageHub", StringComparison.Ordinal))
                     {
+                        // Name the survivor: RunLevel distinguishes "disposed but
+                        // pinned" (6) from "created and ABANDONED, never disposed"
+                        // (≤1 — the CI run 27433340109 case), and the Address says
+                        // WHO leaked it (which creator forgot to tie the hub's
+                        // lifetime to a parent/disposable).
                         try { extra = $"  [RunLevel={obj.ReadField<int>("<RunLevel>k__BackingField")}]"; }
                         catch (Exception e) { extra = $"  [RunLevel read err: {e.Message}]"; }
+                        try
+                        {
+                            var addr = obj.ReadObjectField("<Address>k__BackingField");
+                            if (addr.IsValid)
+                            {
+                                // Address stores Segments (string[]); Type/Id are computed.
+                                var segsObj = addr.ReadObjectField("<Segments>k__BackingField");
+                                if (segsObj.IsValid && segsObj.IsArray)
+                                {
+                                    var arr = segsObj.AsArray();
+                                    var parts = new List<string>();
+                                    for (var k = 0; k < arr.Length && k < 6; k++)
+                                    {
+                                        var el = arr.GetObjectValue(k);
+                                        if (el.IsValid) parts.Add(el.AsString() ?? "?");
+                                    }
+                                    extra += $"  [Address={string.Join("/", parts)}]";
+                                }
+                            }
+                        }
+                        catch (Exception e) { extra += $"  [Address read err: {e.Message}]"; }
                     }
                     chain.Add($"{tn}  (via .{edge})  @{cur:x}{extra}");
                     if (from == 0) break;
