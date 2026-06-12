@@ -199,8 +199,14 @@ public static class DeleteLayoutArea
                             if (response.Message is DeleteNodeResponse { Success: true })
                             {
                                 ctx.Host.UpdateData(progressId, DeleteStatus.Done);
-                                // Navigate back — the node we were looking at no longer exists.
-                                ctx.Host.UpdateArea(ctx.Area, new RedirectControl(backHref));
+                                // Navigate to the PARENT node — the node we were looking
+                                // at no longer exists, so its own Overview (backHref)
+                                // would land the user on a dead page. Top-level nodes
+                                // (no parent) go home. The bare node URL renders the
+                                // parent's default area (Mesh URL shape: /{meshpath}).
+                                var parentPath = GetParentPath(nodePath);
+                                var target = parentPath is null ? "/" : $"/{parentPath}";
+                                ctx.Host.UpdateArea(ctx.Area, new RedirectControl(target));
                             }
                             else
                             {
