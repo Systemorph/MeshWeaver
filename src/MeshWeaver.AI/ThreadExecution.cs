@@ -2221,7 +2221,27 @@ internal static class ThreadExecution
             .Where(n => n?.Content is MeshThread t
                 && t.RequestedStatus == ThreadExecutionStatus.Cancelled
                 && t.IsExecuting)
-            .DistinctUntilChanged(n => ((MeshThread)n!.Content!).ExecutionStartedAt)
+            // 🚨 Dedup key = (round, CTS-availability), NOT ExecutionStartedAt alone.
+            // The plain per-round key swallowed cancels (trace-proven by the
+            // self-diagnosing assert in Cancel_NoPendingMessages: final
+            // Status=Executing, requested=Cancelled, pending=[]): the cancel lands
+            // during StartingExecution → the watcher fires once, the CTS is not yet
+            // stored AND the commit flips Executing concurrently → the No-CTS
+            // fallback's StartingExecution guard no-ops → nothing cancelled; the
+            // per-round key was already consumed, so the first streaming write
+            // AFTER the loop stores its CTS never re-triggered — the round ran to
+            // completion with the cancel request stuck on the node (the
+            // phantom-Executing CI failures; the with-pending siblings freeze
+            // their post-cancel drain behind the same lost cancel). Including the
+            // CTS phase in the key re-arms the watcher exactly once more when the
+            // CTS appears (closing the lost window) while still deduping the
+            // per-frame repeats of one phase (bare removal of the dedup let stale
+            // repeat frames re-cancel across phases).
+            .DistinctUntilChanged(n =>
+            {
+                var t = (MeshThread)n!.Content!;
+                return (t.ExecutionStartedAt, HasCts: hub.Get<CancellationTokenSource>() is not null);
+            })
             .Subscribe(
                 node =>
                 {
