@@ -136,6 +136,17 @@ public static class GraphConfigurationExtensions
             // Register services that don't need hub-level dependencies at the mesh level
             builder.ConfigureServices(services =>
             {
+                // Content-integrity guard (app-integrity, not security — registered with
+                // AddGraph, independent of AddRowLevelSecurity): rejects Create/Update of a
+                // built-in-NodeType node whose Content carries a '$type' discriminator no
+                // registry will ever resolve. Without it, such content persists verbatim
+                // and every later load degrades it to an untyped JsonElement — the node
+                // renders empty and cannot be edited (atioz 2026-06-12: agent-authored
+                // Markdown nodes with '$type': 'MarkdownConfiguration'). Scoped, like the
+                // security validators: each hub scope resolves it with that hub's
+                // IMessageHub, so the registry checked is the validating hub's own chain.
+                services.AddScoped<INodeValidator, Security.ContentDiscriminatorValidator>();
+
                 // Register compilation cache options
                 services.AddOptions<CompilationCacheOptions>();
 
