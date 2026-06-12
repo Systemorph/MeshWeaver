@@ -778,7 +778,7 @@ public class PostgreSqlSqlGenerator
                     _parameters[paramName] = condition.Value.ToLowerInvariant();
                     return $"LOWER({selector}) = {paramName}";
                 }
-                _parameters[paramName] = ConvertValue(condition.Value);
+                _parameters[paramName] = ConvertValue(condition.Selector, condition.Value);
                 return $"{selector} = {paramName}";
             }
 
@@ -797,7 +797,7 @@ public class PostgreSqlSqlGenerator
                     _parameters[paramName] = condition.Value.ToLowerInvariant();
                     return $"(LOWER({selector}) != {paramName} OR {selector} IS NULL)";
                 }
-                _parameters[paramName] = ConvertValue(condition.Value);
+                _parameters[paramName] = ConvertValue(condition.Selector, condition.Value);
                 return $"({selector} != {paramName} OR {selector} IS NULL)";
             }
 
@@ -853,7 +853,7 @@ public class PostgreSqlSqlGenerator
                 foreach (var value in condition.Values)
                 {
                     var inParamName = NextParam();
-                    _parameters[inParamName] = isTextIn ? value.ToLowerInvariant() : ConvertValue(value);
+                    _parameters[inParamName] = isTextIn ? value.ToLowerInvariant() : ConvertValue(condition.Selector, value);
                     inParams.Add(inParamName);
                 }
                 return isTextIn
@@ -866,7 +866,7 @@ public class PostgreSqlSqlGenerator
                 foreach (var value in condition.Values)
                 {
                     var notInParamName = NextParam();
-                    _parameters[notInParamName] = isTextNotIn ? value.ToLowerInvariant() : ConvertValue(value);
+                    _parameters[notInParamName] = isTextNotIn ? value.ToLowerInvariant() : ConvertValue(condition.Selector, value);
                     notInParams.Add(notInParamName);
                 }
                 // 🚨 Same null-handling as NotEqual: NULL NOT IN (...) is NULL,
@@ -1022,6 +1022,20 @@ public class PostgreSqlSqlGenerator
 
     private static bool IsJsonbField(string selector) =>
         !PropertyMap.ContainsKey(selector);
+
+    /// <summary>
+    /// Selector-aware conversion: the <c>state</c> column is a smallint backing
+    /// <c>MeshNodeState</c>, so symbolic values in queries (<c>state:Active</c>)
+    /// must map to the enum's numeric value — sending the raw string produces
+    /// <c>42883: operator does not exist: smallint = text</c>.
+    /// </summary>
+    private static object ConvertValue(string selector, string value)
+    {
+        if (selector.Equals("state", StringComparison.OrdinalIgnoreCase)
+            && Enum.TryParse<MeshNodeState>(value, ignoreCase: true, out var state))
+            return (short)state;
+        return ConvertValue(value);
+    }
 
     private static object ConvertValue(string value)
     {

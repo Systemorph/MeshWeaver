@@ -52,6 +52,24 @@ public class SqlGeneratorTests
     }
 
     [Fact]
+    public void GenerateSelectQuery_SymbolicStateFilter_MapsToSmallint()
+    {
+        // `state:Active` must bind the MeshNodeState NUMERIC value — the state column
+        // is smallint; binding the raw string produced
+        // `42883: operator does not exist: smallint = text` (atioz 2026-06-12, the
+        // BalanceSheet virtual-data-source init failure).
+        var gen = new PostgreSqlSqlGenerator();
+        var query = new ParsedQuery(
+            Filter: new QueryComparison(new QueryCondition("state", QueryOperator.Equal, ["Active"])),
+            TextSearch: null);
+
+        var (sql, parameters) = gen.GenerateSelectQuery(query);
+
+        sql.Should().Contain("n.state = @p0");
+        parameters["@p0"].Should().Be((short)MeshNodeState.Active);
+    }
+
+    [Fact]
     public void GenerateSelectQuery_TextSearch_RanksByHybridRelevance()
     {
         // Parity with GenerateCrossSchemaSelectQuery (#20): a scoped text query with no
