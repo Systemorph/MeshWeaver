@@ -124,6 +124,10 @@ internal class RoutingGrain(
         RoutingGrainTrace.Write($"RoutingGrain.RouteMessage RESOLVE_BEGIN id={delivery.Id} addr={addressPath}");
         pathResolver.ResolvePath(addressPath)
             .Take(1)
+            // Bound resolution so a provider that never emits cannot park the
+            // delivery in silence — the timeout surfaces through the OnError
+            // branch below, which NACKs the sender deterministically.
+            .Timeout(TimeSpan.FromSeconds(30))
             .Subscribe(resolution =>
             {
                 var grainKey = resolution?.Prefix ?? addressPath;
@@ -185,6 +189,10 @@ internal class RoutingGrain(
             {
                 RoutingGrainTrace.Write($"RoutingGrain.RouteMessage RESOLVE_FAULT id={delivery.Id} addr={addressPath} ex={ex.Message}");
                 logger.LogWarning(ex, "[ROUTE] Path resolution failed for {Address}", addressPath);
+                // Never park the caller in silence: a faulted/timed-out resolution
+                // is a terminal answer for THIS delivery — NACK the sender so its
+                // Observe callback fires OnError instead of waiting forever.
+                PostFailureToSender($"Path resolution for '{addressPath}' failed: {ex.Message}", ErrorType.Failed);
             });
 
         return Task.FromResult(delivery.Forwarded(address));

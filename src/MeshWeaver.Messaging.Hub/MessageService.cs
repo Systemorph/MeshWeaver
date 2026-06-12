@@ -869,6 +869,36 @@ public class MessageService : IMessageService
                 logger.LogWarning("Suppressing DeliveryFailure-on-DeliveryFailure ping-pong: {Message}", failureMessage);
                 return delivery.Failed(failureMessage);
             }
+
+            // Fallback-hub contract (UnhandledMessageNack): on a hub standing in for
+            // a node whose NodeType produced no usable configuration, the inbound
+            // type is unregistered BECAUSE that type's assembly never loaded. Answer
+            // with the policy's typed diagnosis (e.g. CompilationFailed + the
+            // NodeTypePath) instead of the generic registry hint, so callers and the
+            // GUI know WHAT is broken and where to act.
+            var nackPolicy = hub.Configuration.Get<UnhandledMessageNack>();
+            if (nackPolicy is not null && hub.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+            {
+                var reason = $"{nackPolicy.Reason} (inbound type '{jsonType}' is not registered in this hub's TypeRegistry)";
+                logger.LogWarning("Unhandled {JsonType} in fallback hub {Address} - answering {ErrorType} NACK: {Reason}",
+                    jsonType, Address, nackPolicy.ErrorType, reason);
+                try
+                {
+                    Post(new DeliveryFailure(delivery)
+                    {
+                        ErrorType = nackPolicy.ErrorType,
+                        NodeTypePath = nackPolicy.NodeTypePath,
+                        Message = reason
+                    }, new PostOptions(Address).ResponseFor(delivery));
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Failed to post fallback NACK for '{JsonType}' (ID: {MessageId}) in {Address}",
+                        jsonType, delivery.Id, Address);
+                }
+                return delivery.Failed(reason);
+            }
+
             return ReportFailure(delivery.Failed(failureMessage));
         }
 

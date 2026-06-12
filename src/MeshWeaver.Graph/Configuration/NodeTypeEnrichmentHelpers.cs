@@ -797,9 +797,19 @@ internal static class NodeTypeEnrichmentHelpers
             return node with { HubConfiguration = baseConfig };
 
         var overlay = CreateCompilationErrorConfiguration(error, guidance);
+        // Fallback-hub contract: the overlay hub serves what its default config CAN
+        // (the error Overview layout, node data binding, Ping) — but everything else,
+        // notably typed requests the broken assembly would have registered (which
+        // arrive as RawJson and would otherwise be silently Ignored), is answered
+        // with a CompilationFailed DeliveryFailure naming this NodeType. Callers get
+        // a terminal OnError instead of parking forever.
+        var nack = new UnhandledMessageNack(
+            $"NodeType '{nodeType}' has no usable hub configuration for '{node.Path}': {error}",
+            ErrorType.CompilationFailed,
+            nodeType);
         Func<MessageHubConfiguration, MessageHubConfiguration> composed = baseConfig != null
-            ? (config => overlay(baseConfig(config)))
-            : overlay;
+            ? (config => overlay(baseConfig(config)).Set(nack))
+            : (config => overlay(config).Set(nack));
         return node with { HubConfiguration = composed };
     }
 
