@@ -530,7 +530,7 @@ public class MeshQuery : IMeshQueryCore
     /// <summary>
     /// Sort + skip + clip the merged initial set. The authoritative ordering
     /// pass for every multi-provider Initial emission. Mirrors the post-collect
-    /// pipeline that <see cref="StorageAdapterMeshQueryProvider.QueryAsync"/> runs per-provider.
+    /// pipeline that <c>StorageAdapterMeshQueryProvider.RunQueryNodes</c> runs per-provider.
     /// Also applies <c>select:</c> projection: static-node providers don't
     /// project to dictionaries on their own, so merging engine projections with
     /// raw static MeshNodes left mixed-shape results for callers.

@@ -87,6 +87,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     .WithView(nameof(StartWithLoadingView), StartWithLoadingView)
                     .WithView(nameof(StartWithDelayedView), StartWithDelayedView)
                     .WithView(nameof(StartWithSubjectView), StartWithSubjectView)
+                    .WithView(nameof(GatedProgressView), GatedProgressView)
                     .WithView(RecursiveView, BuildDeeplyNestedStack())
             );
     }
@@ -790,6 +791,69 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         // This helps isolate timing issues with StartWith
         return TestSubject
             .StartWith(Controls.Markdown("# Loading...\n\n*Waiting for data...*"));
+    }
+
+    // Gate for GatedProgressView: the view emits its first control only when the
+    // test releases the gate — keeps the pre-first-render progress phases stably
+    // observable (deterministic, no sleep). Instance field — dies with the test.
+    private readonly System.Reactive.Subjects.ReplaySubject<UiControl> GatedViewSubject = new(1);
+
+    private IObservable<UiControl> GatedProgressView(LayoutAreaHost area, RenderingContext context)
+    {
+        // View-pushed loading phase — rides the same "data/progress" item the
+        // framework milestones write ("Building layout…" → "Rendering… awaiting
+        // first data"); the client's loading label binds this item.
+        area.UpdateProgress("Crunching the numbers...", 42);
+        return GatedViewSubject;
+    }
+
+    /// <summary>
+    /// Phase-aware progress: while an area is still assembling (its view has not
+    /// emitted), the EntityStore "data/progress" item must carry the latest
+    /// phase — here the view-pushed <c>host.UpdateProgress</c> message, which is
+    /// queued AFTER the framework's "Building layout…" seed and "Rendering…"
+    /// milestone on the same serialized update queue. Once content renders, the
+    /// message clears. This is the server half of the loading UX the Blazor
+    /// <c>LayoutAreaView</c> binds.
+    /// </summary>
+    [HubFact]
+    public void ProgressPhases_AdvanceWhileAssembling_AndClearOnRender()
+    {
+        var reference = new LayoutAreaReference(nameof(GatedProgressView));
+
+        var workspace = GetClient().GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(),
+            reference
+        );
+
+        var progressStream = stream.GetDataStream<JsonElement>(
+            new JsonPointerReference(LayoutAreaReference.GetDataPointer(LayoutAreaHost.ProgressDataId)));
+
+        // Pre-render: the progress item holds the view-pushed phase (proves the
+        // milestone channel advanced past the static "Building layout…" seed).
+        progressStream
+            .Where(p => p.ValueKind == JsonValueKind.Object
+                        && p.TryGetProperty("message", out var m)
+                        && m.ValueKind == JsonValueKind.String
+                        && m.GetString() == "Crunching the numbers...")
+            .Should().Within(10.Seconds()).Emit(
+                "the view-pushed UpdateProgress phase must reach the client through the data/progress item");
+
+        // Release the gate → the control renders → progress clears.
+        GatedViewSubject.OnNext(Controls.Html("Numbers crunched"));
+
+        stream.GetControlStream(reference.Area!)
+            .Where(o => o is HtmlControl)
+            .Should().Within(10.Seconds()).Emit();
+
+        progressStream
+            .Where(p => p.ValueKind == JsonValueKind.Object
+                        && p.TryGetProperty("message", out var m)
+                        && m.ValueKind == JsonValueKind.String
+                        && m.GetString() == "")
+            .Should().Within(10.Seconds()).Emit(
+                "the first render must clear the progress message");
     }
 
     /// <summary>

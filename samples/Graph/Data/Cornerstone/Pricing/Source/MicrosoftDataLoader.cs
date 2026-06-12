@@ -14,9 +14,11 @@ using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
-/// Async loader utility for Microsoft pricing data.
+/// Loader utility for Microsoft pricing data.
 /// Loads PropertyRisks from JSON and reinsurance structure from Slip.md.
 /// Reads files directly from the file system to avoid timing issues with content service initialization.
+/// Public surface is reactive only (IObservable via the FileSystem IIoPool);
+/// the async file reads are private leaves pumped exclusively inside the pool.
 /// </summary>
 public static class MicrosoftDataLoader
 {
@@ -27,11 +29,13 @@ public static class MicrosoftDataLoader
 
     /// <summary>
     /// Loads PropertyRisk records from PropertyRisks.json in the content folder.
+    /// PRIVATE async leaf — only ever awaited inside the IIoPool bridge
+    /// (<see cref="LoadPropertyRisks"/>), never from hub-reachable code.
     /// </summary>
     /// <param name="hub">The message hub for resolving paths</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Array of PropertyRisk records</returns>
-    public static async Task<PropertyRisk[]> LoadPropertyRisksAsync(
+    private static async Task<PropertyRisk[]> LoadPropertyRisksAsync(
         IMessageHub hub,
         CancellationToken cancellationToken = default)
     {
@@ -94,12 +98,14 @@ public static class MicrosoftDataLoader
 
     /// <summary>
     /// Loads reinsurance structure from Slip.md in the Submissions folder.
+    /// PRIVATE async leaf — only ever awaited inside the IIoPool bridges
+    /// (<see cref="LoadReinsuranceAcceptances"/> / <see cref="LoadReinsuranceSections"/>).
     /// </summary>
     /// <param name="hub">The message hub for resolving paths</param>
     /// <param name="pricingId">The pricing ID for generated records</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Tuple of acceptances and sections</returns>
-    public static async Task<(ReinsuranceAcceptance[] Acceptances, ReinsuranceSection[] Sections)> LoadReinsuranceStructureAsync(
+    private static async Task<(ReinsuranceAcceptance[] Acceptances, ReinsuranceSection[] Sections)> LoadReinsuranceStructureAsync(
         IMessageHub hub,
         string pricingId,
         CancellationToken cancellationToken = default)

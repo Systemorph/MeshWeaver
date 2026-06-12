@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data.Validation;
 using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
@@ -39,6 +40,31 @@ public sealed record DataContext : IDisposable
     /// should immediately return DeliveryFailure with this error.
     /// </summary>
     public Exception? InitializationError { get; private set; }
+
+    /// <summary>
+    /// True while at least one configured data source is still running its
+    /// initial load. Display-grade: the layout-area progress milestones read it
+    /// to decide whether to show the "Initializing data sources…" phase.
+    /// </summary>
+    public bool IsInitializing => tasks.Any(t => !t.IsCompleted);
+
+    /// <summary>
+    /// Display-grade completion signal for the initial load of every configured
+    /// data source. Subscribed by the layout-area progress milestones
+    /// ("Initializing data sources…" → "Rendering…"); emits exactly one
+    /// <see cref="System.Reactive.Unit"/> when every source's initial load has
+    /// settled — successfully OR faulted — then completes. A faulted init still
+    /// ENDS the "initializing" phase, which is the only semantic this signal
+    /// carries; the failure itself surfaces authoritatively through
+    /// <see cref="InitializationError"/> and the data streams' OnError (this is
+    /// not an error-handling channel, so nothing is swallowed). Cold: evaluated
+    /// per subscription against the current task set.
+    /// </summary>
+    public IObservable<System.Reactive.Unit> Initialization =>
+        Observable.Defer(() => Task.WhenAll(tasks.ToArray())
+            .ToObservable()
+            .Catch<System.Reactive.Unit, Exception>(_ =>
+                Observable.Return(System.Reactive.Unit.Default)));
 
     private Dictionary<Type, ITypeSource> TypeSourcesByType { get; set; } = new();
 

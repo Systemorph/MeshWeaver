@@ -337,14 +337,12 @@ public class CachingStorageAdapter : IStorageAdapter
         return partitionSubPaths;
     }
 
+    // Pump inside the IIoPool (InvokeStream) — never Observable.Create(async ...),
+    // which runs the pump on the subscriber's scheduler (the grain-wedge defect;
+    // see PartitionObjectsSubscriberIndependenceTest).
     public IObservable<object> GetPartitionObjects(
         string nodePath, string? subPath, JsonSerializerOptions options)
-        => Observable.Create<object>(async (observer, ct) =>
-        {
-            await foreach (var obj in GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct))
-                observer.OnNext(obj);
-            observer.OnCompleted();
-        });
+        => _ioPool.InvokeStream(ct => GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct));
 
     private async IAsyncEnumerable<object> GetPartitionObjectsAsyncCore(
         string nodePath,
