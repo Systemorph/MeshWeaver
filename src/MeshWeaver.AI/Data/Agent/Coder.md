@@ -284,7 +284,11 @@ public record Status
 
 ## CSV Data Loader Pattern
 
-For types that load from CSV files:
+For types that load from CSV files. **Never `async`/`await`/`Task<T>`/`Task.FromResult`
+in a loader** — the loader returns `IObservable<IEnumerable<T>>` (the shape
+`WithInitialData` takes) and runs the blocking file read + parse on the bounded
+FileSystem I/O pool via `InvokeBlocking`, so it never executes on the configuring
+hub's thread (canonical live example: `NorthwindDataLoader`):
 
 ```csharp
 // <meshweaver>
@@ -293,21 +297,32 @@ For types that load from CSV files:
 // </meshweaver>
 
 using System.Globalization;
+using MeshWeaver.Messaging;
+using MeshWeaver.Mesh.Threading;
+using Microsoft.Extensions.DependencyInjection;
 
 public static class DataLoader
 {
     private static readonly string BasePath = Path.Combine("../../samples/Graph/attachments/MyNamespace/Data");
 
-    public static Task<IEnumerable<Product>> LoadProductsAsync(CancellationToken ct)
-    {
-        var lines = File.ReadAllLines(Path.Combine(BasePath, "products.csv"));
-        return Task.FromResult(ParseCsv(lines, parts => new Product
-        {
-            ProductId = int.Parse(parts[0]),
-            ProductName = parts[1],
-            UnitPrice = double.Parse(parts[4], CultureInfo.InvariantCulture),
-        }));
-    }
+    private static IIoPool FileSystemPool(IMessageHub hub) =>
+        hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
+        ?? IoPool.Unbounded;
+
+    public static IObservable<IEnumerable<Product>> LoadProducts(IMessageHub hub)
+        // InvokeBlocking = sync-blocking leaf on the pool's limited-concurrency
+        // scheduler. The .ToList() INSIDE the pool slot matters: ParseCsv is
+        // lazy, and without it the parse would run later on whatever thread
+        // enumerates the result.
+        => FileSystemPool(hub).InvokeBlocking(_ =>
+            (IEnumerable<Product>)ParseCsv(
+                File.ReadAllLines(Path.Combine(BasePath, "products.csv")),
+                parts => new Product
+                {
+                    ProductId = int.Parse(parts[0]),
+                    ProductName = parts[1],
+                    UnitPrice = double.Parse(parts[4], CultureInfo.InvariantCulture),
+                }).ToList());
 
     private static IEnumerable<T> ParseCsv<T>(string[] lines, Func<string[], T> factory)
     {
@@ -366,7 +381,7 @@ The JSON file registers the type and wires everything together:
 - `AddData(data => ...)` — Configure the MeshDataSource
   - `AddSource(source => ...)` — Add a data source
     - `WithType<T>(t => t.WithInitialData(T[] items))` — Seed from static array
-    - `WithType<T>(t => t.WithInitialData(loader))` — Seed from async CSV loader
+    - `WithType<T>(t => t.WithInitialData(() => DataLoader.LoadProducts(hub)))` — Seed from a reactive (IObservable) loader; grab `var hub = source.Workspace.Hub;` in the `AddSource` lambda
   - `WithVirtualDataSource("name", vs => vs.WithVirtualType<T>(workspace => observable))` — Reactive virtual source
   - `AddHubSource(parentAddress, source => source.WithType<T>())` — Import types from parent hub
 - `AddContentCollection(sp => new ContentCollectionConfig { ... })` — Serve files (CSV, images)

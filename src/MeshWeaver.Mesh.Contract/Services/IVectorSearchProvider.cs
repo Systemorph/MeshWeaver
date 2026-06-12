@@ -26,16 +26,20 @@ public interface IVectorSearchProvider
 {
     /// <summary>
     /// Returns the top-K rows by cosine similarity against the query text's
-    /// embedding. Optionally filters by namespace prefix and/or by user
-    /// (caller-side access control honoured by the backend's WHERE clause).
-    /// Yields empty if the query is whitespace-only or no embedding can be
-    /// generated for it.
+    /// embedding as a single snapshot emission. Optionally filters by
+    /// namespace prefix and/or by user (caller-side access control honoured
+    /// by the backend's WHERE clause). Emits an empty collection if the query
+    /// is whitespace-only or no embedding can be generated for it.
+    ///
+    /// <para>Reactive surface — no <c>IAsyncEnumerable</c>, no <c>Task</c>:
+    /// the provider bridges its async I/O leaf (embedding round-trip + the
+    /// vector SQL) through its <c>IIoPool</c>, so the pump never runs on the
+    /// subscriber's scheduler. Cancellation = subscription disposal.</para>
     /// </summary>
-    IAsyncEnumerable<MeshNode> SearchAsync(
+    IObservable<IReadOnlyCollection<MeshNode>> Search(
         string queryText,
         JsonSerializerOptions options,
         string? namespacePath = null,
         string? userId = null,
-        int topK = 10,
-        CancellationToken ct = default);
+        int topK = 10);
 }

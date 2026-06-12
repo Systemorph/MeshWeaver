@@ -1,3 +1,4 @@
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -84,8 +85,15 @@ public class CosmosMeshQuery : IMeshQueryProvider
         return true;
     }
 
-    /// <inheritdoc />
-    public async IAsyncEnumerable<object> QueryAsync(
+    /// <summary>
+    /// Persistence-layer async boundary: the single async-enumerable pump over
+    /// the Cosmos feed iterator. PRIVATE by design — it may only ever be
+    /// enumerated from inside an <see cref="IIoPool"/> bridge
+    /// (<see cref="CollectQueryResultsAsync{T}"/>, <see cref="Autocomplete"/>,
+    /// <see cref="Select{T}"/>), never handed to a caller whose
+    /// <c>await foreach</c> would pump it on a hub/grain scheduler.
+    /// </summary>
+    private async IAsyncEnumerable<object> QueryAsync(
         MeshQueryRequest request,
         JsonSerializerOptions options,
         [EnumeratorCancellation] CancellationToken ct = default)
@@ -303,7 +311,17 @@ public class CosmosMeshQuery : IMeshQueryProvider
             });
         }
 
-        return Observable.Create<QueryResultChange<T>>(async (observer, ct) =>
+        // Use the SYNCHRONOUS Observable.Create overload so no scheduler /
+        // SynchronizationContext is captured at subscribe-time. The previous
+        // shape — Observable.Create(async (observer, ct) => { await foreach
+        // (… QueryAsync …) }) — started the Cosmos pump ON THE SUBSCRIBER'S
+        // thread and let its continuations land on the subscriber's captured
+        // scheduler; when that subscriber is a hub/grain action block waiting
+        // on the result, the pump queues behind the blocked thread and the
+        // Initial never arrives (the grain wedge / dropped-initial flake).
+        // Mirrors PostgreSqlMeshQuery.Query<T>: the DB pump runs INSIDE the
+        // IIoPool, the change feed re-runs the pooled query per batch.
+        return Observable.Create<QueryResultChange<T>>(observer =>
         {
             var parsedQuery = _parser.Parse(request.Query);
 
@@ -319,142 +337,186 @@ public class CosmosMeshQuery : IMeshQueryProvider
 
             // Track current result set for detecting changes
             var currentItems = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
+            var disposables = new CompositeDisposable();
 
-            // Emit initial results
-            try
-            {
-                var initialItems = new List<T>();
-                await foreach (var item in QueryAsync(request, options, ct).ConfigureAwait(false))
-                {
-                    if (item is T typedItem)
-                    {
-                        initialItems.Add(typedItem);
-                        var itemPath = (item as MeshNode)?.Path;
-                        if (!string.IsNullOrEmpty(itemPath))
-                            currentItems[itemPath] = typedItem;
-                    }
-                }
+            // The Cosmos round-trip runs INSIDE the IIoPool — offloaded with
+            // ConfigureAwait(false) throughout, so no hub/Orleans scheduler is
+            // captured. Invoke (cold) keeps work-on-Subscribe semantics —
+            // RunQuery is re-invoked per change batch as one fresh query.
+            IObservable<List<(string? Path, T Item)>> RunQuery()
+                => _ioPool.Invoke(ct => CollectQueryResultsAsync<T>(request, options, ct));
 
-                observer.OnNext(new QueryResultChange<T>
-                {
-                    ChangeType = QueryChangeType.Initial,
-                    Items = initialItems,
-                    Query = parsedQuery,
-                    Version = Interlocked.Increment(ref _version),
-                    Timestamp = DateTimeOffset.UtcNow
-                });
-            }
-            catch (Exception ex)
-            {
-                observer.OnError(ex);
-                return Disposable.Empty;
-            }
-
-            // Subscribe to the storage adapter's Changes feed — that's the
-            // live signal (Cosmos change feed wraps into here). If no change
-            // feed is wired up, the adapter's default Changes IS Observable.Empty,
-            // and the synced query stays at the Initial emission.
-            var changeBuffer = new Subject<DataChangeNotification>();
-            var subscription = new CompositeDisposable();
-
-            var notifierSubscription = _adapter.Changes
+            // Race-fix (mirrors PostgreSqlMeshQuery / StorageAdapterMeshQueryProvider):
+            // subscribe to the adapter's Changes BEFORE running the initial query so
+            // notifications fired during the initial query's I/O window are captured
+            // in a backlog instead of dropped (Changes is a plain Subject — no buffering).
+            var earlyBacklog = new List<DataChangeNotification>();
+            var earlyLock = new object();
+            var initialDone = false;
+            var earlySubscription = _adapter.Changes
                 .Where(n => PathMatcher.ShouldNotify(n.Path, normalizedBasePath, effectiveScope))
-                .Subscribe(changeBuffer);
-            subscription.Add(notifierSubscription);
+                .Subscribe(n =>
+                {
+                    lock (earlyLock)
+                    {
+                        if (!initialDone)
+                            earlyBacklog.Add(n);
+                    }
+                });
+            disposables.Add(earlySubscription);
 
-            var debounceSubscription = changeBuffer
-                .Buffer(DefaultDebounceInterval)
-                .Where(batch => batch.Count > 0)
-                .SelectMany(batch => ProcessChangeBatch(batch, request, options, parsedQuery, currentItems))
-                .Subscribe(observer.OnNext, observer.OnError);
-            subscription.Add(debounceSubscription);
-            subscription.Add(changeBuffer);
+            disposables.Add(RunQuery().Subscribe(
+                initialResults =>
+                {
+                    var initialItems = new List<T>();
+                    foreach (var (path, item) in initialResults)
+                    {
+                        initialItems.Add(item);
+                        if (!string.IsNullOrEmpty(path))
+                            currentItems[path] = item;
+                    }
 
-            return subscription;
+                    DataChangeNotification[] backlog;
+                    // 1) Live pipeline first — starts buffering immediately. Strict
+                    //    unit-of-work via Concat: one pooled RunQuery per change, so
+                    //    the shared currentItems dictionary is never raced.
+                    var changeBuffer = new Subject<DataChangeNotification>();
+                    disposables.Add(changeBuffer);
+                    disposables.Add(
+                        _adapter.Changes
+                            .Where(n => PathMatcher.ShouldNotify(n.Path, normalizedBasePath, effectiveScope))
+                            .Subscribe(changeBuffer));
+                    disposables.Add(
+                        changeBuffer
+                            .Select(n => RunQuery()
+                                .Select(newResults => (batch: (IList<DataChangeNotification>)new[] { n }, newResults)))
+                            .Concat()
+                            .Subscribe(
+                                t => ProcessBatch(t.batch, t.newResults, currentItems, parsedQuery, observer),
+                                ex => observer.OnError(ex)));
+
+                    // 2) Snapshot + clear the early backlog under lock.
+                    lock (earlyLock)
+                    {
+                        backlog = earlyBacklog.ToArray();
+                        earlyBacklog.Clear();
+                        initialDone = true;
+                    }
+                    earlySubscription.Dispose();
+
+                    observer.OnNext(new QueryResultChange<T>
+                    {
+                        ChangeType = QueryChangeType.Initial,
+                        Items = initialItems,
+                        Query = parsedQuery,
+                        Version = Interlocked.Increment(ref _version),
+                        Timestamp = DateTimeOffset.UtcNow
+                    });
+
+                    // 3) Drain the backlog through the same Concat-serialized
+                    //    pipeline (a thread-pool tick avoids stack recursion through
+                    //    the live Subscribe; skip once the consumer unsubscribed).
+                    if (backlog.Length > 0)
+                    {
+                        disposables.Add(Scheduler.Default.Schedule(() =>
+                        {
+                            try
+                            {
+                                foreach (var n in backlog)
+                                {
+                                    if (disposables.IsDisposed)
+                                        return;
+                                    changeBuffer.OnNext(n);
+                                }
+                            }
+                            catch (ObjectDisposedException)
+                            {
+                                // Subscription torn down mid-drain — consumer gone.
+                            }
+                        }));
+                    }
+                },
+                ex => observer.OnError(ex)));
+
+            return disposables;
         });
     }
 
-    private IObservable<QueryResultChange<T>> ProcessChangeBatch<T>(
+    /// <summary>
+    /// Persistence-layer async boundary: collects all results from
+    /// <see cref="QueryAsync"/> into a list. Called exclusively from inside
+    /// <see cref="IIoPool.Invoke{T}"/> (see <see cref="Query{T}"/>'s
+    /// <c>RunQuery</c>) so the pump always runs behind the pool's gate on the
+    /// ThreadPool — no hub/Orleans scheduler is ever captured.
+    /// </summary>
+    private async Task<List<(string? Path, T Item)>> CollectQueryResultsAsync<T>(
+        MeshQueryRequest request, JsonSerializerOptions options, CancellationToken ct)
+    {
+        var results = new List<(string?, T)>();
+        await foreach (var item in QueryAsync(request, options, ct).ConfigureAwait(false))
+            if (item is T typed)
+                results.Add(((item as MeshNode)?.Path, typed));
+        return results;
+    }
+
+    private void ProcessBatch<T>(
         IList<DataChangeNotification> batch,
-        MeshQueryRequest request,
-        JsonSerializerOptions options,
+        List<(string? Path, T Item)> newResults,
+        Dictionary<string, T> currentItems,
         ParsedQuery parsedQuery,
-        Dictionary<string, T> currentItems)
+        IObserver<QueryResultChange<T>> observer)
     {
         var changesByPath = batch
             .GroupBy(c => c.Path, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
 
-        return QueryAsync(request, options, default).ToObservableSequence()
-            .Aggregate(new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase), (newItems, item) =>
+        var newItems = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (path, item) in newResults)
+            if (!string.IsNullOrEmpty(path))
+                newItems[path] = item;
+
+        var addedItems = new List<T>();
+        var updatedItems = new List<T>();
+        var removedItems = new List<T>();
+
+        foreach (var (path, item) in newItems)
+        {
+            if (currentItems.ContainsKey(path))
             {
-                if (item is T typedItem)
-                {
-                    var itemPath = (item as MeshNode)?.Path;
-                    if (!string.IsNullOrEmpty(itemPath))
-                        newItems[itemPath] = typedItem;
-                }
-                return newItems;
-            })
-            .SelectMany(newItems =>
+                if (changesByPath.ContainsKey(path))
+                    updatedItems.Add(item);
+            }
+            else
             {
-                var addedItems = new List<T>();
-                var updatedItems = new List<T>();
-                var removedItems = new List<T>();
+                addedItems.Add(item);
+            }
+        }
 
-                foreach (var (path, item) in newItems)
-                {
-                    if (currentItems.ContainsKey(path))
-                    {
-                        if (changesByPath.ContainsKey(path))
-                            updatedItems.Add(item);
-                    }
-                    else
-                    {
-                        addedItems.Add(item);
-                    }
-                }
+        foreach (var (path, item) in currentItems)
+        {
+            if (!newItems.ContainsKey(path))
+                removedItems.Add(item);
+        }
 
-                foreach (var (path, item) in currentItems)
-                {
-                    if (!newItems.ContainsKey(path))
-                        removedItems.Add(item);
-                }
+        currentItems.Clear();
+        foreach (var (path, item) in newItems)
+            currentItems[path] = item;
 
-                currentItems.Clear();
-                foreach (var (path, item) in newItems)
-                    currentItems[path] = item;
-
-                var emissions = new List<QueryResultChange<T>>();
-                if (addedItems.Count > 0)
-                    emissions.Add(new QueryResultChange<T>
-                    {
-                        ChangeType = QueryChangeType.Added,
-                        Items = addedItems,
-                        Query = parsedQuery,
-                        Version = Interlocked.Increment(ref _version),
-                        Timestamp = DateTimeOffset.UtcNow
-                    });
-                if (updatedItems.Count > 0)
-                    emissions.Add(new QueryResultChange<T>
-                    {
-                        ChangeType = QueryChangeType.Updated,
-                        Items = updatedItems,
-                        Query = parsedQuery,
-                        Version = Interlocked.Increment(ref _version),
-                        Timestamp = DateTimeOffset.UtcNow
-                    });
-                if (removedItems.Count > 0)
-                    emissions.Add(new QueryResultChange<T>
-                    {
-                        ChangeType = QueryChangeType.Removed,
-                        Items = removedItems,
-                        Query = parsedQuery,
-                        Version = Interlocked.Increment(ref _version),
-                        Timestamp = DateTimeOffset.UtcNow
-                    });
-                return emissions.ToObservable();
+        void Emit(QueryChangeType type, IReadOnlyList<T> items)
+        {
+            if (items.Count == 0) return;
+            observer.OnNext(new QueryResultChange<T>
+            {
+                ChangeType = type,
+                Items = items,
+                Query = parsedQuery,
+                Version = Interlocked.Increment(ref _version),
+                Timestamp = DateTimeOffset.UtcNow
             });
+        }
+        Emit(QueryChangeType.Added, addedItems);
+        Emit(QueryChangeType.Updated, updatedItems);
+        Emit(QueryChangeType.Removed, removedItems);
     }
 
     /// <summary>

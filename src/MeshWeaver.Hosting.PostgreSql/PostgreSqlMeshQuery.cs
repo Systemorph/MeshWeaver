@@ -149,27 +149,60 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
     }
 
     /// <inheritdoc/>
-    public async IAsyncEnumerable<MeshNode> SearchAsync(
+    /// <remarks>
+    /// Reactive vector search — the embedding round-trip plus the HNSW SQL pump
+    /// run INSIDE the IIoPool (one snapshot emission), never on the subscriber's
+    /// scheduler. Replaces the former <c>SearchAsync</c> async-enumerable surface.
+    /// </remarks>
+    public IObservable<IReadOnlyCollection<MeshNode>> Search(
         string queryText,
         JsonSerializerOptions options,
         string? namespacePath = null,
         string? userId = null,
-        int topK = 10,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        int topK = 10)
     {
         if (_embeddingProvider is null || string.IsNullOrWhiteSpace(queryText))
-            yield break;
+            return Observable.Return((IReadOnlyCollection<MeshNode>)Array.Empty<MeshNode>());
 
-        var vec = await _embeddingProvider.GenerateEmbeddingAsync(queryText).ConfigureAwait(false);
-        if (vec is null)
-            yield break;
+        return _ioPool.Invoke(async ct =>
+        {
+            var vec = await _embeddingProvider.GenerateEmbeddingAsync(queryText).ConfigureAwait(false);
+            if (vec is null)
+                return (IReadOnlyCollection<MeshNode>)Array.Empty<MeshNode>();
 
-        await foreach (var node in _adapter.VectorSearchAsync(
-            vec, options, filter: null, userId, namespacePath, topK, lexicalTerm: queryText, ct: ct).ConfigureAwait(false))
-            yield return node;
+            var results = new List<MeshNode>();
+            await foreach (var node in _adapter.VectorSearchAsync(
+                vec, options, filter: null, userId, namespacePath, topK, lexicalTerm: queryText, ct: ct).ConfigureAwait(false))
+                results.Add(node);
+            return (IReadOnlyCollection<MeshNode>)results;
+        });
     }
 
-    public async IAsyncEnumerable<object> QueryAsync(
+    /// <summary>
+    /// One-shot reactive snapshot of the query results — the public replacement
+    /// for the former <c>public QueryAsync</c> async-enumerable surface. The
+    /// whole pump (parse → SQL → reader enumeration) runs INSIDE the IIoPool;
+    /// the caller gets a single list emission and never lends the pump its own
+    /// scheduler. Live-delta consumers use <see cref="Query{T}"/> instead.
+    /// </summary>
+    public IObservable<IReadOnlyList<object>> QueryNodes(
+        MeshQueryRequest request, JsonSerializerOptions options)
+        => _ioPool.Invoke(async ct =>
+        {
+            var results = new List<object>();
+            await foreach (var item in QueryAsync(request, options, ct).ConfigureAwait(false))
+                results.Add(item);
+            return (IReadOnlyList<object>)results;
+        });
+
+    /// <summary>
+    /// Persistence-layer async boundary: the single async-enumerable pump over
+    /// the adapter. PRIVATE by design — it may only ever be enumerated from
+    /// inside an <see cref="IIoPool"/> bridge (<see cref="QueryNodes"/> /
+    /// <see cref="CollectQueryResultsAsync{T}"/>), never handed to a caller
+    /// whose <c>await foreach</c> would pump it on a hub/grain scheduler.
+    /// </summary>
+    private async IAsyncEnumerable<object> QueryAsync(
         MeshQueryRequest request,
         JsonSerializerOptions options,
         [EnumeratorCancellation] CancellationToken ct = default)
@@ -402,9 +435,8 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
     /// <summary>
     /// Native reactive autocomplete. The PG execute-query (<c>_adapter.QueryNodesAsync</c> — the
     /// <c>await foreach</c> over the npgsql reader) is the I/O leaf: it runs inside
-    /// <see cref="Observable.FromAsync{TResult}(Func{CancellationToken, Task{TResult}})"/> and is
-    /// pushed to <see cref="System.Reactive.Concurrency.TaskPoolScheduler"/> so the calling hub's
-    /// action block is never blocked. No <c>Task.Run</c> bridge (that was the deadlock), no
+    /// <see cref="IIoPool.Invoke{T}"/> so the calling hub's action block is never blocked and no
+    /// scheduler is captured. No <c>Task.Run</c> bridge (that was the deadlock), no
     /// async-enumerable on the public surface. Emits one snapshot then completes.
     /// </summary>
     public IObservable<IReadOnlyCollection<QueryResult>> Autocomplete(
@@ -895,10 +927,10 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
 
     /// <summary>
     /// Persistence-layer async boundary: collects all results from <see cref="QueryAsync"/>
-    /// into a list. Called exclusively via
-    /// <see cref="Observable.FromAsync{T}(Func{CancellationToken,Task{T}},IScheduler)"/>
-    /// with <see cref="Scheduler.Default"/> so <c>await</c> always runs on the
-    /// ThreadPool — no hub/Orleans scheduler is ever captured.
+    /// into a list. Called exclusively from inside <see cref="IIoPool.Invoke{T}"/>
+    /// (see <see cref="Query{T}"/>'s <c>RunQuery</c>) so <c>await</c> always runs
+    /// behind the pool's gate on the ThreadPool — no hub/Orleans scheduler is ever
+    /// captured.
     /// </summary>
     private async Task<List<(string? Path, T Item)>> CollectQueryResultsAsync<T>(
         MeshQueryRequest request, JsonSerializerOptions options, CancellationToken ct)

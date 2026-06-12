@@ -95,16 +95,12 @@ internal static class PgTestReactiveExtensions
             return rows;
         });
 
-    /// <summary>Reactive materialisation of a query stream into a list (async-enumerable stays async inside).</summary>
+    /// <summary>Reactive materialisation of a query snapshot into a list — delegates to the
+    /// provider's pooled <see cref="PostgreSqlMeshQuery.QueryNodes"/> surface (the public
+    /// async-enumerable <c>QueryAsync</c> was removed; the pump now lives behind the IIoPool).</summary>
     public static IObservable<List<object>> QueryList(
         this PostgreSqlMeshQuery query, MeshQueryRequest request, JsonSerializerOptions options, CancellationToken ct = default)
-        => IoPool.Unbounded.Invoke(async _ =>
-        {
-            var results = new List<object>();
-            await foreach (var item in query.QueryAsync(request, options, ct))
-                results.Add(item);
-            return results;
-        });
+        => query.QueryNodes(request, options).Select(r => r.ToList());
 
     /// <summary>Reactive materialisation of any <see cref="IAsyncEnumerable{T}"/> into a list.</summary>
     public static IObservable<List<T>> Collect<T>(this IAsyncEnumerable<T> source, CancellationToken ct = default)

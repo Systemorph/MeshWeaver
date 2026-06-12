@@ -106,13 +106,11 @@ There are two ways to reach vector semantics:
 
 ```csharp
 var vec = sp.GetService<IVectorSearchProvider>();
-if (vec is not null)
-{
-    await foreach (var node in vec.SearchAsync(
-        queryText, options, namespacePath: "@graph", topK: 20, ct: ct))
-        ...
-}
+vec?.Search(queryText, options, namespacePath: "@graph", topK: 20)
+    .Subscribe(nodes => ..., ex => logger.LogWarning(ex, "vector search failed"));
 ```
+
+> `Search` is reactive — one snapshot emission of the top-K nodes. The embedding round-trip and the HNSW SQL pump run inside the provider's `IIoPool`; cancellation is subscription disposal. There is no `IAsyncEnumerable` surface.
 
 > `IVectorSearchProvider` is registered as a singleton shared with `PostgreSqlMeshQuery` — the same instance appears under both interfaces. `GetService` returns `null` when no PG-backed mesh is registered, so the null check is required.
 
@@ -169,7 +167,7 @@ The dimension `{dim}` is configured via `PostgreSqlStorageOptions.EmbeddingDimen
 
 `test/MeshWeaver.Hosting.PostgreSql.Test/VectorSearchTests.cs` pins three behaviours:
 
-1. `IVectorSearchProvider.SearchAsync` returns the bucket-matching node for a deterministic stub embedding.
+1. `IVectorSearchProvider.Search` returns the bucket-matching node for a deterministic stub embedding.
 2. `QueryAsync` with `TextSearch` and a namespace filter routes through the vector path AND preserves the structured filter.
 3. Structured-only queries do **not** invoke the embedding provider — the intercept is gated on `TextSearch` being non-empty.
 

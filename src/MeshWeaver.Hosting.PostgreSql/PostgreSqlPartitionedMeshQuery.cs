@@ -1,6 +1,4 @@
 using System.Reactive.Linq;
-using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
@@ -148,7 +146,7 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
     /// <see cref="NeedsFanOut"/>), so always claim a match. Returning
     /// <see langword="true"/> here is symmetric with
     /// <see cref="StorageAdapterMeshQueryProvider.Matches"/>: the routing
-    /// decision lives in <see cref="Query{T}"/> / <see cref="QueryAsync"/>.
+    /// decision lives in <see cref="Query{T}"/>.
     /// </remarks>
     public bool Matches(IReadOnlyList<string> queryNamespaces) => true;
 
@@ -175,8 +173,15 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         // and the consumer hangs forever. Emit an empty Initial in the scoped
         // case so the merge can proceed (the per-schema StorageAdapterMeshQueryProvider
         // is the one that contributes the real rows for that path).
-        var snapshot = new ReplaySubject<QueryResultChange<T>>(1);
-        _ioPool.Invoke(async ct =>
+        //
+        // COLD by contract: _ioPool.Invoke runs the fan-out on Subscribe (work
+        // happens once, when the aggregator subscribes). The previous shape
+        // eagerly Subscribe()d into a ReplaySubject at observable-CONSTRUCTION
+        // time — running the cross-schema SQL on the calling hub/grain's turn
+        // even when the consumer never subscribed, and keeping it running after
+        // the consumer unsubscribed. EnumerateFanOutAsync is the private async
+        // leaf and is pumped exclusively inside this pool slot.
+        return _ioPool.Invoke(async ct =>
         {
             var items = new List<T>();
             if (NeedsFanOut(parsed))
@@ -195,44 +200,7 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
                 Items = items,
                 Timestamp = DateTimeOffset.UtcNow,
             };
-        }).Subscribe(snapshot);
-        return snapshot.AsObservable();
-    }
-
-    /// <inheritdoc/>
-    public async IAsyncEnumerable<object> QueryAsync(
-        MeshQueryRequest request,
-        JsonSerializerOptions options,
-        [System.Runtime.CompilerServices.EnumeratorCancellation]
-        CancellationToken ct = default)
-    {
-        var parsed = ParseFirst(request);
-
-        // SCOPED → delegate to the per-schema provider (it applies skip/limit/select itself).
-        if (GetScopedDelegate(parsed) is { } scoped)
-        {
-            await foreach (var item in scoped.QueryAsync(request, options, ct).ConfigureAwait(false))
-                yield return item;
-            yield break;
-        }
-
-        if (!NeedsFanOut(parsed))
-            yield break;
-
-        var yielded = 0;
-        var skip = request.Skip ?? 0;
-        var limit = request.Limit ?? parsed.Limit;
-
-        await foreach (var node in EnumerateFanOutAsync(parsed, options, request, ct).ConfigureAwait(false))
-        {
-            if (skip > 0) { skip--; continue; }
-            yield return parsed.Select != null
-                ? ParsedQuery.ProjectToSelect(node, parsed.Select)
-                : (object)node;
-            yielded++;
-            if (limit.HasValue && yielded >= limit.Value)
-                yield break;
-        }
+        });
     }
 
     /// <inheritdoc/>

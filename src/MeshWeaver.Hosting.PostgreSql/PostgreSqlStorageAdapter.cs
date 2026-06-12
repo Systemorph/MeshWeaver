@@ -191,60 +191,61 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     /// tables / namespaces still runs as one query per (table, namespace)
     /// group rather than per-path.
     /// </summary>
+    // Pump inside the IIoPool (InvokeStream) — never Observable.Create(async ...),
+    // which starts the pump (incl. the synchronous grouping prologue and the
+    // command construction) on the SUBSCRIBER's thread; under a hub/grain
+    // subscriber that is the grain-wedge / dropped-initial-emission defect
+    // (see PartitionObjectsSubscriberIndependenceTest for the repro shape).
     public IObservable<MeshNode> ReadMany(IReadOnlyCollection<string> paths, JsonSerializerOptions options)
-        => Observable.Create<MeshNode>(async (observer, ct) =>
+        => _ioPool.InvokeStream(ct => ReadManyAsyncCore(paths, options, ct));
+
+    private async IAsyncEnumerable<MeshNode> ReadManyAsyncCore(
+        IReadOnlyCollection<string> paths,
+        JsonSerializerOptions options,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        // Normalize + drop empties up front. Group by (table, namespace)
+        // so each PG round-trip is `WHERE namespace = $1 AND id IN (...)`
+        // — the cheapest shape for the indexed (namespace, id) PK.
+        var groups = paths
+            .Select(NormalizePath)
+            .Where(p => !string.IsNullOrEmpty(p))
+            .Select(p =>
+            {
+                var (ns, id) = SplitPath(p);
+                var table = ResolveTable(p);
+                return (table, ns, id);
+            })
+            .GroupBy(t => (t.table, t.ns))
+            .ToList();
+
+        foreach (var group in groups)
         {
-            try
+            var table = group.Key.table;
+            var ns = group.Key.ns;
+            var ids = group.Select(t => t.id).Distinct(StringComparer.Ordinal).ToArray();
+            if (ids.Length == 0)
+                continue;
+
+            // Build the parameter placeholder list ($2, $3, …) for the
+            // IN clause; the first parameter is the namespace.
+            var placeholders = string.Join(", ",
+                Enumerable.Range(2, ids.Length).Select(i => $"${i}"));
+            await using var cmd = _dataSource.CreateCommand(
+                $"SELECT id, namespace, name, description, node_type, category, icon, display_order, " +
+                $"last_modified, version, state, content, desired_id, main_node " +
+                $"FROM {table} WHERE namespace = $1 AND id IN ({placeholders})");
+            cmd.Parameters.AddWithValue(ns);
+            foreach (var id in ids)
+                cmd.Parameters.AddWithValue(id);
+
+            await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
             {
-                // Normalize + drop empties up front. Group by (table, namespace)
-                // so each PG round-trip is `WHERE namespace = $1 AND id IN (...)`
-                // — the cheapest shape for the indexed (namespace, id) PK.
-                var groups = paths
-                    .Select(NormalizePath)
-                    .Where(p => !string.IsNullOrEmpty(p))
-                    .Select(p =>
-                    {
-                        var (ns, id) = SplitPath(p);
-                        var table = ResolveTable(p);
-                        return (table, ns, id);
-                    })
-                    .GroupBy(t => (t.table, t.ns))
-                    .ToList();
-
-                foreach (var group in groups)
-                {
-                    var table = group.Key.table;
-                    var ns = group.Key.ns;
-                    var ids = group.Select(t => t.id).Distinct(StringComparer.Ordinal).ToArray();
-                    if (ids.Length == 0)
-                        continue;
-
-                    // Build the parameter placeholder list ($2, $3, …) for the
-                    // IN clause; the first parameter is the namespace.
-                    var placeholders = string.Join(", ",
-                        Enumerable.Range(2, ids.Length).Select(i => $"${i}"));
-                    await using var cmd = _dataSource.CreateCommand(
-                        $"SELECT id, namespace, name, description, node_type, category, icon, display_order, " +
-                        $"last_modified, version, state, content, desired_id, main_node " +
-                        $"FROM {table} WHERE namespace = $1 AND id IN ({placeholders})");
-                    cmd.Parameters.AddWithValue(ns);
-                    foreach (var id in ids)
-                        cmd.Parameters.AddWithValue(id);
-
-                    await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-                    while (await reader.ReadAsync(ct).ConfigureAwait(false))
-                    {
-                        observer.OnNext(ReadMeshNode(reader, options));
-                    }
-                }
-
-                observer.OnCompleted();
+                yield return ReadMeshNode(reader, options);
             }
-            catch (Exception ex)
-            {
-                observer.OnError(ex);
-            }
-        });
+        }
+    }
 
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
         => _ioPool.Invoke<MeshNode?>(async ct =>
@@ -511,23 +512,18 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
 
     #region Partition Storage
 
+    // Pump inside the IIoPool (InvokeStream) — never Observable.Create(async ...),
+    // which starts the pump on the subscriber's scheduler. This is the
+    // virtual-data-source load that runs at hub init — the exact grain-wedge
+    // edge (see PartitionObjectsSubscriberIndependenceTest for the repro shape).
     public IObservable<object> GetPartitionObjects(
         string nodePath, string? subPath, JsonSerializerOptions options)
-        => Observable.Create<object>(async (observer, ct) =>
-        {
-            try
-            {
-                await foreach (var obj in GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct).ConfigureAwait(false))
-                    observer.OnNext(obj);
-                observer.OnCompleted();
-            }
-            catch (Exception ex) when (IsUndefinedTable(ex))
-            {
+        => _ioPool.InvokeStream(ct => GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct))
+            .Catch<object, Exception>(ex => IsUndefinedTable(ex)
                 // Absent schema (router resolved synchronously, schema never
                 // created) → nothing to read. Complete empty, don't fault.
-                observer.OnCompleted();
-            }
-        });
+                ? Observable.Empty<object>()
+                : Observable.Throw<object>(ex));
 
     private async IAsyncEnumerable<object> GetPartitionObjectsAsyncCore(
         string nodePath, string? subPath, JsonSerializerOptions options,

@@ -39,7 +39,7 @@ public class VectorSearchTests
     }
 
     [Fact]
-    public void IVectorSearchProvider_SearchAsync_FindsExactBucketMatch()
+    public void IVectorSearchProvider_Search_FindsExactBucketMatch()
     {
         _fixture.CleanData().Should().Within(60.Seconds()).Emit();
         var ct = TestContext.Current.CancellationToken;
@@ -61,9 +61,9 @@ public class VectorSearchTests
         _fixture.AccessControl.Grant("VecTest", "Anonymous", "Read", isAllow: true, ct)
             .Should().Within(30.Seconds()).Emit();
 
-        var results = ((IVectorSearchProvider)query).SearchAsync("alpha", _options,
-                namespacePath: "VecTest", userId: null, topK: 5, ct)
-            .Collect(ct).Should().Within(30.Seconds()).Emit();
+        var results = ((IVectorSearchProvider)query).Search("alpha", _options,
+                namespacePath: "VecTest", userId: null, topK: 5)
+            .Should().Within(30.Seconds()).Emit();
 
         // The stub maps "alpha" embedding to the same bucket as node "alpha"
         // (writer stored embedding of "alpha Story"; query embeds "alpha"). They

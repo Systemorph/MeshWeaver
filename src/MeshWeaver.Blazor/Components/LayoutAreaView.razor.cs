@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Blazor.Services;
 using MeshWeaver.Messaging;
@@ -98,6 +99,7 @@ public partial class LayoutAreaView
             MenuStream?.Dispose();
             NodeMenuStream?.Dispose();
             MeshMenuStream?.Dispose();
+            ProgressStream?.Dispose();
         }
         else
         {
@@ -109,6 +111,7 @@ public partial class LayoutAreaView
         MenuStream = null;
         NodeMenuStream = null;
         MeshMenuStream = null;
+        ProgressStream = null;
         await base.DisposeAsync();
     }
 
@@ -119,11 +122,13 @@ public partial class LayoutAreaView
         MenuStream?.Dispose();
         NodeMenuStream?.Dispose();
         MeshMenuStream?.Dispose();
+        ProgressStream?.Dispose();
         AreaStream = null;
         DialogStream = null;
         MenuStream = null;
         NodeMenuStream = null;
         MeshMenuStream = null;
+        ProgressStream = null;
     }
 
     // Must match NodeMenuItemsExtensions.NodeMenuContext / MeshMenuContext — duplicated here to avoid
@@ -146,6 +151,18 @@ public partial class LayoutAreaView
                     Area, Address, ViewModel.Reference);
             DialogStream = SetupDialogAreaMonitoring(AreaStream!);
             DialogStream?.RegisterForDisposal(DialogStream.DistinctUntilChanged().Subscribe(el => OnDialogStreamChanged(el.Value)));
+
+            // Phase-aware loading label: bind the server-side progress item
+            // ({ message, progress } in the EntityStore "data" collection — seeded
+            // "Building layout…" by LayoutAreaHost.BuildInitialization, advanced by
+            // the framework milestones / host.UpdateProgress, cleared on first
+            // render). Riding the SAME area stream means the static "Subscribing…"
+            // seed is replaced by live phases as soon as the first frame lands —
+            // pure display, derived only from data already on the stream.
+            ProgressStream = AreaStream!.Reduce(
+                new JsonPointerReference(LayoutAreaReference.GetDataPointer(LayoutAreaHost.ProgressDataId)));
+            ProgressStream?.RegisterForDisposal(ProgressStream.DistinctUntilChanged()
+                .Subscribe(el => OnProgressStreamChanged(el.Value)));
             if (Top)
             {
                 MenuStream = SetupMenuAreaMonitoring(AreaStream!, MenuControl.MenuArea);
@@ -164,6 +181,39 @@ public partial class LayoutAreaView
     private ISynchronizationStream<JsonElement>? MenuStream { get; set; }
     private ISynchronizationStream<JsonElement>? NodeMenuStream { get; set; }
     private ISynchronizationStream<JsonElement>? MeshMenuStream { get; set; }
+    private ISynchronizationStream<JsonElement>? ProgressStream { get; set; }
+
+    /// <summary>
+    /// Applies a server-side progress-item change ({ message, progress }) to the
+    /// loading label. Non-empty message → show it (the area is still assembling:
+    /// "Building layout…", "Initializing data sources…", "Rendering…", or a
+    /// view-pushed phase via host.UpdateProgress). Empty message = content
+    /// rendered — NamedAreaView hides the spinner via RootControl, so nothing to
+    /// do. Pure display: derived exclusively from data already on the stream.
+    /// </summary>
+    private void OnProgressStreamChanged(JsonElement progressData)
+    {
+        try
+        {
+            if (!IsNotPreRender)
+                return;
+            if (progressData.ValueKind != JsonValueKind.Object)
+                return;
+            var message = progressData.TryGetProperty("message", out var m)
+                          && m.ValueKind == JsonValueKind.String
+                ? m.GetString()
+                : null;
+            if (string.IsNullOrEmpty(message) || message == progressMessage)
+                return;
+            progressMessage = message;
+            showProgress = true;
+            InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Error processing loading-progress stream change for area {Area}", Area);
+        }
+    }
 
     private ISynchronizationStream<JsonElement>? SetupDialogAreaMonitoring(ISynchronizationStream<JsonElement> areaStream)
     {

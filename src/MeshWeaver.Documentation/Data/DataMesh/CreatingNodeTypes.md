@@ -316,6 +316,11 @@ public record Product : INamed
 
 ### Create the CSV Loader
 
+Loaders are reactive — **never `async`/`await`/`Task<T>`/`Task.FromResult`**. Return
+`IObservable<IEnumerable<T>>` (the shape `WithInitialData` takes) and run the
+blocking CSV read + parse on the bounded FileSystem I/O pool via `InvokeBlocking`,
+so the file read never executes on the configuring hub's thread:
+
 ```csharp
 // <meshweaver>
 // Id: DataLoader
@@ -323,25 +328,34 @@ public record Product : INamed
 // </meshweaver>
 
 using System.Globalization;
+using MeshWeaver.Messaging;
+using MeshWeaver.Mesh.Threading;
+using Microsoft.Extensions.DependencyInjection;
 
 public static class DataLoader
 {
     private static readonly string BasePath =
         Path.Combine("../../samples/Graph/attachments/MyData");
 
-    public static Task<IEnumerable<Product>> LoadProductsAsync(CancellationToken ct)
-    {
-        var lines = File.ReadAllLines(Path.Combine(BasePath, "products.csv"));
-        return Task.FromResult(ParseCsv(lines, parts => new Product
-        {
-            ProductId = int.Parse(parts[0]),
-            ProductName = parts[1],
-            SupplierId = int.Parse(parts[2]),
-            CategoryId = int.Parse(parts[3]),
-            UnitPrice = double.Parse(parts[4], CultureInfo.InvariantCulture),
-            UnitsInStock = short.Parse(parts[5]),
-        }));
-    }
+    private static IIoPool FileSystemPool(IMessageHub hub) =>
+        hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
+        ?? IoPool.Unbounded;
+
+    public static IObservable<IEnumerable<Product>> LoadProducts(IMessageHub hub)
+        // The .ToList() INSIDE the pool slot matters: ParseCsv is lazy, and
+        // without it the parse would run later on whatever thread enumerates.
+        => FileSystemPool(hub).InvokeBlocking(_ =>
+            (IEnumerable<Product>)ParseCsv(
+                File.ReadAllLines(Path.Combine(BasePath, "products.csv")),
+                parts => new Product
+                {
+                    ProductId = int.Parse(parts[0]),
+                    ProductName = parts[1],
+                    SupplierId = int.Parse(parts[2]),
+                    CategoryId = int.Parse(parts[3]),
+                    UnitPrice = double.Parse(parts[4], CultureInfo.InvariantCulture),
+                    UnitsInStock = short.Parse(parts[5]),
+                }).ToList());
 
     private static IEnumerable<T> ParseCsv<T>(
         string[] lines, Func<string[], T> factory)
@@ -370,10 +384,13 @@ public static class DataLoader
         DisplayName = \"Data Files\"
       })
       .AddData(data => data
-        .AddSource(source => source
-          .WithType<Category>(t => t.WithInitialData(DataLoader.LoadCategoriesAsync))
-          .WithType<Product>(t => t.WithInitialData(DataLoader.LoadProductsAsync))
-          .WithType<Order>(t => t.WithInitialData(DataLoader.LoadOrdersAsync))))
+        .AddSource(source => {
+          var hub = source.Workspace.Hub;
+          return source
+            .WithType<Category>(t => t.WithInitialData(() => DataLoader.LoadCategories(hub)))
+            .WithType<Product>(t => t.WithInitialData(() => DataLoader.LoadProducts(hub)))
+            .WithType<Order>(t => t.WithInitialData(() => DataLoader.LoadOrders(hub)));
+        }))
       .AddDefaultLayoutAreas()
       .AddLayout(layout => layout.WithDefaultArea(\"LayoutAreas\"))"
   }
@@ -383,7 +400,7 @@ public static class DataLoader
 > **Key points for CSV data:**
 > - Place CSV files in an `attachments/` folder and reference them via `AddContentCollection`.
 > - The loader reads the CSV, skips the header row, and maps columns to record properties.
-> - Use `WithInitialData(Func<CancellationToken, Task<IEnumerable<T>>>)` for async CSV loading.
+> - Use `WithInitialData(Func<IObservable<IEnumerable<T>>>)` for loaded data — the loader bridges its file I/O through the FileSystem `IIoPool`; grab `var hub = source.Workspace.Hub;` in the `AddSource` lambda to resolve the pool.
 > - Use `WithInitialData(T[])` for static in-memory reference data.
 > - `[Dimension(typeof(T))]` declares a relationship between types so the query engine can perform join operations.
 > - Implement `INamed` to provide a display name for lookup columns in the UI.

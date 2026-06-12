@@ -5,22 +5,45 @@
 
 using System.Globalization;
 using System.IO;
-using System.Threading;
-using System.Threading.Tasks;
+using MeshWeaver.Messaging;
+using MeshWeaver.Mesh.Threading;
+using Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
 /// CSV data loader for Northwind transactional entities.
 /// Master data (Product, Customer, Employee, Supplier) is now loaded from MeshNodes
 /// via MeshNodeDataLoader.
+///
+/// Reactive end-to-end: every loader returns IObservable&lt;IEnumerable&lt;T&gt;&gt;
+/// (the shape WithInitialData takes) and runs the blocking CSV read + parse on the
+/// bounded FileSystem I/O pool via InvokeBlocking — never async/await, never
+/// Task.FromResult, never on the configuring hub's thread.
 /// </summary>
 public static class NorthwindDataLoader
 {
     private static readonly string BasePath = Path.Combine("../../samples/Graph/attachments/Northwind/Data");
 
-    public static Task<IEnumerable<Order>> LoadOrdersAsync(CancellationToken ct)
-    {
-        var lines = File.ReadAllLines(Path.Combine(BasePath, "orders.csv"));
-        return Task.FromResult(ParseCsv(lines, parts => new Order
+    /// <summary>
+    /// Resolves the bounded FileSystem I/O pool from the hub (falling back to the
+    /// unbounded pool when no registry is present, e.g. lightweight test hubs).
+    /// All CSV reads below run on this pool.
+    /// </summary>
+    private static IIoPool FileSystemPool(IMessageHub hub) =>
+        hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
+        ?? IoPool.Unbounded;
+
+    /// <summary>
+    /// Reads + parses one CSV file entirely on the I/O pool. The .ToList() inside
+    /// the pool slot matters: ParseCsv is lazy, and without materialisation the
+    /// parse would run later on whatever thread enumerates the result.
+    /// </summary>
+    private static IObservable<IEnumerable<T>> LoadCsv<T>(
+        IMessageHub hub, string fileName, Func<string[], T> factory) =>
+        FileSystemPool(hub).InvokeBlocking(_ =>
+            (IEnumerable<T>)ParseCsv(File.ReadAllLines(Path.Combine(BasePath, fileName)), factory).ToList());
+
+    public static IObservable<IEnumerable<Order>> LoadOrders(IMessageHub hub)
+        => LoadCsv(hub, "orders.csv", parts => new Order
         {
             OrderId = ParseInt(parts[0]),
             CustomerId = parts[1],
@@ -35,13 +58,10 @@ public static class NorthwindDataLoader
             ShipRegion = Get(parts, 10),
             ShipPostalCode = Get(parts, 11),
             ShipCountry = Get(parts, 12),
-        }));
-    }
+        });
 
-    public static Task<IEnumerable<OrderDetails>> LoadOrderDetailsAsync(CancellationToken ct)
-    {
-        var lines = File.ReadAllLines(Path.Combine(BasePath, "orders_details.csv"));
-        return Task.FromResult(ParseCsv(lines, parts => new OrderDetails
+    public static IObservable<IEnumerable<OrderDetails>> LoadOrderDetails(IMessageHub hub)
+        => LoadCsv(hub, "orders_details.csv", parts => new OrderDetails
         {
             Id = ParseInt(parts[0]),
             OrderId = ParseInt(parts[1]),
@@ -49,51 +69,38 @@ public static class NorthwindDataLoader
             UnitPrice = double.Parse(parts[3], CultureInfo.InvariantCulture),
             Quantity = ParseInt(parts[4]),
             Discount = double.Parse(parts[5], CultureInfo.InvariantCulture),
-        }));
-    }
+        });
 
-    public static Task<IEnumerable<Category>> LoadCategoriesAsync(CancellationToken ct)
-    {
-        var lines = File.ReadAllLines(Path.Combine(BasePath, "categories.csv"));
-        return Task.FromResult(ParseCsv(lines, parts => new Category
+    public static IObservable<IEnumerable<Category>> LoadCategories(IMessageHub hub)
+        => LoadCsv(hub, "categories.csv", parts => new Category
         {
             CategoryId = ParseInt(parts[0]),
             CategoryName = parts[1],
             Description = Get(parts, 2),
-        }));
-    }
+        });
 
-    public static Task<IEnumerable<Region>> LoadRegionsAsync(CancellationToken ct)
-    {
-        var lines = File.ReadAllLines(Path.Combine(BasePath, "regions.csv"));
-        return Task.FromResult(ParseCsv(lines, parts => new Region
+    public static IObservable<IEnumerable<Region>> LoadRegions(IMessageHub hub)
+        => LoadCsv(hub, "regions.csv", parts => new Region
         {
             RegionId = ParseInt(parts[0]),
             RegionDescription = parts[1],
-        }));
-    }
+        });
 
-    public static Task<IEnumerable<Territory>> LoadTerritoriesAsync(CancellationToken ct)
-    {
-        var lines = File.ReadAllLines(Path.Combine(BasePath, "territories.csv"));
-        return Task.FromResult(ParseCsv(lines, parts => new Territory
+    public static IObservable<IEnumerable<Territory>> LoadTerritories(IMessageHub hub)
+        => LoadCsv(hub, "territories.csv", parts => new Territory
         {
             TerritoryId = ParseInt(parts[0]),
             TerritoryDescription = parts[1],
             RegionId = ParseInt(parts[2]),
-        }));
-    }
+        });
 
-    public static Task<IEnumerable<Shipper>> LoadShippersAsync(CancellationToken ct)
-    {
-        var lines = File.ReadAllLines(Path.Combine(BasePath, "shippers.csv"));
-        return Task.FromResult(ParseCsv(lines, parts => new Shipper
+    public static IObservable<IEnumerable<Shipper>> LoadShippers(IMessageHub hub)
+        => LoadCsv(hub, "shippers.csv", parts => new Shipper
         {
             ShipperId = ParseInt(parts[0]),
             CompanyName = parts[1],
             Phone = Get(parts, 2),
-        }));
-    }
+        });
 
     private static IEnumerable<T> ParseCsv<T>(string[] lines, Func<string[], T> factory)
     {

@@ -418,14 +418,16 @@ public class FileSystemStorageAdapter : IStorageAdapter
 
     #region Partition Storage
 
+    // The async pump runs INSIDE the IIoPool (InvokeStream) — never a bare
+    // Observable.Create(async ...), which starts the pump on the SUBSCRIBER's
+    // thread and lets every await capture the subscriber's scheduler. When the
+    // subscriber is a hub/grain action block waiting on the virtual-data-source
+    // load (hub init), the continuation queues behind the blocked thread and
+    // the stream never emits — the grain wedge. Pinned by
+    // PartitionObjectsSubscriberIndependenceTest.
     public IObservable<object> GetPartitionObjects(
         string nodePath, string? subPath, JsonSerializerOptions options)
-        => Observable.Create<object>(async (observer, ct) =>
-        {
-            await foreach (var obj in GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct))
-                observer.OnNext(obj);
-            observer.OnCompleted();
-        });
+        => _ioPool.InvokeStream(ct => GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct));
 
     private async IAsyncEnumerable<object> GetPartitionObjectsAsyncCore(
         string nodePath,

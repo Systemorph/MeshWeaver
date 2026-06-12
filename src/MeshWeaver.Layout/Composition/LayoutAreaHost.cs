@@ -39,6 +39,17 @@ public record LayoutAreaHost : IDisposable
     public LayoutDefinition LayoutDefinition { get; }
     private readonly ILogger<LayoutAreaHost> logger;
 
+    /// <summary>
+    /// Id of the EntityStore "data"-collection item carrying the phase-aware
+    /// loading progress (<c>{ message, progress }</c>). Seeded by
+    /// <see cref="BuildInitialization"/> ("Building layout…"), advanced by the
+    /// framework milestones and <see cref="UpdateProgress(string, double?)"/>,
+    /// cleared by <see cref="PushRenderResult"/> once content lands. The Blazor
+    /// client (<c>LayoutAreaView</c>) binds this item to keep the loading label
+    /// phase-aware instead of a static "Subscribing…".
+    /// </summary>
+    public const string ProgressDataId = "progress";
+
     public LayoutAreaHost(IWorkspace workspace,
         LayoutAreaReference reference,
         IUiControlService uiControlService,
@@ -159,7 +170,7 @@ public record LayoutAreaHost : IDisposable
                 .Update(LayoutAreaReference.Areas, x => x)
                 .Update(LayoutAreaReference.Data, x => x)
                 .Update(LayoutAreaReference.Data,
-                    coll => coll.SetItem("progress", new { message = "Building layout...", progress = 0 }));
+                    coll => coll.SetItem(ProgressDataId, new { message = "Building layout...", progress = 0 }));
 
             // When the requested area was null/empty, the default-area indirection
             // (a NamedAreaControl at "" pointing to the resolved area) is a STATIC
@@ -174,6 +185,14 @@ public record LayoutAreaHost : IDisposable
 
             observer.OnNext(baseStore);
 
+            // Framework milestones — phase-aware progress written through the
+            // same "data/progress" item the base frame seeded. Pure display:
+            // each milestone is one queued Stream.Update on the SAME serialized
+            // queue the renders use, so a render's progress-clear always lands
+            // after (and therefore wins over) any milestone queued before it.
+            // No watchdog, no timer, nothing resubscribes on this channel.
+            var milestoneSubscription = WriteFrameworkMilestones(resolvedArea);
+
             // Wire the renderers to deliver content through the stream's serialized
             // update queue (Stream.Update), AFTER the base Full above. Each emission
             // merges its area content + clears progress; the queue ordering keeps any
@@ -183,11 +202,12 @@ public record LayoutAreaHost : IDisposable
             var renderSubscription = LayoutDefinition.Render(this, context, baseStore)
                 .Subscribe(PushRenderResult, FailRendering);
 
-            // Tear down: dispose the render subscription and clear the restored context
-            // so it never leaks into unrelated work on this thread.
+            // Tear down: dispose the render + milestone subscriptions and clear the
+            // restored context so it never leaks into unrelated work on this thread.
             return System.Reactive.Disposables.Disposable.Create(() =>
             {
                 renderSubscription.Dispose();
+                milestoneSubscription.Dispose();
                 if (capturedAccessContext != null)
                     accessService?.SetContext(null);
             });
@@ -221,7 +241,7 @@ public record LayoutAreaHost : IDisposable
 
             // Clear progress now content has been rendered.
             resultStore = resultStore.Update(LayoutAreaReference.Data,
-                coll => coll.SetItem("progress", new { message = "", progress = 100 }));
+                coll => coll.SetItem(ProgressDataId, new { message = "", progress = 100 }));
 
             // Emit as a Full: a complete snapshot the client's control streams
             // re-evaluate wholesale, delivering nested sub-areas reliably.
@@ -737,6 +757,58 @@ public record LayoutAreaHost : IDisposable
         => Stream.Update(state => Stream.ApplyChanges(
             new(state ?? new EntityStore(), [new(LayoutAreaReference.Areas, area, progress)], Stream.StreamId)),
             ex => logger.LogWarning(ex, "Cannot update progress for {Area}", area));
+
+    /// <summary>
+    /// Phase-aware loading progress for this layout area. Writes the EntityStore
+    /// "data" collection's <see cref="ProgressDataId"/> item
+    /// (<c>{ message, progress }</c>) — the same channel
+    /// <see cref="BuildInitialization"/> seeds with "Building layout…" and
+    /// <see cref="PushRenderResult"/> clears once content lands. Views push
+    /// their own phase while assembling slow content:
+    /// <c>host.UpdateProgress("Loading 2024 figures…", 40)</c>. Pure UI feedback —
+    /// display only, never a watchdog; nothing reacts to it except the client's
+    /// loading label.
+    /// </summary>
+    /// <param name="message">The phase label shown next to the spinner.</param>
+    /// <param name="percent">Optional 0–100 completion hint.</param>
+    public void UpdateProgress(string message, double? percent = null)
+        => Stream.Update(current =>
+            new ChangeItem<EntityStore>(
+                (current ?? new EntityStore()).Update(LayoutAreaReference.Data,
+                    coll => coll.SetItem(ProgressDataId, new { message, progress = percent ?? 0 })),
+                Stream.StreamId,
+                Stream.Hub.Version),
+            ex => logger.LogWarning(ex, "Cannot update loading progress for {Area}", Reference.Area));
+
+    /// <summary>
+    /// Writes the framework's own loading milestones through the
+    /// <see cref="ProgressDataId"/> channel at the seams knowable from the
+    /// layout host: the owning hub's data sources still running their initial
+    /// load (virtual data sources / persistence hydration — the common "area
+    /// stuck before its first render" cause on a freshly activated hub), then
+    /// renderers wired and awaiting their first emission. Earlier phases (hub
+    /// activation, NodeType assembly compile) happen before this stream exists
+    /// and are surfaced client-side by <c>CompileProgressIndicator</c> and the
+    /// navigation "Subscribing…" seed. Display only — the returned subscription
+    /// merely stops the milestone writes on teardown; it never retries or
+    /// resubscribes anything.
+    /// </summary>
+    private IDisposable WriteFrameworkMilestones(string areaLabel)
+    {
+        var dataContext = Workspace.DataContext;
+        if (dataContext is { IsInitializing: true })
+        {
+            UpdateProgress($"Initializing data sources on {Hub.Address}...");
+            // DataContext.Initialization is a display-grade completion signal
+            // (emits once when every source's initial load settled, success or
+            // faulted — failures surface through the data streams, not here).
+            return dataContext.Initialization
+                .Subscribe(_ => UpdateProgress($"Rendering {areaLabel}... awaiting first data"));
+        }
+
+        UpdateProgress($"Rendering {areaLabel}... awaiting first data");
+        return System.Reactive.Disposables.Disposable.Empty;
+    }
 
     internal EntityStoreAndUpdates RenderArea(RenderingContext context, ViewDefinition generator, EntityStore store)
     {

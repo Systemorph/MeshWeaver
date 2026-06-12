@@ -220,14 +220,12 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
 
     #region Partition Storage
 
+    // Pump inside the IIoPool (InvokeStream) — never Observable.Create(async ...),
+    // which starts the pump on the subscriber's scheduler (the grain-wedge defect;
+    // see PartitionObjectsSubscriberIndependenceTest for the repro shape).
     public IObservable<object> GetPartitionObjects(
         string nodePath, string? subPath, JsonSerializerOptions options)
-        => Observable.Create<object>(async (observer, ct) =>
-        {
-            await foreach (var obj in GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct).ConfigureAwait(false))
-                observer.OnNext(obj);
-            observer.OnCompleted();
-        });
+        => _ioPool.InvokeStream(ct => GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct));
 
     private async IAsyncEnumerable<object> GetPartitionObjectsAsyncCore(
         string nodePath, string? subPath, JsonSerializerOptions options,
