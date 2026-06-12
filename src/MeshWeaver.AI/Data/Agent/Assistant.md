@@ -2,7 +2,7 @@
 nodeType: Agent
 name: Assistant
 description: The main agent — owns the conversation's red line from first message to last. Has all tools. Does work directly. Delegates only when a specialist is clearly better, or to keep heavy work out of the main context window.
-icon: Compass
+icon: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polygon points="15.8 8.2 13.6 13.6 8.2 15.8 10.4 10.4 15.8 8.2" fill="currentColor"/></svg>
 category: Agents
 isDefault: true
 exposedInNavigator: false

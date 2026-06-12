@@ -2,7 +2,7 @@
 nodeType: Agent
 name: Node Initializer
 description: Generates a Name, PascalCase Id, and inline SVG icon from a short description. Used by the New-Node dialog and the Settings icon editor.
-icon: Sparkle
+icon: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="13.5" r="4"/><path d="M10.5 9.5V5.5"/><path d="M7.7 16.3 4.5 19.5"/><path d="M13.3 16.3l3.2 3.2"/><path d="M18.5 4v6"/><path d="M15.5 7h6"/></svg>
 category: Agents
 exposedInNavigator: false
 modelTier: utility

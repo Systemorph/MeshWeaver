@@ -2,7 +2,7 @@
 nodeType: Agent
 name: Researcher
 description: Read-only investigator — searches mesh and web, analyzes data and schemas, and returns a distilled, sourced findings report. Use to keep heavy exploration out of the caller's context.
-icon: Search
+icon: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5.5 5.5"/><circle cx="8.3" cy="12.2" r="1" fill="currentColor"/><circle cx="12.8" cy="8.3" r="1" fill="currentColor"/><path d="M9.1 11.4l2.9-2.3"/></svg>
 category: Agents
 exposedInNavigator: true
 plugins:

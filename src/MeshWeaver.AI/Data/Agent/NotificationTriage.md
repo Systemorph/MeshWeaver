@@ -2,7 +2,7 @@
 nodeType: Agent
 name: Notification Triage
 description: Decides, per the recipient's own rules, whether an event is worth notifying them about and which channel(s) it should go to (in-app, email, Teams). Runs on a small, cheap model.
-icon: Bell
+icon: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 9.5a6 6 0 0 0-12 0c0 6-2 7-2 7h16s-2-1-2-7"/><path d="M10.3 20.5a2 2 0 0 0 3.4 0"/><path d="m9.5 10.5 2 2 3.5-3.5"/></svg>
 category: Agents
 exposedInNavigator: false
 modelTier: light

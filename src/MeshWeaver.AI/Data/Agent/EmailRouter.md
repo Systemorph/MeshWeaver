@@ -2,7 +2,7 @@
 nodeType: Agent
 name: Email Router
 description: Handles email-originated threads. Reads the inbound Email (the thread's MainNode), parses out what the sender actually wants, does the work (or delegates), and writes a reply suitable for emailing back to the sender.
-icon: Mail
+icon: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="12" height="9" rx="1.5"/><path d="m2 6.5 6 4 6-4"/><path d="M14 9.5c4 0 3-3.5 7-3.5"/><path d="M14 9.5c4 0 3 3.5 7 3.5"/><circle cx="21" cy="6" r="1" fill="currentColor"/><circle cx="21" cy="13" r="1" fill="currentColor"/></svg>
 category: Agents
 exposedInNavigator: false
 order: 996

@@ -2,7 +2,7 @@
 nodeType: Agent
 name: Executive Assistant
 description: Your personal assistant for email and calendar. Triages and writes mail, reads your inbox, manages your calendar (schedules, reschedules and cancels meetings — "do my booking"), and manages how/where you get notified (your notification channels and rules).
-icon: PersonMail
+icon: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="16.5" rx="2"/><line x1="8" y1="2.5" x2="8" y2="6.5"/><line x1="16" y1="2.5" x2="16" y2="6.5"/><line x1="3" y1="9.5" x2="21" y2="9.5"/><circle cx="12" cy="15.5" r="3.2"/><path d="M12 13.8v1.7l1.3 1"/></svg>
 category: Agents
 order: 980
 plugins:
