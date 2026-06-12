@@ -418,10 +418,41 @@ public record LayoutAreaHost : IDisposable
                     Stream.StreamId);
             })
             .Catch<EntityStoreAndUpdates, Exception>(ex =>
-            {
-                FailRendering(ex);
-                return Observable.Empty<EntityStoreAndUpdates>();
-            });
+                // 🚨 Surface render failures to the GUI instead of swallowing them to a
+                // log line + Empty — the latter pushed NOTHING to the stream, so the
+                // client spinner spun forever (the "no error message on the GUI" gap).
+                // Render a visible error control into the area's slot; the full exception
+                // still logs at Error. This COMPLETES the render with a visible error —
+                // it does not hide the fault.
+                Observable.Return(RenderRenderingError(context, cleared, ex)));
+    }
+
+    /// <summary>
+    /// Terminal, VISIBLE outcome of a top-level area render that threw: renders an error
+    /// placeholder (the exception message) into the failed area's slot so the user sees
+    /// what went wrong instead of an indefinite spinner. The full exception is logged at
+    /// Error. Never swallows — this is what the GUI shows when a view/cell faults.
+    /// </summary>
+    private EntityStoreAndUpdates RenderRenderingError(
+        RenderingContext context, EntityStoreAndUpdates cleared, Exception ex)
+    {
+        logger.LogError(ex, "Rendering failed for area {Area}", Reference.Area);
+        try
+        {
+            var errorControl = MeshWeaver.Layout.Controls.Markdown(
+                $"⚠️ **This area failed to render.**\n\n```\n{ex.Message}\n```");
+            var rendered = RenderArea(context, errorControl, cleared.Store);
+            return new EntityStoreAndUpdates(
+                rendered.Store, cleared.Updates.Concat(rendered.Updates), Stream.StreamId);
+        }
+        catch (Exception renderEx)
+        {
+            // The error placeholder itself failed to render (extremely unlikely for a
+            // Markdown control) — log and emit the cleared store rather than recursing
+            // back into the Catch above.
+            logger.LogError(renderEx, "Failed to render the error placeholder for area {Area}", Reference.Area);
+            return cleared;
+        }
     }
 
     /// <summary>
