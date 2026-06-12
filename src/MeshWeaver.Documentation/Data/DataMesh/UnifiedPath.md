@@ -107,6 +107,57 @@ config.AddFileSystemContentCollection("content", sp => "./content")
       .MapContentCollection("avatars", "storage", "persons/avatars");
 ```
 
+## Listing and Downloading Collection Files
+
+The `get` surface (MCP tool, agent plugin, REST) reads collections through the same unified path. The shapes, from listing to file download:
+
+| Goal | Path | Result |
+|---|---|---|
+| List the collection root | `@Node/content/` | `CollectionItemInfo[]` — files and folders (`isFolder: true`) |
+| List a subfolder | `@Node/content/content/SubFolder` | items of `/SubFolder` |
+| Download a file at the root | `@Node/content/file.ext` | file content |
+| Download a nested file | `@Node/content/content/SubFolder/file.ext` | file content |
+| Named collection | `@Node/assets/logo.png` | file from the "assets" collection |
+
+The doubled segment in `@Node/content/content/Sub/...` is not a typo: the **first** `content` is the reserved prefix that switches into collection mode, the **second** segment names the collection. For files at the collection root the short form (`@Node/content/file.ext`) works because a single trailing segment is tried as a file in the default `content` collection first. When a path returns *"Content collection 'X' not found"* for what is actually a **folder** inside `content`, you used the short form on a nested path — switch to the doubled form.
+
+Folder names with spaces need no quoting or URL-encoding: `@Node/content/content/Trainingsdaten/Data Extraction` is valid — segments are split on `/` only.
+
+Writing goes through `upload` with the mirror shape `{nodePath}/{collection}/{filePath}` (nested paths allowed, collection must have `IsEditable = true`):
+`upload @Node/content/Export/result.txt <base64>`.
+
+### Binary formats: what gets extracted, what does not
+
+`get` runs binary documents through registered `IContentTransformer`s before returning text:
+
+| Extension | Behavior |
+|---|---|
+| `.docx` | Converted to **markdown** (DocSharp transformer) |
+| `.md`, `.csv`, `.txt`, source files | Returned as text verbatim |
+| `.xlsx`, `.pdf`, images | **No transformer yet** — bytes are decoded as text and arrive corrupted (binary is not JSON-safe) |
+
+For `.xlsx` / `.pdf` content, two reliable patterns until transformers ship:
+
+1. **Server-side executable Code node** ([ExecuteScript](/Doc/AI/ExecuteScript)): resolve `IContentService`, open the stream, and parse in-process — an `.xlsx` is a ZIP, so `System.IO.Compression.ZipArchive` + `XDocument` over `xl/worksheets/sheet1.xml` and `xl/sharedStrings.xml` needs no NuGet package. Print rows to the activity log or create mesh nodes directly.
+2. **Lossless export through the collection**: a script converts the file to Base64 text and saves it back via `collection.SaveFileAsync(...)`; `get` on the resulting `.b64` file is lossless text, which the client decodes back to the original bytes.
+
+A note on collection resolution inside scripts: the kernel's `IContentService` does not know node-scoped collections by their plain name. Fetch the node's collection config first and register it under a qualified name — the same handshake `upload` performs:
+
+```csharp
+var delivery = await Mesh.Observe(
+        new GetDataRequest(new ContentCollectionReference(new[] { "content" })),
+        o => o.WithTarget((Address)"MySpace"))
+    .Take(1).ToTask();
+var cfg = JsonSerializer.Deserialize<ContentCollectionConfig[]>(
+        ((GetDataResponse)delivery.Message).Data is JsonElement je ? je : default,
+        Mesh.JsonSerializerOptions)
+    .First(c => c.Name == "content");
+contentService.AddConfiguration(cfg with { Name = "MySpace/content", Address = (Address)"MySpace" });
+var collection = await contentService.GetCollectionAsync("MySpace/content", ct);
+```
+
+Files are also served over HTTP at `/static/{address}/{collection}/{filePath}` (browser session auth) — useful for download links inside markdown, not for agent tooling.
+
 ---
 
 # `@` vs `@@` — Navigate or Embed
