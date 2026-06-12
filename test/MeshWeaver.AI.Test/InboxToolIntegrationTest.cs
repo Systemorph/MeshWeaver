@@ -1,4 +1,4 @@
-﻿#pragma warning disable CS1591
+#pragma warning disable CS1591
 
 using System;
 using System.Collections.Generic;
@@ -309,8 +309,18 @@ public class InboxToolIntegrationTest : AITestBase
         await Task.Delay(1500, ct);
 
         var final = await ReadThreadAsync(threadPath, ct);
+        // Self-diagnosing assert: this has failed CI-only (passes solo AND
+        // in-class locally, 11/11). On the next hit the message names the
+        // claimer's product - Status=StartingExecution means a stuck
+        // submission-watcher claim (then: what re-populated pending?),
+        // Status=Executing means a real round dispatched after the cancel.
         final.IsExecuting.Should().BeFalse(
-            "no pending messages â†’ no phantom round should start");
+            "no pending messages -> no phantom round should start. " +
+            $"Status={final.Status}, ActiveMessageId={final.ActiveMessageId}, " +
+            $"pending=[{string.Join(",", final.PendingUserMessages.Keys)}], " +
+            $"ingested=[{string.Join(",", final.IngestedMessageIds)}], " +
+            $"userIds=[{string.Join(",", final.UserMessageIds)}], " +
+            $"messages={final.Messages.Count}, requested={final.RequestedStatus}");
         final.IngestedMessageIds.Should().ContainSingle().Which.Should().Be(u1);
         final.Messages.Count.Should().Be(initialMsgsCount,
             "no new cells expected since nothing was queued");
