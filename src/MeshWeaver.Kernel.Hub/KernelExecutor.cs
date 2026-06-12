@@ -310,7 +310,16 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         scriptLogger = new ScriptLogger(defaultLogger);
         scriptGlobals = new MeshScriptGlobals { Mesh = publicHub, Log = scriptLogger };
 
-        var refs = new HashSet<Assembly>
+        // Curated anchors + DI-contributed module assemblies. The full reference
+        // set ("every loaded non-dynamic assembly with a usable Location, so
+        // scripts can reach types from packages the host already loaded") comes
+        // from KernelScriptReferences — a process-shared, materialized-ONCE
+        // PortableExecutableReference snapshot. 🚨 Never pass raw Assembly objects
+        // to WithReferences here: Roslyn then materializes a fresh AssemblyMetadata
+        // + native metadata block per reference PER SESSION (~350 refs ≈ 150-200 MiB
+        // of native memory per kernel session, never reclaimed — the CI
+        // memory-pressure leak; see KernelScriptReferences docs).
+        var sessionAssemblies = new HashSet<Assembly>
         {
             typeof(IMessageHub).Assembly,
             typeof(Address).Assembly,
@@ -326,38 +335,24 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             typeof(MeshScriptGlobals).Assembly,
         };
 
-        // Pull in every loaded non-dynamic assembly with a usable Location so scripts
-        // can reach types from packages the host already loaded (Markdig, Newtonsoft,
-        // Microsoft.Extensions.*, etc.). Mirrors ScriptCompilationService's TPA scan.
-        //
-        // Filter out assemblies whose Location file no longer exists on disk —
-        // collectible NodeType ALCs leave Assembly objects in AppDomain after a
-        // test deletes their cache directory; Roslyn would call
-        // MetadataReference.CreateFromFile(Location) and throw "Could not find a
-        // part of the path", which silently drops the ENTIRE references set
-        // (so even MeshWeaver.Layout becomes invisible — see kernel test cluster
-        // failure on shared-process CI runs).
-        foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
-        {
-            if (asm.IsDynamic) continue;
-            if (string.IsNullOrEmpty(asm.Location)) continue;
-            if (!File.Exists(asm.Location)) continue;
-            refs.Add(asm);
-        }
-
         // Modules that ship script templates (export, import, …) register their
         // own assembly via DI so it's guaranteed in the references set even if it
-        // hasn't been touched yet at AppDomain scan time. Each module pushes one
-        // <see cref="KernelScriptAssembly"/> singleton (or singletons) and we
-        // enumerate them here.
+        // hasn't been loaded yet when the shared snapshot was taken. Each module
+        // pushes one <see cref="KernelScriptAssembly"/> singleton (or singletons)
+        // and we enumerate them here.
         foreach (var contrib in publicHub.ServiceProvider
                      .GetServices<KernelScriptAssembly>())
         {
-            refs.Add(contrib.Assembly);
+            sessionAssemblies.Add(contrib.Assembly);
         }
 
         scriptOptions = ScriptOptions.Default
-            .WithReferences(refs)
+            .WithReferences(KernelScriptReferences.GetReferences(sessionAssemblies))
+            // 🚨 Required for the sharing to be complete: the compilation resolves
+            // the globals type's transitive closure via ResolveMissingAssembly —
+            // with the default resolver that re-materializes every assembly's
+            // native metadata PER SESSION (the other half of the leak).
+            .WithMetadataResolver(SharedScriptMetadataResolver.Instance)
             .WithImports(
                 "System",
                 "System.Linq",
@@ -451,7 +446,10 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         {
             var resolved = await resolver.ResolveAsync(refs, targetFramework: null, ct);
             scriptOptions = scriptOptions.AddReferences(
-                resolved.AssemblyPaths.Select(p => MetadataReference.CreateFromFile(p)));
+                resolved.AssemblyPaths
+                    .Select(KernelScriptReferences.GetOrCreateFromFile)
+                    .Where(r => r is not null)
+                    .Select(r => (MetadataReference)r!));
             InstallRuntimeProbe(resolved.ProbingDirectories);
             Logger.LogInformation("Resolved {Count} NuGet package(s) for interactive cell.", refs.Length);
         }

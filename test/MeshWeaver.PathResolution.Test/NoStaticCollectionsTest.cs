@@ -84,6 +84,11 @@ public class NoStaticCollectionsTest
 
         // ---- MEMO: process-global memoization, pure-by-key (Type/MethodInfo/content) ----
         ["MeshWeaver.Hosting.Security.AccessControlPipeline.AttributeCache"] = "MEMO: Type -> attribute",
+        // Assembly file path -> the ONE PortableExecutableReference (native metadata
+        // materialization) per process. Pure-by-key over immutable on-disk bytes; holds no
+        // Types/ALCs so it can pin nothing. Kills the ~200 MiB-per-kernel-session native
+        // metadata leak (Roslyn re-materialized ~350 metadata blocks per script session).
+        ["MeshWeaver.Kernel.Hub.KernelScriptReferences.Materialized"] = "MEMO: assembly path -> shared PE reference",
         ["MeshWeaver.Markdown.MarkdownExtensions.PipelineCache"] = "MEMO: (lang,style) -> pipeline",
         ["MeshWeaver.Messaging.MessageHubConfiguration._systemMessageCache"] = "MEMO: Type -> bool",
         // GenericCaches.{TypeCaches,MethodCaches} removed 2026-06-03 — the whole
