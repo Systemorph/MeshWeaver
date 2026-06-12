@@ -348,9 +348,17 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             createdNode.State.Should().Be(MeshNodeState.Transient);
             Output.WriteLine($"Transient node created: {createdNode.Path}");
 
-            // Step 2: Initialize the node's hub (required for sending CreateNodeRequest)
+            // Step 2: Initialize the node's hub (required for sending CreateNodeRequest).
+            // The node's type is the DYNAMIC ACME/Project/Todo NodeType: routing the
+            // first message to it triggers the first-build kickoff compile, and a cold
+            // Roslyn compile takes 12-20s locally / up to 60-90s on CI Linux runners —
+            // the default 10s Emit budget only holds when an earlier test in the class
+            // already warmed the NodeType (msg-trace-verified: the ping parks behind
+            // ResolveHubConfiguration until CompilationStatus settles). Budget like
+            // NodeTypeReleaseTest does for the same cold path.
             var nodeAddress = new Address(nodePath);
-            client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
+            client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress))
+                .Should().Within(90.Seconds()).Emit();
             Output.WriteLine("Node hub initialized.");
 
             // Step 3: Send CreateNodeRequest with State=Active (simulates Create button click)
@@ -369,22 +377,19 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
                 new CreateNodeRequest(nodeWithContent),
                 o => o.WithTarget(nodeAddress));
 
-            // Use IMeshService.Query to wait for the state change to be persisted
-            var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-            var query = MeshQueryRequest.FromQuery($"path:{nodePath}");
-
-            var confirmedNode = meshQuery
-                .Query<MeshNode>(query)
-                .SelectMany(change => change.Items)
-                .Should().Within(10.Seconds()).Match(node => node.State == MeshNodeState.Active);
-
-            Output.WriteLine($"Observed node state: {confirmedNode.State}");
-
-            // Verify success by checking persisted node state directly (CQRS-correct read)
-            var persistedNode = ReadNode(nodePath)
-                .Should().Within(60.Seconds()).Match(n => n is not null && n.State == MeshNodeState.Active);
+            // 🚨 Wait for confirmation on the LIVE node stream — the canonical
+            // wait-for-state primitive (CqrsAndContentAccess.md). Neither of the two
+            // previous shapes can wait correctly here (msg-trace-verified): a
+            // Query<MeshNode>(path:X) snapshot races the persistence commit and never
+            // re-emits for this path, and a one-shot ReadNode catches the owner a few
+            // ms after the confirm — BEFORE the post-commit change-feed catch-up —
+            // then completes, so `.Within(...)` has nothing left to wait on. The live
+            // stream re-emits when the owner's state catches up, exactly like the GUI
+            // data binding observes the confirmation.
+            var persistedNode = client.GetWorkspace().GetMeshNodeStream(nodePath)
+                .Should().Within(60.Seconds())
+                .Match(n => n is not null && n.State == MeshNodeState.Active);
             Output.WriteLine($"Persisted node state: {persistedNode?.State}");
-            persistedNode.Should().NotBeNull("Node should be persisted after CreateNodeRequest");
             persistedNode!.State.Should().Be(MeshNodeState.Active, "Node should be Active after confirmation");
 
             Output.WriteLine($"Node confirmed successfully: {persistedNode.Path}, State: {persistedNode.State}");
@@ -542,14 +547,13 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
             Output.WriteLine("Node hub initialized.");
 
-            // Step 3: Get the node from workspace to see what content was created
-            var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-            var query = MeshQueryRequest.FromQuery($"path:{nodePath}");
-
-            var workspaceNode = meshQuery
-                .Query<MeshNode>(query)
-                .SelectMany(change => change.Items)
-                .Should().Within(10.Seconds()).Emit();
+            // Step 3: Get the node from workspace to see what content was created.
+            // 🚨 Live node stream, not Query<MeshNode>(path:X): a query snapshot races
+            // the just-committed write and never re-emits for this path (CQRS —
+            // CqrsAndContentAccess.md), which is exactly how this step timed out on
+            // cold/solo runs. The stream re-emits as the owner's state settles.
+            var workspaceNode = client.GetWorkspace().GetMeshNodeStream(nodePath)
+                .Should().Within(30.Seconds()).Match(n => n is not null);
 
             Output.WriteLine($"Workspace node content type: {workspaceNode.Content?.GetType().Name ?? "null"}");
             if (workspaceNode.Content != null)
@@ -581,11 +585,10 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
                 new CreateNodeRequest(activeNode),
                 o => o.WithTarget(nodeAddress));
 
-            // Step 6: Wait for node to become Active
-            var confirmedNode = meshQuery
-                .Query<MeshNode>(query)
-                .SelectMany(change => change.Items)
-                .Should().Within(10.Seconds()).Match(node => node.State == MeshNodeState.Active);
+            // Step 6: Wait for node to become Active on the live stream (same
+            // rationale as step 3 — the canonical wait-for-state primitive).
+            var confirmedNode = client.GetWorkspace().GetMeshNodeStream(nodePath)
+                .Should().Within(60.Seconds()).Match(node => node is not null && node.State == MeshNodeState.Active);
 
             Output.WriteLine($"Node confirmed. Content type: {confirmedNode.Content?.GetType().Name ?? "null"}");
             if (confirmedNode.Content != null)

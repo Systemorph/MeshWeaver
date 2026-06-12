@@ -13,8 +13,14 @@ namespace MeshWeaver.BusinessRules;
 /// </summary>
 internal static class DefaultImplementationOfInterfacesExtensions
 {
-
-    private static readonly ConcurrentDictionary<MethodInfo, Func<object, object[], object>> NonVirtualInvocationThunks = new();
+    // 🚨 WEAK-keyed (ConditionalWeakTable), NOT a static ConcurrentDictionary:
+    // the MethodInfo / proxy Type keys here belong to DYNAMICALLY-COMPILED scope
+    // types living in collectible NodeType AssemblyLoadContexts. A strong static
+    // cache keyed by them pins the whole ALC process-wide — the exact leak class
+    // NoStaticState.md bans (same reason MemberInfoExtensions' attribute caches
+    // were deleted). CWT entries are ephemerons: thunk + override entries die
+    // with their key's ALC, nothing pins, no Clear() needed.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<MethodInfo, Func<object, object[], object>> NonVirtualInvocationThunks = new();
 
     /// <summary>
     ///   Performs a non-virtual (non-polymorphic) call to the given <paramref name="method"/>
@@ -38,7 +44,7 @@ internal static class DefaultImplementationOfInterfacesExtensions
         // to a properly typed argument list and then invokes the method using the IL `call`
         // instruction.
 
-        var thunk = NonVirtualInvocationThunks.GetOrAdd(method, static method =>
+        var thunk = NonVirtualInvocationThunks.GetValue(method, static method =>
         {
             var originalParameterTypes = method.GetParameterTypes();
             var n = originalParameterTypes.Length;
@@ -129,7 +135,10 @@ internal static class DefaultImplementationOfInterfacesExtensions
     }
 
 
-    private readonly static ConcurrentDictionary<(MethodInfo, Type), MethodInfo> MostSpecificOverrides = new();
+    // Weak-keyed on the proxy Type (the dynamic key — see the ALC-pin note on
+    // NonVirtualInvocationThunks); the per-type inner dictionary and its
+    // MethodInfo entries die together with the type's ALC.
+    private readonly static System.Runtime.CompilerServices.ConditionalWeakTable<Type, ConcurrentDictionary<MethodInfo, MethodInfo>> MostSpecificOverrides = new();
 
     /// <summary>
     ///   Attempts to find the most specific override for the given method <paramref name="declaration"/>
@@ -137,12 +146,12 @@ internal static class DefaultImplementationOfInterfacesExtensions
     /// </summary>
     internal static MethodInfo FindMostSpecificOverride(MethodInfo declaration, Type proxyType)
     {
-        return MostSpecificOverrides.GetOrAdd((declaration, proxyType), static key =>
+        return MostSpecificOverrides
+            .GetValue(proxyType, static _ => new ConcurrentDictionary<MethodInfo, MethodInfo>())
+            .GetOrAdd(declaration, _ =>
         {
             // This follows the rule specified in:
             // https://docs.microsoft.com/en-us/dotnet/csharp/language-reference/proposals/csharp-8.0/default-interface-methods#the-most-specific-override-rule.
-
-            var (declaration, proxyType) = key;
 
             var genericParameterCount = declaration.IsGenericMethod ? declaration.GetGenericArguments().Length : 0;
             var parameterTypes = declaration.GetParameterTypes().ToArray();
