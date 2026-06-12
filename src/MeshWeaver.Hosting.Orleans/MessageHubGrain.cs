@@ -41,6 +41,18 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     /// </summary>
     private readonly ReplaySubject<IMessageHub> _hubReadyRaw = new(bufferSize: 1);
 
+    /// <summary>
+    /// Budget for the FIRST MeshNode emission from the activation source (path
+    /// resolver merged with the mesh-node stream cache). Bounds only node
+    /// RESOLUTION — once the source emits, the Amb in OnActivateAsync commits to
+    /// it and this timer is unsubscribed, so slow-but-bounded enrichment (cold
+    /// compile slow path) is never cut short. A source that produces nothing in
+    /// this window means the node doesn't exist or no query provider claims its
+    /// partition; the activation faults (callers get a deterministic NACK via
+    /// RoutingGrain) and the grain deactivates for retry-on-next-access.
+    /// </summary>
+    private static readonly TimeSpan FirstNodeResolutionTimeout = TimeSpan.FromSeconds(30);
+
     private IObservable<IMessageHub> HubReady => _hubReadyRaw.Synchronize();
 
     /// <summary>Set to the built hub once activation succeeds; used by OnDeactivateAsync for disposal.</summary>
@@ -49,19 +61,19 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     private IDisposable? _activationSubscription;
 
     /// <summary>
-    /// Blocking activation: resolve the MeshNode (from the mesh-node cache or static
-    /// providers), let <see cref="IMeshNodeHubFactory"/> hydrate the assembly bytes via
-    /// <see cref="IAssemblyStore"/> and produce the HubConfiguration delegate, then
-    /// build the hub. Orleans waits on this completion before dispatching any messages
-    /// to the grain — so by the time <see cref="DeliverMessage"/> runs, <see cref="_hub"/>
-    /// is guaranteed non-null. No pending-queue, no fail-fast for "not ready", no
-    /// scheduler hop on the message path.
+    /// Non-blocking activation: resolve the MeshNode (from the mesh-node cache or
+    /// static providers), let <see cref="IMeshNodeHubFactory"/> hydrate the assembly
+    /// bytes via <see cref="IAssemblyStore"/> and produce the HubConfiguration
+    /// delegate, then build the hub and resolve <see cref="_hubReadyRaw"/>.
+    /// <see cref="DeliverMessage"/> callers park on that ReplaySubject until a
+    /// terminal outcome lands.
     ///
-    /// <para>Bounded by a 30 s timeout so a missing MeshNode (no static provider claims
-    /// it, no storage backend serves it) throws and Orleans deactivates the grain
-    /// rather than hanging. The activation source can complete-without-emitting too —
-    /// <c>FirstOrDefaultAsync</c> returns null in that case and we throw with a
-    /// "No MeshNode resolvable" message.</para>
+    /// <para>Node resolution is bounded by <see cref="FirstNodeResolutionTimeout"/>
+    /// (missing node / unclaimed partition → activation fault → deterministic NACK
+    /// + DeactivateOnIdle). Enrichment is bounded internally by the slow-path
+    /// budgets in <c>NodeTypeEnrichmentHelpers</c>. An enrichment that settles
+    /// WITHOUT a usable configuration activates a NACK fallback hub (see
+    /// <see cref="CompleteActivation"/>) — never a silent park.</para>
     /// </summary>
     public override Task OnActivateAsync(CancellationToken cancellationToken)
     {
@@ -110,21 +122,40 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         }
 
         // Non-blocking activation: subscribe to the source stream; when it emits a
-        // MeshNode with HubConfiguration, build the hub and feed it onto
-        // _hubReadyRaw. DeliverMessage callers subscribe to HubReady (Synchronized
-        // ReplaySubject) and post the moment the hub is available. Returning
-        // Task.CompletedTask here means Orleans hands us messages before activation
-        // finishes; the ReplaySubject queues those subscribers and emits to them in
-        // serialized order under the Synchronize gate (the grain is [Reentrant], so
-        // concurrent Subscribe calls would otherwise race).
-        _activationSubscription = sourceStream
+        // MeshNode, enrich it and build the hub — feeding it onto _hubReadyRaw.
+        // DeliverMessage callers subscribe to HubReady (Synchronized ReplaySubject)
+        // and post the moment the hub is available. Returning Task.CompletedTask
+        // here means Orleans hands us messages before activation finishes; the
+        // ReplaySubject queues those subscribers and emits to them in serialized
+        // order under the Synchronize gate (the grain is [Reentrant], so concurrent
+        // Subscribe calls would otherwise race).
+        //
+        // 🚨 Every terminal outcome MUST resolve _hubReadyRaw — there is no path
+        // that leaves it pending forever:
+        //  - enriched node (config or not) → CompleteActivation (null config builds
+        //    a NACK fallback hub; never silently filtered — the old
+        //    `.Where(HubConfiguration is not null)` swallowed null-config terminal
+        //    answers and parked every DeliverMessage forever: the atioz wedge).
+        //  - enrichment fault / no first emission within FirstNodeResolutionTimeout
+        //    → OnError (DeliverMessage answers Failed; RoutingGrain NACKs the
+        //    sender) + DeactivateOnIdle so the next access retries fresh.
+        //  - source completes empty → OnError + DeactivateOnIdle (below).
+        // The Amb timer bounds ONLY the wait for the FIRST source emission — once
+        // the source emits, Amb commits to it and the timer is unsubscribed, so a
+        // legitimately slow enrichment (cold compile, bounded internally by the
+        // slow-path budgets) is never cut short.
+        _activationSubscription = Observable.Amb(
+                sourceStream,
+                Observable.Timer(FirstNodeResolutionTimeout).SelectMany(_ =>
+                    Observable.Throw<MeshNode>(new TimeoutException(
+                        $"No MeshNode emitted for '{addressPath}' within {FirstNodeResolutionTimeout.TotalSeconds:0}s. " +
+                        "Either the node does not exist or no query provider claims its partition."))))
             .SelectMany(node =>
             {
                 logger.LogDebug("[ACTIVATE] Grain {StreamId}: source emitted node={Path} NodeType={NodeType} hasHubConfig={HasConfig}",
                     streamId, node.Path, node.NodeType ?? "(null)", node.HubConfiguration != null);
                 return ResolveHubConfigurationObservable(node);
             })
-            .Where(node => node.HubConfiguration is not null)
             .Take(1)
             .Subscribe(
                 node => CompleteActivation(streamId, address, grainScheduler, node, sourceStream),
@@ -132,6 +163,10 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 {
                     logger.LogError(ex, "[ACTIVATE] Grain {StreamId}: activation faulted for {Path}", streamId, addressPath);
                     _hubReadyRaw.OnError(ex);
+                    // Retry-on-next-access: without this the grain stays a parked
+                    // corpse answering Failed until idle collection; deactivating
+                    // lets the next caller re-run resolution from scratch.
+                    DeactivateOnIdle();
                 },
                 () =>
                 {
@@ -160,14 +195,29 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         {
             if (node.HubConfiguration is null)
             {
-                _hubReadyRaw.OnError(new ArgumentException(
-                    $"No hub configuration resolved for {node.Path} (NodeType: {node.NodeType})."));
-                return;
+                // Fallback error hub — the enrichment settled WITHOUT a usable
+                // configuration (broken/unregistered NodeType and no default node
+                // hub config). Activate a hub whose UnhandledMessageNack policy
+                // answers every message with a typed DeliveryFailure naming the
+                // node type, so callers fail fast instead of burning Orleans call
+                // timeouts against a hub that never comes. DeactivateOnIdle gives
+                // retry-on-next-access semantics once traffic drains: a later
+                // caller re-runs resolution and picks up a fixed NodeType.
+                var reason =
+                    $"No hub configuration resolved for {node.Path} (NodeType: {node.NodeType ?? "(null)"}). " +
+                    "The node type could not produce a hub configuration; check its registration and compilation state.";
+                logger.LogWarning("[ACTIVATE] Grain {StreamId}: {Reason} — activating NACK fallback hub", streamId, reason);
+                node = node with
+                {
+                    HubConfiguration = c => c.Set(
+                        new UnhandledMessageNack(reason, ErrorType.NotFound, node.NodeType))
+                };
+                DeactivateOnIdle();
             }
             var hub = meshHub.GetHostedHub(address, config =>
             {
                 config = config.WithOwnNodeStream(ownNodeStream);
-                return node.HubConfiguration(config)
+                return node.HubConfiguration!(config)
                     .WithTaskScheduler(grainScheduler)
                     .Set(new GrainKeepAliveCallback(() => DelayDeactivation(TimeSpan.FromMinutes(10))))
                     .Set(new GrainLongRunningOperationCallback(BeginLongRunningOperation));
@@ -182,6 +232,9 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         {
             logger.LogError(ex, "Grain {StreamId}: CompleteActivation failed", streamId);
             _hubReadyRaw.OnError(ex);
+            // Same retry-on-next-access semantics as the activation-fault path:
+            // a grain whose hub construction threw must not linger as a corpse.
+            DeactivateOnIdle();
         }
     }
 

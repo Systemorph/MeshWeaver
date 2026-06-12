@@ -53,6 +53,26 @@ public record DeliveryFailure(IMessageDelivery Delivery, string? Message = null)
         };
 }
 
+/// <summary>
+/// Hub-level "answer everything I can't handle with an error" policy — the
+/// fallback-hub contract for nodes whose NodeType cannot produce a real hub
+/// configuration (non-compiling source, unregistered type, enrichment fault).
+///
+/// <para>Set on the hub via <c>MessageHubConfiguration.Set(new UnhandledMessageNack(...))</c>.
+/// The hub still serves whatever its (default/overlay) configuration DOES handle
+/// — e.g. the error Overview layout, Ping — but every message that reaches the
+/// end of the handler chain unhandled is answered with a
+/// <see cref="DeliveryFailure"/> carrying <see cref="ErrorType"/> and
+/// <see cref="NodeTypePath"/>, instead of being silently
+/// <c>Ignored()</c>. Without this, a typed request to a broken-type hub arrives
+/// as RawJson (type not in the hub's registry), fails the <c>IRequest&lt;&gt;</c>
+/// check, and the caller parks forever — the atioz wedge of 2026-06-12.</para>
+/// </summary>
+public record UnhandledMessageNack(
+    string Reason,
+    ErrorType ErrorType = ErrorType.Failed,
+    string? NodeTypePath = null);
+
 public enum ErrorType
 {
     Unknown,

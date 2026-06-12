@@ -112,6 +112,13 @@ public sealed class MessageHub : IMessageHub
 
     private readonly ILogger logger;
     public MessageHubConfiguration Configuration { get; }
+
+    /// <summary>
+    /// Fallback-hub NACK policy (<see cref="UnhandledMessageNack"/>), resolved once
+    /// at construction — null on regular hubs, set on hubs standing in for a node
+    /// whose NodeType produced no usable configuration. See FinishDelivery.
+    /// </summary>
+    private readonly UnhandledMessageNack? unhandledNack;
     private readonly HostedHubsCollection hostedHubs;
     private readonly AccessService accessService;
 
@@ -255,6 +262,7 @@ public sealed class MessageHub : IMessageHub
         this.hostedHubs = hostedHubs;
         ServiceProvider = serviceProvider;
         Configuration = configuration;
+        unhandledNack = configuration.Get<UnhandledMessageNack>();
         parentAddress = parentHub?.Address;
         accessService = serviceProvider.GetRequiredService<AccessService>();
 
@@ -575,6 +583,38 @@ public sealed class MessageHub : IMessageHub
 
         if (delivery.State == MessageDeliveryState.Submitted)
         {
+            // Fallback-hub contract (UnhandledMessageNack policy): this hub stands in
+            // for a node whose NodeType couldn't produce a real configuration. Anything
+            // its (default/overlay) config didn't handle — including RawJson deliveries
+            // whose type the broken assembly would have registered — is answered with a
+            // typed DeliveryFailure naming the broken NodeType, never silently Ignored.
+            // Guard: never NACK a NACK (DeliveryFailure ping-pong).
+            var nackPolicy = unhandledNack;
+            if (nackPolicy is not null)
+            {
+                if (delivery.Message is DeliveryFailure)
+                    return delivery.Ignored();
+
+                logger.LogWarning(
+                    "Unhandled {MessageType} (ID: {MessageId}) in fallback hub {Address} - answering {ErrorType} NACK: {Reason}",
+                    delivery.Message.GetType().Name, delivery.Id, Address, nackPolicy.ErrorType, nackPolicy.Reason);
+                try
+                {
+                    Post(new DeliveryFailure(delivery)
+                    {
+                        ErrorType = nackPolicy.ErrorType,
+                        NodeTypePath = nackPolicy.NodeTypePath,
+                        Message = nackPolicy.Reason
+                    }, o => o.ResponseFor(delivery));
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Failed to post fallback NACK for {MessageType} (ID: {MessageId}) in {Address}",
+                        delivery.Message.GetType().Name, delivery.Id, Address);
+                }
+                return delivery.Failed(nackPolicy.Reason);
+            }
+
             // Check if this is a request that expects a response
             var messageType = delivery.Message.GetType();
             var isRequest = messageType.GetInterfaces()

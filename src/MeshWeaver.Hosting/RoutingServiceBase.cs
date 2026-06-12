@@ -79,8 +79,13 @@ namespace MeshWeaver.Hosting
 
             // 100% reactive composition. ResolvePath → GetNodeForRouting → RouteImpl
             // compose via SelectMany. Per Doc/Architecture/AsynchronousCalls.md.
+            // Resolution is bounded: a provider that never emits must not park the
+            // delivery in silence — the timeout errors this observable, and the
+            // caller's Subscribe error handler NACKs the sender with a
+            // DeliveryFailure (same contract as RoutingGrain's resolve path).
             return PathResolver.ResolvePath(address.ToString())
                 .Take(1)
+                .Timeout(TimeSpan.FromSeconds(30))
                 .SelectMany(resolution =>
                 {
                     entryLogger?.LogDebug("[ROUTE] resolved {Address} → prefix={Prefix} remainder={Remainder}",

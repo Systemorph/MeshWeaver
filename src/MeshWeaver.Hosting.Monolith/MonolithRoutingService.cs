@@ -118,9 +118,24 @@ internal class MonolithRoutingService(
                     address, enriched.HubConfiguration is not null);
 
                 if (enriched.HubConfiguration is null)
-                    throw new InvalidOperationException(
-                        $"No hub configuration for node '{enriched.Path}' (NodeType: {enriched.NodeType}). " +
-                        "Ensure the node type is registered via AddGraph() or has a HubConfiguration set.");
+                {
+                    // Fallback error hub — never throw here. A throw kills the route
+                    // observable, the delivery is lost, and the caller parks forever.
+                    // Instead activate a hub whose UnhandledMessageNack policy answers
+                    // every message with a typed DeliveryFailure naming the node type,
+                    // so callers fail fast and deterministically.
+                    var reason =
+                        $"No hub configuration for node '{enriched.Path}' (NodeType: {enriched.NodeType ?? "null"}). " +
+                        "Ensure the node type is registered via AddGraph() or has a HubConfiguration set.";
+                    logger.LogWarning(
+                        "[ROUTE-CREATE] {Reason} — activating NACK fallback hub for {Address}",
+                        reason, address);
+                    enriched = enriched with
+                    {
+                        HubConfiguration = c => c.Set(
+                            new UnhandledMessageNack(reason, ErrorType.NotFound, enriched.NodeType))
+                    };
+                }
 
                 // No explicit ALC scope. The dynamic assembly is already loaded
                 // into a per-release AssemblyLoadContext by
