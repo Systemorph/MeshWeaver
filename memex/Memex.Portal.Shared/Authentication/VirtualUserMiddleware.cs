@@ -83,8 +83,13 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
                 // leaking 10,000+ hubs until the portal wedged at 100% CPU
                 // (2026-06-12 atioz outage). A real visitor's node exists by
                 // their second request — before the Blazor circuit needs it.
+                //
+                // 100% reactive, NO await: EnsureVUserNode composes
+                // hub.Observe(CreateNodeRequest).Subscribe(...) internally — the
+                // request thread never waits on mesh work (AsynchronousCalls.md;
+                // an await here parks the request on the hub pump = deadlock).
                 if (!isNew)
-                    await EnsureVirtualUserNodeAsync(portalApp, virtualUserId);
+                    EnsureVirtualUserNode(portalApp, virtualUserId);
 
                 var portalIdentity = portalApp.Hub.Address.ToFullString();
                 var virtualContext = new AccessContext
@@ -136,7 +141,7 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
         return (newId, true);
     }
 
-    private async Task EnsureVirtualUserNodeAsync(PortalApplication portalApp, string virtualUserId)
+    private void EnsureVirtualUserNode(PortalApplication portalApp, string virtualUserId)
     {
         try
         {
