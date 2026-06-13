@@ -42,10 +42,11 @@ public class AgentFileParserTest
         node.Name.Should().Be("Test Agent");
         node.Icon.Should().Be("Bot");
         node.Category.Should().Be("Testing");
+        // Node-level metadata lives on the MeshNode, not duplicated on the content.
+        node.Description.Should().Be("A test agent");
 
         var agentConfig = node.Content.Should().BeOfType<AgentConfiguration>().Subject;
         agentConfig.Id.Should().Be("TestAgent");
-        agentConfig.DisplayName.Should().Be("Test Agent");
         agentConfig.Description.Should().Be("A test agent");
         agentConfig.Instructions.Should().Be("You are a test agent. Do testing things.");
     }
@@ -140,14 +141,15 @@ public class AgentFileParserTest
         // Act
         var node = await _parser.ParseAsync("/FullAgent.md", content, "FullAgent.md");
 
-        // Assert
+        // Assert — group + order are node-level (groupName maps onto the node's Category);
+        // only agent-specific behaviour is on the configuration content.
         node.Should().NotBeNull();
-        var agentConfig = node!.Content.Should().BeOfType<AgentConfiguration>().Subject;
-        agentConfig.GroupName.Should().Be("TestGroup");
+        node!.Category.Should().Be("TestGroup");
+        node.Order.Should().Be(10);
+        var agentConfig = node.Content.Should().BeOfType<AgentConfiguration>().Subject;
         agentConfig.IsDefault.Should().BeTrue();
         agentConfig.ExposedInNavigator.Should().BeTrue();
         agentConfig.ContextMatchPattern.Should().Be("address=like=*Test*");
-        agentConfig.Order.Should().Be(10);
     }
 
     [Fact(Timeout = 20000)]
@@ -258,15 +260,12 @@ public class AgentFileParserTest
     [Fact(Timeout = 20000)]
     public async Task SerializeAsync_AgentNode_ProducesValidMarkdown()
     {
-        // Arrange
+        // Arrange — node-level metadata on the node; only behaviour on the content.
         var agentConfig = new AgentConfiguration
         {
             Id = "TestAgent",
-            DisplayName = "Test Agent",
             Description = "A test agent",
             Instructions = "You are a test agent.",
-            Icon = "Bot",
-            GroupName = "Testing",
             IsDefault = false,
             ExposedInNavigator = true
         };
@@ -275,8 +274,9 @@ public class AgentFileParserTest
         {
             NodeType = "Agent",
             Name = "Test Agent",
+            Description = "A test agent",
             Icon = "Bot",
-            Category = "Agents",
+            Category = "Testing",
             Content = agentConfig
         };
 
@@ -300,7 +300,6 @@ public class AgentFileParserTest
         var agentConfig = new AgentConfiguration
         {
             Id = "Orchestrator",
-            DisplayName = "Orchestrator",
             Instructions = "Navigate requests.",
             Delegations =
             [
@@ -334,7 +333,6 @@ public class AgentFileParserTest
         var agentConfig = new AgentConfiguration
         {
             Id = "Orchestrator",
-            DisplayName = "Orchestrator",
             Instructions = "Navigate requests.",
             Delegations =
             [
@@ -498,13 +496,14 @@ public class AgentFileParserTest
         reparsed.Should().NotBeNull();
         reparsed!.NodeType.Should().Be("Agent");
         reparsed.Name.Should().Be("Complete Agent");
+        // Group + order are node-level (groupName round-trips through the node's Category).
+        reparsed.Category.Should().Be("TestGroup");
+        reparsed.Order.Should().Be(5);
 
         var agentConfig = reparsed.Content.Should().BeOfType<AgentConfiguration>().Subject;
-        agentConfig.GroupName.Should().Be("TestGroup");
         agentConfig.IsDefault.Should().BeTrue();
         agentConfig.ExposedInNavigator.Should().BeTrue();
         agentConfig.ContextMatchPattern.Should().Be("address=like=*Test*");
-        agentConfig.Order.Should().Be(5);
         agentConfig.Delegations.Should().HaveCount(1);
         agentConfig.Delegations![0].AgentPath.Should().Be("Helper");
         agentConfig.Instructions.Should().Contain("# Complete Agent Instructions");
