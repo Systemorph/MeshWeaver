@@ -140,18 +140,24 @@ Treat `content.body` as the front door. A strong one usually has:
 
 The catalog is the `Children` layout area: a mesh search in **namespace-tree** mode,
 scoped to the Space's own partition, that lets you drill into sub-namespaces with
-lazy-loaded counts and a search box. The Space Overview already renders it *below*
-your body automatically, but you can place it anywhere in the body by embedding it:
+lazy-loaded counts and a search box. It is **not** hard-wired into the page — it lives
+in the body as a **deletable `@@`-embed** (the default welcome page ships one), so the
+space owner controls whether and where it appears. Delete the embed line to drop the
+catalog; move it to reposition it. Embed it with:
 
 ```markdown
 @@/Acme/area/Children
 ```
 
-Use the **absolute** form (leading `/` + full Space path). The relative
-`@@("area:Children")` only resolves when the renderer has the node-path in context,
-which is not guaranteed for a Space body — the absolute form always resolves because
-it carries its own address. `@@` (double-at) renders the area inline; a single `@`
-would render a hyperlink instead.
+In an **authored body**, use the **absolute** form (leading `/` + full Space path): it
+resolves regardless of render context because it carries its own address. The default
+welcome page (shared by every Space) uses the relative `@@("area:Children")`, which
+resolves against the Space's own path at render time. `@@` (double-at) renders the area
+inline; a single `@` would render a hyperlink instead.
+
+> The Space's body itself is read from `MeshNode.Content` (the `Space` record) — there
+> is no separate `Space` data stream. The Overview reads the node's content directly,
+> which is why setting `content.body` / `content.logo` is all you need.
 
 ### Setting it all via MCP
 
