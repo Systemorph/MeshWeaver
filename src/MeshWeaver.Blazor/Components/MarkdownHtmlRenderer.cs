@@ -107,7 +107,11 @@ public class MarkdownHtmlRenderer
                 case { Name: "div" } when node.GetAttributeValue("class", "").Contains("mermaid"):
                     builder.OpenComponent<Mermaid>(1);
                     builder.AddAttribute(2, nameof(Mermaid.Mode), _mode);
-                    builder.AddAttribute(3, nameof(Mermaid.Diagram), node.InnerHtml);
+                    // DeEntitize(InnerText), not InnerHtml: the diagram body is HTML-escaped
+                    // at render time (ExecutableCodeBlockRenderer) so '<' in stereotypes /
+                    // inheritance survives. The Mermaid component sets pre.textContent, which
+                    // needs the decoded literal source — entities must be resolved here.
+                    builder.AddAttribute(3, nameof(Mermaid.Diagram), HtmlEntity.DeEntitize(node.InnerText));
                     builder.CloseComponent();
                     break;
                 case { Name: "pre" } when node.ChildNodes.Any(n => n.Name == "code"):

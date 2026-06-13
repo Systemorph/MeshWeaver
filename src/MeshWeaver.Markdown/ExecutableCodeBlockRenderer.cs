@@ -51,9 +51,14 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
         {
             if (fenced.Info == "mermaid")
             {
+                // HTML-escape the diagram source: Mermaid class diagrams contain '<'
+                // (stereotypes `<<enumeration>>`, inheritance `<|--`). Written raw, the
+                // browser/HtmlAgilityPack parse those as live tags and the diagram text
+                // is destroyed before Mermaid reads it. Escaped, it round-trips through
+                // textContent/InnerText decoding back to the literal source.
                 renderer.Write("<div class='mermaid'>");
                 renderer.EnsureLine();
-                renderer.Write(fenced.Lines.ToString());
+                renderer.WriteEscape(fenced.Lines.ToString());
                 renderer.EnsureLine();
                 renderer.Write("</div>");
             }
