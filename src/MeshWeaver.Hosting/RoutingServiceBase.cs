@@ -4,6 +4,7 @@ using MeshWeaver.Kernel;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -56,7 +57,12 @@ namespace MeshWeaver.Hosting
                 _ => { },
                 ex =>
                 {
-                    if (delivery.Message is DeliveryFailure || Mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+                    // [CanBeIgnored] messages (Shutdown/Dispose/HeartBeat) have no awaiting
+                    // sender — a DeliveryFailure for them is meaningless and feeds the disposal
+                    // ping-pong storm (see ReportFailure). Same rule as the Ignored-handler path.
+                    if (delivery.Message is DeliveryFailure
+                        || delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>()
+                        || Mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
                         return;
                     Mesh.Post(new DeliveryFailure(delivery)
                     {
@@ -144,7 +150,9 @@ namespace MeshWeaver.Hosting
                 "RouteMessage: NotFound for {MessageType} → {Address}. {FailureMessage}",
                 delivery.Message.GetType().Name, originalAddress, failureMessage);
 
-            if (delivery.Message is not DeliveryFailure && Mesh.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+            if (delivery.Message is not DeliveryFailure
+                && !delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>()
+                && Mesh.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
             {
                 Mesh.Post(
                     new DeliveryFailure(delivery)

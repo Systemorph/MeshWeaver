@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using MeshWeaver.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -83,6 +84,13 @@ internal class HierarchicalRouting
 
 
         var isDisposing = hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs;
+        // [CanBeIgnored] messages (Shutdown/Dispose/HeartBeat) have no sender awaiting a
+        // response, so a "no route" DeliveryFailure for them is meaningless AND it feeds the
+        // DeliveryFailure⟷ShutdownRequest disposal ping-pong storm (see ReportFailure in
+        // MessageService): a ShutdownRequest routed to an already-gone hub returns NotFound,
+        // the DeliveryFailure routes back, and the pair spins until quiesce.
+        var isFireAndForgetControl =
+            delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>();
         if (delivery.Target.Host != null)
         {
             var hosted = delivery.Target;
@@ -113,7 +121,7 @@ internal class HierarchicalRouting
                     : $"No route found for host {hosted}. Last tried in {hub.Address}";
 
                 logger.LogDebug(errorMessage);
-                if (!isDisposing)
+                if (!isDisposing && !isFireAndForgetControl)
                 {
                     hub.Post(
                         new DeliveryFailure(delivery)
@@ -153,7 +161,7 @@ internal class HierarchicalRouting
                 : $"No route found for host {delivery.Target}. Last tried in {hub.Address}";
 
             logger.LogDebug(errorMessage);
-            if (!isDisposing)
+            if (!isDisposing && !isFireAndForgetControl)
             {
                 hub.Post(
                     new DeliveryFailure(delivery)

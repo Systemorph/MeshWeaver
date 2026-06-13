@@ -228,8 +228,20 @@ public class MessageService : IMessageService
         if (hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
             return delivery;
 
-        // Prevent recursive failure reporting - don't report failures for DeliveryFailure messages
-        if (delivery.Message is not DeliveryFailure)
+        // Don't post a DeliveryFailure for messages NO sender is awaiting a response on.
+        //  - DeliveryFailure itself: prevents the classic recursive failure cascade.
+        //  - [CanBeIgnored] messages (Shutdown/Dispose/HeartBeat): fire-and-forget lifecycle
+        //    control traffic — there is no requester whose hub.Observe(...) is waiting, so a
+        //    DeliveryFailure is meaningless AND it FEEDS A STORM: during a hub's Quiescing
+        //    phase these get Ignored / undeliverable, each one produces a DeliveryFailure,
+        //    which is itself routed and undeliverable to the disposing peer, and the pair
+        //    ping-pongs at ~1ms/cycle (15k+ iterations/hub — the 465k-DeliveryFailure storm a
+        //    denied-subscription teardown produced in the AccessControl/HubDataSource security
+        //    tests, which under the 2-core CI runner saturated the pipeline and timed the
+        //    project out). Real requests still fail closed; only response-less control traffic
+        //    is suppressed — the same rule the Ignored-handler path already applies below.
+        if (delivery.Message is not DeliveryFailure
+            && !delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>())
         {
             try
             {
@@ -244,7 +256,7 @@ public class MessageService : IMessageService
         }
         else
         {
-            logger.LogWarning("Suppressing recursive DeliveryFailure reporting for {MessageType} (ID: {MessageId}) in {Address}",
+            logger.LogWarning("Suppressing DeliveryFailure reporting for response-less control message {MessageType} (ID: {MessageId}) in {Address}",
                 delivery.Message.GetType().Name, delivery.Id, Address);
         }
 
