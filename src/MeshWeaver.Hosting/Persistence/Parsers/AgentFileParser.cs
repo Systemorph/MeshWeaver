@@ -98,16 +98,15 @@ public class AgentFileParser : IFileFormatParser
         var fileInfo = new FileInfo(filePath);
         var lastModified = new DateTimeOffset(fileInfo.LastWriteTimeUtc, TimeSpan.Zero);
 
-        // Build AgentConfiguration from frontmatter + markdown body
+        // Build AgentConfiguration from frontmatter + markdown body. Node-level metadata
+        // (name, description, icon, group, order) lives on the MeshNode below — NOT
+        // duplicated on the content. See AgentConfiguration's class remarks.
         var agentConfig = new AgentConfiguration
         {
             Id = id,
-            DisplayName = frontMatter.Name ?? frontMatter.DisplayName ?? id,
             Description = frontMatter.Description,
             Instructions = string.IsNullOrWhiteSpace(markdownContent) ? null : markdownContent.Trim(),
-            Icon = frontMatter.Icon,
             CustomIconSvg = frontMatter.CustomIconSvg,
-            GroupName = frontMatter.GroupName,
             IsDefault = frontMatter.IsDefault,
             ExposedInNavigator = frontMatter.ExposedInNavigator,
             Delegations = frontMatter.Delegations?.Select(d => new AgentDelegation
@@ -122,7 +121,6 @@ public class AgentFileParser : IFileFormatParser
             }).ToList(),
             Plugins = frontMatter.Plugins?.Select(AgentPluginReference.Parse).ToList(),
             ContextMatchPattern = frontMatter.ContextMatchPattern,
-            Order = frontMatter.Order,
             ModelTier = frontMatter.ModelTier
         };
 
@@ -130,8 +128,10 @@ public class AgentFileParser : IFileFormatParser
         {
             NodeType = AgentNodeType,
             Name = frontMatter.Name ?? frontMatter.DisplayName ?? id,
-            Category = frontMatter.Category ?? "Agents",
+            Description = frontMatter.Description,
+            Category = frontMatter.GroupName ?? frontMatter.Category ?? "Agents",
             Icon = frontMatter.Icon ?? DefaultAgentIcon,
+            Order = frontMatter.Order,
             State = ParseState(frontMatter.State),
             LastModified = lastModified,
             Content = agentConfig
@@ -152,23 +152,25 @@ public class AgentFileParser : IFileFormatParser
             _ => null
         };
 
-        // Build YAML front matter from node properties and AgentConfiguration
+        // Build YAML front matter. Node-level metadata (name, description, group, icon,
+        // order) comes from the MeshNode — the single source of truth — and only
+        // agent-specific behaviour comes from the AgentConfiguration content. The node's
+        // Category round-trips through the front-matter `groupName` key (the parser reads
+        // groupName into Category).
         var frontMatter = new AgentFrontMatter
         {
             NodeType = AgentNodeType,
             Name = node.Name != node.Id ? node.Name : null,
-            Category = node.Category != "Agents" ? node.Category : null,
+            Description = node.Description,
+            GroupName = node.Category is { Length: > 0 } and not "Agents" ? node.Category : null,
             Icon = node.Icon != DefaultAgentIcon ? node.Icon : null,
+            Order = node.Order ?? 0,
             State = node.State != MeshNodeState.Active ? node.State.ToString() : null,
 
             // AgentConfiguration-specific properties
-            Description = agentConfig?.Description,
-            DisplayName = agentConfig?.DisplayName != node.Name ? agentConfig?.DisplayName : null,
-            GroupName = agentConfig?.GroupName,
             IsDefault = agentConfig?.IsDefault ?? false,
             ExposedInNavigator = agentConfig?.ExposedInNavigator ?? false,
             ContextMatchPattern = agentConfig?.ContextMatchPattern,
-            Order = agentConfig?.Order ?? 0,
             CustomIconSvg = agentConfig?.CustomIconSvg,
             Delegations = agentConfig?.Delegations?.Select(d => new DelegationFrontMatter
             {
@@ -237,19 +239,18 @@ public class AgentFileParser : IFileFormatParser
             // Extract required Id
             var id = ExtractString(element, "id") ?? "";
 
+            // Node-level fields (displayName/icon/groupName/order) are no longer part of
+            // AgentConfiguration — they live on the MeshNode. Only agent-specific fields
+            // are extracted here.
             return new AgentConfiguration
             {
                 Id = id,
-                DisplayName = ExtractString(element, "displayName"),
                 Description = ExtractString(element, "description"),
                 Instructions = ExtractString(element, "instructions"),
-                Icon = ExtractString(element, "icon") ?? ExtractString(element, "iconName"),
                 CustomIconSvg = ExtractString(element, "customIconSvg"),
-                GroupName = ExtractString(element, "groupName"),
                 IsDefault = ExtractBool(element, "isDefault"),
                 ExposedInNavigator = ExtractBool(element, "exposedInNavigator"),
                 ContextMatchPattern = ExtractString(element, "contextMatchPattern"),
-                Order = ExtractInt(element, "order"),
                 ModelTier = ExtractString(element, "modelTier"),
                 Delegations = ExtractDelegations(element),
                 Handoffs = ExtractHandoffs(element),
@@ -276,15 +277,6 @@ public class AgentFileParser : IFileFormatParser
             return prop.ValueKind == System.Text.Json.JsonValueKind.True;
         }
         return false;
-    }
-
-    private static int ExtractInt(System.Text.Json.JsonElement element, string propertyName)
-    {
-        if (element.TryGetProperty(propertyName, out var prop) && prop.ValueKind == System.Text.Json.JsonValueKind.Number)
-        {
-            return prop.GetInt32();
-        }
-        return 0;
     }
 
     private static List<AgentDelegation>? ExtractDelegations(System.Text.Json.JsonElement element)

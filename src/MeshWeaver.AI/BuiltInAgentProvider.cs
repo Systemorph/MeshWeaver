@@ -90,14 +90,15 @@ public class BuiltInAgentProvider : IStaticNodeProvider
                             - "Fix the login bug" -> Name: Fix Login Bug / Id: FixLoginBug
                             """,
             ExposedInNavigator = false,
-            Order = 999,
             ModelTier = "utility",
         };
 
+        // Order lives on the node (sorts last in the picker); not duplicated on the config.
         return new MeshNode(ThreadNamerId, "Agent")
         {
             Name = "Thread Namer",
             NodeType = "Agent",
+            Order = 999,
             Content = config
         };
     }
@@ -158,12 +159,9 @@ public class BuiltInAgentProvider : IStaticNodeProvider
         var agentConfig = new AgentConfiguration
         {
             Id = id,
-            DisplayName = frontMatter.Name ?? frontMatter.DisplayName ?? id,
             Description = frontMatter.Description,
             Instructions = string.IsNullOrWhiteSpace(markdownBody) ? null : markdownBody.Trim(),
-            Icon = frontMatter.Icon,
             CustomIconSvg = frontMatter.CustomIconSvg,
-            GroupName = frontMatter.GroupName ?? Harnesses.MeshWeaver,
             IsDefault = frontMatter.IsDefault,
             ExposedInNavigator = frontMatter.ExposedInNavigator,
             Delegations = frontMatter.Delegations?.Select(d => new AgentDelegation
@@ -178,16 +176,21 @@ public class BuiltInAgentProvider : IStaticNodeProvider
             }).ToList(),
             Plugins = frontMatter.Plugins?.Select(AgentPluginReference.Parse).ToList(),
             ContextMatchPattern = frontMatter.ContextMatchPattern,
-            Order = frontMatter.Order,
             ModelTier = frontMatter.ModelTier
         };
 
+        // Node-level metadata (name, description, icon, group, order) lives on the
+        // MeshNode — NOT duplicated on the AgentConfiguration content. The picker groups
+        // by Category, so the harness group (frontmatter groupName, default MeshWeaver)
+        // maps onto the node's Category.
         return new MeshNode(id, ns)
         {
             NodeType = "Agent",
             Name = frontMatter.Name ?? frontMatter.DisplayName ?? id,
-            Category = frontMatter.Category ?? "Agents",
+            Description = frontMatter.Description,
+            Category = frontMatter.GroupName ?? frontMatter.Category ?? Harnesses.MeshWeaver,
             Icon = frontMatter.Icon ?? "Bot",
+            Order = frontMatter.Order,
             Content = agentConfig
         };
     }

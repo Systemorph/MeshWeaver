@@ -6,23 +6,31 @@ namespace MeshWeaver.AI;
 /// Represents an agent configuration stored in the graph.
 /// Agents are stored as MeshNodes with nodeType="Agent" and Content=AgentConfiguration.
 /// Supports hierarchical resolution - agents at lower namespaces override parent namespaces.
+///
+/// <para>🚨 Node-level metadata is NOT duplicated here. The display name, description,
+/// icon, group, and ordering all live on the owning <see cref="MeshWeaver.Mesh.MeshNode"/>
+/// (<c>Name</c>, <c>Description</c>, <c>Icon</c>, <c>Category</c>, <c>Order</c>) and are
+/// edited through the standard node settings — never replicated on the agent content.
+/// This record carries only what's specific to the agent's behaviour. (<see cref="Id"/>
+/// is the runtime identity key and equals the owning node's <c>Id</c> by construction;
+/// <see cref="Description"/> is kept because the agent runtime feeds it to the model as
+/// delegation metadata where only the detached configuration is in hand.)</para>
 /// </summary>
 public record AgentConfiguration
 {
     /// <summary>
-    /// Unique identifier for this agent.
+    /// Unique identifier for this agent. Equals the owning <see cref="MeshWeaver.Mesh.MeshNode.Id"/>
+    /// by construction; used as the runtime identity key for agent creation, delegation
+    /// resolution, and the created-agents map. Display reads the node's Id, not this field.
     /// </summary>
     [Key]
     public required string Id { get; init; }
 
     /// <summary>
-    /// Display name for UI (defaults to Id if not set).
-    /// </summary>
-    public string? DisplayName { get; init; }
-
-    /// <summary>
-    /// Description of what this agent does.
-    /// Used for delegation decisions and UI display.
+    /// Description of what this agent does. Mirrors the owning node's
+    /// <see cref="MeshWeaver.Mesh.MeshNode.Description"/>; kept on the configuration because
+    /// the agent runtime feeds it to the model (delegation/hand-off catalogue) where only
+    /// the detached <see cref="AgentConfiguration"/> is available. UI/picker read the node.
     /// </summary>
     public string? Description { get; init; }
 
@@ -33,19 +41,9 @@ public record AgentConfiguration
     public string? Instructions { get; init; }
 
     /// <summary>
-    /// Icon URL or identifier for the agent.
-    /// </summary>
-    public string? Icon { get; init; }
-
-    /// <summary>
     /// Custom SVG path for icon (optional override).
     /// </summary>
     public string? CustomIconSvg { get; init; }
-
-    /// <summary>
-    /// Group name for UI categorization (e.g., "Insurance", "Todo").
-    /// </summary>
-    public string? GroupName { get; init; }
 
     /// <summary>
     /// Whether this is the default/entry-point agent.
@@ -77,12 +75,6 @@ public record AgentConfiguration
     /// Example: "address.type==pricing" or "address.path=like=*Todo*"
     /// </summary>
     public string? ContextMatchPattern { get; init; }
-
-    /// <summary>
-    /// Display order for sorting agents in the UI.
-    /// Lower values appear first.
-    /// </summary>
-    public int Order { get; init; }
 
     /// <summary>
     /// OPTIONAL hint: abstract model tier this agent prefers — "heavy", "standard", "light",

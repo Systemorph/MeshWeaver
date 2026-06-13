@@ -311,14 +311,16 @@ public static class AgentPickerProjection
             _ => null,
         };
         if (config == null) return null;
+        // Display metadata is sourced from the MeshNode (the single source of truth);
+        // only agent-specific bits (CustomIconSvg, the config itself) come from Content.
         return new AgentDisplayInfo
         {
-            Name = config.DisplayName ?? config.Id,
+            Name = node.Name ?? config.Id,
             Path = node.Path,
-            Description = config.Description ?? "",
-            GroupName = config.GroupName,
-            Order = config.Order,
-            Icon = config.Icon,
+            Description = node.Description ?? config.Description ?? "",
+            GroupName = node.Category,
+            Order = node.Order ?? 0,
+            Icon = node.Icon,
             CustomIconSvg = config.CustomIconSvg,
             AgentConfiguration = config,
         };

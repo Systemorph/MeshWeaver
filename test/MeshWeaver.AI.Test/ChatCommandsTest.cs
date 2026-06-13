@@ -241,7 +241,7 @@ public class ChatCommandsTest
             Name = name,
             Path = $"Agent/{name}",
             Description = $"Stub agent {name}",
-            AgentConfiguration = new AgentConfiguration { Id = name, DisplayName = name }
+            AgentConfiguration = new AgentConfiguration { Id = name }
         };
         var agents = new Dictionary<string, AgentDisplayInfo>(System.StringComparer.OrdinalIgnoreCase)
         {

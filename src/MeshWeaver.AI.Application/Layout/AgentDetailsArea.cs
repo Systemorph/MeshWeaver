@@ -68,8 +68,10 @@ public static class AgentDetailsArea
     {
         var markdown = new StringBuilder();
 
-        // Title and Description
-        var displayName = agent.DisplayName ?? agent.Id.Wordify();
+        // Title and Description — display name now lives on the MeshNode; this
+        // delegation-graph view works off detached configs, so it falls back to the
+        // wordified id (the primary agent page renders the node's Name).
+        var displayName = agent.Id.Wordify();
         markdown.AppendLine($"# {displayName}");
         markdown.AppendLine();
         if (!string.IsNullOrEmpty(agent.Description))
@@ -160,7 +162,7 @@ public static class AgentDetailsArea
                 var targetId = d.AgentPath.Split('/').Last();
                 var targetAgent = agentsById.GetValueOrDefault(targetId);
                 var agentLink = targetAgent != null
-                    ? $"<a href='{host.Hub.Address}/AgentDetails/{targetId}' style='color: #0171ff; text-decoration: none; font-weight: 600;'>{targetAgent.DisplayName ?? targetId}</a>"
+                    ? $"<a href='{host.Hub.Address}/AgentDetails/{targetId}' style='color: #0171ff; text-decoration: none; font-weight: 600;'>{targetId.Wordify()}</a>"
                     : $"<strong style='color: #0171ff;'>{targetId}</strong>";
 
                 return $"<li style='margin: 8px 0; padding: 12px; background: var(--code-block-background-color, #f6f8fa); border-left: 4px solid #0171ff; border-radius: 4px; border: 1px solid var(--code-block-border-color, #e1e4e8);'>" +
@@ -195,7 +197,7 @@ public static class AgentDetailsArea
             var delegationsFromHtml = string.Join("", delegationsFromList.Select(item =>
             {
                 var (sourceAgent, reason) = item;
-                var agentLink = $"<a href='{host.Hub.Address}/AgentDetails/{sourceAgent.Id}' style='color: #6f42c1; text-decoration: none; font-weight: 600;'>{sourceAgent.DisplayName ?? sourceAgent.Id.Wordify()}</a>";
+                var agentLink = $"<a href='{host.Hub.Address}/AgentDetails/{sourceAgent.Id}' style='color: #6f42c1; text-decoration: none; font-weight: 600;'>{sourceAgent.Id.Wordify()}</a>";
 
                 return $"<li style='margin: 8px 0; padding: 12px; background: var(--code-block-background-color, #f6f8fa); border-left: 4px solid #6f42c1; border-radius: 4px; border: 1px solid var(--code-block-border-color, #e1e4e8);'>" +
                        $"<div style='margin-bottom: 4px;'>{agentLink}</div>" +

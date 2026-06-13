@@ -30,7 +30,8 @@ public static class AgentOrderingHelper
             .Select(agents => (IReadOnlyList<AgentDisplayInfo>)OrderByRelevance(agents, contextPath, nodeTypePath));
 
     /// <summary>
-    /// Orders agents by Order then by DisplayName.
+    /// Orders agents by Order then by display name (both sourced from the MeshNode
+    /// via <see cref="AgentDisplayInfo"/>).
     /// </summary>
     public static IReadOnlyList<AgentDisplayInfo> OrderByRelevance(
         IEnumerable<AgentDisplayInfo> agents,
@@ -39,7 +40,7 @@ public static class AgentOrderingHelper
     {
         return agents
             .OrderBy(a => a.Order)
-            .ThenBy(a => a.AgentConfiguration.DisplayName ?? a.Name)
+            .ThenBy(a => a.Name)
             .ToImmutableList();
     }
 }
