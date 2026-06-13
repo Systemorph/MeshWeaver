@@ -182,6 +182,33 @@ Controls.Splitter
 
 ---
 
+# Scrolling Panes
+
+A common goal is a splitter whose panes each scroll **independently** — a side menu that scrolls on its own while the content area scrolls on its own — with the splitter filling the page rather than growing past it.
+
+The instinct is to set `height: 100%` on the pane content. **Don't.** A splitter pane gets its height from flex *stretch*, and a flex-stretched height is *indefinite* for the purpose of resolving a child's percentage height. So `height: 100%` on the content collapses to its natural (content) height, and the pane's `overflow: hidden` then clips it — the content is cut off with nothing to scroll.
+
+Instead, make the pane content fill via the flex chain and scroll within it:
+
+```css
+/* The splitter fills its (definite-height, flex-column) parent. */
+.my-splitter { flex: 1 1 auto; min-height: 0; }
+
+/* Each pane becomes a definite-height flex column. */
+.my-splitter .fluent-multi-splitter-pane {
+    display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+}
+
+/* The pane's content FILLS via flex (not height:100%) and scrolls within. */
+.my-splitter .fluent-multi-splitter-pane > div {
+    flex: 1 1 auto; min-height: 0; overflow-y: auto;
+}
+```
+
+The rule of thumb: in a flex column, use `flex: 1 1 auto; min-height: 0` to fill, never `height: 100%`. The framework's Settings and node-type shell pages use exactly this pattern — see [The Node Settings Page](/Doc/GUI/SettingsPage).
+
+---
+
 # Configuration Reference
 
 ## Splitter Container
@@ -235,3 +262,4 @@ These properties are set internally when you call the fluent methods above. They
 - [Container Control](../../ContainerControl) — Overview of all container controls
 - [Stack Control](../Stack) — Simple vertical and horizontal stacking
 - [Layout Grid](../../LayoutGrid) — Responsive grid-based layouts
+- [The Node Settings Page](/Doc/GUI/SettingsPage) — a real two-pane, independently-scrolling splitter with a collapsible menu

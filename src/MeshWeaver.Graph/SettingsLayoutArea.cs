@@ -138,7 +138,7 @@ public static class SettingsLayoutArea
     /// <see cref="SettingsMenuItemDefinition.Group"/>, and <see cref="SettingsMenuItemDefinition.Keywords"/>
     /// (the terms describing the fields inside each section). Empty query returns all items unchanged.
     /// </summary>
-    private static IReadOnlyList<SettingsMenuItemDefinition> FilterMenuItems(
+    internal static IReadOnlyList<SettingsMenuItemDefinition> FilterMenuItems(
         IReadOnlyList<SettingsMenuItemDefinition> items, string? query)
     {
         if (string.IsNullOrWhiteSpace(query))
