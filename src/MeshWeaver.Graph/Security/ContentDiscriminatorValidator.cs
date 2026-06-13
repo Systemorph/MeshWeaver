@@ -86,6 +86,23 @@ public sealed class ContentDiscriminatorValidator : INodeValidator
         if (Resolves(discriminator))
             return Observable.Return(NodeValidationResult.Valid());
 
+        // Round-trip of already-stored content is NOT a new write of untypeable
+        // content (this guard's contract is "only NEW writes are refused"): a
+        // full-node UPDATE carrying the SAME unresolvable discriminator the existing
+        // node already holds is preserving what is on disk, not introducing garbage.
+        // This is the normal shape for a custom NodeType that registers its content
+        // type on its per-node hub only (an in-process HubConfiguration delegate, e.g.
+        // the test's TestProduct, or a compiled Space type): a cross-hub READ on the
+        // validating (root) hub degrades the content to a JsonElement carrying that
+        // discriminator, and writing the whole node back (the MCP Patch/Update shape)
+        // must not be rejected. NEW garbage is still caught: a CREATE has no existing
+        // node, and an UPDATE whose discriminator CHANGED falls through to the check
+        // below.
+        if (context.Operation == NodeOperation.Update
+            && TryGetContentDiscriminator(context.ExistingNode?.Content, out var existingDiscriminator)
+            && string.Equals(existingDiscriminator, discriminator, StringComparison.Ordinal))
+            return Observable.Return(NodeValidationResult.Valid());
+
         // Unresolvable here — only definitive for BUILT-IN NodeTypes (see class doc).
         // A dynamic NodeType's compiled content types live on its per-node hub only.
         if (string.IsNullOrEmpty(node.NodeType))
@@ -117,6 +134,23 @@ public sealed class ContentDiscriminatorValidator : INodeValidator
             $"persist as an untyped blob that renders empty and cannot be edited. Use the NodeType's declared " +
             $"content shape (check '@{node.NodeType}/schema/'); for Markdown nodes the content is " +
             "{\"$type\": \"MarkdownContent\", \"content\": \"<markdown text>\"}."));
+    }
+
+    /// <summary>
+    /// Extracts the <c>$type</c> discriminator from a node's <see cref="MeshNode.Content"/>
+    /// when it is a raw JSON object — the degraded shape a cross-hub read produces for a
+    /// content type the reading hub's registry cannot resolve. Typed/in-process content and
+    /// non-object JSON have no discriminator to compare and return <c>false</c>.
+    /// </summary>
+    private static bool TryGetContentDiscriminator(object? content, out string? discriminator)
+    {
+        discriminator = null;
+        if (content is not JsonElement je || je.ValueKind != JsonValueKind.Object)
+            return false;
+        if (!je.TryGetProperty("$type", out var typeProp) || typeProp.ValueKind != JsonValueKind.String)
+            return false;
+        discriminator = typeProp.GetString();
+        return !string.IsNullOrEmpty(discriminator);
     }
 
     /// <summary>
