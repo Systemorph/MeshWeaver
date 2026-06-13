@@ -117,8 +117,14 @@ public class Workspace : IWorkspace
         foreach (var key in _remoteStreamCache.Keys)
         {
             if (string.Equals(key.Item1.ToString(), path, StringComparison.OrdinalIgnoreCase)
-                && _remoteStreamCache.TryRemove(key, out _))
+                && _remoteStreamCache.TryRemove(key, out var removed))
             {
+                // Keep ownership of the evicted stream so DisposeAsync still tears
+                // down its `sync/` hub — dropping it here orphaned the hub (never
+                // disposed → TimerQueue-pinned forever). Only a materialised stream
+                // has a hub to dispose.
+                if (removed.IsValueCreated)
+                    _evictedRemoteStreams.Add(removed.Value);
                 _logger.LogDebug(
                     "Evicted remote stream cache for {Address} after change event.",
                     key.Item1);
@@ -259,6 +265,15 @@ public class Workspace : IWorkspace
     // `[0, 19, 22, 19, 22, 46]` — every patch delivered twice via the
     // orphaned stream.
     private readonly ConcurrentDictionary<(Address, WorkspaceReference), Lazy<ISynchronizationStream>> _remoteStreamCache = new();
+
+    // Streams that EvictForPath removed from the cache but did NOT dispose (their
+    // live subscribers keep them attached). The workspace still OWNS their lifetime —
+    // each carries a per-stream `sync/` hub whose 5s stale-callback scanner roots it
+    // in the global TimerQueue, so an evicted-and-never-disposed stream leaks its hub
+    // forever (the RunLevel=1 MeshHub_IsCollected failure). Disposed in DisposeAsync
+    // alongside the still-cached streams, re-establishing the workspace-rooted
+    // disposal that eviction severed.
+    private readonly ConcurrentBag<ISynchronizationStream> _evictedRemoteStreams = new();
 
     private ISynchronizationStream<TReduced> GetExternalClientSynchronizationStream<
         TReduced,
@@ -424,6 +439,20 @@ public class Workspace : IWorkspace
                             Id, key);
                     }
                 }
+            }
+        }
+
+        // Streams evicted by the change feed (removed from _remoteStreamCache without
+        // disposal) are still workspace-owned — dispose them here so their `sync/`
+        // hubs (and the TimerQueue-rooting stale-callback scanner) are torn down.
+        // Idempotent with subscriber-driven disposal: SynchronizationStream.Dispose
+        // is safe to call twice.
+        while (_evictedRemoteStreams.TryTake(out var evicted))
+        {
+            try { evicted.Dispose(); }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Workspace {WorkspaceId} error disposing evicted remote stream", Id);
             }
         }
 

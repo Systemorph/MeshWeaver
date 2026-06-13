@@ -371,6 +371,15 @@ internal static class ThreadExecution
         // valid state. Driving an already-valid state is a no-op write (SetCurrent
         // skips equal), so re-establishing is cheap and idempotent.
         IDisposable? sub = null;
+        // Terminal guard for the self-healing re-establish below. Set by the hub's
+        // disposal hook (bottom of this method). Without it, a SYNCHRONOUS
+        // Subscribe-time fault after teardown — the hub's Autofac scope is gone, so
+        // GetMeshNodeStream().Subscribe() resolves a service off a disposed scope and
+        // throws ObjectDisposedException straight out of Subscribe — would recurse
+        // onError → Establish → onError until the stack overflows (the Orleans-shard
+        // SIGABRT). The re-establish must stop when the hub is gone AND must hop off
+        // the synchronous stack.
+        var disposed = false;
         // Idempotency for the resume path: re-launch an interrupted round AT MOST
         // once per ActiveMessageId. The observation is self-healing (re-establishes
         // on fault), so without this a re-read of the same Executing state would
@@ -459,10 +468,23 @@ internal static class ThreadExecution
                     // (User directive: any observer dying before the thread reaches a
                     // terminal/valid state must restart the watcher.) Without this a
                     // faulted observation left the stale thread stuck forever.
+                    //
+                    // 🚨 Two guards make this self-heal safe — mirroring the sanctioned
+                    // SubscribeWithReEstablish pattern (disposed-terminal + scheduled,
+                    // never-synchronous re-establish):
+                    //   • `disposed` stops re-establishing once the hub is torn down —
+                    //     the fault is then permanent (scope gone), so retrying is futile.
+                    //   • the 1 s Timer hops the re-establish OFF the synchronous error
+                    //     stack. A Subscribe-time fault re-entering Establish inline would
+                    //     recurse to a stack overflow; deferring also lets the disposal
+                    //     hook set `disposed` past the teardown window.
+                    if (disposed)
+                        return;
                     logger?.LogWarning(ex,
                         "[ThreadExec] Init observation faulted for {ThreadPath} — re-establishing recovery",
                         threadPath);
-                    Establish();
+                    System.Reactive.Linq.Observable.Timer(TimeSpan.FromSeconds(1))
+                        .Subscribe(_ => { if (!disposed) Establish(); });
                 });
 
         Establish();
@@ -512,7 +534,7 @@ internal static class ThreadExecution
                 ex => logger?.LogWarning(ex,
                     "[ThreadExec] Init watchdog stream faulted for {ThreadPath}", threadPath));
 
-        hub.RegisterForDisposal(_ => { sub?.Dispose(); watchdog.Dispose(); });
+        hub.RegisterForDisposal(_ => { disposed = true; sub?.Dispose(); watchdog.Dispose(); });
     }
 
     /// <summary>
