@@ -169,10 +169,10 @@ Recommended: 'icon' as an inline SVG starting with <svg, using currentColor. 'co
         => ops.Update(nodes).FirstAsync().ToTask();
 
     [McpServerTool(Title = "Patch node fields", Destructive = true, Idempotent = true, OpenWorld = false)]
-    [Description("Partial update of a single node. Only the keys present in 'fields' are changed; omitted keys preserve existing values. Do NOT include 'content' unless overwriting — never set 'content' to null. Prefer this over Update for small edits like icon/name/category; for edits inside a long Markdown body or source file prefer edit_content.")]
+    [Description("Partial update of a single node. Only the keys present in 'fields' are changed; omitted keys preserve existing values. 'content' deep-merges (RFC 7396): the nested keys you send are updated, the ones you omit are kept, and a null member deletes just that key — so you can change a single content field (e.g. {\"content\":{\"logo\":\"…\"}}) without resending the rest. Setting the whole 'content' to null is rejected. Prefer this over Update for small edits like icon/name/category; for edits inside a long Markdown body or source file prefer edit_content.")]
     public Task<string> Patch(
         [Description("Path to the node (e.g., @User/rbuergi/my-node)")] string path,
-        [Description("JSON object with ONLY the fields to change. Examples: {\"icon\": \"<svg>...</svg>\"}, {\"name\": \"New Name\"}.")] string fields)
+        [Description("JSON object with ONLY the fields to change. Examples: {\"icon\": \"<svg>...</svg>\"}, {\"name\": \"New Name\"}, {\"content\":{\"logo\":\"https://…\"}} (deep-merges into existing content).")] string fields)
         => ops.Patch(path, fields).FirstAsync().ToTask();
 
     [McpServerTool(Title = "Anchored text edit", Destructive = true, Idempotent = false, OpenWorld = false)]
