@@ -138,6 +138,10 @@ public static class SpaceNodeType
         (top-right **⋯**) → **Edit**, then write your overview in the **Body** field
         (plain markdown — headings, links, tables, and `@@`-embeds all work). Or simply
         ask the assistant in the chat below to draft it — it writes to the same Body field.
+
+        ## In this space
+
+        @@("area:Children")
         """;
 
     public static TBuilder AddSpaceType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder

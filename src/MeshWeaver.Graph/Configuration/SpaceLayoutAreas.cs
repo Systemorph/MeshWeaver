@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -22,23 +23,64 @@ public static class SpaceLayoutAreas
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-
-        var spaceStream = host.Workspace.GetStream<Space>()
-            ?.Select(spaces => spaces?.FirstOrDefault())
-            ?? Observable.Return<Space?>(null);
+        var options = host.Hub.JsonSerializerOptions;
 
         var nodeStream = host.Workspace.GetStream<MeshNode>()
             ?.Select(nodes => nodes?.FirstOrDefault(n => n.Path == hubPath))
             ?? Observable.Return<MeshNode?>(null);
 
-        return spaceStream.CombineLatest(nodeStream).Select(t =>
+        // 🚨 The Space lives on MeshNode.Content — NOT in its own stream.
+        // WithContentType<Space> registers Space in the TypeRegistry (serialization) but
+        // NOT as a workspace TypeSource, so host.Workspace.GetStream<Space>() returns null
+        // (Workspace.GetStream<T> bails when DataContext.GetTypeSource(T) is null). The old
+        // spaceStream was therefore ALWAYS null → space.Logo / space.Body were never read →
+        // every Space showed the node icon + the welcome placeholder instead of its own
+        // logo/body. Read the Space off the node's Content via ContentAs (handles the
+        // typed-instance, JsonElement, and null cases).
+        return nodeStream.Select(node =>
         {
-            var (space, node) = t;
-            if (space == null && node == null)
+            if (node == null)
                 return Controls.Markdown("*Loading...*") as UiControl;
 
+            var space = ResolveSpace(node, options);
             return BuildSpaceView(host, space, node);
         });
+    }
+
+    /// <summary>
+    /// Resolves the <see cref="Space"/> off a node's <see cref="MeshNode.Content"/>, robust to
+    /// every form Content can take: an already-typed <see cref="Space"/>, a degraded
+    /// <see cref="JsonElement"/>, or — when the content lost its typing entirely — a raw string.
+    /// A JSON-object string is deserialised back into the Space; any other non-empty string is
+    /// taken as the body so the page still shows the author's text instead of the welcome
+    /// placeholder. Returns null only when there is genuinely nothing to render.
+    /// </summary>
+    internal static Space? ResolveSpace(MeshNode? node, JsonSerializerOptions options)
+    {
+        if (node is null)
+            return null;
+
+        var space = node.ContentAs<Space>(options);
+        if (space != null)
+            return space;
+
+        // Content degraded to a bare string (or a JSON-string JsonElement) — recover it
+        // rather than falling back to the welcome placeholder.
+        var raw = node.Content switch
+        {
+            string s => s,
+            JsonElement { ValueKind: JsonValueKind.String } je => je.GetString(),
+            _ => null
+        };
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+
+        if (raw.TrimStart().StartsWith('{'))
+        {
+            try { return JsonSerializer.Deserialize<Space>(raw, options); }
+            catch (JsonException) { /* not Space JSON — fall through and treat it as the body */ }
+        }
+        return new Space { Name = node.Name ?? node.Path, Body = raw };
     }
 
     private static UiControl BuildSpaceView(
@@ -59,13 +101,10 @@ public static class SpaceLayoutAreas
         if (IsSystemorph(spacePath))
             shell = shell.WithView(BuildSystemorphHighlights(spacePath));
 
-        // Catalog: the namespace-tree Children area rendered directly below the body.
-        // Using Controls.LayoutArea keeps it outside the markdown body so the parser
-        // doesn't need node-path context (@@(...) in a static string can't resolve).
-        shell = shell.WithView(
-            Controls.LayoutArea(host.Hub.Address, new LayoutAreaReference("Children"))
-                .WithStyle($"{ContentMaxWidth} padding-bottom: 32px;"));
-
+        // The catalog is NOT hard-wired here. It lives in the body markdown as a
+        // deletable @@-embed (the default welcome ships one; an author can move or
+        // remove it — see SpaceNodeType.WelcomeMarkdown). Rendering it as a fixed
+        // LayoutArea here would take that control away from the space owner.
         return shell;
     }
 
@@ -170,7 +209,9 @@ public static class SpaceLayoutAreas
     /// </summary>
     private static UiControl BuildBodyContent(Space? space, MeshNode? node)
     {
-        var bodyStyle = $"{ContentMaxWidth} padding-top: 24px; padding-bottom: 8px;";
+        // Generous bottom padding so the in-body catalog @@-embed has vertical breathing
+        // room below it (the catalog is no longer a fixed LayoutArea — see BuildSpaceView).
+        var bodyStyle = $"{ContentMaxWidth} padding-top: 24px; padding-bottom: 48px;";
 
         if (!string.IsNullOrWhiteSpace(node?.PreRenderedHtml))
             return new MarkdownControl("") { Html = node.PreRenderedHtml }.WithStyle(bodyStyle);
