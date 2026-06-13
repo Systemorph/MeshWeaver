@@ -54,10 +54,10 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         [Description("JSON array of complete MeshNode objects fetched via Get and then modified")] string nodes)
         => WithContext(() => ops.Update(nodes)).FirstAsync().ToTask();
 
-    [Description("Partial update of a single node. Only the keys present in 'fields' are changed; omitted keys preserve existing values. Do NOT include 'content' unless you intend to overwrite it — and never set 'content' to null (will be rejected with the schema). Prefer this over Update for small edits like icon/name/category.")]
+    [Description("Partial update of a single node. Only the keys present in 'fields' are changed; omitted keys preserve existing values. 'content' deep-merges (RFC 7396): nested keys you send are updated, omitted keys are kept, a null member deletes that one key — so you can change a single content field without resending the rest. Setting the whole 'content' to null is rejected (with the schema). Prefer this over Update for small edits like icon/name/category.")]
     public Task<string> Patch(
         [Description("Path to the node (e.g., @User/rbuergi/my-node)")] string path,
-        [Description("JSON object with ONLY the fields to change. Examples: {\"icon\": \"<svg>...</svg>\"}, {\"name\": \"New Name\"}. Include 'content' only if overwriting — and never as null.")] string fields)
+        [Description("JSON object with ONLY the fields to change. Examples: {\"icon\": \"<svg>...</svg>\"}, {\"name\": \"New Name\"}, {\"content\":{\"logo\":\"https://…\"}} (deep-merges into existing content). Never set 'content' to null.")] string fields)
         => WithContext(() => ops.Patch(ResolveContextPath(path), fields)).FirstAsync().ToTask();
 
     [Description("Anchored text edit on a node's content (Markdown body or Code source). Replaces oldText with newText — pass just the snippet to change plus enough surrounding context to make it unique, instead of re-sending the whole document through Patch. Fails with a descriptive error when the text isn't found or isn't unique. Preferred over Patch for any edit inside a long document or source file.")]

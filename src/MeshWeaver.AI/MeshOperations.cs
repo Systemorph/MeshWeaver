@@ -840,6 +840,22 @@ public class MeshOperations
                 if (jsonObj.ContainsKey("content") && jsonObj["content"] is null)
                     return BuildNullContentError(existing.Path, existing.NodeType!);
 
+                // 🚨 Deep-merge content (RFC 7396), never wholesale-replace it. A bare
+                // `jsonObj["content"]` carries ONLY the keys the caller sent, so
+                // deserialising it straight into MeshNode.Content would DROP every
+                // existing content field the caller omitted — the 2026-06-13 logo patch
+                // ({"content":{"logo":…}}) clobbered name/description/body exactly this
+                // way. Merge the delta onto the existing content, serialised via the FULL
+                // node so the polymorphic `$type` discriminator is present, so omitted
+                // keys are preserved and only the provided keys change. A null member
+                // deletes that key; arrays/scalars replace wholesale (RFC 7396).
+                if (jsonObj["content"] is JsonObject contentPatch)
+                {
+                    var existingNodeJson = JsonSerializer.SerializeToNode(existing, hub.JsonSerializerOptions) as JsonObject;
+                    if (existingNodeJson?["content"] is JsonObject existingContent)
+                        jsonObj["content"] = MergePatch(existingContent, contentPatch);
+                }
+
                 var partial = jsonObj.Deserialize<MeshNode>(hub.JsonSerializerOptions)
                     ?? new MeshNode(existing.Id, existing.Namespace);
 
@@ -1164,6 +1180,34 @@ public class MeshOperations
             node.Id, id, ns);
 
         return node with { Id = id, Namespace = ns };
+    }
+
+    /// <summary>
+    /// RFC 7396 JSON Merge Patch: recursively merges <paramref name="patch"/> onto
+    /// <paramref name="target"/>. Object members merge recursively; a <c>null</c>
+    /// member deletes that key; any non-object (scalar or array) replaces wholesale.
+    /// Returns a fresh, detached node — neither argument is mutated, so callers can
+    /// keep using <paramref name="target"/>/<paramref name="patch"/> afterwards.
+    /// </summary>
+    internal static JsonNode? MergePatch(JsonNode? target, JsonNode? patch)
+    {
+        // Non-object patch (scalar, array, or null literal) replaces the target.
+        if (patch is not JsonObject patchObj)
+            return patch?.DeepClone();
+
+        var result = target is JsonObject targetObj
+            ? (JsonObject)targetObj.DeepClone()
+            : new JsonObject();
+
+        foreach (var (key, value) in patchObj)
+        {
+            if (value is null)
+                result.Remove(key);            // RFC 7396: null deletes the member
+            else
+                result[key] = MergePatch(result[key], value);  // recurse; result[key] is null when absent
+        }
+
+        return result;
     }
 
     /// <summary>

@@ -194,6 +194,36 @@ public class PatchWorkspaceAckTest : MonolithMeshTestBase
     }
 
     /// <summary>
+    /// 🚨 Regression for the 2026-06-13 content-clobber: a Patch that touches a SINGLE
+    /// content field must DEEP-MERGE (RFC 7396) — preserving every other content field —
+    /// not wholesale-replace 'content'. This is the exact bug that wiped
+    /// name/description/body off the live AgenticPension Space when only {"content":{"logo":…}}
+    /// was sent. Here: seed {name:"Widget", price:1.00, quantity:1}, patch only price,
+    /// and assert name + quantity survive.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task Patch_SingleContentField_DeepMerges_PreservingSiblings()
+    {
+        var plugin = CreatePlugin();
+        var id = $"merge-{Guid.NewGuid():N}";
+        var path = await SeedAsync(plugin, id);   // content { name="Widget", price=1.00, quantity=1 }
+
+        var patched = await plugin.Patch($"@{path}", "{\"content\":{\"price\":2.50}}");
+        patched.Should().StartWith("Patched:", because: "a single-field content patch is valid");
+
+        var got = await plugin.Get($"@{path}");
+        using var doc = JsonDocument.Parse(got);
+        var content = doc.RootElement.GetProperty("content");
+
+        content.GetProperty("price").GetDecimal().Should().Be(2.50m,
+            because: "the one field in the patch must be applied");
+        content.GetProperty("name").GetString().Should().Be("Widget",
+            because: "'name' was omitted from the patch and must be preserved (was clobbered before the fix)");
+        content.GetProperty("quantity").GetInt32().Should().Be(1,
+            because: "'quantity' was omitted from the patch and must be preserved (was clobbered before the fix)");
+    }
+
+    /// <summary>
     /// Stress / deadlock regression: 10 concurrent Patch calls on independent nodes
     /// must all complete within the timeout window. Before the no-await refactor of
     /// the plugin layer (commit d165533c8) the await hub.AwaitResponse pattern would
