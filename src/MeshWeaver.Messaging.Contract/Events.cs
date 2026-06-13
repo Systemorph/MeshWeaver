@@ -98,6 +98,7 @@ public enum ErrorType
 
 
 [SystemMessage]
+[CanBeIgnored]
 public record DisposeRequest;
 public record PingRequest : IRequest<PingResponse>;
 
