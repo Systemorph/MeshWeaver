@@ -223,6 +223,62 @@ public class MarkdownViewLogicTest
             "bare fenced blocks are documentation-only by design — execution requires --execute or --render");
     }
 
+    // ---------- Pipe tables across line endings ----------
+    // Regression for the 2026-06-13 "balance-sheet table renders as one inline line"
+    // report. A generator emitted rows with StringBuilder.AppendLine() (CRLF on
+    // Windows); the table arrived at the browser as inline text. The render pipeline
+    // must be robust to EITHER line ending, so we don't have to chase down every
+    // generator's AppendLine. These pin that contract.
+
+    // {0} = the row separator (LF or CRLF) spliced between every table line.
+    private const string PipeTableTemplate =
+        "| Position | 2024 | 2025 |{0}|---|---:|---:|{0}| Kassenmittel | 50.0 | 60.0 |{0}| Obligationen | 400.0 | 410.0 |{0}";
+
+    [Theory]
+    [InlineData("\n")]    // LF
+    [InlineData("\r\n")]  // CRLF — StringBuilder.AppendLine() on Windows
+    public void Render_PipeTable_WithRightAlignedSeparator_ProducesHtmlTable(string newline)
+    {
+        // The separator is `|---|---:|---:|` — the right-align `:` immediately before
+        // `|` is the case the ASCII-smiley parser used to turn into 😐, breaking the table.
+        var markdown = string.Format(PipeTableTemplate, newline);
+
+        var html = MarkdownViewLogic.Render(markdown, null, null).Html;
+
+        html.Should().Contain("<table",
+            "a right-aligned pipe table must render as a real <table> — the :| in the " +
+            "alignment delimiter must not be eaten by the smiley parser");
+        html.Should().Contain("Kassenmittel");
+        html.Should().NotContain("😐", "the alignment delimiter must not become an emoji");
+        html.Should().NotContain("| Kassenmittel |",
+            "the row must become table cells, not survive as a literal markdown pipe row");
+    }
+
+    [Fact]
+    public void Render_EmojiShortcode_StillConverts()
+    {
+        var html = MarkdownViewLogic.Render("Released :tada:", null, null).Html;
+        html.Should().Contain("🎉", "':shortcode:' emoji must still render");
+    }
+
+    [Fact]
+    public void Render_OrdinarySmiley_StillConverts()
+    {
+        // The fix keeps ASCII smileys — it only drops the pipe-bearing ones (:| , :-|).
+        var html = MarkdownViewLogic.Render("nice :)", null, null).Html;
+        html.Should().NotContain(":)", "ordinary ASCII smileys must still convert to an emoji");
+    }
+
+    [Fact]
+    public void Render_PipeBearingSmiley_StaysLiteral()
+    {
+        // `:|` is intentionally NOT converted — that conversion (→ 😐) is what corrupted
+        // table alignment delimiters. In plain text it simply stays literal.
+        var html = MarkdownViewLogic.Render("meh :| ok", null, null).Html;
+        html.Should().NotContain("😐", ":| must not become the neutral-face emoji anymore");
+        html.Should().Contain(":|", "the pipe-bearing smiley is left as literal text");
+    }
+
     [Fact]
     public void Render_LayoutBlock_IsNotExecutable()
     {
