@@ -89,6 +89,23 @@ public static class StaticRepoImporter
     }
 
     /// <summary>
+    /// Imports a SINGLE caller-supplied source on the dedicated import hub (off the router) — the
+    /// runtime entry point for ad-hoc imports such as "GitHub → new Space". Mirrors
+    /// <see cref="ImportAll"/>'s hub handling (create/reuse <c>import/{meshId}</c>) for one source.
+    /// Per-write System impersonation lives inside <see cref="Import"/> (its <see cref="AsSystem"/>
+    /// wrapper), so callers pre-create any user-owned partition root under the user first, then call
+    /// this for the content. Reactive — Subscribe to run.
+    /// </summary>
+    public static IObservable<StaticRepoImportResult> ImportSource(
+        IMessageHub meshHub, IStaticRepoSource source, ILogger? logger = null)
+    {
+        logger ??= meshHub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.StaticRepoImporter");
+        var importHub = CreateImportHub(meshHub, logger);
+        return Import(importHub, source, logger);
+    }
+
+    /// <summary>
     /// Creates (or returns the existing) DEDICATED import hub — the reachable hosted hub the whole
     /// static-repo import runs on, so its bulk <see cref="CreateOrUpdateNodeRequest"/> /
     /// <see cref="CreateNodeRequest"/> traffic is processed on THIS hub's action block, never the

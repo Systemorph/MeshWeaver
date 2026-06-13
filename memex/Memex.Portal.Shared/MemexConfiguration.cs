@@ -24,6 +24,7 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.Documentation;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Data;
+using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown.Export.Configuration;
@@ -210,6 +211,13 @@ public static class MemexConfiguration
         // ModelProviderService backs the Models settings tab — users store
         // their own AI provider credentials as MeshNodes in their namespace.
         services.AddSingleton<Memex.Portal.Shared.Models.ModelProviderService>();
+
+        // GitHub sync — per-user OAuth credential (device flow) + bidirectional
+        // Space ↔ GitHub sync (export = "sync back"; import = create / re-import a
+        // Space at any commit). The OAuth client id is bound from GitHub:OAuth;
+        // absent a client id the Connect flow is gracefully disabled.
+        services.AddGitHubSyncServices();
+        services.Configure<GitHubOAuthOptions>(builder.Configuration.GetSection("GitHub:OAuth"));
 
         // Per-user CLI Connect (Settings → Models, CLI providers). The
         // ConnectSessionManager is a mesh-scoped singleton holding the live
@@ -453,6 +461,9 @@ public static class MemexConfiguration
                 .AddRowLevelSecurity()
                 // Configure graph from the same base path
                 .AddGraph()
+                // Register GitHub-sync content types (GitHubCredential / GitHubSyncConfig)
+                // on the mesh + per-node hubs so their config nodes (de)serialize.
+                .AddGitHubSyncTypes()
                 // Seed root-scope Admin AccessAssignments for users listed under
                 // `Auth:GlobalAdmins` so configured admins bypass per-partition
                 // RLS for cross-partition operations (list Spaces, create
@@ -535,7 +546,9 @@ public static class MemexConfiguration
                         // Dedicated Admin menu (platform-wide GlobalSettings area), gated on root
                         // Permission.All: Invitations + Inbox.
                         .AddInvitationsSettingsTab()
-                        .AddInboxSettingsTab();
+                        .AddInboxSettingsTab()
+                        // GitHub Sync tab — shows only on Space nodes (self-filtered).
+                        .AddGitHubSyncSettingsTab();
                 })
                 // Add activity tracking to record user access patterns via ActivityLogBundler
                 .AddActivityTracking();

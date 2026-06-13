@@ -276,6 +276,9 @@ deployment can **break the sync and make it its own**.
 
 ## 7. See also
 
+- [GitHubSync.md](/Doc/Architecture/GitHubSync) — the user-facing manual for connecting a
+  Space to GitHub: export ("sync back"), import / re-import at a commit, the per-user OAuth
+  connection, and operator setup.
 - [DataSyncAndCrdt.md](/Doc/Architecture/DataSyncAndCrdt) — the sync protocol: owning-hub
   authority, versions, conflict resolution, why single-sourcing removes the dedup.
 - [StaticRepoImport.md](/Doc/Architecture/StaticRepoImport) — the import mechanism: fingerprint,
