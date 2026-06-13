@@ -112,6 +112,15 @@ public static class InboxTool
             if (!ingestedAfter.Contains(id))
                 ingestedAfter = ingestedAfter.Add(id);
 
+        // Restore the invariant UserMessageIds ⊇ IngestedMessageIds — a concurrent
+        // cross-hub SubmitMessage can drop an id from the UserMessageIds array (RFC 7396
+        // array-replace), while the dict-keyed PendingUserMessages this drain reads keeps
+        // it. The owner is authoritative for the derived list (see DispatchRound).
+        var userIdsAfter = thread.UserMessageIds;
+        foreach (var id in ingestedAfter)
+            if (!userIdsAfter.Contains(id))
+                userIdsAfter = userIdsAfter.Add(id);
+
         // Append drained ids to Messages in submission order, skipping any already present.
         var messagesAfter = thread.Messages;
         foreach (var id in drainedIds)
@@ -125,6 +134,7 @@ public static class InboxTool
             thread with
             {
                 Messages = messagesAfter,
+                UserMessageIds = userIdsAfter,
                 PendingUserMessages = pendingAfter,
                 IngestedMessageIds = ingestedAfter
             });

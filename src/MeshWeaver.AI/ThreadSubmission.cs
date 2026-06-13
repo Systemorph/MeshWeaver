@@ -77,19 +77,27 @@ internal static class ThreadSubmission
         var ids = ComputeDrainIds(thread);
         if (ids.IsEmpty) return null;
 
-        // 🚨 Deterministic per-claim response cell id — NOT a fresh Guid.
+        // 🚨 Deterministic per-round response cell id — NOT a fresh Guid.
         // The submission claim Status oscillates (StartingExecution → rollback →
         // Idle → re-claim, and Executing → StartingExecution resume bounce), so the
         // _Exec round watcher fires DispatchAfterClaim several times for ONE logical
         // round. A fresh Guid each call minted a NEW response cell per fire →
-        // duplicate cells (Thread.Messages[1] flip-flop) + abandoned execution
-        // subscriptions that outlived the per-class fixture (the catastrophic
-        // LifetimeScope ObjectDisposedException cascade). Deriving the id from the
-        // round's drained user ids + current Messages.Count makes every re-dispatch
-        // of the SAME claim resolve to the SAME cell (idempotent create/commit),
-        // while a genuinely new round (next turn / resubmit, Messages.Count advanced)
-        // gets a distinct cell.
-        var responseMessageId = DeriveDeterministicResponseId(ids, thread.Messages.Count, thread.PendingUserMessages);
+        // duplicate cells. Deriving the id from the round's drained user ids (+ their
+        // Timestamp/Text) makes every re-dispatch of the SAME logical round resolve
+        // to the SAME cell (idempotent create/commit), while a genuinely new round
+        // (next turn / resubmit — different drained ids, or the same id with a fresh
+        // resubmit Timestamp) gets a distinct cell.
+        //
+        // 🚨 The id MUST NOT depend on Messages.Count. Under rapid concurrent submits
+        // several DispatchRound calls for the SAME logical round run before any of
+        // their commits settle; each prior commit appends its response cell to
+        // Messages, so a Count-keyed id reads a DIFFERENT count per call → a DIFFERENT
+        // id → a DISTINCT cell PER call (the 4-cells-for-3-messages dispatch STORM
+        // that wedged RapidSubmits_PileUpAndAllIngest: the thread never reaches a
+        // terminal state). The drained id set + per-message Timestamp already
+        // identifies the round uniquely, so Count adds no distinguishing power — only
+        // the churn that breaks idempotency.
+        var responseMessageId = DeriveDeterministicResponseId(ids, thread.PendingUserMessages);
         return new RoundDispatch(
             ids,
             responseMessageId,
@@ -133,26 +141,28 @@ internal static class ThreadSubmission
 
     /// <summary>
     /// Stable 8-hex-char response cell id for a round, derived from the drained
-    /// user-message ids and the thread's current message count. Deterministic so
-    /// repeated dispatches of the same claim (status oscillation) reuse one cell;
-    /// distinct across rounds because either the user ids or Messages.Count differ.
+    /// user-message ids and each drained message's Timestamp + Text. Deterministic so
+    /// repeated dispatches of the SAME logical round (status oscillation, and the
+    /// rapid-submit concurrent re-dispatch) reuse one cell; distinct across rounds
+    /// because the drained ids — or a resubmit's fresh Timestamp on the same id —
+    /// differ. Deliberately INDEPENDENT of Messages.Count: that count changes as
+    /// concurrent dispatches append their cells, and keying on it splits one logical
+    /// round into many cells (the dispatch storm). See PlanNextRound.
     /// </summary>
     internal static string DeriveDeterministicResponseId(
-        IReadOnlyList<string> ids, int messageCount,
+        IReadOnlyList<string> ids,
         IReadOnlyDictionary<string, ThreadMessage> pending)
     {
-        // Include each drained pending message's Timestamp + Text in the key, not
-        // just the ids + count. A resubmit re-adds the SAME user id with a fresh
-        // Timestamp (DateTime.UtcNow) and new text (ResubmitMessage), so keying only
-        // on (ids, Messages.Count) collided with the original round → the resubmit
-        // reused the old response cell instead of creating a new one
-        // (Resubmit_*_NewRoundCreated / Resubmit_*_DoesNotDeadlock). The Timestamp
-        // makes each round's cell distinct; the value is fixed on the pending message
-        // (not recomputed per dispatch), so it stays stable across one claim's
-        // re-dispatch oscillation.
+        // Include each drained pending message's Timestamp + Text in the key. A
+        // resubmit re-adds the SAME user id with a fresh Timestamp (DateTime.UtcNow)
+        // and new text (ResubmitMessage), so the Timestamp makes each round's cell
+        // distinct (Resubmit_*_NewRoundCreated / Resubmit_*_DoesNotDeadlock). The
+        // value is fixed on the pending message (not recomputed per dispatch), so it
+        // stays stable across one round's re-dispatch oscillation AND across the
+        // concurrent dispatches a rapid-submit burst produces.
         var content = string.Join("|", ids.Select(id =>
             pending.TryGetValue(id, out var m) ? $"{m.Timestamp.Ticks}:{m.Text}" : id));
-        var key = string.Join(",", ids) + "|" + messageCount + "|" + content;
+        var key = string.Join(",", ids) + "|" + content;
         var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(key));
         return Convert.ToHexString(hash, 0, 4).ToLowerInvariant();
     }
@@ -635,6 +645,19 @@ internal static class ThreadSubmissionServer
                 var ingested = t.IngestedMessageIds.AddRange(
                     dispatch.UserMessageIds.Where(uid => !t.IngestedMessageIds.Contains(uid)));
 
+                // Restore the invariant UserMessageIds ⊇ IngestedMessageIds. A concurrent
+                // cross-hub SubmitMessage can drop an id from the UserMessageIds *array*
+                // (the owner merges field-by-field via RFC 7396, which REPLACES arrays — two
+                // rapid submits off the same stale base lose one id), while the dict-keyed
+                // PendingUserMessages this round drains from keeps it. So a settled thread
+                // can end up Idle with ingested=3 but UserMessageIds.Count=2 — the
+                // RapidSubmits_PileUpAndAllIngest failure (the thread is otherwise correct;
+                // only the derived list is short). The owner is authoritative for that list,
+                // so re-add any ingested id missing from it.
+                var userIds = t.UserMessageIds;
+                foreach (var uid in ingested)
+                    if (!userIds.Contains(uid)) userIds = userIds.Add(uid);
+
                 // Drop consumed PendingUserMessages entries — their satellites now exist
                 // and their ids are now in Messages.
                 var pending = t.PendingUserMessages;
@@ -646,6 +669,7 @@ internal static class ThreadSubmissionServer
                     Content = t with
                     {
                         Messages = msgs,
+                        UserMessageIds = userIds,
                         IngestedMessageIds = ingested,
                         Status = ThreadExecutionStatus.Executing,
                         // ActiveMessageId is the canonical handle —
