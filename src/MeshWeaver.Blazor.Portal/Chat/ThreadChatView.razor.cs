@@ -630,15 +630,23 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// </summary>
     private void OnAgentList(IReadOnlyList<AgentDisplayInfo> agents)
     {
-        Logger.LogDebug("[ThreadChat:{InstanceId}] Agents received: count={Count}",
-            _instanceId, agents.Count);
+        // Drop background-generator agents (modelTier:utility — ThreadNamer, NodeInitializer,
+        // DescriptionWriter) from every CONVERSATIONAL surface: the /agent picker, @-reference
+        // selection, and the inline agent widget. They're invoked programmatically and emit
+        // structured "Name:/Id:/Svg:" output, so e.g. ThreadNamer must never answer a user's
+        // "hi". The projection itself keeps them (the generators resolve them); we filter here,
+        // at the chat UI, so generators are unaffected.
+        var conversational = agents.Where(a => !AgentPickerProjection.IsUtilityAgent(a)).ToList();
+
+        Logger.LogDebug("[ThreadChat:{InstanceId}] Agents received: count={Count} (conversational={Conv})",
+            _instanceId, agents.Count, conversational.Count);
 
         _agentsByPath.Clear();
-        foreach (var a in agents)
+        foreach (var a in conversational)
             if (!string.IsNullOrEmpty(a.Path))
                 _agentsByPath[a.Path] = a;
 
-        agentDisplayInfos = agents;
+        agentDisplayInfos = conversational;
         StateHasChanged();
     }
 
@@ -910,6 +918,34 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     private void DismissWidget()
     {
+        pendingWidget = ChatWidget.None;
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Picks a model from the inline <see cref="ChatWidget.ModelPicker"/> menu — identical to
+    /// typing <c>/model &lt;Name&gt;</c>: writes the composer's <c>ModelName</c> (so the selection
+    /// persists + drives the next round) and confirms in the status row. Dismisses the menu.
+    /// </summary>
+    private void SelectModelFromWidget(ModelInfo model)
+    {
+        WriteComposerSelection(modelName: model.Name);
+        lastCommandStatus = $"Switched to model: {model.Name} ({model.Provider})";
+        lastCommandStatusIsError = false;
+        pendingWidget = ChatWidget.None;
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Picks an agent from the inline <see cref="ChatWidget.AgentPicker"/> menu — identical to
+    /// typing <c>/agent &lt;Name&gt;</c>: writes the composer's <c>AgentName</c> and confirms in
+    /// the status row. Dismisses the menu.
+    /// </summary>
+    private void SelectAgentFromWidget(AgentDisplayInfo agent)
+    {
+        WriteComposerSelection(agentPath: agent.Path);
+        lastCommandStatus = $"Switched to agent: {agent.Name}";
+        lastCommandStatusIsError = false;
         pendingWidget = ChatWidget.None;
         StateHasChanged();
     }

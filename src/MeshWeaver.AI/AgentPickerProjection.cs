@@ -267,6 +267,25 @@ public static class AgentPickerProjection
             .ToList();
     }
 
+    /// <summary>The utility model tier marks a programmatic generator agent (ThreadNamer,
+    /// NodeInitializer, DescriptionWriter) — invoked by services, never a chat participant.</summary>
+    public const string UtilityModelTier = "utility";
+
+    /// <summary>
+    /// True when the agent is a background GENERATOR (<c>modelTier: utility</c>) — ThreadNamer,
+    /// NodeInitializer, DescriptionWriter. These emit structured "Name:/Id:/Svg:" output and are
+    /// invoked programmatically (<see cref="IconGenerator"/>, <see cref="DescriptionGenerator"/>),
+    /// so they must be hidden from every CONVERSATIONAL surface (the chat agent picker, <c>/agent</c>,
+    /// and <c>@</c>-references) — otherwise e.g. ThreadNamer answers a user's "hi" with "Name: …\nId: …".
+    ///
+    /// <para>The filter is applied at the chat UI (<c>ThreadChatView.OnAgentList</c>), NOT inside
+    /// <see cref="ProjectAgents"/>: the generators build their OWN <see cref="AgentChatClient"/> and
+    /// <c>SetSelectedAgent("NodeInitializer"/"DescriptionWriter")</c>, so the projection must keep
+    /// utility agents for them to resolve.</para>
+    /// </summary>
+    public static bool IsUtilityAgent(AgentDisplayInfo info) =>
+        string.Equals(info.AgentConfiguration?.ModelTier, UtilityModelTier, StringComparison.OrdinalIgnoreCase);
+
     /// <summary>
     /// Projects the synced-query snapshot into the model picker's bound list.
     /// Mirrors <c>ThreadChatView.OnSyncedAgentSnapshot</c>'s LanguageModel

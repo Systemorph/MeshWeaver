@@ -1,5 +1,7 @@
 using System.Reactive.Linq;
 using System.Reflection;
+using MeshWeaver.Data;
+using MeshWeaver.Domain;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -7,6 +9,7 @@ using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
+using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -52,9 +55,12 @@ public static class ThreadComposerView
         [nameof(ThreadComposer.Harness), nameof(ThreadComposer.AgentName), nameof(ThreadComposer.ModelName)];
 
     /// <summary>
-    /// Renders just the harness/agent/model pickers, data-bound + auto-persisting against THIS
-    /// node's composer state. The control row is built ONCE from the first composer emission;
-    /// all later updates flow through the data binding (see <see cref="BindComposerData"/>).
+    /// Renders ONLY the harness picker (no label — just the combobox), data-bound +
+    /// auto-persisting against THIS node's composer state. Agent + model are NOT shown here:
+    /// the chat footer stays compact (harness + context + Send on one row), and agent/model are
+    /// chosen via the <c>/agent</c> and <c>/model</c> slash-commands (which write the same
+    /// composer node). The control is built ONCE from the first composer emission; all later
+    /// updates flow through the data binding (see <see cref="BindComposerData"/>).
     /// </summary>
     public static UiControl ComposerSelectors(LayoutAreaHost host, RenderingContext context)
         => Controls.Stack.WithWidth("100%")
@@ -63,7 +69,7 @@ public static class ThreadComposerView
                 .Select(composer =>
                 {
                     var dataId = BindComposerData(h, composer);
-                    return (UiControl?)BuildSelectorRow(h, dataId);
+                    return (UiControl?)BuildHarnessPicker(h, dataId);
                 }));
 
     /// <summary>
@@ -227,6 +233,34 @@ public static class ThreadComposerView
         SelectorPropertyNames
             .Select(typeof(ThreadComposer).GetProperty)
             .Where(p => p is not null)!;
+
+    /// <summary>
+    /// Builds JUST the harness <see cref="MeshNodePickerControl"/> — no label, just the combobox —
+    /// data-bound to the composer's <see cref="ThreadComposer.Harness"/> field. Constructed
+    /// directly from the property's <c>[MeshNode]</c> attribute (the same query/layout/open/default
+    /// the standard editor would build), bypassing <c>MapToToggleableControl</c> so no "Harness"
+    /// label row is rendered. Writes flow through the data binding installed by
+    /// <see cref="BindComposerData"/> (the picker mutates the <c>harness</c> pointer; auto-save
+    /// persists it), exactly like the full selector row did.
+    /// </summary>
+    private static UiControl BuildHarnessPicker(LayoutAreaHost host, string dataId)
+    {
+        var harnessProp = typeof(ThreadComposer).GetProperty(nameof(ThreadComposer.Harness))!;
+        var meshNodeAttr = harnessProp.GetCustomAttribute<MeshNodeAttribute>()!;
+        var nodeNamespace = host.Hub.Address.ToString();
+        var picker = new MeshNodePickerControl(
+            new JsonPointerReference(nameof(ThreadComposer.Harness).ToCamelCase()!))
+        {
+            Queries = MeshNodeAttribute.ResolveQueries(meshNodeAttr.Queries, nodeNamespace, nodeNamespace),
+            Layout = meshNodeAttr.Layout,
+            Open = meshNodeAttr.Open,
+            DefaultToFirst = meshNodeAttr.DefaultToFirst,
+            DataContext = LayoutAreaReference.GetDataPointer(dataId)
+        };
+        return Controls.Stack
+            .WithStyle("min-width: 90px; max-width: 220px;")
+            .WithView(picker);
+    }
 
     /// <summary>
     /// Send button — one-shot read of the current form data, then the canonical

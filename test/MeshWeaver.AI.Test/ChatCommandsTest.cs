@@ -214,6 +214,9 @@ public class ChatCommandsTest
 
         result.Success.Should().BeTrue();
         switched.Value!.Name.Should().Be("gpt-4o-mini");
+        // The confirmation is surfaced in the chat output (lastCommandStatus) so the user
+        // sees that the model changed — must name the model that was switched to.
+        result.Message.Should().Contain("gpt-4o-mini");
     }
 
     [Fact]

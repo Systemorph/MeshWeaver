@@ -383,6 +383,69 @@ else
         @{ var inputDimmed = showSubmissionProgress; }
         <div class="thread-chat-input-content @(inputDimmed ? "dimmed" : "")" aria-hidden="@(inputDimmed.ToString().ToLowerInvariant())">
 
+        @* Inline command picker — /model and /agent with no argument pop this menu of
+           everything installed; clicking an item writes the composer selection (same as
+           typing /model Name) and confirms in the status row below. *@
+        @if (pendingWidget == ChatWidget.ModelPicker)
+        {
+            <div class="thread-chat-widget">
+                <div class="thread-chat-widget-header">
+                    <span>Choose a model</span>
+                    <button class="thread-msg-action-btn" @onclick="DismissWidget" title="Close">&#10005;</button>
+                </div>
+                <div class="thread-chat-widget-list">
+                    @foreach (var group in availableModels.GroupBy(m => m.Provider).OrderBy(g => g.First().Order))
+                    {
+                        <div class="thread-chat-widget-group">@group.Key</div>
+                        @foreach (var model in group)
+                        {
+                            var isSel = string.Equals(model.Name, LastSegment(boundModelPath), StringComparison.OrdinalIgnoreCase);
+                            <button class="thread-chat-widget-item @(isSel ? "selected" : "")"
+                                    @onclick="@(() => SelectModelFromWidget(model))">
+                                <span class="thread-chat-widget-item-name">@model.Name</span>
+                                <span class="thread-chat-widget-item-desc">@model.Provider</span>
+                            </button>
+                        }
+                    }
+                    @if (availableModels.Count == 0)
+                    {
+                        <div class="thread-chat-widget-empty">No models installed.</div>
+                    }
+                </div>
+            </div>
+        }
+        else if (pendingWidget == ChatWidget.AgentPicker)
+        {
+            <div class="thread-chat-widget">
+                <div class="thread-chat-widget-header">
+                    <span>Choose an agent</span>
+                    <button class="thread-msg-action-btn" @onclick="DismissWidget" title="Close">&#10005;</button>
+                </div>
+                <div class="thread-chat-widget-list">
+                    @foreach (var group in agentDisplayInfos.GroupBy(a => a.GroupName ?? "Agents").OrderBy(g => g.Key))
+                    {
+                        <div class="thread-chat-widget-group">@group.Key</div>
+                        @foreach (var agent in group.OrderBy(a => a.Order).ThenBy(a => a.Name))
+                        {
+                            var isSel = string.Equals(agent.Path, boundAgentPath, StringComparison.OrdinalIgnoreCase);
+                            <button class="thread-chat-widget-item @(isSel ? "selected" : "")"
+                                    @onclick="@(() => SelectAgentFromWidget(agent))">
+                                <span class="thread-chat-widget-item-name">@agent.Name</span>
+                                @if (!string.IsNullOrEmpty(agent.Description))
+                                {
+                                    <span class="thread-chat-widget-item-desc">@agent.Description</span>
+                                }
+                            </button>
+                        }
+                    }
+                    @if (agentDisplayInfos.Count == 0)
+                    {
+                        <div class="thread-chat-widget-empty">No agents installed.</div>
+                    }
+                </div>
+            </div>
+        }
+
         @* Monaco editor for markdown input with completion. Stays visible during
            execution (Claude.ai pattern) — typing while a round is in flight is
            allowed; it queues via PendingUserMessages and dispatches when the round
@@ -400,24 +463,41 @@ else
                               CompletionCallback="@GetCompletions" />
         </div>
 
-        @* One bottom row: harness/agent/model pickers (data-bound to the ThreadComposer node) +
-           attachment chips + Send (pushed right). The pickers live in ThreadComposerView.SelectorsArea
-           (a content-width horizontal row); /agent /model slash-commands still drive the same node. *@
-        <div class="thread-chat-bottom-row" style="display: flex; align-items: flex-end; gap: 8px; flex-wrap: nowrap; margin-top: 4px;">
+        @* Attachments split: the navigation-context chip(s) sit inline in the compact bottom
+           row (next to the harness combobox + Send); any extra @@-reference attachments get
+           their own section above the row so the row never overflows. *@
+        @{
+            var contextChips = attachments.Where(a => a.IsContext).ToList();
+            var referenceChips = attachments.Where(a => !a.IsContext).ToList();
+        }
+        @if (referenceChips.Count > 0)
+        {
+            <div class="thread-chat-attachments">
+                <ReferenceChipCollection
+                    Attachments="@referenceChips"
+                    OnAttachmentRemoved="@OnAttachmentRemoved"
+                    OnChipClick="@OnChipClicked" />
+            </div>
+        }
+
+        @* Compact bottom row: harness combobox (no label) + context chip(s) + Send. Agent and
+           model are chosen via the /agent and /model slash-commands (which pop the pickers above
+           and write the same composer node). *@
+        <div class="thread-chat-bottom-row" style="display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; margin-top: 4px;">
             @if (!string.IsNullOrEmpty(_templatePath))
             {
-                <div class="thread-chat-selectors" style="flex: 1 1 auto; min-width: 0;">
+                <div class="thread-chat-harness" style="flex: 0 1 auto; min-width: 0;">
                     <LayoutAreaView @key="@($"composer-sel-{_templatePath}")"
                                     ViewModel="@(new LayoutAreaControl(_templatePath, new LayoutAreaReference(ThreadComposerView.SelectorsArea)))"
                                     Stream="@Stream"
                                     Area="@($"composer-sel-{_templatePath}")" />
                 </div>
             }
-            @if (attachments.Count > 0)
+            @if (contextChips.Count > 0)
             {
-                <div class="thread-chat-attachments" style="flex: 0 1 auto; min-width: 0;">
+                <div class="thread-chat-context" style="flex: 1 1 auto; min-width: 0; overflow: hidden;">
                     <ReferenceChipCollection
-                        Attachments="@attachments"
+                        Attachments="@contextChips"
                         OnAttachmentRemoved="@OnAttachmentRemoved"
                         OnChipClick="@OnChipClicked" />
                 </div>

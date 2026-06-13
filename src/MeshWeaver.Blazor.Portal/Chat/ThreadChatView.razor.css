@@ -299,10 +299,31 @@
     min-width: 0;
 }
 
-/* Agent + Model dropdown row above the chat input. Driven by the
-   workspace synced query (loadedAgents / availableModels). Slash
-   commands /agent and /model update the same state — both surfaces stay
-   in sync. */
+/* Compact harness combobox in the bottom row — JUST the picker (no label).
+   Agent + model are chosen via the /agent and /model slash-commands, so the
+   row stays small enough to fit harness + context chip + Send on one line. */
+.thread-chat-harness {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    max-width: 220px;
+}
+
+/* Navigation-context chip(s) inline in the bottom row, between the harness and
+   Send. The collection wraps its own chips; cap its share so a long context
+   name truncates rather than pushing Send off the row. */
+.thread-chat-context {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+}
+.thread-chat-context ::deep .reference-chip-collection {
+    margin: 0;
+    flex-wrap: nowrap;
+}
+
+/* Legacy selectors container — kept for any remaining consumer; the chat
+   footer now uses .thread-chat-harness above. */
 .thread-chat-selectors {
     display: flex;
     align-items: center;
@@ -824,15 +845,33 @@
     50%      { opacity: 0.55; }
 }
 
+/* Hover-revealed edit/resubmit/delete row. Collapsed to zero height (not just
+   opacity:0) when hidden so it reserves NO layout space — otherwise every bubble
+   carried ~30px of invisible buttons below its text (the "lots of empty space at
+   the bottom" the user flagged on a one-word "hi"). */
 .thread-msg-inline-actions {
     display: flex;
     gap: 4px;
-    margin-top: 6px;
+    margin-top: 0;
+    max-height: 0;
+    overflow: hidden;
     opacity: 0;
-    transition: opacity 120ms ease;
+    transition: max-height 120ms ease, opacity 120ms ease, margin-top 120ms ease;
 }
 
-.thread-msg-bubble:hover .thread-msg-inline-actions { opacity: 1; }
+.thread-msg-bubble:hover .thread-msg-inline-actions {
+    max-height: 40px;
+    margin-top: 6px;
+    opacity: 1;
+}
+
+/* Markdown wraps each line in a <p> carrying a 1.5em bottom margin (good for doc
+   pages, wrong for a chat bubble) — drop it on the LAST block so a short message
+   doesn't leave a big gap above the bubble's bottom edge. */
+.thread-msg-bubble ::deep .markdown-body > :last-child,
+.thread-msg-bubble ::deep .markdown-body p:last-child {
+    margin-bottom: 0;
+}
 
 .thread-msg-action-btn {
     border: none;
