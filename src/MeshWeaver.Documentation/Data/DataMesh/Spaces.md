@@ -84,6 +84,96 @@ own space (`{your-id}/…`) or **create a Space first and add it there**. This i
 design: it prevents stray top-level content and keeps every node inside a clear
 access boundary.
 
+### What gets created (and what does *not*)
+
+Creating a Space `Acme` (empty namespace, id `Acme`) automatically produces:
+
+- the **Space node** at path `Acme` — *this node is the home page* (see below);
+- the **partition schema** `acme` with all its tables (provisioned before the node
+  is written — no `42P01` races);
+- a **partition definition** `Admin/Partition/Acme` so every silo agrees the
+  partition exists and is routable;
+- a root **Admin grant** `Acme/_Access` for whoever created it.
+
+> **There is no separate "Overview" or "Home" page.** A common mistake is to create
+> a Markdown child like `Acme/Overview` and treat it as the landing page. Don't —
+> the Space node *is* the landing page, and a stray Overview node just duplicates
+> it. The text below is everything you need to make `Acme` itself look good.
+
+## Authoring your Space's home page
+
+When someone opens `Acme`, the Space's **Overview** renders, in order: a header
+(logo + name + description + links), then your **body markdown**, then the
+**namespace catalog** of everything inside the Space. All of it is driven by fields
+on the **Space node's content** — you never create a second node for it.
+
+### The fields you set
+
+| Field (`content.…`) | Shows up as |
+|---|---|
+| `name` | The large title in the header. |
+| `description` | Sub-title under the name (one line, markdown allowed). |
+| `logo` | The 100×100 header image. An **`https://…` URL** *or* a file in the Space's `content` collection. Falls back to the node icon, then to initials. |
+| `body` | The main page content — **markdown**. This is your "overview text". |
+| `website`, `email`, `location` | Small linked stats in the header row. |
+| `icon` | Fluent icon name used where no logo is set (default `Building`). |
+
+The body is resolved as **`node.PreRenderedHtml` → `content.body` → default welcome
+text**. So to replace the generic starter text, just set `content.body`. Leaving it
+empty falls back to the welcome placeholder — which is the "generic template text"
+you see on a fresh Space.
+
+### Writing a good overview body
+
+Treat `content.body` as the front door. A strong one usually has:
+
+1. **A short summary** of what the Space is for.
+2. **Curated links** to the important material inside it. Link with the unified
+   path syntax so links survive moves and renames:
+   - `[Balance sheet model](@/Acme/Reports/BalanceSheet)` — link to a node by path.
+     (`@/…` is markdown-link-only; never put it in raw `<a href>`.)
+   - Relative links also work from the Space body: a link written as
+     `[Reports](Reports)` resolves against the Space path (`Acme/Reports`).
+3. **The live namespace catalog**, embedded inline (next section).
+
+### Embedding the namespace catalog (the search that expands by namespace)
+
+The catalog is the `Children` layout area: a mesh search in **namespace-tree** mode,
+scoped to the Space's own partition, that lets you drill into sub-namespaces with
+lazy-loaded counts and a search box. The Space Overview already renders it *below*
+your body automatically, but you can place it anywhere in the body by embedding it:
+
+```markdown
+@@/Acme/area/Children
+```
+
+Use the **absolute** form (leading `/` + full Space path). The relative
+`@@("area:Children")` only resolves when the renderer has the node-path in context,
+which is not guaranteed for a Space body — the absolute form always resolves because
+it carries its own address. `@@` (double-at) renders the area inline; a single `@`
+would render a hyperlink instead.
+
+### Setting it all via MCP
+
+The home page is plain node content, so one `patch` against the Space node does it:
+
+```jsonc
+// patch @Acme  (content is the Space record)
+{
+  "content": {
+    "logo": "https://example.com/acme-logo.png",
+    "description": "Acme's shared workspace for pension analytics.",
+    "body": "# Acme\n\nWelcome to Acme's workspace…\n\n## Explore\n\n- [Reports](@/Acme/Reports)\n- [Data model](@/Acme/Datenmodell)\n\n## Everything in this space\n\n@@/Acme/area/Children\n"
+  }
+}
+```
+
+`patch` merges (RFC 7396), so you only send the fields you want to change. If the
+logo doesn't appear, check two things: the field is actually `content.logo` (not the
+node `icon`), and the image host allows hot-linking — some CDNs (e.g. LinkedIn media
+URLs) return 403 to off-site `<img>` requests, in which case upload the image into
+the Space's `content` collection and reference it instead.
+
 ## Quick reference
 
 | You want to… | Do this |
@@ -93,3 +183,6 @@ access boundary.
 | Add a page/doc/thread to a team's work | Create it **inside** the team's Space |
 | Separate two efforts with different collaborators | Use **two** Spaces |
 | Organize within one team's work | Folders/pages **inside** one Space |
+| Set the Space's landing page | Edit `content.body` on the **Space node** — no separate Overview page |
+| Add a logo | Set `content.logo` (an `https://…` URL or a `content`-collection file) |
+| Show the namespace catalog in the body | Embed `@@/{Space}/area/Children` |
