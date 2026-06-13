@@ -93,7 +93,7 @@ public static class SpaceLayoutAreas
         if (!string.IsNullOrEmpty(logo))
         {
             logoControl = Controls.Html(
-                $"<img src=\"{logo}\" alt=\"\" style=\"width: 100px; height: 100px; border-radius: 12px; object-fit: cover; background: var(--neutral-layer-2);\" />");
+                $"<img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(logo)}\" alt=\"\" style=\"width: 100px; height: 100px; border-radius: 12px; object-fit: cover; background: var(--neutral-layer-2);\" />");
         }
         else
         {
