@@ -75,7 +75,7 @@ public static class SettingsLayoutArea
             .WithClass("settings-splitter")
             .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%").WithHeight("100%"))
             .WithView(
-                BuildNavMenu(node, hubAddress, hubPath, items, tabId),
+                BuildMenuPane(host, node, hubAddress, hubPath, items, tabId),
                 skin => skin.WithSize("280px").WithMin("200px").WithMax("400px").WithCollapsible(true)
             )
             .WithView(
@@ -97,6 +97,58 @@ public static class SettingsLayoutArea
         }
 
         return settingsPage;
+    }
+
+    /// <summary>
+    /// Left pane: a pinned search box on top + the (live-filtered) nav menu below.
+    /// The search box is its OWN static area so it keeps focus while typing — only the
+    /// "SettingsMenu" sub-area re-renders as the query data stream emits, filtering the
+    /// tabs by Label/Group. (Field-level content search would need searchable keywords
+    /// on each <see cref="SettingsMenuItemDefinition"/>.)
+    /// </summary>
+    private static UiControl BuildMenuPane(
+        LayoutAreaHost host,
+        MeshNode? node,
+        object hubAddress,
+        string hubPath,
+        IReadOnlyList<SettingsMenuItemDefinition> items,
+        string selectedTab)
+    {
+        var searchDataId = $"settingsMenuSearch_{hubPath.Replace('/', '_')}";
+        host.UpdateData(searchDataId, string.Empty);
+
+        var searchBox = (new TextFieldControl(new JsonPointerReference(""))
+                .WithPlaceholder("Search settings…")
+                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(searchDataId) })
+            .WithClass("settings-menu-search");
+
+        return Controls.Stack
+            .WithClass("settings-menu-pane")
+            .WithWidth("100%")
+            .WithView(searchBox)
+            .WithView(
+                (h, c) => h.GetDataStream<string>(searchDataId)
+                    .StartWith(string.Empty)
+                    .Select(q => (UiControl)BuildNavMenu(node, hubAddress, hubPath, FilterMenuItems(items, q), selectedTab)),
+                "SettingsMenu");
+    }
+
+    /// <summary>
+    /// Case-insensitive substring filter over a settings tab's <see cref="SettingsMenuItemDefinition.Label"/>,
+    /// <see cref="SettingsMenuItemDefinition.Group"/>, and <see cref="SettingsMenuItemDefinition.Keywords"/>
+    /// (the terms describing the fields inside each section). Empty query returns all items unchanged.
+    /// </summary>
+    private static IReadOnlyList<SettingsMenuItemDefinition> FilterMenuItems(
+        IReadOnlyList<SettingsMenuItemDefinition> items, string? query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return items;
+        var q = query.Trim();
+        return items.Where(i =>
+                (i.Label?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (i.Group?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (i.Keywords?.Any(k => k.Contains(q, StringComparison.OrdinalIgnoreCase)) ?? false))
+            .ToList();
     }
 
     private static UiControl BuildNavMenu(

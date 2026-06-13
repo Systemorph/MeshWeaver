@@ -56,7 +56,11 @@ public static class DataModelLayoutArea
             .DistinctBy(x => x.Type);
     }
 
-    private static bool IsEligibleDomainType(Type t)
+    /// <summary>
+    /// True when <paramref name="t"/> is a class worth showing in a data-model
+    /// diagram — excludes primitives, enums, and common framework value types.
+    /// </summary>
+    public static bool IsEligibleDomainType(Type t)
     {
         // Exclude primitives, enums, and common framework value types
         if (t.IsPrimitive || t.IsEnum) return false;
@@ -66,14 +70,36 @@ public static class DataModelLayoutArea
     }
 
     private static string GetMermaidDiagram(this LayoutAreaHost host)
+        => BuildMermaidDiagram(
+            host.GetTypes().ToArray(),
+            host.GetAllDomainTypes().ToArray(),
+            $"/{host.Hub.Address}/DataModel");
+
+    /// <summary>
+    /// Builds the Mermaid class-diagram markdown for an explicit set of types —
+    /// the reusable core behind <see cref="DataModel"/>, also used by the NodeType
+    /// page to render the data model of a type's compiled instance configuration.
+    /// </summary>
+    /// <param name="seedTypes">The types to seed each diagram group with; the closure
+    /// over property/derived types from <paramref name="allDomainTypes"/> is added.</param>
+    /// <param name="allDomainTypes">The full domain-type lookup used to resolve
+    /// property targets, derived types, and click links.</param>
+    /// <param name="linkBase">Href prefix for clickable class nodes, e.g.
+    /// <c>/{address}/DataModel</c> or <c>/{nodeTypePath}/$Model</c>.</param>
+    /// <param name="includeGroupHeadings">Whether to emit a <c>## {group}</c> heading
+    /// above each diagram group.</param>
+    public static string BuildMermaidDiagram(
+        IReadOnlyCollection<ITypeDefinition> seedTypes,
+        IReadOnlyCollection<ITypeDefinition> allDomainTypes,
+        string linkBase,
+        bool includeGroupHeadings = true)
     {
-        var types = host.GetTypes().ToArray();
-        var allDomain = host.GetAllDomainTypes().ToArray();
+        var allDomain = allDomainTypes.ToArray();
         var allByType = allDomain.ToDictionary(d => d.Type, d => d);
         var sb = new StringBuilder();
 
         // Group types into subgraphs based on some criteria, e.g., namespace or group name
-        var groupedTypes = types.GroupBy(t => t.GroupName ?? "Default");
+        var groupedTypes = seedTypes.GroupBy(t => t.GroupName ?? "Default");
 
         foreach (var group in groupedTypes)
         {
@@ -101,7 +127,8 @@ public static class DataModelLayoutArea
                 }
             }
 
-            sb.AppendLine($"## {group.Key}");
+            if (includeGroupHeadings)
+                sb.AppendLine($"## {group.Key}");
             sb.AppendLine("```mermaid");
             sb.AppendLine("classDiagram");
 
@@ -109,7 +136,7 @@ public static class DataModelLayoutArea
             foreach (var type in groupSet)
             {
                 var typeName = type.Type.Name;
-                var link = $"/{host.Hub.Address}/DataModel/{typeName}";
+                var link = $"{linkBase}/{typeName}";
 
                 var propLines = type.Type
                     .GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
@@ -185,18 +212,45 @@ public static class DataModelLayoutArea
     }
 
     private static UiControl RenderTypeDetails(this LayoutAreaHost host, ITypeDefinition typeDef)
+        => RenderTypeDetails(
+            typeDef,
+            host.GetAllDomainTypes().ToArray(),
+            $"/{host.Hub.Address}/DataModel",
+            td => string.IsNullOrWhiteSpace(td.CollectionName)
+                ? null
+                : $"/{host.Hub.Address}/Catalog/{td.CollectionName}");
+
+    /// <summary>
+    /// Renders the property/derived-type detail page for one type — the reusable
+    /// core behind the Id-parameterised <see cref="DataModel"/>, also used by the
+    /// NodeType page's instance-model view.
+    /// </summary>
+    /// <param name="typeDef">The type to detail.</param>
+    /// <param name="allDomainTypes">The domain-type lookup for property links and derived types.</param>
+    /// <param name="linkBase">Href prefix for type links (same semantics as
+    /// <see cref="BuildMermaidDiagram"/>).</param>
+    /// <param name="catalogHref">Optional per-type catalog link factory; null suppresses
+    /// the catalog navigation icon.</param>
+    public static UiControl RenderTypeDetails(
+        ITypeDefinition typeDef,
+        IReadOnlyCollection<ITypeDefinition> allDomainTypes,
+        string linkBase,
+        Func<ITypeDefinition, string?>? catalogHref = null)
     {
         var type = typeDef.Type;
+        var allByType = allDomainTypes
+            .DistinctBy(td => td.Type)
+            .ToDictionary(td => td.Type, td => td);
         var sb = new StringBuilder();
 
         var typeSummary = type.GetXmlDocsSummary();
 
         // Title with right-aligned navigation icons
-        var navigationIcons = $"<a href=\"/{host.Hub.Address}/DataModel\" title=\"Data Model Overview\" style=\"text-decoration: none; font-size: 2em; line-height: 1;\">⧉</a>";
-        if (type.BaseType is { } bt && bt != typeof(object) && host.IsDomainType(bt))
-            navigationIcons += $" <a href=\"/{host.Hub.Address}/DataModel/{bt.Name}\" title=\"Base: {bt.Name}\" style=\"text-decoration: none; font-size: 2em; line-height: 1;\">🔝</a>";
-        if (!string.IsNullOrWhiteSpace(typeDef.CollectionName))
-            navigationIcons += $" <a href=\"/{host.Hub.Address}/Catalog/{typeDef.CollectionName}\" title=\"View Catalog\" style=\"text-decoration: none; font-size: 2em; line-height: 1;\">🗃️</a>";
+        var navigationIcons = $"<a href=\"{linkBase}\" title=\"Data Model Overview\" style=\"text-decoration: none; font-size: 2em; line-height: 1;\">⧉</a>";
+        if (type.BaseType is { } bt && bt != typeof(object) && allByType.ContainsKey(bt))
+            navigationIcons += $" <a href=\"{linkBase}/{bt.Name}\" title=\"Base: {bt.Name}\" style=\"text-decoration: none; font-size: 2em; line-height: 1;\">🔝</a>";
+        if (catalogHref?.Invoke(typeDef) is { } catalogLink)
+            navigationIcons += $" <a href=\"{catalogLink}\" title=\"View Catalog\" style=\"text-decoration: none; font-size: 2em; line-height: 1;\">🗃️</a>";
 
         var titleWithNav = $"<div style=\"display: flex !important; justify-content: space-between !important; align-items: center !important; margin-bottom: 1rem; width: 100%;\"><h1 style=\"margin: 0; flex-grow: 1;\">{type.Name}</h1><div style=\"flex-shrink: 0;\">{navigationIcons}</div></div>";
         sb.AppendLine(titleWithNav);
@@ -231,7 +285,7 @@ public static class DataModelLayoutArea
             {
                 var origin = x.IsInherited ? "↑" : "•";
                 var name = x.Prop.Name;
-                var typeMd = GetPropertyTypeCell(host, x.Prop, x.TypeName);
+                var typeMd = GetPropertyTypeCell(allByType, linkBase, x.Prop, x.TypeName);
                 var from = x.IsInherited ? x.Declaring : "this";
                 var summary = string.IsNullOrWhiteSpace(x.Summary) ? "" : x.Summary.Replace("\n", " ").Replace("|", "\\|");
                 sb.AppendLine($"| {origin} | **{name}** | {typeMd} | {from} | {summary} |");
@@ -240,13 +294,13 @@ public static class DataModelLayoutArea
         }
 
         // Derived types navigation last
-        var derived = host.GetAllDomainTypes().Where(t => t.Type.BaseType == type).Select(t => t.Type).OrderBy(t => t.Name).ToArray();
+        var derived = allDomainTypes.Where(t => t.Type.BaseType == type).Select(t => t.Type).OrderBy(t => t.Name).ToArray();
         if (derived.Any())
         {
             sb.AppendLine("## Derived Types");
             foreach (var dt in derived)
             {
-                sb.AppendLine($"- [{dt.Name}](/{host.Hub.Address}/DataModel/{dt.Name})");
+                sb.AppendLine($"- [{dt.Name}]({linkBase}/{dt.Name})");
             }
             sb.AppendLine();
         }
@@ -264,9 +318,6 @@ public static class DataModelLayoutArea
         }
         return host.RenderTypeDetails(typeDef);
     }
-
-    private static bool IsDomainType(this LayoutAreaHost host, Type t)
-        => host.GetAllDomainTypes().Any(td => td.Type == t);
 
     private static string GetParameters(MethodInfo method)
     {
@@ -321,15 +372,18 @@ public static class DataModelLayoutArea
         return isNullable ? baseName + "?" : baseName;
     }
 
-    private static string GetPropertyTypeCell(LayoutAreaHost host, PropertyInfo property,
+    private static string GetPropertyTypeCell(
+        IDictionary<Type, ITypeDefinition> allByType,
+        string linkBase,
+        PropertyInfo property,
         string displayName)
     {
         // Determine underlying type for nullables
-        var t = GetDomainTargetTypeForProperty(property, host.GetAllDomainTypes().ToDictionary(td => td.Type, td => td));
+        var t = GetDomainTargetTypeForProperty(property, allByType);
 
-        if (t != null && host.IsDomainType(t))
+        if (t != null && allByType.ContainsKey(t))
         {
-            var linked = $"[`{displayName}`](/{host.Hub.Address}/DataModel/{t.Name})";
+            var linked = $"[`{displayName}`]({linkBase}/{t.Name})";
             return linked;
         }
 

@@ -263,8 +263,11 @@ public static class CodeLayoutAreas
 
         var siblingStream = host.Stream.GetDataStream<MeshNode[]>(SiblingNodesDataId);
 
+        // Same side-menu splitter treatment as the NodeType shell: panes scroll
+        // independently, height fills the layout-area container (no viewport math).
         return Controls.Splitter
-            .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%").WithHeight("calc(100vh - 100px)"))
+            .WithClass("shell-splitter")
+            .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%").WithHeight("100%"))
             .WithView(
                 // Left pane: NavMenu listing sibling Code nodes
                 (h, c) => siblingStream

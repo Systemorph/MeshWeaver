@@ -237,7 +237,9 @@ public static class UserNodeType
             Group: "Administration",
             Icon: Application.Styles.FluentIcons.Shield(),
             GroupIcon: Application.Styles.FluentIcons.Shield(),
-            Order: 300);
+            Order: 300,
+            Keywords: ["global admin", "platform admin", "administration", "invites",
+                "users", "onboarding", "system"]);
 
         // Canonical platform-admin check: admin on the Admin partition (hub.IsGlobalAdmin →
         // Permission.All at scope "Admin"). Pure reactive — wait for the POSITIVE (filter true)

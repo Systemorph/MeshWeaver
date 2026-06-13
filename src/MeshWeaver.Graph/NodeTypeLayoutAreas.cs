@@ -36,6 +36,15 @@ public static class NodeTypeLayoutAreas
     public const string ReleasesArea = "Releases";
 
     /// <summary>
+    /// "Code" area on the per-NodeType hub: renders one source/test Code file
+    /// (the area Id is the Code node's path) INSIDE the shared <see cref="Shell"/>,
+    /// so navigating the Sources/Tests trees keeps the NodeType side menu. The
+    /// Code node's own page (<see cref="CodeLayoutAreas"/>) remains for direct
+    /// navigation from search results etc.
+    /// </summary>
+    public const string CodeArea = "Code";
+
+    /// <summary>
     /// "Progress" area name on the per-NodeType hub. GUI clients data-bind here
     /// after receiving a <see cref="MeshWeaver.Messaging.DeliveryFailure"/> with
     /// <see cref="MeshWeaver.Messaging.ErrorType.CompilationInProgress"/>: the
@@ -89,11 +98,14 @@ public static class NodeTypeLayoutAreas
                 .WithView(HubConfigViewArea, HubConfigView)
                 .WithView(HubConfigEditArea, HubConfigEdit)
                 .WithView(ReleasesArea, Releases)
+                .WithView(CodeArea, Code)
                 .WithView(ProgressArea, Progress)
                 // UCR special areas for unified content references
                 .WithView(MeshNodeLayoutAreas.DataArea, MeshNodeLayoutAreas.Data)
                 .WithView(MeshNodeLayoutAreas.SchemaArea, MeshNodeLayoutAreas.Schema)
-                .WithView(MeshNodeLayoutAreas.ModelArea, DataModelLayoutArea.DataModel));
+                // $Model on a NodeType shows the INSTANCE data model (compiled types),
+                // not the definition hub's own registry — diagram with a JSON toggle.
+                .WithView(MeshNodeLayoutAreas.ModelArea, NodeTypeDataModel));
 
     /// <summary>
     /// Compile-progress view for a NodeType. Subscribes to the NodeType's own
@@ -198,8 +210,14 @@ public static class NodeTypeLayoutAreas
         var agentsStream = QueryNodesStream(host,
             $"path:{hubPath} nodeType:Agent scope:descendants");
 
+        // `shell-splitter` (standard-page-layout.css) gives both panes a definite-height
+        // flex context: the menu and the content scroll independently, the splitter bar
+        // is draggable (Min/Max bound) and carries the collapse/expand chevrons for the
+        // menu pane. Height fills the parent .layout-area-container instead of a
+        // viewport-minus-magic-number guess.
         return Controls.Splitter
-            .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%").WithHeight("calc(100vh - 100px)"))
+            .WithClass("shell-splitter")
+            .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%").WithHeight("100%"))
             .WithView(
                 (h, c) => GetNodeStream(host)
                     .CombineLatest(sourceGroupsStream, testGroupsStream, nodeTypesStream, agentsStream)
@@ -210,11 +228,15 @@ public static class NodeTypeLayoutAreas
                             return RenderLoading("Loading...");
                         return BuildSideMenu(hubAddress, node, sourceGroups, testGroups, nodeTypes, agents);
                     }),
-                skin => skin.WithSize("280px").WithMin("200px").WithMax("400px").WithCollapsible(true)
+                skin => skin.WithSize("280px").WithMin("200px").WithMax("480px").WithCollapsible(true)
             )
             .WithView(
                 // The splitter pane wants a non-nullable control stream; a null
                 // emission from the content area renders as the loading state.
+                // No wrapper control: the pane's child div is the scroll container
+                // (`.shell-splitter .fluent-multi-splitter-pane > div` in
+                // standard-page-layout.css) — tests and embeddings see the area's
+                // actual control as the pane content.
                 (h, c) => mainContent(h, c).Select(v => v ?? RenderLoading("Loading...")),
                 skin => skin.WithSize("*")
             );
@@ -304,7 +326,7 @@ public static class NodeTypeLayoutAreas
 
                 var content = Controls.Stack.WithWidth("100%")
                     .WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host, typeDef)
-                        + " padding-top: 8px; padding-bottom: 32px; gap: 8px; overflow-y: auto; height: 100%;");
+                        + " padding-top: 8px; padding-bottom: 32px; gap: 8px;");
                 content = content.WithView(MeshNodeLayoutAreas.BuildHeader(host, node, false));
 
                 // Compile-state banner + Compile button — the "ability to compile"
@@ -316,6 +338,7 @@ public static class NodeTypeLayoutAreas
                     content = content.WithView(Controls.Markdown(typeDef.Description));
 
                 content = content.WithView(BuildConfigurationSection(hubAddress, node, typeDef));
+                content = content.WithView(NodeTypeDataModelAreas.BuildOverviewSection(host));
                 content = content.WithView(BuildQueriesSection("Source queries",
                     CodeQueryResolver.GroupAll(typeDef?.Sources, CodeQueryResolver.DefaultSources,
                         node.Path, CodeQueryResolver.DefaultSourceGroupName)));
@@ -328,7 +351,7 @@ public static class NodeTypeLayoutAreas
             });
     }
 
-    private static UiControl BuildSectionHeader(string title, string? href = null, string? linkLabel = null)
+    internal static UiControl BuildSectionHeader(string title, string? href = null, string? linkLabel = null)
     {
         var header = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
@@ -445,6 +468,39 @@ public static class NodeTypeLayoutAreas
         => Shell(host, MeshNodeLayoutAreas.Search);
 
     /// <summary>
+    /// Renders a single source/test Code file inside the shared <see cref="Shell"/>.
+    /// The area Id is the Code node's path; the content embeds that node's default
+    /// (Content) area via <see cref="LayoutAreaControl"/>, so the file view stays
+    /// live while the NodeType side menu stays put. This is where the Sources/Tests
+    /// tree links point — previously they navigated to the Code node's own page,
+    /// which swapped the NodeType menu for the code-sibling menu ("the menu keeps
+    /// disappearing").
+    /// </summary>
+    public static UiControl Code(LayoutAreaHost host, RenderingContext ctx)
+        => Shell(host, CodeContent);
+
+    /// <summary>
+    /// The NodeType's <c>$Model</c> area inside the shared <see cref="Shell"/>:
+    /// the instance data model as a Mermaid class diagram with a tab to switch to
+    /// the JSON schema and back; with an Id, the detail page for that type.
+    /// </summary>
+    public static UiControl NodeTypeDataModel(LayoutAreaHost host, RenderingContext ctx)
+        => Shell(host, NodeTypeDataModelAreas.Content);
+
+    private static IObservable<UiControl?> CodeContent(LayoutAreaHost host, RenderingContext ctx)
+    {
+        var codePath = host.Reference.Id?.ToString();
+        if (string.IsNullOrEmpty(codePath))
+            return Observable.Return<UiControl?>(Controls.Markdown(
+                    "*No source file selected — pick one from the Sources or Tests tree.*")
+                .WithStyle("padding: 24px;"));
+
+        return Observable.Return<UiControl?>(
+            new LayoutAreaControl(new Address(codePath!), new LayoutAreaReference(CodeLayoutAreas.ContentArea))
+                .WithStyle("width: 100%;"));
+    }
+
+    /// <summary>
     /// Builds the NodeType side menu — the one navigation surface every NodeType area
     /// shares. Concerns, top to bottom: Overview (landing), Configuration, the source
     /// tree grouped by query name, the test tree grouped by query name, Releases,
@@ -460,21 +516,25 @@ public static class NodeTypeLayoutAreas
         IReadOnlyList<MeshNode> agents)
     {
         var content = node.Content as NodeTypeDefinition;
-        var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false))
-            .WithStyle("overflow-y: auto; height: 100%;");
+        // Scrolling comes from `.shell-splitter .navmenu` in standard-page-layout.css —
+        // NavMenuView ignores inline Style on its root. Collapse/expand is the splitter
+        // pane's affordance (chevrons on the bar), not the NavMenu hamburger.
+        var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false));
 
         navMenu = navMenu.WithView(new NavLinkControl("Overview", FluentIcons.Home(),
             new LayoutAreaReference(OverviewArea).ToHref(hubAddress)));
         navMenu = navMenu.WithView(new NavLinkControl("Configuration", FluentIcons.Settings(),
             new LayoutAreaReference(ConfigurationArea).ToHref(hubAddress)));
+        navMenu = navMenu.WithView(new NavLinkControl("Data model", FluentIcons.Database(),
+            new LayoutAreaReference(MeshNodeLayoutAreas.ModelArea).ToHref(hubAddress)));
 
         // Sources + Tests trees — the resolved outputs of the configured queries,
         // grouped by query name (default `src` / `test`), so the user sees exactly
         // what compiles — including shared code pulled in from other namespaces.
         navMenu = navMenu.WithNavGroup(BuildCodeNavGroup(
-            "Sources", FluentIcons.Code(), node.Path, sourceGroups));
+            "Sources", FluentIcons.Code(), node.Path, sourceGroups, hubAddress));
         navMenu = navMenu.WithNavGroup(BuildCodeNavGroup(
-            "Tests", FluentIcons.Beaker(), node.Path, testGroups));
+            "Tests", FluentIcons.Beaker(), node.Path, testGroups, hubAddress));
 
         navMenu = navMenu.WithView(new NavLinkControl("Releases", FluentIcons.Box(),
             new LayoutAreaReference(ReleasesArea).ToHref(hubAddress)));
@@ -532,7 +592,8 @@ public static class NodeTypeLayoutAreas
         string groupLabel,
         Icon groupIcon,
         string rootPath,
-        IReadOnlyList<(CodeQueryGroup Group, IReadOnlyList<MeshNode> Nodes)>? groups)
+        IReadOnlyList<(CodeQueryGroup Group, IReadOnlyList<MeshNode> Nodes)>? groups,
+        object? hubAddress = null)
     {
         var root = new NavGroupControl(groupLabel)
             .WithIcon(groupIcon)
@@ -566,7 +627,7 @@ public static class NodeTypeLayoutAreas
                 var basePath = group.BaseNamespace ?? rootPath;
                 var tree = BuildCodeTreeForNavigation(basePath, nodes);
                 foreach (var child in tree.OrderedChildren())
-                    sub = AppendCodeTreeNode(sub, child);
+                    sub = AppendCodeTreeNode(sub, child, hubAddress);
             }
 
             root = root.WithGroup(sub);
@@ -647,11 +708,16 @@ public static class NodeTypeLayoutAreas
             });
     }
 
-    private static NavGroupControl AppendCodeTreeNode(NavGroupControl parent, CodeTreeNode node)
+    private static NavGroupControl AppendCodeTreeNode(NavGroupControl parent, CodeTreeNode node, object? hubAddress)
     {
         if (node is CodeTreeLeaf leaf)
         {
-            var href = new LayoutAreaReference(CodeLayoutAreas.OverviewArea).ToHref(leaf.Node.Path);
+            // Inside a NodeType shell, open the file in the shell's own Code area so
+            // the side menu stays. Without a hub address (no shell context), fall back
+            // to the Code node's standalone page.
+            var href = hubAddress != null
+                ? new LayoutAreaReference(CodeArea) { Id = leaf.Node.Path }.ToHref(hubAddress)
+                : new LayoutAreaReference(CodeLayoutAreas.OverviewArea).ToHref(leaf.Node.Path);
             return parent.WithView(new NavLinkControl(leaf.Node.Name ?? leaf.Node.Id, CustomIcons.CSharp(), href));
         }
 
@@ -660,7 +726,7 @@ public static class NodeTypeLayoutAreas
             .WithIcon(FluentIcons.Folder())
             .WithSkin(s => s.WithExpanded(true));
         foreach (var child in folder.OrderedChildren())
-            group = AppendCodeTreeNode(group, child);
+            group = AppendCodeTreeNode(group, child, hubAddress);
         return parent.WithGroup(group);
     }
 
@@ -768,7 +834,7 @@ public static class NodeTypeLayoutAreas
 
         var stack = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("padding: 24px; gap: 12px; overflow-y: auto; height: 100%;");
+            .WithStyle("padding: 24px; gap: 12px;");
 
         // Header row: title + Create Release (the compile trigger) + live status badge.
         var headerRow = Controls.Stack
@@ -925,7 +991,7 @@ public static class NodeTypeLayoutAreas
 
         var stack = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("padding: 24px; height: 100%; overflow: auto; gap: 20px;");
+            .WithStyle("padding: 24px; gap: 20px;");
 
         // Header row: title + Create Release + Run Tests actions.
         var headerRow = Controls.Stack

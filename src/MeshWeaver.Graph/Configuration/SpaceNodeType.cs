@@ -108,11 +108,11 @@ public static class SpaceNodeType
     /// PreRenderedHtml of its own. Plain markdown — no pseudo-HTML.
     /// Per-Space overrides live in each Space's own <c>index.md</c>
     /// (set on <see cref="MeshNode.PreRenderedHtml"/>).
-    /// <para>The trailing <c>@@("area:Children")</c> line embeds the mesh catalog
-    /// (the namespace-tree Children layout area) as a regular markdown section —
-    /// the reference is relative, so it resolves against the Space's own path at
-    /// render time. A space owner who authors their own page simply omits (or
-    /// deletes) that line to drop the catalog.</para>
+    /// <para>The mesh catalog (the namespace-tree Children layout area) is NOT part
+    /// of this markdown — <c>SpaceLayoutAreas.BuildSpaceView</c> renders it directly
+    /// below the body for every Space, authored or default. A space owner who wants
+    /// the catalog elsewhere in their page can still embed
+    /// <c>@@("area:Children")</c> in their own body.</para>
     /// </summary>
     public const string WelcomeMarkdown = """
         # Welcome
@@ -131,7 +131,13 @@ public static class SpaceNodeType
         - **Chat with your space.** Use the chat input below to ask questions,
           kick off an agent, or draft content together.
 
-        Once you're ready, replace this text with whatever fits your space best.
+        ## Replace this page
+
+        This welcome text is a placeholder shown until the Space has its own overview.
+        To make it your own, edit this Space's **Body**: open the Space's menu
+        (top-right **⋯**) → **Edit**, then write your overview in the **Body** field
+        (plain markdown — headings, links, tables, and `@@`-embeds all work). Or simply
+        ask the assistant in the chat below to draft it — it writes to the same Body field.
         """;
 
     public static TBuilder AddSpaceType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
