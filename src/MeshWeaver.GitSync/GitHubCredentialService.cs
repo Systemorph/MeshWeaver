@@ -77,10 +77,13 @@ public sealed class GitHubCredentialService(IMeshService meshService, IMessageHu
     }
 
     /// <summary>
-    /// Reads the user's GitHub credential with the tokens DECRYPTED, or null when
-    /// none is connected. Maybe-absent → <c>GetQuery</c>.
+    /// LIVE stream of the user's GitHub credential (tokens DECRYPTED), re-emitting on every
+    /// change; null when none is connected. Use this for GUI binding so the connect state flips
+    /// the instant the OAuth callback's saved credential syncs in. (A one-shot read here grabbed
+    /// the synced query's EMPTY pre-sync first emission and showed "Not connected" even right after
+    /// a successful connect.) Maybe-absent → <c>GetQuery</c>.
     /// </summary>
-    public IObservable<GitHubCredential?> Get(string userId)
+    public IObservable<GitHubCredential?> GetStream(string userId)
     {
         if (string.IsNullOrEmpty(userId))
             return Observable.Return<GitHubCredential?>(null);
@@ -88,7 +91,6 @@ public sealed class GitHubCredentialService(IMeshService meshService, IMessageHu
         var path = CredentialPath(userId);
         return hub.GetWorkspace()
             .GetQuery($"github-cred:{userId}", $"path:{path}")
-            .Take(1)
             .Select(nodes =>
             {
                 var node = nodes?.FirstOrDefault(n => string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase));
@@ -101,6 +103,14 @@ public sealed class GitHubCredentialService(IMeshService meshService, IMessageHu
                 };
             });
     }
+
+    /// <summary>
+    /// One-shot decrypted credential read (or null). For action paths (Sync / Import) — the GUI
+    /// connect-state binding keeps the shared <c>github-cred:{userId}</c> query warm, so by action
+    /// time the first emission already reflects the saved credential. The GUI uses
+    /// <see cref="GetStream"/> for display.
+    /// </summary>
+    public IObservable<GitHubCredential?> Get(string userId) => GetStream(userId).Take(1);
 
     /// <summary>True when the user has a stored GitHub credential.</summary>
     public IObservable<bool> IsConnected(string userId) =>

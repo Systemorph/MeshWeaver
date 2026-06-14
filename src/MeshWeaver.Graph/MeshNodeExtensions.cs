@@ -375,6 +375,7 @@ public static class MeshNodeExtensions
         typeRegistry.WithType(typeof(GroupMembership), nameof(GroupMembership));
         typeRegistry.WithType(typeof(MembershipEntry), nameof(MembershipEntry));
         typeRegistry.WithType(typeof(MeshNodeCardControl), nameof(MeshNodeCardControl));
+        typeRegistry.WithType(typeof(MeshNodeContentEditorControl), nameof(MeshNodeContentEditorControl));
         typeRegistry.WithType(typeof(Approval), nameof(Approval));
         typeRegistry.WithType(typeof(ApprovalStatus), nameof(ApprovalStatus));
         typeRegistry.WithType(typeof(TrackedChange), nameof(TrackedChange));

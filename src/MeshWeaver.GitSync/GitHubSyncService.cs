@@ -103,13 +103,11 @@ public sealed class GitHubSyncService
                         logger?.LogInformation(
                             "Exporting {Count} node(s) of {Space} → {Repo}@{Branch}",
                             files.Count, spacePath, repoUrl, config.Branch);
-                        // Use the in-hand config (no re-read) so the write can't lose the repo URL to a race.
+                        // Record the commit by MERGING only the last-sync fields atop the latest
+                        // node content (stream.Update read-modify-write) — never a full-content write,
+                        // so a concurrent repo-field edit in the GUI editor is not clobbered.
                         return repoClient.Push(request).SelectMany(result =>
-                            WriteConfig(spacePath, config with
-                            {
-                                LastSyncedAt = DateTimeOffset.UtcNow,
-                                LastSyncCommitSha = result.CommitSha,
-                            }).Select(_ => result));
+                            RecordLastSync(spacePath, result.CommitSha).Select(_ => result));
                     }));
             });
         });
@@ -283,11 +281,7 @@ public sealed class GitHubSyncService
                         "Connect your GitHub account first."));
                 logger?.LogInformation("Re-importing {Space} at {Ref}", spacePath, commitish);
                 return FetchAndImport(repoUrl, commitish, config.Subdirectory, token, spacePath)
-                    .SelectMany(x => WriteConfig(spacePath, config with
-                    {
-                        LastSyncCommitSha = x.CommitSha,
-                        LastSyncedAt = DateTimeOffset.UtcNow,
-                    }).Select(_ => x.Result));
+                    .SelectMany(x => RecordLastSync(spacePath, x.CommitSha).Select(_ => x.Result));
             });
         });
     }
@@ -362,13 +356,47 @@ public sealed class GitHubSyncService
     /// the hidden <c>{space}/_GitSync</c> satellite path, whose per-node hub does not serve the
     /// single-node reducer reliably (it timed out → "not configured"). Emits the config or null.
     /// </summary>
-    public IObservable<GitHubSyncConfig?> WatchConfig(string spacePath)
+    public IObservable<GitHubSyncConfig?> WatchConfig(string spacePath) =>
+        WatchConfigNode(spacePath).Select(Extract<GitHubSyncConfig>);
+
+    /// <summary>Live <see cref="MeshNode"/> stream for the Space's <c>_GitSync</c> config node
+    /// (or null when absent) — the synced <c>GetQuery</c>. The GUI editor binds to this node by
+    /// path via <c>GetMeshNodeStream</c>; this stream is for service-side reads/displays.</summary>
+    public IObservable<MeshNode?> WatchConfigNode(string spacePath)
     {
         var path = ConfigPath(spacePath);
         return hub.GetWorkspace()
             .GetQuery($"gitsync-cfg:{spacePath}", $"path:{path}")
-            .Select(nodes => Extract<GitHubSyncConfig>(
-                nodes?.FirstOrDefault(n => string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase))));
+            .Select(nodes => nodes?.FirstOrDefault(n => string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    /// <summary>
+    /// Create-on-absent the Space's <c>_GitSync</c> config node (with defaults) so the standard
+    /// node editor has a node to bind to. Existing node untouched. 🚨 Create-on-absent reads
+    /// existence via the keyed <c>GetQuery</c> (empty-on-absent) and seeds through the
+    /// node-lifecycle <c>CreateNode</c> — NEVER a point <c>GetMeshNodeStream(path).Update</c> on an
+    /// absent path (that NotFound-storms). Mirrors <c>AiSettingsNodeType.EnsureExists</c>.
+    /// Returns the existing or newly-created node.
+    /// </summary>
+    public IObservable<MeshNode> EnsureConfigNode(string spacePath)
+    {
+        var path = ConfigPath(spacePath);
+        return WatchConfigNode(spacePath).Take(1).SelectMany(existing =>
+        {
+            if (existing is not null) return Observable.Return(existing);
+            var node = new MeshNode(ConfigId, spacePath)
+            {
+                NodeType = ConfigNodeType,
+                Name = "GitHub Sync",
+                State = MeshNodeState.Active,
+                MainNode = spacePath,
+                Content = new GitHubSyncConfig(),
+            };
+            // CreateNode is create-only (rejects an existing node) — if a concurrent caller won the
+            // race, fall back to reading the now-present node rather than surfacing the conflict.
+            return meshService.CreateNode(node)
+                .Catch<MeshNode, Exception>(_ => WatchConfigNode(spacePath).Where(n => n is not null).Select(n => n!).Take(1));
+        });
     }
 
     /// <summary>One-shot config read for actions (Sync / Re-import). The synced query's first
@@ -393,8 +421,25 @@ public sealed class GitHubSyncService
     private IObservable<MeshNode> UpdateConfig(string spacePath, Func<GitHubSyncConfig, GitHubSyncConfig> update)
         => ReadConfig(spacePath).SelectMany(current => WriteConfig(spacePath, update(current ?? new GitHubSyncConfig())));
 
-    /// <summary>Writes the FULL config (no read) — used after Sync/Re-import where the caller
-    /// already holds the up-to-date config, so no field is lost to a read race.</summary>
+    /// <summary>
+    /// Records the last-sync result by MERGING only <see cref="GitHubSyncConfig.LastSyncedAt"/> /
+    /// <see cref="GitHubSyncConfig.LastSyncCommitSha"/> atop the latest node content via
+    /// <c>GetMeshNodeStream(path).Update</c> (read-modify-write). Touching only those two fields
+    /// means a concurrent GUI edit of the repository fields is never clobbered.
+    /// </summary>
+    private IObservable<MeshNode> RecordLastSync(string spacePath, string commitSha)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return hub.GetWorkspace().GetMeshNodeStream(ConfigPath(spacePath)).Update(node =>
+        {
+            var cur = Extract<GitHubSyncConfig>(node) ?? new GitHubSyncConfig();
+            return node with { Content = cur with { LastSyncedAt = now, LastSyncCommitSha = commitSha } };
+        });
+    }
+
+    /// <summary>Writes the FULL config (no read) — used by <see cref="SaveConfig"/> (a programmatic
+    /// / test API). The GUI does NOT use this: it edits the node through the standard
+    /// <c>MeshNodeContentEditorControl</c> which binds directly to the node stream.</summary>
     private IObservable<MeshNode> WriteConfig(string spacePath, GitHubSyncConfig config)
     {
         var node = new MeshNode(ConfigId, spacePath)
