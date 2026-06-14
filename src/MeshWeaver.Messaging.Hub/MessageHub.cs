@@ -125,6 +125,16 @@ public sealed class MessageHub : IMessageHub
     public long Version { get; private set; }
 
     /// <summary>
+    /// Disposal-health diagnostic: how many <see cref="ShutdownRequest"/> turns this hub
+    /// has handled. A healthy disposal handles exactly the three phase requests
+    /// (Quiescing → DisposeHostedHubs → ShutDown). A value in the thousands is the
+    /// signature of the version-match repost STORM removed from <c>HandleShutdownCore</c>
+    /// (see the regression test <c>Dispose_UnderContinuousLoad_DoesNotStormShutdownRequests</c>).
+    /// </summary>
+    public int ShutdownTurnsHandled => shutdownTurnsHandled;
+    private int shutdownTurnsHandled;
+
+    /// <summary>
     /// Sets the initial version for the hub. Only callable during initialization
     /// before any messages are processed.
     /// </summary>
@@ -1293,6 +1303,7 @@ public sealed class MessageHub : IMessageHub
     )
     {
         var phaseStopwatch = Stopwatch.StartNew();
+        shutdownTurnsHandled++;
         logger.LogDebug("STARTING HandleShutdown for hub {Address}, RunLevel={RunLevel}, RequestVersion={RequestVersion}, total disposal time so far: {totalElapsed}ms",
             Address, request.Message.RunLevel, request.Message.Version, disposalStopwatch.ElapsedMilliseconds);
 
@@ -1300,16 +1311,20 @@ public sealed class MessageHub : IMessageHub
         // are disposed synchronously later, in the ShutDown phase (DisposeImpl →
         // disposables.Dispose). There is no async dispose-action drain phase.
 
-        if (request.Message.Version != Version - 1)
-        {
-            logger.LogDebug("Version mismatch for hub {Address}: received {RequestVersion}, expected {ExpectedVersion}, IsDisposing={IsDisposing}",
-                Address, request.Message.Version, Version - 1, IsDisposing);
-
-            logger.LogDebug("Reposting ShutdownRequest with corrected version {NewVersion} for hub {Address}", Version, Address);
-            Post(request.Message with { Version = Version });
-            return request.Ignored();
-        }
-
+        // NO version-match gate here. We used to require request.Version == Version - 1
+        // (i.e. "this ShutdownRequest is the immediately-next message since it was
+        // posted, nothing handled in between") and, on mismatch, REPOST the request with
+        // a corrected version. On a busy hub that was a livelock: ++Version runs for
+        // EVERY message (HandleMessageAsync), so any concurrent traffic between a repost
+        // and its re-handle bumps Version past the one-step window — the gate never
+        // converges and instead self-sustains a repost STORM (2,820 ShutdownRequest
+        // reposts on a single `consumer/1` hub under the 2-core security tests; 140k
+        // ShutdownRequest turns suite-wide, saturating TaskScheduler.Default and timing
+        // the project out under the 2-core CI runner). The gate also added NOTHING:
+        // duplicates are already handled by the per-phase RunLevel idempotency guards
+        // below (Ignored, not reposted), and the three phases are causally chained
+        // (Quiescing → DisposeHostedHubs → ShutDown, each posted from the previous
+        // phase's completion) and FIFO-ordered, so order is guaranteed without it.
         switch (request.Message.RunLevel)
         {
             case MessageHubRunLevel.Quiescing:

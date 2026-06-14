@@ -115,6 +115,62 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
         victim.IsDisposing.Should().BeTrue();
     }
 
+    record FloodEvent;
+
+    /// <summary>
+    /// Regression for the ShutdownRequest repost STORM (2026-06-14).
+    /// <c>HandleShutdownCore</c> used to gate on <c>request.Version == Version - 1</c>
+    /// ("this ShutdownRequest is the immediately-next message since it was posted") and,
+    /// on mismatch, REPOST the request with a corrected version. But <c>++Version</c>
+    /// runs for EVERY handled message, so any traffic concurrent with disposal bumps
+    /// Version past that one-step window between every repost and its re-handle — the gate
+    /// never converges and instead self-sustains a repost storm: 2,820 reposts on a single
+    /// <c>consumer/1</c> hub, ~140k ShutdownRequest turns suite-wide under the 2-core
+    /// security tests, saturating <c>TaskScheduler.Default</c> and timing the project out
+    /// on the 2-core CI runner. The fix removes the gate — the per-phase RunLevel guards
+    /// already make disposal idempotent, and the three phases are causally chained +
+    /// FIFO-ordered. A healthy disposal therefore handles exactly the phase
+    /// ShutdownRequests regardless of concurrent load. Before the fix, with the flood
+    /// below, <c>ShutdownTurnsHandled</c> runs into the hundreds/thousands.
+    /// </summary>
+    [Fact]
+    public async Task Dispose_UnderContinuousLoad_DoesNotStormShutdownRequests()
+    {
+        var victim = (MessageHub)Mesh.GetHostedHub(new Address("victim", "1"), x => x);
+
+        // Confirm the hub's turn loop is live.
+        victim.Post(new FloodEvent(), o => o.WithTarget(victim.Address));
+
+        // Keep the turn loop continuously busy so Version advances DURING disposal — the
+        // exact condition the old version-match gate livelocked on. Self-posted unhandled
+        // events are Ignored after one turn each (++Version per turn), keeping the inbox
+        // non-empty without any cross-hub dependency.
+        using var floodStop = new CancellationTokenSource();
+        var flood = Task.Run(() =>
+        {
+            while (!floodStop.IsCancellationRequested)
+            {
+                try { victim.Post(new FloodEvent(), o => o.WithTarget(victim.Address)); }
+                catch { /* hub disposing — the loop stops on cancel below */ }
+            }
+        });
+
+        // Let the flood ramp so the inbox is non-empty when Dispose posts the first
+        // ShutdownRequest.
+        await Task.Delay(150);
+
+        victim.Dispose();
+        await victim.DisposalCompleted.FirstOrDefaultAsync().ToTask().WaitAsync(30.Seconds());
+
+        floodStop.Cancel();
+        await flood;
+
+        // Healthy disposal = 3 phase turns (Quiescing, DisposeHostedHubs, ShutDown). The
+        // bound is ~3 orders of magnitude below the pre-fix storm; any storm blows past it.
+        victim.ShutdownTurnsHandled.Should().BeLessThan(20,
+            "disposal must handle only the phase ShutdownRequests, never a version-mismatch repost storm");
+    }
+
     [Fact]
     public void RoutingCycleDetection_ShouldDetectCycle()
     {
