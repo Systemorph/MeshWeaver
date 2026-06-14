@@ -20,9 +20,9 @@ namespace MeshWeaver.GitSync;
 /// documented <see cref="StaticRepoImporter"/> pipeline.
 ///
 /// <para>🚨 Reactive end-to-end (no <c>async</c>/<c>await</c>/<c>Task</c> in any
-/// signature). Every blocking/async leaf — Octokit calls, the OAuth HTTP, and the
-/// file-format <c>SerializeAsync</c>/<c>ParseAsync</c> — runs inside
-/// <see cref="IIoPool"/> per <c>Doc/Architecture/ControlledIoPooling.md</c>.</para>
+/// signature). Every blocking/async leaf — Octokit calls and the OAuth HTTP — runs
+/// inside <see cref="IIoPool"/> per <c>Doc/Architecture/ControlledIoPooling.md</c>.
+/// File-format parse/serialize is pure in-memory CPU and runs synchronously (no pool).</para>
 /// </summary>
 public sealed class GitHubSyncService
 {
@@ -35,7 +35,6 @@ public sealed class GitHubSyncService
     private readonly IGitHubRepoClient repoClient;
     private readonly GitHubCredentialService credentials;
     private readonly ILogger? logger;
-    private readonly IoPoolRegistry ioPools;
     private readonly FileFormatParserRegistry parsers;
 
     public GitHubSyncService(
@@ -50,11 +49,8 @@ public sealed class GitHubSyncService
         this.repoClient = repoClient;
         this.credentials = credentials;
         this.logger = logger;
-        ioPools = hub.ServiceProvider.GetRequiredService<IoPoolRegistry>();
         parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions);
     }
-
-    private IIoPool FsPool => ioPools.Get(IoPoolNames.FileSystem);
 
     public static string ConfigPath(string spacePath) => $"{spacePath}/{ConfigId}";
 
@@ -212,8 +208,8 @@ public sealed class GitHubSyncService
         }
         var ext = serializer.SupportedExtensions.FirstOrDefault() ?? ".json";
         var repoPath = NodeFileMapper.ToRepoPath(node.Path, partition, ext, NodeFileMapper.HasChildren(node.Path, allPaths));
-        return FsPool.Invoke(ct => serializer.SerializeAsync(node, ct))
-            .Select(content => (RepoFile?)new RepoFile(repoPath, content));
+        // Serialize is pure in-memory work — no pool, just project the value into the chain.
+        return Observable.Return<RepoFile?>(new RepoFile(repoPath, serializer.Serialize(node)));
     }
 
     private (string Name, string Email) AuthorIdentity(GitHubCredential cred)
@@ -353,26 +349,24 @@ public sealed class GitHubSyncService
             return Observable.Return(((MeshNode?)null, false));
 
         var ext = System.IO.Path.GetExtension(file.Path);
-        return FsPool.Invoke(ct => parsers.TryParseAsync(ext, file.Path, file.Content, file.Path, ct))
-            .Select(parsed =>
+        // file.Content is already an in-memory string — the parse is pure CPU, no pool.
+        var parsed = parsers.TryParse(ext, file.Path, file.Content, file.Path);
+        if (parsed is null) return Observable.Return(((MeshNode?)null, false));
+        if (NodeFileMapper.IsRootIndex(file.Path))
+        {
+            var root = parsed with
             {
-                if (parsed is null) return ((MeshNode?)null, false);
-                if (NodeFileMapper.IsRootIndex(file.Path))
-                {
-                    var root = parsed with
-                    {
-                        Id = spaceId,
-                        Namespace = "",
-                        MainNode = spaceId,
-                        NodeType = string.IsNullOrEmpty(parsed.NodeType) ? SpaceNodeType : parsed.NodeType,
-                    };
-                    return ((MeshNode?)root, true);
-                }
-                var (id, ns) = NodeFileMapper.FromRelativePath(file.Path);
-                var rebasedNs = string.IsNullOrEmpty(ns) ? spaceId : $"{spaceId}/{ns}";
-                var node = parsed with { Id = id, Namespace = rebasedNs, MainNode = $"{rebasedNs}/{id}" };
-                return ((MeshNode?)node, false);
-            });
+                Id = spaceId,
+                Namespace = "",
+                MainNode = spaceId,
+                NodeType = string.IsNullOrEmpty(parsed.NodeType) ? SpaceNodeType : parsed.NodeType,
+            };
+            return Observable.Return(((MeshNode?)root, true));
+        }
+        var (id, ns) = NodeFileMapper.FromRelativePath(file.Path);
+        var rebasedNs = string.IsNullOrEmpty(ns) ? spaceId : $"{spaceId}/{ns}";
+        var node = parsed with { Id = id, Namespace = rebasedNs, MainNode = $"{rebasedNs}/{id}" };
+        return Observable.Return(((MeshNode?)node, false));
     }
 
     // ══════════════════════════════════════════════════════════════════════════

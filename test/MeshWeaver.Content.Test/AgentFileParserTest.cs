@@ -16,7 +16,7 @@ public class AgentFileParserTest
     #region Parse Tests
 
     [Fact(Timeout = 20000)]
-    public async Task ParseAsync_ValidAgentMarkdown_ReturnsAgentConfiguration()
+    public void ParseAsync_ValidAgentMarkdown_ReturnsAgentConfiguration()
     {
         // Arrange
         var content = """
@@ -32,7 +32,7 @@ public class AgentFileParserTest
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/test/TestAgent.md", content, "test/TestAgent.md");
+        var node = _parser.Parse("/test/TestAgent.md", content, "test/TestAgent.md");
 
         // Assert
         node.Should().NotBeNull();
@@ -52,7 +52,7 @@ public class AgentFileParserTest
     }
 
     [Fact(Timeout = 20000)]
-    public async Task ParseAsync_WithDelegations_ParsesDelegationsList()
+    public void ParseAsync_WithDelegations_ParsesDelegationsList()
     {
         // Arrange
         var content = """
@@ -70,7 +70,7 @@ public class AgentFileParserTest
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/Orchestrator.md", content, "Orchestrator.md");
+        var node = _parser.Parse("/Orchestrator.md", content, "Orchestrator.md");
 
         // Assert
         node.Should().NotBeNull();
@@ -83,7 +83,7 @@ public class AgentFileParserTest
     }
 
     [Fact(Timeout = 20000)]
-    public async Task ParseAsync_InstructionsInMarkdownBody_ExtractsToInstructions()
+    public void ParseAsync_InstructionsInMarkdownBody_ExtractsToInstructions()
     {
         // Arrange
         var content = """
@@ -105,7 +105,7 @@ public class AgentFileParserTest
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/Research.md", content, "Research.md");
+        var node = _parser.Parse("/Research.md", content, "Research.md");
 
         // Assert
         node.Should().NotBeNull();
@@ -117,7 +117,7 @@ public class AgentFileParserTest
     }
 
     [Fact(Timeout = 20000)]
-    public async Task ParseAsync_WithAllProperties_ParsesAllProperties()
+    public void ParseAsync_WithAllProperties_ParsesAllProperties()
     {
         // Arrange
         var content = """
@@ -139,7 +139,7 @@ public class AgentFileParserTest
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/FullAgent.md", content, "FullAgent.md");
+        var node = _parser.Parse("/FullAgent.md", content, "FullAgent.md");
 
         // Assert — group + order are node-level (groupName maps onto the node's Category);
         // only agent-specific behaviour is on the configuration content.
@@ -153,7 +153,7 @@ public class AgentFileParserTest
     }
 
     [Fact(Timeout = 20000)]
-    public async Task ParseAsync_NonAgentNodeType_ReturnsNull()
+    public void ParseAsync_NonAgentNodeType_ReturnsNull()
     {
         // Arrange
         var content = """
@@ -166,14 +166,14 @@ public class AgentFileParserTest
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/test.md", content, "test.md");
+        var node = _parser.Parse("/test.md", content, "test.md");
 
         // Assert
         node.Should().BeNull();
     }
 
     [Fact(Timeout = 20000)]
-    public async Task ParseAsync_NoYamlFrontMatter_ReturnsNull()
+    public void ParseAsync_NoYamlFrontMatter_ReturnsNull()
     {
         // Arrange
         var content = """
@@ -183,14 +183,14 @@ public class AgentFileParserTest
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/test.md", content, "test.md");
+        var node = _parser.Parse("/test.md", content, "test.md");
 
         // Assert
         node.Should().BeNull();
     }
 
     [Fact(Timeout = 20000)]
-    public async Task ParseAsync_WithHandoffs_ParsesHandoffsList()
+    public void ParseAsync_WithHandoffs_ParsesHandoffsList()
     {
         // Arrange
         var content = """
@@ -211,7 +211,7 @@ public class AgentFileParserTest
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/Orchestrator.md", content, "Orchestrator.md");
+        var node = _parser.Parse("/Orchestrator.md", content, "Orchestrator.md");
 
         // Assert
         node.Should().NotBeNull();
@@ -227,7 +227,7 @@ public class AgentFileParserTest
     }
 
     [Fact(Timeout = 20000)]
-    public async Task ParseAsync_WithHandoffsOnly_ParsesHandoffs()
+    public void ParseAsync_WithHandoffsOnly_ParsesHandoffs()
     {
         // Arrange
         var content = """
@@ -243,7 +243,7 @@ public class AgentFileParserTest
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/Specialist.md", content, "Specialist.md");
+        var node = _parser.Parse("/Specialist.md", content, "Specialist.md");
 
         // Assert
         node.Should().NotBeNull();
@@ -258,7 +258,7 @@ public class AgentFileParserTest
     #region Serialize Tests
 
     [Fact(Timeout = 20000)]
-    public async Task SerializeAsync_AgentNode_ProducesValidMarkdown()
+    public void SerializeAsync_AgentNode_ProducesValidMarkdown()
     {
         // Arrange — node-level metadata on the node; only behaviour on the content.
         var agentConfig = new AgentConfiguration
@@ -281,7 +281,7 @@ public class AgentFileParserTest
         };
 
         // Act
-        var result = await _parser.SerializeAsync(node);
+        var result = _parser.Serialize(node);
 
         // Assert
         result.Should().Contain("---");
@@ -294,7 +294,7 @@ public class AgentFileParserTest
     }
 
     [Fact(Timeout = 20000)]
-    public async Task SerializeAsync_WithDelegations_SerializesDelegations()
+    public void SerializeAsync_WithDelegations_SerializesDelegations()
     {
         // Arrange
         var agentConfig = new AgentConfiguration
@@ -316,7 +316,7 @@ public class AgentFileParserTest
         };
 
         // Act
-        var result = await _parser.SerializeAsync(node);
+        var result = _parser.Serialize(node);
 
         // Assert
         result.Should().Contain("delegations:");
@@ -327,7 +327,7 @@ public class AgentFileParserTest
     }
 
     [Fact(Timeout = 20000)]
-    public async Task SerializeAsync_WithHandoffs_SerializesHandoffs()
+    public void SerializeAsync_WithHandoffs_SerializesHandoffs()
     {
         // Arrange
         var agentConfig = new AgentConfiguration
@@ -353,7 +353,7 @@ public class AgentFileParserTest
         };
 
         // Act
-        var result = await _parser.SerializeAsync(node);
+        var result = _parser.Serialize(node);
 
         // Assert
         result.Should().Contain("delegations:");
@@ -366,7 +366,7 @@ public class AgentFileParserTest
     }
 
     [Fact(Timeout = 20000)]
-    public async Task RoundTrip_WithHandoffs_PreservesHandoffs()
+    public void RoundTrip_WithHandoffs_PreservesHandoffs()
     {
         // Arrange
         var originalContent = """
@@ -388,11 +388,11 @@ public class AgentFileParserTest
             """;
 
         // Act - Parse then serialize
-        var node = await _parser.ParseAsync("/Orchestrator.md", originalContent, "Orchestrator.md");
-        var serialized = await _parser.SerializeAsync(node!);
+        var node = _parser.Parse("/Orchestrator.md", originalContent, "Orchestrator.md");
+        var serialized = _parser.Serialize(node!);
 
         // Re-parse to verify
-        var reparsed = await _parser.ParseAsync("/Orchestrator.md", serialized, "Orchestrator.md");
+        var reparsed = _parser.Parse("/Orchestrator.md", serialized, "Orchestrator.md");
 
         // Assert
         reparsed.Should().NotBeNull();
@@ -455,7 +455,7 @@ public class AgentFileParserTest
     #region Round-Trip Tests
 
     [Fact(Timeout = 20000)]
-    public async Task RoundTrip_PreservesAllProperties()
+    public void RoundTrip_PreservesAllProperties()
     {
         // Arrange
         var originalContent = """
@@ -486,11 +486,11 @@ public class AgentFileParserTest
             """;
 
         // Act - Parse then serialize
-        var node = await _parser.ParseAsync("/test/CompleteAgent.md", originalContent, "test/CompleteAgent.md");
-        var serialized = await _parser.SerializeAsync(node!);
+        var node = _parser.Parse("/test/CompleteAgent.md", originalContent, "test/CompleteAgent.md");
+        var serialized = _parser.Serialize(node!);
 
         // Re-parse to verify
-        var reparsed = await _parser.ParseAsync("/test/CompleteAgent.md", serialized, "test/CompleteAgent.md");
+        var reparsed = _parser.Parse("/test/CompleteAgent.md", serialized, "test/CompleteAgent.md");
 
         // Assert
         reparsed.Should().NotBeNull();

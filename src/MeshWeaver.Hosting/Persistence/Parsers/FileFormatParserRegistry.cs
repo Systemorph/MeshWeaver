@@ -41,7 +41,7 @@ public class FileFormatParserRegistry
 
     /// <summary>
     /// Gets the first parser for the given file extension.
-    /// For parsing with fallback support, use TryParseAsync instead.
+    /// For parsing with fallback support, use TryParse instead.
     /// </summary>
     /// <param name="extension">File extension including the dot (e.g., ".md").</param>
     /// <returns>First parser for the extension, or null if no parser handles it.</returns>
@@ -73,21 +73,19 @@ public class FileFormatParserRegistry
     /// <param name="filePath">Full path to the file.</param>
     /// <param name="content">File content.</param>
     /// <param name="relativePath">Path relative to the data root.</param>
-    /// <param name="ct">Cancellation token.</param>
     /// <returns>Parsed MeshNode or null if no parser can handle the content.</returns>
-    public async Task<MeshNode?> TryParseAsync(
+    public MeshNode? TryParse(
         string extension,
         string filePath,
         string content,
-        string relativePath,
-        CancellationToken ct = default)
+        string relativePath)
     {
         var parsers = GetParsers(extension);
         foreach (var parser in parsers)
         {
             try
             {
-                var node = await parser.ParseAsync(filePath, content, relativePath, ct);
+                var node = parser.Parse(filePath, content, relativePath);
                 if (node != null)
                     return node;
             }

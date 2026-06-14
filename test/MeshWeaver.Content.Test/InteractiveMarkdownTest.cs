@@ -41,7 +41,7 @@ public class InteractiveMarkdownTest(ITestOutputHelper output) : MonolithMeshTes
         var content = await File.ReadAllTextAsync(markdownPath);
 
         // Act
-        var node = await parser.ParseAsync(markdownPath, content, "Test/Overview.md");
+        var node = parser.Parse(markdownPath, content, "Test/Overview.md");
 
         // Assert
         node.Should().NotBeNull();
@@ -67,7 +67,7 @@ public class InteractiveMarkdownTest(ITestOutputHelper output) : MonolithMeshTes
             await File.WriteAllTextAsync(tempPath, content);
 
             // Act
-            var node = await parser.ParseAsync(tempPath, content, "Test/Simple.md");
+            var node = parser.Parse(tempPath, content, "Test/Simple.md");
 
             // Assert
             node.Should().NotBeNull();
@@ -84,7 +84,7 @@ public class InteractiveMarkdownTest(ITestOutputHelper output) : MonolithMeshTes
     }
 
     [Fact]
-    public async Task MarkdownFileParser_SerializesNodeToMarkdown()
+    public void MarkdownFileParser_SerializesNodeToMarkdown()
     {
         // Arrange
         var parser = new MarkdownFileParser();
@@ -97,7 +97,7 @@ public class InteractiveMarkdownTest(ITestOutputHelper output) : MonolithMeshTes
         };
 
         // Act
-        var markdown = await parser.SerializeAsync(node);
+        var markdown = parser.Serialize(node);
 
         // Assert
         markdown.Should().Contain("---");

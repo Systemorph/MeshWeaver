@@ -109,7 +109,7 @@ public class MarkdownParsingTest(ITestOutputHelper output) : HubTestBase(output)
             var content = await File.ReadAllTextAsync(file);
             var relativePath = Path.GetRelativePath(baseDir, file);
 
-            var node = await parser.ParseAsync(file, content, relativePath);
+            var node = parser.Parse(file, content, relativePath);
 
             node.Should().NotBeNull();
             node!.Id.Should().Be("Overview");

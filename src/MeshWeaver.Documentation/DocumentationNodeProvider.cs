@@ -106,8 +106,8 @@ public class DocumentationNodeProvider : IStaticNodeProvider
             var extension = Path.GetExtension(relativePath);
 
             // Use the same parsers as the file system provider
-            var node = parserRegistry.TryParseAsync(extension, relativePath, content,
-                $"{RootNamespace}/{relativePath}", default).GetAwaiter().GetResult();
+            var node = parserRegistry.TryParse(extension, relativePath, content,
+                $"{RootNamespace}/{relativePath}");
 
             if (node != null)
                 nodes.Add(node);
@@ -148,8 +148,7 @@ public class DocumentationNodeProvider : IStaticNodeProvider
                 : relativePath;
             var fullPath = $"{RootNamespace}/{withoutExt}".Replace('\\', '/').Trim('/');
 
-            var node = parserRegistry.TryParseAsync(extension, relativePath, content, fullPath, default)
-                .GetAwaiter().GetResult();
+            var node = parserRegistry.TryParse(extension, relativePath, content, fullPath);
             if (node == null) continue;
 
             // Align Namespace/Id with the served path (mirrors EmbeddedResourceStorageAdapter's

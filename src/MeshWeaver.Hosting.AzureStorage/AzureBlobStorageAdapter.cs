@@ -90,8 +90,8 @@ public class AzureBlobStorageAdapter : IStorageAdapter
             var parsers = _parserRegistry.GetParsers(extension);
             if (parsers.Count > 0)
             {
-                // Use TryParseAsync for fallback support (e.g., AgentFileParser -> MarkdownFileParser)
-                node = await _parserRegistry.TryParseAsync(extension, blobClient.Name, content, path, ct).ConfigureAwait(false);
+                // Use TryParse for fallback support (e.g., AgentFileParser -> MarkdownFileParser)
+                node = _parserRegistry.TryParse(extension, blobClient.Name, content, path);
             }
             else
             {
@@ -144,7 +144,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
         var serializer = _parserRegistry.GetSerializerFor(nodeToSave);
         if (serializer != null)
         {
-            content = await serializer.SerializeAsync(nodeToSave, ct).ConfigureAwait(false);
+            content = serializer.Serialize(nodeToSave);
             extension = serializer.SupportedExtensions[0]; // Use the primary extension
         }
         else

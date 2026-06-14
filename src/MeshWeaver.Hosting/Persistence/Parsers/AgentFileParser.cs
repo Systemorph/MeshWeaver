@@ -59,7 +59,7 @@ public class AgentFileParser : IFileFormatParser
         }
     }
 
-    public Task<MeshNode?> ParseAsync(string filePath, string content, string relativePath, CancellationToken ct = default)
+    public MeshNode? Parse(string filePath, string content, string relativePath)
     {
         // Derive id and namespace from path
         var (id, ns) = DeriveIdAndNamespace(relativePath, filePath);
@@ -79,14 +79,14 @@ public class AgentFileParser : IFileFormatParser
             catch
             {
                 // If YAML parsing fails, this isn't a valid agent file
-                return Task.FromResult<MeshNode?>(null);
+                return null;
             }
         }
 
         // Only handle files with nodeType: Agent
         if (frontMatter == null || !string.Equals(frontMatter.NodeType, AgentNodeType, StringComparison.OrdinalIgnoreCase))
         {
-            return Task.FromResult<MeshNode?>(null);
+            return null;
         }
 
         // Extract markdown content (without YAML block) - this becomes Instructions
@@ -137,10 +137,10 @@ public class AgentFileParser : IFileFormatParser
             Content = agentConfig
         };
 
-        return Task.FromResult<MeshNode?>(node);
+        return node;
     }
 
-    public Task<string> SerializeAsync(MeshNode node, CancellationToken ct = default)
+    public string Serialize(MeshNode node)
     {
         var sb = new StringBuilder();
 
@@ -206,7 +206,7 @@ public class AgentFileParser : IFileFormatParser
             }
         }
 
-        return Task.FromResult(sb.ToString());
+        return sb.ToString();
     }
 
     public bool CanSerialize(MeshNode node)
