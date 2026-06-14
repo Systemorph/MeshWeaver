@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using MeshWeaver.Domain;
 using MeshWeaver.Kernel;
 using MeshWeaver.Mesh;
@@ -15,6 +17,16 @@ namespace MeshWeaver.Hosting
         protected readonly ITypeRegistry TypeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
         protected readonly IMessageHub Mesh = hub;
         protected readonly IPathResolver PathResolver = hub.ServiceProvider.GetRequiredService<IPathResolver>();
+
+        /// <summary>
+        /// Per-address activation serializers. While a target hub is being
+        /// activated, every message for that address funnels through one
+        /// <see cref="ActivationSerializer"/> so concurrent first-messages reach
+        /// the hub in ARRIVAL order (see <see cref="RouteInMesh"/>). Instance
+        /// field — lifetime is the mesh's; each serializer self-retires when its
+        /// backlog drains. Never static (would bleed across meshes/tests).
+        /// </summary>
+        private readonly ConcurrentDictionary<Address, ActivationSerializer> activationSerializers = new();
 
         public IObservable<IMessageDelivery> DeliverMessage(IMessageDelivery delivery)
         {
@@ -53,25 +65,147 @@ namespace MeshWeaver.Hosting
             }
 
             var hostAddress = GetHostAddress(address);
-            RouteMessage(delivery, hostAddress).Subscribe(
-                _ => { },
-                ex =>
+
+            // 🚨 Per-address activation FIFO. The hub for `hostAddress` is not yet
+            // activated. Two rapid messages to the SAME not-yet-activated address
+            // must reach its hub in ARRIVAL order. Routed independently, each drives
+            // the async ResolvePath → CreateHub chain (RouteMessage) and the hub
+            // receives them in async-COMPLETION order, not post order — the
+            // cell-2-overtakes-cell-1 reorder behind the kernel REPL state-sharing
+            // failures. Orleans serializes this implicitly at the grain; the
+            // monolith/base must funnel concurrent activations of one address through
+            // a serial queue. RouteInMesh runs on the mesh action block (single
+            // threaded), so enqueue order == arrival order; the serializer's Concat
+            // pump preserves it through activation. Once the hub is hosted the backlog
+            // drains and the serializer self-retires — subsequent messages take the
+            // direct short-circuit above (no per-message ResolvePath).
+            EnqueueForActivation(delivery, hostAddress);
+        }
+
+        private void EnqueueForActivation(IMessageDelivery delivery, Address hostAddress)
+        {
+            while (true)
+            {
+                var serializer = activationSerializers.GetOrAdd(
+                    hostAddress, a => new ActivationSerializer(this, a));
+                if (serializer.TryEnqueue(delivery))
+                    return;
+
+                // The serializer drained + completed between GetOrAdd and Enqueue.
+                // Drop the stale entry and retry: if the hub is now hosted the next
+                // pass takes the direct short-circuit; otherwise a fresh serializer
+                // is created.
+                activationSerializers.TryRemove(
+                    new KeyValuePair<Address, ActivationSerializer>(hostAddress, serializer));
+                if (Mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+                    return;
+                var hosted = Mesh.GetHostedHub(hostAddress, HostedHubCreation.Never);
+                if (hosted is not null)
                 {
-                    // [CanBeIgnored] messages (Shutdown/Dispose/HeartBeat) have no awaiting
-                    // sender — a DeliveryFailure for them is meaningless and feeds the disposal
-                    // ping-pong storm (see ReportFailure). Same rule as the Ignored-handler path.
-                    if (delivery.Message is DeliveryFailure
-                        || delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>()
-                        || Mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
-                        return;
-                    Mesh.Post(new DeliveryFailure(delivery)
-                    {
-                        Message = ex.Message,
-                        ExceptionType = ex.GetType().Name,
-                        StackTrace = ex.StackTrace!
-                    },
-                        o => o.ResponseFor(delivery));
-                });
+                    hosted.DeliverMessage(delivery);
+                    return;
+                }
+            }
+        }
+
+        private void NackRouteFailure(IMessageDelivery delivery, Exception ex)
+        {
+            // [CanBeIgnored] messages (Shutdown/Dispose/HeartBeat) have no awaiting
+            // sender — a DeliveryFailure for them is meaningless and feeds the disposal
+            // ping-pong storm (see ReportFailure). Same rule as the Ignored-handler path.
+            // Also never post once the mesh is tearing down — the recipients are gone.
+            if (delivery.Message is DeliveryFailure
+                || delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>()
+                || Mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+                return;
+            Mesh.Post(new DeliveryFailure(delivery)
+            {
+                Message = ex.Message,
+                ExceptionType = ex.GetType().Name,
+                StackTrace = ex.StackTrace!
+            },
+                o => o.ResponseFor(delivery));
+        }
+
+        /// <summary>
+        /// Serial activation queue for ONE address. Messages funnel through a hot
+        /// <see cref="Subject{T}"/> whose emissions are run one-at-a-time by
+        /// <see cref="Observable.Concat{TSource}(IObservable{IObservable{TSource}})"/>:
+        /// the next message's <see cref="RouteMessage"/> subscribes only after the
+        /// previous one COMPLETES (hub created + message delivered). Fed from
+        /// <see cref="RouteInMesh"/> on the mesh action block, so OnNext order ==
+        /// arrival order and Concat preserves it end-to-end. Self-retires (completes
+        /// + removes itself) once the backlog drains, so the steady-state direct
+        /// path is untouched.
+        /// </summary>
+        private sealed class ActivationSerializer
+        {
+            private readonly RoutingServiceBase owner;
+            private readonly Address address;
+            private readonly Subject<IMessageDelivery> inbox = new();
+            private readonly IDisposable pump;
+            private readonly object gate = new();
+            private int pending;
+            private bool completed;
+
+            public ActivationSerializer(RoutingServiceBase owner, Address address)
+            {
+                this.owner = owner;
+                this.address = address;
+                pump = inbox
+                    .Select(d => RouteOne(d))
+                    .Concat()
+                    .Subscribe(_ => { }, _ => { });
+            }
+
+            private IObservable<IMessageDelivery> RouteOne(IMessageDelivery delivery) =>
+                Observable.Defer(() =>
+                {
+                    // Disconnect after dispose: never resolve/deliver/post once the
+                    // mesh is tearing down — the recipients are disposing too.
+                    if (owner.Mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+                        return Observable.Empty<IMessageDelivery>();
+                    return owner.RouteMessage(delivery, address);
+                })
+                .Catch<IMessageDelivery, Exception>(ex =>
+                {
+                    owner.NackRouteFailure(delivery, ex);
+                    return Observable.Empty<IMessageDelivery>();
+                })
+                .Finally(OnMessageDone);
+
+            public bool TryEnqueue(IMessageDelivery delivery)
+            {
+                lock (gate)
+                {
+                    if (completed) return false;
+                    pending++;
+                    // OnNext under the lock is safe: the lock is reentrant, and a
+                    // synchronously-completing inner (e.g. a fast error) re-enters
+                    // OnMessageDone on this thread without deadlock. RouteMessage's
+                    // I/O is deferred onto the thread pool (ResolvePath SubscribeOn),
+                    // so OnNext returns promptly.
+                    inbox.OnNext(delivery);
+                    return true;
+                }
+            }
+
+            private void OnMessageDone()
+            {
+                lock (gate)
+                {
+                    if (--pending > 0) return;
+                    // Backlog drained — retire. Future messages either take the
+                    // direct short-circuit (hub now hosted) or create a fresh
+                    // serializer. Completing the inbox makes TryEnqueue return false
+                    // for any caller that raced this removal, so it retries cleanly.
+                    completed = true;
+                    inbox.OnCompleted();
+                }
+                owner.activationSerializers.TryRemove(
+                    new KeyValuePair<Address, ActivationSerializer>(address, this));
+                pump.Dispose();
+            }
         }
 
         private IObservable<IMessageDelivery> RouteMessage(
