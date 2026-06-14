@@ -43,7 +43,11 @@ public class AgentSyncedQueryFromHostedHubTest : MonolithMeshTestBase
             {
                 ["Anthropic:Models:0"] = "claude-opus-4-6",
                 ["Anthropic:Models:1"] = "claude-sonnet-4-6",
-                ["Anthropic:Models:2"] = "claude-haiku-4-5"
+                ["Anthropic:Models:2"] = "claude-haiku-4-5",
+                // Endpoint+key make the provider CONFIGURED — BuiltInLanguageModelProvider
+                // hides an unconfigured provider's models (the configured-only filter, f54419cc8).
+                ["Anthropic:Endpoint"] = "https://anthropic.example.com",
+                ["Anthropic:ApiKey"] = "test-key"
             })
             .Build();
 

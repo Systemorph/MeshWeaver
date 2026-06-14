@@ -46,6 +46,11 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
                 ["Anthropic:Models:0"] = "claude-opus-4-6",
                 ["Anthropic:Models:1"] = "claude-sonnet-4-6",
                 ["Anthropic:Models:2"] = "claude-haiku-4-5",
+                // BuiltInLanguageModelProvider emits a provider's LanguageModel nodes ONLY when it
+                // is CONFIGURED (endpoint + key); without these the models are hidden from the
+                // picker and ObserveModels returns empty (the configured-only filter, f54419cc8).
+                ["Anthropic:Endpoint"] = "https://anthropic.example.com",
+                ["Anthropic:ApiKey"] = "test-key",
             })
             .Build();
 
@@ -189,6 +194,11 @@ public class AgentPickerProjectionPartitionedTest : MonolithMeshTestBase
                 ["Anthropic:Models:0"] = "claude-opus-4-6",
                 ["Anthropic:Models:1"] = "claude-sonnet-4-6",
                 ["Anthropic:Models:2"] = "claude-haiku-4-5",
+                // BuiltInLanguageModelProvider emits a provider's LanguageModel nodes ONLY when it
+                // is CONFIGURED (endpoint + key); without these the models are hidden from the
+                // picker and ObserveModels returns empty (the configured-only filter, f54419cc8).
+                ["Anthropic:Endpoint"] = "https://anthropic.example.com",
+                ["Anthropic:ApiKey"] = "test-key",
             })
             .Build();
 
