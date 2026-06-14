@@ -1,15 +1,20 @@
 using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
+using MeshWeaver.Blazor.Infrastructure; // PortalApplication
 using MeshWeaver.GitSync;
+using MeshWeaver.Messaging;             // AccessService
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Memex.Portal.Shared.Social;
@@ -110,29 +115,38 @@ public static class GitHubConnectEndpoints
             if (string.IsNullOrEmpty(code))
                 return Fail("no authorization code returned by GitHub");
 
-            var userId = http.User.Identity?.Name;
+            // The credential MUST be keyed by the mesh User.Id (e.g. "rbuergi") — the SAME identifier
+            // the GitHub Sync tab and Sync read it under (AccessContext.ObjectId). Using
+            // http.User.Identity.Name (the display name "Roland Buergi") saved it under the wrong key,
+            // so the tab never found it ("nothing happens" after ?connect=github-ok). Mirror
+            // OAuthConnectController.ResolveMeshUserId: prefer the resolved AccessContext.ObjectId,
+            // fall back to the preferred_username/email local part.
+            var userId = ResolveMeshUserId(http);
             if (string.IsNullOrEmpty(userId))
-                return Fail("not signed in");
+                return Fail("could not resolve your mesh user id (retry after a normal browser login)");
 
             var redirectUri = BuildRedirectUri(http);
-            var tcs = new TaskCompletionSource<IResult>();
-            oauth.ExchangeCode(code!, redirectUri)
+            // Reactive end-to-end; bridge to Task ONCE at the HTTP boundary via FirstAsync().ToTask()
+            // — the sanctioned edge pattern (see OAuthConnectController.ExchangeToken). NO hand-woven
+            // TaskCompletionSource/Subscribe. The credential write's AccessContext is carried through
+            // the framework's .Subscribe / IoPool boundary from the request context the middleware set.
+            return await oauth.ExchangeCode(code!, redirectUri)
                 .SelectMany(token => oauth.GetLogin(token.AccessToken)
                     .Catch<string?, Exception>(_ => Observable.Return<string?>(null))
                     .SelectMany(login => creds.Save(userId!, token, login)))
-                .Subscribe(
-                    _ =>
-                    {
-                        logger.LogInformation("Stored GitHub credential for {User}", userId);
-                        tcs.TrySetResult(Results.Redirect(SafeReturn(returnPath, "github-ok", null)));
-                    },
-                    ex =>
-                    {
-                        // Surface the REAL reason (token exchange / GetLogin / credential write) — never swallow.
-                        logger.LogWarning(ex, "GitHub connect failed for {User}", userId);
-                        tcs.TrySetResult(Results.Redirect(SafeReturn(returnPath, "github-error", ex.Message)));
-                    });
-            return await tcs.Task;
+                .Select(_ =>
+                {
+                    logger.LogInformation("Stored GitHub credential for {User}", userId);
+                    return (IResult)Results.Redirect(SafeReturn(returnPath, "github-ok", null));
+                })
+                .Catch((Exception ex) =>
+                {
+                    // Surface the REAL reason (token exchange / GetLogin / credential write) — never swallow.
+                    logger.LogWarning(ex, "GitHub connect failed for {User}", userId);
+                    return Observable.Return((IResult)Results.Redirect(SafeReturn(returnPath, "github-error", ex.Message)));
+                })
+                .FirstAsync()
+                .ToTask(http.RequestAborted);
         }).RequireAuthorization();
 
         return endpoints;
@@ -157,4 +171,31 @@ public static class GitHubConnectEndpoints
 
     private static string BuildRedirectUri(HttpContext http) =>
         $"{http.Request.Scheme}://{http.Request.Host}{CallbackPath}";
+
+    /// <summary>
+    /// Resolves the mesh <c>User.Id</c> (e.g. <c>rbuergi</c>) to key the credential under — the SAME
+    /// identifier the GitHub Sync tab + Sync read it under (<c>AccessContext.ObjectId</c>), NEVER the
+    /// display <c>Name</c> claim. Mirrors <c>OAuthConnectController.ResolveMeshUserId</c>: prefer the
+    /// resolved <c>AccessContext.ObjectId</c> (email→User.Id, stamped by UserContextMiddleware), fall
+    /// back to the <c>preferred_username</c>/email local part when no context is present.
+    /// </summary>
+    private static string? ResolveMeshUserId(HttpContext http)
+    {
+        var ctx = http.RequestServices.GetService<PortalApplication>()?
+            .Hub.ServiceProvider.GetService<AccessService>()?.Context;
+        var resolved = ctx?.ObjectId;
+        if (!string.IsNullOrEmpty(resolved) && !resolved.Contains('@'))
+            return resolved;
+        var claim = http.User.FindFirstValue("preferred_username") ?? http.User.FindFirstValue(ClaimTypes.Email);
+        return UsernameFromEmail(claim);
+    }
+
+    /// <summary>Email-shaped identifier → its local part (the username / mesh partition key,
+    /// e.g. <c>rbuergi@systemorph.com → rbuergi</c>); unchanged when there's no <c>@</c>.</summary>
+    private static string? UsernameFromEmail(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return null;
+        var at = value.IndexOf('@');
+        return at > 0 ? value[..at] : value;
+    }
 }
