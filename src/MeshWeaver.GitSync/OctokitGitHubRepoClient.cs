@@ -61,12 +61,20 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
 
         return EnsureRepo(client, owner, repo, request.CreatePrivateIfMissing)
             .SelectMany(repoCreated => ReadHead(client, owner, repo, branch)
-                .SelectMany(head =>
+                .SelectMany(head0 =>
                 {
-                    if (!head.RefExists && !request.CreateBranchIfMissing)
+                    if (!head0.RefExists && !request.CreateBranchIfMissing)
                         return Observable.Throw<GitHubPushResult>(new InvalidOperationException(
                             $"Branch '{branch}' does not exist and branch auto-create is disabled."));
 
+                    // A brand-new EMPTY repo (zero commits) rejects the Git Data API: blob/tree/commit
+                    // creation returns 409 "Git Repository is empty." until a first commit exists, and
+                    // ONLY the Contents API can create that. EnsureInitialCommit seeds a throwaway file
+                    // on the branch to initialize an empty repo, then we mirror normally — the mirror
+                    // reconstructs the tree (dropping the seed) so the real content lands as the commit.
+                    return EnsureInitialCommit(client, owner, repo, branch, prefix, head0)
+                    .SelectMany(head =>
+                    {
                     // Existing blob entries (full repo). Empty when the repo/branch has no commit yet.
                     var existing = head.ExistingBlobs;
                     // Within the mirrored prefix: these are the candidates that may be deleted.
@@ -108,6 +116,7 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
                                         commit.Sha, request.RepositoryUrl,
                                         request.Files.Count, deleted, repoCreated)));
                         });
+                    });
                 }));
     }
 
@@ -244,6 +253,35 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
     internal static bool IsMissingOrEmptyRepo(ApiException ex)
         => ex is NotFoundException
            || ex.StatusCode == System.Net.HttpStatusCode.Conflict;
+
+    /// <summary>
+    /// Bootstraps a brand-new EMPTY repo so the Git Data API works. GitHub rejects blob/tree/commit
+    /// creation on a zero-commit repo with 409 "Git Repository is empty." — only the Contents API can
+    /// create the FIRST commit. When the branch has no head AND the repo is genuinely empty, seed a
+    /// throwaway <c>.gitkeep</c> on the branch via the Contents API (which creates the branch + first
+    /// commit), then re-read the head. The caller's mirror then reconstructs the tree from scratch,
+    /// dropping the seed, so the real content lands as the next commit. A non-empty repo that merely
+    /// lacks this branch is left untouched — the normal parent-less-commit + create-ref path handles it.
+    /// </summary>
+    private IObservable<HeadInfo> EnsureInitialCommit(
+        GitHubClient client, string owner, string repo, string branch, string prefix, HeadInfo head)
+        => head.RefExists
+            ? Observable.Return(head)
+            : IsRepoEmpty(client, owner, repo).SelectMany(empty => empty
+                ? Http.Invoke(ct => client.Repository.Content.CreateFile(owner, repo, prefix + ".gitkeep",
+                        new CreateFileRequest("Initialize repository (MeshWeaver sync)",
+                            "Created by MeshWeaver to initialize this repository.\n", branch)))
+                    .SelectMany(_ => ReadHead(client, owner, repo, branch))
+                : Observable.Return(head));
+
+    /// <summary>True when the repo has no commits at all (a freshly-created repo): GitHub lists zero
+    /// branches for an empty repo, and some endpoints 409 "Git Repository is empty.".</summary>
+    private IObservable<bool> IsRepoEmpty(GitHubClient client, string owner, string repo)
+        => Http.Invoke(ct => client.Repository.Branch.GetAll(owner, repo))
+            .Select(branches => branches.Count == 0)
+            .Catch<bool, ApiException>(ex => IsMissingOrEmptyRepo(ex)
+                ? Observable.Return(true)
+                : Observable.Throw<bool>(ex));
 
     /// <summary>
     /// Resolves a commitish (a branch name OR a commit SHA) to its commit + recursive
