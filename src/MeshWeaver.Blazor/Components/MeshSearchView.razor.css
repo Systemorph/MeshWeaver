@@ -327,6 +327,119 @@
     font-size: 0.85rem;
 }
 
+/* Card wrapper hosting the absolute "Drill down" affordance (top-right). */
+.mesh-search-card-wrap {
+    position: relative;
+    width: 100%;
+}
+
+/* Secondary "Drill down" / "Search this node" affordance — subtle until hover. */
+.mesh-search-drilldown {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    color: var(--neutral-foreground-hint, #888);
+    background: var(--neutral-layer-2, rgba(0, 0, 0, 0.04));
+    border: 1px solid transparent;
+    text-decoration: none;
+    opacity: 0;
+    transition: opacity 0.15s, color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.mesh-search-card-wrap:hover .mesh-search-drilldown,
+.mesh-search-drilldown:focus-visible {
+    opacity: 1;
+}
+
+.mesh-search-drilldown:hover {
+    color: var(--accent-foreground-rest, #0078d4);
+    background: var(--neutral-layer-1, #fff);
+    border-color: var(--neutral-stroke-rest, #d1d1d1);
+}
+
+/* Modern folder TILE for namespace sub-folders (browse mode). The outer element
+   only positions the secondary drill-down anchor; the link is the clickable body. */
+.mesh-search-folder-tile {
+    position: relative;
+    width: 100%;
+}
+
+.mesh-search-folder-tile-link {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 12px 14px;
+    min-height: 60px;
+    border-radius: 10px;
+    background: var(--neutral-layer-1, #fff);
+    border: 1px solid var(--neutral-stroke-rest, #e0e0e0);
+    color: var(--neutral-foreground-rest);
+    text-decoration: none;
+    cursor: pointer;
+    transition: box-shadow 0.15s, border-color 0.15s, transform 0.15s, background 0.15s;
+}
+
+.mesh-search-folder-tile-link:hover {
+    border-color: var(--accent-fill-rest, #0078d4);
+    box-shadow: var(--elevation-shadow-card-active);
+    transform: translateY(-1px);
+    background: var(--neutral-layer-2, #fafafa);
+}
+
+.mesh-search-folder-tile-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    border-radius: 8px;
+    background: var(--neutral-fill-secondary-rest, #f0f0f0);
+    color: var(--accent-foreground-rest, #0078d4);
+    flex-shrink: 0;
+}
+
+.mesh-search-folder-tile-text {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex: 1;
+}
+
+.mesh-search-folder-tile-name {
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mesh-search-folder-tile-count {
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1;
+    padding: 3px 8px;
+    border-radius: 10px;
+    background: var(--neutral-fill-secondary-rest, #e8e8e8);
+    color: var(--neutral-foreground-hint, #666);
+    flex-shrink: 0;
+}
+
+/* The drill-down anchor sitting on a folder tile reveals on tile hover. */
+.mesh-search-folder-tile:hover .mesh-search-folder-drilldown,
+.mesh-search-folder-drilldown:focus-visible {
+    opacity: 1;
+}
+
 /* Namespace tree (MeshSearchRenderMode.NamespaceTree) */
 .mesh-search-tree-section {
     margin-bottom: 12px;

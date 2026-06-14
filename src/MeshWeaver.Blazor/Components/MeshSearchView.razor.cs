@@ -768,6 +768,26 @@ public partial class MeshSearchView : IDisposable
         }
     }
 
+    /// <summary>
+    /// The re-rooted "Drill down" area (e.g. "Search"). When non-empty, each card
+    /// and folder shows a secondary anchor to <c>/{path}/{BoundDrillDownArea}</c>;
+    /// the primary click still opens the node's default page <c>/{path}</c>.
+    /// Empty/unset = no drill-down affordance (opt-in).
+    /// </summary>
+    private string? BoundDrillDownArea
+    {
+        get
+        {
+            if (ViewModel?.DrillDownArea is string s) return string.IsNullOrWhiteSpace(s) ? null : s;
+            if (ViewModel?.DrillDownArea is JsonElement je && je.ValueKind == JsonValueKind.String)
+            {
+                var v = je.GetString();
+                return string.IsNullOrWhiteSpace(v) ? null : v;
+            }
+            return null;
+        }
+    }
+
     private int? BoundMaxColumns
     {
         get

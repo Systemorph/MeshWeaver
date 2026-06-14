@@ -235,6 +235,12 @@
     {
         var cardControl = GetCardControl(node);
         var clickAddress = ViewModel?.ClickMessageAddress?.ToString();
+        var drillArea = BoundDrillDownArea;
+        // Drill-down is only meaningful for browser navigation — when the card
+        // selects (picker) or posts a click message, skip the secondary anchor.
+        var showDrill = !string.IsNullOrEmpty(drillArea)
+            && !OnNodeSelected.HasDelegate
+            && string.IsNullOrEmpty(clickAddress);
 
         if (OnNodeSelected.HasDelegate)
         {
@@ -248,11 +254,29 @@
                 <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
             </div>
         }
+        else if (showDrill)
+        {
+            <div class="mesh-search-card-wrap">
+                <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
+                <a class="mesh-search-drilldown" href="/@node.Path/@drillArea"
+                   title="Drill down" @onclick:stopPropagation="true">
+                    @DrillDownIcon
+                </a>
+            </div>
+        }
         else
         {
             <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
         }
     };
+
+    /// <summary>Small folder-tree / drill-down glyph (~14px) for the secondary "Drill down" affordance.</summary>
+    private static readonly MarkupString DrillDownIcon = (MarkupString)(
+        "<svg width=\"14\" height=\"14\" viewBox=\"0 0 16 16\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\">" +
+        "<path d=\"M1.5 3.5a1 1 0 0 1 1-1h3l1.2 1.4H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H2.5a1 1 0 0 1-1-1V3.5Z\" " +
+        "stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linejoin=\"round\"/>" +
+        "<path d=\"M5.5 8.25h5M8 6.5l2 1.75-2 1.75\" stroke=\"currentColor\" stroke-width=\"1.2\" " +
+        "stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>");
 
     private void PostClickMessage(MeshNode node, string targetAddress)
     {
@@ -300,47 +324,55 @@
         var leaves = items.OfType<NamespaceTreeLeaf>().ToList();
         var showCounts = BoundSections?.ShowCounts ?? true;
 
-        @foreach (var folder in folders)
+        @if (lazy)
         {
-            var isExpanded = lazy
-                ? _expandedFolders.Contains(folder.Path)
-                : IsSearchTreeFolderExpanded(folder.Path);
-            var countLabel = lazy ? FormatTreeCount(folder.Count) : folder.Count.ToString();
-            var folderPath = folder.Path;
-
-            var isLazy = lazy;
-            <div class="mesh-search-section mesh-search-tree-section">
-                <div class="mesh-search-section-header"
-                     @onclick="() => OnTreeFolderHeaderClick(folderPath, isLazy)">
-                    <span class="@(isExpanded ? "mesh-search-collapse-icon expanded" : "mesh-search-collapse-icon")">&#x25b6;</span>
-                    <span class="mesh-search-tree-folder-glyph">
-                        <FluentIcon Value="@(new Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size16.Folder())" />
-                    </span>
-                    <span class="mesh-search-section-label">@folder.Name</span>
-                    @if (showCounts)
-                    {
-                        <span class="mesh-search-tree-count">@countLabel</span>
-                    }
-                    @if (folder.Node != null)
-                    {
-                        <a class="mesh-search-tree-open" href="/@folder.Path" title="Open @folder.Name"
-                           @onclick:stopPropagation="true">&#x2197;</a>
-                    }
-                </div>
-                @if (isExpanded)
-                {
-                    <div class="mesh-search-tree-children">
-                        @if (lazy)
+            @* Browse mode: folders are modern tiles that NAVIGATE into the namespace
+               (default page /{folderPath}); drilling deeper expands the URL. *@
+            @if (folders.Count > 0)
+            {
+                <div class="mesh-search-grid-wrapper">
+                    <div class="mesh-search-area-grid" style="@CardGridStyle">
+                        @foreach (var folder in folders)
                         {
-                            @RenderTreeLevel(folder.Path, depth + 1)
-                        }
-                        else
-                        {
-                            @RenderTreeItems(folder.Children, folder.Path, depth + 1, false)
+                            @RenderFolderTile(folder, FormatTreeCount(folder.Count), showCounts)
                         }
                     </div>
-                }
-            </div>
+                </div>
+            }
+        }
+        else
+        {
+            @* Search mode: folders group flat result nodes — keep the collapsible
+               in-page sections so matches stay visible in their namespace context. *@
+            @foreach (var folder in folders)
+            {
+                var isExpanded = IsSearchTreeFolderExpanded(folder.Path);
+                var countLabel = folder.Count.ToString();
+                var folderPath = folder.Path;
+
+                <div class="mesh-search-section mesh-search-tree-section">
+                    <div class="mesh-search-section-header"
+                         @onclick="() => OnTreeFolderHeaderClick(folderPath, false)">
+                        <span class="@(isExpanded ? "mesh-search-collapse-icon expanded" : "mesh-search-collapse-icon")">&#x25b6;</span>
+                        <span class="mesh-search-tree-folder-glyph">
+                            <FluentIcon Value="@(new Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size16.Folder())" />
+                        </span>
+                        <span class="mesh-search-section-label">@folder.Name</span>
+                        @if (showCounts)
+                        {
+                            <span class="mesh-search-tree-count">@countLabel</span>
+                        }
+                        <a class="mesh-search-tree-open" href="/@folder.Path" title="Open @folder.Name"
+                           @onclick:stopPropagation="true">&#x2197;</a>
+                    </div>
+                    @if (isExpanded)
+                    {
+                        <div class="mesh-search-tree-children">
+                            @RenderTreeItems(folder.Children, folder.Path, depth + 1, false)
+                        </div>
+                    }
+                </div>
+            }
         }
 
         @if (leaves.Count > 0)
@@ -378,5 +410,45 @@
                 </div>
             }
         }
+    };
+
+    /// <summary>
+    /// Renders a sub-namespace as a modern folder tile. The PRIMARY click navigates
+    /// to the folder's default page <c>/{folderPath}</c> (empty area) so drilling
+    /// expands the URL; when a drill-down area is set, a secondary "Drill down" anchor
+    /// re-roots the Search/catalog area at <c>/{folderPath}/{BoundDrillDownArea}</c>.
+    /// </summary>
+    private RenderFragment RenderFolderTile(NamespaceTreeFolder folder, string countLabel, bool showCounts) => __builder =>
+    {
+        var folderPath = folder.Path;
+        var drillArea = BoundDrillDownArea;
+
+        // Avoid nested anchors: the tile body is a full-cover primary anchor; the
+        // secondary "Drill down" anchor is a SIBLING positioned over the top-right.
+        <div class="mesh-search-folder-tile">
+            <a class="mesh-search-folder-tile-link" href="/@folderPath" title="Open @folder.Name">
+                <span class="mesh-search-folder-tile-icon">
+                    <svg width="22" height="22" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                        <path d="M2 5a1.5 1.5 0 0 1 1.5-1.5h3.2l1.5 1.7H16.5A1.5 1.5 0 0 1 18 6.7V15a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 2 15V5Z"
+                              fill="currentColor" fill-opacity="0.14" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                    </svg>
+                </span>
+                <span class="mesh-search-folder-tile-text">
+                    <span class="mesh-search-folder-tile-name">@folder.Name</span>
+                    @if (showCounts)
+                    {
+                        <span class="mesh-search-folder-tile-count">@countLabel</span>
+                    }
+                </span>
+            </a>
+            @if (!string.IsNullOrEmpty(drillArea))
+            {
+                <a class="mesh-search-drilldown mesh-search-folder-drilldown"
+                   href="/@folderPath/@drillArea" title="Drill down"
+                   @onclick:stopPropagation="true">
+                    @DrillDownIcon
+                </a>
+            }
+        </div>
     };
 }

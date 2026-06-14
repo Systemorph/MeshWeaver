@@ -178,6 +178,17 @@ public record MeshSearchControl()
     /// </summary>
     public object? ClickMessageAddress { get; init; }
 
+    /// <summary>
+    /// When set (e.g. <c>"Search"</c>), each result card and each namespace
+    /// folder shows a secondary "Drill down" affordance that navigates to
+    /// <c>/{path}/{DrillDownArea}</c> — the re-rooted Search/catalog area, so the
+    /// user can keep browsing INTO that node's namespace. The PRIMARY click still
+    /// opens the node's default page <c>/{path}</c> (empty area — never a hardcoded
+    /// "Overview"). When null/unset, no drill-down affordance is rendered and the
+    /// catalog behaves exactly as before (opt-in).
+    /// </summary>
+    public object? DrillDownArea { get; init; }
+
     // Basic fluent methods
     public MeshSearchControl WithTitle(string title) => this with { Title = title };
     public MeshSearchControl WithClickMessageAddress(object address) => this with { ClickMessageAddress = address };
@@ -247,4 +258,7 @@ public record MeshSearchControl()
     public MeshSearchControl WithCreateNodeType(string nodeType) => this with { CreateNodeType = nodeType };
     public MeshSearchControl WithCreateNamespace(string ns) => this with { CreateNamespace = ns };
     public MeshSearchControl WithCreateHref(string href) => this with { CreateHref = href };
+
+    // Drill-down: secondary "keep browsing into this namespace" affordance.
+    public MeshSearchControl WithDrillDownArea(string area) => this with { DrillDownArea = area };
 }
