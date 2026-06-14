@@ -211,15 +211,31 @@ async Task<int> Run(
 
 // --- login -----------------------------------------------------------------
 {
-    var tokenArg = new Argument<string>("token") { Description = "API token (mw_…) to stash in ~/.memex/config.json." };
+    // Token is OPTIONAL on the command line — omit it and you're prompted to paste it
+    // interactively (masked), so the secret never lands in shell history or process args.
+    var tokenArg = new Argument<string?>("token")
+    {
+        Description = "API token (mw_…). Omit to be prompted interactively.",
+        Arity = ArgumentArity.ZeroOrOne,
+    };
     var baseOpt = new Option<string?>("--base-url") { Description = "Portal base URL to persist alongside the token." };
-    var cmd = new Command("login", $"Store an API token in {MemexConfig.ConfigPath}.") { tokenArg, baseOpt };
+    var cmd = new Command("login", $"Log on: store an API token in {MemexConfig.ConfigPath}.") { tokenArg, baseOpt };
     cmd.SetAction((result, ct) =>
     {
         try
         {
-            MemexConfig.SaveFile(result.GetValue(baseOpt), result.GetValue(tokenArg)!);
-            Console.WriteLine($"Token saved to {MemexConfig.ConfigPath}");
+            var token = result.GetValue(tokenArg);
+            if (string.IsNullOrWhiteSpace(token))
+                token = PromptForToken();
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                Console.Error.WriteLine("error: no token provided.");
+                return Task.FromResult(3);
+            }
+            if (!token.StartsWith("mw_", StringComparison.Ordinal))
+                Console.Error.WriteLine("warning: token does not start with 'mw_' — saving it anyway.");
+            MemexConfig.SaveFile(result.GetValue(baseOpt), token);
+            Console.WriteLine($"Logged on — token saved to {MemexConfig.ConfigPath}");
             return Task.FromResult(0);
         }
         catch (Exception ex)
@@ -229,6 +245,32 @@ async Task<int> Run(
         }
     });
     root.Subcommands.Add(cmd);
+}
+
+// Reads a token from the console without echoing it. Falls back to a plain read when
+// input is redirected (piped / non-interactive), where key-by-key capture isn't available.
+static string? PromptForToken()
+{
+    Console.Error.Write("Paste your atioz API token (mw_…): ");
+    if (Console.IsInputRedirected)
+        return Console.ReadLine()?.Trim();
+
+    var sb = new StringBuilder();
+    while (true)
+    {
+        var key = Console.ReadKey(intercept: true);
+        if (key.Key == ConsoleKey.Enter) break;
+        if (key.Key == ConsoleKey.Backspace)
+        {
+            if (sb.Length > 0) sb.Length--;
+        }
+        else if (!char.IsControl(key.KeyChar))
+        {
+            sb.Append(key.KeyChar);
+        }
+    }
+    Console.Error.WriteLine();
+    return sb.ToString().Trim();
 }
 
 return await root.Parse(args).InvokeAsync();
