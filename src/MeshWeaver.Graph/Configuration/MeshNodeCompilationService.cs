@@ -66,15 +66,35 @@ internal class MeshNodeCompilationService(
     // re-delivers the content — the ~42s freeze. Impersonate INSIDE the async lambda so the scope
     // spans every await of the compile.
     private IObservable<T> OnThreadPool<T>(Func<Task<T>> asyncWork)
-    {
-        var accessService = hub.ServiceProvider.GetService<AccessService>();
-        return Observable.Create<T>(observer =>
+        => OnThreadPoolCore(() => Task.Run(async () =>
         {
-            Task.Run(async () =>
-            {
-                using (accessService?.ImpersonateAsSystem())
-                    return await asyncWork();
-            }).ContinueWith(
+            var accessService = hub.ServiceProvider.GetService<AccessService>();
+            using (accessService?.ImpersonateAsSystem())
+                return await asyncWork();
+        }));
+
+    // Synchronous heavy work (assembly load + reflection). Run it on the ThreadPool via
+    // Task.Run(Func<T>) DIRECTLY — no Task.FromResult(syncWork()) wrap. syncWork ran on the
+    // pool either way (it was invoked inside the async lambda), so the completed-Task wrapper
+    // was pure ceremony. Task.Run(Func<T>) schedules the sync delegate on TaskScheduler.Default
+    // with the same no-gate / no-captured-scheduler guarantees the async overload relies on.
+    private IObservable<T> OnThreadPool<T>(Func<T> syncWork)
+        => OnThreadPoolCore(() => Task.Run(() =>
+        {
+            var accessService = hub.ServiceProvider.GetService<AccessService>();
+            using (accessService?.ImpersonateAsSystem())
+                return syncWork();
+        }));
+
+    // Shared bridge: subscribe a Task<T>-producing leaf into the observable contract, hopping the
+    // OnNext/OnError onto the continuation via ExecuteSynchronously on TaskScheduler.Default so the
+    // calling hub's action-block scheduler is never captured. See the class-level note above on why
+    // this path uses Task.Run and NOT the IoPool (the Compile pool's gate deadlocks the compile
+    // against itself; the thread-hop also drops the AccessService identity — re-established inside).
+    private static IObservable<T> OnThreadPoolCore<T>(Func<Task<T>> start)
+        => Observable.Create<T>(observer =>
+        {
+            start().ContinueWith(
                 t =>
                 {
                     if (t.IsFaulted) observer.OnError(t.Exception!.GetBaseException());
@@ -86,10 +106,6 @@ internal class MeshNodeCompilationService(
                 TaskScheduler.Default);
             return Disposable.Empty;
         });
-    }
-
-    private IObservable<T> OnThreadPool<T>(Func<T> syncWork) =>
-        OnThreadPool(() => Task.FromResult(syncWork()));
 
     private JsonSerializerOptions JsonOptions => hub.JsonSerializerOptions;
     private readonly DynamicMeshNodeAttributeGenerator _attributeGenerator = new();

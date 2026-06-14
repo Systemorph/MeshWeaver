@@ -163,7 +163,9 @@ public class KernelContainer(IServiceProvider serviceProvider)
             hub,
             new AggregateWorkspaceReference(),
             new ReduceManager<ImmutableDictionary<string, object>>(hub),
-            x => x.WithInitialization((_, _) => Task.FromResult(ImmutableDictionary<string, object>.Empty))
+            // Pure in-memory initial value — use the synchronous IObservable WithInitialization
+            // overload (Observable.Return), not the Task.FromResult bridge.
+            x => x.WithInitialization(_ => Observable.Return(ImmutableDictionary<string, object>.Empty))
         );
     }
 
