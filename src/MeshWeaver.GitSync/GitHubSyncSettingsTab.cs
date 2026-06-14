@@ -78,6 +78,13 @@ public static class GitHubSyncSettingsTab
             "Export this Space to a GitHub repository, and re-import it at any commit. Your GitHub " +
             "connection is personal — commits are authored as you.</p>"));
 
+        // Surface the OAuth connect outcome. The callback redirects back here with
+        // ?connect=github-ok | github-error&reason=... (the query rides on host.Reference.Id);
+        // show the REAL reason instead of silently bouncing the user back not-connected.
+        var connectBanner = ConnectBanner(host.Reference.Id?.ToString());
+        if (connectBanner is not null)
+            stack = stack.WithView(connectBanner);
+
         // ── 1. Your GitHub account ────────────────────────────────────────────
         stack = stack.WithView(Section("Your GitHub account"));
         if (string.IsNullOrEmpty(userId))
@@ -244,6 +251,21 @@ public static class GitHubSyncSettingsTab
         var v = d.GetValueOrDefault(key);
         var s = v is JsonElement je && je.ValueKind == JsonValueKind.String ? je.GetString() : v?.ToString();
         return string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+    }
+
+    /// <summary>Renders a banner for the OAuth connect outcome carried on the area id's query
+    /// (<c>?connect=github-ok|github-error&amp;reason=...</c>), or null when there's no connect result.</summary>
+    private static UiControl? ConnectBanner(string? referenceId)
+    {
+        if (string.IsNullOrEmpty(referenceId) || !referenceId.Contains('?')) return null;
+        var query = System.Web.HttpUtility.ParseQueryString(referenceId[(referenceId.IndexOf('?') + 1)..]);
+        return query["connect"] switch
+        {
+            "github-ok" => Controls.Html(Ok("GitHub connected.")),
+            "github-error" => Controls.Html(Err("GitHub connect failed" +
+                (string.IsNullOrEmpty(query["reason"]) ? "." : $": {query["reason"]}"))),
+            _ => null,
+        };
     }
 
     private static string Short(string sha) => string.IsNullOrEmpty(sha) ? "" : sha[..Math.Min(8, sha.Length)];
