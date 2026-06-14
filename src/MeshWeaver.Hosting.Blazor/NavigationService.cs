@@ -517,41 +517,12 @@ internal class NavigationService : INavigationService
         _hub.Post(new TrackActivityRequest(node.Path, userId, node.Name, node.NodeType, node.Namespace));
     }
 
+    // Keyword-aware: "area/Search" → area "Search", "data/Type/id" → area "$Data" id "Type/id",
+    // "Search" → area "Search". The old split-on-first-'/' treated the reserved keyword as the area
+    // name, so /node/area/Name (and /node/data/…, /node/schema/…) navigation landed on a
+    // non-existent area. Shared with PathBasedLayoutArea so navigation and @@-embeds never drift.
     private static (string? Area, string? Id) ParseRemainder(string? remainder)
-    {
-        if (string.IsNullOrEmpty(remainder))
-            return (null, null);
-
-        // First, check for query string (?) - query string becomes part of the Id
-        var queryIndex = remainder.IndexOf('?');
-        string mainPart;
-        string? querySuffix = null;
-
-        if (queryIndex >= 0)
-        {
-            mainPart = remainder.Substring(0, queryIndex);
-            querySuffix = remainder.Substring(queryIndex); // includes the '?'
-        }
-        else
-        {
-            mainPart = remainder;
-        }
-
-        // Now parse the main part for area/id using '/'
-        var slashIndex = mainPart.IndexOf('/');
-        if (slashIndex >= 0)
-        {
-            var area = mainPart.Substring(0, slashIndex);
-            var id = mainPart.Substring(slashIndex + 1);
-            // Append query string to id if present
-            if (querySuffix != null)
-                id = string.IsNullOrEmpty(id) ? querySuffix : id + querySuffix;
-            return (area, id);
-        }
-
-        // No slash - the main part is the area, query string (if any) is the id
-        return (mainPart, querySuffix);
-    }
+        => MeshWeaver.Markdown.LayoutAreaMarkdownParser.ParseAreaAndId(remainder);
 
     private IDisposable? _creatableLoadSub;
 

@@ -235,6 +235,67 @@ public class LayoutAreaMarkdownParser : BlockParser
     private static readonly HashSet<string> ReservedKeywords = ["data", "area", "schema", "model", "content", "collection", "menu"];
 
     /// <summary>
+    /// Parses a path REMAINDER — everything an <c>IPathResolver</c> leaves after the matched
+    /// node address — into an area name + id, honouring the framework AREA verbs. This is the
+    /// runtime-resolution mirror of <see cref="CreateBlockFromToken"/>: the resolver matches the
+    /// longest existing node prefix and hands back e.g. <c>"area/Search"</c>, <c>"data/Type/id"</c>,
+    /// or just <c>"Search"</c>. A caller that only splits on the first <c>/</c> (the old
+    /// <c>ParseRemainder</c>) mistakes the verb itself for the area — <c>"area/Search"</c> →
+    /// area <c>"area"</c>, <c>"data/X"</c> → area <c>"data"</c> — so every verb-form embed and
+    /// <c>/node/area/Name</c> navigation resolved to a non-existent area and rendered blank.
+    /// <para>The handled verbs are the genuine framework areas only:
+    /// <c>area</c> (the next segment is the area name), <c>data</c>→<see cref="DataAreaName"/>,
+    /// <c>schema</c>→<see cref="SchemaAreaName"/>, <c>model</c>→<see cref="ModelAreaName"/>.
+    /// <b>Content collections are deliberately NOT mapped here</b>: a node's collections are
+    /// CONFIGURED (any number, any name — <c>content</c>, <c>Files</c>, <c>assets</c>, …) and
+    /// resolve by name through the content-collection system, so "content" is not a hardcoded
+    /// area. Anything that is not an area verb is treated as a bare area name (e.g. <c>Search</c>).</para>
+    /// <para>A real node whose path contains a verb segment (a node literally at <c>X/data</c>) is
+    /// matched as the address by the resolver, so the verb branch only fires when the verb is a
+    /// reference verb, not a path segment. A trailing query string (<c>?…</c>) is carried into the
+    /// id, matching how areas read query params.</para>
+    /// </summary>
+    public static (string? Area, string? Id) ParseAreaAndId(string? remainder)
+    {
+        if (string.IsNullOrEmpty(remainder))
+            return (null, null);
+
+        // Peel a trailing query string — it becomes part of the id (areas read query params off Id).
+        string? querySuffix = null;
+        var q = remainder.IndexOf('?');
+        if (q >= 0)
+        {
+            querySuffix = remainder[q..]; // keep the '?'
+            remainder = remainder[..q];
+        }
+
+        var segments = remainder.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 0)
+            return (null, querySuffix);
+
+        string? Rest(int from) => segments.Length > from ? string.Join("/", segments.Skip(from)) : null;
+
+        switch (segments[0].ToLowerInvariant())
+        {
+            // "area" verb → the NEXT segment is the area name; everything after is the id.
+            case "area":
+                return (segments.Length > 1 ? segments[1] : null, AppendQuery(Rest(2), querySuffix));
+            // Framework data areas — fixed, registered by AddDefaultLayoutAreas.
+            case "data": return (DataAreaName, AppendQuery(Rest(1), querySuffix));
+            case "schema": return (SchemaAreaName, AppendQuery(Rest(1), querySuffix));
+            case "model": return (ModelAreaName, AppendQuery(Rest(1), querySuffix));
+            // Everything else (a bare area name like "Search", OR a configured content-collection
+            // reference) keeps the first segment as written. Collections are not hardcoded to a
+            // fixed area here — they are resolved by their configured name downstream.
+            default:
+                return (segments[0], AppendQuery(Rest(1), querySuffix));
+        }
+    }
+
+    private static string? AppendQuery(string? id, string? querySuffix)
+        => querySuffix is null ? id : string.IsNullOrEmpty(id) ? querySuffix : id + querySuffix;
+
+    /// <summary>
     /// Creates the appropriate block type based on the token content.
     /// Supports unified reference notation (addressType/addressId/keyword/...) and default format.
     /// Format: addressType/addressId[/keyword[/remainingPath]]
