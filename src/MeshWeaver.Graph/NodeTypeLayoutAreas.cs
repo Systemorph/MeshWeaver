@@ -118,6 +118,7 @@ public static class NodeTypeLayoutAreas
     /// </summary>
     public static IObservable<UiControl?> Progress(LayoutAreaHost host, RenderingContext _)
     {
+        var nodePath = host.Hub.Address.Path;
         return host.Workspace.GetMeshNodeStream()
             .Select(node =>
             {
@@ -125,21 +126,58 @@ public static class NodeTypeLayoutAreas
                     return (UiControl?)Controls.Markdown(
                         "*This node has no NodeTypeDefinition — nothing to compile.*");
 
+                // Compile finished cleanly → redirect to the now-addressable node. The user
+                // only landed on Progress because an instance area NACKed CompilationInProgress;
+                // once it's Ok the real view resolves, so send them there. "When it ends, we redirect."
+                if (def.CompilationStatus == CompilationStatus.Ok)
+                    return (UiControl?)Controls.Redirect($"/{nodePath}");
+
+                var nodeName = node.Name ?? node.Id;
                 var (icon, header, body) = RenderProgressLines(def);
                 var stack = Controls.Stack
                     .WithStyle("padding: 12px; gap: 8px;")
-                    .WithView(Controls.Markdown($"### {icon} {header}"));
+                    // Title carries the NodeType name: "⏳ Compiling… — <NodeType>".
+                    .WithView(Controls.Markdown($"### {icon} {header} — {nodeName}"));
                 if (!string.IsNullOrEmpty(body))
                     stack = stack.WithView(Controls.Markdown(body));
 
-                // Live activity log — embed the activity hub's existing
-                // ProgressArea so Roslyn diagnostics stream in line by line.
-                // Only render while we have an activity path AND the compile
-                // hasn't terminally settled to Ok (post-success the activity
-                // is history, served via the Releases tab).
-                if (!string.IsNullOrEmpty(def.LastCompilationActivityPath)
-                    && def.CompilationStatus != CompilationStatus.Ok)
+                if (def.CompilationStatus == CompilationStatus.Error)
                 {
+                    // Compilation-failed is a LEGAL terminal status: show the captured error
+                    // (already in `body`) plus a Recompile button. Do NOT embed the activity
+                    // LayoutAreaControl here — the compile activity is history and may be
+                    // unaddressable, and subscribing to an inexistent address is the resubscribe
+                    // storm that wedged the portal. One atomic Update flips
+                    // RequestedReleaseAt + Force on the NodeType's OWN node; the compile watcher reacts.
+                    stack = stack.WithView(Controls.Button("Recompile")
+                        .WithAppearance(Appearance.Accent)
+                        .WithClickAction(_ =>
+                        {
+                            host.Workspace.GetMeshNodeStream()
+                                .Update(curr => curr?.Content is NodeTypeDefinition cd
+                                    ? curr with
+                                    {
+                                        Content = cd with
+                                        {
+                                            RequestedReleaseAt = DateTimeOffset.UtcNow,
+                                            RequestedReleaseForce = true
+                                        }
+                                    }
+                                    : curr!)
+                                .Subscribe(_ => { },
+                                    ex => host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                                        ?.CreateLogger(typeof(NodeTypeLayoutAreas))
+                                        .LogWarning(ex, "Recompile trigger failed for {Path}", nodePath));
+                            return Task.CompletedTask;
+                        }));
+                }
+                else if (!string.IsNullOrEmpty(def.LastCompilationActivityPath))
+                {
+                    // Live activity log = the "show details" of an IN-FLIGHT compile
+                    // (Compiling / Pending only — the activity is fresh and being written).
+                    // Embedding it for a terminal state risks a subscription to a gone
+                    // activity node → the inexistent-address storm. Roslyn diagnostics
+                    // stream in line by line via the activity hub's ProgressArea.
                     stack = stack.WithView(new LayoutAreaControl(
                             new Address(def.LastCompilationActivityPath!),
                             new LayoutAreaReference(ActivityLayoutAreas.ProgressArea))
