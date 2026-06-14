@@ -26,8 +26,6 @@ public static class OverviewLayoutArea
     /// </summary>
     public static UiControl BuildPropertyOverview(LayoutAreaHost host, MeshNode node, bool canEdit = true)
     {
-        var nodePath = node.Namespace ?? host.Hub.Address.ToString();
-
         // Handle Content which could be null, JsonElement, or already deserialized typed object
         var instance = node.Content;
         if (instance == null)
@@ -38,15 +36,24 @@ public static class OverviewLayoutArea
 
         var contentType = instance.GetType();
 
-        // Set up local data for editing
-        var dataId = EditLayoutArea.GetDataId(nodePath);
-        host.UpdateData(dataId, instance);
+        // The property form is bound DIRECTLY to the node's Content (node-bound DataContext): every
+        // field reads from and writes straight back to the node stream (IMeshNodeStreamCache). ONE
+        // source of truth — no /data replica of the node content, no SetupAutoSave save subscription.
+        // See Doc/GUI/DataBinding "edit node content by binding to the node stream".
+        var dataId = EditLayoutArea.GetDataId(node.Path);
+        var boundContext = LayoutAreaReference.GetMeshNodeDataContext(node.Path, bindContent: true);
 
-        // Setup auto-save to persist changes via DataChangeRequest
-        if (canEdit)
-        {
-            SetupAutoSave(host, dataId, instance, node);
-        }
+        // A few read-only display controls (dimension / options / formatted-date labels) derive their
+        // text from the LAYOUT-AREA /data stream rather than a value pointer, so they can't read the
+        // node directly from the Layout layer. Keep /data/{dataId} as a ONE-WAY live projection of the
+        // node's Content (node → /data, NEVER /data → node) so those labels stay correct. This is a
+        // pure read mirror — there is no save loop and no drift: it follows the node, and all WRITES
+        // still go straight to the node via the node-bound DataContext above.
+        host.RegisterForDisposal($"overview-content-projection_{dataId}",
+            host.Workspace.GetMeshNodeStream(node.Path)
+                .Select(n => n?.Content)
+                .Where(c => c is not null)
+                .Subscribe(content => host.UpdateData(dataId, content!)));
 
         var container = Controls.Stack.WithWidth("100%");
 
@@ -56,7 +63,8 @@ public static class OverviewLayoutArea
             DataId = dataId,
             ContentType = contentType,
             CanEdit = canEdit,
-            IsToggleable = true  // Overview: click-to-edit, blur back to read-only
+            IsToggleable = true,  // Overview: click-to-edit, blur back to read-only
+            BoundDataContext = canEdit ? boundContext : null
         }));
 
         // The markdown body (from index.md / a Markdown node's content) is intentionally
@@ -101,7 +109,9 @@ public static class OverviewLayoutArea
     }
 
     /// <summary>
-    /// Builds a clickable title that switches to edit mode on click.
+    /// Builds a clickable title that switches to edit mode on click. The title edit is bound
+    /// DIRECTLY to the node's Content <c>title</c> field (node-bound DataContext) — the edit writes
+    /// straight back to the node stream; only the click-to-edit toggle lives in <c>/data</c>.
     /// </summary>
     public static UiControl BuildTitle(LayoutAreaHost host, MeshNode node, string dataId, bool canEdit)
     {
@@ -115,7 +125,7 @@ public static class OverviewLayoutArea
                     .DistinctUntilChanged()
                     .Select(isEditing =>
                         isEditing && canEdit
-                            ? BuildTitleEditView(h, dataId, editStateId)
+                            ? BuildTitleEditView(h, node.Path, editStateId)
                             : BuildTitleReadView(h, node, dataId, editStateId, canEdit)));
     }
 
@@ -146,14 +156,14 @@ public static class OverviewLayoutArea
 
     private static UiControl BuildTitleEditView(
         LayoutAreaHost _,
-        string dataId,
+        string nodePath,
         string editStateId)
     {
         var titleField = new TextFieldControl(new JsonPointerReference("title"))
         {
             Immediate = true,
             AutoFocus = true,
-            DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            DataContext = LayoutAreaReference.GetMeshNodeDataContext(nodePath, bindContent: true)
         }
         .WithStyle("font-size: 2rem; font-weight: bold; border: none; background: transparent; min-width: 300px;")
         .WithBlurAction(ctx =>
@@ -163,47 +173,6 @@ public static class OverviewLayoutArea
         });
 
         return titleField;
-    }
-
-    /// <summary>
-    /// Sets up auto-save: watches local data stream for changes and persists via DataChangeRequest.
-    /// Follows the exact pattern from InlineEditingTest.cs but for MeshNode content. Public so other
-    /// node layout areas (e.g. the chat composer) persist their data-bound content the SAME standard way.
-    /// </summary>
-    public static void SetupAutoSave(
-        LayoutAreaHost host,
-        string dataId,
-        object instance,
-        MeshNode node)
-    {
-        var current = instance;
-
-        host.RegisterForDisposal($"autosave_{dataId}",
-            host.Stream.GetDataStream<object>(dataId)
-                .Debounce(TimeSpan.FromMilliseconds(300))
-                .Subscribe(updatedContent =>
-                {
-
-                    if (object.Equals(current, updatedContent))
-                        return;
-
-                    // Update current to prevent re-sending
-                    current = updatedContent;
-
-                    // Persist via remote stream Update — read-modify-write inside
-                    // the lambda so we patch atop the LATEST node (not a stale
-                    // captured snapshot). The owning hub's MeshDataSource
-                    // processes the patch and broadcasts to subscribers
-                    // (Doc/Architecture/InitializationGates.md).
-                    var saveLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
-                        ?.CreateLogger("MeshWeaver.Graph.OverviewLayoutArea");
-                    host.Workspace.GetMeshNodeStream(node.Path)
-                        .Update(current => current with { Content = updatedContent })
-                        .Subscribe(
-                            _ => { },
-                            ex => saveLogger?.LogWarning(ex,
-                                "OverviewLayoutArea.AutoSave: UpdateMeshNode failed for {NodePath}", node.Path));
-                }));
     }
 
 }

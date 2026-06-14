@@ -20,10 +20,10 @@ namespace Memex.Portal.Shared.Settings;
 /// enabled harnesses + the agent/model picker query templates.
 ///
 /// <para><b>100% data-bound via the framework, set up the SAME standard way as every node editor</b>
-/// (<see cref="MeshNodeLayoutAreas"/>' <c>EditNode</c>): <see cref="LayoutAreaHost.UpdateData"/> seeds the
-/// content into a data section, <see cref="OverviewLayoutArea.SetupAutoSave"/> persists every edit back to
-/// the node, and <see cref="EditLayoutArea.BuildPropertyForm"/> renders the auto-generated two-way-bound
-/// editor. No hand-rolled <c>Edit</c>-macro callback, no <c>.Take(1)</c>, no Save button.</para>
+/// (<see cref="MeshNodeLayoutAreas"/>' <c>EditNode</c>): the auto-generated property form
+/// (<see cref="EditLayoutArea.BuildPropertyForm"/>) binds DIRECTLY to the node stream via a node-bound
+/// DataContext — each edit writes straight back to the node (ONE source of truth, no <c>/data</c> replica,
+/// no save subscription). No hand-rolled <c>Edit</c>-macro callback, no <c>.Take(1)</c>, no Save button.</para>
 /// </summary>
 public static class AiSettingsTab
 {
@@ -61,8 +61,19 @@ public static class AiSettingsTab
         // Robust: create the node with defaults if it doesn't exist (existing + new users).
         AiSettingsNodeType.EnsureExists(host.Hub, host.Hub.ServiceProvider, userId);
 
-        // Standard node editor — identical wiring to MeshNodeLayoutAreas.EditNode: seed a data section,
-        // auto-persist on change, render the framework's two-way-bound property form.
+        // Standard node editor — identical wiring to MeshNodeLayoutAreas.EditNode: the property form
+        // binds DIRECTLY to the node's Content (node-bound DataContext) so each edit writes straight
+        // back to the node stream. No /data replica, no save subscription. The first emission only
+        // supplies the content TYPE (to generate the form); a one-way /data projection keeps the
+        // derived-label read views (dimension/options/date) correct from the Layout layer.
+        var dataId = EditLayoutArea.GetDataId(path);
+        var boundContext = LayoutAreaReference.GetMeshNodeDataContext(path, bindContent: true);
+        host.RegisterForDisposal($"aisettings-content-projection_{dataId}",
+            host.Workspace.GetMeshNodeStream(path)
+                .Select(n => n?.Content)
+                .Where(c => c is not null)
+                .Subscribe(content => host.UpdateData(dataId, content!)));
+
         return stack.WithView((h, _) => h.Workspace.GetMeshNodeStream(path)
             .Where(n => n?.Content is not null)
             .Select(n =>
@@ -71,12 +82,9 @@ public static class AiSettingsTab
                 if (instance is JsonElement je)
                     instance = JsonSerializer.Deserialize<object>(je.GetRawText(), h.Hub.JsonSerializerOptions)!;
 
-                var dataId = EditLayoutArea.GetDataId(path);
-                h.UpdateData(dataId, instance);
-                OverviewLayoutArea.SetupAutoSave(h, dataId, instance, n);
-
                 return (UiControl?)EditLayoutArea.BuildPropertyForm(
-                    h, instance.GetType(), dataId, canEdit: true, isToggleable: false);
-            }));
+                    h, instance.GetType(), dataId, canEdit: true, isToggleable: false, boundDataContext: boundContext);
+            })
+            .DistinctUntilChanged(n => n?.GetType()));
     }
 }

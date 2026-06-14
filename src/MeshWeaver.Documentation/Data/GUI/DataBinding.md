@@ -167,6 +167,36 @@ No `/data` replica, no `SetupAutoSave`, no Save button, no debounce-and-save sub
 
 The same rule covers create-on-absent: a node the editor binds to must EXIST first — create it with `meshService.CreateNode(...)` (read existence via `GetQuery`, empty-on-absent), NEVER `GetMeshNodeStream(path).Update` on an absent path (it NotFound-storms).
 
+## Node-bound `DataContext` — reuse the rich form-gen, bound to the node
+
+For a RICH editor (text + number + checkbox + markdown + `[MeshNode]` picker + `[Dimension]` select), you don't hand-roll controls — you let the framework's form generator (`EditLayoutArea.BuildPropertyForm` / `MapToToggleableControl` / the `Edit` macro) build them, then point their **`DataContext` at the node** instead of a `/data/{id}` replica. The generated controls then read each field straight from the node stream and write each edit straight back — ONE source of truth, no replica, no save subscription.
+
+Encode the node-bound DataContext with `LayoutAreaReference.GetMeshNodeDataContext(...)`:
+
+```csharp
+// Field pointers resolve against the node's Content JSON (content-typed editors):
+var ctx = LayoutAreaReference.GetMeshNodeDataContext(node.Path);                    // bindContent: true (default)
+
+// Field pointers resolve against the WHOLE node JSON — for top-level fields
+// (Name / Description / Icon / Category / Order — the "metadata" editors):
+var ctx = LayoutAreaReference.GetMeshNodeDataContext(node.Path, bindContent: false);
+
+// …optionally nested one level deeper (e.g. a Thread's inline composer object):
+var ctx = LayoutAreaReference.GetMeshNodeDataContext(node.Path, bindContent: false, subPath: "content/composer");
+
+// Pass it to the standard form generator (or set it as a control's DataContext directly):
+stack.WithView(EditLayoutArea.BuildContentView(host, new ContentViewOptions {
+    DataId = dataId, ContentType = contentType, CanEdit = canEdit, BoundDataContext = ctx }));
+```
+
+Mechanics (so you know what's load-bearing):
+
+- The encoding is a reserved DataContext shape `/$meshNode/{base64url(path)}/{c|n}[/base64url(subPath)]` (`LayoutAreaReference.MeshNodePrefix`). It carries no `/`, `.`, or `%9Y`, so it survives the `DispatchView` decode hop and JSON-pointer parsing untouched.
+- The GUI seams `BlazorView.DataBind` (read) and `BlazorView.UpdatePointer` (write) branch on it: reads come from `Hub.GetMeshNodeStream(path)` and writes are a per-field read-modify-write through `.Update(...)` that touches ONLY the edited field (see `MeshNodeBinding`). Every form control inherits this automatically — `TextField`, `NumberField`, `CheckBox`, `DateTime`, `Select`, `MeshNodePicker`, `MarkdownEditor`, `Code`.
+- Field-pointer resolution against the node is **case-insensitive**, so a metadata DTO's PascalCase pointer (`Name`, `Description`) and a content editor's camelCase pointer (`harness`, `messageContent`) both bind without the layout area knowing the JSON casing.
+- **Edit-state stays in `/data`.** The click-to-edit toggle (`editState_…`) is transient view state, not node content — it is never written to the node. Only field VALUES are node-bound.
+- A few read-only display controls (the `[Dimension]` / options / formatted-date toggle *labels*) derive their text from the layout-area `/data` stream rather than a value pointer. When you node-bind a toggleable form, keep `/data/{dataId}` as a **one-way live projection** of the node content (`GetMeshNodeStream(path).Select(n => n.Content).Subscribe(c => host.UpdateData(dataId, c))`) so those labels stay correct. This is a pure read mirror — it follows the node, has no save loop, and never writes back, so it is NOT the forbidden replicate-then-save pattern.
+
 ## Anti-patterns — never do these
 
 | ❌ Wrong | Why | ✅ Right |
