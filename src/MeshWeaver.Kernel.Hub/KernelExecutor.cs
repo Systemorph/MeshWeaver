@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
 using System.Reflection;
 using System.Runtime.Loader;
@@ -41,7 +42,25 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     private ScriptLogger? scriptLogger;
     private bool initialized;
 
-    private readonly SemaphoreSlim executionLock = new(1, 1);
+    // REPL submissions run STRICTLY in arrival order on a 100%-reactive serial queue:
+    // Concat subscribes the next submission only AFTER the previous Execute completes
+    // (i.e. after scriptState is assigned), so block #2 always sees block #1's variables.
+    // This replaces a hand-woven SemaphoreSlim — per ControlledIoPooling.md the ONLY
+    // concurrency primitives are the IoPools. The compile LEAF inside Execute runs on the
+    // shared Compile pool (which bounds compiles ACROSS kernels); ordering WITHIN a kernel
+    // is this Concat, not a lock. Push order == the executor action block's FIFO handling.
+    private readonly Subject<Submission> submissions = new();
+    private IDisposable? submissionPump;
+
+    /// <summary>One queued REPL submission + the sink that carries its outcome back to the
+    /// posting handler (so the serial Concat pump stays decoupled from request/response).</summary>
+    private sealed record Submission(
+        string Code,
+        string ViewId,
+        IReadOnlyDictionary<string, JsonElement> Inputs,
+        ILogger ScriptOutputLogger,
+        CancellationToken Ct,
+        AsyncSubject<object?> Result);
 
     // 🚦 Roslyn script compile+execute is a CPU/blocking leaf (the compile prologue +
     // RuntimeMetadataReferenceResolver.ResolveMissingAssembly file I/O run synchronously).
@@ -78,6 +97,10 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         config.TypeRegistry.WithType(typeof(SubmitCodeRequest), nameof(SubmitCodeRequest));
         config.TypeRegistry.WithType(typeof(SubmitCodeResponse), nameof(SubmitCodeResponse));
         config.TypeRegistry.WithType(typeof(CancelScriptRequest), nameof(CancelScriptRequest));
+        // Start the serial REPL processor ONCE. Concat runs queued submissions strictly in
+        // arrival order — each Execute fully completes (scriptState assigned) before the next
+        // subscribes — so cross-submission state sharing is deterministic without any lock.
+        submissionPump = submissions.Select(RunSubmission).Concat().Subscribe();
         return config
             .WithHandler<SubmitCodeRequest>(HandleSubmitCodeRequest)
             .WithHandler<CancelScriptRequest>(HandleCancelRequest);
@@ -93,11 +116,12 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     }
 
     /// <summary>
-    /// Sync entry — composes the script work as <see cref="IObservable{T}"/> end
-    /// to end so the executor's action block isn't blocked while the script runs.
-    /// Concurrency on <see cref="scriptState"/> is serialised by <see cref="executionLock"/>;
-    /// the lock is acquired through <see cref="Observable.FromAsync(System.Func{System.Threading.CancellationToken,System.Threading.Tasks.Task})"/>
-    /// at the SemaphoreSlim boundary, every other step is plain Rx composition.
+    /// Sync entry — correlates this submission's outcome (carried on an
+    /// <see cref="AsyncSubject{T}"/>) back to the request/response, then ENQUEUES it on
+    /// the serial Concat pump (see <see cref="submissions"/>). The pump runs submissions
+    /// strictly in arrival order and never blocks the action block — ordering across
+    /// submissions comes from Concat, NOT a lock; the action block returns
+    /// <see cref="IMessageDelivery"/> immediately.
     /// </summary>
     private IMessageDelivery HandleSubmitCodeRequest(IMessageHub hub, IMessageDelivery<SubmitCodeRequest> request)
     {
@@ -114,67 +138,73 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         var cts = new CancellationTokenSource();
         lock (cancellationLock) { activeCancellation = cts; }
 
-        // 🚨 Subscribe INLINE on the action block — do NOT SubscribeOn(TaskPool).
-        // This is a REPL: submissions must execute in the order they were posted
-        // (block #1 defines `x`, block #2 reads it). The action block delivers
-        // SubmitCodeRequests FIFO, and callers fire them back-to-back without
-        // awaiting each response (see MonolithKernelTest.ThreeSubmissions_ShareState),
-        // so submission order is established ONLY by the order in which each
-        // pipeline acquires `executionLock`. Subscribing here, on the action
-        // block, calls executionLock.WaitAsync(ct) synchronously and in order, so
-        // the semaphore queues the waiters FIFO. SubscribeOn(TaskPool) instead
-        // scheduled the whole subscription — including the WaitAsync call — onto
-        // unordered pool threads, letting block #2 win the lock before block #1
-        // and run against an empty ScriptState (CS0103 "name does not exist").
-        // Execute() offloads the heavy work (EnsureInitialized's AppDomain scan +
-        // the cold Roslyn compile) off the action block itself via ObserveOn right
-        // after the lock is acquired, so the delivery still returns Processed()
-        // immediately and the action block is never blocked on a compile (the
-        // leak that d936e31e2 fixed stays fixed).
-        Execute(msg.Code, msg.Id, msg.Inputs, activityLogger, cts.Token)
-            .Subscribe(
-                returnValue =>
+        // The submission's outcome arrives on this AsyncSubject (one value + completion on
+        // success, OnError on failure/cancel). Wire the request/response off it, then push
+        // the submission onto the serial pump — it executes once all earlier submissions
+        // have completed, guaranteeing block #2 sees block #1's ScriptState.
+        var result = new AsyncSubject<object?>();
+        result.Subscribe(
+            returnValue =>
+            {
+                ClearCancellationIf(cts);
+                // Capture the script's return value as JsonElement on the activity's
+                // terminal snapshot so handlers that triggered the script (e.g.
+                // ExportDocumentHandler) can deserialize it without a side-channel MeshNode.
+                JsonElement? returnElement = returnValue is null
+                    ? null
+                    : JsonSerializer.SerializeToElement(returnValue, hub.JsonSerializerOptions);
+                activityLogger.Complete(ActivityStatus.Succeeded, returnElement);
+                hub.Post(new SubmitCodeResponse(msg.Id, true), o => o.ResponseFor(request));
+            },
+            ex =>
+            {
+                ClearCancellationIf(cts);
+                var canceled = ex is OperationCanceledException;
+                if (canceled)
                 {
-                    ClearCancellationIf(cts);
-                    // Capture the script's return value as JsonElement on the
-                    // activity's terminal snapshot so handlers that triggered
-                    // the script (e.g. ExportDocumentHandler) can deserialize
-                    // it without a side-channel MeshNode.
-                    JsonElement? returnElement = returnValue is null
-                        ? null
-                        : JsonSerializer.SerializeToElement(returnValue, hub.JsonSerializerOptions);
-                    activityLogger.Complete(ActivityStatus.Succeeded, returnElement);
-                    hub.Post(new SubmitCodeResponse(msg.Id, true), o => o.ResponseFor(request));
-                },
-                ex =>
+                    activityLogger.LogWarning("Script execution cancelled by user");
+                    activityLogger.Complete(ActivityStatus.Cancelled);
+                }
+                else
                 {
-                    ClearCancellationIf(cts);
-                    var canceled = ex is OperationCanceledException;
-                    if (canceled)
-                    {
-                        activityLogger.LogWarning("Script execution cancelled by user");
-                        activityLogger.Complete(ActivityStatus.Cancelled);
-                    }
-                    else
-                    {
-                        // Surface the full exception detail on the activity log
-                        // (LogError on the standard formatter includes Type +
-                        // Message + StackTrace via "{message}\n{exception}"),
-                        // so subscribers see WHY the script failed, not just
-                        // a generic "Failed" status.
-                        activityLogger.LogError(ex, "Script execution failed: {Reason}", ex.Message);
-                        activityLogger.Complete(ActivityStatus.Failed);
-                    }
-                    hub.Post(
-                        new SubmitCodeResponse(msg.Id, false)
-                        {
-                            Error = canceled ? "Cancelled" : ex.Message
-                        },
-                        o => o.ResponseFor(request));
-                });
+                    // Surface the full exception detail on the activity log (LogError on the
+                    // standard formatter includes Type + Message + StackTrace), so subscribers
+                    // see WHY the script failed, not just a generic "Failed" status.
+                    activityLogger.LogError(ex, "Script execution failed: {Reason}", ex.Message);
+                    activityLogger.Complete(ActivityStatus.Failed);
+                }
+                hub.Post(
+                    new SubmitCodeResponse(msg.Id, false) { Error = canceled ? "Cancelled" : ex.Message },
+                    o => o.ResponseFor(request));
+            });
 
+        submissions.OnNext(new Submission(msg.Code, msg.Id, msg.Inputs, activityLogger, cts.Token, result));
         return request.Processed();
     }
+
+    /// <summary>
+    /// One inner of the serial Concat pump: runs a submission's <see cref="Execute"/>,
+    /// forwards its outcome to the submission's <see cref="AsyncSubject{T}"/> result sink,
+    /// and ALWAYS completes its own (Unit) signal — even on failure — so a failed submission
+    /// never tears down the pump and Concat advances to the next one.
+    /// </summary>
+    private IObservable<Unit> RunSubmission(Submission s) =>
+        Observable.Create<Unit>(downstream =>
+            Execute(s.Code, s.ViewId, s.Inputs, s.ScriptOutputLogger, s.Ct)
+                .Subscribe(
+                    value => s.Result.OnNext(value),
+                    ex =>
+                    {
+                        s.Result.OnError(ex);
+                        downstream.OnNext(Unit.Default);
+                        downstream.OnCompleted();
+                    },
+                    () =>
+                    {
+                        s.Result.OnCompleted();
+                        downstream.OnNext(Unit.Default);
+                        downstream.OnCompleted();
+                    }));
 
     private void ClearCancellationIf(CancellationTokenSource cts)
     {
@@ -189,16 +219,15 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     /// <summary>
     /// Run a single submission as an observable pipeline. Composition shape:
     /// <list type="number">
-    ///   <item>Acquire <see cref="executionLock"/> (SDK boundary → <see cref="Observable.FromAsync(System.Func{System.Threading.CancellationToken,System.Threading.Tasks.Task})"/>).</item>
-    ///   <item>Resolve NuGet refs (SDK boundary → <see cref="Observable.FromAsync(System.Func{System.Threading.CancellationToken,System.Threading.Tasks.Task})"/>).</item>
-    ///   <item>Bind per-submission globals (sync — <c>Observable.Defer</c>).</item>
-    ///   <item>Run Roslyn script under stdout capture (<c>Observable.Using</c> + Roslyn boundary).</item>
+    ///   <item>Resolve NuGet refs (Http IoPool leaf).</item>
+    ///   <item>Bind per-submission globals + run Roslyn script under stdout capture
+    ///         (<c>Observable.Using</c> + the Compile IoPool leaf in RunOnePass).</item>
     ///   <item>Render return value if any (sync tail).</item>
     /// </list>
+    /// Ordering across submissions is the serial Concat pump's job (no lock here).
     /// Errors flow through <c>Observable.Catch</c> —
     /// <see cref="CompilationErrorException"/> wraps to <see cref="ScriptExecutionException"/>;
-    /// other exceptions render an inline error control. The lock is always released
-    /// via <see cref="Observable.Finally{TSource}"/>.
+    /// other exceptions render an inline error control.
     /// </summary>
     private IObservable<object?> Execute(
         string code,
@@ -207,18 +236,14 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         ILogger scriptOutputLogger,
         CancellationToken ct)
     {
-        // executionLock is a serialization primitive (REPL ordering), not an I/O leaf —
-        // so it bridges to the observable contract reactively (Defer keeps it cold so the
-        // WaitAsync runs on Subscribe, inline on the action block, preserving FIFO acquire
-        // order), NOT through Observable.FromAsync and NOT through an I/O pool.
-        return Observable.Defer(() => executionLock.WaitAsync(ct).ToObservable())
-            // The lock is acquired in submission order (the subscription runs
-            // inline on the action block — see HandleSubmitCodeRequest). Hop to
-            // the TaskPool ONLY for the work that follows, so the cold Roslyn
-            // compile + AppDomain scan never run on the action block while still
-            // preserving FIFO execution across submissions.
-            .ObserveOn(TaskPoolScheduler.Default)
-            .SelectMany(_ =>
+        // No lock and no gate here: REPL ordering across submissions is owned by the serial
+        // Concat pump (see `submissions`), which subscribes this observable only after the
+        // previous submission completed. So Execute is just: init → resolve NuGet refs → run
+        // the Roslyn pass. SubscribeOn moves the WHOLE subscribe — including
+        // EnsureInitialized's AppDomain scan — onto the ThreadPool, so the executor action
+        // block is never blocked by a compile. (The Roslyn compile itself runs on the bounded
+        // Compile IoPool inside RunOnePass; NuGet restore on the Http pool.)
+        return Observable.Defer(() =>
             {
                 EnsureInitialized();
                 return nugetPool.Invoke(t => ResolveNuGetReferencesAsync(code, t))
@@ -236,7 +261,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                 UpdateView(viewId, Controls.Markdown($"**Execution failed**:\n{ex.Message}"));
                 return Observable.Throw<object?>(ex);
             })
-            .Finally(() => executionLock.Release());
+            .SubscribeOn(TaskPoolScheduler.Default);
     }
 
     /// <summary>
