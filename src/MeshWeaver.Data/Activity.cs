@@ -1,4 +1,6 @@
 ﻿using System.Collections.Concurrent;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
@@ -50,12 +52,21 @@ public class Activity : ILogger, IDisposable
     public void LogMessage(string message, LogLevel logLevel, IReadOnlyCollection<KeyValuePair<string, object>>? scopes = null)
         => MutateLog(log => log with { Messages = log.Messages.Add(new LogMessage(message, logLevel) { Scopes = scopes }) });
 
-    public Task<ActivityLog> GetLogAsync()
-    {
-        var tcs = new TaskCompletionSource<ActivityLog>();
-        Hub.InvokeAsync(() => tcs.SetResult(activityLog));
-        return tcs.Task;
-    }
+    /// <summary>
+    /// Reactive snapshot of the current <see cref="ActivityLog"/>, read on the activity hub's
+    /// action block (so it's consistent with concurrent mutations) and delivered to the
+    /// subscriber. No Task surface — subscribe / compose, never await on a hub thread.
+    /// </summary>
+    public IObservable<ActivityLog> GetLog() =>
+        Observable.Create<ActivityLog>(observer =>
+        {
+            Hub.InvokeAsync(() =>
+            {
+                observer.OnNext(activityLog);
+                observer.OnCompleted();
+            });
+            return System.Reactive.Disposables.Disposable.Empty;
+        });
 
     public void RecordAffectedPaths(IEnumerable<string> paths)
         => MutateLog(log => log with { AffectedPaths = log.AffectedPaths.AddRange(paths) });
@@ -151,7 +162,7 @@ public class Activity : ILogger, IDisposable
         catch (Exception ex)
         {
             logger.LogError("Error in ProcessActivityCompletion: {Exception}", ex);
-            completionSource.TrySetException(ex);
+            SignalFaulted(ex);
             log = log.Fail(ex.ToString());
             return log;
         }
@@ -167,12 +178,12 @@ public class Activity : ILogger, IDisposable
             {
                 log = log.Finish((int)Hub.Version, status);
                 // Signal completion with updated log
-                completionSource.TrySetResult(log);
+                SignalCompleted(log);
             }
             else
             {
                 // Signal completion with current log
-                completionSource.TrySetResult(log);
+                SignalCompleted(log);
             }
 
             while (completedActions.TryTake(out var completedAction))
@@ -193,7 +204,7 @@ public class Activity : ILogger, IDisposable
         {
             logger.LogError("Error in CompleteMyself: {Exception}", ex);
             log = log.Fail(ex.ToString());
-            completionSource.TrySetException(ex);
+            SignalFaulted(ex);
         }
         finally
         {
@@ -203,12 +214,40 @@ public class Activity : ILogger, IDisposable
     }
 
     private readonly ConcurrentBag<Action<ActivityLog>> completedActions = new();
-    private readonly TaskCompletionSource<ActivityLog> completionSource = new();
+    // 100% reactive completion. AsyncSubject replays the single final ActivityLog (then
+    // completes) to every subscriber — including late ones — exactly like a Task<T> would,
+    // but OnNext fires synchronously on the activity hub's action block (where Complete runs),
+    // never hopping to the TaskScheduler. NO TaskCompletionSource: a Task surface invites
+    // `await activity.Completion` on a hub action block, which deadlocks (see
+    // Doc/Architecture/AsynchronousCalls.md). All mutation of the fields below happens on the
+    // action block (Complete → InvokeAsync → HandleComplete / MutateLog), so they need no lock.
+    private readonly AsyncSubject<ActivityLog> completionSubject = new();
+    private bool isTerminal;
+    private ActivityLog? finalLog;
+
+    private void SignalCompleted(ActivityLog log)
+    {
+        if (isTerminal) return;          // first-wins, mirrors TaskCompletionSource.TrySetResult
+        isTerminal = true;
+        finalLog = log;
+        completionSubject.OnNext(log);
+        completionSubject.OnCompleted();
+    }
+
+    private void SignalFaulted(Exception ex)
+    {
+        if (isTerminal) return;
+        isTerminal = true;
+        completionSubject.OnError(ex);
+    }
 
     /// <summary>
-    /// Task that completes when the activity is finished, returning the final ActivityLog
+    /// Reactive completion — emits the final <see cref="ActivityLog"/> once the activity
+    /// finishes, then completes. Subscribe (compose with .SelectMany/.Subscribe); never bridge
+    /// to a Task and await on a hub action block. Tests bridge at their edge with
+    /// <c>.FirstAsync().ToTask()</c>.
     /// </summary>
-    public Task<ActivityLog> Completion => completionSource.Task;
+    public IObservable<ActivityLog> Completion => completionSubject.AsObservable();
 
 
     /// <summary>
@@ -222,10 +261,12 @@ public class Activity : ILogger, IDisposable
     {
         if (completeAction != null)
         {
-            // If already completed, invoke callback immediately with the final log
-            if (completionSource.Task.IsCompleted)
+            // If already completed, invoke callback immediately with the final log. Runs on
+            // the action block, so reading isTerminal/finalLog is race-free (no Task.Result).
+            if (isTerminal)
             {
-                completeAction.Invoke(completionSource.Task.Result);
+                if (finalLog is not null)
+                    completeAction.Invoke(finalLog);
                 return;
             }
             completedActions.Add(completeAction);
