@@ -200,33 +200,26 @@ public static class StaticRepoImporter
                     }
                 };
 
-                // 🚨 A NON-Succeeded existing activity is a STALE lock — a prior import created it
-                // (Status=Running) then crashed/raced before finishing (e.g. a rollout briefly running
-                // two pods, or a materialization fault). Skipping it forever ("AlreadyRunning", 0
-                // nodes) wedges the partition's import permanently — the atioz Agent/Harness/Command
-                // never materialized for exactly this reason. RECLAIM it: delete the dead lock so the
-                // CreateNode below re-acquires and re-runs. Absent → the delete is a harmless no-op.
-                // (A genuinely-concurrent replica re-runs the idempotent Upsert materialization — wasteful
-                // but correct; this is far better than a permanent wedge on a single-replica deploy.)
-                var clearStale = existing is null
-                    ? Observable.Return(System.Reactive.Unit.Default)
-                    : AsSystem(hub, () => meshService.DeleteNode(activityPath))
-                        .Select(_ => System.Reactive.Unit.Default)
-                        .Catch(Observable.Return(System.Reactive.Unit.Default));
-
-                // CreateNode is the lock: first instance wins; concurrent replicas fault here.
-                // Under System so the lock write authorizes on read-only-_Policy partitions and
-                // persists on the distributed path (see AsSystem).
-                return clearStale.SelectMany(_ => AsSystem(hub, () => meshService.CreateNode(activityNode))
+                // 🚨 Acquire/refresh the import lock via the IDEMPOTENT Upsert (which tolerates a stale
+                // "already exists" — see Upsert). This RECLAIMS a dead lock left by a crashed/raced
+                // prior import (Status=Running that never finished — e.g. a rollout briefly running two
+                // pods, or a materialization fault) instead of skipping forever ("AlreadyRunning", 0
+                // nodes): the atioz Agent/Harness/Command wedge. A plain CreateNode faulted on the
+                // stale lock; delete-then-create raced the eventually-consistent exists-check (Agent
+                // stayed wedged). Single-execution is preserved by the Succeeded short-circuit above; a
+                // genuinely-concurrent replica re-runs the idempotent materialize — wasteful, not wrong.
+                // `existing` is read only for that short-circuit. Under System (Upsert wraps AsSystem)
+                // so the lock write authorizes on read-only-_Policy partitions and persists on PG.
+                return Upsert(hub, activityNode)
                     .SelectMany(_ => Run(hub, source, nodes, root, activityPath, fingerprint, logger))
                     .Catch<StaticRepoImportResult, Exception>(ex =>
                     {
                         logger?.LogInformation(
-                            "[StaticRepoImport] {Partition} ({Fingerprint}) lock held / create faulted: {Message}",
+                            "[StaticRepoImport] {Partition} ({Fingerprint}) import failed: {Message}",
                             source.Partition, fingerprint, ex.Message);
                         return Observable.Return(
-                            new StaticRepoImportResult(source.Partition, fingerprint, "AlreadyRunning"));
-                    }));
+                            new StaticRepoImportResult(source.Partition, fingerprint, "Failed"));
+                    });
             });
     }
 
@@ -585,7 +578,14 @@ public static class StaticRepoImporter
         AsSystem(hub, () => hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node)))
             .FirstAsync()
             .Select(d => d.Message)
+            // "Node already exists" is SUCCESS for an idempotent upsert: the node is present, which IS
+            // the goal. CreateOrUpdate emits it when its eventually-consistent exists-check lags a
+            // recent create and falls through to CreateNode — e.g. re-importing a partition whose
+            // root Space was left by a partial prior run (the atioz Harness/Command "Upsert of
+            // 'Harness' failed: Node already exists" wedge). Treat it as done; a later consistent run
+            // updates changed content. Any OTHER error still faults.
             .SelectMany(resp => resp.Success
+                    || (resp.Error?.Contains("already exists", StringComparison.OrdinalIgnoreCase) ?? false)
                 ? Observable.Return(1)
                 : Observable.Throw<int>(new InvalidOperationException(
                     $"Upsert of '{node.Path}' failed: {resp.Error}")));
