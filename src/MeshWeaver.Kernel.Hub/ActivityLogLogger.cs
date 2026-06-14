@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
@@ -80,17 +81,19 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
         var last = Interlocked.Read(ref _lastPublishTicks);
         if (now - last < ThrottleMs)
         {
-            // Schedule a tail flush: if no other thread has scheduled one, queue
-            // a delayed publish so the latest snapshot still lands.
+            // Schedule a tail flush: if no other thread has scheduled one, queue a
+            // delayed publish so the latest snapshot still lands. 🚨 Reactive timer ONLY —
+            // NEVER Task.Run/Task.Delay here. A bare Task.Run schedules an async state
+            // machine on the shared ThreadPool, the SAME pool the hub turn-loop runs on
+            // (TaskScheduler.Default); under a 2-core box a burst of these starves the
+            // pool and the hub's own delivery continuations get queued behind them —
+            // which reorders rapid same-sender posts (cell-2 overtaking cell-1) and
+            // stretches a cold compile into a pseudo-deadlock. Observable.Timer is a pure
+            // timer-queue one-shot: no immediate dispatch, no parked thread, no await.
             if (Interlocked.CompareExchange(ref _publishScheduled, 1, 0) == 0)
             {
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        await Task.Delay(ThrottleMs);
-                    }
-                    finally
+                Observable.Timer(TimeSpan.FromMilliseconds(ThrottleMs))
+                    .Subscribe(_ =>
                     {
                         Interlocked.Exchange(ref _publishScheduled, 0);
                         if (Volatile.Read(ref _completed) == 0)
@@ -98,8 +101,7 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
                             Interlocked.Exchange(ref _lastPublishTicks, Environment.TickCount64);
                             PublishSnapshot(ActivityStatus.Running, finish: false);
                         }
-                    }
-                });
+                    });
             }
             return;
         }
