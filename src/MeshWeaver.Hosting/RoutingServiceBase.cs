@@ -12,11 +12,11 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting
 {
-    internal abstract class RoutingServiceBase(IMessageHub hub) : IRoutingService
+    internal abstract class RoutingServiceBase : IRoutingService
     {
-        protected readonly ITypeRegistry TypeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
-        protected readonly IMessageHub Mesh = hub;
-        protected readonly IPathResolver PathResolver = hub.ServiceProvider.GetRequiredService<IPathResolver>();
+        protected readonly ITypeRegistry TypeRegistry;
+        protected readonly IMessageHub Mesh;
+        protected readonly IPathResolver PathResolver;
 
         /// <summary>
         /// Per-address activation serializers. While a target hub is being
@@ -27,6 +27,29 @@ namespace MeshWeaver.Hosting
         /// backlog drains. Never static (would bleed across meshes/tests).
         /// </summary>
         private readonly ConcurrentDictionary<Address, ActivationSerializer> activationSerializers = new();
+
+        protected RoutingServiceBase(IMessageHub hub)
+        {
+            Mesh = hub;
+            TypeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
+            PathResolver = hub.ServiceProvider.GetRequiredService<IPathResolver>();
+            // Dispose any lingering per-address activation serializer on mesh teardown.
+            // A serializer mid-activation at shutdown holds an in-flight RouteMessage
+            // whose .Timeout(30s) timer roots the subscription via the TimerQueue (a GC
+            // strong-handle) — and the closure captures this → Mesh, pinning the DISPOSED
+            // MeshHub for up to 30s (the MeshHub_IsCollected leak signature). Disposing
+            // here cancels those timers so the hub is collectable immediately. Drained
+            // serializers have already removed themselves, so this only catches in-flight
+            // ones. Idempotent with the self-retire path.
+            hub.RegisterForDisposal((Action<IMessageHub>)(_ => DisposeSerializers()));
+        }
+
+        private void DisposeSerializers()
+        {
+            foreach (var kvp in activationSerializers)
+                kvp.Value.Dispose();
+            activationSerializers.Clear();
+        }
 
         public IObservable<IMessageDelivery> DeliverMessage(IMessageDelivery delivery)
         {
@@ -194,7 +217,7 @@ namespace MeshWeaver.Hosting
             {
                 lock (gate)
                 {
-                    if (--pending > 0) return;
+                    if (completed || --pending > 0) return;
                     // Backlog drained — retire. Future messages either take the
                     // direct short-circuit (hub now hosted) or create a fresh
                     // serializer. Completing the inbox makes TryEnqueue return false
@@ -204,6 +227,24 @@ namespace MeshWeaver.Hosting
                 }
                 owner.activationSerializers.TryRemove(
                     new KeyValuePair<Address, ActivationSerializer>(address, this));
+                pump.Dispose();
+            }
+
+            /// <summary>
+            /// Teardown hook (mesh disposal). Stops accepting and tears down the
+            /// Concat pump — which unsubscribes any in-flight RouteMessage and
+            /// cancels its Timeout timer, releasing the TimerQueue root that would
+            /// otherwise pin the disposed MeshHub. Idempotent with the self-retire
+            /// path via the <c>completed</c> flag.
+            /// </summary>
+            public void Dispose()
+            {
+                lock (gate)
+                {
+                    if (completed) return;
+                    completed = true;
+                }
+                inbox.OnCompleted();
                 pump.Dispose();
             }
         }
