@@ -41,8 +41,15 @@ public partial class NamedAreaView
         if (Stream is null)
             return;
 
-        // When area is empty, GetControlStream returns a NamedAreaControl pointing to the default area
-        var controlStream = Stream.GetControlStream(AreaToBeRendered);
+        // When area is empty, GetControlStream returns a NamedAreaControl pointing to the default area.
+        // Bounded, throttled, fully-reactive retry: a transiently unaddressable area (per-node hub
+        // still bootstrapping, NodeType mid-compile, activity node not yet routable) self-heals within
+        // a few backoff steps; an inexistent address gives up after AreaStreamRetry.DefaultMaxRetries
+        // instead of resubscribing forever (the NotFound message storm that wedged the partition).
+        // A CompilationInProgress NACK is NOT retried — it falls straight through to the error handler
+        // below, which swaps to the Progress view at once.
+        var controlStream = Stream.GetControlStream(AreaToBeRendered)
+            .RetryAreaWithBackoff(AreaErrorClassifier.ShouldRetryArea);
 
         AddBinding(controlStream
             .Subscribe(
@@ -93,7 +100,7 @@ public partial class NamedAreaView
                     // When the compile settles and the original area becomes addressable, the
                     // user re-navigates / re-mounts and the regular path resumes. Detected
                     // strictly on the typed Failure.ErrorType — no string sniff.
-                    if (TryGetCompilationInProgressNodeType(error) is { } nodeTypePath)
+                    if (AreaErrorClassifier.TryGetCompilationInProgressNodeType(error) is { } nodeTypePath)
                     {
                         Logger.LogInformation(
                             "NACK CompilationInProgress for area {Area} on NodeType {NodeType} — swapping to Progress",
@@ -131,16 +138,35 @@ public partial class NamedAreaView
                     // a subscription that emitted null first, the success handler reset
                     // the counter, the next failure re-armed retries, and the GUI looped
                     // forever consuming circuit bandwidth.
-                    if (IsTransientHubFailure(error))
+                    if (AreaErrorClassifier.IsTransientHubFailure(error))
                     {
-                        // Transient hub failure (timeout, undeliverable). Log only;
-                        // do NOT replace the existing content with a "Loading…"
-                        // placeholder — keeping the previous render in place is
-                        // less disruptive than swapping to a placeholder that
-                        // sometimes lingers when the upstream never recovers.
+                        // By the time a transient failure reaches here the bounded reactive
+                        // retry (RetryAreaWithBackoff, applied to controlStream above) is
+                        // ALREADY exhausted — the upstream had AreaStreamRetry.DefaultMaxRetries
+                        // attempts over ~8s of backoff to come online and didn't. Give up and
+                        // report, rather than spin forever (the inexistent-address storm) or
+                        // silently keep a stale render that never updates. The earlier
+                        // "keep previous, no retry" behaviour is now the retry's job.
                         Logger.LogWarning(error,
-                            "Transient hub failure on area {Area} — keeping previous render. Hub={Message}",
-                            AreaToBeRendered, error.Message);
+                            "Area {Area} unavailable after {Retries} reactive retries — reporting failure. Hub={Message}",
+                            AreaToBeRendered, AreaStreamRetry.DefaultMaxRetries, error.Message);
+                        try
+                        {
+                            InvokeAsync(() =>
+                            {
+                                if (IsViewDisposed) return;
+                                try
+                                {
+                                    RootControl = new MarkdownControl(
+                                        $"**Area unavailable.** The view at `{AreaToBeRendered}` did not become "
+                                        + $"addressable after {AreaStreamRetry.DefaultMaxRetries} retries — it may still be "
+                                        + "initialising or its NodeType may be compiling. Reload to retry.");
+                                    RequestStateChange();
+                                }
+                                catch (ObjectDisposedException) { /* renderer gone */ }
+                            });
+                        }
+                        catch (ObjectDisposedException) { /* renderer gone */ }
                         return;
                     }
 
@@ -150,7 +176,7 @@ public partial class NamedAreaView
                     // so production log dashboards don't page on every "user clicked
                     // a thing they couldn't do". Real errors (NullReferenceException,
                     // IO failures, runtime crashes) still land at Error level.
-                    if (IsExpectedUserActionFailure(error))
+                    if (AreaErrorClassifier.IsExpectedUserActionFailure(error))
                         Logger.LogWarning(error, "Expected user-action failure in control stream for area {Area}: {Message}",
                             AreaToBeRendered, error.Message);
                     else
@@ -178,92 +204,4 @@ public partial class NamedAreaView
         );
     }
 
-    /// <summary>
-    /// Classifies an exception as an expected user-action outcome (access
-    /// violation, validation rejection, not-found, etc.) versus an engineering
-    /// error (null deref, IO crash, etc.). Used to choose the log level so the
-    /// production log dashboard doesn't page on every "user clicked something
-    /// they couldn't do".
-    ///
-    /// <para>Looks through the exception chain — <see cref="DeliveryFailureException"/>
-    /// wraps the routing-layer failure message; <see cref="UnauthorizedAccessException"/>
-    /// is the .NET-standard access-denied. Message-based matching for the
-    /// rest because <c>DeliveryFailure.ErrorType</c> is internal to the
-    /// messaging assembly and we don't expose it.</para>
-    /// </summary>
-    /// <summary>
-    /// Classifies an exception as a transient hub/network failure that should
-    /// trigger an automatic re-subscription rather than surface as a hostile
-    /// "Error loading area" markdown to the user.
-    ///
-    /// <para>The dominant pattern is the framework's own
-    /// <see cref="TimeoutException"/> from <c>MessageHub.BuildTimeoutMessage</c>
-    /// — "No response received in hub … within … for request …" — which fires
-    /// when the SubscribeRequest's target hub doesn't respond inside
-    /// <c>MessageHubConfiguration.RequestTimeout</c> (default 30 s).
-    /// Causes range from "the per-node hub is still bootstrapping its
-    /// SecurityService data sources" to "the workspace synced query has not
-    /// emitted yet" — both self-heal once the upstream catches up.
-    /// <see cref="DeliveryFailureException"/> with the matching wording, and
-    /// raw <c>OperationCanceledException</c> from a torn-down circuit, are
-    /// also transient.</para>
-    /// </summary>
-    private static bool IsTransientHubFailure(Exception? ex)
-    {
-        for (var e = ex; e != null; e = e.InnerException)
-        {
-            if (e is TimeoutException) return true;
-            if (e is OperationCanceledException) return true;
-            var msg = e.Message ?? string.Empty;
-            // The framework's own undeliverable / timeout banners — they reach
-            // the GUI as DeliveryFailureException-wrapped messages, so the
-            // typed check above doesn't always catch them.
-            if (msg.Contains("No response received in hub", StringComparison.OrdinalIgnoreCase)) return true;
-            if (msg.Contains("target hub was not found", StringComparison.OrdinalIgnoreCase)) return true;
-            if (msg.Contains("undeliverable", StringComparison.OrdinalIgnoreCase)) return true;
-        }
-        return false;
-    }
-
-    /// <summary>
-    /// Walks the exception chain for a <see cref="DeliveryFailureException"/> whose
-    /// underlying <see cref="DeliveryFailure.ErrorType"/> is
-    /// <see cref="ErrorType.CompilationInProgress"/>. Returns the failure's
-    /// <see cref="DeliveryFailure.NodeTypePath"/> when found — that's the NodeType
-    /// whose "Progress" layout area the GUI swaps to. Null otherwise.
-    /// </summary>
-    private static string? TryGetCompilationInProgressNodeType(Exception? ex)
-    {
-        for (var e = ex; e != null; e = e.InnerException)
-        {
-            if (e is DeliveryFailureException dfe
-                && dfe.Failure.ErrorType == ErrorType.CompilationInProgress
-                && !string.IsNullOrEmpty(dfe.Failure.NodeTypePath))
-            {
-                return dfe.Failure.NodeTypePath;
-            }
-        }
-        return null;
-    }
-
-    private static bool IsExpectedUserActionFailure(Exception? ex)
-    {
-        for (var e = ex; e != null; e = e.InnerException)
-        {
-            if (e is UnauthorizedAccessException) return true;
-            if (e is DeliveryFailureException)
-            {
-                var msg = e.Message ?? string.Empty;
-                if (msg.Contains("Access denied", StringComparison.OrdinalIgnoreCase)) return true;
-                if (msg.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase)) return true;
-                if (msg.Contains("Forbidden", StringComparison.OrdinalIgnoreCase)) return true;
-                if (msg.StartsWith("No node found", StringComparison.OrdinalIgnoreCase)) return true;
-                if (msg.Contains("Validation failed", StringComparison.OrdinalIgnoreCase)) return true;
-                if (msg.Contains("Validation error", StringComparison.OrdinalIgnoreCase)) return true;
-                if (msg.Contains("not allowed", StringComparison.OrdinalIgnoreCase)) return true;
-                if (msg.Contains("permission", StringComparison.OrdinalIgnoreCase)) return true;
-            }
-        }
-        return false;
-    }
 }
