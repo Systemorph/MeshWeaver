@@ -135,6 +135,7 @@ public static class AIExtensions
             // to break the constructor cycle.
             services.TryAddEnumerable(ServiceDescriptor.Singleton<IChatCommand, AgentCommand>());
             services.TryAddEnumerable(ServiceDescriptor.Singleton<IChatCommand, ModelCommand>());
+            services.TryAddEnumerable(ServiceDescriptor.Singleton<IChatCommand, HarnessCommand>());
             services.TryAddEnumerable(ServiceDescriptor.Singleton<IChatCommand, HelpCommand>());
             services.TryAddSingleton<ChatCommandRegistry>(sp =>
             {

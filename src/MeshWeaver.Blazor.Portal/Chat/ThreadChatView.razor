@@ -411,64 +411,32 @@ else
             </div>
         }
 
-        @* Inline command picker — /model and /agent with no argument pop this menu of
-           everything installed; clicking an item writes the composer selection (same as
-           typing /model Name) and confirms in the status row below. *@
-        @if (pendingWidget == ChatWidget.ModelPicker)
+        @* GENERIC node picker — every node-pick command (/agent, /model, /harness, and any
+           module-defined one) pops THIS one menu. The command supplied the query + title; the
+           host queried the mesh (OpenPicker) and listed the nodes; clicking one writes its PATH
+           to the command's composer field. No per-command widget. *@
+        @if (pendingPicker is { } picker)
         {
             <div class="thread-chat-widget">
                 <div class="thread-chat-widget-header">
-                    <span>Choose a model</span>
+                    <span>@picker.Title</span>
                     <button class="thread-msg-action-btn" @onclick="DismissWidget" title="Close">&#10005;</button>
                 </div>
                 <div class="thread-chat-widget-list">
-                    @foreach (var group in availableModels.GroupBy(m => m.Provider).OrderBy(g => g.First().Order))
+                    @foreach (var node in pickerNodes)
                     {
-                        <div class="thread-chat-widget-group">@group.Key</div>
-                        @foreach (var model in group)
-                        {
-                            var isSel = string.Equals(model.Name, LastSegment(boundModelPath), StringComparison.OrdinalIgnoreCase);
-                            <button class="thread-chat-widget-item @(isSel ? "selected" : "")"
-                                    @onclick="@(() => SelectModelFromWidget(model))">
-                                <span class="thread-chat-widget-item-name">@model.Name</span>
-                                <span class="thread-chat-widget-item-desc">@model.Provider</span>
-                            </button>
-                        }
+                        <button class="thread-chat-widget-item"
+                                @onclick="@(() => SelectFromPicker(picker, node))">
+                            <span class="thread-chat-widget-item-name">@(node.Name ?? node.Id)</span>
+                            @if (!string.IsNullOrEmpty(node.Description))
+                            {
+                                <span class="thread-chat-widget-item-desc">@node.Description</span>
+                            }
+                        </button>
                     }
-                    @if (availableModels.Count == 0)
+                    @if (pickerNodes.Count == 0)
                     {
-                        <div class="thread-chat-widget-empty">No models installed.</div>
-                    }
-                </div>
-            </div>
-        }
-        else if (pendingWidget == ChatWidget.AgentPicker)
-        {
-            <div class="thread-chat-widget">
-                <div class="thread-chat-widget-header">
-                    <span>Choose an agent</span>
-                    <button class="thread-msg-action-btn" @onclick="DismissWidget" title="Close">&#10005;</button>
-                </div>
-                <div class="thread-chat-widget-list">
-                    @foreach (var group in agentDisplayInfos.GroupBy(a => a.GroupName ?? "Agents").OrderBy(g => g.Key))
-                    {
-                        <div class="thread-chat-widget-group">@group.Key</div>
-                        @foreach (var agent in group.OrderBy(a => a.Order).ThenBy(a => a.Name))
-                        {
-                            var isSel = string.Equals(agent.Path, boundAgentPath, StringComparison.OrdinalIgnoreCase);
-                            <button class="thread-chat-widget-item @(isSel ? "selected" : "")"
-                                    @onclick="@(() => SelectAgentFromWidget(agent))">
-                                <span class="thread-chat-widget-item-name">@agent.Name</span>
-                                @if (!string.IsNullOrEmpty(agent.Description))
-                                {
-                                    <span class="thread-chat-widget-item-desc">@agent.Description</span>
-                                }
-                            </button>
-                        }
-                    }
-                    @if (agentDisplayInfos.Count == 0)
-                    {
-                        <div class="thread-chat-widget-empty">No agents installed.</div>
+                        <div class="thread-chat-widget-empty">Nothing to pick.</div>
                     }
                 </div>
             </div>

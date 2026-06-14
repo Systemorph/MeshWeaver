@@ -52,16 +52,16 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private bool lastCommandStatusIsError;
 
     /// <summary>
-    /// Inline widget the most recent command asked us to render. <see cref="ChatWidget.None"/>
-    /// hides the widget area. Driven by <see cref="CommandResult.Widget"/>.
+    /// The node-pick request the most recent command asked us to render (null hides the picker),
+    /// plus the mesh nodes it resolved. Driven by <see cref="CommandResult.Picker"/> via OpenPicker.
     /// </summary>
-    private ChatWidget pendingWidget = ChatWidget.None;
+    private NodePickerRequest? pendingPicker;
+    private IReadOnlyList<MeshNode> pickerNodes = [];
 
     private bool _isDisposed;
     private IDisposable? _navContextSubscription;
     private NavigationContext? _currentNavContext;
     private IDisposable? agentSubscription;
-    private IDisposable? modelSubscription;
     private readonly string _instanceId = Guid.NewGuid().ToString("N")[..8];
 
     // Thread state
@@ -208,7 +208,6 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     // no sticky restore, no resolve/rebuild machinery. The current selection is projected
     // one-way from the composer node into the bound* fields below.
     private IReadOnlyList<AgentDisplayInfo> agentDisplayInfos = [];
-    private IReadOnlyList<ModelInfo> availableModels = [];
 
     /// <summary>
     /// Current selection, projected one-way from the bound composer state (<see cref="_templatePath"/>).
@@ -569,28 +568,20 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     private void InitializeAgentAndModelSelections()
     {
-        // 🚦 Models come EXCLUSIVELY from mesh nodes — the served/imported
-        // nodeType:LanguageModel catalog under _Provider, already filtered to
-        // CONFIGURED providers by BuiltInLanguageModelProvider. The DI
-        // IChatClientFactory list is NOT a model source (it advertised model ids the
-        // deployment may never have configured — the "Azure Claude shows with no
-        // config" bug). OnModelList — fed by AgentPickerProjection.ObserveModels in
-        // SubscribeToAgentNodes — populates availableModels from the mesh query.
+        // The chat view loads NO model/harness lists: /agent, /model and /harness are generic
+        // node-pick commands that query the mesh on demand (OpenPicker). The only subscription
+        // kept is the agent snapshot, used for @-reference agent detection.
         SubscribeToAgentNodes();
     }
 
-    // Merged agent + model nodes from reactive queries, keyed by node path.
-    // Single union query (`nodeType:Agent|Model`) gathers both — fork by
-    // content type in OnAgentQueryChange.
+    // Agent nodes from the reactive query, keyed by node path — used ONLY for @-reference
+    // agent detection (the /agent, /model, /harness commands query the mesh on demand).
     private readonly Dictionary<string, AgentDisplayInfo> _agentsByPath = new();
-    private readonly Dictionary<string, ModelInfo> _modelsByPath = new();
 
     private void SubscribeToAgentNodes()
     {
         agentSubscription?.Dispose();
-        modelSubscription?.Dispose();
         _agentsByPath.Clear();
-        _modelsByPath.Clear();
 
         var workspace = Hub.ServiceProvider.GetService<IWorkspace>();
         if (workspace == null)
@@ -600,15 +591,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             return;
         }
 
-        // 🚨 Two independent subscriptions through the SAME ObserveAgents /
-        // ObserveModels methods that AgentPickerProjectionTest drives.
-        // No query string or projection logic in this file — both live
-        // in AgentPickerProjection so the dropdown can't drift from the
-        // test.
+        // Agent snapshot subscription — kept ONLY for @-reference agent detection
+        // (OnCompletionItemAccepted decides whether an @-ref is an agent). The /agent,
+        // /model and /harness commands no longer load lists here: they go through the
+        // GENERIC node picker (OpenPicker), which queries the mesh on demand.
         agentSubscription = AgentPickerProjection.ObserveAgents(workspace, Hub, initialContext)
             .Subscribe(agents => InvokeAsync(() => OnAgentList(agents)));
-        modelSubscription = AgentPickerProjection.ObserveModels(workspace, Hub, initialContext)
-            .Subscribe(models => InvokeAsync(() => OnModelList(models)));
     }
 
     /// <summary>
@@ -639,36 +627,6 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         agentDisplayInfos = conversational;
         StateHasChanged();
-    }
-
-    private void OnModelList(IReadOnlyList<ModelInfo> models)
-    {
-        Logger.LogDebug("[ThreadChat:{InstanceId}] Models received: count={Count}",
-            _instanceId, models.Count);
-
-        _modelsByPath.Clear();
-        foreach (var m in models)
-            _modelsByPath[m.Path ?? m.Name] = m;
-
-        RebuildAvailableModels();
-        StateHasChanged();
-    }
-
-    /// <summary>
-    /// Recomputes <see cref="availableModels"/> from the mesh <c>nodeType:LanguageModel</c>
-    /// catalog ONLY — the served/imported model nodes under <c>_Provider</c>, already
-    /// filtered to CONFIGURED providers by <c>BuiltInLanguageModelProvider</c>. The
-    /// <c>IChatClientFactory</c> registrations are deliberately NOT a model source any more:
-    /// they advertised model ids the deployment may never have configured (the "Azure Claude
-    /// shows with no config" bug). Models are mesh nodes exclusively, picked by node path.
-    /// </summary>
-    private void RebuildAvailableModels()
-    {
-        availableModels = _modelsByPath.Values
-            .OrderBy(m => m.Order)
-            .ThenBy(m => m.Provider, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(m => m.Name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
     }
 
     private void SendMessage()
@@ -849,34 +807,31 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             return;
         }
 
+        // 🚦 GENERIC command context — no per-command data/setters. A node-pick command
+        // (MeshNodePickCommand) returns a NodePickerRequest; the host renders ONE generic
+        // picker (OpenPicker) and writes the chosen node path to the named composer field.
         var context = new CommandContext
         {
             ParsedCommand = parsedCommand,
-            AvailableAgents = agentDisplayInfos.ToDictionary(a => a.Name, a => a, StringComparer.OrdinalIgnoreCase),
-            CurrentAgent = agentDisplayInfos.FirstOrDefault(a => a.Path == boundAgentPath),
-            SetCurrentAgent = a => WriteComposerSelection(agentPath: a.Path),
-            CurrentModel = availableModels.FirstOrDefault(m => string.Equals(m.Name, LastSegment(boundModelPath), StringComparison.OrdinalIgnoreCase)),
-            SetCurrentModel = m => WriteComposerSelection(modelName: m.Path ?? m.Name),
-            AvailableModels = availableModels,
+            Hub = Hub,
+            ContextPath = initialContext,
             CommandRegistry = CommandRegistry
         };
 
         try
         {
             var result = await command.ExecuteAsync(context);
-            // When the command pops a picker widget, the picker IS the
-            // response — clear lastCommandStatus so the breadcrumb shows
-            // just the active-agent / active-model pills, not the long
-            // "Pick an agent — or type ..." help text that's only useful
-            // as a fallback for headless hosts.
-            pendingWidget = result.Widget;
-            if (result.Widget != ChatWidget.None)
+            if (result.Picker is { } picker)
             {
+                // The command asked for a node picker — the picker IS the response.
                 lastCommandStatus = null;
                 lastCommandStatusIsError = false;
+                OpenPicker(picker);
             }
             else
             {
+                pendingPicker = null;
+                pickerNodes = [];
                 lastCommandStatus = result.Message;
                 lastCommandStatusIsError = !result.Success;
             }
@@ -886,7 +841,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             Logger.LogWarning(ex, "[ThreadChat:{InstanceId}] /{Cmd} failed", _instanceId, parsedCommand.Name);
             lastCommandStatus = $"/{parsedCommand.Name} failed: {ex.Message}";
             lastCommandStatusIsError = true;
-            pendingWidget = ChatWidget.None;
+            pendingPicker = null;
+            pickerNodes = [];
         }
 
         await InvokeAsync(StateHasChanged);
@@ -894,36 +850,86 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     private void DismissWidget()
     {
-        pendingWidget = ChatWidget.None;
+        pendingPicker = null;
+        pickerNodes = [];
         StateHasChanged();
     }
 
     /// <summary>
-    /// Picks a model from the inline <see cref="ChatWidget.ModelPicker"/> menu — identical to
-    /// typing <c>/model &lt;Name&gt;</c>: writes the composer's <c>ModelName</c> (so the selection
-    /// persists + drives the next round) and confirms in the status row. Dismisses the menu.
+    /// Generic node picker for any <see cref="NodePickerRequest"/>: queries the mesh for the
+    /// command's node query and either auto-selects an exact name match (when the user typed an
+    /// argument, e.g. <c>/model gpt-4o</c>) or shows the picker list. One render path serves every
+    /// node-pick command — agent, model, harness, and any module-defined one.
     /// </summary>
-    private void SelectModelFromWidget(ModelInfo model)
+    private void OpenPicker(NodePickerRequest picker)
     {
-        WriteComposerSelection(modelName: model.Path ?? model.Name);
-        lastCommandStatus = $"Switched to model: {model.Name} ({model.Provider})";
+        var workspace = Hub.ServiceProvider.GetService<IWorkspace>();
+        if (workspace == null)
+            return;
+
+        AgentPickerProjection.ObserveSnapshot(workspace, Hub, $"picker|{picker.Query}", picker.Query)
+            .Take(1)
+            .Subscribe(snapshot => InvokeAsync(() =>
+            {
+                var nodes = snapshot.Where(n => !string.IsNullOrEmpty(n.Path)).ToList();
+
+                if (!string.IsNullOrEmpty(picker.SearchTerm))
+                {
+                    // Exact name/last-segment match → switch immediately, no visible picker.
+                    var exact = nodes.FirstOrDefault(n => PickerNodeMatches(n, picker.SearchTerm, exact: true));
+                    if (exact != null)
+                    {
+                        SelectFromPicker(picker, exact);
+                        return;
+                    }
+                    // Otherwise pre-filter the list to the term.
+                    nodes = nodes.Where(n => PickerNodeMatches(n, picker.SearchTerm!, exact: false)).ToList();
+                }
+
+                pendingPicker = picker;
+                pickerNodes = nodes;
+                lastCommandStatus = null;
+                StateHasChanged();
+            }));
+    }
+
+    private static bool PickerNodeMatches(MeshNode node, string term, bool exact)
+    {
+        var name = node.Name ?? node.Id ?? "";
+        var seg = LastSegment(node.Path) ?? "";
+        return exact
+            ? name.Equals(term, StringComparison.OrdinalIgnoreCase) || seg.Equals(term, StringComparison.OrdinalIgnoreCase)
+            : name.Contains(term, StringComparison.OrdinalIgnoreCase) || seg.Contains(term, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Writes the selected node's PATH onto the picker's composer field and dismisses.</summary>
+    private void SelectFromPicker(NodePickerRequest picker, MeshNode node)
+    {
+        WriteComposerSelection(picker.ComposerField, node.Path);
+        lastCommandStatus = $"{picker.Title}: {node.Name ?? node.Id}";
         lastCommandStatusIsError = false;
-        pendingWidget = ChatWidget.None;
+        pendingPicker = null;
+        pickerNodes = [];
         StateHasChanged();
     }
 
     /// <summary>
-    /// Picks an agent from the inline <see cref="ChatWidget.AgentPicker"/> menu — identical to
-    /// typing <c>/agent &lt;Name&gt;</c>: writes the composer's <c>AgentName</c> and confirms in
-    /// the status row. Dismisses the menu.
+    /// Generic composer-field writer — maps a camelCase <c>ThreadComposer</c> field name to the
+    /// typed write. This is the ONE place that knows the composer's selectable fields; commands
+    /// stay generic (they only name the field).
     /// </summary>
-    private void SelectAgentFromWidget(AgentDisplayInfo agent)
+    private void WriteComposerSelection(string field, string? path)
     {
-        WriteComposerSelection(agentPath: agent.Path);
-        lastCommandStatus = $"Switched to agent: {agent.Name}";
-        lastCommandStatusIsError = false;
-        pendingWidget = ChatWidget.None;
-        StateHasChanged();
+        switch (field)
+        {
+            case "harness": WriteComposerSelection(harness: path); break;
+            case "agentName": WriteComposerSelection(agentPath: path); break;
+            case "modelName": WriteComposerSelection(modelName: path); break;
+            default:
+                Logger.LogWarning("[ThreadChat:{InstanceId}] pick command targeted unknown composer field '{Field}'",
+                    _instanceId, field);
+                break;
+        }
     }
 
     private async Task ClearMonacoAsync()
@@ -1936,7 +1942,6 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             _navContextSubscription?.Dispose();
             composerSubscription?.Dispose();
             agentSubscription?.Dispose();
-            modelSubscription?.Dispose();
             submissionHandler.Dispose();
             foreach (var sub in messageSubs.Values) sub.Dispose();
             messageSubs.Clear();

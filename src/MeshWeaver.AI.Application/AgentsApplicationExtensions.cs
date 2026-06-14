@@ -25,17 +25,14 @@ public static class AgentsApplicationExtensions
         => application
             .AddAIViews()
             .WithServices(services => services
-                // Model provider — aggregates models across every registered
-                // IChatClientFactory so the dropdown matches what the runtime
-                // can actually serve. Single-factory registration was the
-                // source of stale model names showing in prod.
-                .AddScoped<IAutocompleteProvider>(sp =>
-                    new ModelAutocompleteProvider(sp.GetServices<IChatClientFactory>()))
-                // Mesh catalog provider
+                // Mesh catalog provider — @-references autocomplete from the mesh node
+                // catalog (agents, models, and every other node). The old factory-based
+                // ModelAutocompleteProvider was deleted: models are mesh nodes now, so it
+                // only duplicated what this provider already lists.
                 .AddScoped<IAutocompleteProvider>(sp =>
                     new MeshCatalogAutocompleteProvider(sp)
                 )
-                // Command provider
+                // Command provider — slash commands (/agent, /model, /harness, …) from the registry.
                 .AddScoped<IAutocompleteProvider, CommandAutocompleteProvider>())
             .WithHandler<AutocompleteRequest>(HandleAutocompleteRequest);
 

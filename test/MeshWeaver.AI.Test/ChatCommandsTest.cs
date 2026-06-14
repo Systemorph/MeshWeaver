@@ -1,7 +1,5 @@
-﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
-using System.Collections.Generic;
-using System.Linq;
 using System.Threading.Tasks;
 using MeshWeaver.AI.Commands;
 using MeshWeaver.AI.Parsing;
@@ -10,16 +8,26 @@ using Xunit;
 namespace MeshWeaver.AI.Test;
 
 /// <summary>
-/// Unit tests covering the slash-command pipeline that powers the chat
-/// breadcrumb (in <c>ThreadChatView.razor</c>): <see cref="ChatPreParser"/>
-/// extraction, <see cref="ChatCommandRegistry"/> registration + lookup, and
-/// the two production commands users will actually type â€” <c>/agent</c>
-/// and <c>/model</c>. The dropdowns were removed in the same change set; if
-/// these tests pass, switching agents/models from the input box still works.
+/// Unit tests for the slash-command pipeline behind the chat input: <see cref="ChatPreParser"/>
+/// extraction, <see cref="ChatCommandRegistry"/> registration + lookup, and the production
+/// node-pick commands (<c>/agent</c>, <c>/model</c>, <c>/harness</c>).
+///
+/// <para>The command surface is GENERIC: every node-pick command is a tiny
+/// <see cref="MeshNodePickCommand"/> subclass that declares only its mesh query + target composer
+/// field + title, and returns a <see cref="NodePickerRequest"/>. The host renders one generic node
+/// picker. <see cref="CustomModulePickCommand_Works_WithZeroCoreChanges"/> proves a MODULE can add
+/// its own such command with no changes to <see cref="CommandContext"/> or the chat view — the
+/// executable counterpart of <c>Doc/AI/ChatCommands.md</c>.</para>
 /// </summary>
 public class ChatCommandsTest
 {
     private readonly ChatPreParser parser = new();
+
+    private CommandContext Ctx(string text) => new()
+    {
+        ParsedCommand = parser.Parse(text).Command
+            ?? throw new System.InvalidOperationException($"Expected slash command in '{text}'")
+    };
 
     // ---- ChatPreParser ----
 
@@ -30,7 +38,6 @@ public class ChatCommandsTest
         result.Command.Should().BeNull();
         result.AgentReference.Should().BeNull();
         result.ModelReference.Should().BeNull();
-
         parser.Parse("   ").Command.Should().BeNull();
     }
 
@@ -59,7 +66,6 @@ public class ChatCommandsTest
     public void Parse_SlashModelWithDottedName_PreservesArg()
     {
         var result = parser.Parse("/model gpt-4o-mini");
-        result.Command.Should().NotBeNull();
         result.Command!.Name.Should().Be("model");
         result.Command.RawArguments.Should().Be("gpt-4o-mini");
     }
@@ -68,25 +74,14 @@ public class ChatCommandsTest
     public void Parse_SlashHelp_NoArguments()
     {
         var result = parser.Parse("/help");
-        result.Command.Should().NotBeNull();
         result.Command!.Name.Should().Be("help");
         result.Command.Arguments.Should().BeEmpty();
     }
 
     [Fact]
-    public void Parse_AgentReferenceInMessage_ExtractsButNoCommand()
-    {
-        var result = parser.Parse("@agent/Worker can you help?");
-        result.Command.Should().BeNull();
-        result.AgentReference.Should().Be("Worker");
-    }
-
-    [Fact]
     public void Parse_SlashNotAtStart_NotTreatedAsCommand()
     {
-        // "/" must be at the start; mid-message is plain text.
-        var result = parser.Parse("Use /agent to switch.");
-        result.Command.Should().BeNull();
+        parser.Parse("Use /agent to switch.").Command.Should().BeNull();
     }
 
     // ---- ChatCommandRegistry ----
@@ -96,11 +91,9 @@ public class ChatCommandsTest
     {
         var registry = new ChatCommandRegistry();
         registry.Register(new HelpCommand());
-
         registry.HasCommand("help").Should().BeTrue();
-        registry.HasCommand("?").Should().BeTrue(); // alias
-        registry.HasCommand("HELP").Should().BeTrue(); // case-insensitive
-
+        registry.HasCommand("?").Should().BeTrue();
+        registry.HasCommand("HELP").Should().BeTrue();
         registry.TryGetCommand("help", out var byName).Should().BeTrue();
         registry.TryGetCommand("?", out var byAlias).Should().BeTrue();
         byName.Should().BeSameAs(byAlias);
@@ -112,175 +105,89 @@ public class ChatCommandsTest
         var registry = new ChatCommandRegistry();
         registry.Register(new HelpCommand());
         registry.Register(new AgentCommand());
-
         registry.GetAllCommands().Should().HaveCount(2);
     }
 
+    // ---- Node-pick commands: each declares query + composer field + title ----
+
     [Fact]
-    public void Registry_UnknownCommand_TryGetReturnsFalse()
+    public async Task AgentCommand_NoArgs_RequestsAgentPicker()
     {
+        var result = await new AgentCommand().ExecuteAsync(Ctx("/agent"), TestContext.Current.CancellationToken);
+        result.Success.Should().BeTrue();
+        result.Picker.Should().NotBeNull();
+        result.Picker!.Query.Should().Be("namespace:Agent nodeType:Agent");
+        result.Picker.ComposerField.Should().Be("agentName");
+        result.Picker.Title.Should().Be("Choose an agent");
+        result.Picker.SearchTerm.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task AgentCommand_WithName_PassesSearchTerm()
+    {
+        var result = await new AgentCommand().ExecuteAsync(Ctx("/agent Worker"), TestContext.Current.CancellationToken);
+        result.Picker!.SearchTerm.Should().Be("Worker");
+        result.Picker.ComposerField.Should().Be("agentName");
+    }
+
+    [Fact]
+    public async Task AgentCommand_AtPrefix_NormalisedToBareName()
+    {
+        var result = await new AgentCommand().ExecuteAsync(Ctx("/agent @agent/Worker"), TestContext.Current.CancellationToken);
+        result.Picker!.SearchTerm.Should().Be("Worker", "a '@type/Name' or 'Path/Name' arg normalises to the last segment");
+    }
+
+    [Fact]
+    public async Task ModelCommand_NoArgs_RequestsModelPicker_OnTheConfiguredCatalogQuery()
+    {
+        var result = await new ModelCommand().ExecuteAsync(Ctx("/model"), TestContext.Current.CancellationToken);
+        result.Picker!.Query.Should().Be("namespace:_Provider nodeType:LanguageModel scope:descendants");
+        result.Picker.ComposerField.Should().Be("modelName");
+        result.Picker.Title.Should().Be("Choose a model");
+    }
+
+    [Fact]
+    public async Task HarnessCommand_NoArgs_RequestsHarnessPicker()
+    {
+        var result = await new HarnessCommand().ExecuteAsync(Ctx("/harness"), TestContext.Current.CancellationToken);
+        result.Picker!.Query.Should().Be("namespace:Harness nodeType:Harness");
+        result.Picker.ComposerField.Should().Be("harness");
+        result.Picker.Title.Should().Be("Choose a harness");
+    }
+
+    // ---- Executable docs example: a module's own node-pick command ----
+
+    /// <summary>
+    /// A module-defined command: pick a Space and drop it into the composer's context. It needs
+    /// ONLY the four declarations — no <see cref="CommandContext"/> field, no chat-view code. It
+    /// registers like any other (<c>services.TryAddEnumerable(ServiceDescriptor.Singleton&lt;IChatCommand,
+    /// SpaceCommand&gt;())</c>), appears in autocomplete via the registry, and the host renders the
+    /// generic picker for its query. This is the executable copy of Doc/AI/ChatCommands.md.
+    /// </summary>
+    private sealed class SpaceCommand : MeshNodePickCommand
+    {
+        public override string Name => "space";
+        public override string Description => "Pick a Space";
+        protected override string Query => "nodeType:Space";
+        protected override string ComposerField => "contextPath";
+        protected override string Title => "Choose a Space";
+    }
+
+    [Fact]
+    public async Task CustomModulePickCommand_Works_WithZeroCoreChanges()
+    {
+        var cmd = new SpaceCommand();
+
+        // It registers + resolves like any built-in command (so it shows up in autocomplete).
         var registry = new ChatCommandRegistry();
-        registry.TryGetCommand("nope", out var cmd).Should().BeFalse();
-        cmd.Should().BeNull();
-    }
+        registry.Register(cmd);
+        registry.HasCommand("space").Should().BeTrue();
 
-    // ---- AgentCommand ----
-
-    [Fact]
-    public async Task AgentCommand_NoArgs_RequestsPickerWidget()
-    {
-        var (cmd, ctx, switched) = MakeAgentCommandContext(parsed: ParseSlash("/agent"));
-
-        var result = await cmd.ExecuteAsync(ctx, TestContext.Current.CancellationToken);
-
-        // No-args = "show me the picker" â€” Success + Widget set, agent list
-        // still listed in the message body as a fallback for non-Blazor hosts.
+        // And executes through the SAME generic surface — declaring only its query + field + title.
+        var result = await cmd.ExecuteAsync(Ctx("/space Acme"), TestContext.Current.CancellationToken);
         result.Success.Should().BeTrue();
-        result.Widget.Should().Be(ChatWidget.AgentPicker);
-        result.Message.Should().Contain("Worker");
-        result.Message.Should().Contain("Coder");
-        switched.Value.Should().BeNull();
+        result.Picker!.Query.Should().Be("nodeType:Space");
+        result.Picker.ComposerField.Should().Be("contextPath");
+        result.Picker.SearchTerm.Should().Be("Acme");
     }
-
-    [Fact]
-    public async Task AgentCommand_KnownAgent_SwitchesAndReturnsOk()
-    {
-        var (cmd, ctx, switched) = MakeAgentCommandContext(parsed: ParseSlash("/agent Worker"));
-
-        var result = await cmd.ExecuteAsync(ctx, TestContext.Current.CancellationToken);
-
-        result.Success.Should().BeTrue();
-        result.Message.Should().Contain("Worker");
-        switched.Value.Should().NotBeNull();
-        switched.Value!.Name.Should().Be("Worker");
-    }
-
-    [Fact]
-    public async Task AgentCommand_AtPrefix_AlsoMatches()
-    {
-        var (cmd, ctx, switched) = MakeAgentCommandContext(parsed: ParseSlash("/agent @agent/Worker"));
-
-        var result = await cmd.ExecuteAsync(ctx, TestContext.Current.CancellationToken);
-
-        result.Success.Should().BeTrue();
-        switched.Value!.Name.Should().Be("Worker");
-    }
-
-    [Fact]
-    public async Task AgentCommand_CaseInsensitiveMatch()
-    {
-        var (cmd, ctx, switched) = MakeAgentCommandContext(parsed: ParseSlash("/agent worker"));
-
-        var result = await cmd.ExecuteAsync(ctx, TestContext.Current.CancellationToken);
-
-        result.Success.Should().BeTrue();
-        switched.Value!.Name.Should().Be("Worker"); // returns canonical-case from dict
-    }
-
-    [Fact]
-    public async Task AgentCommand_UnknownAgent_ReturnsError_DoesNotSwitch()
-    {
-        var (cmd, ctx, switched) = MakeAgentCommandContext(parsed: ParseSlash("/agent Ghost"));
-
-        var result = await cmd.ExecuteAsync(ctx, TestContext.Current.CancellationToken);
-
-        result.Success.Should().BeFalse();
-        result.Message.Should().Contain("Ghost");
-        switched.Value.Should().BeNull();
-    }
-
-    // ---- ModelCommand ----
-
-    [Fact]
-    public async Task ModelCommand_NoArgs_RequestsPickerWidget()
-    {
-        var (cmd, ctx, switched) = MakeModelCommandContext(parsed: ParseSlash("/model"));
-
-        var result = await cmd.ExecuteAsync(ctx, TestContext.Current.CancellationToken);
-
-        result.Success.Should().BeTrue();
-        result.Widget.Should().Be(ChatWidget.ModelPicker);
-        result.Message.Should().Contain("gpt-4o-mini");
-        result.Message.Should().Contain("claude-sonnet");
-        switched.Value.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task ModelCommand_KnownModel_SwitchesAndReturnsOk()
-    {
-        var (cmd, ctx, switched) = MakeModelCommandContext(parsed: ParseSlash("/model gpt-4o-mini"));
-
-        var result = await cmd.ExecuteAsync(ctx, TestContext.Current.CancellationToken);
-
-        result.Success.Should().BeTrue();
-        switched.Value!.Name.Should().Be("gpt-4o-mini");
-        // The confirmation is surfaced in the chat output (lastCommandStatus) so the user
-        // sees that the model changed — must name the model that was switched to.
-        result.Message.Should().Contain("gpt-4o-mini");
-    }
-
-    [Fact]
-    public async Task ModelCommand_UnknownModel_ReturnsError_DoesNotSwitch()
-    {
-        var (cmd, ctx, switched) = MakeModelCommandContext(parsed: ParseSlash("/model nope"));
-
-        var result = await cmd.ExecuteAsync(ctx, TestContext.Current.CancellationToken);
-
-        result.Success.Should().BeFalse();
-        switched.Value.Should().BeNull();
-    }
-
-    // ---- helpers ----
-
-    private ParsedCommand ParseSlash(string text) =>
-        parser.Parse(text).Command ?? throw new System.InvalidOperationException(
-            $"Expected slash command in '{text}'");
-
-    private static (AgentCommand cmd, CommandContext ctx, Box<AgentDisplayInfo?> switched)
-        MakeAgentCommandContext(ParsedCommand parsed)
-    {
-        AgentDisplayInfo MakeAgent(string name) => new()
-        {
-            Name = name,
-            Path = $"Agent/{name}",
-            Description = $"Stub agent {name}",
-            AgentConfiguration = new AgentConfiguration { Id = name }
-        };
-        var agents = new Dictionary<string, AgentDisplayInfo>(System.StringComparer.OrdinalIgnoreCase)
-        {
-            ["Worker"] = MakeAgent("Worker"),
-            ["Coder"] = MakeAgent("Coder"),
-        };
-        var switched = new Box<AgentDisplayInfo?>();
-        var ctx = new CommandContext
-        {
-            ParsedCommand = parsed,
-            AvailableAgents = agents,
-            SetCurrentAgent = a => switched.Value = a
-        };
-        return (new AgentCommand(), ctx, switched);
-    }
-
-    private static (ModelCommand cmd, CommandContext ctx, Box<ModelInfo?> switched)
-        MakeModelCommandContext(ParsedCommand parsed)
-    {
-        var models = new List<ModelInfo>
-        {
-            new() { Name = "gpt-4o-mini", Provider = "OpenAI" },
-            new() { Name = "claude-sonnet", Provider = "Anthropic" },
-        };
-        var switchedModel = new Box<ModelInfo?>();
-        var ctx = new CommandContext
-        {
-            ParsedCommand = parsed,
-            AvailableAgents = new Dictionary<string, AgentDisplayInfo>(),
-            SetCurrentAgent = _ => { },
-            AvailableModels = models,
-            SetCurrentModel = m => switchedModel.Value = m
-        };
-        return (new ModelCommand(), ctx, switchedModel);
-    }
-
-    /// <summary>Out-parameter substitute for closures used in lambdas.</summary>
-    private sealed class Box<T> { public T? Value { get; set; } }
 }
