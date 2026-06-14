@@ -136,8 +136,8 @@ public partial class MeshNodeCollectionView : BlazorView<MeshNodeCollectionContr
     }
 
     /// <summary>
-    /// Removes a sub-entry (role or group) from a node's content and persists the change.
-    /// Uses the same DataChangeRequest pattern as OverviewLayoutArea.SetupAutoSave.
+    /// Removes a sub-entry (role or group) from a node's content and persists the change by writing
+    /// straight back to the node stream (the canonical <c>GetMeshNodeStream(path).Update(...)</c> path).
     /// </summary>
     private void RemoveSubEntry(MeshNode node, int index)
     {
