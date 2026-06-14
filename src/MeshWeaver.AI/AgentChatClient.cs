@@ -287,7 +287,7 @@ public class AgentChatClient : IAgentChat
         // For persistent factories with a persistent thread ID, create a session linked to the server-side thread
         if (isPersistentFactory && !string.IsNullOrEmpty(persistentThreadId))
         {
-            sharedThread = await agent.CreateSessionAsync(persistentThreadId);
+            sharedThread = await agent.CreateSessionAsync(persistentThreadId).ConfigureAwait(false);
             logger.LogInformation("Resumed persistent thread: {PersistentThreadId}", persistentThreadId);
             return sharedThread;
         }
@@ -295,13 +295,13 @@ public class AgentChatClient : IAgentChat
         if (isPersistentFactory)
         {
             // For persistent factories without an existing thread, create a new server-side session
-            sharedThread = await agent.CreateSessionAsync(currentThreadId);
+            sharedThread = await agent.CreateSessionAsync(currentThreadId).ConfigureAwait(false);
             persistentThreadId = currentThreadId;
             logger.LogInformation("Created new persistent thread: {PersistentThreadId}", persistentThreadId);
         }
         else
         {
-            sharedThread = await agent.CreateSessionAsync();
+            sharedThread = await agent.CreateSessionAsync().ConfigureAwait(false);
         }
 
         return sharedThread;
@@ -391,7 +391,7 @@ public class AgentChatClient : IAgentChat
                 }
             }
 
-            var toolDocs = cachedToolDocs ?? await LoadToolDocumentationAsync();
+            var toolDocs = cachedToolDocs ?? await LoadToolDocumentationAsync().ConfigureAwait(false);
             if (!string.IsNullOrEmpty(toolDocs))
             {
                 sb.AppendLine("# Available Tools Documentation");
@@ -484,13 +484,13 @@ public class AgentChatClient : IAgentChat
                         {
                             // Load binary from content collection on the node's hub
                             var effectivePath = nodePath ?? Context?.Path;
-                            var stream = await contentService.GetContentAsync("content", fileName);
+                            var stream = await contentService.GetContentAsync("content", fileName).ConfigureAwait(false);
                             if (stream != null)
                             {
                                 using (stream)
                                 {
                                     using var ms = new MemoryStream();
-                                    await stream.CopyToAsync(ms);
+                                    await stream.CopyToAsync(ms).ConfigureAwait(false);
                                     var mediaType = ExtensionToMediaType.GetValueOrDefault(ext, "application/octet-stream");
                                     binaryAttachments = binaryAttachments.Add(
                                         new DataContent(ms.ToArray(), mediaType) { Name = fileName });
@@ -503,7 +503,7 @@ public class AgentChatClient : IAgentChat
                     }
 
                     // Text attachment — load via MeshPlugin.Get
-                    var content = await meshPlugin.Get($"@{cleanPath}");
+                    var content = await meshPlugin.Get($"@{cleanPath}").ConfigureAwait(false);
                     if (!string.IsNullOrEmpty(content) && !content.StartsWith("Not found") && !content.StartsWith("Error"))
                     {
                         if (content.Length > 8000)
@@ -547,7 +547,7 @@ public class AgentChatClient : IAgentChat
         foreach (var message in messages)
         {
             var text = ExtractTextFromMessage(message);
-            text = await InlineReferenceResolver.ResolveAsync(text, hub, this);
+            text = await InlineReferenceResolver.ResolveAsync(text, hub, this).ConfigureAwait(false);
             messageText.Append(text);
         }
 
@@ -560,7 +560,7 @@ public class AgentChatClient : IAgentChat
     private async Task<string> LoadToolDocumentationAsync()
     {
         var meshPlugin = new MeshPlugin(hub, this);
-        var docs = await meshPlugin.Get("@Doc/AI/Tools/MeshPlugin");
+        var docs = await meshPlugin.Get("@Doc/AI/Tools/MeshPlugin").ConfigureAwait(false);
 
         if (docs.StartsWith("Not found") || docs.StartsWith("Error"))
             return string.Empty;
@@ -573,7 +573,7 @@ public class AgentChatClient : IAgentChat
             {
                 var content = contentElement.GetString() ?? string.Empty;
                 // Resolve @@ references in tool documentation (e.g., @@QuerySyntax, @@UnifiedPath)
-                content = await InlineReferenceResolver.ResolveAsync(content, hub, this);
+                content = await InlineReferenceResolver.ResolveAsync(content, hub, this).ConfigureAwait(false);
                 return content;
             }
             // If content is not a simple string, return empty
@@ -617,17 +617,17 @@ public class AgentChatClient : IAgentChat
         currentAgentName = agent.Name;
 
         // Get or create thread for this agent
-        var thread = await GetOrCreateThreadAsync(agent);
+        var thread = await GetOrCreateThreadAsync(agent).ConfigureAwait(false);
 
         // Build the user message with context and agent instructions
-        var (userText, binaryParts) = await BuildMessageWithContextAsync(messages, currentAgentName);
+        var (userText, binaryParts) = await BuildMessageWithContextAsync(messages, currentAgentName).ConfigureAwait(false);
         currentAttachments = null; // Clear after use
 
         // Build ChatMessage with mixed content (text + binary attachments)
         var chatMessage = BuildChatMessage(userText, binaryParts);
 
         // Get response from the agent with thread
-        var response = await agent.RunAsync(chatMessage, thread, cancellationToken: cancellationToken);
+        var response = await agent.RunAsync(chatMessage, thread, cancellationToken: cancellationToken).ConfigureAwait(false);
 
         // Save the updated thread
         _ = SaveThreadAsync(agent, thread); // no-op; method returns Task.CompletedTask
@@ -694,7 +694,7 @@ public class AgentChatClient : IAgentChat
                 handoff.SourceAgentName, targetId);
 
             // Run target agent on the same shared thread with the handoff message
-            var handoffResponse = await targetAgent.RunAsync(handoff.Message, thread, cancellationToken: cancellationToken);
+            var handoffResponse = await targetAgent.RunAsync(handoff.Message, thread, cancellationToken: cancellationToken).ConfigureAwait(false);
             _ = SaveThreadAsync(targetAgent, thread); // no-op; method returns Task.CompletedTask
 
             foreach (var msg in handoffResponse.Messages)
@@ -740,7 +740,7 @@ public class AgentChatClient : IAgentChat
         currentAgentName = agent.Name;
 
         // Get or create thread for this agent
-        var thread = await GetOrCreateThreadAsync(agent);
+        var thread = await GetOrCreateThreadAsync(agent).ConfigureAwait(false);
 
         // Pass all messages as separate turns with system prompt prepended.
         // The agent's ChatClient includes FunctionInvokingChatClient for tool calls.
@@ -768,7 +768,12 @@ public class AgentChatClient : IAgentChat
         // agent can fold them into the current response — see InboxTool.
         tools.Add(InboxTool.CreateCheckInboxTool(hub, logger));
         chatOptions.Tools = tools;
-        await foreach (var update in agent.ChatClient.GetStreamingResponseAsync(turnMessages, chatOptions, cancellationToken))
+        // ConfigureAwait(false): keep the agent-stream iteration on the ThreadPool (the
+        // IoPool's domain), never resuming on a captured hub/grain action-block scheduler.
+        // This generator is consumed by ThreadExecution's round-streaming await foreach; a
+        // captured hub context that isn't pumped under a 2-core runner stalls the round
+        // (missed-observation deadlock). See ThreadExecution's STREAM await foreach.
+        await foreach (var update in agent.ChatClient.GetStreamingResponseAsync(turnMessages, chatOptions, cancellationToken).ConfigureAwait(false))
         {
             // Forward the complete update with all contents (including FunctionCallContent)
             if (update.Contents.Count > 0)
@@ -860,8 +865,10 @@ public class AgentChatClient : IAgentChat
             logger.LogInformation("Handoff (streaming): {Source} -> {Target}, running target agent on shared thread",
                 handoff.SourceAgentName, targetId);
 
-            // Run target agent streaming on the same shared thread
-            await foreach (var update in targetAgent.RunStreamingAsync(handoff.Message, thread, cancellationToken: cancellationToken))
+            // Run target agent streaming on the same shared thread.
+            // ConfigureAwait(false): same rule — never resume the handoff stream on a
+            // captured hub scheduler (keep it on the ThreadPool / IoPool domain).
+            await foreach (var update in targetAgent.RunStreamingAsync(handoff.Message, thread, cancellationToken: cancellationToken).ConfigureAwait(false))
             {
                 if (update.Contents.Count > 0)
                 {

@@ -1424,7 +1424,21 @@ internal static class ThreadExecution
                     var responseStream = harnessClient != null
                         ? harnessClient.GetStreamingResponseAsync(allMessages, options: null, ct)
                         : client.GetStreamingResponseAsync(allMessages, ct);
-                    await foreach (var update in responseStream)
+                    // 🚦 ConfigureAwait(false) is MANDATORY: this is the ONLY await in the
+                    // round-streaming lambda, and it drives PushToResponseMessage + the
+                    // terminal-Status write that signals round completion. Without it, each
+                    // MoveNextAsync resumes on whatever scheduler was captured — and the agent
+                    // stream's inner awaits (real LLM I/O, or a fake client's await Task.Delay)
+                    // can complete on a per-node HUB action-block thread. The round body would
+                    // then resume on that single-threaded hub scheduler, which under a 2-core
+                    // runner is busy/parked → the continuation is queued but never pumped → the
+                    // round never completes → the submission watcher never observes completion →
+                    // the whole round is a MISSED OBSERVATION (all threads parked, no app frame).
+                    // ConfigureAwait(false) pins the iteration to the ThreadPool (the IoPool's
+                    // domain) so completion is never gated on a hub scheduler. This is the
+                    // "await only in the IoPool" rule: the streaming await must never capture and
+                    // resume on a hub/grain context.
+                    await foreach (var update in responseStream.ConfigureAwait(false))
             {
                 // Diagnostic: surface every content-kind we see. If FunctionInvokingChatClient
                 // eats the FunctionCallContent before we see it, this loop only logs TextContent /
