@@ -426,6 +426,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         return new MeshWeaver.AI.ThreadComposer
         {
             Harness = $"{MeshWeaver.AI.HarnessNodeType.RootNamespace}/{MeshWeaver.AI.Harnesses.MeshWeaver}",
+            // Default to the conversational default agent (Assistant), NEVER a utility/naming agent.
+            AgentName = $"{MeshWeaver.AI.AgentNodeType.NodeType}/Assistant",
             ModelName = string.IsNullOrEmpty(standard)
                 ? null
                 : $"{MeshWeaver.AI.ModelProviderNodeType.RootNamespace}/Anthropic/{standard}",
@@ -448,6 +450,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             var filled = c with
             {
                 Harness = string.IsNullOrEmpty(c.Harness) ? defaults.Harness : c.Harness,
+                // Default (or RE-default) the agent: empty OR a background-generator agent → the
+                // conversational default. The latter migrates composers a pre-sort:order picker
+                // stamped with the first (utility) agent — the "ThreadNamer pre-selected" symptom.
+                AgentName = NeedsAgentDefault(c.AgentName) ? defaults.AgentName : c.AgentName,
                 ModelName = string.IsNullOrEmpty(c.ModelName) ? defaults.ModelName : c.ModelName,
             };
             return filled == c ? node : node with { Content = filled };
@@ -457,6 +463,20 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 "[ThreadChat:{InstanceId}] composer default-fill failed for {Path}", _instanceId, path));
 
         OpenComposerProjection(path);
+    }
+
+    /// <summary>
+    /// True when the composer's <c>AgentName</c> should be replaced with the conversational default:
+    /// it's empty, or it's a background-GENERATOR agent (<c>modelTier:utility</c> — ThreadNamer,
+    /// NodeInitializer, DescriptionWriter) that must never be the chat's selected agent (they emit
+    /// structured "Name:/Id:/Svg:" output, not conversation). A pre-<c>sort:order</c> picker could
+    /// default-to-first onto one of these and persist it; this clears that.
+    /// </summary>
+    private static bool NeedsAgentDefault(string? agentName)
+    {
+        if (string.IsNullOrEmpty(agentName)) return true;
+        var seg = agentName.Contains('/') ? agentName[(agentName.LastIndexOf('/') + 1)..] : agentName;
+        return seg is "ThreadNamer" or "NodeInitializer" or "DescriptionWriter";
     }
 
     /// <summary>
