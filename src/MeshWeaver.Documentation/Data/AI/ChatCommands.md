@@ -42,6 +42,20 @@ That is the whole change. `/space` now:
 No `CommandContext` field, no chat-view widget, no per-command UI — the host renders ONE generic
 picker for every node-pick command (`/agent`, `/model`, `/harness`, and yours).
 
+## As a mesh node (no code)
+
+A command can also be a **`nodeType:Command` mesh node** — no C# at all. Its content is a
+`CommandDefinition` (the same `{ Query, ComposerField, Title }` spec); the slash word is the node's
+id and the help text its description. The built-in `/agent`, `/model`, `/harness` ship this way
+(`BuiltInCommandProvider`, under the `Command` namespace).
+
+A Space or a NodeType can define its **own** Command nodes in its partition. They are discovered
+through **namespace inheritance** — `CommandNodeType.CommandQueries` unions the global catalog, the
+current context node + ancestors, and the user's home + ancestors — so a command defined nearer the
+context overrides a global one by id. The chat input resolves the matching Command node and opens
+the same generic picker. This is the data form of `MeshNodePickCommand`: prefer it for commands that
+are pure "pick a node → set a field"; use the C# subclass only when a command needs real code.
+
 ## How it executes
 
 `MeshNodePickCommand.ExecuteAsync` returns a `NodePickerRequest(Query, ComposerField, Title,
