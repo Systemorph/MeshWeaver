@@ -146,14 +146,16 @@ space owner controls whether and where it appears. Delete the embed line to drop
 catalog; move it to reposition it. Embed it with:
 
 ```markdown
-@@/Acme/area/Children
+@@/Acme/area/Search
 ```
 
 In an **authored body**, use the **absolute** form (leading `/` + full Space path): it
 resolves regardless of render context because it carries its own address. The default
-welcome page (shared by every Space) uses the relative `@@("area:Children")`, which
+welcome page (shared by every Space) uses the relative `@@("area:Search")`, which
 resolves against the Space's own path at render time. `@@` (double-at) renders the area
-inline; a single `@` would render a hyperlink instead.
+inline; a single `@` would render a hyperlink instead. The `Search` area defaults to the
+namespace tree; tune it with `?groupBy=type|category|namespace|flat` and `?subtree=true`
+— see [Mesh Search & Catalogs](/Doc/GUI/MeshSearch).
 
 > The Space's body itself is read from `MeshNode.Content` (the `Space` record) — there
 > is no separate `Space` data stream. The Overview reads the node's content directly,
@@ -169,7 +171,7 @@ The home page is plain node content, so one `patch` against the Space node does 
   "content": {
     "logo": "https://example.com/acme-logo.png",
     "description": "Acme's shared workspace for pension analytics.",
-    "body": "# Acme\n\nWelcome to Acme's workspace…\n\n## Explore\n\n- [Reports](@/Acme/Reports)\n- [Data model](@/Acme/Datenmodell)\n\n## Everything in this space\n\n@@/Acme/area/Children\n"
+    "body": "# Acme\n\nWelcome to Acme's workspace…\n\n## Explore\n\n- [Reports](@/Acme/Reports)\n- [Data model](@/Acme/Datenmodell)\n\n## Everything in this space\n\n@@/Acme/area/Search\n"
   }
 }
 ```
@@ -191,4 +193,4 @@ the Space's `content` collection and reference it instead.
 | Organize within one team's work | Folders/pages **inside** one Space |
 | Set the Space's landing page | Edit `content.body` on the **Space node** — no separate Overview page |
 | Add a logo | Set `content.logo` (an `https://…` URL or a `content`-collection file) |
-| Show the namespace catalog in the body | Embed `@@/{Space}/area/Children` |
+| Show the namespace catalog in the body | Embed `@@/{Space}/area/Search` (`?groupBy=type` to group by type) |

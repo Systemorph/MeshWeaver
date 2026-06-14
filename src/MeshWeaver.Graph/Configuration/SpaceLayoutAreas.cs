@@ -225,7 +225,7 @@ public static class SpaceLayoutAreas
     /// <summary>
     /// Dashboard grid mirroring the UserActivity layout but scoped to this space's partition:
     /// Latest Threads, Activity Feed, Recent Updates. The content catalog is NOT
-    /// hard-wired here anymore — it ships as a deletable <c>@@("area:Children")</c>
+    /// hard-wired here anymore — it ships as a deletable <c>@@("area:Search")</c>
     /// section inside the space's markdown body (see
     /// <see cref="SpaceNodeType.WelcomeMarkdown"/>), so each space owner controls
     /// whether and where the catalog appears.
