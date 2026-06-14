@@ -32,6 +32,11 @@ public static class GitHubSyncSettingsTab
 
     private const string ResultId = "ghSyncResult";
     private const string CommitFormId = "ghReimportForm";
+    // Holds the path of the PR draft the user is currently editing (empty = none yet).
+    private const string PrPathId = "ghPrPath";
+    // Holds the path of the currently-running operation activity (empty = none). The progress
+    // panel binds to it; Cancel flips RequestedStatus on it.
+    private const string ActivityPathId = "ghActivityPath";
 
     /// <summary>Registers the GitHub Sync settings tab provider (shown only on Space nodes).</summary>
     public static MessageHubConfiguration AddGitHubSyncSettingsTab(this MessageHubConfiguration config)
@@ -66,6 +71,7 @@ public static class GitHubSyncSettingsTab
         var sync = sp.GetRequiredService<GitHubSyncService>();
         var oauth = sp.GetRequiredService<GitHubOAuthService>();
         var creds = sp.GetRequiredService<GitHubCredentialService>();
+        var prService = sp.GetRequiredService<PullRequestService>();
         var userId = sp.GetService<AccessService>()?.Context?.ObjectId ?? "";
         var spacePath = node?.Path ?? "";
 
@@ -112,19 +118,44 @@ public static class GitHubSyncSettingsTab
             MeshNodeContentEditorControl.ForType(GitHubSyncService.ConfigPath(spacePath), typeof(GitHubSyncConfig)));
 
         // ── 3. Sync + re-import ───────────────────────────────────────────────
+        // Every long-running GitHub op runs as an ACTIVITY (Doc/Architecture/ActivityControlPlane):
+        // the click calls the unified hub extension, which creates an activity + returns its path;
+        // we stash the path so the progress panel below binds to it (live Messages/Status + Cancel).
         stack = stack.WithView(Section("Sync"));
-        stack = stack.WithView(Controls.Button("Sync now")
+        stack = stack.WithView(Controls.Button("Sync now (commit)")
             .WithAppearance(Appearance.Accent)
             .WithClickAction(ctx =>
             {
-                ctx.Host.UpdateData(ResultId, Pending("Syncing this Space to GitHub…"));
-                sync.SyncToGitHub(spacePath, userId).Subscribe(
-                    res => ctx.Host.UpdateData(ResultId, Ok(
-                        $"Synced — commit {Short(res.CommitSha)} ({res.FilesWritten} written, {res.FilesDeleted} removed)" +
-                        (res.RepoCreated ? ", repository created" : "") + ".")),
-                    ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
+                ctx.Host.Hub.CommitToGitHub(spacePath, userId,
+                        onActivityCreated: path => ctx.Host.UpdateData(ActivityPathId, path))
+                    .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
                 return Task.CompletedTask;
             }));
+        stack = stack.WithView(Controls.Button("Update to latest (checkout)")
+            .WithAppearance(Appearance.Outline)
+            .WithClickAction(ctx =>
+            {
+                ctx.Host.Hub.UpdateToLatestFromGitHub(spacePath, userId,
+                        onActivityCreated: path => ctx.Host.UpdateData(ActivityPathId, path))
+                    .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
+                return Task.CompletedTask;
+            }));
+        stack = stack.WithView(Controls.Button("Check branch on GitHub")
+            .WithAppearance(Appearance.Outline)
+            .WithClickAction(ctx =>
+            {
+                ctx.Host.Hub.CheckBranchStateOnGitHub(spacePath, userId,
+                        onActivityCreated: path => ctx.Host.UpdateData(ActivityPathId, path))
+                    .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
+                return Task.CompletedTask;
+            }));
+
+        // Live activity progress panel: binds to the running operation's activity node — its
+        // Messages stream live, the terminal Status shows the outcome, and Cancel flips
+        // RequestedStatus = Cancelled (Activity Control Plane). Empty until an op starts.
+        stack = stack.WithView((h, _) => h.Stream.GetDataStream<string>(ActivityPathId)
+            .Select(path => (UiControl?)BuildActivityPanel(h, path))
+            .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
 
         // Last-synced status (live — re-renders after each sync via the authoritative cache stream).
         stack = stack.WithView((h, _) => sync.WatchConfig(spacePath)
@@ -141,7 +172,38 @@ public static class GitHubSyncSettingsTab
             {
                 ["commit"] = cfg!.LastSyncCommitSha ?? cfg.Branch ?? "main",
             })));
-        stack = stack.WithView(BuildReimportForm(sync, spacePath, userId));
+        stack = stack.WithView(BuildReimportForm(spacePath, userId));
+
+        // ── 4. Pull request (AI-drafted → user edits the bound node → submit) ──
+        stack = stack.WithView(Section("Pull request"));
+        stack = stack.WithView(Controls.Html(
+            "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);margin:0 0 8px 0;\">" +
+            "Draft a pull request with AI, edit the title and body, then submit it to GitHub. " +
+            "The draft is a mesh node bound directly to the editor below — your edits save as you type.</p>"));
+
+        // "Draft pull request" — AI drafts title+body and creates a draft PR node, then we point
+        // the editor at that node by stashing its path in the PrPathId data id.
+        stack = stack.WithView(Controls.Button("Draft pull request with AI")
+            .WithAppearance(Appearance.Accent)
+            .WithClickAction(ctx =>
+            {
+                ctx.Host.UpdateData(ResultId, Pending("Asking the agent to draft a pull request…"));
+                prService.CreateDraft(spacePath, headBranch: null, baseBranch: "main").Subscribe(
+                    prNode =>
+                    {
+                        ctx.Host.UpdateData(PrPathId, prNode.Path);
+                        ctx.Host.UpdateData(ResultId, Ok("Draft created — edit the title and body below, then Submit."));
+                    },
+                    ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
+                return Task.CompletedTask;
+            }));
+
+        // The PR editor + status, bound to the draft path the button stashes. Re-renders whenever
+        // PrPathId changes (a new draft) — the node-content editor itself live-binds to the node
+        // stream for Title/Body, and the status/link row binds to the same node's content.
+        stack = stack.WithView((h, _) => h.Stream.GetDataStream<string>(PrPathId)
+            .Select(prPath => (UiControl?)BuildPullRequestEditor(prService, spacePath, prPath, userId))
+            .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
 
         // ── Result area ───────────────────────────────────────────────────────
         stack = stack.WithView((h, _) => h.Stream.GetDataStream<string>(ResultId)
@@ -204,7 +266,7 @@ public static class GitHubSyncSettingsTab
 
     // ── Re-import form (transient action input — a commit/branch to import to, not node content) ──
 
-    private static UiControl BuildReimportForm(GitHubSyncService sync, string spacePath, string userId)
+    private static UiControl BuildReimportForm(string spacePath, string userId)
     {
         var row = Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap:8px;align-items:flex-end;");
         row = row.WithView(new TextFieldControl(new JsonPointerReference("commit"))
@@ -225,14 +287,128 @@ public static class GitHubSyncSettingsTab
                         ctx.Host.UpdateData(ResultId, Err("Enter a commit SHA or branch to re-import."));
                         return;
                     }
-                    ctx.Host.UpdateData(ResultId, Pending($"Re-importing this Space at {Esc(commit)}…"));
-                    sync.ReimportAtCommit(spacePath, commit, userId).Subscribe(
-                        r => ctx.Host.UpdateData(ResultId, Ok($"Re-imported {r.Outcome} ({r.Count} node(s)) at {Esc(commit)}.")),
-                        ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
+                    // Runs as an activity (progress + cancel via the panel above).
+                    ctx.Host.Hub.ReimportFromGitHub(spacePath, commit, userId,
+                            onActivityCreated: path => ctx.Host.UpdateData(ActivityPathId, path))
+                        .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
                 });
                 return Task.CompletedTask;
             }));
         return row;
+    }
+
+    // ── Activity progress panel (binds to the running operation's activity node) ──
+
+    /// <summary>
+    /// Builds the live progress panel for the running operation at <paramref name="activityPath"/>:
+    /// streams the activity's <see cref="MeshWeaver.Data.LogMessage"/> lines and terminal
+    /// <see cref="MeshWeaver.Data.ActivityStatus"/>, with a Cancel button that flips
+    /// <c>RequestedStatus = Cancelled</c> (Activity Control Plane). Empty until an op starts.
+    /// </summary>
+    private static UiControl BuildActivityPanel(LayoutAreaHost host, string? activityPath)
+    {
+        var stack = Controls.Stack.WithWidth("100%");
+        if (string.IsNullOrEmpty(activityPath))
+            return stack;
+
+        // Live Messages + Status, bound to the activity node (re-renders on every progress tick).
+        stack = stack.WithView((h, _) => h.Hub.GetWorkspace().GetMeshNodeStream(activityPath)
+            .Select(node => (UiControl?)Controls.Html(ActivityHtml(node?.Content as MeshWeaver.Data.ActivityLog)))
+            .StartWith((UiControl?)Controls.Html("")));
+
+        // Cancel — flips RequestedStatus = Cancelled; the runner's watcher trips the command's token.
+        stack = stack.WithView((h, _) => h.Hub.GetWorkspace().GetMeshNodeStream(activityPath)
+            .Select(node => (node?.Content as MeshWeaver.Data.ActivityLog)?.Status)
+            .Select(status => (UiControl?)(status == MeshWeaver.Data.ActivityStatus.Running
+                ? Controls.Button("Cancel")
+                    .WithAppearance(Appearance.Outline)
+                    .WithClickAction(ctx => { ctx.Host.Hub.CancelActivity(activityPath); return Task.CompletedTask; })
+                : Controls.Stack))
+            .StartWith((UiControl?)Controls.Stack));
+        return stack;
+    }
+
+    private static string ActivityHtml(MeshWeaver.Data.ActivityLog? log)
+    {
+        if (log is null) return "";
+        var colour = log.Status switch
+        {
+            MeshWeaver.Data.ActivityStatus.Running => "var(--neutral-foreground-hint)",
+            MeshWeaver.Data.ActivityStatus.Succeeded => "#4ade80",
+            MeshWeaver.Data.ActivityStatus.Failed => "#f87171",
+            MeshWeaver.Data.ActivityStatus.Cancelled => "#fbbf24",
+            _ => "var(--neutral-foreground-hint)",
+        };
+        var lines = string.Join("", log.Messages.TakeLast(8).Select(m =>
+            $"<div style=\"font-family:monospace;font-size:0.8rem;\">{Esc(m.Message)}</div>"));
+        return $"<div style=\"padding:8px 12px;background:var(--neutral-layer-2);border-radius:6px;\">" +
+               $"<div style=\"font-weight:600;color:{colour};margin-bottom:4px;\">{Esc(log.Status.ToString())}</div>" +
+               $"{lines}</div>";
+    }
+
+    // ── Pull-request editor (the draft node IS the binding anchor) ──────────────
+
+    /// <summary>
+    /// Builds the PR editor for the draft at <paramref name="prPath"/>: the standard
+    /// node-content editor (Title/Body, bound DIRECTLY to the node stream — no /data replica,
+    /// no save subscription), a Submit button that opens the PR on GitHub and writes back ONLY the
+    /// immutable handle (number + url), a "Check status on GitHub" button that asks GitHub LIVE
+    /// (status is never stored — never replicated), and a link row bound to the node's handle.
+    /// Empty until a draft is created.
+    /// </summary>
+    private static UiControl BuildPullRequestEditor(
+        PullRequestService prService, string spacePath, string? prPath, string userId)
+    {
+        var stack = Controls.Stack.WithWidth("100%").WithStyle("gap:12px;");
+        if (string.IsNullOrEmpty(prPath))
+            return stack;
+
+        // Title + Body editable fields, bound directly to the PR node stream.
+        stack = stack.WithView(
+            MeshNodeContentEditorControl.ForType(prPath, typeof(GitHubPullRequest)));
+
+        // Action row: Submit (open on GitHub) + Check status (asks GitHub live).
+        var actions = Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap:8px;align-items:center;");
+        actions = actions.WithView(Controls.Button("Submit pull request")
+            .WithAppearance(Appearance.Accent)
+            .WithClickAction(ctx =>
+            {
+                // Runs as an activity (progress + cancel shown in the Sync section's activity panel).
+                ctx.Host.Hub.OpenPullRequestOnGitHub(spacePath, prPath, userId,
+                        onActivityCreated: path => ctx.Host.UpdateData(ActivityPathId, path))
+                    .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
+                return Task.CompletedTask;
+            }));
+        // Status is GitHub-owned: we ASK GitHub live, never store/replicate it.
+        actions = actions.WithView(Controls.Button("Check status on GitHub")
+            .WithAppearance(Appearance.Outline)
+            .WithClickAction(ctx =>
+            {
+                ctx.Host.UpdateData(ResultId, Pending("Asking GitHub for the pull-request status…"));
+                prService.AskStatus(spacePath, prPath, userId).Subscribe(
+                    info => ctx.Host.UpdateData(ResultId, Ok($"GitHub reports this pull request is {info.Status}.")),
+                    ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
+                return Task.CompletedTask;
+            }));
+        stack = stack.WithView(actions);
+
+        // Link row, bound to the PR node's immutable handle (number + url). The status is NOT shown
+        // from a stored field — use "Check status on GitHub" to read it live.
+        stack = stack.WithView((h, _) => prService.WatchPullRequest(prPath)
+            .Select(pr => (UiControl?)Controls.Html(PullRequestLinkHtml(pr)))
+            .StartWith((UiControl?)Controls.Html("")));
+        return stack;
+    }
+
+    private static string PullRequestLinkHtml(GitHubPullRequest? pr)
+    {
+        if (pr is null) return "";
+        if (pr.Number is { } n && pr.Url is { Length: > 0 } url)
+            return "<p style=\"font-size:0.85rem;\">Pull request " +
+                   $"<a href=\"{Esc(url)}\" target=\"_top\" rel=\"noopener\" " +
+                   $"style=\"color:var(--accent-fill-rest);font-weight:600;\">#{n} ↗</a> opened on GitHub — " +
+                   "use <em>Check status on GitHub</em> for its current state.</p>";
+        return "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);\">Draft — not yet opened on GitHub.</p>";
     }
 
     // ── small helpers ─────────────────────────────────────────────────────────

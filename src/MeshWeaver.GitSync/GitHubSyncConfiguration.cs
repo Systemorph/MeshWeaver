@@ -31,6 +31,10 @@ public static class GitHubSyncConfiguration
         services.AddSingleton<IGitHubRepoClient, OctokitGitHubRepoClient>();
         services.AddSingleton<GitHubCredentialService>();
         services.AddSingleton<GitHubSyncService>();
+        services.AddSingleton<PullRequestService>();
+        // AI-drafted PR title/body. Default delegates to the PullRequestWriter agent via the
+        // existing chat surface (mirrors DescriptionGenerator); tests override with a stub.
+        services.AddSingleton<IPullRequestDraftService, PullRequestDraftService>();
         // Factory so the optional HttpClient param is explicitly defaulted (the service
         // creates its own) — no bare-HttpClient registration required in the container.
         services.AddSingleton(sp => new GitHubOAuthService(
@@ -66,16 +70,29 @@ public static class GitHubSyncConfiguration
                 ExcludeFromContext = new HashSet<string> { "search", "create" },
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<GitHubSyncConfig>()),
+            },
+            // PullRequest satellite ({space}/_PullRequest/{id}). A satellite type ('_'-prefixed
+            // namespace segment), so the export filter already skips it — a PR is never written to
+            // the repo. The standard node-content editor binds to it for the Title/Body edit.
+            new MeshNode(PullRequestService.NodeType)
+            {
+                Name = "Pull Request",
+                IsSatelliteType = true,
+                ExcludeFromContext = new HashSet<string> { "search", "create" },
+                HubConfiguration = config => config
+                    .AddMeshDataSource(source => source.WithContentType<GitHubPullRequest>()),
             });
 
         // Also register the content types on the mesh hub + every per-node hub so reads via
         // GetQuery / GetMeshNodeStream resolve the typed content (and the $type discriminator).
         builder.ConfigureHub(c => c
             .WithType<GitHubCredential>(nameof(GitHubCredential))
-            .WithType<GitHubSyncConfig>(nameof(GitHubSyncConfig)));
+            .WithType<GitHubSyncConfig>(nameof(GitHubSyncConfig))
+            .WithType<GitHubPullRequest>(nameof(GitHubPullRequest)));
         builder.ConfigureDefaultNodeHub(c => c
             .WithType<GitHubCredential>(nameof(GitHubCredential))
-            .WithType<GitHubSyncConfig>(nameof(GitHubSyncConfig)));
+            .WithType<GitHubSyncConfig>(nameof(GitHubSyncConfig))
+            .WithType<GitHubPullRequest>(nameof(GitHubPullRequest)));
         return builder;
     }
 }
