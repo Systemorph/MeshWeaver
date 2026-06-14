@@ -184,14 +184,18 @@ public static class GitHubSyncSettingsTab
                 "GitHub OAuth is not configured on this server (set <code>GitHub:OAuth:ClientId</code> + " +
                 "<code>ClientSecret</code>).</p>");
 
-        // The OAuth flow is a browser redirect to /connect/github, which posts back to
-        // /connect/github/callback, stores the token, and returns here. Render a link
-        // (not a click-action) so the browser navigates.
+        // The OAuth flow is a browser redirect to the server endpoint /connect/github, which posts
+        // back to /connect/github/callback, stores the token, and returns here. This MUST be a full
+        // browser navigation — a plain in-app link is intercepted by the Blazor router and resolved
+        // as a mesh path ("page not found"). target="_top" opts the anchor out of Blazor's link
+        // interception so the browser does a real navigation to the minimal-API endpoint (the same
+        // intent as NavigateTo(forceLoad:true) used by the login button).
         var returnPath = $"/{spacePath}/Settings/{TabId}";
         var connectUrl = $"/connect/github?returnPath={Uri.EscapeDataString(returnPath)}";
         return Controls.Html(
             "<div style=\"font-size:0.85rem;\"><span style=\"color:#9ca3af;\">●</span> Not connected. " +
-            $"<a href=\"{Esc(connectUrl)}\" style=\"color:var(--accent-fill-rest);font-weight:600;\">Connect GitHub →</a>" +
+            $"<a href=\"{Esc(connectUrl)}\" target=\"_top\" rel=\"noopener\" " +
+            "style=\"color:var(--accent-fill-rest);font-weight:600;\">Connect GitHub →</a>" +
             " (one-time browser approval; authorize for the org whose repos you'll sync).</div>");
     }
 
