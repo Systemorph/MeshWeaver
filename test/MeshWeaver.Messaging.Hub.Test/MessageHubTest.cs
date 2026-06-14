@@ -141,23 +141,28 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
         // Confirm the hub's turn loop is live.
         victim.Post(new FloodEvent(), o => o.WithTarget(victim.Address));
 
-        // Keep the turn loop continuously busy so Version advances DURING disposal — the
-        // exact condition the old version-match gate livelocked on. Self-posted unhandled
-        // events are Ignored after one turn each (++Version per turn), keeping the inbox
-        // non-empty without any cross-hub dependency.
+        // Keep the turn loop busy so Version advances DURING disposal — the exact condition
+        // the old version-match gate livelocked on. Self-posted unhandled events are Ignored
+        // after one turn each (++Version per turn). The flood is BOUNDED on purpose: each
+        // post emits a Debug "Buffering message" line that xUnit captures into the TRX, and
+        // an unbounded tight loop produced a 24 MB TRX with a single 30 k-line text node that
+        // broke CI's result-XML parser ("huge text node") and failed the whole shard even
+        // though the test passed. A few hundred posts is plenty of interleaving to make the
+        // old gate storm (ShutdownTurnsHandled in the hundreds) while keeping the log small.
         using var floodStop = new CancellationTokenSource();
         var flood = Task.Run(() =>
         {
-            while (!floodStop.IsCancellationRequested)
+            for (var i = 0; i < 400 && !floodStop.IsCancellationRequested; i++)
             {
                 try { victim.Post(new FloodEvent(), o => o.WithTarget(victim.Address)); }
-                catch { /* hub disposing — the loop stops on cancel below */ }
+                catch { break; /* hub disposing */ }
+                Thread.SpinWait(20_000); // spread the 400 posts across the dispose window
             }
         });
 
-        // Let the flood ramp so the inbox is non-empty when Dispose posts the first
-        // ShutdownRequest.
-        await Task.Delay(150);
+        // Tiny ramp so the inbox is non-empty when Dispose posts the first ShutdownRequest,
+        // then dispose CONCURRENTLY with the still-running flood.
+        await Task.Delay(15);
 
         victim.Dispose();
         await victim.DisposalCompleted.FirstOrDefaultAsync().ToTask().WaitAsync(30.Seconds());
