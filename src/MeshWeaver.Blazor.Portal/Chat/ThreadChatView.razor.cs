@@ -801,6 +801,11 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         if (!CommandRegistry.TryGetCommand(parsedCommand.Name, out var command) || command == null)
         {
+            // Not a C# command (those are now just /help + anything a module registers) — try a
+            // nodeType:Command MESH NODE. Built-in /agent /model /harness ship as Command nodes
+            // (BuiltInCommandProvider) and a Space/NodeType/user can define more; all resolve here.
+            if (TryRunCommandNode(parsedCommand))
+                return;
             lastCommandStatus = $"Unknown command: /{parsedCommand.Name}";
             lastCommandStatusIsError = true;
             await InvokeAsync(StateHasChanged);
@@ -846,6 +851,29 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         }
 
         await InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>
+    /// Resolves a <c>nodeType:Command</c> mesh node by its slash word and opens the generic picker
+    /// for it. The built-in commands (/agent, /model, /harness) and any Space/NodeType/user-defined
+    /// command come through here — there is no C# class per command. Resolved synchronously from the
+    /// static command catalog (<see cref="BuiltInCommandProvider"/>). Returns false when no Command
+    /// node matches, so the caller can report "unknown command".
+    /// </summary>
+    private bool TryRunCommandNode(ParsedCommand parsed)
+    {
+        var commands = CommandNodeType.ProjectCommands(
+            Hub.ServiceProvider.EnumerateStaticNodes(), Hub.JsonSerializerOptions);
+        var match = commands.FirstOrDefault(c =>
+            string.Equals(c.Id, parsed.Name, StringComparison.OrdinalIgnoreCase));
+        if (match is null)
+            return false;
+
+        var term = parsed.Arguments.Length == 0 ? null : LastSegment(parsed.RawArguments.Trim());
+        lastCommandStatus = null;
+        lastCommandStatusIsError = false;
+        OpenPicker(match.ToPickerRequest(term));
+        return true;
     }
 
     private void DismissWidget()
