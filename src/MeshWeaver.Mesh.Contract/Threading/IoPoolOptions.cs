@@ -38,6 +38,17 @@ public static class IoPoolNames
     /// connection. See <see cref="IoPoolOptions.MaxConcurrencyFor"/>.
     /// </summary>
     public const string PostgresAdapterPrefix = "pg:";
+
+    /// <summary>
+    /// Prefix for the per-Postgres-storage-adapter <b>read</b> pool (<c>pg-read:{adapterName}</c>).
+    /// Distinct from <see cref="PostgresAdapterPrefix"/> (the cap-1 write/provisioning pool): reads
+    /// run against the shared base connection pool and are capped BELOW its <c>MaxPoolSize</c> so a
+    /// synced-query read fan-out storm cannot drain the pool and starve writes (onboarding/chat stay
+    /// ungated and always have headroom). This pool IS the former hand-woven <c>ReadConcurrencyGate</c>
+    /// — its <see cref="SemaphoreSlim"/> folded into the one sanctioned <see cref="IIoPool"/> primitive.
+    /// Cap from <see cref="IoPoolOptions.PostgresRead"/>. See <see cref="IoPoolOptions.MaxConcurrencyFor"/>.
+    /// </summary>
+    public const string PostgresReadAdapterPrefix = "pg-read:";
 }
 
 /// <summary>
@@ -82,12 +93,26 @@ public sealed record IoPoolOptions
     /// <summary>Concurrent external processes. Heavy; defaults to 4.</summary>
     public int Process { get; init; } = 4;
 
+    /// <summary>
+    /// Concurrent READS per Postgres storage adapter (the <c>pg-read:{adapter}</c> pool). Kept
+    /// comfortably below the shared base connection pool's <c>MaxPoolSize</c> so a synced-query
+    /// read fan-out storm cannot drain the pool and starve writes (prod 2026-06-04: "connection
+    /// pool has been exhausted, currently 50"). This is the cap the former <c>ReadConcurrencyGate</c>
+    /// enforced; folded into <see cref="IIoPool"/>. Reads are async leaves (the thread is released
+    /// during the await), so the cap bounds in-flight connections, not threads.
+    /// </summary>
+    public int PostgresRead { get; init; } = 16;
+
     /// <summary>Fallback cap for any pool name not listed above.</summary>
     public int Default { get; init; } = Environment.ProcessorCount;
 
     /// <summary>Resolves the configured cap for a pool name.</summary>
     public int MaxConcurrencyFor(string name) =>
-        // Per-PG-adapter pools (pg:{adapter}) hold exactly one connection — the gate
+        // Per-PG-adapter READ pools (pg-read:{adapter}) bound the read fan-out below the
+        // shared connection pool so reads can't starve writes — checked BEFORE the cap-1
+        // write prefix because "pg-read:" also starts with "pg".
+        name.StartsWith(IoPoolNames.PostgresReadAdapterPrefix, StringComparison.Ordinal) ? PostgresRead :
+        // Per-PG-adapter WRITE pools (pg:{adapter}) hold exactly one connection — the gate
         // IS the single Npgsql connection, never a parallel bound on top of it.
         name.StartsWith(IoPoolNames.PostgresAdapterPrefix, StringComparison.Ordinal) ? 1 :
         name switch

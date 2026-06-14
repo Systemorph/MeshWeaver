@@ -144,7 +144,7 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
         var schema = !string.IsNullOrEmpty(def.Schema) ? def.Schema : def.Namespace;
         return _adaptersBySchema.GetOrAdd(schema!, _ =>
         {
-            var adapter = new PostgreSqlStorageAdapter(_provider.BaseDataSource, embeddingProvider: null, def, readGate: _provider.ReadGate);
+            var adapter = new PostgreSqlStorageAdapter(_provider.BaseDataSource, embeddingProvider: null, def, readPool: _provider.ReadPool);
             // Wire the new per-schema adapter's Changes into the routing
             // adapter's merged feed. Once-per-schema cost — the inner adapter
             // is itself cached in _adaptersBySchema.

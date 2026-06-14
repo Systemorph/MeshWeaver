@@ -1,4 +1,5 @@
 using Azure.Storage.Blobs;
+using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -18,7 +19,10 @@ public static class BlobNuGetPackageCacheExtensions
             new BlobNuGetPackageCache(
                 sp.GetRequiredService<BlobServiceClient>(),
                 containerName,
-                sp.GetRequiredService<ILogger<BlobNuGetPackageCache>>())));
+                sp.GetRequiredService<ILogger<BlobNuGetPackageCache>>(),
+                // Blob pool (mesh-scoped) governs blob concurrency; absent it falls back to
+                // IoPool.Unbounded — still offloads, just uncapped. See ControlledIoPooling.md.
+                sp.GetService<IoPoolRegistry>())));
         return services;
     }
 }

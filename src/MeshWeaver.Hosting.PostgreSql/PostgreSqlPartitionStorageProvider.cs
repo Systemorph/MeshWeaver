@@ -47,10 +47,11 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     // field (never static) so its lifetime is the mesh's.
     private readonly ConcurrentDictionary<string, PartitionDefinition> _registeredPartitions =
         new(StringComparer.OrdinalIgnoreCase);
-    // One read-concurrency gate shared by every adapter this provider creates —
-    // they all share the single base connection pool, so the gate must be shared
-    // too. Bounds read fan-out below the pool size (leaves write headroom).
-    private readonly ReadConcurrencyGate _readGate;
+    // One READ pool (pg-read:{adapter}) shared by every adapter this provider creates — they all
+    // share the single base connection pool, so the read bound must be shared too. Bounds read
+    // fan-out below the pool size (leaves write headroom). This IS the former ReadConcurrencyGate,
+    // folded into the one sanctioned IIoPool primitive — no standalone SemaphoreSlim remains.
+    private readonly IIoPool _readPool;
 
     /// <summary>Per-silo memo of "CREATE SCHEMA already ran this session".</summary>
     private readonly ConcurrentDictionary<string, byte> _schemasInitialized =
@@ -86,8 +87,8 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     /// <summary>Embedding provider for vector scoring, shared with the per-schema delegate.</summary>
     internal IEmbeddingProvider? EmbeddingProvider => _embeddingProvider;
 
-    /// <summary>Shared per-adapter read-concurrency gate (see <see cref="ReadConcurrencyGate"/>).</summary>
-    internal ReadConcurrencyGate ReadGate => _readGate;
+    /// <summary>Shared per-adapter READ pool (<c>pg-read:{adapter}</c>) — bounds read fan-out below the connection-pool size.</summary>
+    internal IIoPool ReadPool => _readPool;
 
     /// <summary>
     /// Synchronous lookup of a registered <see cref="PartitionDefinition"/> by
@@ -128,11 +129,12 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
         _options = options;
         _embeddingProvider = embeddingProvider;
         _configureDataSource = configureDataSource;
-        // Per-adapter pool (cap 1 — one connection). Falls back to the unbounded pool only
-        // when constructed outside DI (tests) — still off the hub scheduler, never FromAsync.
+        // Per-adapter WRITE pool (cap 1 — one connection) and READ pool (cap = IoPoolOptions.PostgresRead,
+        // below the connection-pool size so a read fan-out can't starve writes). Both fall back to the
+        // unbounded pool only when constructed outside DI (tests) — still off the hub scheduler, never FromAsync.
         _ioPool = ioPoolRegistry?.Get($"{IoPoolNames.PostgresAdapterPrefix}{Name}") ?? IoPool.Unbounded;
+        _readPool = ioPoolRegistry?.Get($"{IoPoolNames.PostgresReadAdapterPrefix}{Name}") ?? IoPool.Unbounded;
         _logger = logger;
-        _readGate = new ReadConcurrencyGate(options.MaxReadConcurrency);
 
         Contexts = contexts != null
             ? ImmutableHashSet.CreateRange(StringComparer.OrdinalIgnoreCase, contexts)
@@ -361,7 +363,8 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     /// <inheritdoc/>
     public void Dispose()
     {
-        _readGate.Dispose();
+        // The read pool is owned by IoPoolRegistry (mesh-scoped singleton) and dies with the mesh —
+        // the provider must NOT dispose it here (it may be shared / outlive this provider's Dispose).
     }
 
     /// <inheritdoc/>
@@ -391,7 +394,7 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
             TableMappings = null
         };
 
-        return new PostgreSqlStorageAdapter(_baseDataSource, _embeddingProvider, tableScopedDef, readGate: _readGate);
+        return new PostgreSqlStorageAdapter(_baseDataSource, _embeddingProvider, tableScopedDef, readPool: _readPool);
     }
 
     /// <inheritdoc/>

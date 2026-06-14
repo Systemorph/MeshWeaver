@@ -73,10 +73,7 @@ public sealed class CopilotConnectStrategy : IConnectStrategy
         => httpPool.Invoke(ct => GetIsAuthenticatedAsync(userConfigDir, ct));
 
     public IObservable<ConnectChallenge> StartConnect(ConnectSession session, string ownerPath)
-    {
-        var options = Options;
-        return processPool.Invoke(ct => SpawnAndScrapeDeviceCodeAsync(session, options, ct));
-    }
+        => SpawnAndScrapeDeviceCode(session, Options);
 
     public IObservable<string> CompleteConnect(ConnectSession session, string? pastedCode)
     {
@@ -113,67 +110,82 @@ public sealed class CopilotConnectStrategy : IConnectStrategy
         return new CopilotClient(options);
     }
 
-    private async Task<ConnectChallenge> SpawnAndScrapeDeviceCodeAsync(
-        ConnectSession session, CopilotConnectOptions options, CancellationToken ct)
-    {
-        var process = new Process
+    // IObservable end-to-end up to the IO boundary. The CLI's stdout/stderr is the SOURCE: the
+    // callbacks drive a ReplaySubject<string> (race-proof — a line emitted before we subscribe is
+    // buffered, never dropped), replacing the hand-rolled queue + SemaphoreSlim signal. The only
+    // genuine IO is the synchronous, thread-holding process spawn — it goes through the Process pool
+    // via InvokeBlocking (the ControlledIoPooling boundary). Everything after is pure reactive
+    // composition: scan lines for url+code, complete on the first full pair, surface a typed error if
+    // the process exits first, all bounded by Timeout. No await, no .ToTask(), no async gate to park.
+    private IObservable<ConnectChallenge> SpawnAndScrapeDeviceCode(
+        ConnectSession session, CopilotConnectOptions options)
+        => Observable.Defer(() =>
         {
-            StartInfo = new ProcessStartInfo
+            var process = new Process
             {
-                FileName = options.FileName,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            },
-            EnableRaisingEvents = true,
-        };
-        foreach (var a in options.Arguments) process.StartInfo.ArgumentList.Add(a);
-        if (!string.IsNullOrEmpty(session.ConfigDir))
-            process.StartInfo.Environment["COPILOT_HOME"] = session.ConfigDir;
-
-        var lines = new System.Collections.Concurrent.ConcurrentQueue<string>();
-        var gate = new SemaphoreSlim(0);
-        void Add(string l) { lines.Enqueue(l); gate.Release(); }
-        process.OutputDataReceived += (_, e) => { if (e.Data != null) Add(e.Data); };
-        process.ErrorDataReceived += (_, e) => { if (e.Data != null) Add(e.Data); };
-
-        process.Start();
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
-        session.Process = process;
-
-        var urlRegex = new Regex(options.DeviceUrlPattern, RegexOptions.Compiled);
-        var codeRegex = new Regex(options.UserCodePattern, RegexOptions.Compiled);
-        string? url = null, code = null;
-
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(options.DeviceCodeTimeout);
-        try
-        {
-            while (!timeoutCts.IsCancellationRequested && (url is null || code is null))
-            {
-                while (lines.TryDequeue(out var line))
+                StartInfo = new ProcessStartInfo
                 {
-                    if (url is null) { var mu = urlRegex.Match(line); if (mu.Success) url = (mu.Groups.Count > 1 && mu.Groups[1].Success ? mu.Groups[1].Value : mu.Value).Trim(); }
-                    if (code is null) { var mc = codeRegex.Match(line); if (mc.Success) code = (mc.Groups.Count > 1 && mc.Groups[1].Success ? mc.Groups[1].Value : mc.Value).Trim(); }
-                }
-                if (url != null && code != null) break;
-                if (process.HasExited && lines.IsEmpty)
-                    throw new InvalidOperationException(
-                        "copilot login exited before emitting a device code. On a non-TTY stdout it emits nothing — see TODO(copilot-pty).");
-                await gate.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
-            }
-        }
-        catch (OperationCanceledException) { /* fall through */ }
+                    FileName = options.FileName,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                },
+                EnableRaisingEvents = true,
+            };
+            foreach (var a in options.Arguments) process.StartInfo.ArgumentList.Add(a);
+            if (!string.IsNullOrEmpty(session.ConfigDir))
+                process.StartInfo.Environment["COPILOT_HOME"] = session.ConfigDir;
 
-        if (url is null)
-            throw new TimeoutException(
-                "Timed out waiting for the Copilot device code. The CLI needs a real terminal (PTY) — see TODO(copilot-pty).");
+            var lines = new System.Reactive.Subjects.ReplaySubject<string>();
+            process.OutputDataReceived += (_, e) => { if (e.Data != null) lines.OnNext(e.Data); };
+            process.ErrorDataReceived += (_, e) => { if (e.Data != null) lines.OnNext(e.Data); };
+            process.Exited += (_, _) => lines.OnCompleted();
 
-        logger?.LogInformation("Copilot Connect surfaced device code for session {Session}", session.SessionId);
-        return new ConnectChallenge(session.SessionId, ConnectProvider.Copilot, url, UserCode: code, RequiresPastedCode: false);
-    }
+            var urlRegex = new Regex(options.DeviceUrlPattern, RegexOptions.Compiled);
+            var codeRegex = new Regex(options.UserCodePattern, RegexOptions.Compiled);
+
+            static string Extract(Match m) =>
+                (m.Groups.Count > 1 && m.Groups[1].Success ? m.Groups[1].Value : m.Value).Trim();
+
+            // Fold each line into the accumulating (url, code) pair; emit the first pair where both are
+            // set. Process exit (the source's OnCompleted) without a full pair -> "exited early" error.
+            var scrape = lines
+                .Scan(
+                    (Url: (string?)null, Code: (string?)null),
+                    (acc, line) =>
+                    {
+                        var url = acc.Url;
+                        var code = acc.Code;
+                        if (url is null) { var mu = urlRegex.Match(line); if (mu.Success) url = Extract(mu); }
+                        if (code is null) { var mc = codeRegex.Match(line); if (mc.Success) code = Extract(mc); }
+                        return (url, code);
+                    })
+                .Where(acc => acc.Url is not null && acc.Code is not null)
+                .Take(1)
+                .Select(acc => new ConnectChallenge(
+                    session.SessionId, ConnectProvider.Copilot, acc.Url!, UserCode: acc.Code!, RequiresPastedCode: false))
+                .Concat(Observable.Throw<ConnectChallenge>(new InvalidOperationException(
+                    "copilot login exited before emitting a device code. On a non-TTY stdout it emits nothing — see TODO(copilot-pty).")))
+                .Timeout(options.DeviceCodeTimeout, Observable.Throw<ConnectChallenge>(new TimeoutException(
+                    "Timed out waiting for the Copilot device code. The CLI needs a real terminal (PTY) — see TODO(copilot-pty).")))
+                .Do(challenge => logger?.LogInformation(
+                    "Copilot Connect surfaced device code for session {Session}", session.SessionId));
+
+            // The synchronous, thread-holding spawn is the IO leaf -> Process pool (InvokeBlocking).
+            // Subscribing the scrape is set up before BeginOutputReadLine; the ReplaySubject makes it
+            // race-proof regardless. SelectMany hands off to the pure-Rx scrape once the process is up.
+            return processPool
+                .InvokeBlocking(_ =>
+                {
+                    process.Start();
+                    process.BeginOutputReadLine();
+                    process.BeginErrorReadLine();
+                    session.Process = process;
+                    return System.Reactive.Unit.Default;
+                })
+                .SelectMany(_ => scrape);
+        });
 
     private async Task<string> PollUntilAuthenticatedAsync(
         ConnectSession session, CopilotConnectOptions options, CancellationToken ct)

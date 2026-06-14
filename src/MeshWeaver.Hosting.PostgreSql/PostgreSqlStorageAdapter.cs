@@ -27,12 +27,15 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     private readonly PartitionDefinition? _partitionDefinition;
     private readonly string? _schemaName;
     private readonly Microsoft.Extensions.Logging.ILogger? _logger;
-    // Optional per-adapter READ concurrency gate (Postgres only; null = ungated,
-    // e.g. in-memory/tests). Reads acquire a slot; writes stay ungated so they
-    // always have pool headroom. See ReadConcurrencyGate.
-    private readonly ReadConcurrencyGate? _readGate;
-    // The pg:{adapter} I/O pool — every DB round-trip runs inside it (Invoke), never a bare
-    // _ioPool.Invoke. Unbounded fallback when no registry is wired (in-memory/tests).
+    // Per-adapter READ pool (the pg-read:{adapter} IIoPool). Bounds concurrent READS below the
+    // shared connection-pool size so a synced-query read fan-out storm can't drain the pool and
+    // starve writes (writes stay ungated and always have headroom). This IS the former hand-woven
+    // ReadConcurrencyGate — its SemaphoreSlim folded into the one sanctioned IIoPool primitive, so
+    // there is no standalone semaphore anywhere. Unbounded fallback when no registry is wired
+    // (in-memory / tests): reads still offload off the hub scheduler, just without the cap.
+    private readonly IIoPool _readPool;
+    // The pg:{adapter} write I/O pool — every WRITE / provisioning DB round-trip runs inside it
+    // (Invoke), never a bare Observable.FromAsync. Unbounded fallback when no registry is wired.
     private readonly IIoPool _ioPool;
     private readonly Subject<DataChangeNotification> _changes = new();
 
@@ -58,7 +61,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         IEmbeddingProvider? embeddingProvider = null,
         PartitionDefinition? partitionDefinition = null,
         Microsoft.Extensions.Logging.ILogger<PostgreSqlStorageAdapter>? logger = null,
-        ReadConcurrencyGate? readGate = null,
+        IIoPool? readPool = null,
         IIoPool? ioPool = null)
     {
         _dataSource = dataSource;
@@ -66,22 +69,49 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         _partitionDefinition = partitionDefinition;
         _schemaName = partitionDefinition?.Schema;
         _logger = logger;
-        _readGate = readGate;
+        _readPool = readPool ?? IoPool.Unbounded;
         _ioPool = ioPool ?? IoPool.Unbounded;
     }
 
     /// <summary>
-    /// Acquire a read-concurrency slot for the duration of a read:
-    /// <c>using var _ = await AcquireReadSlotAsync(ct);</c> (safe inside an
-    /// <c>async IAsyncEnumerable</c> — the slot releases when the enumerator is
-    /// disposed). No-op (immediate empty disposable) when the adapter is ungated
-    /// (in-memory / tests). Gated reads cannot drain the connection pool past
-    /// <see cref="ReadConcurrencyGate.MaxConcurrency"/>, leaving headroom for writes.
+    /// Pumps a read <see cref="IAsyncEnumerable{T}"/> through the per-adapter READ pool
+    /// (<c>pg-read:{adapter}</c>), bounding concurrent reads below the connection-pool size so a
+    /// fan-out storm can't starve writes. The pool's <see cref="IIoPool.InvokeStream{T}"/> holds
+    /// ONE slot for the whole enumeration (acquired off the caller's scheduler, released when the
+    /// enumeration completes / errors / is cancelled) — exactly the former <c>ReadConcurrencyGate</c>
+    /// slot semantics, now backed by the one sanctioned <see cref="IIoPool"/> semaphore. The
+    /// observable is bridged back to <see cref="IAsyncEnumerable{T}"/> via an unbounded
+    /// <see cref="System.Threading.Channels.Channel{T}"/> so callers' existing <c>await foreach</c>
+    /// shape is unchanged. The reader's rows arrive on a ThreadPool worker; this method only relays.
     /// </summary>
-    private async Task<IDisposable> AcquireReadSlotAsync(CancellationToken ct)
-        => _readGate is null
-            ? System.Reactive.Disposables.Disposable.Empty
-            : await _readGate.AcquireAsync(ct).ConfigureAwait(false);
+    private async IAsyncEnumerable<T> ReadPooled<T>(
+        Func<CancellationToken, IAsyncEnumerable<T>> source,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        var channel = System.Threading.Channels.Channel.CreateUnbounded<T>(
+            new System.Threading.Channels.UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
+
+        var subscription = _readPool.InvokeStream(source).Subscribe(
+            item => channel.Writer.TryWrite(item),
+            ex => channel.Writer.TryComplete(ex),
+            () => channel.Writer.TryComplete());
+
+        try
+        {
+            await foreach (var item in channel.Reader.ReadAllAsync(ct).ConfigureAwait(false))
+                yield return item;
+        }
+        finally
+        {
+            // Unsubscribe releases the held read-pool slot (the InvokeStream enumeration is
+            // cancelled) even when the caller breaks out of the await foreach early.
+            subscription.Dispose();
+        }
+    }
+
+    /// <summary>Empty async sequence — for the no-op query branch (no slot taken).</summary>
+    private static IAsyncEnumerable<T> EmptyAsync<T>()
+        => System.Linq.AsyncEnumerable.Empty<T>();
 
     /// <summary>
     /// Returns a schema-qualified table reference for use in SQL.
@@ -351,8 +381,10 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
+    // Child-listing is a READ → runs in the read pool (pg-read:{adapter}), bounded below the
+    // connection-pool size, NOT the cap-1 write pool (which would serialise it behind writes).
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
-        => _ioPool.Invoke(ct => ListChildPathsAsyncCore(parentPath, ct))
+        => _readPool.Invoke(ct => ListChildPathsAsyncCore(parentPath, ct))
             .Catch<(IEnumerable<string>, IEnumerable<string>), Exception>(ex => IsUndefinedTable(ex)
                 ? Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(([], []))
                 : Observable.Throw<(IEnumerable<string>, IEnumerable<string>)>(ex));
@@ -364,7 +396,6 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         var normalizedParent = NormalizePath(parentPath);
 
         var table = ResolveTable(normalizedParent);
-        using var readSlot = await AcquireReadSlotAsync(ct).ConfigureAwait(false);
         await using var cmd = _dataSource.CreateCommand(
             $"SELECT id, namespace FROM {table} WHERE namespace = $1");
         cmd.Parameters.AddWithValue(normalizedParent);
@@ -690,16 +721,30 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     #region Query Support
 
     /// <summary>
-    /// Queries nodes using parsed query, translated to PostgreSQL SQL.
+    /// Queries nodes using parsed query, translated to PostgreSQL SQL. The reader pump runs in the
+    /// per-adapter READ pool (<c>pg-read:{adapter}</c>) via <see cref="ReadPooled{T}"/> — one
+    /// pooled slot for the whole enumeration, bounding read fan-out below the connection-pool size.
     /// </summary>
-    public async IAsyncEnumerable<MeshNode> QueryNodesAsync(
+    public IAsyncEnumerable<MeshNode> QueryNodesAsync(
         ParsedQuery query,
         JsonSerializerOptions options,
         string? userId = null,
         string? basePath = null,
         string? activityUserId = null,
         IReadOnlyCollection<string>? excludedNodeTypes = null,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        CancellationToken ct = default)
+        => ReadPooled(
+            c => QueryNodesInnerAsync(query, options, userId, basePath, activityUserId, excludedNodeTypes, c),
+            ct);
+
+    private async IAsyncEnumerable<MeshNode> QueryNodesInnerAsync(
+        ParsedQuery query,
+        JsonSerializerOptions options,
+        string? userId,
+        string? basePath,
+        string? activityUserId,
+        IReadOnlyCollection<string>? excludedNodeTypes,
+        [EnumeratorCancellation] CancellationToken ct)
     {
         // Resolve the target table based on the query path or nodeType and partition definition.
         // For satellite paths like "User/alice/_Thread", this routes to the "threads" table.
@@ -773,7 +818,6 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
                 _logger.LogDebug("  Param {Name} = {Value}", name, value);
         }
 
-        using var readSlot = await AcquireReadSlotAsync(ct).ConfigureAwait(false);
         await using var cmd = _dataSource.CreateCommand(sql);
         foreach (var (name, value) in parameters)
         {
@@ -828,24 +872,37 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     /// disambiguation by query index (single regex pass — see comment below
     /// for why this can't be a sequence of <c>string.Replace</c> calls).</para>
     /// </summary>
-    public async IAsyncEnumerable<MeshNode> QueryNodesAsync(
+    public IAsyncEnumerable<MeshNode> QueryNodesAsync(
         IReadOnlyList<ParsedQuery> queries,
         JsonSerializerOptions options,
         string? userId = null,
         string? basePath = null,
         string? activityUserId = null,
         IReadOnlyCollection<string>? excludedNodeTypes = null,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        CancellationToken ct = default)
     {
-        if (queries == null || queries.Count == 0) yield break;
+        if (queries == null || queries.Count == 0)
+            return EmptyAsync<MeshNode>();
+        // Single-query: delegate to the single-query overload — itself pooled via ReadPooled. We
+        // must NOT wrap this in our own ReadPooled too: that would hold a pg-read slot while the
+        // delegate acquires a SECOND, the one same-pool nesting that can deadlock the gate.
         if (queries.Count == 1)
-        {
-            await foreach (var node in QueryNodesAsync(
-                queries[0], options, userId, basePath, activityUserId, excludedNodeTypes, ct).ConfigureAwait(false))
-                yield return node;
-            yield break;
-        }
+            return QueryNodesAsync(queries[0], options, userId, basePath, activityUserId, excludedNodeTypes, ct);
+        // Multi-query UNION: ONE pooled slot for the whole reader enumeration.
+        return ReadPooled(
+            c => QueryNodesUnionInnerAsync(queries, options, userId, basePath, activityUserId, excludedNodeTypes, c),
+            ct);
+    }
 
+    private async IAsyncEnumerable<MeshNode> QueryNodesUnionInnerAsync(
+        IReadOnlyList<ParsedQuery> queries,
+        JsonSerializerOptions options,
+        string? userId,
+        string? basePath,
+        string? activityUserId,
+        IReadOnlyCollection<string>? excludedNodeTypes,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
         var unionedSelects = new List<string>(queries.Count);
         var unionedParams = new Dictionary<string, object>(StringComparer.Ordinal);
 
@@ -900,7 +957,6 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
                 _logger.LogDebug("  Param {Name} = {Value}", name, value);
         }
 
-        using var readSlot = await AcquireReadSlotAsync(ct).ConfigureAwait(false);
         await using var cmd = _dataSource.CreateCommand(sql);
         foreach (var (name, value) in unionedParams)
             cmd.Parameters.Add(new NpgsqlParameter(name, value ?? DBNull.Value));
@@ -987,9 +1043,10 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     }
 
     /// <summary>
-    /// Performs vector similarity search.
+    /// Performs vector similarity search. Reader pump runs in the per-adapter READ pool
+    /// (<c>pg-read:{adapter}</c>) via <see cref="ReadPooled{T}"/>.
     /// </summary>
-    public async IAsyncEnumerable<MeshNode> VectorSearchAsync(
+    public IAsyncEnumerable<MeshNode> VectorSearchAsync(
         float[] queryVector,
         JsonSerializerOptions options,
         ParsedQuery? filter = null,
@@ -997,7 +1054,20 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         string? namespacePath = null,
         int topK = 10,
         string? lexicalTerm = null,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        CancellationToken ct = default)
+        => ReadPooled(
+            c => VectorSearchInnerAsync(queryVector, options, filter, userId, namespacePath, topK, lexicalTerm, c),
+            ct);
+
+    private async IAsyncEnumerable<MeshNode> VectorSearchInnerAsync(
+        float[] queryVector,
+        JsonSerializerOptions options,
+        ParsedQuery? filter,
+        string? userId,
+        string? namespacePath,
+        int topK,
+        string? lexicalTerm,
+        [EnumeratorCancellation] CancellationToken ct)
     {
         var generator = new PostgreSqlSqlGenerator { SchemaName = _schemaName };
         var (sql, parameters) = generator.GenerateVectorSearchQuery(
@@ -1014,7 +1084,6 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
                 sql = sql.Replace("ORDER BY", "WHERE n.path LIKE @nsPrefix || '%' ORDER BY");
         }
 
-        using var readSlot = await AcquireReadSlotAsync(ct).ConfigureAwait(false);
         await using var cmd = _dataSource.CreateCommand(sql);
         foreach (var (name, value) in parameters)
         {
@@ -1047,23 +1116,32 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     /// <summary>
     /// Queries nodes across multiple schemas using a single UNION ALL query.
     /// Much more efficient than per-schema fan-out: one connection, one round-trip.
+    /// Reader pump runs in the per-adapter READ pool (<c>pg-read:{adapter}</c>) via
+    /// <see cref="ReadPooled{T}"/>.
     /// </summary>
-    public async IAsyncEnumerable<MeshNode> QueryNodesAcrossSchemasAsync(
+    public IAsyncEnumerable<MeshNode> QueryNodesAcrossSchemasAsync(
         ParsedQuery query,
         JsonSerializerOptions options,
         IReadOnlyList<string> schemas,
         string? userId = null,
-        [EnumeratorCancellation] CancellationToken ct = default)
-    {
-        if (schemas.Count == 0) yield break;
+        CancellationToken ct = default)
+        => schemas.Count == 0
+            ? EmptyAsync<MeshNode>()
+            : ReadPooled(c => QueryNodesAcrossSchemasInnerAsync(query, options, schemas, userId, c), ct);
 
+    private async IAsyncEnumerable<MeshNode> QueryNodesAcrossSchemasInnerAsync(
+        ParsedQuery query,
+        JsonSerializerOptions options,
+        IReadOnlyList<string> schemas,
+        string? userId,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
         var generator = new PostgreSqlSqlGenerator();
         var (sql, parameters) = generator.GenerateCrossSchemaSelectQuery(query, schemas, userId);
 
         if (_logger?.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Debug) == true)
             _logger.LogDebug("Cross-schema SQL ({SchemaCount} schemas): {Sql}", schemas.Count, sql);
 
-        using var readSlot = await AcquireReadSlotAsync(ct).ConfigureAwait(false);
         await using var cmd = _dataSource.CreateCommand(sql);
         foreach (var (name, value) in parameters)
         {

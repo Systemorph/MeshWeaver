@@ -56,7 +56,8 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
     // re-run relies on.) We use the shared storage-read pool (FileSystem cap =
     // ProcessorCount, matching the pedestrian StorageAdapterMeshQueryProvider)
     // — NOT the cap-1 pg:{adapter} write pool, which would serialize every
-    // read; the adapter's own ReadConcurrencyGate bounds the live connections.
+    // read; the adapter's own per-adapter READ pool (pg-read:{adapter}) bounds
+    // the live connections below the connection-pool size.
     // See Doc/Architecture/ControlledIoPooling.md + AsynchronousCalls.md.
     private readonly IIoPool _ioPool;
 

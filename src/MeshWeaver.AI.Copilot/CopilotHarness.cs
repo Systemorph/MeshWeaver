@@ -1,3 +1,4 @@
+using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -40,7 +41,10 @@ public sealed class CopilotHarness(IOptions<CopilotConfiguration> options) : IHa
         var resolver = hub.ServiceProvider.GetService<ChatClientCredentialResolver>();
         var githubToken = !string.IsNullOrEmpty(modelName) ? resolver?.Resolve(modelName).ApiKey : null;
         var clientLogger = hub.ServiceProvider.GetService<ILogger<CopilotChatClient>>();
+        // Subprocess CLI spawn + SDK network round-trips → Http pool (off the hub scheduler,
+        // bounded). Unbounded fallback when no pool is wired (tests / DI-less construction).
+        var ioPool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
 
-        return new CopilotChatClient(configuration, modelName, clientLogger, githubToken);
+        return new CopilotChatClient(configuration, modelName, clientLogger, githubToken, ioPool);
     }
 }

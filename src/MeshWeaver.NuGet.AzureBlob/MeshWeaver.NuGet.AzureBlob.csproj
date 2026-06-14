@@ -8,10 +8,15 @@
     <PackageReference Include="Azure.Storage.Blobs" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <!-- IoPool promise-cache uses IObservable / Unit / FirstAsync / ToTask; Mesh.Contract's
+         System.Reactive does not flow transitively, so reference it directly. -->
+    <PackageReference Include="System.Reactive" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.NuGet\MeshWeaver.NuGet.csproj" />
+    <!-- IIoPool / IoPoolRegistry / IoPoolNames live in Mesh.Contract. -->
+    <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
   </ItemGroup>
 
 </Project>

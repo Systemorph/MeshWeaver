@@ -1,6 +1,7 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using MeshWeaver.Mesh.Threading;
@@ -144,13 +145,18 @@ public sealed class ClaudeConnectStrategy : IConnectStrategy
         }
         var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
 
-        // Line buffer shared with CompleteConnect via the session — both stdout (URL, token) lines
-        // and a completion signal accumulate here. A ConcurrentQueue keeps the reader lock-free.
-        var lines = new ConcurrentQueue<string>();
-        var buffer = new OutputBuffer(lines);
+        // Output is an OBSERVABLE line feed (ReplaySubject-backed) shared with CompleteConnect via the
+        // session — every stdout/stderr line is OnNext'd; process exit OnCompletes it. No SemaphoreSlim
+        // signal: the scrape is a reactive Where/FirstAsync over this source (per the "no hand-woven
+        // async gate" rule). ReplaySubject so the phase-2 token scan still sees lines emitted before it
+        // subscribed (the old shared-queue "no line is lost" contract).
+        var buffer = new OutputBuffer();
         session.ProviderClient = buffer;   // reused by CompleteConnect to read the token line
         process.OutputDataReceived += (_, e) => { if (e.Data != null) buffer.Add(e.Data); };
         process.ErrorDataReceived += (_, e) => { if (e.Data != null) buffer.Add(e.Data); };
+        // Exit completes the feed so a waiting FirstAsync terminates (→ "exited before URL") instead of
+        // hanging; this is the reactive replacement for the old `if (process.HasExited) throw` check.
+        process.Exited += (_, _) => buffer.Complete();
 
         process.Start();
         process.BeginOutputReadLine();
@@ -158,32 +164,36 @@ public sealed class ClaudeConnectStrategy : IConnectStrategy
         session.Process = process;
 
         var urlRegex = options.CompiledUrl();
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(options.UrlTimeout);
 
+        // Reactive scrape: first stripped line whose text matches the URL regex → the challenge,
+        // bounded by UrlTimeout, honouring the pool's CancellationToken. The `await … .ToTask(ct)`
+        // bridge runs INSIDE the Process IoPool worker (not the hub action block) — the one sanctioned
+        // async edge. A completed-without-match feed (process exited) surfaces as "no elements".
         try
         {
-            while (!timeoutCts.IsCancellationRequested)
-            {
-                var line = StripAnsi(await buffer.TakeAsync(timeoutCts.Token).ConfigureAwait(false));
-                var m = urlRegex.Match(line);
-                if (m.Success)
-                {
-                    var url = (m.Groups.Count > 1 && m.Groups[1].Success ? m.Groups[1].Value : m.Value).Trim();
-                    logger?.LogInformation("Claude Connect surfaced auth URL for session {Session}", session.SessionId);
-                    return new ConnectChallenge(session.SessionId, ConnectProvider.ClaudeCode, url, UserCode: null, RequiresPastedCode: true);
-                }
-                if (process.HasExited)
-                    throw new InvalidOperationException(
-                        "claude setup-token exited before emitting an auth URL. On a non-TTY stdout the Ink UI emits nothing — see TODO(claude-pty).");
-            }
+            var url = await buffer.Lines
+                .Select(StripAnsi)
+                .Select(line => urlRegex.Match(line))
+                .Where(m => m.Success)
+                .Select(m => (m.Groups.Count > 1 && m.Groups[1].Success ? m.Groups[1].Value : m.Value).Trim())
+                .FirstAsync()
+                .Timeout(options.UrlTimeout)
+                .ToTask(ct)
+                .ConfigureAwait(false);
+            logger?.LogInformation("Claude Connect surfaced auth URL for session {Session}", session.SessionId);
+            return new ConnectChallenge(session.SessionId, ConnectProvider.ClaudeCode, url, UserCode: null, RequiresPastedCode: true);
         }
-        catch (OperationCanceledException)
+        catch (InvalidOperationException)
         {
-            // fall through to the timeout error
+            // FirstAsync on a completed-without-match feed → the CLI exited before emitting a URL.
+            throw new InvalidOperationException(
+                "claude setup-token exited before emitting an auth URL. On a non-TTY stdout the Ink UI emits nothing — see TODO(claude-pty).");
         }
-        throw new TimeoutException(
-            "Timed out waiting for the Claude auth URL. The CLI needs a real terminal (PTY) — see TODO(claude-pty).");
+        catch (TimeoutException)
+        {
+            throw new TimeoutException(
+                "Timed out waiting for the Claude auth URL. The CLI needs a real terminal (PTY) — see TODO(claude-pty).");
+        }
     }
 
     private async Task<string> SubmitCodeAndCaptureTokenAsync(
@@ -208,26 +218,36 @@ public sealed class ClaudeConnectStrategy : IConnectStrategy
         }
 
         var tokenRegex = options.CompiledToken();
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(options.TokenTimeout);
 
-        // 1) Prefer a token printed on stdout.
+        // 1) Prefer a token printed on stdout. Reactive scan of the same observable line feed —
+        //    first stripped line matching the token regex, bounded by TokenTimeout. The `await …
+        //    .ToTask(ct)` runs INSIDE the Process IoPool worker (the one sanctioned async edge), not
+        //    the hub. Timeout / completed-without-match (process exited) / cancellation all fall
+        //    through to the credentials-file fallback, exactly as the old loop did.
+        string? fromStdout = null;
         try
         {
-            while (!timeoutCts.IsCancellationRequested)
-            {
-                var line = StripAnsi(await buffer.TakeAsync(timeoutCts.Token).ConfigureAwait(false));
-                var m = tokenRegex.Match(line);
-                if (m.Success)
-                {
-                    var token = (m.Groups.Count > 1 && m.Groups[1].Success ? m.Groups[1].Value : m.Value).Trim();
-                    logger?.LogInformation("Claude Connect captured token (stdout) for session {Session}", session.SessionId);
-                    return token;
-                }
-                if (process.HasExited) break;
-            }
+            fromStdout = await buffer.Lines
+                .Select(StripAnsi)
+                .Select(line => tokenRegex.Match(line))
+                .Where(m => m.Success)
+                .Select(m => (m.Groups.Count > 1 && m.Groups[1].Success ? m.Groups[1].Value : m.Value).Trim())
+                .FirstAsync()
+                .Timeout(options.TokenTimeout)
+                .ToTask(ct)
+                .ConfigureAwait(false);
         }
-        catch (OperationCanceledException) { /* fall through to credentials file */ }
+        catch (Exception ex) when (ex is TimeoutException or InvalidOperationException or OperationCanceledException)
+        {
+            // Timed out, feed completed without a match (process exited), or cancelled — fall through
+            // to the credentials-file fallback below.
+        }
+
+        if (!string.IsNullOrEmpty(fromStdout))
+        {
+            logger?.LogInformation("Claude Connect captured token (stdout) for session {Session}", session.SessionId);
+            return fromStdout;
+        }
 
         // 2) Fallback: the CLI may have written the token to {ConfigDir}/.credentials.json instead.
         var configDir = ResolveConfigDir(session, options);
@@ -292,26 +312,27 @@ public sealed class ClaudeConnectStrategy : IConnectStrategy
     }
 
     /// <summary>
-    /// A tiny async-readable line buffer over the process output streams. Lets StartConnect and
-    /// CompleteConnect consume the same line feed sequentially.
+    /// An observable line feed over the process output streams. The producer (the process
+    /// OutputDataReceived/ErrorDataReceived events) <see cref="Add"/>s each line; the consumers
+    /// (StartConnect's URL scrape, CompleteConnect's token scrape) compose reactively over
+    /// <see cref="Lines"/> — no SemaphoreSlim / no hand-woven async gate (per the "no hand-woven
+    /// async/concurrency primitives" rule). Backed by a <see cref="ReplaySubject{T}"/> so the
+    /// later (token) scrape still observes lines emitted before it subscribed — the old shared-queue
+    /// "no line is lost across the two phases" contract. <see cref="Complete"/> (driven by process
+    /// exit) terminates the feed so a waiting scrape ends instead of hanging.
     /// </summary>
-    private sealed class OutputBuffer(ConcurrentQueue<string> lines)
+    private sealed class OutputBuffer : IDisposable
     {
-        private readonly SemaphoreSlim signal = new(0);
+        private readonly ReplaySubject<string> subject = new();
 
-        public void Add(string line)
-        {
-            lines.Enqueue(line);
-            signal.Release();
-        }
+        /// <summary>The line feed: every stdout/stderr line, replayed to late subscribers.</summary>
+        public IObservable<string> Lines => subject;
 
-        public async Task<string> TakeAsync(CancellationToken ct)
-        {
-            while (true)
-            {
-                if (lines.TryDequeue(out var line)) return line;
-                await signal.WaitAsync(ct).ConfigureAwait(false);
-            }
-        }
+        public void Add(string line) => subject.OnNext(line);
+
+        /// <summary>Signal end-of-stream (process exited) — terminates any waiting scrape.</summary>
+        public void Complete() => subject.OnCompleted();
+
+        public void Dispose() => subject.Dispose();
     }
 }

@@ -50,7 +50,9 @@ if (useAzureBackend)
         new BlobNuGetPackageCache(
             sp.GetRequiredKeyedService<BlobServiceClient>("storage"),
             containerName: "nuget-cache",
-            logger: sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<BlobNuGetPackageCache>>())));
+            logger: sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<BlobNuGetPackageCache>>(),
+            // Mesh-scoped Blob pool caps blob concurrency; absent it falls back to IoPool.Unbounded.
+            ioPoolRegistry: sp.GetService<MeshWeaver.Mesh.Threading.IoPoolRegistry>())));
 
     // Data protection: persist keys to Azure Blob Storage (shared across replicas)
     var dpConfig = builder.Configuration.GetSection("DataProtection");

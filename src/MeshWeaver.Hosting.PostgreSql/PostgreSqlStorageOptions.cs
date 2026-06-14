@@ -21,12 +21,17 @@ public class PostgreSqlStorageOptions
     public string Schema { get; set; } = "public";
 
     /// <summary>
-    /// Maximum concurrent READ operations the Postgres storage adapter may run
-    /// against the shared connection pool. Kept comfortably below the pool's
-    /// <c>MaxPoolSize</c> so a synced-query fan-out storm cannot drain the pool
-    /// and starve writes (onboarding/chat stay ungated and always have headroom).
-    /// See <see cref="ReadConcurrencyGate"/>. This is a per-storage-adapter knob:
-    /// in-memory storage has no connection scarcity and is never gated.
+    /// Maximum concurrent READ operations the Postgres storage adapter may run against the shared
+    /// connection pool, kept comfortably below the pool's <c>MaxPoolSize</c> so a synced-query
+    /// fan-out storm cannot drain the pool and starve writes (onboarding/chat stay ungated and
+    /// always have headroom).
+    ///
+    /// <para>🚦 The read bound is now enforced by the per-adapter READ I/O pool
+    /// (<c>pg-read:{adapter}</c>) — the former hand-woven <c>ReadConcurrencyGate</c> folded into the
+    /// one sanctioned <see cref="MeshWeaver.Mesh.Threading.IIoPool"/> primitive. The actual cap lives
+    /// in <see cref="MeshWeaver.Mesh.Threading.IoPoolOptions.PostgresRead"/> (override via
+    /// <c>AddIoPools(o =&gt; o with { PostgresRead = N })</c>); this legacy knob is retained for config
+    /// compatibility. In-memory storage has no connection scarcity and falls back to the unbounded pool.</para>
     /// </summary>
     public int MaxReadConcurrency { get; set; } = 16;
 
