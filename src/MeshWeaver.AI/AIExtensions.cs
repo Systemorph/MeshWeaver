@@ -32,6 +32,7 @@ public static class AIExtensions
                     .AddAgentType(serveFromPartition)
                     .AddLanguageModelType(serveFromPartition)
                     .AddHarnessType()
+                    .AddCommandType()
                     .AddThreadComposerType()
                     .AddAiSettingsType()
                     .ConfigureServices(services => services.AddAgentChatServices())
