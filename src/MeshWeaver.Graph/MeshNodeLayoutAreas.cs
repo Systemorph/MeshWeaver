@@ -700,6 +700,14 @@ public static class MeshNodeLayoutAreas
         // Get search term from query string (if present)
         var searchTerm = host.GetQueryStringParamValue("q")?.Trim();
 
+        // View controls, all driven by the URL so a single area serves every catalog shape
+        // (this is the area that replaced the dedicated "Children" catalog):
+        //   ?groupBy=namespace|type|category|flat|hierarchy   how results are organised
+        //   ?subtree=true                                     include the whole descendant subtree, not just direct children
+        // See the "Mesh Search" documentation article.
+        var groupBy = host.GetQueryStringParamValue("groupBy")?.Trim();
+        var includeSubtree = ParseTruthy(host.GetQueryStringParamValue("subtree"));
+
         return host.Workspace.GetMeshNodeStream().Select(node =>
         {
             // NodeType catalog mode is used when either:
@@ -752,61 +760,107 @@ public static class MeshNodeLayoutAreas
 
                 var createHref = $"/create?{createQs}";
 
-                return (UiControl?)Controls.MeshSearch
+                // Instances of a NodeType default to a hierarchical list; ?groupBy overrides.
+                var (typeMode, typeGroupProp) = ResolveCatalogView(groupBy, MeshSearchRenderMode.Hierarchical);
+                var typeSearch = Controls.MeshSearch
                     .WithHiddenQuery(hiddenQuery)
                     .WithVisibleQuery(searchTerm ?? "")
                     .WithNamespace(hubPath)
                     .WithPlaceholder("Search... (use @ for references)")
-                    .WithRenderMode(MeshSearchRenderMode.Hierarchical)
+                    .WithRenderMode(typeMode)
                     .WithMaxColumns(3)
                     .WithCreateHref(createHref);
+                if (!string.IsNullOrEmpty(typeGroupProp))
+                    typeSearch = typeSearch.WithGroupBy(typeGroupProp);
+                return (UiControl?)typeSearch;
             }
 
-            // Instance node catalog
-            var instanceHiddenQuery = $"namespace:{node?.Namespace ?? hubPath}";
-
-            return Controls.MeshSearch
-                .WithHiddenQuery(instanceHiddenQuery)
-                .WithVisibleQuery(searchTerm ?? "")
-                .WithNamespace(hubPath)
-                .WithPlaceholder("Search... (use @ for references)")
-                .WithRenderMode(MeshSearchRenderMode.Hierarchical)
-                .WithMaxColumns(3)
-                // Pre-select self as the Location for the Create form (matches Associated catalog behavior).
-                .WithCreateHref($"/{hubPath}/{CreateNodeArea}?namespace={Uri.EscapeDataString(hubPath)}");
+            // Instance node catalog — this node's own content (its children, or the whole
+            // descendant subtree with ?subtree=true), organised per ?groupBy (default: the
+            // namespace tree with lazy per-level drilldown — the view that replaced the
+            // dedicated "Children" area).
+            var (mode, groupProp) = ResolveCatalogView(groupBy, MeshSearchRenderMode.NamespaceTree);
+            return BuildCatalog(hubPath, mode, groupProp, includeSubtree, searchTerm);
         });
     }
 
-    /// <summary>
-    /// Renders the Children view as a mesh catalog: child nodes organized by their
-    /// namespace hierarchy (NamespaceTree render mode). Sub-namespaces show as
-    /// nested collapsible sections with counts; levels load lazily on expand.
-    /// The search box is visible — typing switches to a subtree search whose
-    /// results are grouped by relative namespace.
-    /// Includes a "Create Sub-Node" button when the user has Create permission.
-    /// </summary>
-    [Browsable(false)]
-    public static UiControl Children(LayoutAreaHost host, RenderingContext _)
-    {
-        var hubPath = host.Hub.Address.ToString();
+    /// <summary>Best-effort truthy parse for boolean query params (<c>true/1/yes/on</c>).</summary>
+    private static bool ParseTruthy(string? value) =>
+        value is not null && (value.Equals("true", StringComparison.OrdinalIgnoreCase)
+            || value is "1" || value.Equals("yes", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("on", StringComparison.OrdinalIgnoreCase));
 
-        return Controls.MeshSearch
+    /// <summary>
+    /// Maps the <c>?groupBy=</c> query value to a <see cref="MeshSearchRenderMode"/> and, for the
+    /// <see cref="MeshSearchRenderMode.Grouped"/> modes, the node property to group on. Unknown /
+    /// missing values fall back to <paramref name="fallback"/>.
+    /// <list type="bullet">
+    ///   <item><c>namespace</c> (a.k.a. <c>ns</c>, <c>tree</c>) → <see cref="MeshSearchRenderMode.NamespaceTree"/> — lazy per-level drilldown.</item>
+    ///   <item><c>type</c> (a.k.a. <c>nodeType</c>) → <see cref="MeshSearchRenderMode.Grouped"/> by <c>NodeType</c>.</item>
+    ///   <item><c>category</c> → <see cref="MeshSearchRenderMode.Grouped"/> by <c>Category</c>.</item>
+    ///   <item><c>flat</c> (a.k.a. <c>none</c>, <c>grid</c>) → <see cref="MeshSearchRenderMode.Flat"/>.</item>
+    ///   <item><c>hierarchy</c> (a.k.a. <c>hierarchical</c>) → <see cref="MeshSearchRenderMode.Hierarchical"/>.</item>
+    /// </list>
+    /// </summary>
+    internal static (MeshSearchRenderMode Mode, string? GroupByProperty) ResolveCatalogView(
+        string? groupBy, MeshSearchRenderMode fallback)
+        => groupBy?.ToLowerInvariant() switch
+        {
+            "namespace" or "ns" or "tree" => (MeshSearchRenderMode.NamespaceTree, null),
+            "type" or "nodetype" => (MeshSearchRenderMode.Grouped, "NodeType"),
+            "category" or "cat" => (MeshSearchRenderMode.Grouped, "Category"),
+            "flat" or "none" or "grid" => (MeshSearchRenderMode.Flat, null),
+            "hierarchy" or "hierarchical" => (MeshSearchRenderMode.Hierarchical, null),
+            _ => (fallback, null)
+        };
+
+    /// <summary>
+    /// Builds the node-content catalog (the shared body of the <see cref="Search"/> instance view
+    /// and the legacy <see cref="Children"/> area): a <see cref="MeshSearchControl"/> over
+    /// <c>namespace:{nodePath}</c> (its children) — or <c>scope:descendants</c> when
+    /// <paramref name="includeSubtree"/> — excluding NodeType definitions, with the search box,
+    /// section counts, and a Create button. <paramref name="mode"/> + <paramref name="groupByProperty"/>
+    /// come from <see cref="ResolveCatalogView"/>.
+    /// </summary>
+    private static MeshSearchControl BuildCatalog(
+        string nodePath, MeshSearchRenderMode mode, string? groupByProperty,
+        bool includeSubtree, string? searchTerm)
+    {
+        var scope = includeSubtree ? " scope:descendants" : "";
+        var search = Controls.MeshSearch
             .WithTitle("Catalog")
-            // Exclude NodeType definitions — they belong to type admin, not the
-            // Organization/instance catalog — and enable ReactiveMode so moves,
-            // renames, and new children show up without an F5.
-            .WithHiddenQuery($"namespace:{hubPath} is:main context:search -nodeType:NodeType")
+            // Exclude NodeType definitions — they belong to type admin, not the instance catalog —
+            // and enable ReactiveMode so moves, renames, and new children show up without an F5.
+            .WithHiddenQuery($"namespace:{nodePath}{scope} is:main context:search -nodeType:NodeType")
+            .WithVisibleQuery(searchTerm ?? "")
+            .WithNamespace(nodePath)
+            .WithPlaceholder("Search... (use @ for references)")
             .WithReactiveMode(true)
             .WithShowSearchBox(true)
             .WithShowEmptyMessage(false)
             .WithShowLoadingIndicator(false)
-            .WithRenderMode(MeshSearchRenderMode.NamespaceTree)
+            .WithRenderMode(mode)
             .WithSectionCounts(true)
             .WithItemLimit(50)
             .WithMaxRows(3)
+            .WithMaxColumns(3)
             .WithCollapsibleSections(true)
-            .WithCreateHref($"/{hubPath}/{CreateNodeArea}?namespace={Uri.EscapeDataString(hubPath)}");
+            .WithCreateHref($"/{nodePath}/{CreateNodeArea}?namespace={Uri.EscapeDataString(nodePath)}");
+        return string.IsNullOrEmpty(groupByProperty) ? search : search.WithGroupBy(groupByProperty);
     }
+
+    /// <summary>
+    /// Legacy catalog area, kept as a thin alias of the unified <see cref="Search"/> view
+    /// (<c>?groupBy=namespace</c>): child nodes organised by their namespace hierarchy
+    /// (NamespaceTree, lazy per-level drilldown). New content should embed the Search area
+    /// instead — e.g. <c>@@/{node}/area/Search</c> — and use <c>?groupBy=</c> to pick the
+    /// grouping. Shares <see cref="BuildCatalog"/> so the two never drift.
+    /// </summary>
+    [Browsable(false)]
+    public static UiControl Children(LayoutAreaHost host, RenderingContext _)
+        => BuildCatalog(host.Hub.Address.ToString(),
+            MeshSearchRenderMode.NamespaceTree, groupByProperty: null,
+            includeSubtree: false, searchTerm: null);
 
     /// <summary>
     /// Renders the Threads catalog showing child Thread nodes using MeshSearchControl.
