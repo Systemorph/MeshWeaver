@@ -14,6 +14,7 @@ public partial class MarkdownView
     private object? HtmlRaw { get; set; }
     private object? CodeSubmissionsRaw { get; set; }
     private object? ShowReferencesRaw { get; set; }
+    private object? NodePathRaw { get; set; }
 
     private string? Html { get; set; }
     private IReadOnlyList<SubmitCodeRequest>? CodeSubmissions { get; set; }
@@ -48,15 +49,21 @@ public partial class MarkdownView
         DataBind(ViewModel.Html, x => x.HtmlRaw);
         DataBind(ViewModel.CodeSubmissions, x => x.CodeSubmissionsRaw);
         DataBind(ViewModel.ShowReferences, x => x.ShowReferencesRaw);
+        DataBind(ViewModel.NodePath, x => x.NodePathRaw);
 
         var markdown = MarkdownViewLogic.CoerceString(MarkdownRaw);
         Html = MarkdownViewLogic.CoerceString(HtmlRaw);
         CodeSubmissions = MarkdownViewLogic.CoerceCodeSubmissions(CodeSubmissionsRaw, Hub.JsonSerializerOptions);
         ShowReferencesSection = MarkdownViewLogic.CoerceBool(ShowReferencesRaw, defaultValue: true);
 
+        // Explicit NodePath (set by the producing control) wins over the bound stream's owner.
+        // Relative @@-embeds resolve against this path; child controls whose stream owner is
+        // not the authoring node (e.g. a Space's body inside the Overview) rely on it.
+        var nodePath = MarkdownViewLogic.CoerceString(NodePathRaw) ?? Stream?.Owner?.ToString();
+
         if (Html is null && !string.IsNullOrEmpty(markdown))
         {
-            var result = MarkdownViewLogic.Render(markdown, Stream?.Owner, Stream?.Owner?.ToString());
+            var result = MarkdownViewLogic.Render(markdown, Stream?.Owner, nodePath);
             Html = result.Html;
             CodeSubmissions ??= result.CodeSubmissions;
         }
@@ -66,7 +73,7 @@ public partial class MarkdownView
                  && !string.IsNullOrEmpty(markdown))
         {
             CodeSubmissions = MarkdownViewLogic.ExtractCodeSubmissions(
-                markdown, Stream?.Owner, Stream?.Owner?.ToString());
+                markdown, Stream?.Owner, nodePath);
         }
 
         if (Html is not null && CodeSubmissions is { Count: > 0 })

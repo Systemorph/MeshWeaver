@@ -96,7 +96,7 @@ public static class SpaceLayoutAreas
             .WithStyle($"height: 100%; overflow-y: auto; {ThinScrollbar}");
 
         shell = shell.WithView(BuildHeader(space, node, spaceName));
-        shell = shell.WithView(BuildBodyContent(space, node));
+        shell = shell.WithView(BuildBodyContent(space, node, spacePath));
 
         if (IsSystemorph(spacePath))
             shell = shell.WithView(BuildSystemorphHighlights(spacePath));
@@ -207,7 +207,7 @@ public static class SpaceLayoutAreas
     /// <summary>
     /// Body content — priority: node.PreRenderedHtml → space.Body → default welcome markdown.
     /// </summary>
-    private static UiControl BuildBodyContent(Space? space, MeshNode? node)
+    internal static UiControl BuildBodyContent(Space? space, MeshNode? node, string spacePath)
     {
         // Generous bottom padding so the in-body catalog @@-embed has vertical breathing
         // room below it (the catalog is no longer a fixed LayoutArea — see BuildSpaceView).
@@ -216,10 +216,14 @@ public static class SpaceLayoutAreas
         if (!string.IsNullOrWhiteSpace(node?.PreRenderedHtml))
             return new MarkdownControl("") { Html = node.PreRenderedHtml }.WithStyle(bodyStyle);
 
-        if (!string.IsNullOrWhiteSpace(space?.Body))
-            return Controls.Markdown(space!.Body!).WithStyle(bodyStyle);
-
-        return Controls.Markdown(SpaceNodeType.WelcomeMarkdown).WithStyle(bodyStyle);
+        // 🚨 NodePath is what makes the body's RELATIVE @@-embeds resolve. The default
+        // welcome ships @@("area:Search"); the body MarkdownControl is a CHILD of the Overview
+        // area, whose stream owner is not a reliable node-path source — so the embed would
+        // render an unaddressed (dead) layout-area div without this. Setting NodePath to the
+        // Space path makes @@("area:Search") resolve to {spacePath}/area:Search. Authored
+        // bodies may also use the absolute @@/{space}/area/Search, which resolves either way.
+        var body = !string.IsNullOrWhiteSpace(space?.Body) ? space!.Body! : SpaceNodeType.WelcomeMarkdown;
+        return (Controls.Markdown(body) with { NodePath = spacePath }).WithStyle(bodyStyle);
     }
 
     /// <summary>
