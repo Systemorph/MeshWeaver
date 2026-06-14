@@ -2,6 +2,7 @@
 
 using System.Text.Json;
 using MeshWeaver.Graph;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using Xunit;
 
@@ -65,5 +66,33 @@ public class SpaceResolveSpaceTest
     public void NullContent_ReturnsNull()
     {
         SpaceLayoutAreas.ResolveSpace(Node(null), Options).Should().BeNull();
+    }
+
+    // ---------- BuildBodyContent carries the Space path as NodePath ----------
+    // The body markdown is a child of the Overview area; its stream owner is not a reliable
+    // node-path source, so the relative @@("area:Search") in the welcome would render an
+    // unaddressed (dead) layout area. BuildBodyContent must stamp NodePath = the Space path
+    // so MarkdownView resolves the embed.
+
+    [Fact]
+    public void BuildBodyContent_DefaultWelcome_CarriesSpacePathAsNodePath()
+    {
+        var control = SpaceLayoutAreas.BuildBodyContent(space: null, Node(null), spacePath: "Acme");
+
+        var md = Assert.IsType<MarkdownControl>(control);
+        md.NodePath.Should().Be("Acme",
+            "the welcome body must carry the Space path so @@(\"area:Search\") resolves");
+        md.Markdown.ToString()!.Should().Contain("area:Search", "the welcome ships the catalog embed");
+    }
+
+    [Fact]
+    public void BuildBodyContent_AuthoredBody_CarriesSpacePathAsNodePath()
+    {
+        var space = new Space { Name = "Acme", Body = "# Hi\n\n@@(\"area:Search\")" };
+        var control = SpaceLayoutAreas.BuildBodyContent(space, Node(space), spacePath: "Acme");
+
+        var md = Assert.IsType<MarkdownControl>(control);
+        md.NodePath.Should().Be("Acme");
+        md.Markdown.ToString()!.Should().Contain("Hi");
     }
 }
