@@ -47,7 +47,7 @@ public class ContentReferenceIntegrityTest
         {
             var relativePath = Path.GetRelativePath(contentDir, filePath).Replace('\\', '/');
             var fileContent = await File.ReadAllTextAsync(filePath);
-            var node = await _parser.ParseAsync(filePath, fileContent, relativePath);
+            var node = _parser.Parse(filePath, fileContent, relativePath);
 
             var thumbnail = (node?.Content as MarkdownContent)?.Thumbnail;
             if (string.IsNullOrEmpty(thumbnail))
@@ -83,7 +83,7 @@ public class ContentReferenceIntegrityTest
         {
             var relativePath = Path.GetRelativePath(contentDir, filePath).Replace('\\', '/');
             var fileContent = await File.ReadAllTextAsync(filePath);
-            var node = await _parser.ParseAsync(filePath, fileContent, relativePath);
+            var node = _parser.Parse(filePath, fileContent, relativePath);
 
             var thumbnail = (node?.Content as MarkdownContent)?.Thumbnail;
             if (string.IsNullOrEmpty(thumbnail))
@@ -134,7 +134,7 @@ public class ContentReferenceIntegrityTest
             var baseDir = filePath.StartsWith(contentDir) ? contentDir : dataDir;
             var relativePath = Path.GetRelativePath(baseDir, filePath).Replace('\\', '/');
             var fileContent = await File.ReadAllTextAsync(filePath);
-            var node = await _parser.ParseAsync(filePath, fileContent, relativePath);
+            var node = _parser.Parse(filePath, fileContent, relativePath);
 
             var icon = node?.Icon;
             if (string.IsNullOrEmpty(icon))

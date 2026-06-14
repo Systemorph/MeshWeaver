@@ -136,9 +136,12 @@ public class CachingStorageAdapter : IStorageAdapter
     }
 
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-        => _ioPool.Run(ct => ReadAsyncCore(path, options, ct));
+        // ReadCore is fully synchronous (the cached-bytes access triggers File.ReadAllBytes
+        // — genuine blocking I/O — and the parse is in-memory), so it runs on the blocking
+        // pool leg, not the async-Task leg.
+        => _ioPool.InvokeBlocking(ct => ReadCore(path, options, ct));
 
-    private async Task<MeshNode?> ReadAsyncCore(string path, JsonSerializerOptions options, CancellationToken ct)
+    private MeshNode? ReadCore(string path, JsonSerializerOptions options, CancellationToken ct)
     {
         var normalizedPath = path?.Trim('/');
         if (string.IsNullOrEmpty(normalizedPath))
@@ -159,7 +162,7 @@ public class CachingStorageAdapter : IStorageAdapter
         {
             var parsers = _parserRegistry.GetParsers(extension);
             if (parsers.Count > 0)
-                node = await _parserRegistry.TryParseAsync(extension, filePath, content, normalizedPath, ct).ConfigureAwait(false);
+                node = _parserRegistry.TryParse(extension, filePath, content, normalizedPath);
             else
                 node = JsonSerializer.Deserialize<MeshNode>(content, options);
         }
@@ -206,7 +209,7 @@ public class CachingStorageAdapter : IStorageAdapter
 
         // Merge companion index.md
         if (extension == ".json" && node.Content is null)
-            node = await MergeIndexMarkdownAsync(node, normalizedPath, ct).ConfigureAwait(false);
+            node = MergeIndexMarkdown(node, normalizedPath);
 
         return node;
     }
@@ -403,7 +406,7 @@ public class CachingStorageAdapter : IStorageAdapter
                 {
                     var content = System.Text.Encoding.UTF8.GetString(kvp.Value.Value);
                     var filePath = Path.Combine(_baseDirectory, cachedRelPath.Replace('/', Path.DirectorySeparatorChar));
-                    config = await _parserRegistry.CSharpParser.ParseCodeConfigurationAsync(filePath, content, ct);
+                    config = _parserRegistry.CSharpParser.ParseCodeConfiguration(filePath, content);
                 }
                 catch (Exception ex)
                 {
@@ -476,7 +479,7 @@ public class CachingStorageAdapter : IStorageAdapter
         return (null, ".json");
     }
 
-    private async Task<MeshNode> MergeIndexMarkdownAsync(MeshNode node, string normalizedPath, CancellationToken ct)
+    private MeshNode MergeIndexMarkdown(MeshNode node, string normalizedPath)
     {
         var indexMdKey = normalizedPath + "/index.md";
         if (!_snapshot.Files.TryGetValue(indexMdKey, out var mdBytesLazy))
@@ -485,8 +488,8 @@ public class CachingStorageAdapter : IStorageAdapter
         var mdContent = System.Text.Encoding.UTF8.GetString(mdBytesLazy.Value);
         var filePath = Path.Combine(_baseDirectory, indexMdKey.Replace('/', Path.DirectorySeparatorChar));
 
-        var mdNode = await _parserRegistry.TryParseAsync(".md", filePath, mdContent,
-            normalizedPath + "/index", ct).ConfigureAwait(false);
+        var mdNode = _parserRegistry.TryParse(".md", filePath, mdContent,
+            normalizedPath + "/index");
 
         if (mdNode?.Content is MarkdownContent markdownContent)
         {

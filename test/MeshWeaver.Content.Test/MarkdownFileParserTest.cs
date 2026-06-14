@@ -17,7 +17,7 @@ public class MarkdownFileParserTest
     #region Parse Tests
 
     [Fact(Timeout = 20000)]
-    public async Task Parse_WithFullYamlFrontMatter_ExtractsAllProperties()
+    public void Parse_WithFullYamlFrontMatter_ExtractsAllProperties()
     {
         // Arrange
         var content = """
@@ -43,7 +43,7 @@ public class MarkdownFileParserTest
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/test/article.md", content, "test/article.md");
+        var node = _parser.Parse("/test/article.md", content, "test/article.md");
 
         // Assert
         node.Should().NotBeNull();
@@ -67,7 +67,7 @@ public class MarkdownFileParserTest
     }
 
     [Fact(Timeout = 20000)]
-    public async Task Parse_WithMinimalYaml_UsesDefaults()
+    public void Parse_WithMinimalYaml_UsesDefaults()
     {
         // Arrange
         var content = """
@@ -79,7 +79,7 @@ public class MarkdownFileParserTest
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/docs/simple.md", content, "docs/simple.md");
+        var node = _parser.Parse("/docs/simple.md", content, "docs/simple.md");
 
         // Assert
         node.Should().NotBeNull();
@@ -90,7 +90,7 @@ public class MarkdownFileParserTest
     }
 
     [Fact(Timeout = 20000)]
-    public async Task Parse_WithoutYaml_UsesIdAsName()
+    public void Parse_WithoutYaml_UsesIdAsName()
     {
         // Arrange
         var content = """
@@ -100,7 +100,7 @@ public class MarkdownFileParserTest
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/docs/plain.md", content, "docs/plain.md");
+        var node = _parser.Parse("/docs/plain.md", content, "docs/plain.md");
 
         // Assert
         node.Should().NotBeNull();
@@ -110,7 +110,7 @@ public class MarkdownFileParserTest
     }
 
     [Fact(Timeout = 20000)]
-    public async Task Parse_WithLegacyArticleProperties_MapsCorrectly()
+    public void Parse_WithLegacyArticleProperties_MapsCorrectly()
     {
         // Arrange - Uses legacy Title/Abstract instead of Name/Description
         var content = """
@@ -123,7 +123,7 @@ public class MarkdownFileParserTest
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/articles/legacy.md", content, "articles/legacy.md");
+        var node = _parser.Parse("/articles/legacy.md", content, "articles/legacy.md");
 
         // Assert
         node.Should().NotBeNull();
@@ -134,13 +134,13 @@ public class MarkdownFileParserTest
     }
 
     [Fact(Timeout = 20000)]
-    public async Task Parse_DerivesPathFromRelativePath()
+    public void Parse_DerivesPathFromRelativePath()
     {
         // Arrange
         var content = "# Test";
 
         // Act
-        var node = await _parser.ParseAsync("/root/folder/subfolder/doc.md", content, "folder/subfolder/doc.md");
+        var node = _parser.Parse("/root/folder/subfolder/doc.md", content, "folder/subfolder/doc.md");
 
         // Assert
         node.Should().NotBeNull();
@@ -150,7 +150,7 @@ public class MarkdownFileParserTest
     }
 
     [Fact(Timeout = 20000)]
-    public async Task Parse_RelativeIconPath_ResolvesToAbsoluteUrl()
+    public void Parse_RelativeIconPath_ResolvesToAbsoluteUrl()
     {
         // Arrange
         var content = """
@@ -163,7 +163,7 @@ public class MarkdownFileParserTest
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/root/Cornerstone/doc.md", content, "Cornerstone/doc.md");
+        var node = _parser.Parse("/root/Cornerstone/doc.md", content, "Cornerstone/doc.md");
 
         // Assert
         node.Should().NotBeNull();
@@ -171,7 +171,7 @@ public class MarkdownFileParserTest
     }
 
     [Fact(Timeout = 20000)]
-    public async Task Parse_AbsoluteIconPath_PassesThroughUnchanged()
+    public void Parse_AbsoluteIconPath_PassesThroughUnchanged()
     {
         // Arrange
         var content = """
@@ -184,7 +184,7 @@ public class MarkdownFileParserTest
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/root/ns/doc.md", content, "ns/doc.md");
+        var node = _parser.Parse("/root/ns/doc.md", content, "ns/doc.md");
 
         // Assert
         node.Should().NotBeNull();
@@ -192,7 +192,7 @@ public class MarkdownFileParserTest
     }
 
     [Fact(Timeout = 20000)]
-    public async Task Parse_HttpUrlIcon_PassesThroughUnchanged()
+    public void Parse_HttpUrlIcon_PassesThroughUnchanged()
     {
         // Arrange
         var content = """
@@ -205,7 +205,7 @@ public class MarkdownFileParserTest
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/root/ns/doc.md", content, "ns/doc.md");
+        var node = _parser.Parse("/root/ns/doc.md", content, "ns/doc.md");
 
         // Assert
         node.Should().NotBeNull();
@@ -217,7 +217,7 @@ public class MarkdownFileParserTest
     #region Serialize Tests
 
     [Fact(Timeout = 20000)]
-    public async Task Serialize_WithAllProperties_WritesCompleteYaml()
+    public void Serialize_WithAllProperties_WritesCompleteYaml()
     {
         // Arrange
         var node = new MeshNode("doc", "test")
@@ -238,7 +238,7 @@ public class MarkdownFileParserTest
         };
 
         // Act
-        var result = await _parser.SerializeAsync(node);
+        var result = _parser.Serialize(node);
 
         // Assert
         result.Should().Contain("---");
@@ -258,7 +258,7 @@ public class MarkdownFileParserTest
     }
 
     [Fact(Timeout = 20000)]
-    public async Task Serialize_OmitsDefaultValues()
+    public void Serialize_OmitsDefaultValues()
     {
         // Arrange - Node with default values that should be omitted
         var node = new MeshNode("doc", "test")
@@ -271,7 +271,7 @@ public class MarkdownFileParserTest
         };
 
         // Act
-        var result = await _parser.SerializeAsync(node);
+        var result = _parser.Serialize(node);
 
         // Assert - should not have YAML block since all values are defaults
         result.Should().NotContain("NodeType:");
@@ -282,7 +282,7 @@ public class MarkdownFileParserTest
     }
 
     [Fact(Timeout = 20000)]
-    public async Task Serialize_WithStringContent_WritesDirectly()
+    public void Serialize_WithStringContent_WritesDirectly()
     {
         // Arrange
         var node = new MeshNode("doc", "test")
@@ -292,7 +292,7 @@ public class MarkdownFileParserTest
         };
 
         // Act
-        var result = await _parser.SerializeAsync(node);
+        var result = _parser.Serialize(node);
 
         // Assert
         result.Should().Contain("Name: String Content Doc");
@@ -301,7 +301,7 @@ public class MarkdownFileParserTest
     }
 
     [Fact(Timeout = 20000)]
-    public async Task Serialize_WithNullContent_WritesOnlyYaml()
+    public void Serialize_WithNullContent_WritesOnlyYaml()
     {
         // Arrange
         var node = new MeshNode("doc", "test")
@@ -312,7 +312,7 @@ public class MarkdownFileParserTest
         };
 
         // Act
-        var result = await _parser.SerializeAsync(node);
+        var result = _parser.Serialize(node);
 
         // Assert
         result.Should().Contain("Name: No Content Doc");
@@ -321,7 +321,7 @@ public class MarkdownFileParserTest
     }
 
     [Fact(Timeout = 20000)]
-    public async Task Serialize_ResolvedAbsoluteIconPath_IsOmittedFromYaml()
+    public void Serialize_ResolvedAbsoluteIconPath_IsOmittedFromYaml()
     {
         // Arrange - Icon starts with /static/storage/content/ (was resolved from relative path)
         var node = new MeshNode("doc", "ns")
@@ -332,7 +332,7 @@ public class MarkdownFileParserTest
         };
 
         // Act
-        var result = await _parser.SerializeAsync(node);
+        var result = _parser.Serialize(node);
 
         // Assert - The serialization guard should strip resolved paths
         result.Should().NotContain("Icon:");
@@ -344,7 +344,7 @@ public class MarkdownFileParserTest
     #region Round-Trip Tests
 
     [Fact(Timeout = 20000)]
-    public async Task RoundTrip_RelativeIcon_ResolvesCorrectlyAfterReParse()
+    public void RoundTrip_RelativeIcon_ResolvesCorrectlyAfterReParse()
     {
         // Arrange - Markdown with a relative icon path
         var originalContent = """
@@ -357,16 +357,16 @@ public class MarkdownFileParserTest
             """;
 
         // Act - Parse (resolves relative icon), serialize, re-parse
-        var node = await _parser.ParseAsync("/root/Cornerstone/doc.md", originalContent, "Cornerstone/doc.md");
+        var node = _parser.Parse("/root/Cornerstone/doc.md", originalContent, "Cornerstone/doc.md");
         node!.Icon.Should().Be("/static/storage/content/Cornerstone/icons/custom.svg");
 
-        var serialized = await _parser.SerializeAsync(node);
+        var serialized = _parser.Serialize(node);
 
         // The resolved absolute path should NOT appear in serialized YAML
         serialized.Should().NotContain("/static/storage/content/");
 
         // Re-parse — Thumbnail is still in YAML and should resolve again
-        var reparsed = await _parser.ParseAsync("/root/Cornerstone/doc.md", serialized, "Cornerstone/doc.md");
+        var reparsed = _parser.Parse("/root/Cornerstone/doc.md", serialized, "Cornerstone/doc.md");
 
         // Assert — icon resolves to the same absolute URL (no double-resolution)
         reparsed.Should().NotBeNull();
@@ -374,7 +374,7 @@ public class MarkdownFileParserTest
     }
 
     [Fact(Timeout = 20000)]
-    public async Task RoundTrip_PreservesAllData()
+    public void RoundTrip_PreservesAllData()
     {
         // Arrange
         var originalContent = """
@@ -398,11 +398,11 @@ public class MarkdownFileParserTest
             """;
 
         // Act - Parse then serialize
-        var node = await _parser.ParseAsync("/tutorials/complete.md", originalContent, "tutorials/complete.md");
-        var serialized = await _parser.SerializeAsync(node!);
+        var node = _parser.Parse("/tutorials/complete.md", originalContent, "tutorials/complete.md");
+        var serialized = _parser.Serialize(node!);
 
         // Re-parse to verify
-        var reparsed = await _parser.ParseAsync("/tutorials/complete.md", serialized, "tutorials/complete.md");
+        var reparsed = _parser.Parse("/tutorials/complete.md", serialized, "tutorials/complete.md");
 
         // Assert
         reparsed.Should().NotBeNull();
@@ -456,7 +456,7 @@ public class MarkdownFileParserTest
     #region Edge Cases
 
     [Fact(Timeout = 20000)]
-    public async Task Parse_WithMalformedYaml_UsesDefaults()
+    public void Parse_WithMalformedYaml_UsesDefaults()
     {
         // Arrange
         var content = """
@@ -468,7 +468,7 @@ public class MarkdownFileParserTest
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/test/malformed.md", content, "test/malformed.md");
+        var node = _parser.Parse("/test/malformed.md", content, "test/malformed.md");
 
         // Assert - Should not throw, uses defaults
         node.Should().NotBeNull();
@@ -477,13 +477,13 @@ public class MarkdownFileParserTest
     }
 
     [Fact(Timeout = 20000)]
-    public async Task Parse_WithEmptyContent_ReturnsEmptyMarkdownContent()
+    public void Parse_WithEmptyContent_ReturnsEmptyMarkdownContent()
     {
         // Arrange
         var content = "";
 
         // Act
-        var node = await _parser.ParseAsync("/test/empty.md", content, "test/empty.md");
+        var node = _parser.Parse("/test/empty.md", content, "test/empty.md");
 
         // Assert
         node.Should().NotBeNull();
@@ -492,7 +492,7 @@ public class MarkdownFileParserTest
     }
 
     [Fact(Timeout = 20000)]
-    public async Task Serialize_WithSpecialCharacters_EscapesCorrectly()
+    public void Serialize_WithSpecialCharacters_EscapesCorrectly()
     {
         // Arrange
         var node = new MeshNode("doc", "test")
@@ -502,10 +502,10 @@ public class MarkdownFileParserTest
         };
 
         // Act
-        var result = await _parser.SerializeAsync(node);
+        var result = _parser.Serialize(node);
 
         // Parse back to verify
-        var reparsed = await _parser.ParseAsync("/test/doc.md", result, "test/doc.md");
+        var reparsed = _parser.Parse("/test/doc.md", result, "test/doc.md");
 
         // Assert
         reparsed!.Name.Should().Be("Doc with: colons");

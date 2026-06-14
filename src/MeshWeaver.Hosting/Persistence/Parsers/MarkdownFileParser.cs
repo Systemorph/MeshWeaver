@@ -29,7 +29,7 @@ public partial class MarkdownFileParser : IFileFormatParser
 
     public IReadOnlyList<string> SupportedExtensions => [".md"];
 
-    public Task<MeshNode?> ParseAsync(string filePath, string content, string relativePath, CancellationToken ct = default)
+    public MeshNode? Parse(string filePath, string content, string relativePath)
     {
         // Derive id and namespace from path
         var (id, ns) = DeriveIdAndNamespace(relativePath, filePath);
@@ -184,10 +184,10 @@ public partial class MarkdownFileParser : IFileFormatParser
             PreRenderedHtml = markdownDocument.PrerenderedHtml
         };
 
-        return Task.FromResult<MeshNode?>(node);
+        return node;
     }
 
-    public Task<string> SerializeAsync(MeshNode node, CancellationToken ct = default)
+    public string Serialize(MeshNode node)
     {
         var sb = new StringBuilder();
 
@@ -245,7 +245,7 @@ public partial class MarkdownFileParser : IFileFormatParser
             sb.Append(markdownText);
         }
 
-        return Task.FromResult(sb.ToString());
+        return sb.ToString();
     }
 
     public bool CanSerialize(MeshNode node)

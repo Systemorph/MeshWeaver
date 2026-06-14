@@ -18,22 +18,21 @@ public class JsonFileParser : IFileFormatParser
 
     public IReadOnlyList<string> SupportedExtensions => [".json"];
 
-    public Task<MeshNode?> ParseAsync(string filePath, string content, string relativePath, CancellationToken ct = default)
+    public MeshNode? Parse(string filePath, string content, string relativePath)
     {
         try
         {
-            var node = JsonSerializer.Deserialize<MeshNode>(content, _options);
-            return Task.FromResult(node);
+            return JsonSerializer.Deserialize<MeshNode>(content, _options);
         }
         catch
         {
-            return Task.FromResult<MeshNode?>(null);
+            return null;
         }
     }
 
-    public Task<string> SerializeAsync(MeshNode node, CancellationToken ct = default)
+    public string Serialize(MeshNode node)
     {
-        return Task.FromResult(JsonSerializer.Serialize(node, _options));
+        return JsonSerializer.Serialize(node, _options);
     }
 
     public bool CanSerialize(MeshNode node) => true;

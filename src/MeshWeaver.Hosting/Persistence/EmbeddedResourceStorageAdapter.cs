@@ -161,7 +161,7 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
         var content = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
 
         var registry = GetParserRegistry(options);
-        var node = await registry.TryParseAsync(entry.Extension, entry.ResourceName, content, normalized, ct).ConfigureAwait(false);
+        var node = registry.TryParse(entry.Extension, entry.ResourceName, content, normalized);
         if (node == null) return null;
 
         // Same path-source-of-truth normalization as FileSystemStorageAdapter.

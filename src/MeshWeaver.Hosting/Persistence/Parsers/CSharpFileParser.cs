@@ -29,21 +29,18 @@ public partial class CSharpFileParser : IFileFormatParser
     [GeneratedRegex(@"(?:public|internal|private|protected)?\s*(?:partial\s+)?(?:static\s+)?(?:abstract\s+)?(?:sealed\s+)?(?:class|record|struct|interface)\s+(\w+)", RegexOptions.Multiline)]
     private static partial Regex TypeNameRegex();
 
-    public Task<CodeConfiguration?> ParseCodeConfigurationAsync(string filePath, string content, CancellationToken ct = default)
+    public CodeConfiguration? ParseCodeConfiguration(string filePath, string content)
     {
-        var metadata = ExtractMetadata(content);
         var codeWithoutMetadata = RemoveMetadataBlock(content);
 
-        var config = new CodeConfiguration
+        return new CodeConfiguration
         {
             Code = codeWithoutMetadata.Trim(),
             Language = "csharp"
         };
-
-        return Task.FromResult<CodeConfiguration?>(config);
     }
 
-    public Task<MeshNode?> ParseAsync(string filePath, string content, string relativePath, CancellationToken ct = default)
+    public MeshNode? Parse(string filePath, string content, string relativePath)
     {
         // C# files are typically loaded as partition objects (CodeConfiguration), not as MeshNodes
         // This method is here for completeness but may not be commonly used
@@ -72,15 +69,15 @@ public partial class CSharpFileParser : IFileFormatParser
             Content = codeConfig
         };
 
-        return Task.FromResult<MeshNode?>(node);
+        return node;
     }
 
-    public Task<string> SerializeAsync(MeshNode node, CancellationToken ct = default)
+    public string Serialize(MeshNode node)
     {
         if (node.Content is not CodeConfiguration codeConfig)
             throw new InvalidOperationException("Cannot serialize node without CodeConfiguration content");
 
-        return Task.FromResult(SerializeCodeConfiguration(codeConfig));
+        return SerializeCodeConfiguration(codeConfig);
     }
 
     /// <summary>

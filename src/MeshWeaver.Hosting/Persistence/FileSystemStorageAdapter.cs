@@ -108,8 +108,8 @@ public class FileSystemStorageAdapter : IStorageAdapter
             var parsers = _parserRegistry.GetParsers(extension);
             if (parsers.Count > 0)
             {
-                // Use TryParseAsync for fallback support (e.g., AgentFileParser -> MarkdownFileParser)
-                node = await _parserRegistry.TryParseAsync(extension, filePath, content, path, ct).ConfigureAwait(false);
+                // Use TryParse for fallback support (e.g., AgentFileParser -> MarkdownFileParser)
+                node = _parserRegistry.TryParse(extension, filePath, content, path);
             }
             else
             {
@@ -204,7 +204,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
         var serializer = _parserRegistry.GetSerializerFor(node);
         if (serializer != null)
         {
-            content = await serializer.SerializeAsync(node, ct).ConfigureAwait(false);
+            content = serializer.Serialize(node);
             extension = serializer.SupportedExtensions[0]; // Use the primary extension
         }
         else
@@ -401,8 +401,8 @@ public class FileSystemStorageAdapter : IStorageAdapter
 
         var mdContent = await ReadFileWithSharingAsync(indexMdPath, ct).ConfigureAwait(false);
 
-        var mdNode = await _parserRegistry.TryParseAsync(".md", indexMdPath, mdContent,
-            normalizedPath + "/index", ct).ConfigureAwait(false);
+        var mdNode = _parserRegistry.TryParse(".md", indexMdPath, mdContent,
+            normalizedPath + "/index");
 
         if (mdNode?.Content is MarkdownContent markdownContent)
         {
@@ -479,7 +479,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
                 try
                 {
                     var content = await ReadFileWithSharingAsync(file, ct);
-                    config = await _parserRegistry.CSharpParser.ParseCodeConfigurationAsync(file, content, ct);
+                    config = _parserRegistry.CSharpParser.ParseCodeConfiguration(file, content);
                 }
                 catch
                 {
