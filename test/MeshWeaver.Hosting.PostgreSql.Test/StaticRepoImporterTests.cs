@@ -174,8 +174,15 @@ public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelpe
         ];
         Import().Single(r => r.Partition == _partition).Outcome.Should().Be("Imported");
 
+        // Wait for the SPECIFIC refilled content, not just any MarkdownContent. The raw
+        // `UPDATE content = NULL` above bypassed the workspace cache (psql writes don't
+        // invalidate it), so the cache still holds the ORIGINAL MarkdownContent — a bare
+        // `is MarkdownContent` predicate races and grabs that stale body before the
+        // re-import propagates. Filtering on "Refilled body." makes the wait deterministic
+        // (and still surfaces a genuine refill failure as a 30s timeout). Mirrors
+        // Reimport_ChangedContent_Updates_AndIncrementsVersion.
         var refilled = Mesh.GetMeshNodeStream($"{_partition}/Page1")
-            .Where(n => n?.Content is MarkdownContent)
+            .Where(n => n?.Content is MarkdownContent mc && mc.Content.Contains("Refilled body."))
             .Should().Within(30.Seconds()).Emit();
         (refilled!.Content as MarkdownContent)!.Content.Should().Contain("Refilled body.");
     }
