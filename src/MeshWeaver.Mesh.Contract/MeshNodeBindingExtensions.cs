@@ -2,43 +2,71 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Data;
-using MeshWeaver.Layout;
-using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.Blazor;
+namespace MeshWeaver.Mesh;
 
 /// <summary>
-/// The GUI-side bridge that makes a <b>node-bound DataContext</b> (see
+/// The binding seam that makes a <b>node-bound DataContext</b> (see
 /// <see cref="LayoutAreaReference.MeshNodePrefix"/>) read from and write straight back to a live
-/// <see cref="MeshNode"/> via <c>Hub.GetMeshNodeStream(path)</c> (the process-wide
+/// <see cref="MeshNode"/> via <c>hub.GetMeshNodeStream(path)</c> (the process-wide
 /// <c>IMeshNodeStreamCache</c>) — ONE source of truth, no layout-area <c>/data</c> replica and no
 /// debounced save-subscription.
 ///
-/// <para>It is intentionally the SAME shape every other cache-bound view uses
-/// (<c>MeshNodeContentEditorView</c>, <c>MarkdownEditorView</c>): reads come straight off
-/// <c>Hub.GetMeshNodeStream(NodePath)</c> and each edit is a per-field read-modify-write through
-/// <c>.Update(...)</c> that touches ONLY the edited field — so concurrent writers / out-of-band
-/// fields (status, version, sibling form fields) are never clobbered. The existing form-generated
-/// controls (TextField / NumberField / CheckBox / DateTime / Select / MeshNodePicker / Markdown /
-/// Code) keep their unchanged read (<see cref="BlazorView{TViewModel,TView}.DataBind{T}"/>) and
-/// write (<see cref="BlazorView{TViewModel,TView}.UpdatePointer"/>) seams — those two seams branch
-/// here when the DataContext is node-bound, so every control inherits node binding for free.</para>
+/// <para>This is the CONTROL-LEVEL binding primitive: it lives next to
+/// <see cref="MeshNodeStreamExtensions.GetMeshNodeStream(MeshWeaver.Data.IWorkspace,string)"/> (NOT in
+/// the Blazor view layer) so it is a plain static extension testable without a Blazor render host. The
+/// GUI seams <c>BlazorView.DataBind</c> (read) and <c>BlazorView.UpdatePointer</c> (write) branch here
+/// when the DataContext is node-bound, so every form control inherits node binding for free; the Monaco
+/// editor views (<c>MarkdownEditorView</c> / <c>CodeEditorView</c> / <c>NotebookEditorView</c>), which
+/// bind their single <c>Value</c> pointer themselves rather than through <c>BlazorView.DataBind</c>,
+/// call <see cref="IsNodeBound"/> + <see cref="Bind"/> directly.</para>
 ///
-/// <para>Field-pointer resolution against the node JSON is <b>case-insensitive</b>, so a metadata
-/// DTO's PascalCase pointer (<c>Name</c>, <c>Description</c>) and a content editor's camelCase
-/// pointer (<c>harness</c>, <c>messageContent</c>) both bind without the layout area having to know
-/// the JSON casing of the target.</para>
+/// <para><b>Why it must NOT be resolved via the layout <c>Stream</c>:</b> a node-bound pointer is
+/// <c>/$meshNode/{base64url(nodePath)}/{c|n}/…</c>. For node <c>AgenticPension</c> the path segment is
+/// <c>QWdlbnRpY1BlbnNpb24</c>. <c>LayoutExtensions.GetStream&lt;T&gt;</c> treats the second pointer
+/// segment as a JSON-encoded id and calls <c>JsonSerializer.Deserialize&lt;string&gt;(segment)</c> — a
+/// bare Base64Url token is not a JSON-quoted string, so it throws <c>"'Q' is an invalid start of a
+/// value"</c> and tears down the whole Blazor circuit. Routing through this seam reads the field off the
+/// node instead, where the content actually lives.</para>
+///
+/// <para>Field-pointer resolution against the node JSON is <b>case-insensitive</b>, so a metadata DTO's
+/// PascalCase pointer (<c>Name</c>, <c>Description</c>) and a content editor's camelCase pointer
+/// (<c>harness</c>, <c>messageContent</c>) both bind without the caller having to know the JSON casing
+/// of the target.</para>
 /// </summary>
-internal static class MeshNodeBinding
+public static class MeshNodeBindingExtensions
 {
+    /// <summary>
+    /// True when <paramref name="dataContext"/> is node-bound (see
+    /// <see cref="LayoutAreaReference.MeshNodePrefix"/>) AND <paramref name="reference"/> is a relative
+    /// field pointer — i.e. the value lives on the <see cref="MeshNode"/>, not in the layout-area
+    /// <c>/data</c> store. The relative-pointer condition matches <c>BlazorView.DataBind</c>: an
+    /// absolute (<c>/…</c>) pointer is a layout-area path and is never node-bound.
+    /// </summary>
+    public static bool IsNodeBound(string? dataContext, JsonPointerReference reference)
+        => LayoutAreaReference.TryParseMeshNodeDataContext(dataContext) is not null
+           && !reference.Pointer.StartsWith('/');
+
+    /// <summary>
+    /// Pure read: evaluates the field at <paramref name="reference"/> (optionally nested under
+    /// <paramref name="subPath"/>) against <paramref name="node"/> — its <c>Content</c> JSON when
+    /// <paramref name="bindContent"/> is <c>true</c>, otherwise the whole-node JSON — and returns the
+    /// value as a <see cref="JsonElement"/> (or <c>null</c> when absent). No stream, no hub: this is the
+    /// node-bound read logic in isolation, so it is unit-testable against an in-memory node.
+    /// </summary>
+    public static JsonElement? ResolveField(
+        MeshNode node, bool bindContent, string? subPath, JsonPointerReference reference,
+        JsonSerializerOptions options)
+        => EvaluateField(BindingRoot(node, bindContent, options), Combine(subPath, reference.Pointer));
+
     /// <summary>
     /// Live stream of the value at <paramref name="reference"/> on the node at
     /// <paramref name="nodePath"/>. Emits the raw <see cref="JsonElement"/> (or <c>null</c> when the
-    /// field is absent) so the caller's existing converter pipeline
-    /// (<c>Hub.ConvertSingle</c> / <c>ConversionToValue</c>) deserializes it exactly as it would a
-    /// <c>/data</c> value. Stays subscribed for the component lifetime — no <c>.Take(1)</c>.
+    /// field is absent) so the caller's existing converter pipeline (<c>Hub.ConvertSingle</c> /
+    /// <c>ConversionToValue</c>) deserializes it exactly as it would a <c>/data</c> value. Stays
+    /// subscribed for the component lifetime — no <c>.Take(1)</c>.
     /// </summary>
     public static IObservable<object?> Bind(
         IMessageHub hub, string nodePath, bool bindContent, string? subPath, JsonPointerReference reference)

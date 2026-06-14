@@ -7,6 +7,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.DataGrid;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
@@ -114,7 +115,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
                     if (LayoutAreaReference.TryParseMeshNodeDataContext(DataContext) is { } meshNode
                         && !reference.Pointer.StartsWith('/'))
                     {
-                        bindings.Add(MeshNodeBinding
+                        bindings.Add(MeshNodeBindingExtensions
                             .Bind(Hub, meshNode.NodePath, meshNode.BindContent, meshNode.SubPath, reference)
                             .Subscribe(v =>
                             {
@@ -263,7 +264,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         if (LayoutAreaReference.TryParseMeshNodeDataContext(DataContext) is { } meshNode
             && !reference.Pointer.StartsWith('/'))
         {
-            MeshNodeBinding.Write(Hub, Logger, meshNode.NodePath, meshNode.BindContent, meshNode.SubPath, reference, value);
+            MeshNodeBindingExtensions.Write(Hub, Logger, meshNode.NodePath, meshNode.BindContent, meshNode.SubPath, reference, value);
             return;
         }
 

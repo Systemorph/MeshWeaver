@@ -173,11 +173,18 @@
         autoSaveHandler = new AutoSaveHandler(AutoSaveThrottleInterval, AutoSaveContent);
         AddBinding(autoSaveHandler);
 
-        // Bind Value with reactive subscription
-        if (Stream != null && ValuePointer != null)
+        // Bind Value with reactive subscription. A node-bound DataContext (/$meshNode/…) must read
+        // straight off the node stream via MeshNodeBindingExtensions (BindNodeBoundValue) — the SAME seam
+        // every form control inherits through BlazorView.DataBind. Binding the layout-area Stream with a node-bound
+        // pointer hands the Base64Url node-path segment to JsonSerializer.Deserialize<string> inside
+        // LayoutExtensions.GetStream<T>, which throws ("'Q' is an invalid start of a value") and tears
+        // down the whole Blazor circuit.
+        if (ValuePointer != null)
         {
-            AddBinding(Stream
-                .DataBind<string>(ValuePointer, DataContext)
+            var valueStream = BindNodeBoundValue(ValuePointer)
+                              ?? Stream?.DataBind<string>(ValuePointer, DataContext);
+            if (valueStream != null)
+                AddBinding(valueStream
                 .Subscribe(value =>
                 {
                     if (value != null && value != AnnotatedContent)
@@ -284,8 +291,31 @@
         await UpdateContent(newContent);
     }
 
+    /// <summary>
+    /// Node-bound read seam for the editor's single Value pointer. Returns a live, string-converted
+    /// stream of the field off the node stream when the DataContext is node-bound (via
+    /// <see cref="MeshNodeBindingExtensions.Bind"/>), or <c>null</c> so the caller falls back to the
+    /// layout-area <c>Stream.DataBind</c>. Routing a node-bound pointer through the layout Stream
+    /// instead crashes in LayoutExtensions.GetStream&lt;T&gt; ("'Q' is an invalid start of a value").
+    /// </summary>
+    private IObservable<string?>? BindNodeBoundValue(JsonPointerReference pointer)
+    {
+        if (LayoutAreaReference.TryParseMeshNodeDataContext(DataContext) is not { } meshNode
+            || pointer.Pointer.StartsWith('/'))
+            return null;
+        return MeshNodeBindingExtensions
+            .Bind(Hub, meshNode.NodePath, meshNode.BindContent, meshNode.SubPath, pointer)
+            .Select(v => Hub.ConvertSingle<string>(v, null));
+    }
+
     private string? GetInitialValue()
     {
+        // Node-bound contexts are seeded by the reactive subscription above (MeshNodeBindingExtensions
+        // replays the node's current field value on subscribe); a synchronous Stream.GetDataBoundValue
+        // would crash on the Base64Url node-path pointer segment, just like the reactive path did.
+        if (ViewModel.Value is JsonPointerReference pointer && MeshNodeBindingExtensions.IsNodeBound(DataContext, pointer))
+            return null;
+
         if (Stream == null || ViewModel.Value == null)
             return null;
 
