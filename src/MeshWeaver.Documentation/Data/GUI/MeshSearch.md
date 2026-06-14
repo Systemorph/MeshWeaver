@@ -65,6 +65,34 @@ By default the catalog shows only the node's **direct children**. Set `?subtree=
 
 ---
 
+## Display options
+
+Every knob of the catalog is URL-driven — there is nothing hard-coded you can't override.
+Booleans accept `true`/`1`/`yes`/`on` (anything else, or absence, is the stated default); ints
+must be positive.
+
+| Param | Default | Effect |
+|---|---|---|
+| `?searchBar=` | `true` | Show/hide the search box — `?searchBar=false` for a compact embedded catalog |
+| `?emptyMessage=` | `false` | Show the "No items found." message when there are no results |
+| `?loading=` | `false` | Show skeleton loading cards while results stream in |
+| `?counts=` | `true` | Show the per-section item counts |
+| `?collapsible=` | `true` | Allow sections to collapse (`false` keeps everything expanded) |
+| `?reactive=` | `true` | Live-update on data changes (moves, renames, new children) without a reload |
+| `?limit=N` | `50` | Items shown per section |
+| `?maxRows=N` | `3` | Collapsed rows per section before "show more" |
+| `?maxColumns=N` | `3` | Grid columns |
+| `?title=…` | `Catalog` | Section title shown next to the search bar |
+| `?placeholder=…` | `Search…` | Search box placeholder text |
+
+Combine freely with `?groupBy` / `?subtree`:
+
+```
+/ACME/Search?groupBy=type&searchBar=false&maxColumns=4&counts=false&title=Contents
+```
+
+---
+
 ## Drilldown
 
 In **namespace-tree** mode the catalog is lazy: only the direct children of the root are queried up

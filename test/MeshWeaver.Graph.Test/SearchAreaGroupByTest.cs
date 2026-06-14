@@ -48,4 +48,22 @@ public class SearchAreaGroupByTest
         mode.Should().Be(MeshSearchRenderMode.NamespaceTree);
         property.Should().BeNull();
     }
+
+    [Theory]
+    [InlineData("true", true)]
+    [InlineData("True", true)]
+    [InlineData("1", true)]
+    [InlineData("yes", true)]
+    [InlineData("on", true)]
+    [InlineData("false", false)]
+    [InlineData("0", false)]
+    [InlineData("no", false)]
+    [InlineData("off", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void ParseTruthy_RecognisesCommonTruthyValues(string? value, bool expected)
+    {
+        // Drives every boolean catalog param (?searchBar, ?subtree, ?counts, ?emptyMessage, …).
+        MeshNodeLayoutAreas.ParseTruthy(value).Should().Be(expected);
+    }
 }
