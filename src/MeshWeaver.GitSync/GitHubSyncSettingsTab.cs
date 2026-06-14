@@ -46,7 +46,7 @@ public static class GitHubSyncSettingsTab
             Id: TabId,
             Label: "GitHub Sync",
             ContentBuilder: BuildContent,
-            Group: "Integrations",
+            Group: "Integration",
             Icon: FluentIcons.Document(),
             GroupIcon: FluentIcons.Document(),
             Order: 250,
@@ -99,6 +99,23 @@ public static class GitHubSyncSettingsTab
         });
         stack = stack.WithView(BuildRepoForm(sync, spacePath));
 
+        // Auto-save: persist the repository settings as the user edits them (debounced), so there
+        // is no separate "Save" step and Sync always sees the current values. The explicit Save
+        // button remains for an immediate write. Skip the initial prefill emission; never persist
+        // an empty URL.
+        host.RegisterForDisposal("gh-cfg-autosave", host.Stream
+            .GetDataStream<Dictionary<string, object?>>(CfgFormId)
+            .Skip(1)
+            .Throttle(TimeSpan.FromMilliseconds(800))
+            .Subscribe(d =>
+            {
+                var url = Str(d, "repositoryUrl");
+                if (string.IsNullOrEmpty(url)) return;
+                sync.SaveConfig(spacePath, url, Str(d, "branch") ?? "main", Str(d, "subdirectory"),
+                        Bool(d, "createBranch", true), Bool(d, "createRepo", true))
+                    .Subscribe(_ => { }, ex => host.UpdateData(ResultId, Err(ex.Message)));
+            }));
+
         // ── 3. Sync + re-import ───────────────────────────────────────────────
         stack = stack.WithView(Section("Sync"));
         stack = stack.WithView(Controls.Button("Sync now")
@@ -114,8 +131,8 @@ public static class GitHubSyncSettingsTab
                 return Task.CompletedTask;
             }));
 
-        // Last-synced status (live).
-        stack = stack.WithView((h, _) => sync.ReadConfig(spacePath)
+        // Last-synced status (live — re-renders after each sync via the authoritative cache stream).
+        stack = stack.WithView((h, _) => sync.WatchConfig(spacePath)
             .Select(cfg => (UiControl?)Controls.Html(LastSyncedHtml(cfg)))
             .StartWith((UiControl?)Controls.Html("<p style=\"color:var(--neutral-foreground-hint);\">…</p>")));
 

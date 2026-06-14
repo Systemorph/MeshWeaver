@@ -73,7 +73,9 @@ public sealed class GitHubSyncService
         {
             if (config?.RepositoryUrl is not { Length: > 0 } repoUrl)
                 return Observable.Throw<GitHubPushResult>(new InvalidOperationException(
-                    "No GitHub repository configured for this Space — set the repository URL in GitHub Sync settings."));
+                    "No repository URL is set for this Space yet. In the Repository section above, enter a " +
+                    "URL like https://github.com/owner/repo (the repo is created automatically if it doesn't " +
+                    "exist), then Sync."));
 
             return credentials.Get(userId).Take(1).SelectMany(cred =>
             {
@@ -101,8 +103,9 @@ public sealed class GitHubSyncService
                         logger?.LogInformation(
                             "Exporting {Count} node(s) of {Space} → {Repo}@{Branch}",
                             files.Count, spacePath, repoUrl, config.Branch);
+                        // Use the in-hand config (no re-read) so the write can't lose the repo URL to a race.
                         return repoClient.Push(request).SelectMany(result =>
-                            UpdateConfig(spacePath, c => c with
+                            WriteConfig(spacePath, config with
                             {
                                 LastSyncedAt = DateTimeOffset.UtcNow,
                                 LastSyncCommitSha = result.CommitSha,
@@ -280,7 +283,7 @@ public sealed class GitHubSyncService
                         "Connect your GitHub account first."));
                 logger?.LogInformation("Re-importing {Space} at {Ref}", spacePath, commitish);
                 return FetchAndImport(repoUrl, commitish, config.Subdirectory, token, spacePath)
-                    .SelectMany(x => UpdateConfig(spacePath, c => c with
+                    .SelectMany(x => WriteConfig(spacePath, config with
                     {
                         LastSyncCommitSha = x.CommitSha,
                         LastSyncedAt = DateTimeOffset.UtcNow,
@@ -352,16 +355,26 @@ public sealed class GitHubSyncService
     //  Config read / write
     // ══════════════════════════════════════════════════════════════════════════
 
-    /// <summary>Reads the Space's <see cref="GitHubSyncConfig"/>, or null when none is set.</summary>
-    public IObservable<GitHubSyncConfig?> ReadConfig(string spacePath)
+    /// <summary>
+    /// Live config stream for GUI display — the <b>synced</b> <c>GetQuery</c> (Replay/RefCount,
+    /// re-emits on change), the same pattern <c>ModelProviderService</c> uses for its per-user
+    /// satellite nodes. A point <c>GetMeshNodeStream</c> read is NOT used here: the config lives at
+    /// the hidden <c>{space}/_GitSync</c> satellite path, whose per-node hub does not serve the
+    /// single-node reducer reliably (it timed out → "not configured"). Emits the config or null.
+    /// </summary>
+    public IObservable<GitHubSyncConfig?> WatchConfig(string spacePath)
     {
         var path = ConfigPath(spacePath);
         return hub.GetWorkspace()
             .GetQuery($"gitsync-cfg:{spacePath}", $"path:{path}")
-            .Take(1)
             .Select(nodes => Extract<GitHubSyncConfig>(
                 nodes?.FirstOrDefault(n => string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase))));
     }
+
+    /// <summary>One-shot config read for actions (Sync / Re-import). The synced query's first
+    /// emission already reflects a committed write (the GUI auto-saves the repo URL on edit, so by
+    /// Sync time the config is present).</summary>
+    public IObservable<GitHubSyncConfig?> ReadConfig(string spacePath) => WatchConfig(spacePath).Take(1);
 
     /// <summary>Persists the repository settings (preserving the recorded last-sync state).</summary>
     public IObservable<MeshNode> SaveConfig(
@@ -376,27 +389,29 @@ public sealed class GitHubSyncService
             CreateRepoIfMissing = createRepoIfMissing,
         });
 
+    /// <summary>Read-modify-write a config field (current value from the synced query; null when absent).</summary>
     private IObservable<MeshNode> UpdateConfig(string spacePath, Func<GitHubSyncConfig, GitHubSyncConfig> update)
+        => ReadConfig(spacePath).SelectMany(current => WriteConfig(spacePath, update(current ?? new GitHubSyncConfig())));
+
+    /// <summary>Writes the FULL config (no read) — used after Sync/Re-import where the caller
+    /// already holds the up-to-date config, so no field is lost to a read race.</summary>
+    private IObservable<MeshNode> WriteConfig(string spacePath, GitHubSyncConfig config)
     {
-        return ReadConfig(spacePath).Take(1).SelectMany(current =>
+        var node = new MeshNode(ConfigId, spacePath)
         {
-            var updated = update(current ?? new GitHubSyncConfig());
-            var node = new MeshNode(ConfigId, spacePath)
-            {
-                NodeType = ConfigNodeType,
-                Name = "GitHub Sync",
-                State = MeshNodeState.Active,
-                MainNode = spacePath,
-                Content = updated,
-            };
-            return hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node))
-                .FirstAsync()
-                .Select(d => d.Message)
-                .SelectMany(resp => resp.Success
-                    ? Observable.Return(resp.Node!)
-                    : Observable.Throw<MeshNode>(new InvalidOperationException(
-                        $"Failed to save GitHub sync config: {resp.Error}")));
-        });
+            NodeType = ConfigNodeType,
+            Name = "GitHub Sync",
+            State = MeshNodeState.Active,
+            MainNode = spacePath,
+            Content = config,
+        };
+        return hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node))
+            .FirstAsync()
+            .Select(d => d.Message)
+            .SelectMany(resp => resp.Success
+                ? Observable.Return(resp.Node!)
+                : Observable.Throw<MeshNode>(new InvalidOperationException(
+                    $"Failed to save GitHub sync config: {resp.Error}")));
     }
 
     private T? Extract<T>(MeshNode? node) where T : class
