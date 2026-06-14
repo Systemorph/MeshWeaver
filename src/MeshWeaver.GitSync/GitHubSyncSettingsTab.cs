@@ -87,8 +87,8 @@ public static class GitHubSyncSettingsTab
             host.UpdateData(ConnectStateId, Controls.Html("<p>Sign in to connect a GitHub account.</p>"));
         else
             creds.Get(userId).Take(1).Subscribe(
-                c => host.UpdateData(ConnectStateId, RenderConnect(oauth, creds, userId, c)),
-                _ => host.UpdateData(ConnectStateId, RenderConnect(oauth, creds, userId, null)));
+                c => host.UpdateData(ConnectStateId, RenderConnect(creds, userId, spacePath, c, oauth.IsConfigured)),
+                _ => host.UpdateData(ConnectStateId, RenderConnect(creds, userId, spacePath, null, oauth.IsConfigured)));
 
         // ── 2. Repository ─────────────────────────────────────────────────────
         stack = stack.WithView(Section("Repository"));
@@ -138,10 +138,10 @@ public static class GitHubSyncSettingsTab
         return stack;
     }
 
-    // ── Connect (device flow) ─────────────────────────────────────────────────
+    // ── Connect (OAuth authorization-code / callback flow) ─────────────────────
 
     private static UiControl RenderConnect(
-        GitHubOAuthService oauth, GitHubCredentialService creds, string userId, GitHubCredential? cred)
+        GitHubCredentialService creds, string userId, string spacePath, GitHubCredential? cred, bool isConfigured)
     {
         if (cred is { AccessToken.Length: > 0 } || cred is { GitHubLogin.Length: > 0 })
         {
@@ -154,56 +154,29 @@ public static class GitHubSyncSettingsTab
                 .WithClickAction(ctx =>
                 {
                     creds.Delete(userId).Subscribe(
-                        _ => ctx.Host.UpdateData(ConnectStateId, RenderConnect(oauth, creds, userId, null)),
+                        _ => ctx.Host.UpdateData(ConnectStateId, RenderConnect(creds, userId, spacePath, null, isConfigured)),
                         ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
                     return Task.CompletedTask;
                 }));
             return body;
         }
 
-        var notConnected = Controls.Stack.WithStyle("gap:8px;");
-        if (!oauth.IsConfigured)
-        {
-            notConnected = notConnected.WithView(Controls.Html(
+        if (!isConfigured)
+            return Controls.Html(
                 "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);\">" +
-                "GitHub OAuth is not configured on this server. Set <code>GitHub:OAuth:ClientId</code> " +
-                "(a GitHub OAuth App with device flow enabled) to enable Connect.</p>"));
-            return notConnected;
-        }
-        notConnected = notConnected.WithView(Controls.Html(
-            "<div style=\"font-size:0.85rem;\"><span style=\"color:#9ca3af;\">●</span> Not connected.</div>"));
-        notConnected = notConnected.WithView(Controls.Button("Connect GitHub")
-            .WithAppearance(Appearance.Accent)
-            .WithClickAction(ctx =>
-            {
-                ctx.Host.UpdateData(ConnectStateId, Controls.Html(
-                    "<p style=\"font-size:0.85rem;color:#f59e0b;\">● Starting GitHub authorization…</p>"));
-                oauth.StartConnect().Subscribe(
-                    challenge =>
-                    {
-                        ctx.Host.UpdateData(ConnectStateId, RenderConnecting(challenge));
-                        oauth.Poll(challenge).Subscribe(
-                            token => oauth.GetLogin(token.AccessToken).Subscribe(login =>
-                                creds.Save(userId, token, login).Subscribe(
-                                    _ => ctx.Host.UpdateData(ConnectStateId,
-                                        RenderConnect(oauth, creds, userId,
-                                            new GitHubCredential { AccessToken = token.AccessToken, GitHubLogin = login })),
-                                    ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)))),
-                            ex => ctx.Host.UpdateData(ConnectStateId, Controls.Html(
-                                $"<p style=\"color:#f87171;\">● {Esc(ex.Message)}</p>")));
-                    },
-                    ex => ctx.Host.UpdateData(ConnectStateId, Controls.Html(
-                        $"<p style=\"color:#f87171;\">● {Esc(ex.Message)}</p>")));
-                return Task.CompletedTask;
-            }));
-        return notConnected;
-    }
+                "GitHub OAuth is not configured on this server (set <code>GitHub:OAuth:ClientId</code> + " +
+                "<code>ClientSecret</code>).</p>");
 
-    private static UiControl RenderConnecting(DeviceChallenge challenge) => Controls.Html(
-        "<div style=\"font-size:0.85rem;\"><span style=\"color:#f59e0b;\">●</span> Open " +
-        $"<a href=\"{Esc(challenge.VerificationUri)}\" target=\"_blank\" rel=\"noopener\">{Esc(challenge.VerificationUri)}</a> " +
-        $"and enter code <strong style=\"font-family:monospace;font-size:1.1rem;\">{Esc(challenge.UserCode)}</strong>. " +
-        "Waiting for authorization… (this can stay open while you approve in your browser).</div>");
+        // The OAuth flow is a browser redirect to /connect/github, which posts back to
+        // /connect/github/callback, stores the token, and returns here. Render a link
+        // (not a click-action) so the browser navigates.
+        var returnPath = $"/{spacePath}/Settings/{TabId}";
+        var connectUrl = $"/connect/github?returnPath={Uri.EscapeDataString(returnPath)}";
+        return Controls.Html(
+            "<div style=\"font-size:0.85rem;\"><span style=\"color:#9ca3af;\">●</span> Not connected. " +
+            $"<a href=\"{Esc(connectUrl)}\" style=\"color:var(--accent-fill-rest);font-weight:600;\">Connect GitHub →</a>" +
+            " (one-time browser approval; authorize for the org whose repos you'll sync).</div>");
+    }
 
     // ── Repository form ───────────────────────────────────────────────────────
 

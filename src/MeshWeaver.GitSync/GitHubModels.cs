@@ -40,18 +40,7 @@ public record GitHubPushResult(
     int FilesDeleted,
     bool RepoCreated);
 
-/// <summary>
-/// The device-flow challenge returned by GitHub's <c>login/device/code</c> endpoint —
-/// the user opens <see cref="VerificationUri"/> and enters <see cref="UserCode"/>.
-/// </summary>
-public record DeviceChallenge(
-    string DeviceCode,
-    string UserCode,
-    string VerificationUri,
-    int IntervalSeconds,
-    int ExpiresInSeconds);
-
-/// <summary>An OAuth token exchanged from a completed device flow.</summary>
+/// <summary>An OAuth token from a completed authorization-code exchange.</summary>
 public record GitHubToken(
     string AccessToken,
     string? RefreshToken,

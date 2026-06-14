@@ -7,19 +7,16 @@ using Microsoft.Extensions.Options;
 namespace MeshWeaver.GitSync;
 
 /// <summary>
-/// Drives the GitHub OAuth <b>device flow</b> to obtain a long-standing access
-/// token for the current user. Mirrors the device-flow Connect state machine used
-/// for the AI CLIs, but talks to GitHub's OAuth endpoints directly over HTTP — and
-/// every HTTP leaf runs inside <see cref="IIoPool"/> (the <see cref="IoPoolNames.Http"/>
-/// pool); polling is reactive via <see cref="Observable.Interval"/>, never
-/// <c>Task.Delay</c>.
+/// GitHub OAuth <b>authorization-code</b> flow helper. Builds the authorize URL the
+/// browser is redirected to, and exchanges the returned <c>code</c> for a
+/// long-standing access token. Used by the portal's <c>/connect/github</c> endpoints
+/// (mirrors the LinkedIn connect); the callback stores the token via
+/// <see cref="GitHubCredentialService"/>.
 ///
-/// <list type="number">
-///   <item><see cref="StartConnect"/> → POST <c>login/device/code</c>; show the
-///     <see cref="DeviceChallenge.UserCode"/> + <see cref="DeviceChallenge.VerificationUri"/>.</item>
-///   <item><see cref="Poll"/> → POST <c>login/oauth/access_token</c> on an interval
-///     until the user authorizes (or the code expires).</item>
-/// </list>
+/// <para>🚨 Every HTTP leaf runs inside <see cref="IIoPool"/> (the
+/// <see cref="IoPoolNames.Http"/> pool) and the public surface is
+/// <see cref="IObservable{T}"/> — no <c>async</c>/<c>await</c>/<c>Task</c> escapes a
+/// signature (<c>Doc/Architecture/ControlledIoPooling.md</c>).</para>
 /// </summary>
 public sealed class GitHubOAuthService
 {
@@ -46,75 +43,38 @@ public sealed class GitHubOAuthService
 
     private IIoPool Http => ioPools.Get(IoPoolNames.Http);
 
-    /// <summary>Requests a device code; emits the challenge to show the user.</summary>
-    public IObservable<DeviceChallenge> StartConnect()
+    /// <summary>The GitHub authorize URL to redirect the browser to (start of the flow).</summary>
+    public string BuildAuthorizeUrl(string redirectUri, string state) =>
+        $"{options.AuthorizeUrl}?response_type=code"
+        + $"&client_id={Uri.EscapeDataString(options.ClientId ?? "")}"
+        + $"&redirect_uri={Uri.EscapeDataString(redirectUri)}"
+        + $"&state={Uri.EscapeDataString(state)}"
+        + $"&scope={Uri.EscapeDataString(options.Scopes)}";
+
+    /// <summary>Exchanges the callback <c>code</c> for an access token (server-side, with the client secret).</summary>
+    public IObservable<GitHubToken> ExchangeCode(string code, string redirectUri)
     {
         if (!options.IsConfigured)
-            return Observable.Throw<DeviceChallenge>(new InvalidOperationException(
-                "GitHub OAuth is not configured (set GitHub:OAuth:ClientId)."));
-        return Http.Invoke(ct => RequestDeviceCodeAsync(ct));
+            return Observable.Throw<GitHubToken>(new InvalidOperationException(
+                "GitHub OAuth is not configured (set GitHub:OAuth:ClientId + ClientSecret)."));
+        return Http.Invoke(ct => ExchangeCodeAsync(code, redirectUri, ct));
     }
 
-    /// <summary>
-    /// Polls the token endpoint on the device-flow interval until the user
-    /// authorizes (emits the token), the request is denied/expired (errors), or the
-    /// challenge's overall lifetime elapses (times out).
-    /// </summary>
-    public IObservable<GitHubToken> Poll(DeviceChallenge challenge)
-    {
-        var interval = TimeSpan.FromSeconds(Math.Max(challenge.IntervalSeconds, 5) + 1);
-        return Observable.Interval(interval)
-            .SelectMany(_ => Http.Invoke(ct => ExchangeAsync(challenge.DeviceCode, ct)))
-            .Where(o => o.IsTerminal)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(Math.Max(challenge.ExpiresInSeconds, 60)))
-            .SelectMany(o => o.Token is { } token
-                ? Observable.Return(token)
-                : Observable.Throw<GitHubToken>(new InvalidOperationException(
-                    $"GitHub authorization failed: {o.Error ?? "unknown error"}")));
-    }
-
-    /// <summary>Convenience: start + poll as a single observable that emits the token once authorized.</summary>
-    public IObservable<GitHubToken> Connect() => StartConnect().SelectMany(Poll);
-
-    /// <summary>Resolves the authenticated user's GitHub login for the given token (for display + commit authoring).</summary>
+    /// <summary>Resolves the authenticated user's GitHub login (for display + commit authoring).</summary>
     public IObservable<string?> GetLogin(string accessToken) =>
         Http.Invoke(ct => GetLoginAsync(accessToken, ct));
 
     // ── HTTP leaves (run inside the I/O pool) ────────────────────────────────
 
-    private async Task<DeviceChallenge> RequestDeviceCodeAsync(CancellationToken ct)
+    private async Task<GitHubToken> ExchangeCodeAsync(string code, string redirectUri, CancellationToken ct)
     {
         var form = new Dictionary<string, string>
         {
+            ["grant_type"] = "authorization_code",
+            ["code"] = code,
+            ["redirect_uri"] = redirectUri,
             ["client_id"] = options.ClientId!,
-            ["scope"] = options.Scopes,
-        };
-        using var req = new HttpRequestMessage(HttpMethod.Post, options.DeviceCodeUrl)
-        {
-            Content = new FormUrlEncodedContent(form),
-        };
-        req.Headers.Accept.ParseAdd("application/json");
-        using var resp = await http.SendAsync(req, ct).ConfigureAwait(false);
-        resp.EnsureSuccessStatusCode();
-        var json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-        using var doc = JsonDocument.Parse(json);
-        var r = doc.RootElement;
-        return new DeviceChallenge(
-            r.GetProperty("device_code").GetString()!,
-            r.GetProperty("user_code").GetString()!,
-            r.GetProperty("verification_uri").GetString()!,
-            GetInt(r, "interval") ?? 5,
-            GetInt(r, "expires_in") ?? 900);
-    }
-
-    private async Task<PollOutcome> ExchangeAsync(string deviceCode, CancellationToken ct)
-    {
-        var form = new Dictionary<string, string>
-        {
-            ["client_id"] = options.ClientId!,
-            ["device_code"] = deviceCode,
-            ["grant_type"] = "urn:ietf:params:oauth:grant-type:device_code",
+            ["client_secret"] = options.ClientSecret!,
         };
         using var req = new HttpRequestMessage(HttpMethod.Post, options.TokenUrl)
         {
@@ -125,21 +85,17 @@ public sealed class GitHubOAuthService
         var json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
-        if (root.TryGetProperty("access_token", out var at) && at.ValueKind == JsonValueKind.String)
-            return new PollOutcome(
-                new GitHubToken(
-                    at.GetString()!,
-                    GetStr(root, "refresh_token"),
-                    GetStr(root, "token_type") ?? "bearer",
-                    GetStr(root, "scope") ?? options.Scopes,
-                    GetInt(root, "expires_in")),
-                null, IsTerminal: true);
-
-        var error = GetStr(root, "error");
-        // authorization_pending / slow_down → keep polling (not terminal).
-        if (error is "authorization_pending" or "slow_down")
-            return new PollOutcome(null, error, IsTerminal: false);
-        return new PollOutcome(null, error ?? "unknown_error", IsTerminal: true);
+        if (!root.TryGetProperty("access_token", out var at) || at.ValueKind != JsonValueKind.String)
+        {
+            var error = GetStr(root, "error_description") ?? GetStr(root, "error") ?? "no access_token in response";
+            throw new InvalidOperationException($"GitHub token exchange failed: {error}");
+        }
+        return new GitHubToken(
+            at.GetString()!,
+            GetStr(root, "refresh_token"),
+            GetStr(root, "token_type") ?? "bearer",
+            GetStr(root, "scope") ?? options.Scopes,
+            GetInt(root, "expires_in"));
     }
 
     private async Task<string?> GetLoginAsync(string accessToken, CancellationToken ct)
@@ -159,6 +115,4 @@ public sealed class GitHubOAuthService
 
     private static int? GetInt(JsonElement e, string name) =>
         e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var i) ? i : null;
-
-    private record PollOutcome(GitHubToken? Token, string? Error, bool IsTerminal);
 }
