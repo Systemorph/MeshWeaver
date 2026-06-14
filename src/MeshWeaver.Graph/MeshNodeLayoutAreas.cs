@@ -769,14 +769,17 @@ public static class MeshNodeLayoutAreas
                     .WithCreateHref(createHref);
                 if (!string.IsNullOrEmpty(typeOpts.GroupByProperty))
                     typeSearch = typeSearch.WithGroupBy(typeOpts.GroupByProperty);
-                return (UiControl?)typeSearch;
+                // Prepend the breadcrumb trail (ancestors → default pages, current node bold).
+                return (UiControl?)WithBreadcrumbs(typeSearch, hubPath);
             }
 
             // Instance node catalog — this node's own content (its children, or the whole
             // descendant subtree with ?subtree=true), organised per ?groupBy (default: the
             // namespace tree with lazy per-level drilldown — the view that replaced the
             // dedicated "Children" area).
-            return BuildCatalog(hubPath, ReadCatalogOptions(host, MeshSearchRenderMode.NamespaceTree));
+            return WithBreadcrumbs(
+                BuildCatalog(hubPath, ReadCatalogOptions(host, MeshSearchRenderMode.NamespaceTree)),
+                hubPath);
         });
     }
 
@@ -912,8 +915,64 @@ public static class MeshNodeLayoutAreas
             .WithMaxRows(o.MaxRows)
             .WithMaxColumns(o.MaxColumns)
             .WithCollapsibleSections(o.Collapsible)
+            // Each card/folder gets a secondary "Drill down" link to /{path}/Search,
+            // so users keep browsing INTO a namespace; the primary click still opens
+            // the node's default page /{path} (empty area, never a hardcoded "Overview").
+            .WithDrillDownArea(SearchArea)
             .WithCreateHref($"/{nodePath}/{CreateNodeArea}?namespace={Uri.EscapeDataString(nodePath)}");
         return string.IsNullOrEmpty(o.GroupByProperty) ? search : search.WithGroupBy(o.GroupByProperty);
+    }
+
+    /// <summary>
+    /// Builds a breadcrumb trail for <paramref name="nodePath"/>: each ANCESTOR
+    /// segment is a <see cref="Controls.NavLink"/> to that ancestor's DEFAULT page
+    /// (<c>/{cumulative}</c> — empty area, never a hardcoded "Overview"), separated
+    /// by a "/" glyph; the LAST segment (the current node) is plain bold text.
+    /// Returns null when the path has no ancestors (single segment / empty) so the
+    /// caller can skip an empty row.
+    /// </summary>
+    private static UiControl? BuildBreadcrumbs(string nodePath)
+    {
+        var segments = (nodePath ?? "").Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length <= 1)
+            return null;
+
+        var row = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; font-size: 0.9rem;");
+
+        var cumulative = "";
+        for (var i = 0; i < segments.Length; i++)
+        {
+            cumulative = i == 0 ? segments[i] : $"{cumulative}/{segments[i]}";
+            if (i > 0)
+                row = row.WithView(Controls.Html(
+                    "<span style=\"color: var(--neutral-foreground-hint); user-select: none;\">/</span>"));
+
+            if (i < segments.Length - 1)
+                // Ancestor → default page /{cumulative} (empty area).
+                row = row.WithView(Controls.NavLink(segments[i], $"/{cumulative}"));
+            else
+                // Current node — plain bold text, not a link.
+                row = row.WithView(Controls.Html(
+                    $"<span style=\"font-weight: 600;\">{System.Web.HttpUtility.HtmlEncode(segments[i])}</span>"));
+        }
+
+        return row;
+    }
+
+    /// <summary>
+    /// Prepends the <see cref="BuildBreadcrumbs"/> trail to a Search/catalog control so
+    /// every node's Search area shows where the user is and lets them step back up to any
+    /// ancestor's default page. When the path has no ancestors the catalog is returned
+    /// unchanged.
+    /// </summary>
+    private static UiControl WithBreadcrumbs(UiControl catalog, string nodePath)
+    {
+        var crumbs = BuildBreadcrumbs(nodePath);
+        return crumbs is null
+            ? catalog
+            : Controls.Stack.WithWidth("100%").WithView(crumbs).WithView(catalog);
     }
 
     /// <summary>
