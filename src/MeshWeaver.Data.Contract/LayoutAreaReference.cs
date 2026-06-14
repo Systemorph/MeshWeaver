@@ -63,6 +63,87 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
     public const string Areas = "areas";
 
     /// <summary>
+    /// Reserved DataContext prefix marking a <b>node-bound</b> DataContext: the control's field
+    /// pointers resolve against a live <c>MeshNode</c> (via <c>IMeshNodeStreamCache</c>),
+    /// NOT against a layout-area <c>/data/{id}</c> replica. This is the encoding that lets the
+    /// EXISTING form-generated controls (text/number/checkbox/markdown/picker/dimension) read from
+    /// and write straight back to the node — ONE source of truth, no <c>SetupAutoSave</c> replica +
+    /// save-subscription. See <c>Doc/GUI/DataBinding</c> → "ABSOLUTE: edit node content by binding
+    /// to the node stream".
+    ///
+    /// <para>Shape: <c>/$meshNode/{base64url(nodePath)}/{target}</c> where <c>{target}</c> is
+    /// <see cref="MeshNodeContentTarget"/> ("c") to bind field pointers against the node's
+    /// <c>Content</c> JSON, or <see cref="MeshNodeFieldsTarget"/> ("n") to bind against the whole
+    /// node JSON (top-level fields like <c>Name</c>/<c>Description</c>/<c>Icon</c>/<c>Category</c>/
+    /// <c>Order</c> + a nested <c>content/…</c> path). The path is base64url so it carries no
+    /// <c>/</c>, <c>.</c>, or <c>%9Y</c> — surviving the <c>DispatchView</c> <c>WorkspaceReference.Decode</c>
+    /// hop and JSON-pointer parsing untouched. Field-pointer resolution against the node is
+    /// case-insensitive, so both PascalCase DTO pointers and camelCase content pointers bind.</para>
+    /// </summary>
+    public const string MeshNodePrefix = "$meshNode";
+
+    /// <summary>Target token: bind field pointers against the node's <c>Content</c> JSON.</summary>
+    public const string MeshNodeContentTarget = "c";
+
+    /// <summary>Target token: bind field pointers against the whole node JSON (top-level fields).</summary>
+    public const string MeshNodeFieldsTarget = "n";
+
+    /// <summary>
+    /// Builds a node-bound DataContext (see <see cref="MeshNodePrefix"/>) for the node at
+    /// <paramref name="nodePath"/>. <paramref name="bindContent"/> selects whether the form's field
+    /// pointers resolve against the node's <c>Content</c> JSON (the default — for content-typed
+    /// editors) or against the whole node JSON (top-level fields — for metadata editors).
+    /// <paramref name="subPath"/> optionally nests the binding root one level deeper (e.g.
+    /// <c>"composer"</c> so a form's <c>harness</c> pointer resolves to <c>content/composer/harness</c>
+    /// on a Thread node that embeds its composer) — every field pointer is resolved relative to it.
+    /// </summary>
+    public static string GetMeshNodeDataContext(string nodePath, bool bindContent = true, string? subPath = null)
+    {
+        var ctx = $"/{MeshNodePrefix}/{Base64UrlEncode(nodePath)}/{(bindContent ? MeshNodeContentTarget : MeshNodeFieldsTarget)}";
+        return string.IsNullOrEmpty(subPath) ? ctx : $"{ctx}/{Base64UrlEncode(subPath)}";
+    }
+
+    /// <summary>
+    /// Decodes a node-bound DataContext produced by <see cref="GetMeshNodeDataContext"/>. Returns
+    /// <c>null</c> when <paramref name="dataContext"/> is not node-bound (an ordinary
+    /// <c>/data/{id}</c> context), so the binding hot path can branch cheaply.
+    /// </summary>
+    public static (string NodePath, bool BindContent, string? SubPath)? TryParseMeshNodeDataContext(string? dataContext)
+    {
+        if (string.IsNullOrEmpty(dataContext))
+            return null;
+        var trimmed = dataContext.StartsWith('/') ? dataContext[1..] : dataContext;
+        var parts = trimmed.Split('/');
+        if (parts.Length is < 3 or > 4 || parts[0] != MeshNodePrefix)
+            return null;
+        var bindContent = parts[2] != MeshNodeFieldsTarget; // default to content for unknown token
+        try
+        {
+            var subPath = parts.Length == 4 ? Base64UrlDecode(parts[3]) : null;
+            return (Base64UrlDecode(parts[1]), bindContent, subPath);
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+    }
+
+    private static string Base64UrlEncode(string value)
+        => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(value))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    private static string Base64UrlDecode(string value)
+    {
+        var padded = value.Replace('-', '+').Replace('_', '/');
+        switch (padded.Length % 4)
+        {
+            case 2: padded += "=="; break;
+            case 3: padded += "="; break;
+        }
+        return System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(padded));
+    }
+
+    /// <summary>
     /// Gets the data pointer for the specified ID and extra segments.
     /// </summary>
     /// <param name="id">The ID for the data pointer.</param>

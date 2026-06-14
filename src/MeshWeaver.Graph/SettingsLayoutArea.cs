@@ -273,16 +273,17 @@ public static class SettingsLayoutArea
             return stack;
         }
 
-        var nodePath = node.Namespace ?? host.Hub.Address.ToString();
         var meta = MeshNodeMetadata.FromNode(node);
 
-        var dataId = $"nodeMeta_{nodePath.Replace("/", "_")}";
-        host.UpdateData(dataId, meta);
-
-        SetupNodeMetadataAutoSave(host, dataId, meta, node);
+        // Display fields are bound DIRECTLY to the node (node-bound DataContext, fields-mode):
+        // Name/Description/Category/Icon/Order map onto the node's own top-level fields, and each
+        // edit writes straight back to the node stream (IMeshNodeStreamCache). No /data replica of
+        // the node, no SetupNodeMetadataAutoSave save subscription — ONE source of truth.
+        // (Identity + Timestamps are read-only and rendered from the snapshot `meta`.)
+        var nodeContext = LayoutAreaReference.GetMeshNodeDataContext(node.Path, bindContent: false);
 
         stack = stack.WithView(BuildSection("Identity", BuildIdentitySection(meta)));
-        stack = stack.WithView(BuildSection("Display", BuildDisplaySection(host, dataId)));
+        stack = stack.WithView(BuildSection("Display", BuildDisplaySection(host, node.Path, nodeContext)));
         stack = stack.WithView(BuildSection("Timestamps", BuildTimestampsSection(meta)));
 
         return stack;
@@ -531,16 +532,15 @@ public static class SettingsLayoutArea
         valueHtml +
         "</div>";
 
-    private static UiControl BuildDisplaySection(LayoutAreaHost host, string dataId)
+    private static UiControl BuildDisplaySection(LayoutAreaHost host, string nodePath, string nodeContext)
     {
-        var dataPointer = LayoutAreaReference.GetDataPointer(dataId);
         var stack = Controls.Stack.WithWidth("100%").WithStyle("gap: 16px;");
 
-        stack = stack.WithView(new TextFieldControl(new JsonPointerReference("Name"))
+        stack = stack.WithView(new TextFieldControl(new JsonPointerReference(nameof(MeshNode.Name)))
         {
             Label = "Name",
             Immediate = true,
-            DataContext = dataPointer
+            DataContext = nodeContext
         }.WithWidth("100%"));
 
         // Description + Generate button on its own row, matching the icon layout below.
@@ -550,10 +550,10 @@ public static class SettingsLayoutArea
             .WithView(Controls.Html("<label style=\"font-weight: 500; font-size: 0.85rem;\">Description</label>"))
             .WithView(new MarkdownEditorControl
             {
-                Value = new JsonPointerReference("Description"),
+                Value = new JsonPointerReference(nameof(MeshNode.Description)),
                 Height = "300px",
                 Placeholder = "Long-form description. Seeds AI Name/Id/Icon generation and appears in detail views.",
-                DataContext = dataPointer
+                DataContext = nodeContext
             }.WithStyle("width: 100%;"))
             .WithView(Controls.Stack
                 .WithWidth("100%")
@@ -563,49 +563,48 @@ public static class SettingsLayoutArea
                 .WithView(Controls.Button("Generate")
                     .WithAppearance(Appearance.Neutral)
                     .WithIconStart(FluentIcons.Sparkle())
-                    .WithClickAction(actx => RegenerateDescriptionFromMetadata(actx, dataId)))));
+                    .WithClickAction(actx => RegenerateDescriptionFromNode(actx, nodePath)))));
 
-        stack = stack.WithView(new TextFieldControl(new JsonPointerReference("Category"))
+        stack = stack.WithView(new TextFieldControl(new JsonPointerReference(nameof(MeshNode.Category)))
         {
             Label = "Category",
             Immediate = true,
-            DataContext = dataPointer
+            DataContext = nodeContext
         }.WithWidth("100%"));
 
-        stack = stack.WithView(BuildIconPicker(host, dataId));
+        stack = stack.WithView(BuildIconPicker(host, nodePath, nodeContext));
 
-        stack = stack.WithView(new NumberFieldControl(new JsonPointerReference("Order"), "Int32?")
+        stack = stack.WithView(new NumberFieldControl(new JsonPointerReference(nameof(MeshNode.Order)), "Int32?")
         {
             Label = "Order",
             Immediate = true,
-            DataContext = dataPointer
+            DataContext = nodeContext
         }.WithWidth("100%"));
 
         return stack;
     }
 
-    private static UiControl BuildIconPicker(LayoutAreaHost host, string metadataDataId)
+    private static UiControl BuildIconPicker(LayoutAreaHost host, string nodePath, string nodeContext)
     {
         var contentService = host.Hub.ServiceProvider.GetService<IContentService>();
         var collections = contentService?.GetAllCollectionConfigs()?.ToList() ?? [];
         var editableCollection = collections.FirstOrDefault(c => c.IsEditable);
-        var metadataPointer = LayoutAreaReference.GetDataPointer(metadataDataId);
 
         var section = Controls.Stack.WithWidth("100%").WithStyle("gap: 8px;");
         section = section.WithView(Controls.Html(
             "<label style=\"font-weight: 500; font-size: 0.85rem;\">Icon</label>"));
 
-        // Live preview + Regenerate button — mirrors the Create form's layout so the
-        // two surfaces feel consistent.
+        // Live preview + Regenerate button — reads the Icon straight off the node stream (the same
+        // source the Icon Path field below binds to), so the preview tracks edits live.
         section = section.WithView(Controls.Stack
             .WithWidth("100%")
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(12)
             .WithStyle("align-items: center;")
-            .WithView((h, _) => h.Stream.GetDataStream<MeshNodeMetadata>(metadataDataId)
-                .Select(meta =>
+            .WithView((h, _) => h.Workspace.GetMeshNodeStream(nodePath)
+                .Select(node =>
                 {
-                    var icon = meta?.Icon ?? "";
+                    var icon = node?.Icon ?? "";
                     return string.IsNullOrEmpty(icon)
                         ? Controls.Html("<div style=\"width:48px;height:48px;border:1px dashed var(--neutral-stroke-rest);border-radius:6px;\"></div>")
                         : CreateLayoutArea.BuildIconPreview(icon);
@@ -613,22 +612,22 @@ public static class SettingsLayoutArea
             .WithView(Controls.Button("Generate")
                 .WithAppearance(Appearance.Neutral)
                 .WithIconStart(FluentIcons.Sparkle())
-                .WithClickAction(actx => RegenerateIconFromMetadata(actx, metadataDataId))));
+                .WithClickAction(actx => RegenerateIconFromNode(actx, nodePath))));
 
-        section = section.WithView(new TextFieldControl(new JsonPointerReference("Icon"))
+        section = section.WithView(new TextFieldControl(new JsonPointerReference(nameof(MeshNode.Icon)))
         {
             Label = "Icon Path",
             Placeholder = "content:logo.png, /static/…, data:image/svg+xml;… or an absolute URL",
             Immediate = true,
-            DataContext = metadataPointer
+            DataContext = nodeContext
         }.WithWidth("100%"));
 
         // Quick-pick row — after uploading a file via the browser below, type its name here
-        // and click "Use as Icon". Writes "content:<filename>" which resolves to the node's
-        // content collection at render time.
+        // and click "Use as Icon". Writes "content:<filename>" straight to the node's Icon field.
+        // The filename text box is transient form state (not node content), so it stays in /data.
         if (editableCollection != null)
         {
-            var quickPickDataId = $"iconQuickPick_{metadataDataId}";
+            var quickPickDataId = $"iconQuickPick_{nodePath.Replace("/", "_")}";
             host.UpdateData(quickPickDataId, new Dictionary<string, object?> { ["fileName"] = "" });
 
             section = section.WithView(Controls.Stack
@@ -645,7 +644,7 @@ public static class SettingsLayoutArea
                 }.WithStyle("flex: 1;"))
                 .WithView(Controls.Button("Use as Icon")
                     .WithAppearance(Appearance.Neutral)
-                    .WithClickAction(actx => UseFileAsIcon(actx, metadataDataId, quickPickDataId))));
+                    .WithClickAction(actx => UseFileAsIcon(actx, nodePath, quickPickDataId))));
         }
 
         section = section.WithView(Controls.Body(
@@ -660,7 +659,7 @@ public static class SettingsLayoutArea
                 .Select(c => (Option)new Option<string>(c.Name, c.DisplayName ?? c.Name))
                 .ToArray();
 
-            var pickerDataId = $"iconPicker_{metadataDataId}";
+            var pickerDataId = $"iconPicker_{nodePath.Replace("/", "_")}";
             var defaultCollection = editableCollection?.Name ?? "";
             host.UpdateData(pickerDataId, new Dictionary<string, object?> { ["collection"] = defaultCollection });
             host.UpdateData($"{pickerDataId}_options", collectionOptions);
@@ -691,11 +690,11 @@ public static class SettingsLayoutArea
 
     /// <summary>
     /// Click handler for the quick-pick "Use as Icon" button: reads the filename the user
-    /// typed, writes <c>content:&lt;filename&gt;</c> into the metadata's Icon field. The
-    /// icon resolver turns that into <c>/static/storage/content/{nodePath}/{filename}</c>
-    /// at render time.
+    /// typed (transient form state), then writes <c>content:&lt;filename&gt;</c> straight to the
+    /// node's <see cref="MeshNode.Icon"/> via the node stream. The icon resolver turns that into
+    /// <c>/static/storage/content/{nodePath}/{filename}</c> at render time.
     /// </summary>
-    private static void UseFileAsIcon(UiActionContext actx, string metadataDataId, string quickPickDataId)
+    private static void UseFileAsIcon(UiActionContext actx, string nodePath, string quickPickDataId)
     {
         actx.Host.Stream.GetDataStream<Dictionary<string, object?>>(quickPickDataId)
             .Take(1)
@@ -713,23 +712,16 @@ public static class SettingsLayoutArea
                 fileName = fileName.TrimStart('/');
                 var iconRef = $"content:{fileName}";
 
-                actx.Host.Stream.GetDataStream<MeshNodeMetadata>(metadataDataId)
-                    .Take(1)
-                    .Subscribe(meta =>
-                    {
-                        var updated = (meta ?? new MeshNodeMetadata()) with { Icon = iconRef };
-                        actx.Host.UpdateData(metadataDataId, updated);
-                    });
+                WriteIcon(actx, nodePath, iconRef);
             });
     }
 
     /// <summary>
-    /// Click handler for the Regenerate-icon button in the Settings Metadata tab.
-    /// Reads Name + Description from the MeshNodeMetadata stream, invokes the
-    /// IIconGenerator, and writes the resulting SVG back into the metadata object
-    /// so the auto-save subscription persists it on the node.
+    /// Click handler for the Regenerate-icon button in the Settings Metadata tab. Reads Name +
+    /// Description from the node stream, invokes the <see cref="IIconGenerator"/>, and writes the
+    /// resulting SVG straight back to the node's <see cref="MeshNode.Icon"/> — ONE source of truth.
     /// </summary>
-    private static void RegenerateIconFromMetadata(UiActionContext actx, string metadataDataId)
+    private static void RegenerateIconFromNode(UiActionContext actx, string nodePath)
     {
         var generator = actx.Host.Hub.ServiceProvider.GetService<IIconGenerator>();
         if (generator == null)
@@ -738,12 +730,13 @@ public static class SettingsLayoutArea
                 "Icon generator service is not registered. Call AddAgentChatServices().");
             return;
         }
-        actx.Host.Stream.GetDataStream<MeshNodeMetadata>(metadataDataId)
+        actx.Host.Workspace.GetMeshNodeStream(nodePath)
+            .Where(n => n is not null)
             .Take(1)
-            .Subscribe(meta =>
+            .Subscribe(node =>
             {
-                var name = meta?.Name ?? "";
-                var description = meta?.Description;
+                var name = node!.Name ?? "";
+                var description = node.Description;
                 if (string.IsNullOrWhiteSpace(name) && string.IsNullOrWhiteSpace(description))
                 {
                     ShowSettingsErrorDialog(actx, "Regenerate Icon",
@@ -751,24 +744,17 @@ public static class SettingsLayoutArea
                     return;
                 }
                 generator.GenerateSvgAsync(name, description).Subscribe(
-                    svg =>
-                    {
-                        // Replace the Icon field on the metadata record; the Throttled
-                        // auto-save subscription picks this up and posts UpdateNodeRequest.
-                        var updated = (meta ?? new MeshNodeMetadata()) with { Icon = svg };
-                        actx.Host.UpdateData(metadataDataId, updated);
-                    },
+                    svg => WriteIcon(actx, nodePath, svg),
                     ex => ShowSettingsErrorDialog(actx, "Icon Generation Failed", ex.Message));
             });
     }
 
     /// <summary>
-    /// Click handler for the Generate-description button in the Settings Display section.
-    /// Reads Name + Category from the MeshNodeMetadata stream, invokes the
-    /// IDescriptionGenerator, and writes the resulting text back into the metadata object
-    /// so the auto-save subscription persists it on the node.
+    /// Click handler for the Generate-description button in the Settings Display section. Reads
+    /// Name + Category from the node stream, invokes the <see cref="IDescriptionGenerator"/>, and
+    /// writes the resulting text straight back to the node's <see cref="MeshNode.Description"/>.
     /// </summary>
-    private static void RegenerateDescriptionFromMetadata(UiActionContext actx, string metadataDataId)
+    private static void RegenerateDescriptionFromNode(UiActionContext actx, string nodePath)
     {
         var generator = actx.Host.Hub.ServiceProvider.GetService<IDescriptionGenerator>();
         if (generator == null)
@@ -777,12 +763,13 @@ public static class SettingsLayoutArea
                 "Description generator service is not registered. Call AddAgentChatServices().");
             return;
         }
-        actx.Host.Stream.GetDataStream<MeshNodeMetadata>(metadataDataId)
+        actx.Host.Workspace.GetMeshNodeStream(nodePath)
+            .Where(n => n is not null)
             .Take(1)
-            .Subscribe(meta =>
+            .Subscribe(node =>
             {
-                var name = meta?.Name ?? "";
-                var category = meta?.Category;
+                var name = node!.Name ?? "";
+                var category = node.Category;
                 if (string.IsNullOrWhiteSpace(name))
                 {
                     ShowSettingsErrorDialog(actx, "Generate Description",
@@ -790,14 +777,21 @@ public static class SettingsLayoutArea
                     return;
                 }
                 generator.GenerateDescriptionAsync(name, category).Subscribe(
-                    description =>
-                    {
-                        var updated = (meta ?? new MeshNodeMetadata()) with { Description = description };
-                        actx.Host.UpdateData(metadataDataId, updated);
-                    },
+                    description => actx.Host.Workspace.GetMeshNodeStream(nodePath)
+                        .Update(n => n with { Description = description })
+                        .Subscribe(_ => { }, ex => actx.Host.Hub.ServiceProvider
+                            .GetService<ILoggerFactory>()?.CreateLogger(typeof(SettingsLayoutArea).FullName!)
+                            .LogWarning(ex, "Description write failed for {Path}", nodePath)),
                     ex => ShowSettingsErrorDialog(actx, "Description Generation Failed", ex.Message));
             });
     }
+
+    private static void WriteIcon(UiActionContext actx, string nodePath, string icon) =>
+        actx.Host.Workspace.GetMeshNodeStream(nodePath)
+            .Update(n => n with { Icon = icon })
+            .Subscribe(_ => { }, ex => actx.Host.Hub.ServiceProvider
+                .GetService<ILoggerFactory>()?.CreateLogger(typeof(SettingsLayoutArea).FullName!)
+                .LogWarning(ex, "Icon write failed for {Path}", nodePath));
 
     private static void ShowSettingsErrorDialog(UiActionContext ctx, string title, string message)
     {
@@ -816,47 +810,6 @@ public static class SettingsLayoutArea
         grid = AddReadOnlyField(grid, "Last Modified",
             meta.LastModified == default ? "—" : meta.LastModified.ToString("yyyy-MM-dd HH:mm:ss zzz"));
         return grid;
-    }
-
-    private static void SetupNodeMetadataAutoSave(
-        LayoutAreaHost host,
-        string dataId,
-        MeshNodeMetadata initial,
-        MeshNode node)
-    {
-        var current = (object)initial;
-
-        host.RegisterForDisposal($"autosave_{dataId}",
-            host.Stream.GetDataStream<object>(dataId)
-                .Throttle(TimeSpan.FromMilliseconds(300))
-                .Subscribe(updated =>
-                {
-                    if (object.Equals(current, updated))
-                        return;
-
-                    current = updated;
-
-                    if (updated is not MeshNodeMetadata updatedMeta)
-                        return;
-
-                    // Write through the shared cache so every reader of the
-                    // node's stream sees the change (AGENTS.md "NodeMutations:
-                    // stream.Update only"). updatedMeta.ApplyTo composes the
-                    // patch inside the cache.Update lambda against the live
-                    // node — applying the metadata patch on top of whichever
-                    // version the cache holds, not the stale node captured at
-                    // SetupNodeMetadataAutoSave time.
-                    if (node.Path is { Length: > 0 } metaPath)
-                    {
-                        var cache = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-                        cache.Update(metaPath, current => updatedMeta.ApplyTo(current), host.Hub.JsonSerializerOptions)
-                            .Subscribe(
-                                _ => { },
-                                ex => host.Hub.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()
-                                    ?.CreateLogger(typeof(SettingsLayoutArea).FullName!)
-                                    .LogWarning(ex, "Metadata auto-save failed for {Path}", metaPath));
-                    }
-                }));
     }
 
     private static string BuildPermissionResultHtml(string userId, Permission perms)

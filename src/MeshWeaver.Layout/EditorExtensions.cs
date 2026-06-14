@@ -544,7 +544,8 @@ public static class EditorExtensions
         string dataId,
         bool canEdit,
         LayoutAreaHost host,
-        bool isToggleable = true)
+        bool isToggleable = true,
+        string? boundDataContext = null)
     {
         var propName = property.Name.ToCamelCase()!;
         var editStateId = $"editState_{dataId}_{propName}";
@@ -552,6 +553,9 @@ public static class EditorExtensions
         // Initialize the edit-state value only once per layout-area session so a re-render
         // doesn't reset edit mode. The "already seeded" set lives on the host (per-session
         // instance state), not a process-wide static set — see NoStaticState.md.
+        // NB: edit-state ALWAYS lives in /data (keyed by dataId), never on the node — it is
+        // transient view state, not node content. Only the field VALUE binding is redirected to
+        // the node when boundDataContext is supplied.
         if (host.TryMarkEditStateInitialized(editStateId))
             host.UpdateData(editStateId, !isToggleable); // Start in edit mode when not toggleable
 
@@ -573,7 +577,7 @@ public static class EditorExtensions
         var uiControlAttr = property.GetCustomAttribute<UiControlAttribute>();
         if (IsMarkdownProperty(property))
         {
-            return BuildMarkdownToggle(host, property, dataId, editStateId, editStateStream, isEditable, isToggleable);
+            return BuildMarkdownToggle(host, property, dataId, editStateId, editStateStream, isEditable, isToggleable, boundDataContext);
         }
 
         // Regular property: Label + reactive read/edit view
@@ -592,9 +596,19 @@ public static class EditorExtensions
                 .WithStyle("font-weight: 600; color: var(--neutral-foreground-hint); font-size: 0.875rem;"))
             .WithView((h, _) => editStateStream
                 .Select(isEditing => isEditing && isEditable
-                    ? BuildEditControl(h, property, dataId, editStateId, isToggleable)
-                    : BuildReadonlyControl(h, property, dataId, editStateId, isEditable)));
+                    ? BuildEditControl(h, property, dataId, editStateId, isToggleable, boundDataContext)
+                    : BuildReadonlyControl(h, property, dataId, editStateId, isEditable, boundDataContext)));
     }
+
+    /// <summary>
+    /// The DataContext a form control binds against: the node-bound <paramref name="boundDataContext"/>
+    /// when supplied (the field reads/writes go straight to the node stream — see
+    /// <see cref="LayoutAreaReference.MeshNodePrefix"/>), otherwise the layout-area
+    /// <c>/data/{dataId}</c> pointer. One helper so every control in the toggleable machinery picks
+    /// the same target without each callsite re-deciding.
+    /// </summary>
+    private static string EffectiveDataContext(string dataId, string? boundDataContext)
+        => boundDataContext ?? LayoutAreaReference.GetDataPointer(dataId);
 
     /// <summary>
     /// Returns true if the property should render as markdown.
@@ -622,7 +636,8 @@ public static class EditorExtensions
         PropertyInfo property,
         string dataId,
         string editStateId,
-        bool isEditable)
+        bool isEditable,
+        string? boundDataContext = null)
     {
         var propName = property.Name.ToCamelCase()!;
         var propType = property.PropertyType;
@@ -642,7 +657,7 @@ public static class EditorExtensions
         {
             readOnlyControl = new LabelControl(new JsonPointerReference(propName))
             {
-                DataContext = LayoutAreaReference.GetDataPointer(dataId)
+                DataContext = EffectiveDataContext(dataId, boundDataContext)
             }.WithStyle("padding: 8px; min-height: 32px;");
         }
         else if (uiAttr?.Options != null)
@@ -658,14 +673,14 @@ public static class EditorExtensions
         {
             readOnlyControl = new LabelControl(new JsonPointerReference(propName))
             {
-                DataContext = LayoutAreaReference.GetDataPointer(dataId)
+                DataContext = EffectiveDataContext(dataId, boundDataContext)
             }.WithStyle("padding: 8px; min-height: 32px;");
         }
         else
         {
             readOnlyControl = new LabelControl(new JsonPointerReference(propName))
             {
-                DataContext = LayoutAreaReference.GetDataPointer(dataId)
+                DataContext = EffectiveDataContext(dataId, boundDataContext)
             }.WithStyle("padding: 8px; min-height: 32px; background: var(--neutral-fill-rest); border-radius: 4px;");
         }
 
@@ -861,7 +876,8 @@ public static class EditorExtensions
         PropertyInfo property,
         string dataId,
         string editStateId,
-        bool isToggleable)
+        bool isToggleable,
+        string? boundDataContext = null)
     {
         var propName = property.Name.ToCamelCase()!;
         var jsonPointer = new JsonPointerReference(propName);
@@ -942,7 +958,7 @@ public static class EditorExtensions
         var attrStyle = property.GetCustomAttribute<UiControlAttribute>()?.Style;
         editCtrl = editCtrl with
         {
-            DataContext = LayoutAreaReference.GetDataPointer(dataId),
+            DataContext = EffectiveDataContext(dataId, boundDataContext),
             Style = attrStyle
         };
 
@@ -1400,7 +1416,8 @@ public static class EditorExtensions
         string editStateId,
         IObservable<bool> editStateStream,
         bool isEditable,
-        bool isToggleable)
+        bool isToggleable,
+        string? boundDataContext = null)
     {
         var propName = property.Name.ToCamelCase()!;
         var displayName = GetToggleableDisplayName(property);
@@ -1411,7 +1428,7 @@ public static class EditorExtensions
             return Controls.Stack
                 .WithWidth("100%")
                 .WithStyle("margin-top: 16px;")
-                .WithView(BuildMarkdownEditView(host, property, dataId, editStateId, isToggleable));
+                .WithView(BuildMarkdownEditView(host, property, dataId, editStateId, isToggleable, boundDataContext));
         }
 
         return Controls.Stack
@@ -1422,8 +1439,8 @@ public static class EditorExtensions
                     .DistinctUntilChanged()
                     .Select(isEditing =>
                         isEditing && isEditable
-                            ? BuildMarkdownEditView(h, property, dataId, editStateId, isToggleable)
-                            : BuildMarkdownReadView(h, property, dataId, displayName, editStateId, isEditable)));
+                            ? BuildMarkdownEditView(h, property, dataId, editStateId, isToggleable, boundDataContext)
+                            : BuildMarkdownReadView(h, property, dataId, displayName, editStateId, isEditable, boundDataContext)));
     }
 
     private static UiControl BuildMarkdownReadView(
@@ -1432,13 +1449,14 @@ public static class EditorExtensions
         string dataId,
         string displayName,
         string editStateId,
-        bool isEditable)
+        bool isEditable,
+        string? boundDataContext = null)
     {
         var propName = property.Name.ToCamelCase()!;
 
         var markdownControl = new MarkdownControl(new JsonPointerReference(propName))
         {
-            DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            DataContext = EffectiveDataContext(dataId, boundDataContext)
         };
 
         var contentStack = Controls.Stack
@@ -1464,7 +1482,8 @@ public static class EditorExtensions
         PropertyInfo property,
         string dataId,
         string editStateId,
-        bool isToggleable)
+        bool isToggleable,
+        string? boundDataContext = null)
     {
         var propName = property.Name.ToCamelCase()!;
         var markdownAttr = property.GetCustomAttribute<MarkdownAttribute>();
@@ -1476,7 +1495,7 @@ public static class EditorExtensions
             .WithPlaceholder(markdownAttr?.Placeholder ?? "Enter content...") with
         {
             Value = new JsonPointerReference(propName),
-            DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            DataContext = EffectiveDataContext(dataId, boundDataContext)
         };
 
         var stack = Controls.Stack

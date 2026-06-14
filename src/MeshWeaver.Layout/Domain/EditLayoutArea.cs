@@ -69,6 +69,16 @@ public record ContentViewOptions
     /// Optional padding for the entire view. Default is no padding.
     /// </summary>
     public string? Padding { get; init; }
+
+    /// <summary>
+    /// When set, the generated form controls bind their field VALUES against this node-bound
+    /// DataContext (see <see cref="LayoutAreaReference.MeshNodePrefix"/>) instead of the layout-area
+    /// <c>/data/{DataId}</c> replica — reads come straight off the node stream and edits write
+    /// straight back to it (ONE source of truth, no replicate-then-save). Edit-state (the
+    /// click-to-edit toggle) still lives in <c>/data</c> keyed by <see cref="DataId"/>. Leave null
+    /// for the create form (no node exists yet) and other transient editors.
+    /// </summary>
+    public string? BoundDataContext { get; init; }
 }
 
 public static class EditLayoutArea
@@ -104,7 +114,7 @@ public static class EditLayoutArea
         }
 
         // Property form
-        stack = stack.WithView(BuildPropertyForm(host, options.ContentType, options.DataId, options.CanEdit, options.IsToggleable));
+        stack = stack.WithView(BuildPropertyForm(host, options.ContentType, options.DataId, options.CanEdit, options.IsToggleable, options.BoundDataContext));
 
         // Footer actions (buttons)
         if (options.FooterActions != null)
@@ -199,7 +209,8 @@ public static class EditLayoutArea
         Type contentType,
         string dataId,
         bool canEdit,
-        bool isToggleable = true)
+        bool isToggleable = true,
+        string? boundDataContext = null)
     {
         // Get browsable properties (skip Title - shown in header)
         var properties = contentType.GetProperties()
@@ -230,7 +241,7 @@ public static class EditLayoutArea
 
             foreach (var prop in regularProps)
             {
-                var control = host.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit, host, isToggleable);
+                var control = host.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit, host, isToggleable, boundDataContext);
                 propsGrid = propsGrid.WithView(control, s => s.WithXs(12).WithMd(6).WithLg(4));
             }
 
@@ -240,14 +251,14 @@ public static class EditLayoutArea
         // Build markdown sections using MapToToggleableControl (full width)
         foreach (var prop in markdownProps)
         {
-            var control = host.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit, host, isToggleable);
+            var control = host.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit, host, isToggleable, boundDataContext);
             stack = stack.WithView(control);
         }
 
         // Build collection sections using MapToToggleableControl (full width)
         foreach (var prop in collectionProps)
         {
-            var control = host.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit, host, isToggleable);
+            var control = host.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit, host, isToggleable, boundDataContext);
             stack = stack.WithView(control);
         }
 
