@@ -131,8 +131,13 @@ public static class SpaceLayoutAreas
         UiControl logoControl;
         if (!string.IsNullOrEmpty(logo))
         {
+            // Natural-aspect, never cropped: a wide banner logo (e.g. ATIOZ) and a square
+            // avatar both render whole. `object-fit: cover` in a fixed 100×100 box cropped wide
+            // logos to their middle strip — use max-box + auto sizing so the image scales to fit
+            // within the bounds at its own aspect ratio (contain just backs that up for any
+            // intrinsic-size oddities).
             logoControl = Controls.Html(
-                $"<img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(logo)}\" alt=\"\" style=\"width: 100px; height: 100px; border-radius: 12px; object-fit: cover; background: var(--neutral-layer-2);\" />");
+                $"<img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(logo)}\" alt=\"\" style=\"max-height: 96px; max-width: 340px; width: auto; height: auto; border-radius: 12px; object-fit: contain; background: var(--neutral-layer-2); padding: 6px; box-sizing: border-box;\" />");
         }
         else
         {
