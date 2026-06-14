@@ -16,16 +16,27 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.AI;
 
 /// <summary>
-/// The data-bound chat composer layout areas. Both areas bind the <see cref="ThreadComposer"/>
-/// state of THIS node — the composer node's own content out of a thread, or the thread's
-/// embedded <see cref="Thread.Composer"/> when registered on a thread hub
-/// (<see cref="ThreadComposerNodeType.ComposerOf"/> discriminates by NodeType).
+/// The data-bound chat composer layout areas. Both areas bind the form controls DIRECTLY to the
+/// <see cref="ThreadComposer"/> state of THIS node via a node-bound DataContext
+/// (<see cref="ComposerContext"/>) — ONE source of truth, the node stream
+/// (<c>IMeshNodeStreamCache</c>). No <c>/data</c> replica, no debounced save subscription, no
+/// re-seed loop — each field edit writes straight back to the composer's inline location on the node.
 ///
-/// <para><b>Binding discipline (the mid-edit-clobber fix):</b> the form data is seeded ONCE per
-/// layout session and auto-save is installed ONCE (<see cref="BindComposerData"/>). Later node
-/// emissions re-seed the form ONLY when they differ from the last value this session saved or
-/// seeded — the echo of our own save compares equal and is skipped, so a server echo can never
-/// overwrite in-flight typing, and stacked auto-save subscriptions can't accumulate.</para>
+/// <para><b>Where the composer lives (and the rule):</b> the composer is read/written via
+/// <see cref="ThreadComposerNodeType.ComposerOf"/> / <c>WithComposer</c> in ONE of two inline shapes,
+/// and the binding always targets that SAME inline location — NEVER a separate node:
+/// <list type="bullet">
+///   <item><description><b>No thread yet</b> → a standalone <c>ThreadComposer</c> node in the user's
+///   home (<c>{user}/_Thread/ThreadComposer</c>): the composer IS the node's whole <c>Content</c>
+///   (content-mode binding).</description></item>
+///   <item><description><b>Once a thread exists</b> → the composer is the Thread's INLINE
+///   <see cref="Thread.Composer"/> object on the thread node itself (fields-mode binding with
+///   sub-path <c>content/composer</c>). The thread always refers to its own embedded composer
+///   object, never an outside node.</description></item>
+/// </list>
+/// Because writes route through the owning hub's serialised action block, concurrent fields the
+/// composer carries (<see cref="ThreadComposer.ContextPath"/> / <see cref="ThreadComposer.OpenThreadPath"/>,
+/// set by the side panel) are never clobbered by a field edit.</para>
 /// </summary>
 public static class ThreadComposerView
 {
@@ -55,22 +66,19 @@ public static class ThreadComposerView
         [nameof(ThreadComposer.Harness), nameof(ThreadComposer.AgentName), nameof(ThreadComposer.ModelName)];
 
     /// <summary>
-    /// Renders ONLY the harness picker (no label — just the combobox), data-bound +
-    /// auto-persisting against THIS node's composer state. Agent + model are NOT shown here:
-    /// the chat footer stays compact (harness + context + Send on one row), and agent/model are
-    /// chosen via the <c>/agent</c> and <c>/model</c> slash-commands (which write the same
-    /// composer node). The control is built ONCE from the first composer emission; all later
-    /// updates flow through the data binding (see <see cref="BindComposerData"/>).
+    /// Renders ONLY the harness picker (no label — just the combobox), bound DIRECTLY to THIS node's
+    /// composer state (<see cref="ComposerContext"/>) so the pick persists straight to the node.
+    /// Agent + model are NOT shown here: the chat footer stays compact (harness + context + Send on
+    /// one row), and agent/model are chosen via the <c>/agent</c> and <c>/model</c> slash-commands
+    /// (which write the same composer). The control is built ONCE from the first composer emission;
+    /// all later updates flow through the node-bound data binding.
     /// </summary>
     public static UiControl ComposerSelectors(LayoutAreaHost host, RenderingContext context)
         => Controls.Stack.WithWidth("100%")
-            .WithView((h, _) => ComposerStream(h)
+            .WithView((h, _) => h.Workspace.GetMeshNodeStream()
+                .Where(n => ThreadComposerNodeType.ComposerOf(n, h.Hub.JsonSerializerOptions, Logger(h)) is not null)
                 .Take(1)
-                .Select(composer =>
-                {
-                    var dataId = BindComposerData(h, composer);
-                    return (UiControl?)BuildHarnessPicker(h, dataId);
-                }));
+                .Select(node => (UiControl?)BuildHarnessPicker(h, ComposerContext(h, node))));
 
     /// <summary>
     /// The composer node's default area: data-bound message editor + selector row + Send.
@@ -81,134 +89,61 @@ public static class ThreadComposerView
     /// </summary>
     public static UiControl Composer(LayoutAreaHost host, RenderingContext context)
         => Controls.Stack.WithWidth("100%").WithStyle("gap: 8px;")
-            .WithView((h, _) => ComposerStream(h)
+            .WithView((h, _) => h.Workspace.GetMeshNodeStream()
+                .Where(n => ThreadComposerNodeType.ComposerOf(n, h.Hub.JsonSerializerOptions, Logger(h)) is not null)
                 .Take(1)
-                .Select(composer =>
+                .Select(node =>
                 {
-                    var dataId = BindComposerData(h, composer);
+                    var ctx = ComposerContext(h, node);
+                    var dataId = EditLayoutArea.GetDataId(h.Hub.Address.ToString());
 
                     var messageProp = typeof(ThreadComposer).GetProperty(nameof(ThreadComposer.MessageContent))!;
                     var editor = Controls.Stack.WithWidth("100%")
                         .WithView(h.Hub.ServiceProvider.MapToToggleableControl(
-                            messageProp, dataId, canEdit: true, h, isToggleable: false));
+                            messageProp, dataId, canEdit: true, h, isToggleable: false, boundDataContext: ctx));
 
                     var bottomRow = Controls.Stack
                         .WithOrientation(Orientation.Horizontal)
                         .WithStyle("gap: 8px; flex-wrap: nowrap; align-items: flex-end; width: 100%;")
                         .WithView(Controls.Stack.WithStyle("flex: 1 1 auto; min-width: 0;")
-                            .WithView(BuildSelectorRow(h, dataId)))
+                            .WithView(BuildSelectorRow(h, dataId, ctx)))
                         .WithView(Controls.Stack.WithStyle("flex: 0 0 auto; margin-left: auto;")
-                            .WithView(BuildSendButton(dataId)));
+                            .WithView(BuildSendButton()));
 
                     return (UiControl?)Controls.Stack.WithWidth("100%").WithStyle("gap: 8px;")
                         .WithView(editor)
                         .WithView(bottomRow);
                 }));
 
-    /// <summary>
-    /// This node's composer state as a live stream — <see cref="ThreadComposerNodeType.ComposerOf"/>
-    /// over the OWN node stream (composer node content or the thread's embedded composer).
-    /// </summary>
-    private static IObservable<ThreadComposer> ComposerStream(LayoutAreaHost host)
-    {
-        var logger = Logger(host);
-        return host.Workspace.GetMeshNodeStream()
-            .Select(node => ThreadComposerNodeType.ComposerOf(node, host.Hub.JsonSerializerOptions, logger))
-            .Where(c => c is not null)
-            .Select(c => c!);
-    }
-
     private static ILogger? Logger(LayoutAreaHost host)
         => host.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(LogCategory);
 
     /// <summary>
-    /// Seeds the form data and installs the bidirectional composer binding EXACTLY ONCE per
-    /// layout session (gated by <see cref="LayoutAreaHost.TryMarkEditStateInitialized"/>):
-    ///
+    /// The node-bound DataContext the composer form binds against — ONE source of truth, the node
+    /// stream (IMeshNodeStreamCache). The composer lives in one of TWO shapes
+    /// (<see cref="ThreadComposerNodeType.ComposerOf"/>), and this resolves the binding root to the
+    /// SAME inline location each shape reads from — it NEVER references a separate node:
     /// <list type="bullet">
-    ///   <item><description><b>data → node (auto-save)</b>: debounced; writes only the EDITABLE
-    ///   fields (message, harness/agent/model, attachments), preserving the node's authoritative
-    ///   <see cref="ThreadComposer.ContextPath"/> / <see cref="ThreadComposer.OpenThreadPath"/>
-    ///   so a stale form snapshot can never re-arm the navigate signal or clobber the side
-    ///   panel's context write.</description></item>
-    ///   <item><description><b>node → data (re-seed)</b>: only when the node value differs from
-    ///   the last value this session saved or seeded. The echo of our own save compares EQUAL
-    ///   (value equality, attachments by sequence) and is skipped — no mid-typing clobber, the
-    ///   defect of re-running <c>UpdateData</c> on every emission.</description></item>
+    ///   <item><description><b>standalone <c>ThreadComposer</c> node</b> (the user-home new-chat
+    ///   composer, used when no thread exists yet): the composer IS the node's whole
+    ///   <c>Content</c> → content-mode, no sub-path. Field pointers (<c>messageContent</c>,
+    ///   <c>harness</c>, …) resolve against the Content.</description></item>
+    ///   <item><description><b><c>Thread</c> node</b> (once a thread exists): the composer is the
+    ///   thread's INLINE <see cref="Thread.Composer"/> object — fields-mode with sub-path
+    ///   <c>content/composer</c>, so a <c>harness</c> pointer resolves to
+    ///   <c>content/composer/harness</c> on the thread node ITSELF. The thread always binds its own
+    ///   embedded composer object, never an external composer node.</description></item>
     /// </list>
+    /// Each field edit writes straight back to that location on the node stream — no <c>/data</c>
+    /// replica, no debounced save subscription. The owning hub serialises writes, so concurrent
+    /// fields (ContextPath / OpenThreadPath set by the side panel) are never clobbered.
     /// </summary>
-    internal static string BindComposerData(LayoutAreaHost host, ThreadComposer initial)
+    private static string ComposerContext(LayoutAreaHost host, MeshNode? node)
     {
         var nodePath = host.Hub.Address.ToString();
-        var dataId = EditLayoutArea.GetDataId(nodePath);
-        if (!host.TryMarkEditStateInitialized($"composer-bind_{dataId}"))
-            return dataId; // already wired this session
-
-        var logger = Logger(host);
-        var gate = new object();
-        var last = initial;
-        host.UpdateData(dataId, initial);
-
-        host.RegisterForDisposal($"composer-autosave_{dataId}",
-            host.Stream.GetDataStream<ThreadComposer>(dataId)
-                .Debounce(TimeSpan.FromMilliseconds(300))
-                .Subscribe(
-                    updated =>
-                {
-                    if (updated is null) return;
-                    lock (gate)
-                    {
-                        if (Equals(last, updated)) return;
-                        last = updated;
-                    }
-                    host.Workspace.GetMeshNodeStream()
-                        .Update(node =>
-                        {
-                            var current = ThreadComposerNodeType.ComposerOf(node, host.Hub.JsonSerializerOptions, logger);
-                            if (node.Content is not null && current is null)
-                                return node; // unreadable → leave alone, never clobber
-                            var merged = (current ?? new ThreadComposer()) with
-                            {
-                                MessageContent = updated.MessageContent,
-                                Harness = updated.Harness,
-                                AgentName = updated.AgentName,
-                                ModelName = updated.ModelName,
-                                Attachments = updated.Attachments
-                            };
-                            return Equals(current, merged)
-                                ? node
-                                : ThreadComposerNodeType.WithComposer(node, merged, host.Hub.JsonSerializerOptions, logger);
-                        })
-                        .Subscribe(
-                            _ => { },
-                            ex => logger?.LogWarning(ex,
-                                "[ThreadComposer] auto-save failed for {Path}", nodePath));
-                },
-                    // If the data stream itself faults, auto-save dies for the session —
-                    // log loudly so a dead binding is visible instead of silent draft loss.
-                    ex => logger?.LogWarning(ex,
-                        "[ThreadComposer] auto-save data stream FAULTED for {Path} — drafts no longer persist this session",
-                        nodePath)));
-
-        host.RegisterForDisposal($"composer-reseed_{dataId}",
-            host.Workspace.GetMeshNodeStream()
-                .Select(n => ThreadComposerNodeType.ComposerOf(n, host.Hub.JsonSerializerOptions, logger))
-                .Where(c => c is not null)
-                .Subscribe(
-                    c =>
-                    {
-                        lock (gate)
-                        {
-                            if (Equals(last, c)) return;
-                            last = c!;
-                        }
-                        host.UpdateData(dataId, c!);
-                    },
-                    ex => logger?.LogWarning(ex,
-                        "[ThreadComposer] re-seed stream FAULTED for {Path} — external composer changes no longer reflect this session",
-                        nodePath)));
-
-        return dataId;
+        return node?.NodeType == ThreadNodeType.NodeType
+            ? LayoutAreaReference.GetMeshNodeDataContext(nodePath, bindContent: false, subPath: $"{nameof(MeshNode.Content).ToCamelCase()}/{nameof(Thread.Composer).ToCamelCase()}")
+            : LayoutAreaReference.GetMeshNodeDataContext(nodePath, bindContent: true);
     }
 
     /// <summary>
@@ -216,7 +151,7 @@ public static class ThreadComposerView
     /// ONE line (nowrap) and bottom-aligned so the chat footer fits pickers + chips + Send on a
     /// single bottom row. Each picker shrinks rather than wrapping; min-width keeps them usable.
     /// </summary>
-    private static UiControl BuildSelectorRow(LayoutAreaHost host, string dataId)
+    private static UiControl BuildSelectorRow(LayoutAreaHost host, string dataId, string boundContext)
     {
         var row = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
@@ -225,7 +160,7 @@ public static class ThreadComposerView
             row = row.WithView(
                 Controls.Stack.WithStyle("flex: 1 1 0; min-width: 70px; max-width: 220px;")
                     .WithView(host.Hub.ServiceProvider.MapToToggleableControl(
-                        prop, dataId, canEdit: true, host, isToggleable: false)));
+                        prop, dataId, canEdit: true, host, isToggleable: false, boundDataContext: boundContext)));
         return row;
     }
 
@@ -236,14 +171,13 @@ public static class ThreadComposerView
 
     /// <summary>
     /// Builds JUST the harness <see cref="MeshNodePickerControl"/> — no label, just the combobox —
-    /// data-bound to the composer's <see cref="ThreadComposer.Harness"/> field. Constructed
-    /// directly from the property's <c>[MeshNode]</c> attribute (the same query/layout/open/default
-    /// the standard editor would build), bypassing <c>MapToToggleableControl</c> so no "Harness"
-    /// label row is rendered. Writes flow through the data binding installed by
-    /// <see cref="BindComposerData"/> (the picker mutates the <c>harness</c> pointer; auto-save
-    /// persists it), exactly like the full selector row did.
+    /// data-bound to the composer's <see cref="ThreadComposer.Harness"/> field via the node-bound
+    /// <paramref name="boundContext"/>. Constructed directly from the property's <c>[MeshNode]</c>
+    /// attribute (the same query/layout/open/default the standard editor would build), bypassing
+    /// <c>MapToToggleableControl</c> so no "Harness" label row is rendered. The picker mutates the
+    /// <c>harness</c> pointer, which writes straight back to the composer on the node stream.
     /// </summary>
-    private static UiControl BuildHarnessPicker(LayoutAreaHost host, string dataId)
+    private static UiControl BuildHarnessPicker(LayoutAreaHost host, string boundContext)
     {
         var harnessProp = typeof(ThreadComposer).GetProperty(nameof(ThreadComposer.Harness))!;
         var meshNodeAttr = harnessProp.GetCustomAttribute<MeshNodeAttribute>()!;
@@ -255,7 +189,7 @@ public static class ThreadComposerView
             Layout = meshNodeAttr.Layout,
             Open = meshNodeAttr.Open,
             DefaultToFirst = meshNodeAttr.DefaultToFirst,
-            DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            DataContext = boundContext
         };
         return Controls.Stack
             .WithStyle("min-width: 90px; max-width: 220px;")
@@ -263,12 +197,13 @@ public static class ThreadComposerView
     }
 
     /// <summary>
-    /// Send button — one-shot read of the current form data, then the canonical
-    /// <see cref="HubThreadExtensions.StartThread"/>. Identity is resolved at CLICK time from
-    /// the click delivery's <see cref="AccessContext"/> (hub/system principals filtered) — never
-    /// captured at render time, where the ambient context can be the hub itself.
+    /// Send button — one-shot read of the composer straight off the node stream (ONE source of
+    /// truth), then the canonical <see cref="HubThreadExtensions.StartThread"/>. Identity is
+    /// resolved at CLICK time from the click delivery's <see cref="AccessContext"/> (hub/system
+    /// principals filtered) — never captured at render time, where the ambient context can be the
+    /// hub itself.
     /// </summary>
-    private static UiControl BuildSendButton(string dataId)
+    private static UiControl BuildSendButton()
         => Controls.Button("Send")
             .WithAppearance(Appearance.Accent)
             .WithClickAction(ctx =>
@@ -276,11 +211,13 @@ public static class ThreadComposerView
                 var host = ctx.Host;
                 var logger = Logger(host);
                 var user = ResolveUser(host.Hub.ServiceProvider.GetService<AccessService>());
-                host.Stream.GetDataStream<ThreadComposer>(dataId)
+                host.Workspace.GetMeshNodeStream()
+                    .Select(n => ThreadComposerNodeType.ComposerOf(n, host.Hub.JsonSerializerOptions, logger))
+                    .Where(c => c is not null)
                     .Take(1)
                     .Subscribe(
                         edited => Send(host, edited, user, logger),
-                        ex => logger?.LogWarning(ex, "[ThreadComposer] Send: form read failed"));
+                        ex => logger?.LogWarning(ex, "[ThreadComposer] Send: composer read failed"));
                 return Task.CompletedTask;
             });
 

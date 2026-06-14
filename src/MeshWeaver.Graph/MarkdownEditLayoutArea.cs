@@ -56,16 +56,6 @@ public static class MarkdownEditLayoutArea
             .WithWidth("100%")
             .WithStyle("flex: 1; display: flex; flex-direction: column; min-height: 0;");
 
-        // Set up data binding for node name (used in title bar)
-        string? dataId = null;
-        if (node != null)
-        {
-            dataId = $"editTitle_{hubPath.Replace("/", "_")}";
-            var props = MeshNodeMetadata.FromNode(node);
-            host.UpdateData(dataId, props);
-            SetupNodeMetadataAutoSave(host, dataId, props, node);
-        }
-
         // Header row with back button and inline title editor
         var headerRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
@@ -80,14 +70,17 @@ public static class MarkdownEditLayoutArea
             .WithAppearance(Appearance.Stealth)
             .WithNavigateToHref(backHref));
 
-        // Title text field in the header bar
-        if (dataId != null)
+        // Title text field in the header bar — bound DIRECTLY to the node's Name field
+        // (node-bound DataContext, fields-mode). The edit writes straight back to the node stream;
+        // no /data replica, no metadata save subscription. The body is already node-bound via
+        // MarkdownEditorControl.WithAutoSave below. See Doc/GUI/DataBinding.
+        if (node != null)
         {
-            var titleField = new TextFieldControl(new JsonPointerReference("name"))
+            var titleField = new TextFieldControl(new JsonPointerReference(nameof(MeshNode.Name)))
             {
                 Immediate = true,
                 Placeholder = "Untitled",
-                DataContext = LayoutAreaReference.GetDataPointer(dataId)
+                DataContext = LayoutAreaReference.GetMeshNodeDataContext(node.Path, bindContent: false)
             }.WithStyle("flex: 1; font-size: 1.25rem; font-weight: 600;")
              .WithClass("title-bar-field");
 
@@ -121,39 +114,5 @@ public static class MarkdownEditLayoutArea
         container = container.WithView(editorWrapper);
 
         return container;
-    }
-
-    private static void SetupNodeMetadataAutoSave(
-        LayoutAreaHost host,
-        string dataId,
-        MeshNodeMetadata initial,
-        MeshNode node)
-    {
-        var current = (object)initial;
-
-        host.RegisterForDisposal($"autosave_{dataId}",
-            host.Stream.GetDataStream<object>(dataId)
-                .Throttle(TimeSpan.FromMilliseconds(300))
-                .Subscribe(updated =>
-                {
-                    if (object.Equals(current, updated))
-                        return;
-
-                    current = updated;
-
-                    if (updated is not MeshNodeMetadata updatedProps)
-                        return;
-
-                    // Persist via remote stream Update — apply props to the LATEST
-                    // node (Doc/Architecture/InitializationGates.md).
-                    var saveLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
-                        ?.CreateLogger("MeshWeaver.Graph.MarkdownEditLayoutArea");
-                    host.Workspace.GetMeshNodeStream(node.Path)
-                        .Update(current => updatedProps.ApplyTo(current))
-                        .Subscribe(
-                            _ => { },
-                            ex => saveLogger?.LogWarning(ex,
-                                "SetupNodeMetadataAutoSave: UpdateMeshNode failed for {NodePath}", node.Path));
-                }));
     }
 }

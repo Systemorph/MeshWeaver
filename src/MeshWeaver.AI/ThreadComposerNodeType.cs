@@ -33,6 +33,14 @@ namespace MeshWeaver.AI;
 /// class. The content is the dedicated <see cref="ThreadComposer"/> record (message text + the
 /// harness/agent/model comboboxes + attachments) — exactly the fields the out-of-thread composer
 /// owns, not the full conversation <see cref="Thread"/> shape.</para>
+///
+/// <para><b>🚨 Where the composer lives — the rule:</b> the standalone <c>ThreadComposer</c> node
+/// (this singleton, in the user's home under <c>_Thread</c>) is used ONLY when there is NO thread yet
+/// — the new-chat composer. The moment a thread exists, the composer is the thread's INLINE
+/// <see cref="Thread.Composer"/> object on the thread node ITSELF; the thread always refers to its own
+/// embedded composer object, NEVER an outside composer node. <see cref="ComposerOf"/> /
+/// <c>WithComposer</c> read/write whichever inline shape applies (discriminated by NodeType), and the
+/// GUI binds DIRECTLY to that inline location — see <c>ThreadComposerView.ComposerContext</c>.</para>
 /// </summary>
 public static class ThreadComposerNodeType
 {

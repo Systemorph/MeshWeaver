@@ -1139,76 +1139,77 @@ public static class NodeTypeLayoutAreas
                 .Select(d => BuildCompileLogPanel(d!));
         stack = stack.WithView(compileLogPanel, "CompileLogPanel");
 
-        // Editable settings form — auto-saves to MeshNode.Content as NodeTypeDefinition.
-        var dataId = $"nodeTypeConfig_{node.Path.Replace('/', '_')}";
-        var form = NodeTypeConfigForm.FromNode(node, definition);
-        host.UpdateData(dataId, form);
-        SetupNodeTypeConfigAutoSave(host, dataId, form, node, definition);
+        // Editable settings form — bound DIRECTLY to the node stream (IMeshNodeStreamCache), ONE
+        // source of truth. Display Name / Icon are node TOP-LEVEL fields (fields-mode DataContext);
+        // the NodeTypeDefinition settings live in node.Content (content-mode DataContext). Each
+        // control's edit writes straight back to the matching field on the node — no /data replica,
+        // no debounced save subscription. See Doc/GUI/DataBinding "edit node content by binding to
+        // the node stream". (Pointer resolution against the node is case-insensitive, so the
+        // camelCase node/Content JSON binds from these PascalCase pointers.)
+        var nodeFieldsContext = LayoutAreaReference.GetMeshNodeDataContext(node.Path, bindContent: false);
+        var contentContext = LayoutAreaReference.GetMeshNodeDataContext(node.Path, bindContent: true);
 
-        var dataPointer = LayoutAreaReference.GetDataPointer(dataId);
         var formGrid = Controls.Stack
             .WithStyle("display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px;");
 
-        formGrid = formGrid.WithView(new TextFieldControl(new JsonPointerReference(nameof(NodeTypeConfigForm.Name)))
+        formGrid = formGrid.WithView(new TextFieldControl(new JsonPointerReference(nameof(MeshNode.Name)))
         {
             Label = "Display Name",
             Immediate = true,
-            DataContext = dataPointer
+            DataContext = nodeFieldsContext
         });
 
-        formGrid = formGrid.WithView(new TextFieldControl(new JsonPointerReference(nameof(NodeTypeConfigForm.Icon)))
+        formGrid = formGrid.WithView(new TextFieldControl(new JsonPointerReference(nameof(MeshNode.Icon)))
         {
             Label = "Icon",
             Placeholder = "content:icon.svg, /static/…, <svg>…</svg>, or URL",
             Immediate = true,
-            DataContext = dataPointer
+            DataContext = nodeFieldsContext
         });
 
-        formGrid = formGrid.WithView(new TextFieldControl(new JsonPointerReference(nameof(NodeTypeConfigForm.ChildrenQuery)))
+        formGrid = formGrid.WithView(new TextFieldControl(new JsonPointerReference(nameof(NodeTypeDefinition.ChildrenQuery)))
         {
             Label = "Children Query",
             Placeholder = "e.g. nodeType:Person scope:descendants",
             Immediate = true,
-            DataContext = dataPointer
+            DataContext = contentContext
         });
 
-        formGrid = formGrid.WithView(new TextFieldControl(new JsonPointerReference(nameof(NodeTypeConfigForm.DefaultNamespace)))
+        formGrid = formGrid.WithView(new TextFieldControl(new JsonPointerReference(nameof(NodeTypeDefinition.DefaultNamespace)))
         {
             Label = "Default Namespace",
             Placeholder = "Pre-selected namespace in Create form",
             Immediate = true,
-            DataContext = dataPointer
+            DataContext = contentContext
         });
 
-        formGrid = formGrid.WithView(new TextFieldControl(new JsonPointerReference(nameof(NodeTypeConfigForm.PageMaxWidth)))
+        formGrid = formGrid.WithView(new TextFieldControl(new JsonPointerReference(nameof(NodeTypeDefinition.PageMaxWidth)))
         {
             Label = "Page Max Width",
             Placeholder = "e.g. 1200px or 100%",
             Immediate = true,
-            DataContext = dataPointer
+            DataContext = contentContext
         });
 
         stack = stack.WithView(formGrid);
 
-        stack = stack.WithView(new TextAreaControl(new JsonPointerReference(nameof(NodeTypeConfigForm.Description)))
+        stack = stack.WithView(new TextAreaControl(new JsonPointerReference(nameof(NodeTypeDefinition.Description)))
         {
             Label = "Description",
             Placeholder = "Long-form description shown in the Overview and Create dialog.",
             Immediate = true,
-            DataContext = dataPointer
+            DataContext = contentContext
         }.WithRows(4));
 
-        // Release notes — what changed in the next compile. The form-debounce
-        // (SetupNodeTypeConfigAutoSave) writes this onto NodeTypeDefinition.
-        // ReleaseNotes via stream.UpdateMeshNode the moment the user stops
-        // typing; the Create Release click reads no data — it just flips
-        // CompilationStatus to Pending. Pure stream wiring, no Take(1).
-        stack = stack.WithView(new TextAreaControl(new JsonPointerReference(nameof(NodeTypeConfigForm.ReleaseNotes)))
+        // Release notes — what changed in the next compile. Bound straight to
+        // NodeTypeDefinition.ReleaseNotes on the node (content-mode); the Create Release click reads
+        // no data — it just flips CompilationStatus to Pending. Pure stream wiring, no Take(1).
+        stack = stack.WithView(new TextAreaControl(new JsonPointerReference(nameof(NodeTypeDefinition.ReleaseNotes)))
         {
             Label = "Release notes",
             Placeholder = "What changed in the next compile? Shown on each row in the Releases pane.",
             Immediate = true,
-            DataContext = dataPointer
+            DataContext = contentContext
         }.WithRows(3));
 
         // Configuration lambda — read-only preview, with button to open the dedicated editor.
@@ -1252,63 +1253,6 @@ public static class NodeTypeLayoutAreas
         }
 
         return stack;
-    }
-
-    /// <summary>
-    /// Debounced autosave for the NodeType Configuration form. On changes, writes
-    /// the form values back through <c>UpdateMeshNode</c>
-    /// so the edits flow through the live MeshNode stream (GetStream on <see cref="MeshNodeReference"/>)
-    /// — the standard reactive write path. Using <c>UpdateNodeRequest</c> targeted at the local hub
-    /// address would skip the stream patch and leave subscribed views showing stale state.
-    /// No <c>await</c>: composed via Subscribe.
-    /// </summary>
-    private static void SetupNodeTypeConfigAutoSave(
-        LayoutAreaHost host,
-        string dataId,
-        NodeTypeConfigForm initial,
-        MeshNode node,
-        NodeTypeDefinition? originalDefinition)
-    {
-        var current = (object)initial;
-
-        host.RegisterForDisposal($"autosave_{dataId}",
-            host.Stream.GetDataStream<object>(dataId)
-                .Throttle(TimeSpan.FromMilliseconds(400))
-                .Subscribe(updated =>
-                {
-                    if (Equals(current, updated)) return;
-                    current = updated;
-                    if (updated is not NodeTypeConfigForm form) return;
-
-                    // Write through the live stream — this is what GetStream(new MeshNodeReference())
-                    // subscribers observe. UpdateMeshNode reads the latest node, applies the lambda,
-                    // and emits a patch on the MeshNode data-source stream.
-                    var saveLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
-                        ?.CreateLogger("MeshWeaver.Graph.NodeTypeLayoutAreas");
-                    host.Workspace.GetMeshNodeStream(node.Path).Update(liveNode =>
-                    {
-                        var baseDef = (liveNode.Content as NodeTypeDefinition)
-                            ?? originalDefinition
-                            ?? new NodeTypeDefinition();
-                        var nextDefinition = baseDef with
-                        {
-                            Description = string.IsNullOrWhiteSpace(form.Description) ? null : form.Description,
-                            ChildrenQuery = string.IsNullOrWhiteSpace(form.ChildrenQuery) ? null : form.ChildrenQuery,
-                            DefaultNamespace = string.IsNullOrWhiteSpace(form.DefaultNamespace) ? null : form.DefaultNamespace,
-                            PageMaxWidth = string.IsNullOrWhiteSpace(form.PageMaxWidth) ? null : form.PageMaxWidth,
-                            ReleaseNotes = string.IsNullOrWhiteSpace(form.ReleaseNotes) ? null : form.ReleaseNotes,
-                        };
-                        return liveNode with
-                        {
-                            Name = string.IsNullOrWhiteSpace(form.Name) ? liveNode.Name : form.Name,
-                            Icon = string.IsNullOrWhiteSpace(form.Icon) ? null : form.Icon,
-                            Content = nextDefinition
-                        };
-                    }).Subscribe(
-                        _ => { },
-                        ex => saveLogger?.LogWarning(ex,
-                            "SetupNodeTypeConfigAutoSave: UpdateMeshNode failed for {NodePath}", node.Path));
-                }));
     }
 
     /// <summary>

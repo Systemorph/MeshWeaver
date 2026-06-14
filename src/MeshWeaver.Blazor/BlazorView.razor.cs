@@ -108,7 +108,43 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
             {
                 try
                 {
-                    if (Model is not null && !reference.Pointer.StartsWith('/'))
+                    // Node-bound DataContext: read the field straight off the node stream (the
+                    // process-wide IMeshNodeStreamCache) instead of a /data replica. ONE source of
+                    // truth — see LayoutAreaReference.MeshNodePrefix and Doc/GUI/DataBinding.
+                    if (LayoutAreaReference.TryParseMeshNodeDataContext(DataContext) is { } meshNode
+                        && !reference.Pointer.StartsWith('/'))
+                    {
+                        bindings.Add(MeshNodeBinding
+                            .Bind(Hub, meshNode.NodePath, meshNode.BindContent, meshNode.SubPath, reference)
+                            .Subscribe(v =>
+                            {
+                                if (_viewDisposed) return;
+                                try
+                                {
+                                    InvokeAsync(() =>
+                                    {
+                                        if (_viewDisposed) return;
+                                        try
+                                        {
+                                            setter(Hub.ConvertSingle(v, conversion, defaultValue));
+                                            RequestStateChange();
+                                        }
+                                        catch (ObjectDisposedException) { /* renderer gone */ }
+                                        catch (Exception ex)
+                                        {
+                                            Logger.LogError(ex, "Error setting node-bound property value in Area {area}", Area);
+                                        }
+                                    });
+                                }
+                                catch (ObjectDisposedException) { /* renderer gone */ }
+                                catch (Exception ex)
+                                {
+                                    Logger.LogError(ex, "Error scheduling node-bound property update in Area {area}", Area);
+                                }
+                            },
+                            ex => Logger.LogError(ex, "Node-bound binding faulted for '{pointer}' in Area {area}", reference.Pointer, Area)));
+                    }
+                    else if (Model is not null && !reference.Pointer.StartsWith('/'))
                     {
                         var convertedValue = Hub.ConvertSingle(Model.GetValueFromModel(reference), conversion, defaultValue);
                         setter(convertedValue);
@@ -221,6 +257,16 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
 
     protected virtual void UpdatePointer(object? value, JsonPointerReference reference)
     {
+        // Node-bound DataContext: write the edited field straight back to the node stream
+        // (per-field read-modify-write through IMeshNodeStreamCache). No /data replica, no
+        // server-side save subscription — see LayoutAreaReference.MeshNodePrefix.
+        if (LayoutAreaReference.TryParseMeshNodeDataContext(DataContext) is { } meshNode
+            && !reference.Pointer.StartsWith('/'))
+        {
+            MeshNodeBinding.Write(Hub, Logger, meshNode.NodePath, meshNode.BindContent, meshNode.SubPath, reference, value);
+            return;
+        }
+
         if(Stream is null)
             throw new InvalidOperationException("Stream must be set before updating pointers.");
         Stream.UpdatePointer(value, DataContext ?? "/", reference, Model);

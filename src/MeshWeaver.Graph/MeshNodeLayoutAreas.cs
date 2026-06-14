@@ -1602,10 +1602,17 @@ public static class MeshNodeLayoutAreas
         var contentType = instance.GetType();
         var nodePath = node.Path;
         var dataId = Layout.Domain.EditLayoutArea.GetDataId(nodePath);
-        host.UpdateData(dataId, instance);
 
-        // Setup auto-save (same mechanism as Overview)
-        OverviewLayoutArea.SetupAutoSave(host, dataId, instance, node);
+        // The form binds DIRECTLY to the node's Content (node-bound DataContext): each field reads
+        // from and writes straight back to the node stream — ONE source of truth, no /data replica,
+        // no SetupAutoSave save subscription. The one-way /data projection below keeps the
+        // derived-label read views (dimension/options/date) correct from the Layout layer.
+        var boundContext = LayoutAreaReference.GetMeshNodeDataContext(nodePath, bindContent: true);
+        host.RegisterForDisposal($"editnode-content-projection_{dataId}",
+            host.Workspace.GetMeshNodeStream(nodePath)
+                .Select(n => n?.Content)
+                .Where(c => c is not null)
+                .Subscribe(content => host.UpdateData(dataId, content!)));
 
         var container = Controls.Stack.WithWidth("100%").WithStyle(GetContainerStyle(host));
 
@@ -1614,7 +1621,7 @@ public static class MeshNodeLayoutAreas
 
         // Property form in pure edit mode (not toggleable)
         container = container.WithView(Layout.Domain.EditLayoutArea.BuildPropertyForm(
-            host, contentType, dataId, canEdit: true, isToggleable: false));
+            host, contentType, dataId, canEdit: true, isToggleable: false, boundDataContext: boundContext));
 
         return container;
     }
