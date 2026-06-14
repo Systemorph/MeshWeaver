@@ -383,6 +383,34 @@ else
         @{ var inputDimmed = showSubmissionProgress; }
         <div class="thread-chat-input-content @(inputDimmed ? "dimmed" : "")" aria-hidden="@(inputDimmed.ToString().ToLowerInvariant())">
 
+        @* Thin, READ-ONLY thread status — what this thread uses (harness · agent · model)
+           plus tokens consumed, fully data-bound to the composer selections
+           (boundHarness/boundAgentPath/boundModelPath) and ThreadViewModel.TokensUsed.
+           Selection itself is via the /harness, /agent and /model slash-commands — this
+           row only displays. *@
+        @if (!string.IsNullOrEmpty(boundHarness) || !string.IsNullOrEmpty(boundModelPath) || !string.IsNullOrEmpty(boundAgentPath))
+        {
+            <div class="thread-chat-status-row">
+                @if (!string.IsNullOrEmpty(boundHarness))
+                {
+                    <span class="thread-chat-status-item" title="Harness (/harness to change)">⬡ @LastSegment(boundHarness)</span>
+                }
+                @if (!string.IsNullOrEmpty(boundAgentPath))
+                {
+                    <span class="thread-chat-status-item" title="Agent (/agent to change)">🤖 @LastSegment(boundAgentPath)</span>
+                }
+                @if (!string.IsNullOrEmpty(boundModelPath))
+                {
+                    <span class="thread-chat-status-item" title="Model (/model to change)">✦ @LastSegment(boundModelPath)</span>
+                }
+                @if ((ThreadViewModel?.TokensUsed ?? 0) > 0)
+                {
+                    <span class="thread-chat-status-sep">·</span>
+                    <span class="thread-chat-status-item thread-chat-status-tokens" title="Tokens used for this thread">@FormatTokens(ThreadViewModel!.TokensUsed) tok</span>
+                }
+            </div>
+        }
+
         @* Inline command picker — /model and /agent with no argument pop this menu of
            everything installed; clicking an item writes the composer selection (same as
            typing /model Name) and confirms in the status row below. *@

@@ -1711,6 +1711,10 @@ internal static class ThreadExecution
                         ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null,
                         PendingUserMessage = null, PendingAgentName = null, PendingModelName = null,
                         PendingContextPath = null, PendingAttachments = null,
+                        // Accumulate this round's token usage into the thread total so the
+                        // data-bound thread status row can show "tokens used for this thread"
+                        // (the field was previously only ever reset to 0, never summed).
+                        TokensUsed = t.TokensUsed + (totalTokens ?? 0),
                         Summary = summaryText
                     }).Subscribe(
                         _ => { },

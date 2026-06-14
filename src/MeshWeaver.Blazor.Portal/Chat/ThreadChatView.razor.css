@@ -281,6 +281,38 @@
     user-select: none;
 }
 
+/* Thin, read-only thread status — harness · agent · model · tokens used.
+   Muted + small so it reads as metadata above the editor, not a control. */
+.thread-chat-status-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 0 2px 6px 2px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--neutral-foreground-hint);
+    min-width: 0;
+}
+
+.thread-chat-status-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 180px;
+}
+
+.thread-chat-status-sep {
+    color: var(--neutral-stroke-rest);
+}
+
+.thread-chat-status-tokens {
+    font-variant-numeric: tabular-nums;
+}
+
 .input-container {
     margin: 8px 0;
     min-width: 0;

@@ -233,6 +233,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private static string? LastSegment(string? path) =>
         string.IsNullOrEmpty(path) ? path : path.Split('/')[^1];
 
+    /// <summary>Compact token count for the thin thread status row (1234 → "1.2k").</summary>
+    private static string FormatTokens(int tokens) =>
+        tokens >= 1000 ? $"{tokens / 1000.0:0.#}k" : tokens.ToString();
+
     /// <summary>Fallback model id (the deployment's configured standard tier, <c>ModelTier:Standard</c>)
     /// when nothing is selected — so submit never sends an empty model that the agent factory can't
     /// resolve (the "no model configured" failure).</summary>
