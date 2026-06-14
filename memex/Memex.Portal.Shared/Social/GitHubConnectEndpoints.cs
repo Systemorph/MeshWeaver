@@ -78,29 +78,41 @@ public static class GitHubConnectEndpoints
         {
             var logger = loggers.CreateLogger("GitHubConnect");
 
-            if (!string.IsNullOrEmpty(error))
-                return Results.Redirect($"/?connect=github-error&reason={Uri.EscapeDataString(error)}");
-            if (!http.Request.Cookies.TryGetValue(StateCookieName, out var cookie) || string.IsNullOrEmpty(cookie))
-                return Results.BadRequest("Missing connect state cookie (CSRF).");
-            http.Response.Cookies.Delete(StateCookieName);
-
-            string cookieState, returnPath;
-            try
+            // Recover the originating page (and CSRF state) from the cookie FIRST, so every failure
+            // below redirects the user BACK to the GitHub Sync tab WITH a visible reason — never a
+            // silent bounce to the home page. (Errors are also logged at Warning so they surface in
+            // Loki / App Insights, not just the GUI.)
+            string cookieState = "", returnPath = "/";
+            if (http.Request.Cookies.TryGetValue(StateCookieName, out var cookie) && !string.IsNullOrEmpty(cookie))
             {
-                var parts = Encoding.UTF8.GetString(WebEncoders.Base64UrlDecode(cookie)).Split('|', 2);
-                cookieState = parts[0];
-                returnPath = parts.Length > 1 ? parts[1] : "/";
+                http.Response.Cookies.Delete(StateCookieName);
+                try
+                {
+                    var parts = Encoding.UTF8.GetString(WebEncoders.Base64UrlDecode(cookie)).Split('|', 2);
+                    cookieState = parts[0];
+                    returnPath = parts.Length > 1 ? parts[1] : "/";
+                }
+                catch { /* malformed cookie — fall through to the state check below */ }
             }
-            catch { return Results.BadRequest("Bad state cookie."); }
 
+            IResult Fail(string reason)
+            {
+                logger.LogWarning("GitHub connect failed: {Reason} (user {User})", reason, http.User.Identity?.Name);
+                return Results.Redirect(SafeReturn(returnPath, "github-error", reason));
+            }
+
+            if (!string.IsNullOrEmpty(error))
+                return Fail(error!);
+            if (string.IsNullOrEmpty(cookieState))
+                return Fail("missing or bad connect-state cookie (CSRF)");
             if (!string.Equals(cookieState, state, StringComparison.Ordinal))
-                return Results.BadRequest("State mismatch (CSRF).");
+                return Fail("connect-state mismatch (CSRF)");
             if (string.IsNullOrEmpty(code))
-                return Results.BadRequest("No authorization code.");
+                return Fail("no authorization code returned by GitHub");
 
             var userId = http.User.Identity?.Name;
             if (string.IsNullOrEmpty(userId))
-                return Results.BadRequest("Not authenticated.");
+                return Fail("not signed in");
 
             var redirectUri = BuildRedirectUri(http);
             var tcs = new TaskCompletionSource<IResult>();
@@ -112,12 +124,13 @@ public static class GitHubConnectEndpoints
                     _ =>
                     {
                         logger.LogInformation("Stored GitHub credential for {User}", userId);
-                        tcs.TrySetResult(Results.Redirect(SafeReturn(returnPath, "github-ok")));
+                        tcs.TrySetResult(Results.Redirect(SafeReturn(returnPath, "github-ok", null)));
                     },
                     ex =>
                     {
+                        // Surface the REAL reason (token exchange / GetLogin / credential write) — never swallow.
                         logger.LogWarning(ex, "GitHub connect failed for {User}", userId);
-                        tcs.TrySetResult(Results.Redirect(SafeReturn(returnPath, "github-error")));
+                        tcs.TrySetResult(Results.Redirect(SafeReturn(returnPath, "github-error", ex.Message)));
                     });
             return await tcs.Task;
         }).RequireAuthorization();
@@ -125,11 +138,14 @@ public static class GitHubConnectEndpoints
         return endpoints;
     }
 
-    private static string SafeReturn(string returnPath, string status)
+    private static string SafeReturn(string returnPath, string status, string? reason)
     {
         var rp = string.IsNullOrWhiteSpace(returnPath) || !returnPath.StartsWith("/", StringComparison.Ordinal) ? "/" : returnPath;
         var sep = rp.Contains('?') ? "&" : "?";
-        return $"{rp}{sep}connect={status}";
+        var url = $"{rp}{sep}connect={status}";
+        if (!string.IsNullOrEmpty(reason))
+            url += $"&reason={Uri.EscapeDataString(reason!)}";
+        return url;
     }
 
     private static string GenerateState()
