@@ -1,4 +1,6 @@
-﻿using System.Threading.Tasks;
+﻿using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
@@ -26,7 +28,7 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
         // Log information using message-based approach
         activity.LogInformation("Starting Sub-activity {Activity}", subActivity.Id);
         
-        var closeTask = activity.Completion;
+        var closeTask = activity.Completion.FirstAsync().ToTask(TestContext.Current.CancellationToken);
         
         // Complete activity using message-based approach
 
@@ -51,9 +53,9 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
         // Start sub-activity using message-based approach
         var subActivity = activity.StartSubActivity("gugus");
         
-        var taskComplete = activity.Completion;
+        var taskComplete = activity.Completion.FirstAsync().ToTask(TestContext.Current.CancellationToken);
         ActivityLog? activityLog = null;
-        var taskComplete2 = activity.Completion; // Both should refer to the same completion
+        var taskComplete2 = activity.Completion.FirstAsync().ToTask(TestContext.Current.CancellationToken); // Both should refer to the same completion
         
         // Initially activityLog should be null
         activityLog.Should().BeNull();
@@ -65,12 +67,15 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
         activityLog = await taskComplete
             .WaitAsync(3.Seconds(), TestContext.Current.CancellationToken)
             ;
-        
+        // Second independent subscription to the same reactive completion observes the
+        // identical terminal log (AsyncSubject replays the final value to every subscriber).
+        var activityLog2 = await taskComplete2
+            .WaitAsync(3.Seconds(), TestContext.Current.CancellationToken);
+
         await DisposeAsync();
-        taskComplete.Status.Should().Be(TaskStatus.RanToCompletion);
-        taskComplete2.Status.Should().Be(TaskStatus.RanToCompletion);
         activityLog.Should().NotBeNull();
         activityLog.Status.Should().Be(ActivityStatus.Succeeded);
+        activityLog2.Status.Should().Be(ActivityStatus.Succeeded);
     }
 
     /// <summary>
@@ -89,7 +94,7 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
         subActivity.Complete();
 
         // Wait for main activity to auto-complete
-        var log = await activity.Completion
+        var log = await activity.Completion.FirstAsync().ToTask(TestContext.Current.CancellationToken)
             .WaitAsync(3.Seconds(), TestContext.Current.CancellationToken);
 
         log.Should().NotBeNull();
@@ -116,7 +121,7 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
 
         activity.Complete();
 
-        var log = await activity.Completion
+        var log = await activity.Completion.FirstAsync().ToTask(TestContext.Current.CancellationToken)
             .WaitAsync(3.Seconds(), TestContext.Current.CancellationToken);
 
         log.Should().NotBeNull();
@@ -143,7 +148,7 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
         // Parent activity completes — simulates DataExtensions line 557-561
         activity.Complete();
 
-        var finalLog = await activity.Completion
+        var finalLog = await activity.Completion.FirstAsync().ToTask(TestContext.Current.CancellationToken)
             .WaitAsync(3.Seconds(), TestContext.Current.CancellationToken);
 
         finalLog.Status.Should().Be(ActivityStatus.Failed,
