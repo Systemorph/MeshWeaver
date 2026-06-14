@@ -16,12 +16,15 @@ public class BuiltInCommandProvider : IStaticNodeProvider
     /// <inheritdoc />
     public IEnumerable<MeshNode> GetStaticNodes()
     {
+        // `sort:order` puts the catalog's intended head first (Assistant's order:-1 leads agents,
+        // the catalog index leads models/harnesses) so the picker's default-to-first selects it —
+        // ordering lives in the QUERY (data), never replicated in the GUI picker.
         yield return Command("agent", "Switch the agent for subsequent messages",
-            "namespace:Agent nodeType:Agent", "agentName", "Choose an agent");
+            "namespace:Agent nodeType:Agent sort:order", "agentName", "Choose an agent");
         yield return Command("model", "Switch the AI model for subsequent messages",
-            "namespace:_Provider nodeType:LanguageModel scope:descendants", "modelName", "Choose a model");
+            "namespace:_Provider nodeType:LanguageModel scope:descendants sort:order", "modelName", "Choose a model");
         yield return Command("harness", "Switch the harness (runtime) for subsequent messages",
-            "namespace:Harness nodeType:Harness", "harness", "Choose a harness");
+            "namespace:Harness nodeType:Harness sort:order", "harness", "Choose a harness");
     }
 
     private static MeshNode Command(string id, string description, string query, string field, string title) =>

@@ -27,20 +27,31 @@ public static class CommandNodeType
     /// Registers the Command type node, the content type, and the static-node provider that
     /// serves the built-in commands read-only under the <c>Command</c> partition.
     /// </summary>
-    public static TBuilder AddCommandType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
+    public static TBuilder AddCommandType<TBuilder>(this TBuilder builder,
+        IReadOnlySet<string>? serveFromPartition = null) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
         builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         builder.ConfigureHub(config => config.WithType<CommandDefinition>(nameof(CommandDefinition)));
+        // When the "Command" partition is DB-synced (static-repo import), DO NOT register the
+        // read-only in-memory static surfaces — they would shadow Postgres and reject the import's
+        // writes (and on the distributed/PG path the in-memory adapter is never consulted by
+        // queries, so the commands would be invisible). The import materializes them into the
+        // partition; PG serves them. Mirrors AddAgentType — see CommandStaticRepoSource +
+        // Doc/Architecture/StaticRepoImport.md.
+        var dbSynced = serveFromPartition?.Contains(RootNamespace) == true;
         builder.ConfigureServices(services =>
         {
             services.TryAddSingleton<BuiltInCommandProvider>();
-            services.AddSingleton<IStaticNodeProvider>(sp => sp.GetRequiredService<BuiltInCommandProvider>());
-            services.AddSingleton<IPartitionStorageProvider>(sp =>
-                new StaticNodePartitionStorageProvider(
-                    RootNamespace,
-                    sp.GetRequiredService<BuiltInCommandProvider>(),
-                    description: "Built-in chat commands (read-only)."));
+            if (!dbSynced)
+            {
+                services.AddSingleton<IStaticNodeProvider>(sp => sp.GetRequiredService<BuiltInCommandProvider>());
+                services.AddSingleton<IPartitionStorageProvider>(sp =>
+                    new StaticNodePartitionStorageProvider(
+                        RootNamespace,
+                        sp.GetRequiredService<BuiltInCommandProvider>(),
+                        description: "Built-in chat commands (read-only)."));
+            }
             return services;
         });
         return builder;

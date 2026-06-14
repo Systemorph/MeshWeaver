@@ -6,74 +6,76 @@ using MeshWeaver.Messaging;
 namespace MeshWeaver.AI.Commands;
 
 /// <summary>
-/// Context provided to a chat command during execution. Deliberately GENERIC — it carries no
-/// per-command data (no agent/model/harness lists or setters). A command that needs to pick a
-/// mesh node declares its query + target composer field and returns
-/// <see cref="CommandResult.ShowPicker"/>; the host renders ONE generic node picker and writes
-/// the chosen node's path back. So a module can register any <see cref="IChatCommand"/> (see
-/// <see cref="MeshNodePickCommand"/> for the common "pick a node by query" case) WITHOUT touching
-/// this type or the chat view.
+/// The execution context handed to a chat command's handler (<see cref="IChatCommand.Execute"/>).
+/// A command is a HANDLER — like a button's click action — that runs <b>in the thread</b> when the
+/// user executes it. The context gives the handler everything it needs to run its workflow WITHOUT
+/// knowing anything about the GUI:
+/// <list type="bullet">
+///   <item><b>thread access</b> — <see cref="Hub"/> (resolve the workspace/services + write nodes),
+///     <see cref="ThreadPath"/>, <see cref="ComposerPath"/> (the <c>ThreadComposer</c> the selections
+///     persist on), and <see cref="ContextPath"/> (the navigation context);</item>
+///   <item><b>GUI callbacks</b> — the handler TRIGGERS these to inject GUI (e.g. pop the node selector
+///     via <see cref="ShowNodePicker"/>) without referencing any Blazor type. The host (the chat view)
+///     wires the implementations; a command in any module composes them freely.</item>
+/// </list>
+///
+/// <para>This is the "emancipate commands from the GUI" surface: a module ships an
+/// <see cref="IChatCommand"/> (or, for the common pick case, a <see cref="MeshNodePickCommand"/> /
+/// a <c>nodeType:Command</c> node) and it works in the chat with NO change to the chat view. The
+/// callbacks are optional (null in a headless/test host), so handlers null-guard them and stay
+/// unit-testable without a mesh or a GUI. See <c>Doc/AI/ChatCommands.md</c>.</para>
 /// </summary>
 public record CommandContext
 {
-    /// <summary>The parsed command (name + arguments).</summary>
+    /// <summary>The parsed command (name + arguments) the user executed.</summary>
     public required ParsedCommand ParsedCommand { get; init; }
 
     /// <summary>
-    /// The chat hub — a command can resolve the workspace / services from it for anything beyond
-    /// the node-pick pattern. Optional so commands are unit-testable without a mesh.
+    /// The chat hub — the handler resolves the workspace / services from it and writes nodes
+    /// (e.g. <c>Hub.GetMeshNodeStream(ComposerPath).Update(...)</c>). Optional so commands are
+    /// unit-testable without a mesh.
     /// </summary>
     public IMessageHub? Hub { get; init; }
 
     /// <summary>The current navigation context path (used to scope node-pick queries). Optional.</summary>
     public string? ContextPath { get; init; }
 
-    /// <summary>Current agent context (address, layout area).</summary>
-    public AgentContext? AgentContext { get; init; }
+    /// <summary>
+    /// The thread this command runs in (null for the out-of-thread composer / new-thread case).
+    /// </summary>
+    public string? ThreadPath { get; init; }
 
-    /// <summary>Registry of all commands (for the /help command).</summary>
+    /// <summary>
+    /// The <c>ThreadComposer</c> node path the selections (agent / model / harness / …) persist on.
+    /// The standard place a command saves its picked value — the status row + the next submission
+    /// read it back. <see cref="ShowNodePicker"/>'s default host writes the selected node PATH onto
+    /// the <see cref="NodePickerRequest.ComposerField"/> of this node.
+    /// </summary>
+    public string? ComposerPath { get; init; }
+
+    /// <summary>Registry of all commands (for the <c>/help</c> command).</summary>
     public ChatCommandRegistry? CommandRegistry { get; init; }
+
+    /// <summary>
+    /// GUI callback: pop the generic mesh-node selector for <see cref="NodePickerRequest.Query"/>;
+    /// on selection the host writes the chosen node's PATH onto the composer field. A command TRIGGERS
+    /// this to inject the picker GUI without referencing any Blazor type. Null in a headless host.
+    /// </summary>
+    public Action<NodePickerRequest>? ShowNodePicker { get; init; }
+
+    /// <summary>
+    /// GUI callback: surface a one-line status / error / help message under the chat input. Null in a
+    /// headless host. The bool argument styles it as an error.
+    /// </summary>
+    public Action<string, bool>? ShowStatus { get; init; }
 }
 
 /// <summary>
-/// A request from a command to the host to render a node picker: list the mesh nodes matching
-/// <see cref="Query"/>, and on selection write the chosen node's PATH onto the composer field
-/// <see cref="ComposerField"/> (a camelCase <c>ThreadComposer</c> property name, e.g. <c>harness</c>,
+/// A request from a command's handler to the host to render the generic node selector: list the mesh
+/// nodes matching <see cref="Query"/> (ordering + eligibility are the query's concern — e.g.
+/// <c>... sort:order</c>), and on selection write the chosen node's PATH onto the composer field
+/// <see cref="ComposerField"/> (a camelCase <c>ThreadComposer</c> property — <c>harness</c>,
 /// <c>agentName</c>, <c>modelName</c>). When <see cref="SearchTerm"/> is non-null the host pre-filters
 /// to it and auto-selects an exact match (so <c>/model gpt-4o</c> switches without a click).
 /// </summary>
 public record NodePickerRequest(string Query, string ComposerField, string Title, string? SearchTerm = null);
-
-/// <summary>
-/// Result of executing a command.
-/// </summary>
-public record CommandResult
-{
-    /// <summary>Whether the command executed successfully.</summary>
-    public bool Success { get; init; }
-
-    /// <summary>Message to display to the user (error, confirmation, or picker fallback list).</summary>
-    public string? Message { get; init; }
-
-    /// <summary>Whether to proceed with sending the message to the AI.</summary>
-    public bool ShouldSendToAI { get; init; } = false;
-
-    /// <summary>
-    /// Optional node-picker request. When set, the host renders the generic node picker for
-    /// <see cref="NodePickerRequest.Query"/> and writes the selection to the composer field —
-    /// the host wires the selection exactly as if the user had typed the command with that value.
-    /// </summary>
-    public NodePickerRequest? Picker { get; init; }
-
-    /// <summary>Creates a successful result.</summary>
-    public static CommandResult Ok(string? message = null) =>
-        new() { Success = true, Message = message };
-
-    /// <summary>Creates a failed result.</summary>
-    public static CommandResult Error(string message) =>
-        new() { Success = false, Message = message };
-
-    /// <summary>Creates a successful result that asks the host to render the generic node picker.</summary>
-    public static CommandResult ShowPicker(NodePickerRequest picker, string? message = null) =>
-        new() { Success = true, Message = message, Picker = picker };
-}

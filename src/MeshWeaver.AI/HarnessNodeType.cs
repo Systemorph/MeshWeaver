@@ -26,22 +26,34 @@ public static class HarnessNodeType
     /// catalog provider that turns every registered <see cref="IHarness"/> into a
     /// read-only node under the <c>Harness</c> partition.
     /// </summary>
-    public static TBuilder AddHarnessType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
+    public static TBuilder AddHarnessType<TBuilder>(this TBuilder builder,
+        IReadOnlySet<string>? serveFromPartition = null) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
         builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
+        // When the "Harness" partition is DB-synced (static-repo import), DO NOT register the
+        // read-only in-memory static surfaces — on the distributed/PG path queries never consult
+        // the in-memory adapter, so the harness catalog would be invisible (empty picker / the
+        // combobox spins). The import materializes harnesses into the partition; PG serves them.
+        // Mirrors AddAgentType — see HarnessStaticRepoSource + Doc/Architecture/StaticRepoImport.md.
+        var dbSynced = serveFromPartition?.Contains(RootNamespace) == true;
         builder.ConfigureServices(services =>
         {
             // The native MeshWeaver harness ships from this assembly. CLI harnesses
             // add their own IHarness from their DLLs (TryAddEnumerable composes them).
+            // Registered regardless of dbSynced — the import SOURCE (HarnessStaticRepoSource)
+            // wraps BuiltInHarnessProvider, which reads this IHarness collection.
             services.TryAddEnumerable(ServiceDescriptor.Singleton<IHarness, MeshWeaverHarness>());
             services.TryAddSingleton<BuiltInHarnessProvider>();
-            services.AddSingleton<IStaticNodeProvider>(sp => sp.GetRequiredService<BuiltInHarnessProvider>());
-            services.AddSingleton<IPartitionStorageProvider>(sp =>
-                new StaticNodePartitionStorageProvider(
-                    RootNamespace,
-                    sp.GetRequiredService<BuiltInHarnessProvider>(),
-                    description: "Built-in harness definitions (read-only)."));
+            if (!dbSynced)
+            {
+                services.AddSingleton<IStaticNodeProvider>(sp => sp.GetRequiredService<BuiltInHarnessProvider>());
+                services.AddSingleton<IPartitionStorageProvider>(sp =>
+                    new StaticNodePartitionStorageProvider(
+                        RootNamespace,
+                        sp.GetRequiredService<BuiltInHarnessProvider>(),
+                        description: "Built-in harness definitions (read-only)."));
+            }
             return services;
         });
         return builder;

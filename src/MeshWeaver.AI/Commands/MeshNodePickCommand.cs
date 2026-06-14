@@ -39,7 +39,7 @@ public abstract class MeshNodePickCommand : IChatCommand
     public virtual string Usage => $"/{Name} [name]";
 
     /// <inheritdoc />
-    public Task<CommandResult> ExecuteAsync(CommandContext context, CancellationToken cancellationToken = default)
+    public void Execute(CommandContext context)
     {
         var raw = context.ParsedCommand.RawArguments.Trim();
         // Normalise the argument to a bare name: "@agent/Worker" / "Agent/Worker" → "Worker".
@@ -47,8 +47,9 @@ public abstract class MeshNodePickCommand : IChatCommand
             ? null
             : raw.Contains('/') ? raw[(raw.LastIndexOf('/') + 1)..].Trim() : raw;
 
-        return Task.FromResult(CommandResult.ShowPicker(
-            new NodePickerRequest(Query, ComposerField, Title, term),
-            term is null ? $"{Title} — or type `{Usage}`." : null));
+        // Trigger the host's node-selector GUI; on selection it writes the chosen node PATH onto the
+        // composer's ComposerField. The picker (and its default-to-first) order/eligibility come from
+        // the Query (e.g. `... sort:order`) — never replicated in the GUI.
+        context.ShowNodePicker?.Invoke(new NodePickerRequest(Query, ComposerField, Title, term));
     }
 }

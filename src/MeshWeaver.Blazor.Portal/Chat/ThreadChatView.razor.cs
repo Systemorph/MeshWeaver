@@ -799,52 +799,53 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (CommandRegistry == null)
             return;
 
-        if (!CommandRegistry.TryGetCommand(parsedCommand.Name, out var command) || command == null)
-        {
-            // Not a C# command (those are now just /help) — resolve a nodeType:Command MESH NODE.
-            // Built-in /agent /model /harness AND any Space/NodeType/user-defined command resolve
-            // here, with namespace inheritance (CommandQueries). Reactive — reports "unknown" if
-            // nothing matches.
-            ResolveCommandNodeAndRun(parsedCommand);
-            return;
-        }
-
-        // 🚦 GENERIC command context — no per-command data/setters. A node-pick command
-        // (MeshNodePickCommand) returns a NodePickerRequest; the host renders ONE generic
-        // picker (OpenPicker) and writes the chosen node path to the named composer field.
+        // 🚦 GENERIC command context — no per-command data/setters. The command is a HANDLER that
+        // runs in this thread and TRIGGERS the GUI callbacks below to inject UI (the node selector)
+        // or surface status. The chat view knows nothing about any specific command; a module ships
+        // an IChatCommand (or a nodeType:Command node) and it just works. See Doc/AI/ChatCommands.md.
         var context = new CommandContext
         {
             ParsedCommand = parsedCommand,
             Hub = Hub,
             ContextPath = initialContext,
-            CommandRegistry = CommandRegistry
-        };
-
-        try
-        {
-            var result = await command.ExecuteAsync(context);
-            if (result.Picker is { } picker)
+            ThreadPath = threadPath,
+            ComposerPath = _templatePath,
+            CommandRegistry = CommandRegistry,
+            // GUI callback: pop the generic node selector; selection writes the node PATH onto the
+            // composer field (saved on ThreadComposer — the status row + next submission read it).
+            ShowNodePicker = picker =>
             {
-                // The command asked for a node picker — the picker IS the response.
                 lastCommandStatus = null;
                 lastCommandStatusIsError = false;
                 OpenPicker(picker);
-            }
-            else
+            },
+            // GUI callback: status / error / help line under the input.
+            ShowStatus = (msg, isError) =>
             {
                 pendingPicker = null;
                 pickerNodes = [];
-                lastCommandStatus = result.Message;
-                lastCommandStatusIsError = !result.Success;
+                lastCommandStatus = msg;
+                lastCommandStatusIsError = isError;
             }
+        };
+
+        if (!CommandRegistry.TryGetCommand(parsedCommand.Name, out var command) || command == null)
+        {
+            // Not a registered C# command — resolve a nodeType:Command MESH NODE (the built-in
+            // /agent /model /harness ship as Command nodes; Spaces/NodeTypes/users add their own).
+            // The node's CommandDefinition IS the pick spec → triggers the SAME ShowNodePicker.
+            ResolveCommandNodeAndRun(parsedCommand, context);
+            return;
+        }
+
+        try
+        {
+            command.Execute(context);
         }
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "[ThreadChat:{InstanceId}] /{Cmd} failed", _instanceId, parsedCommand.Name);
-            lastCommandStatus = $"/{parsedCommand.Name} failed: {ex.Message}";
-            lastCommandStatusIsError = true;
-            pendingPicker = null;
-            pickerNodes = [];
+            context.ShowStatus?.Invoke($"/{parsedCommand.Name} failed: {ex.Message}", true);
         }
 
         await InvokeAsync(StateHasChanged);
@@ -858,12 +859,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// catalog + context+ancestors + user-home+ancestors). There is no C# class per command.
     /// Reactive: queries the mesh once, then opens the picker or reports "unknown command".
     /// </summary>
-    private void ResolveCommandNodeAndRun(ParsedCommand parsed)
+    private void ResolveCommandNodeAndRun(ParsedCommand parsed, CommandContext context)
     {
         var workspace = Hub.ServiceProvider.GetService<IWorkspace>();
         if (workspace is null)
         {
-            ReportUnknownCommand(parsed.Name);
+            context.ShowStatus?.Invoke($"Unknown command: /{parsed.Name}", true);
             return;
         }
 
@@ -878,22 +879,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                         .FirstOrDefault(c => string.Equals(c.Id, parsed.Name, StringComparison.OrdinalIgnoreCase));
                     if (match is null)
                     {
-                        ReportUnknownCommand(parsed.Name);
+                        context.ShowStatus?.Invoke($"Unknown command: /{parsed.Name}", true);
                         return;
                     }
+                    // The Command node's CommandDefinition IS the pick spec → trigger the SAME
+                    // ShowNodePicker callback the C# commands use. Identical GUI, one code path.
                     var term = parsed.Arguments.Length == 0 ? null : LastSegment(parsed.RawArguments.Trim());
-                    lastCommandStatus = null;
-                    lastCommandStatusIsError = false;
-                    OpenPicker(match.ToPickerRequest(term));
+                    context.ShowNodePicker?.Invoke(match.ToPickerRequest(term));
                 }),
-                _ => InvokeAsync(() => ReportUnknownCommand(parsed.Name)));
-    }
-
-    private void ReportUnknownCommand(string name)
-    {
-        lastCommandStatus = $"Unknown command: /{name}";
-        lastCommandStatusIsError = true;
-        StateHasChanged();
+                _ => InvokeAsync(() => context.ShowStatus?.Invoke($"Unknown command: /{parsed.Name}", true)));
     }
 
     private void DismissWidget()
@@ -919,6 +913,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             .Take(1)
             .Subscribe(snapshot => InvokeAsync(() =>
             {
+                // The picker is GENERIC: it renders the query result as-is (ordering + which nodes
+                // are eligible are the COMMAND's concern, expressed in its query — never replicated
+                // here). The query already returns nodes ordered/scoped per the CommandDefinition.
                 var nodes = snapshot.Where(n => !string.IsNullOrEmpty(n.Path)).ToList();
 
                 if (!string.IsNullOrEmpty(picker.SearchTerm))

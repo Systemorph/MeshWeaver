@@ -1,6 +1,6 @@
 #pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
-using System.Threading.Tasks;
+using System.Collections.Generic;
 using MeshWeaver.AI.Commands;
 using MeshWeaver.AI.Parsing;
 using Xunit;
@@ -9,24 +9,34 @@ namespace MeshWeaver.AI.Test;
 
 /// <summary>
 /// Unit tests for the slash-command pipeline behind the chat input: <see cref="ChatPreParser"/>
-/// extraction, <see cref="ChatCommandRegistry"/> registration + lookup, and the production
-/// node-pick commands (<c>/agent</c>, <c>/model</c>, <c>/harness</c>).
+/// extraction, <see cref="ChatCommandRegistry"/> registration + lookup, and the command HANDLER
+/// contract.
 ///
-/// <para>The command surface is GENERIC: every node-pick command is a tiny
-/// <see cref="MeshNodePickCommand"/> subclass that declares only its mesh query + target composer
-/// field + title, and returns a <see cref="NodePickerRequest"/>. The host renders one generic node
-/// picker. <see cref="CustomModulePickCommand_Works_WithZeroCoreChanges"/> proves a MODULE can add
-/// its own such command with no changes to <see cref="CommandContext"/> or the chat view — the
-/// executable counterpart of <c>Doc/AI/ChatCommands.md</c>.</para>
+/// <para>A command is a HANDLER (<see cref="IChatCommand.Execute"/>) that runs in the thread and
+/// TRIGGERS GUI callbacks on the <see cref="CommandContext"/> to inject UI — it never references
+/// Blazor. The standard <c>/agent</c> <c>/model</c> <c>/harness</c> pickers ship as
+/// <c>nodeType:Command</c> MESH NODES (see <c>CommandHarnessImportSourceTest</c> +
+/// <c>BuiltInCommandProvider</c>), not C# classes. A CODE command is only needed for a workflow
+/// beyond "pick a node + save it on the composer" — <see cref="HelpCommand"/> and the
+/// <see cref="SpaceCommand"/> example below. <see cref="CustomModulePickCommand_Works_WithZeroCoreChanges"/>
+/// is the executable copy of <c>Doc/AI/ChatCommands.md</c>.</para>
 /// </summary>
 public class ChatCommandsTest
 {
     private readonly ChatPreParser parser = new();
 
-    private CommandContext Ctx(string text) => new()
+    /// <summary>Builds a context whose GUI callbacks capture into the given lists (null = headless).</summary>
+    private CommandContext Ctx(
+        string text,
+        List<NodePickerRequest>? pickers = null,
+        List<(string Msg, bool IsError)>? statuses = null,
+        ChatCommandRegistry? registry = null) => new()
     {
         ParsedCommand = parser.Parse(text).Command
-            ?? throw new System.InvalidOperationException($"Expected slash command in '{text}'")
+            ?? throw new System.InvalidOperationException($"Expected slash command in '{text}'"),
+        CommandRegistry = registry,
+        ShowNodePicker = pickers is null ? null : p => pickers.Add(p),
+        ShowStatus = statuses is null ? null : (m, e) => statuses.Add((m, e))
     };
 
     // ---- ChatPreParser ----
@@ -104,65 +114,73 @@ public class ChatCommandsTest
     {
         var registry = new ChatCommandRegistry();
         registry.Register(new HelpCommand());
-        registry.Register(new AgentCommand());
+        registry.Register(new SpaceCommand());
         registry.GetAllCommands().Should().HaveCount(2);
     }
 
-    // ---- Node-pick commands: each declares query + composer field + title ----
+    // ---- The command HANDLER triggers GUI callbacks (no Blazor, no return value) ----
 
     [Fact]
-    public async Task AgentCommand_NoArgs_RequestsAgentPicker()
+    public void PickCommand_NoArgs_TriggersNodePicker_WithNullTerm()
     {
-        var result = await new AgentCommand().ExecuteAsync(Ctx("/agent"), TestContext.Current.CancellationToken);
-        result.Success.Should().BeTrue();
-        result.Picker.Should().NotBeNull();
-        result.Picker!.Query.Should().Be("namespace:Agent nodeType:Agent");
-        result.Picker.ComposerField.Should().Be("agentName");
-        result.Picker.Title.Should().Be("Choose an agent");
-        result.Picker.SearchTerm.Should().BeNull();
+        var pickers = new List<NodePickerRequest>();
+        new SpaceCommand().Execute(Ctx("/space", pickers));
+
+        var picker = pickers.Should().ContainSingle().Subject;
+        picker.Query.Should().Be("nodeType:Space");
+        picker.ComposerField.Should().Be("contextPath");
+        picker.Title.Should().Be("Choose a Space");
+        picker.SearchTerm.Should().BeNull();
     }
 
     [Fact]
-    public async Task AgentCommand_WithName_PassesSearchTerm()
+    public void PickCommand_WithName_PassesSearchTerm()
     {
-        var result = await new AgentCommand().ExecuteAsync(Ctx("/agent Worker"), TestContext.Current.CancellationToken);
-        result.Picker!.SearchTerm.Should().Be("Worker");
-        result.Picker.ComposerField.Should().Be("agentName");
+        var pickers = new List<NodePickerRequest>();
+        new SpaceCommand().Execute(Ctx("/space Acme", pickers));
+        pickers.Should().ContainSingle().Which.SearchTerm.Should().Be("Acme");
     }
 
     [Fact]
-    public async Task AgentCommand_AtPrefix_NormalisedToBareName()
+    public void PickCommand_AtPrefix_NormalisedToBareName()
     {
-        var result = await new AgentCommand().ExecuteAsync(Ctx("/agent @agent/Worker"), TestContext.Current.CancellationToken);
-        result.Picker!.SearchTerm.Should().Be("Worker", "a '@type/Name' or 'Path/Name' arg normalises to the last segment");
+        var pickers = new List<NodePickerRequest>();
+        new SpaceCommand().Execute(Ctx("/space @space/Acme", pickers));
+        pickers.Should().ContainSingle().Which.SearchTerm.Should().Be("Acme",
+            "a '@type/Name' or 'Path/Name' arg normalises to the last segment");
     }
 
     [Fact]
-    public async Task ModelCommand_NoArgs_RequestsModelPicker_OnTheConfiguredCatalogQuery()
+    public void PickCommand_HeadlessHost_NullCallback_DoesNotThrow()
     {
-        var result = await new ModelCommand().ExecuteAsync(Ctx("/model"), TestContext.Current.CancellationToken);
-        result.Picker!.Query.Should().Be("namespace:_Provider nodeType:LanguageModel scope:descendants");
-        result.Picker.ComposerField.Should().Be("modelName");
-        result.Picker.Title.Should().Be("Choose a model");
+        // ShowNodePicker is null (no GUI wired) — the handler must null-guard and no-op.
+        var ex = Record.Exception(() => new SpaceCommand().Execute(Ctx("/space")));
+        ex.Should().BeNull();
     }
 
     [Fact]
-    public async Task HarnessCommand_NoArgs_RequestsHarnessPicker()
+    public void HelpCommand_TriggersStatus_WithCommandList()
     {
-        var result = await new HarnessCommand().ExecuteAsync(Ctx("/harness"), TestContext.Current.CancellationToken);
-        result.Picker!.Query.Should().Be("namespace:Harness nodeType:Harness");
-        result.Picker.ComposerField.Should().Be("harness");
-        result.Picker.Title.Should().Be("Choose a harness");
+        var registry = new ChatCommandRegistry();
+        registry.Register(new HelpCommand());
+        registry.Register(new SpaceCommand());
+
+        var statuses = new List<(string Msg, bool IsError)>();
+        new HelpCommand().Execute(Ctx("/help", statuses: statuses, registry: registry));
+
+        var status = statuses.Should().ContainSingle().Subject;
+        status.IsError.Should().BeFalse();
+        status.Msg.Should().Contain("/space");
     }
 
     // ---- Executable docs example: a module's own node-pick command ----
 
     /// <summary>
-    /// A module-defined command: pick a Space and drop it into the composer's context. It needs
-    /// ONLY the four declarations — no <see cref="CommandContext"/> field, no chat-view code. It
-    /// registers like any other (<c>services.TryAddEnumerable(ServiceDescriptor.Singleton&lt;IChatCommand,
-    /// SpaceCommand&gt;())</c>), appears in autocomplete via the registry, and the host renders the
-    /// generic picker for its query. This is the executable copy of Doc/AI/ChatCommands.md.
+    /// A module-defined command: pick a Space and drop it into the composer's context. It needs ONLY
+    /// the four declarations — no <see cref="CommandContext"/> field, no chat-view code. It registers
+    /// like any other (<c>services.TryAddEnumerable(ServiceDescriptor.Singleton&lt;IChatCommand,
+    /// SpaceCommand&gt;())</c>), appears in autocomplete via the registry, and on execution TRIGGERS
+    /// the host's generic node picker. This is the executable copy of Doc/AI/ChatCommands.md.
     /// </summary>
     private sealed class SpaceCommand : MeshNodePickCommand
     {
@@ -174,7 +192,7 @@ public class ChatCommandsTest
     }
 
     [Fact]
-    public async Task CustomModulePickCommand_Works_WithZeroCoreChanges()
+    public void CustomModulePickCommand_Works_WithZeroCoreChanges()
     {
         var cmd = new SpaceCommand();
 
@@ -183,11 +201,13 @@ public class ChatCommandsTest
         registry.Register(cmd);
         registry.HasCommand("space").Should().BeTrue();
 
-        // And executes through the SAME generic surface — declaring only its query + field + title.
-        var result = await cmd.ExecuteAsync(Ctx("/space Acme"), TestContext.Current.CancellationToken);
-        result.Success.Should().BeTrue();
-        result.Picker!.Query.Should().Be("nodeType:Space");
-        result.Picker.ComposerField.Should().Be("contextPath");
-        result.Picker.SearchTerm.Should().Be("Acme");
+        // And executes through the SAME generic surface — declaring only its query + field + title,
+        // triggering the host's node picker via the context callback.
+        var pickers = new List<NodePickerRequest>();
+        cmd.Execute(Ctx("/space Acme", pickers));
+        var picker = pickers.Should().ContainSingle().Subject;
+        picker.Query.Should().Be("nodeType:Space");
+        picker.ComposerField.Should().Be("contextPath");
+        picker.SearchTerm.Should().Be("Acme");
     }
 }

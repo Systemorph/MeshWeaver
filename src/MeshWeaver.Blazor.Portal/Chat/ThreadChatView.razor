@@ -476,19 +476,10 @@ else
             </div>
         }
 
-        @* Compact bottom row: harness combobox (no label) + context chip(s) + Send. Agent and
-           model are chosen via the /agent and /model slash-commands (which pop the pickers above
-           and write the same composer node). *@
+        @* Compact bottom row: context chip(s) + Send. Harness, agent and model are chosen via the
+           /harness, /agent and /model slash-commands (which pop the pickers above and write the same
+           composer node); what's selected shows in the read-only status row above. No comboboxes. *@
         <div class="thread-chat-bottom-row" style="display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; margin-top: 4px;">
-            @if (!string.IsNullOrEmpty(_templatePath))
-            {
-                <div class="thread-chat-harness" style="flex: 0 1 auto; min-width: 0;">
-                    <LayoutAreaView @key="@($"composer-sel-{_templatePath}")"
-                                    ViewModel="@(new LayoutAreaControl(_templatePath, new LayoutAreaReference(ThreadComposerView.SelectorsArea)))"
-                                    Stream="@Stream"
-                                    Area="@($"composer-sel-{_templatePath}")" />
-                </div>
-            }
             @if (contextChips.Count > 0)
             {
                 <div class="thread-chat-context" style="flex: 1 1 auto; min-width: 0; overflow: hidden;">

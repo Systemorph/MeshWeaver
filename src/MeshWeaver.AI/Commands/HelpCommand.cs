@@ -15,12 +15,13 @@ public class HelpCommand : IChatCommand
     public string Usage => "/help [command]";
     public IReadOnlyList<string> Aliases => ["?"];
 
-    public Task<CommandResult> ExecuteAsync(CommandContext context, CancellationToken cancellationToken = default)
+    public void Execute(CommandContext context)
     {
         var registry = context.CommandRegistry;
         if (registry == null)
         {
-            return Task.FromResult(CommandResult.Error("Command registry not available."));
+            context.ShowStatus?.Invoke("Command registry not available.", true);
+            return;
         }
 
         var sb = new StringBuilder();
@@ -55,7 +56,8 @@ public class HelpCommand : IChatCommand
             }
             else
             {
-                return Task.FromResult(CommandResult.Error($"Unknown command: {commandName}"));
+                context.ShowStatus?.Invoke($"Unknown command: {commandName}", true);
+                return;
             }
         }
         else
@@ -75,7 +77,7 @@ public class HelpCommand : IChatCommand
             sb.AppendLine("**Tip:** You can also use `@agent/Name` anywhere in your message to address a specific agent.");
         }
 
-        return Task.FromResult(CommandResult.Ok(sb.ToString()));
+        context.ShowStatus?.Invoke(sb.ToString(), false);
     }
 
     /// <summary>
