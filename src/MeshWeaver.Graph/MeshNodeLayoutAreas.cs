@@ -742,7 +742,7 @@ public static class MeshNodeLayoutAreas
                 // are main nodes too.
                 var hiddenQuery = nodeTypeDefinition?.DefaultNamespace != null
                     ? $"nodeType:{nodeTypePath} namespace:{nodeTypeDefinition.DefaultNamespace}"
-                    : $"namespace:{nodeTypePath} scope:descendants is:main -nodeType:Code -nodeType:NodeType -nodeType:Markdown";
+                    : $"namespace:{nodeTypePath} scope:subtree is:main -nodeType:Code -nodeType:NodeType -nodeType:Markdown";
                 var defaultNs = nodeTypeDefinition?.DefaultNamespace;
                 var createNs = !string.IsNullOrEmpty(defaultNs) ? defaultNs : hubPath;
 
@@ -820,8 +820,9 @@ public static class MeshNodeLayoutAreas
         public MeshSearchRenderMode Mode { get; init; } = MeshSearchRenderMode.NamespaceTree;
         /// <summary>Node property to group on for the Grouped modes (NodeType / Category), else null.</summary>
         public string? GroupByProperty { get; init; }
-        /// <summary><c>?subtree=true</c> — query the whole descendant subtree, not just direct children.</summary>
-        public bool IncludeSubtree { get; init; }
+        /// <summary>Whether to query the whole descendant subtree (the default) vs only direct
+        /// children. <c>?subtree=false</c> restricts to direct children.</summary>
+        public bool IncludeSubtree { get; init; } = true;
         /// <summary><c>?q=</c> — the initial search term (visible query).</summary>
         public string? SearchTerm { get; init; }
         /// <summary><c>?searchBar=false</c> hides the search box.</summary>
@@ -857,7 +858,7 @@ public static class MeshNodeLayoutAreas
         {
             Mode = mode,
             GroupByProperty = groupProp,
-            IncludeSubtree = ParseTruthy(host.GetQueryStringParamValue("subtree")),
+            IncludeSubtree = ReadBool(host, "subtree", true),
             SearchTerm = host.GetQueryStringParamValue("q")?.Trim(),
             ShowSearchBox = ReadBool(host, "searchBar", true),
             ShowEmptyMessage = ReadBool(host, "emptyMessage", false),
@@ -885,13 +886,15 @@ public static class MeshNodeLayoutAreas
     /// <summary>
     /// Builds the node-content catalog (the shared body of the <see cref="Search"/> instance view and
     /// the legacy <see cref="Children"/> area): a <see cref="MeshSearchControl"/> over
-    /// <c>namespace:{nodePath}</c> (its children) — or <c>scope:descendants</c> when
-    /// <see cref="CatalogOptions.IncludeSubtree"/> — excluding NodeType definitions. Every display
-    /// knob comes from <paramref name="o"/> (see <see cref="CatalogOptions"/>).
+    /// <c>namespace:{nodePath} scope:subtree</c> (the whole descendant subtree, the default) — or
+    /// just <c>namespace:{nodePath}</c> (direct children) when <c>?subtree=false</c> — excluding
+    /// NodeType definitions. Every display knob comes from <paramref name="o"/> (see
+    /// <see cref="CatalogOptions"/>). The subtree default is what lets the namespace tree reveal
+    /// deeper nodes (lazily, per level) instead of stopping at direct children.
     /// </summary>
     private static MeshSearchControl BuildCatalog(string nodePath, CatalogOptions o)
     {
-        var scope = o.IncludeSubtree ? " scope:descendants" : "";
+        var scope = o.IncludeSubtree ? " scope:subtree" : "";
         var search = Controls.MeshSearch
             .WithTitle(o.Title)
             // Exclude NodeType definitions — they belong to type admin, not the instance catalog.
