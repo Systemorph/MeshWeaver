@@ -697,17 +697,11 @@ public static class MeshNodeLayoutAreas
         var hubPath = host.Hub.Address.ToString();
         var configuredNodeTypeMode = host.Hub.Configuration.Get<NodeTypeCatalogMode>() != null;
 
-        // Get search term from query string (if present)
-        var searchTerm = host.GetQueryStringParamValue("q")?.Trim();
-
-        // View controls, all driven by the URL so a single area serves every catalog shape
-        // (this is the area that replaced the dedicated "Children" catalog):
-        //   ?groupBy=namespace|type|category|flat|hierarchy   how results are organised
-        //   ?subtree=true                                     include the whole descendant subtree, not just direct children
-        // See the "Mesh Search" documentation article.
-        var groupBy = host.GetQueryStringParamValue("groupBy")?.Trim();
-        var includeSubtree = ParseTruthy(host.GetQueryStringParamValue("subtree"));
-
+        // Every catalog knob is URL-driven so one area serves every shape — read by
+        // ReadCatalogOptions (see the "Mesh Search" doc): ?groupBy ?subtree ?searchBar
+        // ?emptyMessage ?loading ?counts ?limit ?maxRows ?maxColumns ?collapsible ?reactive
+        // ?title ?placeholder ?q. The fallback render mode differs by branch (NodeType
+        // instances → Hierarchical, content catalog → NamespaceTree).
         return host.Workspace.GetMeshNodeStream().Select(node =>
         {
             // NodeType catalog mode is used when either:
@@ -760,18 +754,21 @@ public static class MeshNodeLayoutAreas
 
                 var createHref = $"/create?{createQs}";
 
-                // Instances of a NodeType default to a hierarchical list; ?groupBy overrides.
-                var (typeMode, typeGroupProp) = ResolveCatalogView(groupBy, MeshSearchRenderMode.Hierarchical);
+                // Instances of a NodeType default to a hierarchical list; every knob is still
+                // ?param-overridable (?groupBy ?searchBar ?maxColumns ?emptyMessage ?title …).
+                var typeOpts = ReadCatalogOptions(host, MeshSearchRenderMode.Hierarchical);
                 var typeSearch = Controls.MeshSearch
                     .WithHiddenQuery(hiddenQuery)
-                    .WithVisibleQuery(searchTerm ?? "")
+                    .WithVisibleQuery(typeOpts.SearchTerm ?? "")
                     .WithNamespace(hubPath)
-                    .WithPlaceholder("Search... (use @ for references)")
-                    .WithRenderMode(typeMode)
-                    .WithMaxColumns(3)
+                    .WithPlaceholder(typeOpts.Placeholder)
+                    .WithRenderMode(typeOpts.Mode)
+                    .WithShowSearchBox(typeOpts.ShowSearchBox)
+                    .WithShowEmptyMessage(typeOpts.ShowEmptyMessage)
+                    .WithMaxColumns(typeOpts.MaxColumns)
                     .WithCreateHref(createHref);
-                if (!string.IsNullOrEmpty(typeGroupProp))
-                    typeSearch = typeSearch.WithGroupBy(typeGroupProp);
+                if (!string.IsNullOrEmpty(typeOpts.GroupByProperty))
+                    typeSearch = typeSearch.WithGroupBy(typeOpts.GroupByProperty);
                 return (UiControl?)typeSearch;
             }
 
@@ -779,13 +776,12 @@ public static class MeshNodeLayoutAreas
             // descendant subtree with ?subtree=true), organised per ?groupBy (default: the
             // namespace tree with lazy per-level drilldown — the view that replaced the
             // dedicated "Children" area).
-            var (mode, groupProp) = ResolveCatalogView(groupBy, MeshSearchRenderMode.NamespaceTree);
-            return BuildCatalog(hubPath, mode, groupProp, includeSubtree, searchTerm);
+            return BuildCatalog(hubPath, ReadCatalogOptions(host, MeshSearchRenderMode.NamespaceTree));
         });
     }
 
     /// <summary>Best-effort truthy parse for boolean query params (<c>true/1/yes/on</c>).</summary>
-    private static bool ParseTruthy(string? value) =>
+    internal static bool ParseTruthy(string? value) =>
         value is not null && (value.Equals("true", StringComparison.OrdinalIgnoreCase)
             || value is "1" || value.Equals("yes", StringComparison.OrdinalIgnoreCase)
             || value.Equals("on", StringComparison.OrdinalIgnoreCase));
@@ -815,52 +811,117 @@ public static class MeshNodeLayoutAreas
         };
 
     /// <summary>
-    /// Builds the node-content catalog (the shared body of the <see cref="Search"/> instance view
-    /// and the legacy <see cref="Children"/> area): a <see cref="MeshSearchControl"/> over
-    /// <c>namespace:{nodePath}</c> (its children) — or <c>scope:descendants</c> when
-    /// <paramref name="includeSubtree"/> — excluding NodeType definitions, with the search box,
-    /// section counts, and a Create button. <paramref name="mode"/> + <paramref name="groupByProperty"/>
-    /// come from <see cref="ResolveCatalogView"/>.
+    /// Every catalog knob, each overridable via a query param so the single <see cref="Search"/>
+    /// area serves every shape. Defaults reproduce the classic namespace-tree catalog.
     /// </summary>
-    private static MeshSearchControl BuildCatalog(
-        string nodePath, MeshSearchRenderMode mode, string? groupByProperty,
-        bool includeSubtree, string? searchTerm)
+    internal sealed record CatalogOptions
     {
-        var scope = includeSubtree ? " scope:descendants" : "";
+        /// <summary>Render mode — from <c>?groupBy</c> via <see cref="ResolveCatalogView"/>.</summary>
+        public MeshSearchRenderMode Mode { get; init; } = MeshSearchRenderMode.NamespaceTree;
+        /// <summary>Node property to group on for the Grouped modes (NodeType / Category), else null.</summary>
+        public string? GroupByProperty { get; init; }
+        /// <summary><c>?subtree=true</c> — query the whole descendant subtree, not just direct children.</summary>
+        public bool IncludeSubtree { get; init; }
+        /// <summary><c>?q=</c> — the initial search term (visible query).</summary>
+        public string? SearchTerm { get; init; }
+        /// <summary><c>?searchBar=false</c> hides the search box.</summary>
+        public bool ShowSearchBox { get; init; } = true;
+        /// <summary><c>?emptyMessage=true</c> shows the "No items found." message.</summary>
+        public bool ShowEmptyMessage { get; init; }
+        /// <summary><c>?loading=true</c> shows the skeleton loading indicator.</summary>
+        public bool ShowLoadingIndicator { get; init; }
+        /// <summary><c>?counts=false</c> hides the per-section counts.</summary>
+        public bool SectionCounts { get; init; } = true;
+        /// <summary><c>?limit=N</c> — items per section.</summary>
+        public int ItemLimit { get; init; } = 50;
+        /// <summary><c>?maxRows=N</c> — collapsed rows per section.</summary>
+        public int MaxRows { get; init; } = 3;
+        /// <summary><c>?maxColumns=N</c> — grid columns.</summary>
+        public int MaxColumns { get; init; } = 3;
+        /// <summary><c>?collapsible=false</c> keeps every section expanded.</summary>
+        public bool Collapsible { get; init; } = true;
+        /// <summary><c>?reactive=false</c> disables live updates on data change.</summary>
+        public bool Reactive { get; init; } = true;
+        /// <summary><c>?title=</c> — the section title.</summary>
+        public string Title { get; init; } = "Catalog";
+        /// <summary><c>?placeholder=</c> — the search box placeholder.</summary>
+        public string Placeholder { get; init; } = "Search... (use @ for references)";
+    }
+
+    /// <summary>Reads every catalog knob from the layout area's query string (see <see cref="CatalogOptions"/>).
+    /// Booleans accept <c>true/1/yes/on</c> (and their negation by absence); ints must be positive.</summary>
+    private static CatalogOptions ReadCatalogOptions(LayoutAreaHost host, MeshSearchRenderMode fallbackMode)
+    {
+        var (mode, groupProp) = ResolveCatalogView(host.GetQueryStringParamValue("groupBy")?.Trim(), fallbackMode);
+        return new CatalogOptions
+        {
+            Mode = mode,
+            GroupByProperty = groupProp,
+            IncludeSubtree = ParseTruthy(host.GetQueryStringParamValue("subtree")),
+            SearchTerm = host.GetQueryStringParamValue("q")?.Trim(),
+            ShowSearchBox = ReadBool(host, "searchBar", true),
+            ShowEmptyMessage = ReadBool(host, "emptyMessage", false),
+            ShowLoadingIndicator = ReadBool(host, "loading", false),
+            SectionCounts = ReadBool(host, "counts", true),
+            ItemLimit = ReadInt(host, "limit", 50),
+            MaxRows = ReadInt(host, "maxRows", 3),
+            MaxColumns = ReadInt(host, "maxColumns", 3),
+            Collapsible = ReadBool(host, "collapsible", true),
+            Reactive = ReadBool(host, "reactive", true),
+            Title = host.GetQueryStringParamValue("title")?.Trim() is { Length: > 0 } t ? t : "Catalog",
+            Placeholder = host.GetQueryStringParamValue("placeholder")?.Trim() is { Length: > 0 } p
+                ? p : "Search... (use @ for references)",
+        };
+    }
+
+    /// <summary>Reads a boolean query param, falling back to <paramref name="fallback"/> when absent.</summary>
+    private static bool ReadBool(LayoutAreaHost host, string name, bool fallback)
+        => host.GetQueryStringParamValue(name) is { } v ? ParseTruthy(v) : fallback;
+
+    /// <summary>Reads a positive-int query param, falling back to <paramref name="fallback"/> when absent/invalid.</summary>
+    private static int ReadInt(LayoutAreaHost host, string name, int fallback)
+        => int.TryParse(host.GetQueryStringParamValue(name), out var v) && v > 0 ? v : fallback;
+
+    /// <summary>
+    /// Builds the node-content catalog (the shared body of the <see cref="Search"/> instance view and
+    /// the legacy <see cref="Children"/> area): a <see cref="MeshSearchControl"/> over
+    /// <c>namespace:{nodePath}</c> (its children) — or <c>scope:descendants</c> when
+    /// <see cref="CatalogOptions.IncludeSubtree"/> — excluding NodeType definitions. Every display
+    /// knob comes from <paramref name="o"/> (see <see cref="CatalogOptions"/>).
+    /// </summary>
+    private static MeshSearchControl BuildCatalog(string nodePath, CatalogOptions o)
+    {
+        var scope = o.IncludeSubtree ? " scope:descendants" : "";
         var search = Controls.MeshSearch
-            .WithTitle("Catalog")
-            // Exclude NodeType definitions — they belong to type admin, not the instance catalog —
-            // and enable ReactiveMode so moves, renames, and new children show up without an F5.
+            .WithTitle(o.Title)
+            // Exclude NodeType definitions — they belong to type admin, not the instance catalog.
             .WithHiddenQuery($"namespace:{nodePath}{scope} is:main context:search -nodeType:NodeType")
-            .WithVisibleQuery(searchTerm ?? "")
+            .WithVisibleQuery(o.SearchTerm ?? "")
             .WithNamespace(nodePath)
-            .WithPlaceholder("Search... (use @ for references)")
-            .WithReactiveMode(true)
-            .WithShowSearchBox(true)
-            .WithShowEmptyMessage(false)
-            .WithShowLoadingIndicator(false)
-            .WithRenderMode(mode)
-            .WithSectionCounts(true)
-            .WithItemLimit(50)
-            .WithMaxRows(3)
-            .WithMaxColumns(3)
-            .WithCollapsibleSections(true)
+            .WithPlaceholder(o.Placeholder)
+            .WithReactiveMode(o.Reactive)
+            .WithShowSearchBox(o.ShowSearchBox)
+            .WithShowEmptyMessage(o.ShowEmptyMessage)
+            .WithShowLoadingIndicator(o.ShowLoadingIndicator)
+            .WithRenderMode(o.Mode)
+            .WithSectionCounts(o.SectionCounts)
+            .WithItemLimit(o.ItemLimit)
+            .WithMaxRows(o.MaxRows)
+            .WithMaxColumns(o.MaxColumns)
+            .WithCollapsibleSections(o.Collapsible)
             .WithCreateHref($"/{nodePath}/{CreateNodeArea}?namespace={Uri.EscapeDataString(nodePath)}");
-        return string.IsNullOrEmpty(groupByProperty) ? search : search.WithGroupBy(groupByProperty);
+        return string.IsNullOrEmpty(o.GroupByProperty) ? search : search.WithGroupBy(o.GroupByProperty);
     }
 
     /// <summary>
-    /// Legacy catalog area, kept as a thin alias of the unified <see cref="Search"/> view
-    /// (<c>?groupBy=namespace</c>): child nodes organised by their namespace hierarchy
-    /// (NamespaceTree, lazy per-level drilldown). New content should embed the Search area
-    /// instead — e.g. <c>@@/{node}/area/Search</c> — and use <c>?groupBy=</c> to pick the
-    /// grouping. Shares <see cref="BuildCatalog"/> so the two never drift.
+    /// Legacy catalog area, kept as a thin alias of the unified <see cref="Search"/> view with default
+    /// options (<c>groupBy=namespace</c>): child nodes by namespace hierarchy (lazy drilldown). New
+    /// content should embed the Search area instead — e.g. <c>@@/{node}/area/Search</c> — and use
+    /// <c>?groupBy=</c> etc. Shares <see cref="BuildCatalog"/> so the two never drift.
     /// </summary>
     [Browsable(false)]
     public static UiControl Children(LayoutAreaHost host, RenderingContext _)
-        => BuildCatalog(host.Hub.Address.ToString(),
-            MeshSearchRenderMode.NamespaceTree, groupByProperty: null,
-            includeSubtree: false, searchTerm: null);
+        => BuildCatalog(host.Hub.Address.ToString(), new CatalogOptions());
 
     /// <summary>
     /// Renders the Threads catalog showing child Thread nodes using MeshSearchControl.
