@@ -41,6 +41,10 @@ public static class StaticRepoSyncExtensions
                 services.AddSingleton<IStaticRepoSource, AgentStaticRepoSource>();
             if (serveFromPartition.Contains("Model"))
                 services.AddSingleton<IStaticRepoSource, ModelStaticRepoSource>();
+            if (serveFromPartition.Contains("Harness"))
+                services.AddSingleton<IStaticRepoSource, HarnessStaticRepoSource>();
+            if (serveFromPartition.Contains("Command"))
+                services.AddSingleton<IStaticRepoSource, CommandStaticRepoSource>();
 
             // Runs after the PG schema-provisioning hosted service (registered earlier by
             // AddPartitionedPostgreSqlPersistence) — hosted services start in registration order.
