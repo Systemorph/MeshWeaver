@@ -145,20 +145,36 @@ public static class AiSettingsNodeType
             .DistinctUntilChanged();
     }
 
-    /// <summary>Create-on-absent (with defaults) through the cache write path; existing node untouched.</summary>
+    /// <summary>Create-on-absent (with defaults); existing node untouched.</summary>
     public static void EnsureExists(IMessageHub hub, IServiceProvider services, string user)
     {
+        var meshService = services.GetService<IMeshService>();
+        if (meshService is null)
+            return;
         var path = PathFor(user);
-        var defaults = BuildDefaults(services);
-        hub.GetMeshNodeStream(path)
-            .Update(node => node is not null
-                ? node
-                : MeshNode.FromPath(path) with
+        // 🚨 Create-on-absent must NEVER point-read/patch the node via
+        // GetMeshNodeStream(path).Update. On an ABSENT node that opens a cross-hub
+        // SubscribeRequest + JSON-merge patch to a node/hub that does not exist, which
+        // Orleans-NotFound-RESUBSCRIBE-STORMS (the rbuergi/_Memex/AiSettings +
+        // system-security/_Memex/AiSettings NotFound flood — fired on EVERY thread
+        // execution through Observe, it burned the action block and helped wedge the
+        // portal). Read existence via the SAME keyed GetQuery the Observe read uses
+        // (empty-on-absent, shared cached stream — no point-read, never storms), and seed
+        // only when genuinely absent through the node-lifecycle CreateNode (create-only:
+        // it does not clobber an existing customised node). See
+        // feedback_optional_node_query_not_access / Doc/Architecture/AsynchronousCalls.md.
+        hub.GetWorkspace()
+            .GetQuery($"{NodeType}|{user}", $"path:{path} nodeType:{NodeType}")
+            .Take(1)
+            .Where(nodes => !nodes.Any(n =>
+                string.Equals(n.NodeType, NodeType, StringComparison.OrdinalIgnoreCase)))
+            .SelectMany(_ => meshService.CreateNode(
+                MeshNode.FromPath(path) with
                 {
                     NodeType = NodeType,
                     Name = "AI Settings",
-                    Content = defaults
-                })
+                    Content = BuildDefaults(services)
+                }))
             .Subscribe(
                 _ => { },
                 ex => services.GetService<ILoggerFactory>()
