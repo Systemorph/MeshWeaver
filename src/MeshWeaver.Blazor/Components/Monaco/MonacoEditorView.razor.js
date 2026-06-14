@@ -267,10 +267,22 @@ export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = fals
         monaco.editor.setTheme(monacoTheme);
     }
     if (editorInstance) {
-        // Handle content changes for placeholder
+        // Handle content changes for placeholder AND push the value back to C#.
+        // 🚨 This is the SYNC content-change wiring that replaces BlazorMonaco's
+        // OnDidChangeModelContent Razor callback: that callback is registered via
+        // BlazorMonaco's async SetEventListeners in OnAfterRenderAsync, which throws
+        // "Couldn't find the editor with id …" (tearing down the circuit) when the
+        // editor is mid-teardown. Wiring the listener directly on the editor instance
+        // here avoids that race. The invoke is best-effort — a disposed dotNetRef
+        // rejects, which we swallow so a teardown can never surface an unhandled error.
         editorInstance.onDidChangeModelContent(() => {
             const value = editorInstance.getValue();
             updatePlaceholderVisibility(editorId, !value);
+            const st = editorState.get(editorId);
+            if (st?.dotNetRef) {
+                st.dotNetRef.invokeMethodAsync('HandleContentChanged', value)
+                    .catch(err => console.debug('HandleContentChanged failed (editor disposed?):', err));
+            }
         });
 
         // Handle Enter key - in code edit mode, Enter inserts newline; in chat mode, Enter submits

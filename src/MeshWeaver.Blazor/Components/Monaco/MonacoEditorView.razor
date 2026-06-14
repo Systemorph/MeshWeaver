@@ -5,11 +5,19 @@
 @inject ILogger<MonacoEditorView> Logger
 
 <div class="monaco-editor-container @(ShowBorder ? "with-border" : "")" style="@ContainerStyle">
+    @* 🚨 Do NOT wire OnDidChangeModelContent (or any other BlazorMonaco editor-event
+       callback) here. BlazorMonaco registers those through its ASYNC SetEventListeners
+       in OnAfterRenderAsync(firstRender); when the editor is mid-teardown/recreate that
+       awaited JS interop throws JSException "Couldn't find the editor with id …" straight
+       out of the render lifecycle, which tears down the whole Blazor circuit (the chat
+       input "Connection disconnected" blocker). We wire onDidChangeModelContent
+       SYNCHRONOUSLY on the editor instance in our own JS module (initEditor) instead and
+       push the value to HandleContentChanged — no async event-listener race, no
+       editor.GetValue() round-trip. See Doc/Architecture/AsynchronousCalls.md. *@
     <StandaloneCodeEditor @ref="editor"
                           Id="@EditorId"
                           ConstructionOptions="GetEditorOptions"
                           OnDidInit="OnEditorInit"
-                          OnDidChangeModelContent="OnContentChanged"
                           CssClass="monaco-editor-view" />
 </div>
 
@@ -293,17 +301,23 @@
         lastCompletionItemCount = currentItemCount;
     }
 
-    private async Task OnContentChanged(ModelContentChangedEvent e)
+    /// <summary>
+    /// Content-change callback, invoked SYNCHRONOUSLY from our JS module's
+    /// <c>onDidChangeModelContent</c> handler (see MonacoEditorView.razor.js → initEditor)
+    /// with the editor's current text. Replaces the BlazorMonaco <c>OnDidChangeModelContent</c>
+    /// Razor callback whose async <c>SetEventListeners</c> registration raced the editor
+    /// lifecycle and tore down the circuit. JS already has the value, so there is no
+    /// <c>editor.GetValue()</c> round-trip here.
+    /// </summary>
+    [JSInvokable]
+    public async Task HandleContentChanged(string? value)
     {
-        if (editor != null)
+        value ??= string.Empty;
+        if (value != Value)
         {
-            var value = await editor.GetValue();
-            if (value != Value)
-            {
-                Value = value;
-                lastSetValue = value; // Track user-typed value
-                await ValueChanged.InvokeAsync(value);
-            }
+            Value = value;
+            lastSetValue = value; // Track user-typed value
+            await ValueChanged.InvokeAsync(value);
         }
     }
 
