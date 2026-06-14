@@ -851,11 +851,22 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"EuropeRe Search query: {hiddenQuery}");
 
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        // The instance catalog (BuildCatalog in MeshNodeLayoutAreas) INTENTIONALLY excludes
+        // NodeType definitions — the "-nodeType:NodeType" in the hidden query (a9b189c09):
+        // type definitions belong to type admin, not the content catalog. EuropeRe's
+        // LineOfBusiness and TransactionMapping are LOCAL NodeType definitions
+        // (nodeType:"NodeType"), so they are correctly absent from the content catalog; the
+        // searchable content child is the Analysis node. Wait for the LIVE eventually-
+        // consistent query to surface Analysis (the first snapshot can lag the index), then
+        // assert the catalog rendered EuropeRe's content — not a brittle count of the
+        // type-admin nodes the catalog hides by design.
         var results = meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(hiddenQuery))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
-        Output.WriteLine($"EuropeRe Search returned {results.Count} results");
-        results.Count.Should().BeGreaterThanOrEqualTo(2,
-            "EuropeRe should have at least LineOfBusiness and TransactionMapping child nodes");
+            .Should().Within(30.Seconds())
+            .Match(c => c.Items.Any(n => n.Id == "Analysis")).Items;
+        Output.WriteLine($"EuropeRe content catalog: {results.Count} item(s): {string.Join(", ", results.Select(n => n.Id))}");
+        results.Any(n => n.Id == "Analysis").Should().BeTrue(
+            "the EuropeRe content catalog must render its Analysis content child (local NodeType "
+            + "definitions like LineOfBusiness/TransactionMapping are excluded by design)");
     }
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Node Existence Verification Ã¢â€â‚¬Ã¢â€â‚¬
