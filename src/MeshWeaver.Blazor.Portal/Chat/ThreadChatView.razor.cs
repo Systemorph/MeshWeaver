@@ -933,10 +933,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             .Take(1)
             .Subscribe(snapshot => InvokeAsync(() =>
             {
-                // The picker is GENERIC: it renders the query result as-is (ordering + which nodes
-                // are eligible are the COMMAND's concern, expressed in its query — never replicated
-                // here). The query already returns nodes ordered/scoped per the CommandDefinition.
-                var nodes = snapshot.Where(n => !string.IsNullOrEmpty(n.Path)).ToList();
+                // Order by the node's universal Order field (then Name) so the picker leads with the
+                // catalog head — Assistant (order:-1) for agents, the flagship model for models. This
+                // is NOT command-specific logic: it's the generic "order nodes by Order" every picker
+                // wants. (The query's `sort:order` is lost when the synced-query snapshot re-buckets by
+                // path into a dict, so the order must be re-applied here on the node data.)
+                var nodes = snapshot.Where(n => !string.IsNullOrEmpty(n.Path))
+                    .OrderBy(n => n.Order ?? 0)
+                    .ThenBy(n => n.Name ?? n.Id, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
 
                 if (!string.IsNullOrEmpty(picker.SearchTerm))
                 {
@@ -1354,7 +1359,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     {
         return new CompletionProviderConfig
         {
-            TriggerCharacters = ["@"],
+            // "@" → node/agent references; "/" → slash-commands (handled by GetCommandCompletions).
+            TriggerCharacters = ["@", "/"],
             Items = []
         };
     }
@@ -1395,6 +1401,11 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// </summary>
     private IObservable<IReadOnlyList<CompletionItem>> GetCompletions(string query)
     {
+        // Slash-commands: route straight to the command catalog (nodeType:Command + the registry),
+        // bypassing the @-oriented node-search orchestrator so a "/" query lists ONLY commands.
+        if (query?.StartsWith("/") == true)
+            return GetCommandCompletions(query);
+
         if (string.IsNullOrWhiteSpace(query) || !query.StartsWith("@"))
             return Observable.Return<IReadOnlyList<CompletionItem>>(Array.Empty<CompletionItem>());
 
@@ -1415,6 +1426,32 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 })
                 .Finally(() => SetCompletionsInflight(false));
         });
+    }
+
+    /// <summary>
+    /// Slash-command completions: lists <c>nodeType:Command</c> nodes (built-ins imported to PG plus
+    /// any Space/NodeType/user command via namespace inheritance) AND registry <c>IChatCommand</c>s,
+    /// straight from <see cref="MeshWeaver.AI.Completion.CommandAutocompleteProvider"/> — NOT through
+    /// the @-oriented node-search orchestrator. Monaco filters the list by the typed "/word".
+    /// </summary>
+    private IObservable<IReadOnlyList<CompletionItem>> GetCommandCompletions(string query)
+    {
+        var provider = Hub.ServiceProvider.GetServices<Data.Completion.IAutocompleteProvider>()
+            .OfType<MeshWeaver.AI.Completion.CommandAutocompleteProvider>()
+            .FirstOrDefault();
+        if (provider is null)
+            return Observable.Return<IReadOnlyList<CompletionItem>>(Array.Empty<CompletionItem>());
+
+        return provider.GetItems(query, initialContext)
+            .Select(items => (IReadOnlyList<CompletionItem>)items
+                .Select(i => AutocompleteToCompletion(i, "Commands", 2000))
+                .OrderBy(c => c.SortKey, StringComparer.Ordinal)
+                .ToList())
+            .Catch<IReadOnlyList<CompletionItem>, Exception>(ex =>
+            {
+                Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] command completions failed", _instanceId);
+                return Observable.Return<IReadOnlyList<CompletionItem>>(Array.Empty<CompletionItem>());
+            });
     }
 
     /// <summary>

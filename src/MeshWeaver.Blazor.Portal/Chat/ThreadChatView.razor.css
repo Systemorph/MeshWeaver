@@ -273,6 +273,10 @@
 
 .thread-chat-input-content {
     transition: opacity 120ms ease;
+    /* Anchor the slash-command picker as a floating popup (see .thread-chat-widget) so opening it
+       does NOT push the Monaco editor's DOM down + back up — which re-laid-out the editor and made
+       the composer appear to vanish on selection. */
+    position: relative;
 }
 
 .thread-chat-input-content.dimmed {
@@ -432,7 +436,13 @@
    is invoked without an argument. Theme-aware via Fluent design tokens
    so dark mode + high-contrast read correctly. */
 .thread-chat-widget {
-    margin-bottom: 8px;
+    /* Floating popup ABOVE the input (a command palette popping up), anchored to
+       .thread-chat-input-content — does not push the Monaco DOM. */
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 0;
+    right: 0;
+    z-index: 30;
     border: 1px solid var(--neutral-stroke-rest);
     border-radius: 8px;
     background: var(--neutral-layer-1);
@@ -440,7 +450,7 @@
     max-height: 280px;
     display: flex;
     flex-direction: column;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
 }
 
 .thread-chat-widget-header {
@@ -485,11 +495,36 @@
     border-radius: 6px;
     padding: 8px 10px;
     display: flex;
-    flex-direction: column;
-    gap: 2px;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
     color: var(--neutral-foreground-rest);
     font: inherit;
     transition: background 80ms ease, border-color 80ms ease;
+}
+
+.thread-chat-widget-item-icon {
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--neutral-foreground-hint);
+}
+
+.thread-chat-widget-item-icon :deep(svg),
+.thread-chat-widget-item-icon img,
+.thread-chat-widget-item-icon svg {
+    width: 18px;
+    height: 18px;
+}
+
+.thread-chat-widget-item-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
 }
 
 .thread-chat-widget-item:hover,

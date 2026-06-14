@@ -427,11 +427,24 @@ else
                     {
                         <button class="thread-chat-widget-item"
                                 @onclick="@(() => SelectFromPicker(picker, node))">
-                            <span class="thread-chat-widget-item-name">@(node.Name ?? node.Id)</span>
-                            @if (!string.IsNullOrEmpty(node.Description))
+                            @if (!string.IsNullOrEmpty(node.Icon))
                             {
-                                <span class="thread-chat-widget-item-desc">@node.Description</span>
+                                @if (node.Icon.TrimStart().StartsWith("<"))
+                                {
+                                    <span class="thread-chat-widget-item-icon">@((MarkupString)node.Icon)</span>
+                                }
+                                else
+                                {
+                                    <img class="thread-chat-widget-item-icon" src="@node.Icon" alt="" />
+                                }
                             }
+                            <span class="thread-chat-widget-item-text">
+                                <span class="thread-chat-widget-item-name">@(node.Name ?? node.Id)</span>
+                                @if (!string.IsNullOrEmpty(node.Description))
+                                {
+                                    <span class="thread-chat-widget-item-desc">@node.Description</span>
+                                }
+                            </span>
                         </button>
                     }
                     @if (pickerNodes.Count == 0)
