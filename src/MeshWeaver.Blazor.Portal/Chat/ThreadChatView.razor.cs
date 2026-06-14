@@ -252,8 +252,6 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         && !string.IsNullOrEmpty(ThreadViewModel?.CreatedBy)
         && !string.Equals(ThreadViewModel.CreatedBy, _userHome, StringComparison.OrdinalIgnoreCase);
 
-    private IEnumerable<IChatClientFactory> ChatClientFactories => Hub.ServiceProvider.GetServices<IChatClientFactory>();
-
     protected override void OnInitialized()
     {
         Logger.LogDebug("[ThreadChat:{InstanceId}] OnInitialized started", _instanceId);
@@ -567,24 +565,13 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     private void InitializeAgentAndModelSelections()
     {
-        // Load available models from DI-registered factories
-        var factories = ChatClientFactories.ToList();
-        Logger.LogDebug("[ThreadChat:{InstanceId}] IChatClientFactory instances resolved: {Count}", _instanceId, factories.Count);
-
-        availableModels = factories
-            .OrderBy(f => f.Order)
-            .SelectMany(f => f.Models.Select(m => new ModelInfo
-            {
-                Name = m,
-                Provider = f.Name,
-                Order = f.Order
-            }))
-            .ToList();
-
-        Logger.LogDebug("[ThreadChat:{InstanceId}] Available models ({Count}): [{Models}]",
-            _instanceId, availableModels.Count, string.Join(", ", availableModels.Select(m => $"{m.Name} ({m.Provider})")));
-
-        // Subscribe to agent MeshNodes reactively
+        // 🚦 Models come EXCLUSIVELY from mesh nodes — the served/imported
+        // nodeType:LanguageModel catalog under _Provider, already filtered to
+        // CONFIGURED providers by BuiltInLanguageModelProvider. The DI
+        // IChatClientFactory list is NOT a model source (it advertised model ids the
+        // deployment may never have configured — the "Azure Claude shows with no
+        // config" bug). OnModelList — fed by AgentPickerProjection.ObserveModels in
+        // SubscribeToAgentNodes — populates availableModels from the mesh query.
         SubscribeToAgentNodes();
     }
 
@@ -657,38 +644,23 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         _modelsByPath.Clear();
         foreach (var m in models)
-            _modelsByPath[m.Name] = m;
+            _modelsByPath[m.Path ?? m.Name] = m;
 
         RebuildAvailableModels();
         StateHasChanged();
     }
 
     /// <summary>
-    /// Recomputes <see cref="availableModels"/> as the union of
-    /// factory-provided models (from <see cref="IChatClientFactory"/>) and
-    /// mesh-discovered <c>nodeType:Model</c> nodes. Mesh entries take
-    /// precedence on Id collision so a user-authored Model node can
-    /// override / customise a factory default.
+    /// Recomputes <see cref="availableModels"/> from the mesh <c>nodeType:LanguageModel</c>
+    /// catalog ONLY — the served/imported model nodes under <c>_Provider</c>, already
+    /// filtered to CONFIGURED providers by <c>BuiltInLanguageModelProvider</c>. The
+    /// <c>IChatClientFactory</c> registrations are deliberately NOT a model source any more:
+    /// they advertised model ids the deployment may never have configured (the "Azure Claude
+    /// shows with no config" bug). Models are mesh nodes exclusively, picked by node path.
     /// </summary>
     private void RebuildAvailableModels()
     {
-        // Factory-provided baseline.
-        var factoryModels = ChatClientFactories
-            .OrderBy(f => f.Order)
-            .SelectMany(f => f.Models.Select(m => new ModelInfo
-            {
-                Name = m,
-                Provider = f.Name,
-                Order = f.Order
-            }));
-
-        var byName = factoryModels.ToDictionary(m => m.Name, m => m, StringComparer.OrdinalIgnoreCase);
-
-        // Mesh-defined models override on Id collision.
-        foreach (var meshModel in _modelsByPath.Values)
-            byName[meshModel.Name] = meshModel;
-
-        availableModels = byName.Values
+        availableModels = _modelsByPath.Values
             .OrderBy(m => m.Order)
             .ThenBy(m => m.Provider, StringComparer.OrdinalIgnoreCase)
             .ThenBy(m => m.Name, StringComparer.OrdinalIgnoreCase)
@@ -880,7 +852,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             CurrentAgent = agentDisplayInfos.FirstOrDefault(a => a.Path == boundAgentPath),
             SetCurrentAgent = a => WriteComposerSelection(agentPath: a.Path),
             CurrentModel = availableModels.FirstOrDefault(m => string.Equals(m.Name, LastSegment(boundModelPath), StringComparison.OrdinalIgnoreCase)),
-            SetCurrentModel = m => WriteComposerSelection(modelName: m.Name),
+            SetCurrentModel = m => WriteComposerSelection(modelName: m.Path ?? m.Name),
             AvailableModels = availableModels,
             CommandRegistry = CommandRegistry
         };
@@ -929,7 +901,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// </summary>
     private void SelectModelFromWidget(ModelInfo model)
     {
-        WriteComposerSelection(modelName: model.Name);
+        WriteComposerSelection(modelName: model.Path ?? model.Name);
         lastCommandStatus = $"Switched to model: {model.Name} ({model.Provider})";
         lastCommandStatusIsError = false;
         pendingWidget = ChatWidget.None;

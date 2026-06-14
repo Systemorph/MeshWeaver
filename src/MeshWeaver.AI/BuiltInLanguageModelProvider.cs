@@ -132,6 +132,27 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                 continue;
             }
 
+            // 🚦 Only surface a provider's models when it's actually CONFIGURED.
+            // Api providers (RequiresApiKey) need BOTH an Endpoint and an ApiKey in
+            // config; keyless/CLI providers (RequiresApiKey=false — Claude Code,
+            // Copilot) need neither. An unconfigured Api provider's Models[] is just a
+            // default catalog the deployment never wired up (e.g. an "Azure" section
+            // listing Claude ids with no Endpoint/ApiKey) — surfacing those puts
+            // selectable-but-unusable entries in the /model picker (the reported
+            // "Azure Claude shows even though nothing is configured" bug). The
+            // ModelProvider node above is STILL emitted so Settings → Models can render
+            // its configure form; only the selectable LanguageModel catalog entries are
+            // gated on having credentials.
+            var isConfigured = !source.RequiresApiKey
+                || (!string.IsNullOrEmpty(endpoint) && !string.IsNullOrEmpty(apiKey));
+            if (!isConfigured)
+            {
+                logger?.LogDebug(
+                    "BuiltInLanguageModelProvider: provider {Provider} not configured (Endpoint/ApiKey unset) — hiding its {Count} model(s) from the catalog until configured",
+                    source.ProviderName, models.Length);
+                continue;
+            }
+
             foreach (var modelId in models)
             {
                 if (string.IsNullOrWhiteSpace(modelId)) continue;
