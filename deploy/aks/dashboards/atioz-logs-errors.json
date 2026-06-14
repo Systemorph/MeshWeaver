@@ -1,0 +1,72 @@
+{
+  "dashboard": {
+    "uid": "atioz-logs-errors",
+    "title": "ATIOZ Logs & Errors",
+    "tags": ["atioz", "logs"],
+    "schemaVersion": 39,
+    "refresh": "30s",
+    "time": { "from": "now-3h", "to": "now" },
+    "templating": {
+      "list": [
+        { "type": "textbox", "name": "filter", "label": "Text filter (regex)", "query": "", "current": { "text": "", "value": "" } }
+      ]
+    },
+    "panels": [
+      {
+        "type": "timeseries",
+        "title": "Log volume by level",
+        "gridPos": { "h": 8, "w": 16, "x": 0, "y": 0 },
+        "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+        "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 70, "stacking": { "mode": "normal" } }, "unit": "short" }, "overrides": [{ "matcher": { "id": "byName", "options": "errors" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }, { "matcher": { "id": "byName", "options": "warnings" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "yellow" } }] }, { "matcher": { "id": "byName", "options": "info" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] }] },
+        "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+        "targets": [
+          { "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "sum(count_over_time({namespace=\"atioz\"} |~ `^info:` [$__auto]))", "legendFormat": "info", "queryType": "range" },
+          { "refId": "B", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "sum(count_over_time({namespace=\"atioz\"} |~ `^warn:` [$__auto]))", "legendFormat": "warnings", "queryType": "range" },
+          { "refId": "C", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "sum(count_over_time({namespace=\"atioz\"} |~ `^(fail|crit):` [$__auto]))", "legendFormat": "errors", "queryType": "range" }
+        ]
+      },
+      {
+        "type": "stat",
+        "title": "Total log events (range)",
+        "gridPos": { "h": 4, "w": 8, "x": 16, "y": 0 },
+        "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+        "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "blue", "value": null }] }, "unit": "short" }, "overrides": [] },
+        "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area", "textMode": "auto" },
+        "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "sum(count_over_time({namespace=\"atioz\"} |~ `^(info|warn|fail|crit|dbug|trce):` [$__range]))", "queryType": "instant" }]
+      },
+      {
+        "type": "stat",
+        "title": "Errors (range)",
+        "gridPos": { "h": 4, "w": 8, "x": 16, "y": 4 },
+        "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+        "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }, "unit": "short" }, "overrides": [] },
+        "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "background", "graphMode": "area", "textMode": "auto" },
+        "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "sum(count_over_time({namespace=\"atioz\"} |~ `^(fail|crit):` [$__range]))", "queryType": "instant" }]
+      },
+      {
+        "type": "table",
+        "title": "Top warning / error categories (range)",
+        "gridPos": { "h": 9, "w": 24, "x": 0, "y": 8 },
+        "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+        "fieldConfig": { "defaults": { "custom": { "align": "auto" } }, "overrides": [] },
+        "options": { "showHeader": true, "sortBy": [{ "displayName": "Count", "desc": true }] },
+        "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "topk(20, sum by (category) (count_over_time({namespace=\"atioz\"} |~ `^(warn|fail|crit):` | regexp `^\\w{4}: (?P<category>[A-Za-z0-9_.]+)` [$__range])))", "queryType": "instant" }],
+        "transformations": [
+          { "id": "labelsToFields", "options": {} },
+          { "id": "organize", "options": { "excludeByName": { "Time": true }, "renameByName": { "category": "Category", "Value": "Count" } } }
+        ]
+      },
+      {
+        "type": "logs",
+        "title": "Live logs (use the Text filter variable above)",
+        "gridPos": { "h": 11, "w": 24, "x": 0, "y": 17 },
+        "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+        "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true, "dedupStrategy": "none", "prettifyLogMessage": false },
+        "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "{namespace=\"atioz\"} |~ `(?i)${filter:raw}`", "queryType": "range" }]
+      }
+    ]
+  },
+  "overwrite": true,
+  "folderId": 0,
+  "message": "Provisioned by Claude Code"
+}
