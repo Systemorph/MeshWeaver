@@ -227,9 +227,23 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
         => Http.Invoke(ct => client.Git.Reference.Get(owner, repo, $"heads/{branch}"))
             .SelectMany(reference => Http.Invoke(ct => client.Git.Commit.Get(owner, repo, reference.Object.Sha))
                 .SelectMany(commit => TreeOf(client, owner, repo, commit)))
-            // Empty repo / missing branch → no head, no existing blobs.
-            .Catch<HeadInfo, NotFoundException>(_ =>
-                Observable.Return(new HeadInfo(null, false, Array.Empty<(string, string)>())));
+            // No commit to build on → no head, no existing blobs (the export then makes a first,
+            // PARENT-LESS commit that creates the branch ref). GitHub signals "no commit" TWO ways:
+            // a missing branch on a non-empty repo is 404 (NotFoundException), but a brand-new repo
+            // with ZERO commits has an unborn HEAD and returns 409 "Git Repository is empty." for
+            // ref/commit lookups. The original catch only handled 404, so the very first "sync back"
+            // to a freshly-created empty repo failed with that 409.
+            .Catch<HeadInfo, ApiException>(ex =>
+                IsMissingOrEmptyRepo(ex)
+                    ? Observable.Return(new HeadInfo(null, false, Array.Empty<(string, string)>()))
+                    : Observable.Throw<HeadInfo>(ex));
+
+    /// <summary>True when an Octokit error means "this branch has no commit to build on": a missing
+    /// branch (404 <see cref="NotFoundException"/>) or a brand-new repo whose HEAD is unborn — GitHub
+    /// returns 409 "Git Repository is empty." for ref/commit lookups until the first commit lands.</summary>
+    internal static bool IsMissingOrEmptyRepo(ApiException ex)
+        => ex is NotFoundException
+           || ex.StatusCode == System.Net.HttpStatusCode.Conflict;
 
     /// <summary>
     /// Resolves a commitish (a branch name OR a commit SHA) to its commit + recursive
