@@ -190,8 +190,19 @@ public class LanguageModelNodeTypeTest
         IDictionary<string, string?> configValues,
         params LanguageModelCatalogSource[] sources)
     {
+        // 🚦 Each Api source needs an Endpoint + ApiKey to count as CONFIGURED — otherwise
+        // BuiltInLanguageModelProvider deliberately hides its models (an un-wired catalog would
+        // put selectable-but-unusable models in the picker; see BuiltInLanguageModelProviderTest).
+        // These catalog-shape tests exercise the emit path, so stamp synthetic credentials per
+        // source section. A section with no Models[] still emits nothing (the empty/missing tests).
+        var values = new Dictionary<string, string?>(configValues);
+        foreach (var s in sources)
+        {
+            values.TryAdd($"{s.SectionName}:Endpoint", $"https://{s.SectionName}.example.com");
+            values.TryAdd($"{s.SectionName}:ApiKey", "test-key");
+        }
         var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(configValues!)
+            .AddInMemoryCollection(values!)
             .Build();
         var options = new LanguageModelCatalogOptions();
         foreach (var s in sources) options.Add(s);
