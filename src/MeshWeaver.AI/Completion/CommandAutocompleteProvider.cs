@@ -4,21 +4,26 @@ using System.Text.Json;
 using System.Reactive.Linq;
 using MeshWeaver.AI;
 using MeshWeaver.AI.Commands;
+using MeshWeaver.Data;
 using MeshWeaver.Data.Completion;
-using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.AI.Completion;
 
 /// <summary>
-/// Autocomplete for chat slash-commands. Lists the <c>nodeType:Command</c> catalog — the built-in
-/// <c>/agent</c>, <c>/model</c>, <c>/harness</c> shipped as Command mesh nodes by
-/// <see cref="BuiltInCommandProvider"/>, plus any other registered Command node — AND any C#
-/// <see cref="IChatCommand"/> from the registry (e.g. <c>/help</c>). Deduped by slash word.
+/// Autocomplete for chat slash-commands, sourced from the <c>nodeType:Command</c> catalog with
+/// namespace inheritance (<see cref="CommandNodeType.CommandQueries"/> — built-ins under the
+/// <c>Command</c> namespace, plus any Command node defined in the context or the user's home and
+/// their ancestors), PLUS any C# <see cref="IChatCommand"/> from the registry (e.g. <c>/help</c>).
+/// Deduped by slash word.
 /// </summary>
 public class CommandAutocompleteProvider : IAutocompleteProvider
 {
     private const int CommandCategoryPriority = 2000;
+    private static readonly JsonSerializerOptions EmptyJsonOptions = new();
+
     private readonly IServiceProvider _serviceProvider;
 
     /// <inheritdoc cref="CommandAutocompleteProvider"/>
@@ -30,29 +35,38 @@ public class CommandAutocompleteProvider : IAutocompleteProvider
     /// <inheritdoc />
     public IObservable<IReadOnlyCollection<AutocompleteItem>> GetItems(string query, string? contextPath = null)
     {
-        // Pure in-memory enumeration — no external I/O.
+        var registry = _serviceProvider.GetService<ChatCommandRegistry>();
+        var registryCommands = registry?.GetAllCommands().ToList() ?? [];
+
+        var workspace = _serviceProvider.GetService<IWorkspace>();
+        var hub = _serviceProvider.GetService<IMessageHub>();
+        if (workspace is null || hub is null)
+            return Observable.Return(BuildItems([], registryCommands, hub));
+
+        // nodeType:Command catalog with inheritance — cached by queryId so per-keystroke calls
+        // reuse the same shared subscription. Built-in commands are served live under the
+        // Command partition; Space/NodeType/user-defined ones come from the inherited scopes.
+        var queries = CommandNodeType.CommandQueries(contextPath, null);
+        return AgentPickerProjection.ObserveSnapshot(workspace, hub, $"command-autocomplete|{contextPath}", queries)
+            .Select(snapshot => BuildItems(snapshot, registryCommands, hub));
+    }
+
+    private static IReadOnlyCollection<AutocompleteItem> BuildItems(
+        IEnumerable<MeshNode> snapshot, IReadOnlyList<IChatCommand> registryCommands, IMessageHub? hub)
+    {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var items = new List<AutocompleteItem>();
 
-        // Commands AS mesh nodes — the static Command catalog (built-ins + any other static
-        // Command nodes). Their content is typed CommandDefinition, so the JsonSerializerOptions
-        // is only the JsonElement-fallback and never actually used here.
-        foreach (var cmd in CommandNodeType.ProjectCommands(
-                     _serviceProvider.EnumerateStaticNodes(), EmptyJsonOptions))
+        foreach (var cmd in CommandNodeType.ProjectCommands(snapshot, hub?.JsonSerializerOptions ?? EmptyJsonOptions))
             if (seen.Add(cmd.Id))
                 items.Add(Item(cmd.Id, cmd.Description));
 
-        // C# commands (e.g. /help) registered as IChatCommand.
-        var registry = _serviceProvider.GetService<ChatCommandRegistry>();
-        if (registry is not null)
-            foreach (var cmd in registry.GetAllCommands())
-                if (seen.Add(cmd.Name))
-                    items.Add(Item(cmd.Name, cmd.Description));
+        foreach (var cmd in registryCommands)
+            if (seen.Add(cmd.Name))
+                items.Add(Item(cmd.Name, cmd.Description));
 
-        return Observable.Return((IReadOnlyCollection<AutocompleteItem>)items);
+        return items;
     }
-
-    private static readonly JsonSerializerOptions EmptyJsonOptions = new();
 
     private static AutocompleteItem Item(string name, string? description) =>
         new(

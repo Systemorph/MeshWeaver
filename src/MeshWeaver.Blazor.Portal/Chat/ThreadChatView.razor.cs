@@ -801,14 +801,11 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         if (!CommandRegistry.TryGetCommand(parsedCommand.Name, out var command) || command == null)
         {
-            // Not a C# command (those are now just /help + anything a module registers) — try a
-            // nodeType:Command MESH NODE. Built-in /agent /model /harness ship as Command nodes
-            // (BuiltInCommandProvider) and a Space/NodeType/user can define more; all resolve here.
-            if (TryRunCommandNode(parsedCommand))
-                return;
-            lastCommandStatus = $"Unknown command: /{parsedCommand.Name}";
-            lastCommandStatusIsError = true;
-            await InvokeAsync(StateHasChanged);
+            // Not a C# command (those are now just /help) — resolve a nodeType:Command MESH NODE.
+            // Built-in /agent /model /harness AND any Space/NodeType/user-defined command resolve
+            // here, with namespace inheritance (CommandQueries). Reactive — reports "unknown" if
+            // nothing matches.
+            ResolveCommandNodeAndRun(parsedCommand);
             return;
         }
 
@@ -854,26 +851,49 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     }
 
     /// <summary>
-    /// Resolves a <c>nodeType:Command</c> mesh node by its slash word and opens the generic picker
-    /// for it. The built-in commands (/agent, /model, /harness) and any Space/NodeType/user-defined
-    /// command come through here — there is no C# class per command. Resolved synchronously from the
-    /// static command catalog (<see cref="BuiltInCommandProvider"/>). Returns false when no Command
-    /// node matches, so the caller can report "unknown command".
+    /// Resolves a <c>nodeType:Command</c> mesh node by its slash word and opens the generic picker.
+    /// Built-in commands (/agent, /model, /harness — shipped as Command nodes by
+    /// <see cref="BuiltInCommandProvider"/>) AND any Space/NodeType/user-defined command resolve
+    /// here, with namespace inheritance (<see cref="CommandNodeType.CommandQueries"/> — global
+    /// catalog + context+ancestors + user-home+ancestors). There is no C# class per command.
+    /// Reactive: queries the mesh once, then opens the picker or reports "unknown command".
     /// </summary>
-    private bool TryRunCommandNode(ParsedCommand parsed)
+    private void ResolveCommandNodeAndRun(ParsedCommand parsed)
     {
-        var commands = CommandNodeType.ProjectCommands(
-            Hub.ServiceProvider.EnumerateStaticNodes(), Hub.JsonSerializerOptions);
-        var match = commands.FirstOrDefault(c =>
-            string.Equals(c.Id, parsed.Name, StringComparison.OrdinalIgnoreCase));
-        if (match is null)
-            return false;
+        var workspace = Hub.ServiceProvider.GetService<IWorkspace>();
+        if (workspace is null)
+        {
+            ReportUnknownCommand(parsed.Name);
+            return;
+        }
 
-        var term = parsed.Arguments.Length == 0 ? null : LastSegment(parsed.RawArguments.Trim());
-        lastCommandStatus = null;
-        lastCommandStatusIsError = false;
-        OpenPicker(match.ToPickerRequest(term));
-        return true;
+        var queries = CommandNodeType.CommandQueries(initialContext, _userHome);
+        AgentPickerProjection.ObserveSnapshot(workspace, Hub, $"commands|{initialContext}|{_userHome}", queries)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Subscribe(
+                snapshot => InvokeAsync(() =>
+                {
+                    var match = CommandNodeType.ProjectCommands(snapshot, Hub.JsonSerializerOptions)
+                        .FirstOrDefault(c => string.Equals(c.Id, parsed.Name, StringComparison.OrdinalIgnoreCase));
+                    if (match is null)
+                    {
+                        ReportUnknownCommand(parsed.Name);
+                        return;
+                    }
+                    var term = parsed.Arguments.Length == 0 ? null : LastSegment(parsed.RawArguments.Trim());
+                    lastCommandStatus = null;
+                    lastCommandStatusIsError = false;
+                    OpenPicker(match.ToPickerRequest(term));
+                }),
+                _ => InvokeAsync(() => ReportUnknownCommand(parsed.Name)));
+    }
+
+    private void ReportUnknownCommand(string name)
+    {
+        lastCommandStatus = $"Unknown command: /{name}";
+        lastCommandStatusIsError = true;
+        StateHasChanged();
     }
 
     private void DismissWidget()
