@@ -2,6 +2,7 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -30,8 +31,6 @@ public static class GitHubSyncSettingsTab
     public const string TabId = "GitHubSync";
 
     private const string ResultId = "ghSyncResult";
-    private const string ConnectStateId = "ghConnectState";
-    private const string CfgFormId = "ghSyncCfgForm";
     private const string CommitFormId = "ghReimportForm";
 
     /// <summary>Registers the GitHub Sync settings tab provider (shown only on Space nodes).</summary>
@@ -81,40 +80,29 @@ public static class GitHubSyncSettingsTab
 
         // ── 1. Your GitHub account ────────────────────────────────────────────
         stack = stack.WithView(Section("Your GitHub account"));
-        stack = stack.WithView((h, _) => h.Stream.GetDataStream<UiControl>(ConnectStateId)
-            .StartWith((UiControl)Controls.Html("<p style=\"color:var(--neutral-foreground-hint);\">…</p>")));
         if (string.IsNullOrEmpty(userId))
-            host.UpdateData(ConnectStateId, Controls.Html("<p>Sign in to connect a GitHub account.</p>"));
+            stack = stack.WithView(Controls.Html(
+                "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);\">Sign in to connect a GitHub account.</p>"));
         else
-            creds.Get(userId).Take(1).Subscribe(
-                c => host.UpdateData(ConnectStateId, RenderConnect(creds, userId, spacePath, c, oauth.IsConfigured)),
-                _ => host.UpdateData(ConnectStateId, RenderConnect(creds, userId, spacePath, null, oauth.IsConfigured)));
+            // Live-bind to the user's credential stream so the state flips to "Connected" the instant
+            // the OAuth callback's saved credential syncs in. (A one-shot read grabbed the synced
+            // query's empty pre-sync snapshot and showed "Not connected" right after connecting.)
+            stack = stack.WithView((h, _) => creds.GetStream(userId)
+                .Select(c => (UiControl?)RenderConnect(creds, userId, spacePath, c, oauth.IsConfigured))
+                .StartWith((UiControl?)Controls.Html(
+                    "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);\">Checking GitHub connection…</p>")));
 
         // ── 2. Repository ─────────────────────────────────────────────────────
+        // The GitHub settings ARE a mesh node ({space}/_GitSync, GitHubSyncConfig). Edit it through
+        // the STANDARD node-content editor, which binds the GUI client DIRECTLY to the node stream
+        // (IMeshNodeStreamCache) and writes edits back via stream.Update — NO /data replica, NO save
+        // subscription, NO Save button. Ensure the node exists first (create-on-absent), then just
+        // DECLARE the editor bound to its path; all value resolution + persistence happen GUI-side.
         stack = stack.WithView(Section("Repository"));
-        host.UpdateData(CfgFormId, DefaultCfgForm());
-        sync.ReadConfig(spacePath).Take(1).Subscribe(cfg =>
-        {
-            if (cfg is not null) host.UpdateData(CfgFormId, CfgFormFrom(cfg));
-        });
-        stack = stack.WithView(BuildRepoForm(sync, spacePath));
-
-        // Auto-save: persist the repository settings as the user edits them (debounced), so there
-        // is no separate "Save" step and Sync always sees the current values. The explicit Save
-        // button remains for an immediate write. Skip the initial prefill emission; never persist
-        // an empty URL.
-        host.RegisterForDisposal("gh-cfg-autosave", host.Stream
-            .GetDataStream<Dictionary<string, object?>>(CfgFormId)
-            .Skip(1)
-            .Throttle(TimeSpan.FromMilliseconds(800))
-            .Subscribe(d =>
-            {
-                var url = Str(d, "repositoryUrl");
-                if (string.IsNullOrEmpty(url)) return;
-                sync.SaveConfig(spacePath, url, Str(d, "branch") ?? "main", Str(d, "subdirectory"),
-                        Bool(d, "createBranch", true), Bool(d, "createRepo", true))
-                    .Subscribe(_ => { }, ex => host.UpdateData(ResultId, Err(ex.Message)));
-            }));
+        sync.EnsureConfigNode(spacePath).Subscribe(_ => { },
+            ex => host.UpdateData(ResultId, Err(ex.Message)));
+        stack = stack.WithView(
+            MeshNodeContentEditorControl.ForType(GitHubSyncService.ConfigPath(spacePath), typeof(GitHubSyncConfig)));
 
         // ── 3. Sync + re-import ───────────────────────────────────────────────
         stack = stack.WithView(Section("Sync"));
@@ -136,13 +124,16 @@ public static class GitHubSyncSettingsTab
             .Select(cfg => (UiControl?)Controls.Html(LastSyncedHtml(cfg)))
             .StartWith((UiControl?)Controls.Html("<p style=\"color:var(--neutral-foreground-hint);\">…</p>")));
 
-        // Editable commit + re-import.
-        host.UpdateData(CommitFormId, new Dictionary<string, object?> { ["commit"] = "" });
-        sync.ReadConfig(spacePath).Take(1).Subscribe(cfg =>
-            host.UpdateData(CommitFormId, new Dictionary<string, object?>
+        // Editable commit + re-import. Prefill from the Space's saved config once it arrives (same
+        // synced-query empty-first-emission caveat as the repo form).
+        host.UpdateData(CommitFormId, new Dictionary<string, object?> { ["commit"] = "main" });
+        host.RegisterForDisposal("gh-commit-prefill", sync.WatchConfig(spacePath)
+            .Where(c => c is not null)
+            .Take(1)
+            .Subscribe(cfg => host.UpdateData(CommitFormId, new Dictionary<string, object?>
             {
-                ["commit"] = cfg?.LastSyncCommitSha ?? cfg?.Branch ?? "main",
-            }));
+                ["commit"] = cfg!.LastSyncCommitSha ?? cfg.Branch ?? "main",
+            })));
         stack = stack.WithView(BuildReimportForm(sync, spacePath, userId));
 
         // ── Result area ───────────────────────────────────────────────────────
@@ -170,8 +161,10 @@ public static class GitHubSyncSettingsTab
                 .WithAppearance(Appearance.Outline)
                 .WithClickAction(ctx =>
                 {
+                    // The connect-state view live-binds to creds.GetStream(userId); deleting the
+                    // credential re-emits null and the body flips to "Not connected" on its own.
                     creds.Delete(userId).Subscribe(
-                        _ => ctx.Host.UpdateData(ConnectStateId, RenderConnect(creds, userId, spacePath, null, isConfigured)),
+                        _ => { },
                         ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
                     return Task.CompletedTask;
                 }));
@@ -193,56 +186,16 @@ public static class GitHubSyncSettingsTab
         var returnPath = $"/{spacePath}/Settings/{TabId}";
         var connectUrl = $"/connect/github?returnPath={Uri.EscapeDataString(returnPath)}";
         return Controls.Html(
-            "<div style=\"font-size:0.85rem;\"><span style=\"color:#9ca3af;\">●</span> Not connected. " +
+            "<div style=\"font-size:0.85rem;display:flex;align-items:center;gap:8px;\">" +
+            "<span style=\"display:inline-block;width:8px;height:8px;border-radius:50%;" +
+            "background:var(--neutral-stroke-strong-rest);flex:0 0 auto;\"></span>" +
+            "<span>Not connected. " +
             $"<a href=\"{Esc(connectUrl)}\" target=\"_top\" rel=\"noopener\" " +
             "style=\"color:var(--accent-fill-rest);font-weight:600;\">Connect GitHub →</a>" +
-            " (one-time browser approval; authorize for the org whose repos you'll sync).</div>");
+            " (one-time browser approval; authorize for the org whose repos you'll sync).</span></div>");
     }
 
-    // ── Repository form ───────────────────────────────────────────────────────
-
-    private static UiControl BuildRepoForm(GitHubSyncService sync, string spacePath)
-    {
-        var ctxPtr = LayoutAreaReference.GetDataPointer(CfgFormId);
-        var form = Controls.Stack.WithWidth("100%").WithStyle("gap:12px;");
-
-        form = form.WithView(new TextFieldControl(new JsonPointerReference("repositoryUrl"))
-        {
-            Label = "Repository URL", Placeholder = "https://github.com/owner/repo", DataContext = ctxPtr,
-        }.WithWidth("100%"));
-        form = form.WithView(new TextFieldControl(new JsonPointerReference("branch"))
-        {
-            Label = "Branch", Placeholder = "main", DataContext = ctxPtr,
-        }.WithWidth("240px"));
-        form = form.WithView(new TextFieldControl(new JsonPointerReference("subdirectory"))
-        {
-            Label = "Subdirectory (optional)", Placeholder = "(repository root)", DataContext = ctxPtr,
-        }.WithWidth("320px"));
-        form = form.WithView(new CheckBoxControl(new JsonPointerReference("createBranch"))
-        {
-            Label = "Create the branch if it doesn't exist", DataContext = ctxPtr,
-        });
-        form = form.WithView(new CheckBoxControl(new JsonPointerReference("createRepo"))
-        {
-            Label = "Create the repository (private) if it doesn't exist", DataContext = ctxPtr,
-        });
-        form = form.WithView(Controls.Button("Save repository settings")
-            .WithClickAction(ctx =>
-            {
-                ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(CfgFormId).Take(1).Subscribe(d =>
-                {
-                    var url = Str(d, "repositoryUrl");
-                    var branch = Str(d, "branch") ?? "main";
-                    var sub = Str(d, "subdirectory");
-                    sync.SaveConfig(spacePath, url, branch, sub, Bool(d, "createBranch", true), Bool(d, "createRepo", true))
-                        .Subscribe(
-                            _ => ctx.Host.UpdateData(ResultId, Ok("Saved repository settings.")),
-                            ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
-                });
-                return Task.CompletedTask;
-            }));
-        return form;
-    }
+    // ── Re-import form (transient action input — a commit/branch to import to, not node content) ──
 
     private static UiControl BuildReimportForm(GitHubSyncService sync, string spacePath, string userId)
     {
@@ -277,21 +230,6 @@ public static class GitHubSyncSettingsTab
 
     // ── small helpers ─────────────────────────────────────────────────────────
 
-    private static Dictionary<string, object?> DefaultCfgForm() => new()
-    {
-        ["repositoryUrl"] = "", ["branch"] = "main", ["subdirectory"] = "",
-        ["createBranch"] = true, ["createRepo"] = true,
-    };
-
-    private static Dictionary<string, object?> CfgFormFrom(GitHubSyncConfig cfg) => new()
-    {
-        ["repositoryUrl"] = cfg.RepositoryUrl ?? "",
-        ["branch"] = cfg.Branch,
-        ["subdirectory"] = cfg.Subdirectory ?? "",
-        ["createBranch"] = cfg.CreateBranchIfMissing,
-        ["createRepo"] = cfg.CreateRepoIfMissing,
-    };
-
     private static string LastSyncedHtml(GitHubSyncConfig? cfg) =>
         cfg?.LastSyncCommitSha is { Length: > 0 } sha
             ? $"<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);\">Last synced: " +
@@ -306,19 +244,6 @@ public static class GitHubSyncSettingsTab
         var v = d.GetValueOrDefault(key);
         var s = v is JsonElement je && je.ValueKind == JsonValueKind.String ? je.GetString() : v?.ToString();
         return string.IsNullOrWhiteSpace(s) ? null : s.Trim();
-    }
-
-    private static bool Bool(Dictionary<string, object?> d, string key, bool fallback)
-    {
-        var v = d.GetValueOrDefault(key);
-        return v switch
-        {
-            bool b => b,
-            JsonElement je when je.ValueKind is JsonValueKind.True => true,
-            JsonElement je when je.ValueKind is JsonValueKind.False => false,
-            string s when bool.TryParse(s, out var b) => b,
-            _ => fallback,
-        };
     }
 
     private static string Short(string sha) => string.IsNullOrEmpty(sha) ? "" : sha[..Math.Min(8, sha.Length)];

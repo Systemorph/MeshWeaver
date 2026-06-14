@@ -41,7 +41,12 @@ public static class SettingsLayoutArea
     {
         var hubPath = host.Hub.Address.ToString();
         var hubAddress = host.Hub.Address;
-        var tabId = host.Reference.Id?.ToString();
+        // Reference.Id carries any query string appended by ApplicationPage.UpdateFromContext
+        // (e.g. "GitHubSync?connect=github-ok" after an OAuth callback redirect). The tab id is
+        // the part before '?', mirroring ApplicationPage.GetDisplayNameFromId — otherwise a query
+        // string never matches item.Id and the content pane silently falls back to the first
+        // (Metadata) tab while the nav still highlights the URL tab.
+        var tabId = host.Reference.Id?.ToString()?.Split('?')[0];
 
         var ownNode = host.Workspace.GetMeshNodeStream();
         var permsStream = host.Hub.GetEffectivePermissions(hubPath);
@@ -71,9 +76,18 @@ public static class SettingsLayoutArea
         // `.layout-area-container` (flex column) rather than a viewport-minus-magic-number
         // guess, which was overshooting the real header/messagebar height and clipping the
         // bottom of the content out of reach.
+        // Do NOT set Height="100%" on the splitter skin. FluentMultiSplitter renders its pane
+        // chrome in shadow DOM, so the global `.settings-splitter` CSS can't reach the inner
+        // host; the only height the component honours is the `Height` parameter fed from this
+        // skin. An inline `height:100%` resolves against an indefinite-height ancestor → it
+        // collapses to content height, the splitter grows past the viewport, and nothing
+        // scrolls. Instead let the splitter take its height from the `flex:1 1 auto; min-height:0`
+        // it already gets via the `.settings-splitter` class inside the flex-column
+        // `.layout-area-container` — a real, bounded height the `.settings-content-pane`
+        // (overflow-y:auto) scrolls within.
         var settingsPage = Controls.Splitter
             .WithClass("settings-splitter")
-            .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%").WithHeight("100%"))
+            .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%"))
             .WithView(
                 BuildMenuPane(host, node, hubAddress, hubPath, items, tabId),
                 skin => skin.WithSize("280px").WithMin("200px").WithMax("400px").WithCollapsible(true)

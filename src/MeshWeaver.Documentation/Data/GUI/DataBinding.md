@@ -130,6 +130,43 @@ No separate `DataChangeRequest` is needed for own-node edits inside a bound view
 
 ---
 
+# 🚨 ABSOLUTE: edit node content by binding to the node stream — NEVER replicate into `/data` + a save subscription
+
+**Editing a mesh node's content means binding the GUI client to the node's own stream and writing edits straight back to it.** There is exactly ONE source of truth — `Hub.GetMeshNodeStream(path)` (the process-wide `IMeshNodeStreamCache`). Reads come from it; edits write back through `GetMeshNodeStream(path).Update(...)`.
+
+**The forbidden antipattern** (it has appeared in many editors and must not be added to new ones):
+
+```csharp
+// ❌ FORBIDDEN — replicate-then-save. Two sources of truth glued by a debounced loop.
+host.UpdateData(dataId, node.Content);                          // 1. copy the node into a /data replica
+// ... controls bound to /data/{dataId} ...                      // 2. edit the replica
+host.Stream.GetDataStream<object>(dataId)                        // 3. a SERVER-SIDE save subscription
+    .Debounce(...).Subscribe(c => GetMeshNodeStream(path).Update(n => n with { Content = c }));
+```
+
+Why it's wrong: the `/data/{id}` copy and the node stream are two stores that drift (an out-of-band write to the node — e.g. a status field — never reaches the replica), and the debounced `Subscribe(...Update...)` is a hidden save loop that fires spurious writes, races the echo, and clobbers fields it didn't edit. **`OverviewLayoutArea.SetupAutoSave` is this antipattern; do not call it and do not write your own variant** (`SetupNodeMetadataAutoSave`, `SetupNodeTypeConfigAutoSave`, a hand-rolled `GetDataStream(id).Throttle().Subscribe(...Update...)`, or a "Save" button that reads `/data` and writes the node).
+
+**The correct pattern — a node-bound editor.** The backend layout area only DECLARES the editor with a node path; a Blazor view binds it to the node stream:
+
+```csharp
+// ✅ Backend layout area — declare the binding, compute the fields from the content type:
+stack.WithView(MeshNodeContentEditorControl.ForType(nodePath, typeof(MyContent)));
+
+// ✅ The Blazor view (the ONLY place reads/writes live) — bind to the node stream:
+AddBinding(Hub.GetMeshNodeStream(NodePath)
+    .Where(n => n is not null)
+    .Subscribe(node => { LoadValues(node); InvokeAsync(StateHasChanged); }));   // reads
+
+// edit -> per-field read-modify-write straight to the node (set ONLY the edited field):
+Hub.GetMeshNodeStream(NodePath)
+    .Update(node => node with { Content = PatchOneField(node.Content, key, value) })
+    .Subscribe(_ => { }, ex => Logger.LogWarning(ex, "persist failed for {Path}", NodePath));
+```
+
+No `/data` replica, no `SetupAutoSave`, no Save button, no debounce-and-save subscription. `MeshNodeContentEditorControl` (control in `MeshWeaver.Graph`, view `MeshNodeContentEditorView` in `MeshWeaver.Blazor`) is the reusable generic editor for simple scalar/bool content. For rich content (markdown, mesh-node picking) use the dedicated already-node-bound controls — `MarkdownEditorControl.WithAutoSave(hubAddress, nodePath)` (writes via the cache), `MeshNodePickerControl`, `CollaborativeMarkdownView`. Reference editor: `MeshNodeEditorView` (`MeshWeaver.Blazor.Graph`) via the `MeshNodeEditor`/`IMeshNodeEditor` client wrapper.
+
+The same rule covers create-on-absent: a node the editor binds to must EXIST first — create it with `meshService.CreateNode(...)` (read existence via `GetQuery`, empty-on-absent), NEVER `GetMeshNodeStream(path).Update` on an absent path (it NotFound-storms).
+
 ## Anti-patterns — never do these
 
 | ❌ Wrong | Why | ✅ Right |
@@ -141,6 +178,8 @@ No separate `DataChangeRequest` is needed for own-node edits inside a bound view
 | `await PermissionHelper.GetEffectivePermissions(...).FirstAsync()` in a layout area | Hub deadlock candidate | Compose the `IObservable<Permission>` via `CombineLatest`; bind permissions on the GUI side |
 | `try { ... } catch { /* swallowed */ }` around backend reads | Errors disappear, debugging impossible | Propagate via `OnError`; framework handles it |
 | `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, ...)` directly in a Blazor view | Opens a per-view upstream handle; bypasses `IMeshNodeStreamCache`; multiplies subscriptions; writes through the cache aren't observed | `Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>().GetStream(path)` — shared, write-coherent |
+| `host.UpdateData(id, node.Content)` + `GetDataStream(id).Debounce().Subscribe(...GetMeshNodeStream(path).Update...)` to edit node content (a.k.a. `SetupAutoSave`) | Replicate-then-save: two stores drift, the save loop races the echo and clobbers unedited fields | `MeshNodeContentEditorControl.ForType(path, typeof(T))` — the GUI view binds to `GetMeshNodeStream(path)` and writes per-field via `.Update(...)`; no replica, no save subscription |
+| A "Save" button that reads `/data/{id}` and writes the node | The edit should already be on the node via the bound stream | Node-bound editor; edits persist on change through `GetMeshNodeStream(path).Update(...)` |
 
 ---
 

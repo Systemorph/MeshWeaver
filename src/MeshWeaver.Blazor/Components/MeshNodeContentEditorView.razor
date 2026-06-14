@@ -1,0 +1,40 @@
+@inherits BlazorView<MeshNodeContentEditorControl, MeshNodeContentEditorView>
+@using MeshWeaver.Graph
+@using Microsoft.FluentUI.AspNetCore.Components
+
+@if (!_loaded)
+{
+    <FluentProgressRing Style="width: 24px; height: 24px;" />
+}
+else if (Fields.Count == 0)
+{
+    <FluentLabel Typo="Microsoft.FluentUI.AspNetCore.Components.Typography.Body">No editable settings.</FluentLabel>
+}
+else
+{
+    <div class="mesh-node-content-editor" style="display: flex; flex-direction: column; gap: 14px; width: 100%;">
+        @foreach (var f in Fields)
+        {
+            <div class="field" style="display: flex; flex-direction: column; gap: 4px; width: 100%;">
+                @if (f.Kind == MeshNodeEditorFieldKind.Bool)
+                {
+                    <FluentCheckbox Value="@BoolOf(f)"
+                                    ValueChanged="(bool v) => OnBoolChanged(f, v)"
+                                    Disabled="@(!CanEdit)"
+                                    Label="@f.Label" />
+                }
+                else
+                {
+                    <FluentLabel Typo="Microsoft.FluentUI.AspNetCore.Components.Typography.Body"
+                                 Weight="Microsoft.FluentUI.AspNetCore.Components.FontWeight.Bold">@f.Label</FluentLabel>
+                    <FluentTextField Value="@TextOf(f)"
+                                     ValueChanged="(string? v) => OnTextChanged(f, v)"
+                                     @onfocus="() => OnFocus(f)"
+                                     @onblur="() => OnBlur(f)"
+                                     ReadOnly="@(!CanEdit)"
+                                     Style="width: 100%; max-width: 560px;" />
+                }
+            </div>
+        }
+    </div>
+}
