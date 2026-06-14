@@ -447,14 +447,18 @@ namespace MeshWeaver.Utils
                     return source.ConvertToAsyncEnumerable();
             }
         }
+#pragma warning disable CS1998 // async iterator with no await — the IAsyncEnumerable<T> shape is the contract; enumeration of a non-async IQueryable is synchronous
         private static async IAsyncEnumerable<T> ConvertToAsyncEnumerable<T>(this IQueryable<T> source)
         {
-            var res = await Task.FromResult(source.AsEnumerable());
-            foreach (var el in res)
+            // Non-async IQueryable: enumerate synchronously. The previous
+            // `await Task.FromResult(source.AsEnumerable())` was fake-async — it added a
+            // Task allocation and a continuation hop for zero real asynchrony.
+            foreach (var el in source.AsEnumerable())
             {
                 yield return el;
             }
         }
+#pragma warning restore CS1998
     }
 
     public static class Check

@@ -70,7 +70,7 @@ public static class LayoutExtensions
                     services.TryAddEnumerable(ServiceDescriptor.Scoped<IAutocompleteProvider, LayoutAreaAutocompleteProvider>());
                     return services;
                 })
-                .WithHandler<GetDataRequest>(HandleLayoutAreasRequest)
+                .WithHandler<GetDataRequest>(HandleLayoutAreasRequest, HandleLayoutAreasFilter)
                 .AddData(data =>
                 {
                     // Register the area: prefix resolver for UnifiedReference (only if not already registered)
@@ -587,26 +587,30 @@ public static class LayoutExtensions
     }
 
     /// <summary>
+    /// Filter that restricts <see cref="HandleLayoutAreasRequest"/> to GetDataRequests whose
+    /// reference is a UnifiedReference with the "layoutAreas" prefix. Any other request is left
+    /// for the next handler in the rule chain — so the handler itself never has to pass through.
+    /// </summary>
+    private static bool HandleLayoutAreasFilter(IMessageHub hub, IMessageDelivery delivery)
+        => delivery is IMessageDelivery<GetDataRequest> { Message.Reference: UnifiedReference uRef }
+           && uRef.Path.StartsWith("layoutAreas", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Handles GetDataRequest for layoutAreas: prefix directly, bypassing the
     /// Observable/SynchronizationStream/FirstAsync chain that can race.
-    /// AreaDefinitions are immutable and fully known at config time.
+    /// AreaDefinitions are immutable and fully known at config time — this is pure
+    /// in-memory work, so the handler is synchronous (no Task.FromResult bridge).
     /// </summary>
-    private static Task<IMessageDelivery> HandleLayoutAreasRequest(
+    private static IMessageDelivery HandleLayoutAreasRequest(
         IMessageHub hub,
-        IMessageDelivery<GetDataRequest> request,
-        CancellationToken ct)
+        IMessageDelivery<GetDataRequest> request)
     {
-        // Only handle UnifiedReference with "layoutAreas:" prefix
-        if (request.Message.Reference is not UnifiedReference uRef
-            || !uRef.Path.StartsWith("layoutAreas", StringComparison.OrdinalIgnoreCase))
-            return Task.FromResult<IMessageDelivery>(request); // Pass through to next handler
-
         var uiControlService = hub.ServiceProvider.GetService<IUiControlService>();
         if (uiControlService == null)
         {
             hub.Post(new GetDataResponse(null, 0) { Error = "Layout not configured" },
                 o => o.ResponseFor(request));
-            return Task.FromResult(request.Processed());
+            return request.Processed();
         }
 
         var areas = uiControlService.LayoutDefinition
@@ -616,6 +620,6 @@ public static class LayoutExtensions
             .ToList();
 
         hub.Post(new GetDataResponse(areas, hub.Version), o => o.ResponseFor(request));
-        return Task.FromResult(request.Processed());
+        return request.Processed();
     }
 }

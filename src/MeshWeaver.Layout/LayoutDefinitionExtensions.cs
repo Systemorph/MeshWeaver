@@ -90,12 +90,11 @@ public static class LayoutDefinitionExtensions
         Func<RenderingContext, bool> context,
         IObservable<Func<LayoutAreaHost, RenderingContext, UiControl>> generator
     ) =>
-        WithView(layout,
-            context,
-            generator.Select(o =>
-                (Func<LayoutAreaHost, RenderingContext, Task<UiControl>>)((a, c) => Task.FromResult(o.Invoke(a, c)))
-            )
-        );
+        // The generator is a SYNCHRONOUS view factory — render it through the synchronous
+        // RenderAreaObservable path directly (mirrors the string-area overload below), rather
+        // than wrapping each invocation in Task.FromResult to satisfy the Task<UiControl> shape.
+        layout.WithRenderer(context, (a, c, s) =>
+            a.RenderAreaObservable(c, generator.Select(o => (object?)o.Invoke(a, c)), s));
 
     /// <summary>
     /// Adds a view to the layout definition for the specified area and observable generator.
