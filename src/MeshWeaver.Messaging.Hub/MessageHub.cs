@@ -216,38 +216,63 @@ public sealed class MessageHub : IMessageHub
     private void InstallStaleCallbackScanner()
     {
         var thresholdMs = (long)StaleCallbackThreshold.TotalMilliseconds;
-        staleCallbackScannerSub = Observable
+        // 🚨 WEAK self-reference. The scanner is a DIAGNOSTIC — it must NEVER keep its
+        // hub alive. Observable.Interval lives on the global Rx scheduler's TimerQueue
+        // (a GC strong-root); a closure capturing `this` STRONGLY pins the hub via
+        // TimerQueue → Rx PeriodicTimer → DisplayClass → MessageHub for as long as the
+        // timer runs. That is fine for a hub that gets DISPOSED (the dispose path kills
+        // the timer), but an ABANDONED hub — created, RunLevel=1, never disposed
+        // (e.g. a sync/ SynchronizationStream hub orphaned at mesh teardown) — never
+        // disposes its scanner, so the timer pins it forever and it accumulates across
+        // meshes. That is the MeshHub_IsCollected leak (ClrMD: TimerQueue → Rx
+        // PeriodicTimer → DisplayClass44 → MessageHub[sync/…, RunLevel=1]). With a weak
+        // ref the abandoned hub is collectable; the scanner observes it dead on the next
+        // tick and self-disposes. A LIVE hub is held by its real owners (parent
+        // hosted-hubs / DI), so the weak ref always resolves while the hub matters.
+        var weakSelf = new WeakReference<MessageHub>(this);
+        var sub = new System.Reactive.Disposables.SingleAssignmentDisposable();
+        sub.Disposable = Observable
             .Interval(StaleCallbackScanInterval)
             .Subscribe(_ =>
             {
-                try
+                if (!weakSelf.TryGetTarget(out var self))
                 {
-                    var pending = SnapshotPendingCallbacks();
-                    if (pending.Length == 0) return;
-                    var stale = pending.Where(p => p.AgeMs > thresholdMs).ToArray();
-                    if (stale.Length == 0) return;
-                    TryLog(LogLevel.Warning,
-                        "[STALE-CALLBACK] {Address}: {Count} callback(s) pending > {ThresholdMs}ms: {Detail}",
-                        Address, stale.Length, thresholdMs, FormatPendingCallbacks(stale));
+                    // Hub was collected (abandoned + GC'd). Stop the timer so the whole
+                    // scanner graph becomes unreachable. `sub` is captured directly, so
+                    // this needs no reference back to the (now-gone) hub.
+                    sub.Dispose();
+                    return;
                 }
-                catch (Exception ex)
-                {
-                    TryLog(LogLevel.Debug,
-                        "[STALE-CALLBACK] {Address}: scan tick failed: {Error}",
-                        Address, ex.Message);
-                }
+                self.ScanStaleCallbacks(thresholdMs);
             });
-        // 🚨 The fallback the doc-comment promises must actually exist: register
-        // the scanner in the disposables composite so the FINAL teardown always
-        // kills it, even on disposal paths that never execute the Quiescing case
-        // body. Without this, the per-hub 5s Observable.Interval (whose closure
-        // captures `this`) survives disposal and the TimerQueue strong-root pins
-        // the disposed hub forever — the exact ClrMD chain MeshHub_IsCollected
-        // caught in CI run 27431445179: TimerQueue → Rx PeriodicTimer →
-        // DisplayClass40_0 → MessageHub[RunLevel=6]. Double-dispose with the
-        // explicit Quiescing-phase dispose is harmless (Rx subscriptions are
-        // idempotent).
-        disposables.Add(staleCallbackScannerSub);
+        staleCallbackScannerSub = sub;
+        // Also register in the disposables composite so a NORMAL teardown kills the
+        // timer promptly (rather than waiting for the next tick after GC). Double-dispose
+        // with the explicit Quiescing-phase dispose is harmless (Rx is idempotent).
+        disposables.Add(sub);
+    }
+
+    /// <summary>Single scan tick — extracted so the timer closure captures only a
+    /// <see cref="WeakReference{T}"/> to the hub, never <c>this</c> (see
+    /// <see cref="InstallStaleCallbackScanner"/>).</summary>
+    private void ScanStaleCallbacks(long thresholdMs)
+    {
+        try
+        {
+            var pending = SnapshotPendingCallbacks();
+            if (pending.Length == 0) return;
+            var stale = pending.Where(p => p.AgeMs > thresholdMs).ToArray();
+            if (stale.Length == 0) return;
+            TryLog(LogLevel.Warning,
+                "[STALE-CALLBACK] {Address}: {Count} callback(s) pending > {ThresholdMs}ms: {Detail}",
+                Address, stale.Length, thresholdMs, FormatPendingCallbacks(stale));
+        }
+        catch (Exception ex)
+        {
+            TryLog(LogLevel.Debug,
+                "[STALE-CALLBACK] {Address}: scan tick failed: {Error}",
+                Address, ex.Message);
+        }
     }
 
     private readonly ThreadSafeLinkedList<AsyncDelivery> rules = new();
