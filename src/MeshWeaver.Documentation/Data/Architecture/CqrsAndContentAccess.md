@@ -316,8 +316,11 @@ The *only* legitimate uses of `IMeshQueryCore.Query` are inside the synced-query
 | API tokens list | `ApiTokenService.GetTokensForUser` — `workspace.GetQuery($"api-tokens:{userId}", …)` |
 | Chat agents + models | `AgentChatClient.Initialize` — `workspace.GetQuery("agents-and-models", …)` |
 | Access control list | `AccessControlLayoutArea` — `workspace.GetQuery($"access:{nodePath}", …)` |
+| Harness model list | `CopilotModelCatalog.Models` — `workspace.GetQuery("LanguageModel\|Copilot", …)` projected to `IReadOnlyList<string>` and data-bound by the picker |
 
 If you find yourself reading `MeshNode.Content` out of a one-shot `meshService.QueryAsync` to render a UI or feed a compiler, you are at the wrong layer. Wrap the query in `workspace.GetQuery` and subscribe — the recompile or re-render fires automatically when the underlying nodes change.
+
+> **🚨 A live set is NEVER a pooled one-shot cached in a field.** The tempting anti-pattern for "list of things from somewhere" is `ioPool.Run(... ListXAsync ...)` into a `volatile cached` field + an `EnsureLoaded()` kick-off + a snapshot `IReadOnlyList<T>` getter. That is wrong twice over: (1) it is a **snapshot** — it never re-emits when the set changes, so the picker/tab goes stale; and (2) the IoPool leaf runs **identity-less** (no `AccessContext` baton on the ThreadPool worker — see [ControlledIoPooling → "The pool carries NO AccessContext"](/Doc/Architecture/ControlledIoPooling)), so any node read it does bypasses the subscriber's RLS. Replace it with `workspace.GetQuery(...)` projected to the shape you want, exposed as `IObservable<T>` and data-bound. `GetQuery` is live (re-emits on change), shared (one upstream per id), and carries the subscriber's identity per emission. The Copilot model catalog was migrated exactly this way: `ioPool.Run(... CLI ListModelsAsync ...)` + `EnsureLoaded()` + cached field → `workspace.GetQuery(...)` exposing a live `IObservable<IReadOnlyList<string>>`.
 
 ---
 
