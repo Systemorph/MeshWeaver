@@ -1291,10 +1291,17 @@ public class MeshOperations
 
             // Ask the owning node hub for its collection config — exact same mechanism
             // the static GET endpoint uses (see BlazorHostingExtensions.ResolveStatic).
+            // 🚨 .Timeout is mandatory: HandleCollectionConfigRequest is registered ONLY by
+            // AddContentCollections(). A target node hub WITHOUT it never answers this
+            // GetDataRequest, so an un-timed Take(1) hangs FOREVER — and since the MCP/REST
+            // boundary does ops.Upload(...).FirstAsync().ToTask(), that wedges the calling
+            // request (the 2026-06-14 atioz upload wedge). On timeout the TimeoutException
+            // falls through to the .Catch below and surfaces as a clean "Error: …" string.
             return hub.Observe(
                 new GetDataRequest(new ContentCollectionReference([collectionName])),
                 o => o.WithTarget(targetAddress))
                 .Take(1)
+                .Timeout(TimeSpan.FromSeconds(30))
                 .Select(collectionResponse =>
                 {
                     // Deserialize via the hub's JSON options so the naming policy (camelCase)
@@ -1350,7 +1357,11 @@ public class MeshOperations
         .Catch((Exception ex) =>
         {
             logger.LogWarning(ex, "Upload failed for {Path}", path);
-            return Observable.Return($"Error: {ex.Message}");
+            var message = ex is TimeoutException
+                ? $"the node for '{path}' did not respond to the content-collection lookup in time — " +
+                  "confirm the path resolves to a content-enabled node (one configured with AddContentCollections)."
+                : ex.Message;
+            return Observable.Return($"Error: {message}");
         });
     }
 
