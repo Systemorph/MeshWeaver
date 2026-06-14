@@ -851,8 +851,16 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"EuropeRe Search query: {hiddenQuery}");
 
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        // Query<T> is a LIVE, eventually-consistent change stream: the Initial snapshot
+        // can lag the writes (under CI load the index reflects only 1 child before the
+        // 2nd propagates), so asserting on the FIRST Initial flaked at "1 >= 2". Wait for
+        // the emission where the count actually reaches 2 — the stream re-emits as the
+        // index catches up. A genuine missing child surfaces as a 30s timeout, not a
+        // stale-read mismatch. (Same "wait for the real condition" rule as the PG import
+        // and node-content reads — never assert on a lagged first snapshot.)
         var results = meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(hiddenQuery))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+            .Should().Within(30.Seconds())
+            .Match(c => c.Items.Count >= 2).Items;
         Output.WriteLine($"EuropeRe Search returned {results.Count} results");
         results.Count.Should().BeGreaterThanOrEqualTo(2,
             "EuropeRe should have at least LineOfBusiness and TransactionMapping child nodes");
