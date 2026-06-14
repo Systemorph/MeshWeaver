@@ -177,7 +177,8 @@ public static class StaticRepoImporter
             .Take(1)
             .SelectMany(change =>
             {
-                if (change.Items.FirstOrDefault()?.Content is ActivityLog { Status: ActivityStatus.Succeeded })
+                var existing = change.Items.FirstOrDefault();
+                if (existing?.Content is ActivityLog { Status: ActivityStatus.Succeeded })
                 {
                     logger?.LogInformation(
                         "[StaticRepoImport] {Partition} already at {Fingerprint} — skipping.",
@@ -199,10 +200,24 @@ public static class StaticRepoImporter
                     }
                 };
 
+                // 🚨 A NON-Succeeded existing activity is a STALE lock — a prior import created it
+                // (Status=Running) then crashed/raced before finishing (e.g. a rollout briefly running
+                // two pods, or a materialization fault). Skipping it forever ("AlreadyRunning", 0
+                // nodes) wedges the partition's import permanently — the atioz Agent/Harness/Command
+                // never materialized for exactly this reason. RECLAIM it: delete the dead lock so the
+                // CreateNode below re-acquires and re-runs. Absent → the delete is a harmless no-op.
+                // (A genuinely-concurrent replica re-runs the idempotent Upsert materialization — wasteful
+                // but correct; this is far better than a permanent wedge on a single-replica deploy.)
+                var clearStale = existing is null
+                    ? Observable.Return(System.Reactive.Unit.Default)
+                    : AsSystem(hub, () => meshService.DeleteNode(activityPath))
+                        .Select(_ => System.Reactive.Unit.Default)
+                        .Catch(Observable.Return(System.Reactive.Unit.Default));
+
                 // CreateNode is the lock: first instance wins; concurrent replicas fault here.
                 // Under System so the lock write authorizes on read-only-_Policy partitions and
                 // persists on the distributed path (see AsSystem).
-                return AsSystem(hub, () => meshService.CreateNode(activityNode))
+                return clearStale.SelectMany(_ => AsSystem(hub, () => meshService.CreateNode(activityNode))
                     .SelectMany(_ => Run(hub, source, nodes, root, activityPath, fingerprint, logger))
                     .Catch<StaticRepoImportResult, Exception>(ex =>
                     {
@@ -211,7 +226,7 @@ public static class StaticRepoImporter
                             source.Partition, fingerprint, ex.Message);
                         return Observable.Return(
                             new StaticRepoImportResult(source.Partition, fingerprint, "AlreadyRunning"));
-                    });
+                    }));
             });
     }
 
