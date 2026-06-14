@@ -286,6 +286,36 @@ public sealed class GitHubSyncService
         });
     }
 
+    /// <summary>
+    /// Asks GitHub — LIVE, nothing stored — for the configured branch's current HEAD commit,
+    /// and reports whether the Space's last sync matches it ("are we on the latest on this
+    /// branch?"). The branch name comes from the (local) config; the HEAD comes straight from
+    /// GitHub, so the answer can never drift. Delegates rather than replicating branch state.
+    /// </summary>
+    public IObservable<BranchState> AskBranchState(string spacePath, string userId)
+    {
+        return ReadConfig(spacePath).Take(1).SelectMany(config =>
+        {
+            if (config?.RepositoryUrl is not { Length: > 0 } repoUrl)
+                return Observable.Throw<BranchState>(new InvalidOperationException(
+                    "No GitHub repository configured for this Space."));
+            return credentials.Get(userId).Take(1).SelectMany(cred =>
+            {
+                if (cred?.AccessToken is not { Length: > 0 } token)
+                    return Observable.Throw<BranchState>(new InvalidOperationException(
+                        "Connect your GitHub account first."));
+                var branch = string.IsNullOrWhiteSpace(config.Branch) ? "main" : config.Branch;
+                // Fetch resolves the branch ref to its current HEAD commit on GitHub.
+                return repoClient.Fetch(repoUrl, branch, config.Subdirectory, token)
+                    .Select(snapshot => new BranchState(
+                        branch,
+                        snapshot.CommitSha,
+                        config.LastSyncCommitSha,
+                        UpToDate: string.Equals(snapshot.CommitSha, config.LastSyncCommitSha, StringComparison.Ordinal)));
+            });
+        });
+    }
+
     private IObservable<(StaticRepoImportResult Result, string CommitSha)> FetchAndImport(
         string repoUrl, string commitish, string? subdirectory, string token, string spaceId)
     {

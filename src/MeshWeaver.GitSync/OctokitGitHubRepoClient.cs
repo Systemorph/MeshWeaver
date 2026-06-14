@@ -139,7 +139,68 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
             });
     }
 
+    public IObservable<GitHubBranchResult> CreateBranch(GitHubCreateBranchRequest request)
+    {
+        var (owner, repo) = ParseRepoUrl(request.RepositoryUrl);
+        var client = Client(request.AccessToken);
+        var baseRef = string.IsNullOrWhiteSpace(request.BaseRef) ? "main" : request.BaseRef.Trim();
+        var newBranch = request.NewBranch.Trim();
+        if (string.IsNullOrEmpty(newBranch))
+            return Observable.Throw<GitHubBranchResult>(new ArgumentException("New branch name is required.", nameof(request)));
+
+        return ResolveRefSha(client, owner, repo, baseRef)
+            .SelectMany(sha =>
+            {
+                logger?.LogInformation("Creating branch {Branch} from {BaseRef} ({Sha}) in {Owner}/{Repo}.",
+                    newBranch, baseRef, sha[..Math.Min(8, sha.Length)], owner, repo);
+                return Http.Invoke(ct => client.Git.Reference.Create(
+                        owner, repo, new NewReference($"refs/heads/{newBranch}", sha)))
+                    .Select(reference => new GitHubBranchResult(newBranch, reference.Object.Sha));
+            });
+    }
+
+    public IObservable<GitHubPullRequestInfo> OpenPullRequest(GitHubOpenPullRequestRequest request)
+    {
+        var (owner, repo) = ParseRepoUrl(request.RepositoryUrl);
+        var client = Client(request.AccessToken);
+        var baseBranch = string.IsNullOrWhiteSpace(request.BaseBranch) ? "main" : request.BaseBranch.Trim();
+        var head = request.HeadBranch?.Trim();
+        if (string.IsNullOrEmpty(head))
+            return Observable.Throw<GitHubPullRequestInfo>(new ArgumentException("Head branch is required.", nameof(request)));
+
+        var newPr = new NewPullRequest(request.Title, head, baseBranch) { Body = request.Body ?? "" };
+        logger?.LogInformation("Opening PR {Head} → {Base} in {Owner}/{Repo}.", head, baseBranch, owner, repo);
+        return Http.Invoke(ct => client.PullRequest.Create(owner, repo, newPr))
+            .Select(ToInfo);
+    }
+
+    public IObservable<GitHubPullRequestInfo> GetPullRequestStatus(
+        string repositoryUrl, int number, string accessToken)
+    {
+        var (owner, repo) = ParseRepoUrl(repositoryUrl);
+        var client = Client(accessToken);
+        return Http.Invoke(ct => client.PullRequest.Get(owner, repo, number))
+            .Select(ToInfo);
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
+
+    /// <summary>Maps an Octokit <see cref="PullRequest"/> to our merged-state info record.</summary>
+    private static GitHubPullRequestInfo ToInfo(PullRequest pr) =>
+        new(pr.Number, pr.HtmlUrl, MapStatus(pr));
+
+    /// <summary>GitHub <c>state</c> + <c>merged</c> → <see cref="PullRequestStatus"/>.</summary>
+    private static PullRequestStatus MapStatus(PullRequest pr) =>
+        pr.Merged ? PullRequestStatus.Merged
+        : pr.State.Value == ItemState.Closed ? PullRequestStatus.Closed
+        : PullRequestStatus.Open;
+
+    /// <summary>Resolves a commitish (branch name OR SHA) to its commit SHA — cheap, no tree read.</summary>
+    private IObservable<string> ResolveRefSha(GitHubClient client, string owner, string repo, string commitish)
+        => IsSha(commitish)
+            ? Http.Invoke(ct => client.Git.Commit.Get(owner, repo, commitish)).Select(c => c.Sha)
+            : Http.Invoke(ct => client.Git.Reference.Get(owner, repo, $"heads/{commitish}"))
+                .Select(reference => reference.Object.Sha);
 
     private sealed record HeadInfo(string? CommitSha, bool RefExists, IReadOnlyList<(string Path, string Sha)> ExistingBlobs);
 
