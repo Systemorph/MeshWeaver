@@ -59,6 +59,31 @@ public class GitHubSyncSettingsTabTest(ITestOutputHelper output) : GitHubSyncTes
         Assert.Contains("Update to latest (checkout)", json);  // the checkout action renders too
     }
 
+    [Fact(Timeout = 60000)]
+    public void OpeningGitHubSyncTab_AutoCreatesConfigNodeForUnconfiguredSpace()
+    {
+        var space = "GhAuto" + Guid.NewGuid().ToString("N")[..8];
+        CreateSpace(space, "Auto Space");
+        var cfgPath = GitHubSyncService.ConfigPath(space);
+
+        // The Space was NEVER configured — no _GitSync node yet.
+        Assert.True(IsAbsent(cfgPath));
+
+        // Open the GitHub Sync tab. The Repository editor is gated on EnsureConfigNode, so the
+        // editor's "Repository URL" field only renders once {space}/_GitSync has been auto-created.
+        var json = RenderSettings(
+            new Address(space),
+            new LayoutAreaReference("Settings") { Id = GitHubSyncSettingsTab.TabId },
+            j => j.GetRawText().Contains("Repository URL"));
+        Assert.Contains("Repository URL", json);
+
+        // Entering the GUI auto-created the config node (with defaults) — robust for un-configured Spaces.
+        var node = WaitForNode(cfgPath);
+        Assert.Equal(GitHubSyncService.ConfigNodeType, node.NodeType);
+        var cfg = WaitForConfig(space, _ => true);
+        Assert.Equal("main", cfg.Branch);
+    }
+
     private string RenderSettings(Address hostAddress, Func<JsonElement, bool> until)
         => RenderSettings(hostAddress, new LayoutAreaReference("Settings"), until);
 

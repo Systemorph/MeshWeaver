@@ -112,10 +112,17 @@ public static class GitHubSyncSettingsTab
         // subscription, NO Save button. Ensure the node exists first (create-on-absent), then just
         // DECLARE the editor bound to its path; all value resolution + persistence happen GUI-side.
         stack = stack.WithView(Section("Repository"));
-        sync.EnsureConfigNode(spacePath).Subscribe(_ => { },
-            ex => host.UpdateData(ResultId, Err(ex.Message)));
-        stack = stack.WithView(
-            MeshNodeContentEditorControl.ForType(GitHubSyncService.ConfigPath(spacePath), typeof(GitHubSyncConfig)));
+        // Robust create-on-absent: gate the editor's render on EnsureConfigNode so a Space that was
+        // NEVER configured gets its {space}/_GitSync node auto-created (via the safe GetQuery+CreateNode
+        // path) BEFORE the editor binds to it — the editor then binds to an existing node instead of
+        // spinning on (or storm-breaking against) an absent path. Any creation failure surfaces inline.
+        stack = stack.WithView((h, _) => sync.EnsureConfigNode(spacePath)
+            .Select(_ => (UiControl?)MeshNodeContentEditorControl.ForType(
+                GitHubSyncService.ConfigPath(spacePath), typeof(GitHubSyncConfig)))
+            .Catch<UiControl?, Exception>(ex => Observable.Return((UiControl?)Controls.Html(
+                Err($"Couldn't initialize GitHub settings: {ex.Message}"))))
+            .StartWith((UiControl?)Controls.Html(
+                "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);\">Loading repository settings…</p>")));
 
         // ── 3. Sync + re-import ───────────────────────────────────────────────
         // Every long-running GitHub op runs as an ACTIVITY (Doc/Architecture/ActivityControlPlane):
