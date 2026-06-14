@@ -720,6 +720,11 @@ public static class MemexConfiguration
         // UseAuthentication so HttpContext.User is populated.
         app.MapLinkedInConnect();
 
+        // GitHub Sync — OAuth authorization-code connect endpoints (same ordering
+        // requirement: needs HttpContext.User). Stores the per-user token at
+        // {userId}/_Provider/GitHub. See Doc/Architecture/GitHubSync.
+        app.MapGitHubConnect();
+
         // Use HTTPS redirection only for non-MCP paths (MCP needs HTTP for Claude Code)
         app.UseWhen(
             context => !context.Request.Path.StartsWithSegments("/mcp"),

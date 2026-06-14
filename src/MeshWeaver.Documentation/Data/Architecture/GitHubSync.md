@@ -34,14 +34,15 @@ from a repo at a release tag), see [DataSyncSetup.md](/Doc/Architecture/DataSync
 
 ## 1. Connect your GitHub account (once)
 
-GitHub Sync authenticates with a **long-standing OAuth credential** obtained through
-GitHub's **device flow** — no password, no pasted personal access token.
+GitHub Sync authenticates with a **long-standing OAuth credential** via GitHub's
+**authorization-code flow** — no password, no pasted personal access token.
 
 1. Open any Space → **Settings → GitHub Sync**.
-2. Under **Your GitHub account**, click **Connect GitHub**.
-3. A code and a link (`https://github.com/login/device`) appear. Open the link in
-   your browser, enter the code, and approve.
-4. The tab flips to **✓ Connected as _your-login_**. You can **Disconnect** anytime.
+2. Under **Your GitHub account**, click **Connect GitHub →**.
+3. Your browser is redirected to GitHub; approve the authorization (authorize it for
+   the **org** whose repos you'll sync). GitHub redirects back to the portal
+   (`/connect/github/callback`), which stores the token and returns you to the Space.
+4. The tab shows **✓ Connected as _your-login_**. You can **Disconnect** anytime.
 
 Your token is stored **encrypted at rest** (AES-256-GCM) on your own partition
 (`{you}/_Provider/GitHub`) and is reused for every sync — you only connect once.
@@ -113,18 +114,20 @@ activity lock + canonical upsert + prune) — see
 
 Two pieces of server configuration enable GitHub Sync:
 
-1. **A GitHub OAuth App with the device flow enabled.** Register one under the GitHub
-   organization (Settings → Developer settings → OAuth Apps → *Enable Device Flow*).
-   Request scope **`repo`** (read/write to private + public repos). Then configure its
-   client id:
+1. **A GitHub OAuth App per portal host.** Register one under the GitHub organization
+   (Settings → Developer settings → OAuth Apps → New). Set the **Authorization callback
+   URL** to `https://{host}/connect/github/callback`. Copy the **Client ID** and generate
+   a **Client Secret**. Request scope **`repo`** (read/write to private + public repos):
 
    ```jsonc
-   // appsettings.json
-   "GitHub": { "OAuth": { "ClientId": "Iv1.xxxxxxxxxxxxxxxx", "Scopes": "repo" } }
+   // appsettings.json / env  (GitHub__OAuth__ClientId, GitHub__OAuth__ClientSecret)
+   "GitHub": { "OAuth": { "ClientId": "Ov23li…", "ClientSecret": "<secret>", "Scopes": "repo" } }
    ```
 
-   No client secret is needed for the device authorization grant. Absent a client id the
-   Connect button is disabled and the rest of the tab still works for reading status.
+   The **ClientId** is non-secret (env/values). Keep the **ClientSecret** in the **Key
+   Vault** and surface it as the `GitHub__OAuth__ClientSecret` env via the
+   SecretProviderClass (like the other secrets). Absent the client id + secret the Connect
+   link is disabled and the rest of the tab still works for reading status.
 
 2. **An encryption master key** so stored tokens are ciphertext at rest:
 
