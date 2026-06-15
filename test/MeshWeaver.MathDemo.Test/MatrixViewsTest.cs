@@ -73,7 +73,7 @@ public class MatrixViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         => base.ConfigureClient(configuration).AddLayoutClient();
 
     [Fact(Timeout = 120_000)]
-    public void Inverse_ShouldRenderForMatrixExample()
+    public async Task Inverse_ShouldRenderForMatrixExample()
     {
         if (ShouldSkip) return;
 
@@ -81,7 +81,7 @@ public class MatrixViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var address = new Address("MathDemo/Matrix/Example");
 
         // Initialize the hub first â€” required for routing to hit the per-node hub.
-        client.Observe(new PingRequest(), o => o.WithTarget(address))
+        await client.Observe(new PingRequest(), o => o.WithTarget(address))
             .Should().Within(TimeSpan.FromSeconds(90)).Emit();
 
         var workspace = client.GetWorkspace();
@@ -90,7 +90,7 @@ public class MatrixViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
 
         Output.WriteLine("Waiting for Inverse view to render (cold run resolves MathNet.Numerics from NuGet)â€¦");
-        stream.Should().Within(TimeSpan.FromSeconds(90))
+        await stream.Should().Within(TimeSpan.FromSeconds(90))
             .Match(value => !value.Equals(default(JsonElement)),
                 "Inverse layout area should render â€” proves #r \"nuget:MathNet.Numerics, ...\" is resolved " +
                 "and MatrixLayoutAreas.Inverse executed against the sample instance.");

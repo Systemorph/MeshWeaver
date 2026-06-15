@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Threading.Tasks;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -21,11 +22,11 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
         => base.ConfigureMesh(builder);
 
     /// <summary>Reactive query snapshot: the Initial emission carries the full result set.</summary>
-    private IReadOnlyList<MeshNode> QueryNodes(MeshQueryRequest request)
-        => MeshQuery.Query<MeshNode>(request)
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+    private async Task<IReadOnlyList<MeshNode>> QueryNodes(MeshQueryRequest request)
+        => (await MeshQuery.Query<MeshNode>(request)
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
-    private IReadOnlyList<MeshNode> QueryNodes(string query) => QueryNodes(MeshQueryRequest.FromQuery(query));
+    private async Task<IReadOnlyList<MeshNode>> QueryNodes(string query) => await QueryNodes(MeshQueryRequest.FromQuery(query));
 
     /// <summary>
     /// Reactive autocomplete is a one-shot snapshot: each provider emits its matches then completes.
@@ -33,60 +34,60 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     /// snapshot may complete empty. Re-issue the snapshot on an interval until it surfaces a match — the
     /// sanctioned re-query pattern for snapshot sources that race eventual-consistency lag.
     /// </summary>
-    private IReadOnlyCollection<QueryResult> AutocompleteUntil(
+    private async Task<IReadOnlyCollection<QueryResult>> AutocompleteUntil(
         string basePath, string prefix, Func<IReadOnlyCollection<QueryResult>, bool> predicate)
-        => Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
+        => await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
             .SelectMany(_ => MeshQuery.Autocomplete(basePath, prefix, limit: 10))
             .Should().Match(predicate);
 
-    private void SetupMarketingHierarchy()
+    private async Task SetupMarketingHierarchy()
     {
         // Create the Marketing story hierarchy similar to sample data
-        NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing") with
         {
             Name = "Marketing",
             NodeType = "Group"
         }).Should().Emit();
 
-        NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing") with
         {
             Name = "Claims Processing",
             NodeType = "Markdown"
         }).Should().Emit();
 
-        NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing/DataIngestionStrategy") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing/DataIngestionStrategy") with
         {
             Name = "Data Ingestion Strategy",
             NodeType = "Markdown"
         }).Should().Emit();
 
         // Sub-stories of ClaimsProcessing
-        NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing/EmailTriage") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing/EmailTriage") with
         {
             Name = "Email Triage",
             NodeType = "Markdown"
         }).Should().Emit();
 
-        NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing/DocumentExtraction") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing/DocumentExtraction") with
         {
             Name = "Document Extraction",
             NodeType = "Markdown"
         }).Should().Emit();
 
-        NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing/ClientCorrespondence") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing/ClientCorrespondence") with
         {
             Name = "Client Correspondence",
             NodeType = "Markdown"
         }).Should().Emit();
 
         // Sub-stories of DataIngestionStrategy
-        NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing/DataIngestionStrategy/AnnotatedDataModel") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing/DataIngestionStrategy/AnnotatedDataModel") with
         {
             Name = "Annotated Data Model",
             NodeType = "Markdown"
         }).Should().Emit();
 
-        NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing/DataIngestionStrategy/HistoricIngestion") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing/DataIngestionStrategy/HistoricIngestion") with
         {
             Name = "Historic Ingestion",
             NodeType = "Markdown"
@@ -94,11 +95,11 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     }
 
     [Fact]
-    public void Query_TopLevel_ShowsAllStories()
+    public async Task Query_TopLevel_ShowsAllStories()
     {
-        SetupMarketingHierarchy();
+        await SetupMarketingHierarchy();
 
-        var results = QueryNodes("path:Systemorph/Marketing nodeType:Markdown scope:descendants");
+        var results = await QueryNodes("path:Systemorph/Marketing nodeType:Markdown scope:descendants");
 
         // Should find all 7 stories (2 parent + 5 sub-stories)
         results.Should().HaveCount(7);
@@ -114,12 +115,12 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     }
 
     [Fact]
-    public void Query_SubStories_OnlyReturnsChildrenOfParent()
+    public async Task Query_SubStories_OnlyReturnsChildrenOfParent()
     {
-        SetupMarketingHierarchy();
+        await SetupMarketingHierarchy();
 
         // scope:subtree includes the base path itself plus all descendants
-        var results = QueryNodes("path:Systemorph/Marketing/ClaimsProcessing nodeType:Markdown scope:subtree");
+        var results = await QueryNodes("path:Systemorph/Marketing/ClaimsProcessing nodeType:Markdown scope:subtree");
 
         // Should find ClaimsProcessing + 3 sub-stories (4 total)
         results.Should().HaveCount(4);
@@ -135,11 +136,11 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     }
 
     [Fact]
-    public void Query_ByPath_RestrictsResults()
+    public async Task Query_ByPath_RestrictsResults()
     {
-        SetupMarketingHierarchy();
+        await SetupMarketingHierarchy();
 
-        var results = QueryNodes("path:Systemorph/Marketing/ClaimsProcessing nodeType:Markdown scope:subtree");
+        var results = await QueryNodes("path:Systemorph/Marketing/ClaimsProcessing nodeType:Markdown scope:subtree");
 
         // Should only return nodes under ClaimsProcessing path (ClaimsProcessing + 3 sub-stories = 4)
         results.Should().HaveCount(4);
@@ -148,16 +149,16 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     }
 
     [Fact]
-    public void Query_ParentStory_HasCorrectChildren()
+    public async Task Query_ParentStory_HasCorrectChildren()
     {
-        SetupMarketingHierarchy();
+        await SetupMarketingHierarchy();
 
         // Get ClaimsProcessing node
-        var claimsNode = ReadNode("Systemorph/Marketing/ClaimsProcessing").Should().Emit();
+        var claimsNode = await ReadNode("Systemorph/Marketing/ClaimsProcessing").Should().Emit();
         claimsNode.Should().NotBeNull();
 
         // Get direct children
-        var children = QueryNodes($"namespace:{claimsNode!.Path}");
+        var children = await QueryNodes($"namespace:{claimsNode!.Path}");
 
         children.Should().HaveCount(3);
         children.Select(n => n.Name).Should().Contain([
@@ -168,12 +169,12 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     }
 
     [Fact]
-    public void Query_SubStory_HasCorrectParent()
+    public async Task Query_SubStory_HasCorrectParent()
     {
-        SetupMarketingHierarchy();
+        await SetupMarketingHierarchy();
 
         // Get a sub-story
-        var emailTriageNode = ReadNode("Systemorph/Marketing/ClaimsProcessing/EmailTriage").Should().Emit();
+        var emailTriageNode = await ReadNode("Systemorph/Marketing/ClaimsProcessing/EmailTriage").Should().Emit();
         emailTriageNode.Should().NotBeNull();
 
         // Verify parent path
@@ -182,17 +183,17 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
         // Get parent
         var parentPath = emailTriageNode!.GetParentPath();
         parentPath.Should().NotBeNull();
-        var parentNode = ReadNode(parentPath!).Should().Emit();
+        var parentNode = await ReadNode(parentPath!).Should().Emit();
         parentNode.Should().NotBeNull();
         parentNode!.Name.Should().Be("Claims Processing");
     }
 
     [Fact]
-    public void Autocomplete_ReturnsMatchingNodes()
+    public async Task Autocomplete_ReturnsMatchingNodes()
     {
-        SetupMarketingHierarchy();
+        await SetupMarketingHierarchy();
 
-        var suggestions = AutocompleteUntil("Systemorph/Marketing", "Email", r => r.Count >= 1);
+        var suggestions = await AutocompleteUntil("Systemorph/Marketing", "Email", r => r.Count >= 1);
 
         suggestions.Should().HaveCount(1);
         suggestions.First().Name.Should().Be("Email Triage");
@@ -200,23 +201,23 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     }
 
     [Fact]
-    public void Autocomplete_FuzzyMatching_FindsPartialMatches()
+    public async Task Autocomplete_FuzzyMatching_FindsPartialMatches()
     {
-        SetupMarketingHierarchy();
+        await SetupMarketingHierarchy();
 
-        var suggestions = AutocompleteUntil("Systemorph/Marketing", "claim", r => r.Any(s => s.Name == "Claims Processing"));
+        var suggestions = await AutocompleteUntil("Systemorph/Marketing", "claim", r => r.Any(s => s.Name == "Claims Processing"));
 
         // Should find Claims Processing and its sub-stories
         suggestions.Should().Contain(s => s.Name == "Claims Processing");
     }
 
     [Fact]
-    public void Query_TextSearch_FindsMatchingDescriptions()
+    public async Task Query_TextSearch_FindsMatchingDescriptions()
     {
-        SetupMarketingHierarchy();
+        await SetupMarketingHierarchy();
 
         // Search for "AI" in descriptions
-        var results = QueryNodes("path:Systemorph/Marketing AI scope:descendants");
+        var results = await QueryNodes("path:Systemorph/Marketing AI scope:descendants");
 
         // Should find Email Triage and Client Correspondence which mention AI
         results.Should().HaveCountGreaterThanOrEqualTo(2);
@@ -226,22 +227,22 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     }
 
     [Fact]
-    public void Query_WithLimit_RespectsLimit()
+    public async Task Query_WithLimit_RespectsLimit()
     {
-        SetupMarketingHierarchy();
+        await SetupMarketingHierarchy();
 
-        var results = QueryNodes("path:Systemorph/Marketing nodeType:Markdown scope:descendants limit:3");
+        var results = await QueryNodes("path:Systemorph/Marketing nodeType:Markdown scope:descendants limit:3");
 
         results.Should().HaveCount(3);
     }
 
     [Fact]
-    public void Query_WithLimitProperty_OverridesQueryLimit()
+    public async Task Query_WithLimitProperty_OverridesQueryLimit()
     {
-        SetupMarketingHierarchy();
+        await SetupMarketingHierarchy();
 
         // Limit property takes precedence over limit in query string
-        var results = QueryNodes(new MeshQueryRequest
+        var results = await QueryNodes(new MeshQueryRequest
         {
             Query = "path:Systemorph/Marketing nodeType:Markdown scope:descendants limit:10",
             Limit = 2
@@ -252,25 +253,25 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     }
 
     [Fact]
-    public void Query_WithSkipAndLimit_ReturnsPaginatedResults()
+    public async Task Query_WithSkipAndLimit_ReturnsPaginatedResults()
     {
-        SetupMarketingHierarchy();
+        await SetupMarketingHierarchy();
 
         // Query all 7 stories to get consistent ordering
         var allQuery = "path:Systemorph/Marketing nodeType:Markdown scope:descendants";
-        var allResults = QueryNodes(allQuery);
+        var allResults = await QueryNodes(allQuery);
         allResults.Should().HaveCount(7);
 
         // Get first page (skip 0, limit 3)
-        var page1 = QueryNodes(new MeshQueryRequest { Query = allQuery, Skip = 0, Limit = 3 });
+        var page1 = await QueryNodes(new MeshQueryRequest { Query = allQuery, Skip = 0, Limit = 3 });
         page1.Should().HaveCount(3);
 
         // Get second page (skip 3, limit 3)
-        var page2 = QueryNodes(new MeshQueryRequest { Query = allQuery, Skip = 3, Limit = 3 });
+        var page2 = await QueryNodes(new MeshQueryRequest { Query = allQuery, Skip = 3, Limit = 3 });
         page2.Should().HaveCount(3);
 
         // Get third page (skip 6, limit 3) - only 1 item left
-        var page3 = QueryNodes(new MeshQueryRequest { Query = allQuery, Skip = 6, Limit = 3 });
+        var page3 = await QueryNodes(new MeshQueryRequest { Query = allQuery, Skip = 6, Limit = 3 });
         page3.Should().HaveCount(1);
 
         // All pages should contain different items
@@ -280,12 +281,12 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     }
 
     [Fact]
-    public void Query_Hierarchy_IncludesAncestorsAndDescendants()
+    public async Task Query_Hierarchy_IncludesAncestorsAndDescendants()
     {
-        SetupMarketingHierarchy();
+        await SetupMarketingHierarchy();
 
         // Query with hierarchy scope from a sub-story
-        var results = QueryNodes("path:Systemorph/Marketing/ClaimsProcessing/EmailTriage scope:hierarchy");
+        var results = await QueryNodes("path:Systemorph/Marketing/ClaimsProcessing/EmailTriage scope:hierarchy");
 
         var paths = results.Select(n => n.Path).ToList();
 
@@ -303,20 +304,20 @@ public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder);
 
-    private IReadOnlyList<MeshNode> QueryNodes(MeshQueryRequest request)
-        => MeshQuery.Query<MeshNode>(request)
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+    private async Task<IReadOnlyList<MeshNode>> QueryNodes(MeshQueryRequest request)
+        => (await MeshQuery.Query<MeshNode>(request)
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
     [Fact]
-    public void QueryAsync_Generic_ReturnsTypedResults()
+    public async Task QueryAsync_Generic_ReturnsTypedResults()
     {
         // Arrange - save MeshNodes with nodeType
-        NodeFactory.CreateNode(MeshNode.FromPath("shop/inventory/1") with { Name = "Laptop", NodeType = "Markdown" }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("shop/inventory/2") with { Name = "Phone", NodeType = "Markdown" }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("shop/inventory/order-1") with { Name = "Order 1", NodeType = "Code" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath("shop/inventory/1") with { Name = "Laptop", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath("shop/inventory/2") with { Name = "Phone", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath("shop/inventory/order-1") with { Name = "Order 1", NodeType = "Code" }).Should().Emit();
 
         // Act - query for Product nodes only
-        var results = QueryNodes(MeshQueryRequest.FromQuery("path:shop/inventory nodeType:Markdown scope:descendants"));
+        var results = await QueryNodes(MeshQueryRequest.FromQuery("path:shop/inventory nodeType:Markdown scope:descendants"));
 
         // Assert - should only return Product nodes
         results.Should().HaveCount(2);
@@ -324,14 +325,14 @@ public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     }
 
     [Fact]
-    public void QueryAsync_Generic_WithNodeType_FiltersCorrectly()
+    public async Task QueryAsync_Generic_WithNodeType_FiltersCorrectly()
     {
         // Arrange - save nodes with different types
-        NodeFactory.CreateNode(MeshNode.FromPath("shop/data/1") with { Name = "Laptop", NodeType = "Markdown" }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("shop/data/order-1") with { Name = "Order 1", NodeType = "Code" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath("shop/data/1") with { Name = "Laptop", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath("shop/data/order-1") with { Name = "Order 1", NodeType = "Code" }).Should().Emit();
 
         // Act - query for Product nodeType
-        var results = QueryNodes(MeshQueryRequest.FromQuery("path:shop/data nodeType:Markdown scope:descendants"));
+        var results = await QueryNodes(MeshQueryRequest.FromQuery("path:shop/data nodeType:Markdown scope:descendants"));
 
         // Assert - should find only Product nodes
         results.Should().HaveCount(1);
@@ -339,12 +340,12 @@ public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     }
 
     [Fact]
-    public void QueryAsync_Generic_WithPaging_ReturnsPagedResults()
+    public async Task QueryAsync_Generic_WithPaging_ReturnsPagedResults()
     {
         // Arrange - save 10 product nodes
         for (int i = 1; i <= 10; i++)
         {
-            NodeFactory.CreateNode(MeshNode.FromPath($"catalog/products/{i}") with
+            await NodeFactory.CreateNode(MeshNode.FromPath($"catalog/products/{i}") with
             {
                 Name = $"Product {i}",
                 NodeType = "Markdown"
@@ -352,23 +353,23 @@ public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         }
 
         // Act - get page 2 (skip 3, take 3)
-        var results = QueryNodes(MeshQueryRequest.FromQuery("path:catalog/products scope:descendants") with { Skip = 3, Limit = 3 });
+        var results = await QueryNodes(MeshQueryRequest.FromQuery("path:catalog/products scope:descendants") with { Skip = 3, Limit = 3 });
 
         // Assert
         results.Should().HaveCount(3);
     }
 
     [Fact]
-    public void QueryAsync_Generic_WithAdditionalFilters_CombinesFilters()
+    public async Task QueryAsync_Generic_WithAdditionalFilters_CombinesFilters()
     {
         // Arrange - save nodes with different names and types
-        NodeFactory.CreateNode(MeshNode.FromPath("shop/all/1") with { Name = "Gaming Laptop", NodeType = "Markdown" }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("shop/all/2") with { Name = "Business Laptop", NodeType = "Markdown" }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("shop/all/3") with { Name = "Phone", NodeType = "Markdown" }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("shop/all/order-1") with { Name = "Order 1", NodeType = "Code" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath("shop/all/1") with { Name = "Gaming Laptop", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath("shop/all/2") with { Name = "Business Laptop", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath("shop/all/3") with { Name = "Phone", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath("shop/all/order-1") with { Name = "Order 1", NodeType = "Code" }).Should().Emit();
 
         // Act - query for Product nodes with name filter
-        var results = QueryNodes(MeshQueryRequest.FromQuery("path:shop/all name:*Laptop* nodeType:Markdown scope:descendants"));
+        var results = await QueryNodes(MeshQueryRequest.FromQuery("path:shop/all name:*Laptop* nodeType:Markdown scope:descendants"));
 
         // Assert - should only return laptops
         results.Should().HaveCount(2);
@@ -376,28 +377,28 @@ public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     }
 
     [Fact]
-    public void QueryAsync_Generic_NoMatchingNodeType_ReturnsEmpty()
+    public async Task QueryAsync_Generic_NoMatchingNodeType_ReturnsEmpty()
     {
         // Arrange - save only Order nodes
-        NodeFactory.CreateNode(MeshNode.FromPath("shop/orders/order-1") with { Name = "Order 1", NodeType = "Code" }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("shop/orders/order-2") with { Name = "Order 2", NodeType = "Code" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath("shop/orders/order-1") with { Name = "Order 1", NodeType = "Code" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath("shop/orders/order-2") with { Name = "Order 2", NodeType = "Code" }).Should().Emit();
 
         // Act - query for Product nodeType (none exist)
-        var results = QueryNodes(MeshQueryRequest.FromQuery("path:shop/orders nodeType:Markdown scope:descendants"));
+        var results = await QueryNodes(MeshQueryRequest.FromQuery("path:shop/orders nodeType:Markdown scope:descendants"));
 
         // Assert - no Product nodes exist, only Order
         results.Should().BeEmpty();
     }
 
     [Fact]
-    public void QueryAsync_Generic_MeshNode_WorksWithNodes()
+    public async Task QueryAsync_Generic_MeshNode_WorksWithNodes()
     {
         // Arrange
-        NodeFactory.CreateNode(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "Markdown" }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("org/contoso") with { Name = "Contoso Ltd", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath("org/contoso") with { Name = "Contoso Ltd", NodeType = "Markdown" }).Should().Emit();
 
         // Act - query for MeshNode type
-        var results = QueryNodes(MeshQueryRequest.FromQuery("path:org scope:descendants"));
+        var results = await QueryNodes(MeshQueryRequest.FromQuery("path:org scope:descendants"));
 
         // Assert
         results.Should().HaveCount(2);

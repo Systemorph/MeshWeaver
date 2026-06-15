@@ -100,9 +100,9 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
     /// Verifies the sample reply (reply1 under c1) is queryable with correct path and content.
     /// </summary>
     [Fact]
-    public void SampleReply_LoadableByPath()
+    public async Task SampleReply_LoadableByPath()
     {
-        var reply = ObserveFirst($"path:{Reply1Path}").Should().Within(15.Seconds()).Emit();
+        var reply = await ObserveFirst($"path:{Reply1Path}").Should().Within(15.Seconds()).Emit();
 
         reply.Id.Should().Be("reply1");
         reply.Path.Should().Be(Reply1Path);
@@ -119,9 +119,9 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
     /// then verifies it via Query.
     /// </summary>
     [Fact]
-    public void CreateReply_UnderParentComment()
+    public async Task CreateReply_UnderParentComment()
     {
-        var parent = ObserveFirst($"path:{CommentC1Path}").Should().Within(15.Seconds()).Emit();
+        var parent = await ObserveFirst($"path:{CommentC1Path}").Should().Within(15.Seconds()).Emit();
         var parentContent = (Comment)parent.Content!;
 
         var replyId = Guid.NewGuid().AsString();
@@ -140,12 +140,12 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
             }
         };
 
-        var created = NodeFactory.CreateNode(replyNode).Should().Emit();
+        var created = await NodeFactory.CreateNode(replyNode).Should().Emit();
         created.Path.Should().Be($"{CommentC1Path}/{replyId}");
 
         try
         {
-            var observed = ObserveFirst($"path:{created.Path}").Should().Within(15.Seconds()).Emit();
+            var observed = await ObserveFirst($"path:{created.Path}").Should().Within(15.Seconds()).Emit();
             observed.Id.Should().Be(replyId);
             var content = (Comment)observed.Content!;
             content.Author.Should().Be("TestReviewer");
@@ -154,7 +154,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
         }
         finally
         {
-            NodeFactory.DeleteNode(created.Path!).Should().Emit();
+            await NodeFactory.DeleteNode(created.Path!).Should().Emit();
         }
     }
 
@@ -162,7 +162,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
     /// Full workflow: create comment â†’ create reply â†’ update reply text â†’ verify via Query.
     /// </summary>
     [Fact]
-    public void FullWorkflow_Comment_Reply_Edit()
+    public async Task FullWorkflow_Comment_Reply_Edit()
     {
         var commentId = Guid.NewGuid().AsString();
         var commentNode = new MeshNode(commentId, $"{DocPath}/{CommentPartition}")
@@ -181,12 +181,12 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
                 Status = CommentStatus.Active
             }
         };
-        var createdComment = NodeFactory.CreateNode(commentNode).Should().Emit();
+        var createdComment = await NodeFactory.CreateNode(commentNode).Should().Emit();
         var commentPath = createdComment.Path!;
 
         try
         {
-            var observed = ObserveFirst($"path:{commentPath}").Should().Within(15.Seconds()).Emit();
+            var observed = await ObserveFirst($"path:{commentPath}").Should().Within(15.Seconds()).Emit();
             ((Comment)observed.Content!).Author.Should().Be("TestAuthor");
 
             var replyId = Guid.NewGuid().AsString();
@@ -204,7 +204,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
                     Status = CommentStatus.Active
                 }
             };
-            var createdReply = NodeFactory.CreateNode(replyNode).Should().Emit();
+            var createdReply = await NodeFactory.CreateNode(replyNode).Should().Emit();
             createdReply.Path.Should().Be($"{commentPath}/{replyId}");
 
             var updatedReply = createdReply with
@@ -212,9 +212,9 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
                 State = MeshNodeState.Active,
                 Content = ((Comment)createdReply.Content!) with { Text = "I agree!" }
             };
-            NodeFactory.UpdateNode(updatedReply).Should().Emit();
+            await NodeFactory.UpdateNode(updatedReply).Should().Emit();
 
-            var finalReply = MeshQuery
+            var finalReply = await MeshQuery
                 .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{createdReply.Path}"))
                 .SelectMany(c => c.Items)
                 .Where(n => ((Comment)n.Content!).Text == "I agree!")
@@ -224,11 +224,11 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
 
             ((Comment)finalReply.Content!).Author.Should().Be("TestReplier");
 
-            NodeFactory.DeleteNode(createdReply.Path!).Should().Emit();
+            await NodeFactory.DeleteNode(createdReply.Path!).Should().Emit();
         }
         finally
         {
-            NodeFactory.DeleteNode(commentPath).Should().Emit();
+            await NodeFactory.DeleteNode(commentPath).Should().Emit();
         }
     }
 
@@ -237,7 +237,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
     /// Also verifies IsTopLevelComment detection.
     /// </summary>
     [Fact]
-    public void ResolveComment_StatusUpdated()
+    public async Task ResolveComment_StatusUpdated()
     {
         var commentId = Guid.NewGuid().AsString();
         var commentPath = $"{DocPath}/{CommentPartition}/{commentId}";
@@ -255,7 +255,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
                 Status = CommentStatus.Active
             }
         };
-        var created = NodeFactory.CreateNode(commentNode).Should().Emit();
+        var created = await NodeFactory.CreateNode(commentNode).Should().Emit();
 
         try
         {
@@ -267,9 +267,9 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
             {
                 Content = content with { Status = CommentStatus.Resolved }
             };
-            NodeFactory.UpdateNode(resolved).Should().Emit();
+            await NodeFactory.UpdateNode(resolved).Should().Emit();
 
-            var updated = MeshQuery
+            var updated = await MeshQuery
                 .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{commentPath}"))
                 .SelectMany(c => c.Items)
                 .Where(n => ((Comment)n.Content!).Status == CommentStatus.Resolved)
@@ -281,7 +281,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
         }
         finally
         {
-            NodeFactory.DeleteNode(commentPath).Should().Emit();
+            await NodeFactory.DeleteNode(commentPath).Should().Emit();
         }
     }
 
@@ -290,19 +290,19 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
     /// Uses the layout client pattern (GetRemoteStream / GetControlStream).
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void CommentThumbnail_ShouldRender()
+    public async Task CommentThumbnail_ShouldRender()
     {
         var client = GetClient();
         var commentAddress = new Address(CommentC1Path);
 
-        client.Observe(new PingRequest(), o => o.WithTarget(commentAddress)).Should().Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(commentAddress)).Should().Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Thumbnail");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             commentAddress, reference);
 
-        var value = stream.Should().Within(15.Seconds()).Emit();
+        var value = await stream.Should().Within(15.Seconds()).Emit();
         value.Should().NotBe(default(JsonElement), "Thumbnail should render for comment c1");
     }
 
@@ -311,19 +311,19 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
     /// Uses the layout client pattern (GetRemoteStream / GetControlStream).
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void CommentOverview_WithReply_ShouldRender()
+    public async Task CommentOverview_WithReply_ShouldRender()
     {
         var client = GetClient();
         var commentAddress = new Address(CommentC1Path);
 
-        client.Observe(new PingRequest(), o => o.WithTarget(commentAddress)).Should().Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(commentAddress)).Should().Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(CommentLayoutAreas.OverviewArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             commentAddress, reference);
 
-        var value = stream.Should().Within(15.Seconds()).Emit();
+        var value = await stream.Should().Within(15.Seconds()).Emit();
         value.Should().NotBe(default(JsonElement),
             "Overview should render for comment c1 (which has reply1)");
     }
@@ -333,19 +333,19 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
     /// Uses the layout client pattern (GetRemoteStream / GetControlStream).
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void DocumentReadView_ShouldRender()
+    public async Task DocumentReadView_ShouldRender()
     {
         var client = GetClient();
         var docAddress = new Address(DocPath);
 
-        client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).Should().Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).Should().Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MarkdownLayoutAreas.OverviewArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             docAddress, reference);
 
-        var control = stream
+        var control = await stream
             .GetControlStream(MarkdownLayoutAreas.OverviewArea)
             .Should()
             .Within(20.Seconds())

@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.GitSync;
 using Xunit;
 
@@ -11,20 +12,20 @@ namespace MeshWeaver.GitSync.Test;
 public class GitHubExportImportTest(ITestOutputHelper output) : GitHubSyncTestBase(output)
 {
     [Fact(Timeout = 120000)]
-    public void Export_Then_Import_RoundTripsContent()
+    public async Task Export_Then_Import_RoundTripsContent()
     {
-        Connect();
+        await Connect();
         var a = "GhA" + Guid.NewGuid().ToString("N")[..8];
-        CreateSpace(a, "Space A");
-        CreateMarkdown($"{a}/Welcome", "Welcome", "# Welcome\n\nHello world.");
-        CreateMarkdown($"{a}/Docs", "Docs", "# Docs\n\nSection.");
-        CreateMarkdown($"{a}/Docs/Intro", "Intro", "# Intro\n\nIntro body.");
+        await CreateSpace(a, "Space A");
+        await CreateMarkdown($"{a}/Welcome", "Welcome", "# Welcome\n\nHello world.");
+        await CreateMarkdown($"{a}/Docs", "Docs", "# Docs\n\nSection.");
+        await CreateMarkdown($"{a}/Docs/Intro", "Intro", "# Intro\n\nIntro body.");
 
         var repo = "https://github.com/test/space-a";
-        Sync.SaveConfig(a, repo, "main", subdirectory: null, createBranchIfMissing: true, createRepoIfMissing: true)
-            .Timeout(30.Seconds()).Wait();
+        await Sync.SaveConfig(a, repo, "main", subdirectory: null, createBranchIfMissing: true, createRepoIfMissing: true)
+            .Timeout(30.Seconds()).ToTask();
 
-        var pushed = Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).Wait();
+        var pushed = await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).ToTask();
         Assert.False(string.IsNullOrEmpty(pushed.CommitSha));
         Assert.True(pushed.FilesWritten >= 3);
 
@@ -38,55 +39,55 @@ public class GitHubExportImportTest(ITestOutputHelper output) : GitHubSyncTestBa
 
         // Import into a fresh Space B and assert the content round-trips.
         var b = "GhB" + Guid.NewGuid().ToString("N")[..8];
-        Sync.ImportFromGitHub(repo, "main", b, "Space B", subdirectory: null, UserId)
-            .Timeout(90.Seconds()).Wait();
+        await Sync.ImportFromGitHub(repo, "main", b, "Space B", subdirectory: null, UserId)
+            .Timeout(90.Seconds()).ToTask();
 
-        Assert.Contains("Hello world.", MarkdownBody(WaitForNode($"{b}/Welcome")));
-        Assert.Contains("Intro body.", MarkdownBody(WaitForNode($"{b}/Docs/Intro")));
-        Assert.Contains("Section.", MarkdownBody(WaitForNode($"{b}/Docs")));
+        Assert.Contains("Hello world.", MarkdownBody(await WaitForNode($"{b}/Welcome")));
+        Assert.Contains("Intro body.", MarkdownBody(await WaitForNode($"{b}/Docs/Intro")));
+        Assert.Contains("Section.", MarkdownBody(await WaitForNode($"{b}/Docs")));
         // README.md is a display file — import must NOT create a stray node for it.
-        Assert.True(IsAbsent($"{b}/README"));
+        Assert.True(await IsAbsent($"{b}/README"));
     }
 
     [Fact(Timeout = 120000)]
-    public void Reimport_AtEarlierCommit_PrunesLaterAdditions()
+    public async Task Reimport_AtEarlierCommit_PrunesLaterAdditions()
     {
-        Connect();
+        await Connect();
         var a = "GhR" + Guid.NewGuid().ToString("N")[..8];
-        CreateSpace(a, "Space R");
-        CreateMarkdown($"{a}/Welcome", "Welcome", "# Welcome\n\nv1.");
+        await CreateSpace(a, "Space R");
+        await CreateMarkdown($"{a}/Welcome", "Welcome", "# Welcome\n\nv1.");
         var repo = "https://github.com/test/space-r";
-        Sync.SaveConfig(a, repo, "main", null, true, true).Timeout(30.Seconds()).Wait();
+        await Sync.SaveConfig(a, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
 
-        var c1 = Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).Wait();      // commit 1: Welcome
+        var c1 = await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).ToTask();      // commit 1: Welcome
 
-        CreateMarkdown($"{a}/Extra", "Extra", "# Extra\n\nadded later.");
-        var c2 = Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).Wait();      // commit 2: Welcome + Extra
+        await CreateMarkdown($"{a}/Extra", "Extra", "# Extra\n\nadded later.");
+        var c2 = await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).ToTask();      // commit 2: Welcome + Extra
         Assert.NotEqual(c1.CommitSha, c2.CommitSha);
-        Assert.NotNull(WaitForNode($"{a}/Extra"));
+        Assert.NotNull(await WaitForNode($"{a}/Extra"));
 
         // Re-import the Space at commit 1 → Extra is pruned (mirror to that state).
-        Sync.ReimportAtCommit(a, c1.CommitSha, UserId).Timeout(90.Seconds()).Wait();
-        Assert.True(IsAbsent($"{a}/Extra"));
-        Assert.NotNull(WaitForNode($"{a}/Welcome"));
+        await Sync.ReimportAtCommit(a, c1.CommitSha, UserId).Timeout(90.Seconds()).ToTask();
+        Assert.True(await IsAbsent($"{a}/Extra"));
+        Assert.NotNull(await WaitForNode($"{a}/Welcome"));
 
         // The stored synced commit reflects the re-imported state.
-        WaitForConfig(a, c => c.LastSyncCommitSha == c1.CommitSha);
+        await WaitForConfig(a, c => c.LastSyncCommitSha == c1.CommitSha);
     }
 
     [Fact(Timeout = 120000)]
-    public void Export_StoresSyncedCommitAndBranchOnSpace()
+    public async Task Export_StoresSyncedCommitAndBranchOnSpace()
     {
-        Connect();
+        await Connect();
         var a = "GhC" + Guid.NewGuid().ToString("N")[..8];
-        CreateSpace(a);
-        CreateMarkdown($"{a}/Page", "Page", "# Page");
+        await CreateSpace(a);
+        await CreateMarkdown($"{a}/Page", "Page", "# Page");
         var repo = "https://github.com/test/space-c";
-        Sync.SaveConfig(a, repo, "develop", null, true, true).Timeout(30.Seconds()).Wait();
+        await Sync.SaveConfig(a, repo, "develop", null, true, true).Timeout(30.Seconds()).ToTask();
 
-        var pushed = Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).Wait();
+        var pushed = await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).ToTask();
 
-        var cfg = WaitForConfig(a, c => c.LastSyncCommitSha == pushed.CommitSha);
+        var cfg = await WaitForConfig(a, c => c.LastSyncCommitSha == pushed.CommitSha);
         Assert.Equal("develop", cfg.Branch);
         Assert.NotNull(cfg.LastSyncedAt);
     }

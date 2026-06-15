@@ -19,7 +19,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 public class CrossHubWritePersistenceTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     [Fact(Timeout = 60000)]
-    public void StreamUpdate_CrossHub_NoPriorSubscription_Persists()
+    public async Task StreamUpdate_CrossHub_NoPriorSubscription_Persists()
     {
         var factory = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var path = $"{TestPartition}/CrossHubWrite-{Guid.NewGuid():N}";
@@ -34,15 +34,15 @@ public class CrossHubWritePersistenceTest(ITestOutputHelper output) : MonolithMe
             NodeType = "Markdown",
             State = MeshNodeState.Active,
         };
-        factory.CreateNode(node).Should().Within(60.Seconds()).Emit();
+        await factory.CreateNode(node).Should().Within(60.Seconds()).Emit();
 
         // Write via stream.Update WITHOUT any prior read/subscription on `path`.
-        Mesh.GetMeshNodeStream(path)
+        await Mesh.GetMeshNodeStream(path)
             .Update(n => n with { Name = "Updated" })
             .Should().Within(15.Seconds()).Emit();
 
         // Read back — must reflect the PERSISTED update, not the stale create.
-        var after = ReadNode(path)
+        var after = await ReadNode(path)
             .Should().Within(30.Seconds()).Match(n => n is not null && n.Name == "Updated");
         after!.Name.Should().Be("Updated",
             "a cross-hub stream.Update must persist even without a prior subscription/read");

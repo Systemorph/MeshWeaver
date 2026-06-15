@@ -1,6 +1,8 @@
 using System;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Graph.Security;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Security;
@@ -49,7 +51,7 @@ public class PartitionWriteGuardTest(ITestOutputHelper output) : MonolithMeshTes
     // ── Rule 1: the User/Auth mirror is middleware-only ──────────────────────────────
 
     [Fact(Timeout = 20000)]
-    public void Validate_StandaloneContentInUserMirror_AsNormalUser_IsRejected()
+    public async Task Validate_StandaloneContentInUserMirror_AsNormalUser_IsRejected()
     {
         // The exact reported incident: a content node directly under the User mirror partition.
         var node = new MeshNode("ReinsuranceContractCheck", "User/rsalzmann")
@@ -58,7 +60,7 @@ public class PartitionWriteGuardTest(ITestOutputHelper output) : MonolithMeshTes
             Name = "Reinsurance Contract Check",
         };
 
-        var result = Guard().Validate(CreateContext(node, "rsalzmann")).Should().Emit();
+        var result = await Guard().Validate(CreateContext(node, "rsalzmann")).Should().Emit();
 
         result.IsValid.Should().BeFalse("standalone content must not be created in the system mirror partition");
         result.Reason.Should().Be(NodeRejectionReason.Unauthorized);
@@ -66,30 +68,30 @@ public class PartitionWriteGuardTest(ITestOutputHelper output) : MonolithMeshTes
     }
 
     [Fact(Timeout = 20000)]
-    public void Validate_ContentInAuthMirror_AsNormalUser_IsRejected()
+    public async Task Validate_ContentInAuthMirror_AsNormalUser_IsRejected()
     {
         var node = new MeshNode("Foo", "Auth/rsalzmann") { NodeType = "Markdown", Name = "Foo" };
 
-        var result = Guard().Validate(CreateContext(node, "rsalzmann")).Should().Emit();
+        var result = await Guard().Validate(CreateContext(node, "rsalzmann")).Should().Emit();
 
         result.IsValid.Should().BeFalse();
         result.Reason.Should().Be(NodeRejectionReason.Unauthorized);
     }
 
     [Fact(Timeout = 20000)]
-    public void Validate_MirrorRowWrite_AsNormalUser_IsRejected()
+    public async Task Validate_MirrorRowWrite_AsNormalUser_IsRejected()
     {
         // A bare 2-segment write `User/{x}` (a mirror row) is also middleware-only.
         var node = new MeshNode("someone", "User") { NodeType = "User", Name = "Someone" };
 
-        var result = Guard().Validate(CreateContext(node, "rsalzmann")).Should().Emit();
+        var result = await Guard().Validate(CreateContext(node, "rsalzmann")).Should().Emit();
 
         result.IsValid.Should().BeFalse();
         result.Reason.Should().Be(NodeRejectionReason.Unauthorized);
     }
 
     [Fact(Timeout = 20000)]
-    public void Validate_LegacyOwnScopeSatelliteInUserMirror_IsAllowed()
+    public async Task Validate_LegacyOwnScopeSatelliteInUserMirror_IsAllowed()
     {
         // Transitional thread/comment satellite — the guard defers to RLS rather than blocking,
         // so the un-migrated thread/comment subsystem keeps working.
@@ -99,40 +101,40 @@ public class PartitionWriteGuardTest(ITestOutputHelper output) : MonolithMeshTes
             Name = "A thread",
         };
 
-        var result = Guard().Validate(CreateContext(node, "rsalzmann")).Should().Emit();
+        var result = await Guard().Validate(CreateContext(node, "rsalzmann")).Should().Emit();
 
         result.IsValid.Should().BeTrue("legacy own-scope satellites under the mirror are allowed (gated by RLS)");
     }
 
     [Fact(Timeout = 20000)]
-    public void Validate_SystemIdentity_CanWriteMirror()
+    public async Task Validate_SystemIdentity_CanWriteMirror()
     {
         // Onboarding / the mirror trigger run as System — must NOT be blocked.
         var node = new MeshNode("newuser", "User") { NodeType = "User", Name = "New User" };
 
-        var result = Guard().Validate(CreateContext(node, WellKnownUsers.System)).Should().Emit();
+        var result = await Guard().Validate(CreateContext(node, WellKnownUsers.System)).Should().Emit();
 
         result.IsValid.Should().BeTrue("the System identity (middleware) writes the mirror");
     }
 
     [Fact(Timeout = 20000)]
-    public void Validate_OwnPartition_IsAllowed()
+    public async Task Validate_OwnPartition_IsAllowed()
     {
         // A user writing into their own partition is always allowed by the guard.
         var node = new MeshNode("SomeProject", "rsalzmann") { NodeType = "Markdown", Name = "Some Project" };
 
-        var result = Guard().Validate(CreateContext(node, "rsalzmann")).Should().Emit();
+        var result = await Guard().Validate(CreateContext(node, "rsalzmann")).Should().Emit();
 
         result.IsValid.Should().BeTrue("a user owns their {userId} partition");
     }
 
     [Fact(Timeout = 20000)]
-    public void Validate_CreatingSpace_IsAllowed()
+    public async Task Validate_CreatingSpace_IsAllowed()
     {
         // Creating a Space is the EXPLICIT partition-creation path — deferred to SpaceTopLevelValidator.
         var node = new MeshNode("newspace") { NodeType = "Space", Name = "New Space" };
 
-        var result = Guard().Validate(CreateContext(node, "rsalzmann")).Should().Emit();
+        var result = await Guard().Validate(CreateContext(node, "rsalzmann")).Should().Emit();
 
         result.IsValid.Should().BeTrue("creating a Space is the sanctioned explicit way to make a partition");
     }
@@ -149,7 +151,7 @@ public class PartitionWriteGuardTest(ITestOutputHelper output) : MonolithMeshTes
     // ── End-to-end: the guard overrides RLS in the real create pipeline ──────────────
 
     [Fact(Timeout = 20000)]
-    public void CreateNode_StandaloneContentInUserMirror_ThrowsEvenWhenRlsWouldGrant()
+    public async Task CreateNode_StandaloneContentInUserMirror_ThrowsEvenWhenRlsWouldGrant()
     {
         // Set MainNode == userId so RlsNodeValidator's unconditional self-access shortcut GRANTS
         // the write (the very hole that let the incident through). The guard must still block it,
@@ -169,10 +171,10 @@ public class PartitionWriteGuardTest(ITestOutputHelper output) : MonolithMeshTes
                 MainNode = userId, // triggers RLS self-access grant
             };
 
-            Action act = () => NodeFactory.CreateNode(node).Wait();
+            Func<Task> act = () => NodeFactory.CreateNode(node).FirstAsync().ToTask();
 
-            act.Should().Throw<UnauthorizedAccessException>(
-                    "the partition write guard must block standalone content in the User mirror even when RLS grants")
+            (await act.Should().ThrowAsync<UnauthorizedAccessException>(
+                    "the partition write guard must block standalone content in the User mirror even when RLS grants"))
                 .Which.Message.Should().Contain("system-managed");
         }
         finally

@@ -53,7 +53,7 @@ public class UnregisteredNodeTypeTest(ITestOutputHelper output) : MonolithMeshTe
     /// this 8s budget.
     /// </summary>
     [Fact(Timeout = 8000)]
-    public void UnknownNodeType_FailsFastNotAfterSlowPathTimeout()
+    public async Task UnknownNodeType_FailsFastNotAfterSlowPathTimeout()
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var address = new Address(UnknownPath);
@@ -64,7 +64,7 @@ public class UnregisteredNodeTypeTest(ITestOutputHelper output) : MonolithMeshTe
         // produced. Either way, it must NOT hang for 30s+ on the slow path.
         try
         {
-            client.Observe(new PingRequest(), o => o.WithTarget(address))
+            await client.Observe(new PingRequest(), o => o.WithTarget(address))
                 .Should().Within(TimeSpan.FromSeconds(6)).Emit();
         }
         catch (Exception ex)

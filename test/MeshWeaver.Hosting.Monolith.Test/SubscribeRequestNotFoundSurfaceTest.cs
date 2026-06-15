@@ -1,9 +1,9 @@
 using System;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
-using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -72,7 +72,7 @@ public class SubscribeRequestNotFoundSurfaceTest(ITestOutputHelper output) : Mon
     /// into the swallowed-timeout shape is loud.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void GetRemoteStream_on_nonexistent_address_surfaces_OnError_with_NotFound_message()
+    public async Task GetRemoteStream_on_nonexistent_address_surfaces_OnError_with_NotFound_message()
     {
         var client = GetClient(c => c.AddData(data => data));
 
@@ -87,31 +87,31 @@ public class SubscribeRequestNotFoundSurfaceTest(ITestOutputHelper output) : Mon
         // unreachable, the OnError path (asserted below) is the surface signal.
         Assert.NotNull(stream);
 
-        // Race two observables:
-        //   • the stream's first Initial / data emission (success path — must not fire)
-        //   • a Timer hit at 5 s (would mean we're in the spinner regression — must not fire either)
-        // The stream's OnError converts to OnErrorResumeNext-style observation via
-        // .Catch — capture the exception and assert on its type/message.
-        Exception? captured = null;
-        var done = new ManualResetEventSlim(false);
+        // Await the stream's first notification (value / error / completion) at the
+        // test edge via the sanctioned Materialize → FirstAsync → Timeout → ToTask
+        // bridge. The stream's OnError surfaces as an OnError notification; a value
+        // would surface as OnNext (the success path — must not fire). A timeout here
+        // means the stream spun forever — the regression the test guards against.
+        Notification<ChangeItem<JsonElement>> first;
+        try
+        {
+            first = await stream
+                .Materialize()
+                .FirstAsync()
+                .Timeout(TimeSpan.FromSeconds(20))
+                .ToTask();
+        }
+        catch (TimeoutException)
+        {
+            Assert.Fail(
+                "the stream must surface OnError (not spin) when the target address routes to NotFound. " +
+                "If this assertion fails, OrleansRoutingService.SendDeliveryFailure / RoutingServiceBase.PostNotFound " +
+                "is dropping the failure response on the floor and the SubscribeRequest's Observe is timing out — " +
+                "exactly the symptom that caused the prod /rbuergi endless-spinner regression.");
+            return;
+        }
 
-        using var sub = stream.Subscribe(
-            _ => { /* no value should arrive */ },
-            ex =>
-            {
-                captured = ex;
-                done.Set();
-            },
-            () => done.Set());
-
-        var fired = done.Wait(TimeSpan.FromSeconds(20));
-
-        fired.Should().BeTrue(
-            "the stream must surface OnError (not spin) when the target address routes to NotFound. " +
-            "If this assertion fails, OrleansRoutingService.SendDeliveryFailure / RoutingServiceBase.PostNotFound " +
-            "is dropping the failure response on the floor and the SubscribeRequest's Observe is timing out — " +
-            "exactly the symptom that caused the prod /rbuergi endless-spinner regression.");
-
+        var captured = first.Exception;
         captured.Should().NotBeNull("OnError must propagate the failure, not be swallowed by the timeout-as-success branch in JsonSynchronizationStream.");
 
         // We don't pin the exact exception type because the routing layer can

@@ -28,14 +28,14 @@ public class HostedHubTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [Fact]
-    public void HostedPingPong()
+    public async Task HostedPingPong()
     {
         var client = GetClient();
         var subHub =
             client.ServiceProvider.CreateMessageHub(new Address("new", "1"),
                 conf => conf.WithTypes(typeof(Ping), typeof(Pong))
                 );
-        var response = subHub
+        var response = await subHub
             .Observe(new Ping(), o => o.WithTarget(CreateHostAddress())).Should().Within(5.Seconds()).Emit();
         response.Message.Should().BeOfType<Pong>();
     }

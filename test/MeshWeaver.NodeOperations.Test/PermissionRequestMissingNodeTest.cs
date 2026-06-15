@@ -40,7 +40,7 @@ public class PermissionRequestMissingNodeTest(ITestOutputHelper output)
     : MonolithMeshTestBase(output)
 {
     [Fact(Timeout = 30_000)]
-    public void GetPermissionRequest_MissingPath_ThrowsDeliveryFailure_NotFound()
+    public async Task GetPermissionRequest_MissingPath_ThrowsDeliveryFailure_NotFound()
     {
         // A partition-rooted path that no node was ever created at.
         // First segment is the test partition (NOT a NodeType name), so the
@@ -55,12 +55,12 @@ public class PermissionRequestMissingNodeTest(ITestOutputHelper output)
         // deadlock symptom. With the fix the routing service returns a
         // NotFound DeliveryFailure within milliseconds, which the framework
         // surfaces as DeliveryFailureException on the observable.
-        Action act = () => Mesh.Observe<GetPermissionResponse>(
+        Func<Task> act = async () => await Mesh.Observe<GetPermissionResponse>(
                 new GetPermissionRequest(),
                 o => o.WithTarget(new Address(missingPath)))
-            .Wait();
+            .FirstAsync().ToTask();
 
-        var ex = act.Should().Throw<DeliveryFailureException>(
+        var ex = await act.Should().ThrowAsync<DeliveryFailureException>(
             "the routing service must surface 'node missing' as a deterministic " +
             "failure on the observable — silently hanging is the prod 2026-05-23 " +
             "deadlock symptom this test pins against");
@@ -74,7 +74,7 @@ public class PermissionRequestMissingNodeTest(ITestOutputHelper output)
     }
 
     [Fact(Timeout = 30_000)]
-    public void GetPermissionRequest_DeeplyNestedMissingPath_ThrowsDeliveryFailure_NotFound()
+    public async Task GetPermissionRequest_DeeplyNestedMissingPath_ThrowsDeliveryFailure_NotFound()
     {
         // The exact prod path shape that triggered the deadlock:
         // partition / _Thread / <parent-thread> / <msg-id> / <sub-thread> / <sub-msg-id>.
@@ -84,12 +84,12 @@ public class PermissionRequestMissingNodeTest(ITestOutputHelper output)
         var deepMissingPath =
             $"{TestPartition}/_Thread/{Guid.NewGuid():N}/{Guid.NewGuid():N}/{Guid.NewGuid():N}/{Guid.NewGuid():N}";
 
-        Action act = () => Mesh.Observe<GetPermissionResponse>(
+        Func<Task> act = async () => await Mesh.Observe<GetPermissionResponse>(
                 new GetPermissionRequest(),
                 o => o.WithTarget(new Address(deepMissingPath)))
-            .Wait();
+            .FirstAsync().ToTask();
 
-        var ex = act.Should().Throw<DeliveryFailureException>(
+        var ex = await act.Should().ThrowAsync<DeliveryFailureException>(
             "deeply nested missing satellite paths must error in bounded time " +
             "exactly like shallow missing paths — the routing service must not " +
             "get stuck on a non-existent leaf");
@@ -99,7 +99,7 @@ public class PermissionRequestMissingNodeTest(ITestOutputHelper output)
     }
 
     [Fact(Timeout = 30_000)]
-    public void GetPermissionRequest_ExistingPath_RepliesPromptly_WithRealPermissions()
+    public async Task GetPermissionRequest_ExistingPath_RepliesPromptly_WithRealPermissions()
     {
         // Negative control: the missing-node failure path must not be over-
         // eager. The partition root exists and the test user is Admin (per
@@ -107,7 +107,7 @@ public class PermissionRequestMissingNodeTest(ITestOutputHelper output)
         // quickly, NOT throw DeliveryFailure.
         var existingPath = TestPartition;
 
-        var delivery = Mesh.Observe<GetPermissionResponse>(
+        var delivery = await Mesh.Observe<GetPermissionResponse>(
                 new GetPermissionRequest(),
                 o => o.WithTarget(new Address(existingPath)))
             .Should().Within(20.Seconds()).Emit();

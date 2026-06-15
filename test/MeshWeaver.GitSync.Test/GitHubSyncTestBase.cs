@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
@@ -53,64 +54,64 @@ public abstract class GitHubSyncTestBase(ITestOutputHelper output) : MonolithMes
     protected string UserId => TestUsers.Admin.ObjectId!;
 
     /// <summary>Saves a GitHub credential for the current user and waits for it to be readable.</summary>
-    protected GitHubCredential Connect(string token = "ghp_test_token", string login = "octocat")
+    protected async Task<GitHubCredential> Connect(string token = "ghp_test_token", string login = "octocat")
     {
-        Credentials.Save(UserId, new GitHubToken(token, null, "bearer", "repo", null), login)
-            .Timeout(30.Seconds()).Wait();
-        return WaitForCredential();
+        await Credentials.Save(UserId, new GitHubToken(token, null, "bearer", "repo", null), login)
+            .Timeout(30.Seconds()).ToTask();
+        return await WaitForCredential();
     }
 
-    protected GitHubCredential WaitForCredential() =>
-        Observable.Interval(50.Milliseconds()).StartWith(0L)
+    protected async Task<GitHubCredential> WaitForCredential() =>
+        (await Observable.Interval(50.Milliseconds()).StartWith(0L)
             .SelectMany(_ => Credentials.Get(UserId))
             .Where(c => c is { AccessToken.Length: > 0 })
             .FirstAsync()
             .Timeout(10.Seconds())
-            .Wait()!;
+            .ToTask())!;
 
-    protected MeshNode CreateSpace(string id, string? name = null) =>
-        NodeFactory.CreateNode(new MeshNode(id)
+    protected async Task<MeshNode> CreateSpace(string id, string? name = null) =>
+        await NodeFactory.CreateNode(new MeshNode(id)
         {
             NodeType = "Space",
             Name = name ?? id,
             State = MeshNodeState.Active,
             Content = new Space { Name = name ?? id },
-        }).Timeout(60.Seconds()).Wait();
+        }).Timeout(60.Seconds()).ToTask();
 
-    protected MeshNode CreateMarkdown(string path, string name, string body)
+    protected async Task<MeshNode> CreateMarkdown(string path, string name, string body)
     {
         var seed = MeshNode.FromPath(path);
-        return NodeFactory.CreateNode(seed with
+        return await NodeFactory.CreateNode(seed with
         {
             NodeType = "Markdown",
             Name = name,
             State = MeshNodeState.Active,
             Content = new MarkdownContent { Content = body },
-        }).Timeout(60.Seconds()).Wait();
+        }).Timeout(60.Seconds()).ToTask();
     }
 
     /// <summary>Waits for a node to be readable at <paramref name="path"/> and returns it.</summary>
-    protected MeshNode WaitForNode(string path) =>
-        Observable.Interval(100.Milliseconds()).StartWith(0L)
+    protected async Task<MeshNode> WaitForNode(string path) =>
+        (await Observable.Interval(100.Milliseconds()).StartWith(0L)
             .SelectMany(_ => ReadNode(path))
             .Where(n => n is not null)
             .FirstAsync()
             .Timeout(30.Seconds())
-            .Wait()!;
+            .ToTask())!;
 
     /// <summary>Confirms a node is absent (stays null over a short window) — for prune assertions.</summary>
-    protected bool IsAbsent(string path) =>
-        ReadNode(path).Timeout(10.Seconds()).Wait() is null;
+    protected async Task<bool> IsAbsent(string path) =>
+        await ReadNode(path).Timeout(10.Seconds()).ToTask() is null;
 
     /// <summary>Polls the Space's GitHub sync config until it satisfies <paramref name="predicate"/>.</summary>
-    protected GitHubSyncConfig WaitForConfig(string spacePath, Func<GitHubSyncConfig, bool> predicate) =>
-        Observable.Interval(100.Milliseconds()).StartWith(0L)
+    protected async Task<GitHubSyncConfig> WaitForConfig(string spacePath, Func<GitHubSyncConfig, bool> predicate) =>
+        await Observable.Interval(100.Milliseconds()).StartWith(0L)
             .SelectMany(_ => Sync.ReadConfig(spacePath))
             .Where(c => c is not null && predicate(c))
             .Select(c => c!)
             .FirstAsync()
             .Timeout(30.Seconds())
-            .Wait();
+            .ToTask();
 
     protected static string MarkdownBody(MeshNode node) => node.Content switch
     {

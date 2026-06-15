@@ -84,7 +84,7 @@ public class LanguageModelSyncedQueryTest : MonolithMeshTestBase
     }
 
     [Fact]
-    public void SyncedQuery_AgentsAndModels_FullyPopulated()
+    public async Task SyncedQuery_AgentsAndModels_FullyPopulated()
     {
         // 🚨 Drive the EXACT same workspace.GetQuery call the chat view
         // makes (ThreadChatView.SubscribeToAgentNodes). Three queries,
@@ -102,7 +102,7 @@ public class LanguageModelSyncedQueryTest : MonolithMeshTestBase
         // agents keeps the test resilient against the long-standing CI failure
         // where models don't surface in the synced query (see the conditional
         // model block).
-        var snapshot = observable
+        var snapshot = await observable
             .Should().Within(15.Seconds())
             .Match(s => s.Any(n => n.NodeType == AgentNodeType.NodeType));
 
@@ -158,7 +158,7 @@ public class LanguageModelSyncedQueryTest : MonolithMeshTestBase
     }
 
     [Fact]
-    public void SyncedQuery_GetQueryById_ReusesSameUpstreamAcrossCalls()
+    public async Task SyncedQuery_GetQueryById_ReusesSameUpstreamAcrossCalls()
     {
         // The chat view re-subscribes when the context path changes. The
         // synced-query registry must reuse the SAME upstream observable for
@@ -175,8 +175,8 @@ public class LanguageModelSyncedQueryTest : MonolithMeshTestBase
         (second is not null).Should().BeTrue(
             "subsequent GetQuery(id) lookup-only must return the cached entry");
         // Subscribe both — Initial frames must agree (same upstream).
-        var firstSnap = first.Take(1).Should().Within(10.Seconds()).Emit();
-        var secondSnap = second!.Take(1).Should().Within(10.Seconds()).Emit();
+        var firstSnap = await first.Take(1).Should().Within(10.Seconds()).Emit();
+        var secondSnap = await second!.Take(1).Should().Within(10.Seconds()).Emit();
         secondSnap.Select(n => n.Path).Should().BeEquivalentTo(
             firstSnap.Select(n => n.Path),
             System.Text.Json.JsonSerializerOptions.Default,

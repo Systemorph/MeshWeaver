@@ -37,7 +37,7 @@ public class SpaceOverviewBodyTest(ITestOutputHelper output) : MonolithMeshTestB
         => base.ConfigureMesh(builder).AddSpaceType();
 
     [Fact(Timeout = 60000)]
-    public void SpaceOverview_RendersContentBody_NotWelcomeTemplate()
+    public async Task SpaceOverview_RendersContentBody_NotWelcomeTemplate()
     {
         var spaceId = $"BodySpace{Guid.NewGuid():N}"[..18];
         var spaceNode = MeshNode.FromPath(spaceId) with
@@ -46,7 +46,7 @@ public class SpaceOverviewBodyTest(ITestOutputHelper output) : MonolithMeshTestB
             NodeType = SpaceNodeType.NodeType,
             Content = new Space { Name = "Body Space", Body = $"# Overview\n\n{BodyMarker}" }
         };
-        NodeFactory.CreateNode(spaceNode).Should().Emit();
+        await NodeFactory.CreateNode(spaceNode).Should().Emit();
 
         var workspace = GetClient(c => c.AddData()).GetWorkspace();
         var reference = new LayoutAreaReference("Overview");
@@ -54,7 +54,7 @@ public class SpaceOverviewBodyTest(ITestOutputHelper output) : MonolithMeshTestB
             new Address(spaceId), reference);
 
         // Overview composes a Stack: [header, body, …].
-        var root = stream.GetControlStream(reference.Area!)
+        var root = await stream.GetControlStream(reference.Area!)
             .Should().Within(30.Seconds()).Match(c => c is StackControl);
         var stack = (StackControl)root!;
         stack.Areas.Should().HaveCountGreaterThanOrEqualTo(2, "Overview composes header + body");
@@ -66,7 +66,7 @@ public class SpaceOverviewBodyTest(ITestOutputHelper output) : MonolithMeshTestB
         {
             var name = area.Area?.ToString();
             if (string.IsNullOrEmpty(name)) continue;
-            var child = stream.GetControlStream(name).Should().Within(10.Seconds()).Match(c => c != null);
+            var child = await stream.GetControlStream(name).Should().Within(10.Seconds()).Match(c => c != null);
             if (child is MarkdownControl md)
                 markdownTexts.Add(md.Markdown?.ToString() ?? md.Html?.ToString() ?? "");
         }
@@ -76,6 +76,6 @@ public class SpaceOverviewBodyTest(ITestOutputHelper output) : MonolithMeshTestB
         Assert.False(markdownTexts.Any(t => t.Contains("your space's home page")),
             "the welcome placeholder must NOT render when content.Body is set");
 
-        NodeFactory.DeleteNode(spaceId).Should().Emit();
+        await NodeFactory.DeleteNode(spaceId).Should().Emit();
     }
 }

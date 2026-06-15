@@ -51,7 +51,7 @@ public class KernelScriptMemoryLeakTest(ITestOutputHelper output) : MonolithMesh
     private bool _selfDisposed;
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private void RunOneKernelScript()
+    private async Task RunOneKernelScript()
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var kernelId = Guid.NewGuid().ToString("N");
@@ -65,7 +65,7 @@ public class KernelScriptMemoryLeakTest(ITestOutputHelper output) : MonolithMesh
             State = MeshNodeState.Active,
             Content = new ActivityLog("KernelExecution") { Status = ActivityStatus.Running }
         };
-        meshService.CreateNode(activityNode).Should().Within(60.Seconds()).Emit();
+        await meshService.CreateNode(activityNode).Should().Within(60.Seconds()).Emit();
         var kernelAddress = new Address($"{activityNamespace}/leakprobe-{kernelId}");
 
         var client = GetClient();
@@ -78,7 +78,7 @@ public class KernelScriptMemoryLeakTest(ITestOutputHelper output) : MonolithMesh
             new SubmitCodeRequest("Console.WriteLine(\"leak-probe-done\");"),
             o => o.WithTarget(kernelAddress));
 
-        logStream.Should().Within(60.Seconds()).Emit();
+        await logStream.Should().Within(60.Seconds()).Emit();
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -93,17 +93,17 @@ public class KernelScriptMemoryLeakTest(ITestOutputHelper output) : MonolithMesh
     }
 
     [Fact(Timeout = 120_000)]
-    public void ScriptState_IsCollected_AfterMeshAndServiceProviderDisposal()
+    public async Task ScriptState_IsCollected_AfterMeshAndServiceProviderDisposal()
     {
         RunOneKernelScript();
 
         var hub = Mesh;
         hub.Dispose();
-        hub.DisposalCompleted
+        await hub.DisposalCompleted
             .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
             .FirstOrDefaultAsync()
-            .ToTask()
-            .Wait(TimeSpan.FromSeconds(30));
+            .Timeout(TimeSpan.FromSeconds(30))
+            .ToTask();
 
         var sp = ServiceProvider;
         ServiceProvider = null!;

@@ -66,7 +66,7 @@ public class SyncedQueryDataSourceTest(ITestOutputHelper output) : MonolithMeshT
     /// asserting on the matching emission.
     /// </summary>
     [Fact]
-    public void OwningHubUpdate_SurfacesInLiveQueryStream()
+    public async Task OwningHubUpdate_SurfacesInLiveQueryStream()
     {
         var path = $"{SubjectsNamespace}/alpha";
 
@@ -78,27 +78,27 @@ public class SyncedQueryDataSourceTest(ITestOutputHelper output) : MonolithMeshT
 
         // The create's emission only fires after the source per-node hub has
         // applied + persisted the node.
-        NodeFactory.CreateNode(MakeSubject("alpha", "Original")).Should().Emit();
+        await NodeFactory.CreateNode(MakeSubject("alpha", "Original")).Should().Emit();
 
         // The query stream must surface the create — wait for the predicate.
-        queryStream
+        await queryStream
             .Should().Within(TimeSpan.FromSeconds(15))
             .Match(c => c.Items.Any(n => n.Path == path && n.Name == "Original"));
 
         // Update at source side; the update's emission confirms the write.
-        var current = ReadNode(path).Should().Emit();
+        var current = await ReadNode(path).Should().Emit();
         current.Should().NotBeNull();
-        NodeFactory.UpdateNode(current! with { Name = "Updated At Source" }).Should().Emit();
+        await NodeFactory.UpdateNode(current! with { Name = "Updated At Source" }).Should().Emit();
 
         // Live query must surface the update.
-        queryStream
+        await queryStream
             .Should().Within(TimeSpan.FromSeconds(15))
             .Match(c => c.Items.Any(n => n.Path == path && n.Name == "Updated At Source"));
 
         // Source-side ground truth — wait for the authoritative read to reflect
         // the update too. ReadNode rounds-trips the owner hub each call, so retry
         // via an interval until the read sees the updated name.
-        var reread = Observable.Interval(TimeSpan.FromMilliseconds(50))
+        var reread = await Observable.Interval(TimeSpan.FromMilliseconds(50))
             .StartWith(0L)
             .SelectMany(_ => ReadNode(path))
             .Should().Within(TimeSpan.FromSeconds(10))
@@ -114,7 +114,7 @@ public class SyncedQueryDataSourceTest(ITestOutputHelper output) : MonolithMeshT
     /// set so the predicate sees the cumulative state.
     /// </summary>
     [Fact]
-    public void QueryStream_TracksAddsAndRemoves()
+    public async Task QueryStream_TracksAddsAndRemoves()
     {
         // Hot, accumulating view of the live path set.
         var pathSet = MeshQuery
@@ -136,19 +136,19 @@ public class SyncedQueryDataSourceTest(ITestOutputHelper output) : MonolithMeshT
         // Keep the subscription hot for the life of the test.
         using var keepAlive = pathSet.Subscribe();
 
-        NodeFactory.CreateNode(MakeSubject("one", "One")).Should().Emit();
-        NodeFactory.CreateNode(MakeSubject("two", "Two")).Should().Emit();
-        NodeFactory.CreateNode(MakeSubject("three", "Three")).Should().Emit();
+        await NodeFactory.CreateNode(MakeSubject("one", "One")).Should().Emit();
+        await NodeFactory.CreateNode(MakeSubject("two", "Two")).Should().Emit();
+        await NodeFactory.CreateNode(MakeSubject("three", "Three")).Should().Emit();
 
-        pathSet
+        await pathSet
             .Should().Within(TimeSpan.FromSeconds(15))
             .Match(set => set.Contains($"{SubjectsNamespace}/one")
                        && set.Contains($"{SubjectsNamespace}/two")
                        && set.Contains($"{SubjectsNamespace}/three"));
 
-        NodeFactory.DeleteNode($"{SubjectsNamespace}/two").Should().Emit();
+        await NodeFactory.DeleteNode($"{SubjectsNamespace}/two").Should().Emit();
 
-        pathSet
+        await pathSet
             .Should().Within(TimeSpan.FromSeconds(15))
             .Match(set => !set.Contains($"{SubjectsNamespace}/two"));
     }

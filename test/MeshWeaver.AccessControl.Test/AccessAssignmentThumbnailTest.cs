@@ -28,7 +28,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration).AddLayoutClient(d => d);
 
-    private MeshNode CreateAssignmentNode(
+    private async Task<MeshNode> CreateAssignmentNode(
         string id, AccessAssignment assignment)
     {
         var node = new MeshNode(id, TestNamespace)
@@ -39,7 +39,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
             MainNode = "Admin",
         };
         // Cold observable — the create runs on the assertion's Subscribe.
-        return NodeFactory.CreateNode(node).Should().Emit();
+        return await NodeFactory.CreateNode(node).Should().Emit();
     }
 
     private static Address NodeAddress(string id)
@@ -93,7 +93,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
     }
 
     [Fact(Timeout = 30000)]
-    public void Thumbnail_RendersStackControl()
+    public async Task Thumbnail_RendersStackControl()
     {
         var assignment = new AccessAssignment
         {
@@ -101,7 +101,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
             DisplayName = "Grace",
             Roles = [new RoleAssignment { Role = "Admin", Denied = false }]
         };
-        CreateAssignmentNode("grace-access", assignment);
+        await CreateAssignmentNode("grace-access", assignment);
 
         var client = GetClient();
         var hostAddress = NodeAddress("grace-access");
@@ -111,7 +111,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             hostAddress, reference);
 
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(10.Seconds())
             .Match(x => x != null);
@@ -120,7 +120,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
     }
 
     [Fact(Timeout = 30000)]
-    public void Thumbnail_ClickRoleChip_TogglesStrikethrough()
+    public async Task Thumbnail_ClickRoleChip_TogglesStrikethrough()
     {
         var assignment = new AccessAssignment
         {
@@ -128,7 +128,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
             DisplayName = "Hank",
             Roles = [new RoleAssignment { Role = "Editor", Denied = false }]
         };
-        CreateAssignmentNode("hank-access", assignment);
+        await CreateAssignmentNode("hank-access", assignment);
 
         var client = GetClient();
         var hostAddress = NodeAddress("hank-access");
@@ -139,7 +139,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
             hostAddress, reference);
 
         // Wait for initial render
-        var initialControl = stream
+        var initialControl = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(10.Seconds())
             .Match(x => x != null);
@@ -154,7 +154,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
         var chipsRowAreaName = outerAreas[1].Area?.ToString();
         chipsRowAreaName.Should().NotBeNullOrEmpty("chipsRow area should have a name");
 
-        var chipsRowControl = stream
+        var chipsRowControl = await stream
             .GetControlStream(chipsRowAreaName!)
             .Should().Within(5.Seconds())
             .Match(x => x != null);
@@ -168,7 +168,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
         roleChipArea.Should().NotBeNullOrEmpty();
 
         // Verify initial button exists and has no line-through
-        var initialChip = stream
+        var initialChip = await stream
             .GetControlStream(roleChipArea!)
             .Should().Within(5.Seconds())
             .Match(x => x != null);
@@ -181,7 +181,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
             o => o.WithTarget(hostAddress));
 
         // Wait for re-render — button style should now have line-through
-        var updatedChip = stream
+        var updatedChip = await stream
             .GetControlStream(roleChipArea!)
             .Should().Within(10.Seconds())
             .Match(c =>
@@ -197,7 +197,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
     }
 
     [Fact(Timeout = 30000)]
-    public void Thumbnail_ClickRemoveRole_RemovesChip()
+    public async Task Thumbnail_ClickRemoveRole_RemovesChip()
     {
         var assignment = new AccessAssignment
         {
@@ -209,7 +209,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
                 new RoleAssignment { Role = "Editor", Denied = false }
             ]
         };
-        CreateAssignmentNode("iris-access", assignment);
+        await CreateAssignmentNode("iris-access", assignment);
 
         var client = GetClient();
         var hostAddress = NodeAddress("iris-access");
@@ -220,7 +220,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
             hostAddress, reference);
 
         // Wait for initial render
-        var initialControl = stream
+        var initialControl = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(10.Seconds())
             .Match(x => x != null);
@@ -231,7 +231,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
 
         // Get chips row
         var chipsRowAreaName = outerAreas[1].Area?.ToString();
-        var chipsRowControl = stream
+        var chipsRowControl = await stream
             .GetControlStream(chipsRowAreaName!)
             .Should().Within(5.Seconds())
             .Match(x => x != null);
@@ -255,7 +255,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
         // Where(...) never matched after the click, even though the per-node
         // hub had committed the new state. The wait lives in the assertion;
         // the predicate is the settle condition.
-        var updatedNode = Observable.Interval(100.Milliseconds()).StartWith(0L)
+        var updatedNode = await Observable.Interval(100.Milliseconds()).StartWith(0L)
             .SelectMany(_ => Mesh.GetMeshNode($"{TestNamespace}/iris-access"))
             .Should().Within(10.Seconds())
             .Match(n => n?.Content is AccessAssignment a && a.Roles.Count == 1);
@@ -268,7 +268,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
     }
 
     [Fact(Timeout = 30000)]
-    public void Overview_RendersChangeSubjectButton()
+    public async Task Overview_RendersChangeSubjectButton()
     {
         var assignment = new AccessAssignment
         {
@@ -276,7 +276,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
             DisplayName = "Alice",
             Roles = [new RoleAssignment { Role = "Editor", Denied = false }]
         };
-        CreateAssignmentNode("alice-access", assignment);
+        await CreateAssignmentNode("alice-access", assignment);
 
         var client = GetClient();
         var hostAddress = NodeAddress("alice-access");
@@ -291,13 +291,13 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
         // $Menu/$Menu:Node/$Menu:Mesh land before Overview, and matching on
         // "any areas" would happily snap the menu-only frame and assert
         // against menus that have no Change Subject button.
-        stream
+        await stream
             .GetControlStream(reference.Area!)
             .Should().Within(10.Seconds())
             .Match(x => x != null);
 
         // Read the assembled entity-store now that the Overview area exists.
-        var settled = stream
+        var settled = await stream
             .Should().Within(5.Seconds())
             .Match(i => i.Value.TryGetProperty("areas", out var areas)
                 && areas.EnumerateObject().Any(a => a.Name.Contains("Overview")));
@@ -327,7 +327,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
     }
 
     [Fact(Timeout = 30000)]
-    public void UpdateAccessObject_ChangesSubject_ViaDataChange()
+    public async Task UpdateAccessObject_ChangesSubject_ViaDataChange()
     {
         var assignment = new AccessAssignment
         {
@@ -335,17 +335,17 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
             DisplayName = "Dave",
             Roles = [new RoleAssignment { Role = "Viewer", Denied = false }]
         };
-        var created = CreateAssignmentNode("dave-access", assignment);
+        var created = await CreateAssignmentNode("dave-access", assignment);
 
         // Update the node's AccessObject via NodeFactory (cold — runs on Subscribe).
         var updatedAssignment = assignment with { AccessObject = "User/eve" };
         var updatedNode = created with { Content = updatedAssignment };
-        NodeFactory.UpdateNode(updatedNode).Should().Emit();
+        await NodeFactory.UpdateNode(updatedNode).Should().Emit();
 
         // Re-read authoritatively (Mesh.GetMeshNode round-trip) until the
         // subject change lands — same pattern as the sibling CanSelectAnyNodeType
         // test. GetMeshNodeStream + Where does not surface the update reliably here.
-        var result = Observable.Interval(100.Milliseconds()).StartWith(0L)
+        var result = await Observable.Interval(100.Milliseconds()).StartWith(0L)
             .SelectMany(_ => Mesh.GetMeshNode($"{TestNamespace}/dave-access"))
             .Should().Within(10.Seconds())
             .Match(n => n?.Content is AccessAssignment a && a.AccessObject == "User/eve");
@@ -376,7 +376,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
     }
 
     [Fact(Timeout = 30000)]
-    public void UpdateAccessObject_CanSelectAnyNodeType_ViaDataChange()
+    public async Task UpdateAccessObject_CanSelectAnyNodeType_ViaDataChange()
     {
         // Create an assignment pointing to a User
         var assignment = new AccessAssignment
@@ -385,7 +385,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
             DisplayName = "George",
             Roles = [new RoleAssignment { Role = "Editor", Denied = false }]
         };
-        var created = CreateAssignmentNode("george-access", assignment);
+        var created = await CreateAssignmentNode("george-access", assignment);
 
         // Create a Group node as the new target (cold — runs on Subscribe).
         var groupNode = new MeshNode("engineering", "Admin")
@@ -393,17 +393,17 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
             Name = "Engineering",
             NodeType = "Group",
         };
-        NodeFactory.CreateNode(groupNode).Should().Emit();
+        await NodeFactory.CreateNode(groupNode).Should().Emit();
 
         // Change AccessObject from a User to a Group path
         var updatedAssignment = assignment with { AccessObject = "Admin/engineering" };
         var updatedNode = created with { Content = updatedAssignment };
-        NodeFactory.UpdateNode(updatedNode).Should().Emit();
+        await NodeFactory.UpdateNode(updatedNode).Should().Emit();
 
         // Verify the update was persisted — AccessObject can be any mesh node
         // path. Re-read authoritatively (Mesh.GetMeshNode round-trip) until the
         // change lands.
-        var result = Observable.Interval(100.Milliseconds()).StartWith(0L)
+        var result = await Observable.Interval(100.Milliseconds()).StartWith(0L)
             .SelectMany(_ => Mesh.GetMeshNode($"{TestNamespace}/george-access"))
             .Should().Within(10.Seconds())
             .Match(n => n?.Content is AccessAssignment a && a.AccessObject == "Admin/engineering");

@@ -32,7 +32,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : MonolithMeshTestBase
 
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-    private void CreateNode(string path, string? name = null, string? nodeType = null, object? content = null)
+    private async Task CreateNode(string path, string? name = null, string? nodeType = null, object? content = null)
     {
         var node = MeshNode.FromPath(path) with
         {
@@ -48,38 +48,38 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : MonolithMeshTestBase
         if (string.IsNullOrEmpty(node.Namespace))
             SeedTopLevel(node);
         else
-            MeshService.CreateNode(node).Should().Within(30.Seconds()).Emit();
+            await MeshService.CreateNode(node).Should().Within(30.Seconds()).Emit();
     }
 
-    private MeshNode? GetNode(string path)
-        => Mesh.GetMeshNode(path, TimeSpan.FromSeconds(15))
+    private async Task<MeshNode?> GetNode(string path)
+        => await Mesh.GetMeshNode(path, TimeSpan.FromSeconds(15))
             .Should().Within(15.Seconds()).Emit();
 
     // Explicit partition creation — a Space is the sanctioned top-level container. The
     // creator (the test's Admin identity) is granted Admin by SpacePostCreationHandler, so
     // child writes under it authorise.
-    private void CreateSpace(string id)
-        => MeshService.CreateNode(new MeshNode(id)
+    private async Task CreateSpace(string id)
+        => await MeshService.CreateNode(new MeshNode(id)
         {
             Name = id,
             NodeType = "Space",
             State = MeshNodeState.Active
         }).Should().Within(30.Seconds()).Emit();
 
-    private int CopyTree(string source, string target, bool force)
-        => NodeCopyHelper.CopyNodeTree(MeshService, MeshService, Mesh, source, target, force)
+    private async Task<int> CopyTree(string source, string target, bool force)
+        => await NodeCopyHelper.CopyNodeTree(MeshService, MeshService, Mesh, source, target, force)
             .Should().Within(30.Seconds()).Emit();
 
     [Fact]
-    public void CopySingleNode_ToNewNamespace()
+    public async Task CopySingleNode_ToNewNamespace()
     {
-        CreateNode("org/Acme", "Acme Corp", "Markdown");
+        await CreateNode("org/Acme", "Acme Corp", "Markdown");
 
-        var copied = CopyTree("org/Acme", "workspace", force: false);
+        var copied = await CopyTree("org/Acme", "workspace", force: false);
 
         copied.Should().Be(1);
 
-        var target = GetNode("workspace/Acme");
+        var target = await GetNode("workspace/Acme");
         target.Should().NotBeNull();
         target!.Name.Should().Be("Acme Corp");
         target.NodeType.Should().Be("Markdown");
@@ -87,59 +87,59 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact]
-    public void CopyNodeTree_WithDescendants()
+    public async Task CopyNodeTree_WithDescendants()
     {
-        CreateNode("org/Acme", "Acme Corp", "Markdown");
-        CreateNode("org/Acme/Team1", "Team One", "Markdown");
-        CreateNode("org/Acme/Team2", "Team Two", "Markdown");
-        CreateNode("org/Acme/Team1/Alice", "Alice", "Markdown");
+        await CreateNode("org/Acme", "Acme Corp", "Markdown");
+        await CreateNode("org/Acme/Team1", "Team One", "Markdown");
+        await CreateNode("org/Acme/Team2", "Team Two", "Markdown");
+        await CreateNode("org/Acme/Team1/Alice", "Alice", "Markdown");
 
-        var copied = CopyTree("org/Acme", "workspace", force: false);
+        var copied = await CopyTree("org/Acme", "workspace", force: false);
 
         copied.Should().Be(4);
 
-        GetNode("workspace/Acme").Should().NotBeNull();
-        GetNode("workspace/Acme/Team1").Should().NotBeNull();
-        GetNode("workspace/Acme/Team2").Should().NotBeNull();
-        GetNode("workspace/Acme/Team1/Alice").Should().NotBeNull();
+        (await GetNode("workspace/Acme")).Should().NotBeNull();
+        (await GetNode("workspace/Acme/Team1")).Should().NotBeNull();
+        (await GetNode("workspace/Acme/Team2")).Should().NotBeNull();
+        (await GetNode("workspace/Acme/Team1/Alice")).Should().NotBeNull();
 
-        var alice = GetNode("workspace/Acme/Team1/Alice");
+        var alice = await GetNode("workspace/Acme/Team1/Alice");
         alice!.Name.Should().Be("Alice");
     }
 
     [Fact]
-    public void CopyNodeTree_SkipsExistingWhenNotForced()
+    public async Task CopyNodeTree_SkipsExistingWhenNotForced()
     {
-        CreateNode("org/Acme", "Acme Corp", "Markdown");
-        CreateNode("org/Acme/Team1", "Team One", "Markdown");
-        CreateNode("workspace/Acme", "Existing Acme", "Markdown");
+        await CreateNode("org/Acme", "Acme Corp", "Markdown");
+        await CreateNode("org/Acme/Team1", "Team One", "Markdown");
+        await CreateNode("workspace/Acme", "Existing Acme", "Markdown");
 
-        var copied = CopyTree("org/Acme", "workspace", force: false);
+        var copied = await CopyTree("org/Acme", "workspace", force: false);
 
         copied.Should().Be(1);
 
-        var existing = GetNode("workspace/Acme");
+        var existing = await GetNode("workspace/Acme");
         existing!.Name.Should().Be("Existing Acme");
     }
 
     [Fact]
-    public void CopyNodeTree_OverwritesExistingWhenForced()
+    public async Task CopyNodeTree_OverwritesExistingWhenForced()
     {
-        CreateNode("org/Acme", "Acme Corp", "Markdown");
-        CreateNode("workspace/Acme", "Existing Acme", "Markdown");
+        await CreateNode("org/Acme", "Acme Corp", "Markdown");
+        await CreateNode("workspace/Acme", "Existing Acme", "Markdown");
 
-        var copied = CopyTree("org/Acme", "workspace", force: true);
+        var copied = await CopyTree("org/Acme", "workspace", force: true);
 
         copied.Should().Be(1);
 
-        var overwritten = GetNode("workspace/Acme");
+        var overwritten = await GetNode("workspace/Acme");
         overwritten!.Name.Should().Be("Acme Corp");
     }
 
     [Fact]
-    public void CopyNodeTree_ThrowsWhenSourceNotFound()
+    public async Task CopyNodeTree_ThrowsWhenSourceNotFound()
     {
-        var notification = NodeCopyHelper
+        var notification = await NodeCopyHelper
             .CopyNodeTree(MeshService, MeshService, Mesh, "nonexistent/path", "workspace", force: false)
             .Materialize()
             .Should().Within(30.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
@@ -148,48 +148,48 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact]
-    public void CopyNodeTree_ToSpaceNamespace()
+    public async Task CopyNodeTree_ToSpaceNamespace()
     {
         // The empty namespace is reserved for partitions (PartitionWriteGuard rejects a
         // non-partition Markdown root there), so copy the subtree under an explicitly-created
         // Space — the sanctioned top-level partition — rather than the bare root.
-        CreateSpace("destspace");
-        CreateNode("org/Acme", "Acme Corp", "Markdown");
-        CreateNode("org/Acme/Sub", "Sub Node", "Markdown");
+        await CreateSpace("destspace");
+        await CreateNode("org/Acme", "Acme Corp", "Markdown");
+        await CreateNode("org/Acme/Sub", "Sub Node", "Markdown");
 
-        var copied = CopyTree("org/Acme", "destspace", force: false);
+        var copied = await CopyTree("org/Acme", "destspace", force: false);
 
         copied.Should().Be(2);
 
-        GetNode("destspace/Acme").Should().NotBeNull();
-        GetNode("destspace/Acme/Sub").Should().NotBeNull();
+        (await GetNode("destspace/Acme")).Should().NotBeNull();
+        (await GetNode("destspace/Acme/Sub")).Should().NotBeNull();
     }
 
     [Fact]
-    public void CopyNodeTree_PreservesContent()
+    public async Task CopyNodeTree_PreservesContent()
     {
         var content = new Dictionary<string, object?> { ["key"] = "value" };
-        CreateNode("src/Doc", "My Doc", "Markdown", content);
+        await CreateNode("src/Doc", "My Doc", "Markdown", content);
 
-        var copied = CopyTree("src/Doc", "dest", force: false);
+        var copied = await CopyTree("src/Doc", "dest", force: false);
 
         copied.Should().Be(1);
 
-        var target = GetNode("dest/Doc");
+        var target = await GetNode("dest/Doc");
         target.Should().NotBeNull();
         target!.Content.Should().NotBeNull();
     }
 
     [Fact]
-    public void CopyRootLevelNode_ToNamespace()
+    public async Task CopyRootLevelNode_ToNamespace()
     {
-        CreateNode("TopLevel", "Top Level Node", "Markdown");
+        await CreateNode("TopLevel", "Top Level Node", "Markdown");
 
-        var copied = CopyTree("TopLevel", "workspace", force: false);
+        var copied = await CopyTree("TopLevel", "workspace", force: false);
 
         copied.Should().Be(1);
 
-        var target = GetNode("workspace/TopLevel");
+        var target = await GetNode("workspace/TopLevel");
         target.Should().NotBeNull();
         target!.Name.Should().Be("Top Level Node");
     }

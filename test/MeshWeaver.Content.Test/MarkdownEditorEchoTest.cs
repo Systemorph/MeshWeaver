@@ -86,7 +86,7 @@ public class MarkdownEditorEchoTest(ITestOutputHelper output) : MonolithMeshTest
     /// change rather than suppressing it.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void GetMeshNodeStreamUpdate_PropagatesToRemoteSubscriber()
+    public async Task GetMeshNodeStreamUpdate_PropagatesToRemoteSubscriber()
     {
         var nodePath = "Doc/DataMesh/CollaborativeEditing";
         var nodeAddress = new Address(nodePath);
@@ -97,12 +97,12 @@ public class MarkdownEditorEchoTest(ITestOutputHelper output) : MonolithMeshTest
         // Activate the per-node hub via a layout-area request.
         var editRef = new LayoutAreaReference(MarkdownLayoutAreas.EditArea);
         var editStream = subscriberWorkspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, editRef);
-        editStream.Should().Within(30.Seconds()).Emit();
+        await editStream.Should().Within(30.Seconds()).Emit();
 
         // Subscribe to the MeshNode via the canonical remote stream.
         var subscriberStream = subscriberWorkspace
             .GetMeshNodeStream(nodeAddress.Path);
-        var initial = subscriberStream
+        var initial = await subscriberStream
             .Should()
             .Within(30.Seconds())
             .Match(c => c != null);
@@ -124,7 +124,7 @@ public class MarkdownEditorEchoTest(ITestOutputHelper output) : MonolithMeshTest
         // The remote subscriber's stream is live and retains the latest reduced
         // value, so blocking for the marker after the write is race-free —
         // .Match waits until the propagated state satisfies the predicate.
-        var observed = subscriberStream
+        var observed = await subscriberStream
             .Should()
             .Within(15.Seconds())
             .Match(c =>

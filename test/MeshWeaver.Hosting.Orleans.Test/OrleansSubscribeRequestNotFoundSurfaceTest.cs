@@ -1,4 +1,7 @@
 using System;
+using System.Reactive;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -65,22 +68,22 @@ public class OrleansSubscribeRequestNotFoundSurfaceTest(ITestOutputHelper output
         // the OnError path (asserted below) is the surface signal.
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
 
-        Exception? captured = null;
-        var done = new ManualResetEventSlim(false);
+        // Materialize so the first notification (OnNext / OnError / OnCompleted) is captured as a
+        // value; the bounded ToTask bridge fails the test loudly if nothing surfaces in 20s instead
+        // of spinning forever.
+        var firstNotification = await stream
+            .Materialize()
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(20))
+            .ToTask(TestContext.Current.CancellationToken);
 
-        using var sub = stream.Subscribe(
-            _ => { /* no value should arrive */ },
-            ex => { captured = ex; done.Set(); },
-            () => done.Set());
-
-        var fired = done.Wait(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
-
-        fired.Should().BeTrue(
+        firstNotification.Kind.Should().Be(NotificationKind.OnError,
             "the stream must surface OnError (not spin) when the target address routes to NotFound. " +
             "If this fails, OrleansRoutingService.SendDeliveryFailure / RoutingGrain is dropping " +
             "the DeliveryFailure response and the SubscribeRequest's Observe is timing out â€” " +
             "exactly the symptom that caused the /rbuergi Orleans endless-spinner regression.");
 
+        var captured = firstNotification.Exception;
         captured.Should().NotBeNull(
             "OnError must propagate the failure, not be swallowed by the timeout-as-success branch.");
 
@@ -114,21 +117,18 @@ public class OrleansSubscribeRequestNotFoundSurfaceTest(ITestOutputHelper output
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
 
-        var dataReceived = false;
-        Exception? error = null;
-        var done = new ManualResetEventSlim(false);
+        // The first notification must be a data emission, not an error or empty completion — bounded
+        // so a hang fails loudly within 20s rather than spinning.
+        var firstNotification = await stream
+            .Materialize()
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(20))
+            .ToTask(TestContext.Current.CancellationToken);
 
-        using var sub = stream.Subscribe(
-            _ => { dataReceived = true; done.Set(); },
-            ex => { error = ex; done.Set(); },
-            () => done.Set());
-
-        var fired = done.Wait(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
-
-        error.Should().BeNull($"expected data from {address}/Overview, got error: {error?.Message}");
-        fired.Should().BeTrue(
+        firstNotification.Exception.Should().BeNull(
+            $"expected data from {address}/Overview, got error: {firstNotification.Exception?.Message}");
+        firstNotification.Kind.Should().Be(NotificationKind.OnNext,
             "a layout area stream on an existing address must emit data, not hang. " +
             "If this fails, the Orleans routing â†’ MessageHubGrain activation â†’ layout area path is broken.");
-        dataReceived.Should().BeTrue("at least one data emission must arrive from the existing address");
     }
 }

@@ -91,9 +91,9 @@ public class CompileFinishAndDisposeTest(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact(Timeout = 60_000)]
-    public void TriggeredCompile_FinishesGeneration_AndActivityReachesTerminalDisposedState()
+    public async Task TriggeredCompile_FinishesGeneration_AndActivityReachesTerminalDisposedState()
     {
-        var response = CreateAndCompile("FinishStory",
+        var response = await CreateAndCompile("FinishStory",
             new NodeTypeDefinition { Configuration = "config => config.WithContentType<FinishStory>()" },
             ("code", "public record FinishStory { public string Title { get; init; } = string.Empty; }"))
             .Should().Within(55.Seconds()).Emit();
@@ -119,13 +119,13 @@ public class CompileFinishAndDisposeTest(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact(Timeout = 60_000)]
-    public void FailedCompile_StillReachesTerminalDisposedState_NotStuck()
+    public async Task FailedCompile_StillReachesTerminalDisposedState_NotStuck()
     {
         // Even a broken source must not wedge the activity: it finishes Failed
         // (with End stamped) rather than hanging Running until a deadline. The
         // consumer then sees a settled Error via stream.Where and renders the
         // diagnostic — not the "did not settle" timeout overlay.
-        var response = CreateAndCompile("FinishBroken",
+        var response = await CreateAndCompile("FinishBroken",
             new NodeTypeDefinition { Configuration = "config => config.WithContentType<FinishBroken>()" },
             ("code", "public record FinishBroken { this is not valid C# }"))
             .Should().Within(55.Seconds()).Emit();

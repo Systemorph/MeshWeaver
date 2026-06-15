@@ -82,7 +82,7 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     /// Should show the Name+Description form when ?type=ACME/Project/Todo is specified.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void CreateArea_WithTypeParam_ShowsCreateForm()
+    public async Task CreateArea_WithTypeParam_ShowsCreateForm()
     {
         var client = GetClient();
         var parentAddress = new Address("ACME/ProductLaunch");
@@ -101,7 +101,7 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
             reference);
 
         Output.WriteLine("Waiting for Create form to render...");
-        var value = stream.Should().Within(TimeSpan.FromSeconds(40)).Emit();
+        var value = await stream.Should().Within(TimeSpan.FromSeconds(40)).Emit();
 
         Output.WriteLine($"Received value");
         value.Should().NotBe(default(JsonElement), "Create form should render when type parameter is specified");
@@ -112,7 +112,7 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     /// Should show type selection grid or a message.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void CreateArea_WithoutTypeParam_ShowsTypeSelection()
+    public async Task CreateArea_WithoutTypeParam_ShowsTypeSelection()
     {
         var client = GetClient();
         var parentAddress = new Address("ACME/ProductLaunch");
@@ -127,7 +127,7 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
             reference);
 
         Output.WriteLine("Waiting for type selection to render...");
-        var value = stream.Should().Within(TimeSpan.FromSeconds(40)).Emit();
+        var value = await stream.Should().Within(TimeSpan.FromSeconds(40)).Emit();
 
         Output.WriteLine($"Received value");
         value.Should().NotBe(default(JsonElement), "Type selection should render when no type parameter is specified");
@@ -137,7 +137,7 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     /// Test that the Overview area works for ProductLaunch (baseline test).
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void OverviewArea_WorksForProductLaunch()
+    public async Task OverviewArea_WorksForProductLaunch()
     {
         var client = GetClient();
         var parentAddress = new Address("ACME/ProductLaunch");
@@ -152,7 +152,7 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
             reference);
 
         Output.WriteLine("Waiting for Overview to render...");
-        var value = stream.Should().Within(TimeSpan.FromSeconds(40)).Emit();
+        var value = await stream.Should().Within(TimeSpan.FromSeconds(40)).Emit();
 
         Output.WriteLine($"Received value");
         value.Should().NotBe(default(JsonElement), "Overview should render for ProductLaunch");

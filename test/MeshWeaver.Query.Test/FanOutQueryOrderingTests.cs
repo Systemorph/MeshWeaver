@@ -32,50 +32,50 @@ public class FanOutQueryOrderingTests(ITestOutputHelper output) : MonolithMeshTe
     /// Reactive replacement for <c>QueryAsync(...).ToListAsync()</c>: the first
     /// <see cref="QueryChangeType.Initial"/> emission carries the full snapshot.
     /// </summary>
-    private IReadOnlyList<MeshNode> QueryNodes(string query)
-        => MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+    private async Task<IReadOnlyList<MeshNode>> QueryNodes(string query)
+        => (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
     [Fact(Timeout = 30000)]
-    public void FanOut_SortByLastModified_MergesCorrectly()
+    public async Task FanOut_SortByLastModified_MergesCorrectly()
     {
         // Arrange: create nodes in different namespaces with known timestamps.
         // The newest node is in a "later" namespace to simulate partition ordering issues.
         var baseTime = DateTimeOffset.UtcNow;
 
         // Namespace A: older items
-        NodeFactory.CreateNode(MeshNode.FromPath("FoNsA/old1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("FoNsA/old1") with
         {
             Name = "Old Item A1", NodeType = "Markdown",
             LastModified = baseTime.AddMinutes(-10)
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("FoNsA/old2") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("FoNsA/old2") with
         {
             Name = "Old Item A2", NodeType = "Markdown",
             LastModified = baseTime.AddMinutes(-8)
         }).Should().Emit();
 
         // Namespace B: newer items
-        NodeFactory.CreateNode(MeshNode.FromPath("FoNsB/new1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("FoNsB/new1") with
         {
             Name = "New Item B1", NodeType = "Markdown",
             LastModified = baseTime.AddMinutes(-1)
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("FoNsB/new2") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("FoNsB/new2") with
         {
             Name = "New Item B2", NodeType = "Markdown",
             LastModified = baseTime.AddMinutes(-2)
         }).Should().Emit();
 
         // Namespace C: middle items
-        NodeFactory.CreateNode(MeshNode.FromPath("FoNsC/mid1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("FoNsC/mid1") with
         {
             Name = "Mid Item C1", NodeType = "Markdown",
             LastModified = baseTime.AddMinutes(-5)
         }).Should().Emit();
 
         // Act: global query with sort and limit
-        var results = QueryNodes("is:main scope:descendants sort:LastModified-desc limit:3");
+        var results = await QueryNodes("is:main scope:descendants sort:LastModified-desc limit:3");
 
         Output.WriteLine($"Results ({results.Count}):");
         foreach (var r in results)
@@ -89,24 +89,24 @@ public class FanOutQueryOrderingTests(ITestOutputHelper output) : MonolithMeshTe
     }
 
     [Fact(Timeout = 30000)]
-    public void FanOut_NoLimit_ReturnsAllResults()
+    public async Task FanOut_NoLimit_ReturnsAllResults()
     {
         // Arrange: nodes in different namespaces
-        NodeFactory.CreateNode(MeshNode.FromPath("FoAll1/doc1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("FoAll1/doc1") with
         {
             Name = "Doc All 1", NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("FoAll2/doc2") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("FoAll2/doc2") with
         {
             Name = "Doc All 2", NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("FoAll3/doc3") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("FoAll3/doc3") with
         {
             Name = "Doc All 3", NodeType = "Markdown"
         }).Should().Emit();
 
         // Act: no limit
-        var results = QueryNodes("is:main scope:descendants sort:LastModified-desc");
+        var results = await QueryNodes("is:main scope:descendants sort:LastModified-desc");
 
         // Assert: all 3 returned
         results.Should().HaveCountGreaterThanOrEqualTo(3);
@@ -116,24 +116,24 @@ public class FanOutQueryOrderingTests(ITestOutputHelper output) : MonolithMeshTe
     }
 
     [Fact(Timeout = 30000)]
-    public void FanOut_TextSearch_FindsAcrossNamespaces()
+    public async Task FanOut_TextSearch_FindsAcrossNamespaces()
     {
         // Arrange: "Unique" text in different namespaces
-        NodeFactory.CreateNode(MeshNode.FromPath("FoTxt1/alpha") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("FoTxt1/alpha") with
         {
             Name = "UniqueSearchTerm Alpha", NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("FoTxt2/beta") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("FoTxt2/beta") with
         {
             Name = "UniqueSearchTerm Beta", NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("FoTxt3/gamma") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("FoTxt3/gamma") with
         {
             Name = "No Match Here", NodeType = "Markdown"
         }).Should().Emit();
 
         // Act: text search across all namespaces
-        var results = QueryNodes("UniqueSearchTerm is:main scope:descendants");
+        var results = await QueryNodes("UniqueSearchTerm is:main scope:descendants");
 
         // Assert: finds both matching nodes across namespaces
         results.Should().HaveCount(2);
@@ -142,16 +142,16 @@ public class FanOutQueryOrderingTests(ITestOutputHelper output) : MonolithMeshTe
     }
 
     [Fact(Timeout = 30000)]
-    public void FanOut_Deduplicates_SamePathAcrossProviders()
+    public async Task FanOut_Deduplicates_SamePathAcrossProviders()
     {
         // Arrange: create a node (only one copy should appear)
-        NodeFactory.CreateNode(MeshNode.FromPath("FoDup/item1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("FoDup/item1") with
         {
             Name = "Deduplicate Me", NodeType = "Markdown"
         }).Should().Emit();
 
         // Act: query that hits all providers
-        var results = QueryNodes("path:FoDup/item1");
+        var results = await QueryNodes("path:FoDup/item1");
 
         // Assert: only one result (deduplication by path)
         results.Should().ContainSingle();

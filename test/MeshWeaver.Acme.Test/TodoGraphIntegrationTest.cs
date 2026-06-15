@@ -78,13 +78,13 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     /// Test that ACME organization hub can be initialized.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void ACME_Organization_CanBeInitialized()
+    public async Task ACME_Organization_CanBeInitialized()
     {
         var acmeAddress = new Address("ACME");
 
         var client = GetClient(c => c.AddData(data => data));
 
-        var response = client.Observe(new PingRequest(), o => o.WithTarget(acmeAddress)).Should().Emit();
+        var response = await client.Observe(new PingRequest(), o => o.WithTarget(acmeAddress)).Should().Emit();
 
         response.Should().NotBeNull();
     }
@@ -93,13 +93,13 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     /// Test that Project NodeType under ACME can be initialized.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void ACME_Project_NodeType_CanBeInitialized()
+    public async Task ACME_Project_NodeType_CanBeInitialized()
     {
         var projectTypeAddress = new Address("ACME/Project");
 
         var client = GetClient(c => c.AddData(data => data));
 
-        var response = client.Observe(new PingRequest(), o => o.WithTarget(projectTypeAddress)).Should().Emit();
+        var response = await client.Observe(new PingRequest(), o => o.WithTarget(projectTypeAddress)).Should().Emit();
 
         response.Should().NotBeNull();
     }
@@ -108,13 +108,13 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     /// Test that Todo NodeType under Project can be initialized.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void ACME_Todo_NodeType_CanBeInitialized()
+    public async Task ACME_Todo_NodeType_CanBeInitialized()
     {
         var todoTypeAddress = new Address("ACME/Project/Todo");
 
         var client = GetClient(c => c.AddData(data => data));
 
-        var response = client.Observe(new PingRequest(), o => o.WithTarget(todoTypeAddress)).Should().Emit();
+        var response = await client.Observe(new PingRequest(), o => o.WithTarget(todoTypeAddress)).Should().Emit();
 
         response.Should().NotBeNull();
     }
@@ -123,13 +123,13 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     /// Test that ProductLaunch project instance can be initialized.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void ProductLaunch_Instance_CanBeInitialized()
+    public async Task ProductLaunch_Instance_CanBeInitialized()
     {
         var productLaunchAddress = new Address("ACME/ProductLaunch");
 
         var client = GetClient(c => c.AddData(data => data));
 
-        var response = client.Observe(new PingRequest(), o => o.WithTarget(productLaunchAddress)).Should().Emit();
+        var response = await client.Observe(new PingRequest(), o => o.WithTarget(productLaunchAddress)).Should().Emit();
 
         response.Should().NotBeNull();
     }
@@ -138,13 +138,13 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     /// Test that a task instance can be initialized.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void Task_Instance_CanBeInitialized()
+    public async Task Task_Instance_CanBeInitialized()
     {
         var taskAddress = new Address("ACME/ProductLaunch/Todo/DefinePersona");
 
         var client = GetClient(c => c.AddData(data => data));
 
-        var response = client.Observe(new PingRequest(), o => o.WithTarget(taskAddress)).Should().Emit();
+        var response = await client.Observe(new PingRequest(), o => o.WithTarget(taskAddress)).Should().Emit();
 
         response.Should().NotBeNull();
     }
@@ -153,11 +153,11 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     /// Test that ProductLaunch has task children.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void ProductLaunch_HasTaskChildren()
+    public async Task ProductLaunch_HasTaskChildren()
     {
-        var children = MeshQuery
+        var children = (await MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:ACME/ProductLaunch/Todo"))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         children.Should().NotBeEmpty("ProductLaunch should have task children");
         children.Should().HaveCountGreaterThan(10, "ProductLaunch should have at least 10 tasks");
@@ -168,9 +168,9 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     /// Test that task instances have correct NodeType.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void Task_Instances_HaveCorrectNodeType()
+    public async Task Task_Instances_HaveCorrectNodeType()
     {
-        var task = ReadNode("ACME/ProductLaunch/Todo/DefinePersona")
+        var task = await ReadNode("ACME/ProductLaunch/Todo/DefinePersona")
             .Should().Within(60.Seconds()).Match(n => n is not null);
 
         task.Should().NotBeNull();

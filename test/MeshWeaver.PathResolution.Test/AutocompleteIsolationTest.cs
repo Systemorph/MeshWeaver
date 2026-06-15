@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading;
+using System.Threading.Tasks;
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -26,41 +28,30 @@ public class AutocompleteIsolationTest : MonolithMeshTestBase
     public AutocompleteIsolationTest(ITestOutputHelper output) : base(output) => this.output = output;
 
     [Fact]
-    public void Autocomplete_Email_RecordsEveryEmission()
+    public async Task Autocomplete_Email_RecordsEveryEmission()
     {
         // Arrange — minimal hierarchy (one matching leaf: "Email Triage").
-        NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing") with
         { Name = "Marketing", NodeType = "Group" }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing") with
         { Name = "Claims Processing", NodeType = "Markdown" }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing/EmailTriage") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing/EmailTriage") with
         { Name = "Email Triage", NodeType = "Markdown" }).Should().Emit();
 
-        // Act — subscribe directly and record the raw emission stream (count + names + timing).
-        var emissions = new List<(double ms, int count, string names)>();
+        // Act — record the raw emission stream (count + names + timing) reactively up to the
+        // first emission carrying a match (or completion / timeout), then materialize.
         var sw = Stopwatch.StartNew();
-        var done = new ManualResetEventSlim(false);
-        var completed = false;
-        Exception? error = null;
-
-        using var sub = MeshQuery.Autocomplete("Systemorph/Marketing", "Email", limit: 10)
-            .Subscribe(
-                r =>
-                {
-                    emissions.Add((sw.Elapsed.TotalMilliseconds, r.Count, string.Join(", ", r.Select(x => x.Name))));
-                    if (r.Count >= 1) done.Set();
-                },
-                ex => { error = ex; done.Set(); },
-                () => { completed = true; done.Set(); });
-
-        done.Wait(TimeSpan.FromSeconds(10));
-        // Give a beat for any trailing emission to land so the log is complete.
-        Thread.Sleep(200);
+        var emissions = await MeshQuery.Autocomplete("Systemorph/Marketing", "Email", limit: 10)
+            .Select(r => (ms: sw.Elapsed.TotalMilliseconds, count: r.Count, names: string.Join(", ", r.Select(x => x.Name))))
+            .TakeUntil(e => e.count >= 1)
+            .ToList()
+            .Timeout(TimeSpan.FromSeconds(10))
+            .ToTask();
 
         output.WriteLine($"=== reactive Autocomplete('Systemorph/Marketing','Email') ===");
         foreach (var e in emissions)
             output.WriteLine($"  +{e.ms,6:F0}ms  count={e.count}  [{e.names}]");
-        output.WriteLine($"completed={completed}  error={error?.GetType().Name ?? "none"}  totalEmissions={emissions.Count}");
+        output.WriteLine($"totalEmissions={emissions.Count}");
 
         emissions.Should().Contain(e => e.count >= 1,
             "reactive Autocomplete must eventually surface 'Email Triage' (if it only ever emits empty then completes, the index lags the create and the conversion needs a retry/poll)");

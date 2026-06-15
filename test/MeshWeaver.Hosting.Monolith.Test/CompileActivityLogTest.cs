@@ -40,7 +40,7 @@ public class CompileActivityLogTest(ITestOutputHelper output) : MonolithMeshTest
     /// Returns the settled <see cref="NodeTypeDefinition"/> (CompilationStatus Ok/Error +
     /// LastCompilationActivityPath + CompilationError).
     /// </summary>
-    private NodeTypeDefinition CreateAndCompile(
+    private async Task<NodeTypeDefinition> CreateAndCompile(
         string nodeTypeId,
         NodeTypeDefinition definition,
         params (string Name, string Code)[] sources)
@@ -54,7 +54,7 @@ public class CompileActivityLogTest(ITestOutputHelper output) : MonolithMeshTest
             State = MeshNodeState.Active
         };
 
-        MeshService.CreateNode(typeNode)
+        await MeshService.CreateNode(typeNode)
             .SelectMany(_ => sources
                 .Select(source => MeshService.CreateNode(new MeshNode(source.Name, $"{nodeTypePath}/Source")
                 {
@@ -67,7 +67,7 @@ public class CompileActivityLogTest(ITestOutputHelper output) : MonolithMeshTest
                     chain.SelectMany(_ => next.Select(n => (MeshNode?)n))))
             .Should().Within(30.Seconds()).Emit();
 
-        var node = Mesh.GetMeshNodeStream(nodeTypePath)
+        var node = await Mesh.GetMeshNodeStream(nodeTypePath)
             .Should().Within(40.Seconds())
             .Match(n => n?.Content is NodeTypeDefinition d
                 && d.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error);
@@ -86,16 +86,16 @@ public class CompileActivityLogTest(ITestOutputHelper output) : MonolithMeshTest
     /// activity terminal write may not have landed yet. Wait on the actual condition (terminal
     /// status), not the first emission.
     /// </summary>
-    private ActivityLog ReadActivityLog(string activityPath) =>
-        (ActivityLog)Mesh.GetMeshNodeStream(activityPath)
+    private async Task<ActivityLog> ReadActivityLog(string activityPath) =>
+        (ActivityLog)(await Mesh.GetMeshNodeStream(activityPath)
             .Should().Within(15.Seconds())
-            .Match(n => n?.Content is ActivityLog log && log.Status != ActivityStatus.Running)
+            .Match(n => n?.Content is ActivityLog log && log.Status != ActivityStatus.Running))
             .Content!;
 
     [Fact(Timeout = 60_000)]
-    public void SuccessfulCompile_ReportsActivityLogWithSourceQueriesAndMatchedPaths()
+    public async Task SuccessfulCompile_ReportsActivityLogWithSourceQueriesAndMatchedPaths()
     {
-        var def = CreateAndCompile("LogStory",
+        var def = await CreateAndCompile("LogStory",
             new NodeTypeDefinition { Configuration = "config => config.WithContentType<LogStory>()" },
             ("code", "public record LogStory { public string Title { get; init; } = string.Empty; }"));
 
@@ -104,7 +104,7 @@ public class CompileActivityLogTest(ITestOutputHelper output) : MonolithMeshTest
         def.LastCompilationActivityPath.Should().NotBeNullOrEmpty(
             "a successful compile must link its activity log");
 
-        var log = ReadActivityLog(def.LastCompilationActivityPath!);
+        var log = await ReadActivityLog(def.LastCompilationActivityPath!);
         log.Category.Should().Be(ActivityCategory.Compilation);
         log.Status.Should().Be(ActivityStatus.Succeeded);
 
@@ -118,9 +118,9 @@ public class CompileActivityLogTest(ITestOutputHelper output) : MonolithMeshTest
     }
 
     [Fact(Timeout = 60_000)]
-    public void FailedCompile_FaultsActivityAndSurfacesFullDiagnostics()
+    public async Task FailedCompile_FaultsActivityAndSurfacesFullDiagnostics()
     {
-        var def = CreateAndCompile("LogBroken",
+        var def = await CreateAndCompile("LogBroken",
             new NodeTypeDefinition { Configuration = "config => config.WithContentType<LogBroken>()" },
             ("code", "public record LogBroken { this is not valid C# }"));
 
@@ -131,7 +131,7 @@ public class CompileActivityLogTest(ITestOutputHelper output) : MonolithMeshTest
         def.LastCompilationActivityPath.Should().NotBeNullOrEmpty(
             "a failed compile must still link its activity log so the UI can show diagnostics");
 
-        var log = ReadActivityLog(def.LastCompilationActivityPath!);
+        var log = await ReadActivityLog(def.LastCompilationActivityPath!);
         log.Status.Should().Be(ActivityStatus.Failed,
             "the activity status must reflect that compile faulted");
 
@@ -154,7 +154,7 @@ public class CompileActivityLogTest(ITestOutputHelper output) : MonolithMeshTest
     /// recompile-needed checks survive portal restart and silo move.
     /// </summary>
     [Fact(Timeout = 30_000)]
-    public void SuccessfulCompile_PopulatesCompiledSourcesSnapshot()
+    public async Task SuccessfulCompile_PopulatesCompiledSourcesSnapshot()
     {
         const string nodeTypeId = "SnapStory";
         const string nodeTypePath = "type/SnapStory";
@@ -168,9 +168,9 @@ public class CompileActivityLogTest(ITestOutputHelper output) : MonolithMeshTest
             },
             State = MeshNodeState.Active
         };
-        MeshService.CreateNode(typeNode).Should().Emit();
+        await MeshService.CreateNode(typeNode).Should().Emit();
 
-        MeshService.CreateNode(new MeshNode("code", $"{nodeTypePath}/Source")
+        await MeshService.CreateNode(new MeshNode("code", $"{nodeTypePath}/Source")
         {
             NodeType = "Code",
             Name = "code",
@@ -187,7 +187,7 @@ public class CompileActivityLogTest(ITestOutputHelper output) : MonolithMeshTest
         // separate watcher → UpdateMeshNode round-trip.
         var compilationService = Mesh.ServiceProvider
             .GetRequiredService<IMeshNodeCompilationService>();
-        var result = compilationService.CompileAndGetConfigurations(typeNode)
+        var result = await compilationService.CompileAndGetConfigurations(typeNode)
             .Should().Within(25.Seconds()).Emit();
 
         result.Should().NotBeNull();

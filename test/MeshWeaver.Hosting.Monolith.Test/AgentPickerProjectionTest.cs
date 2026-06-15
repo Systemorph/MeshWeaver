@@ -74,9 +74,9 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
     }
 
     [Fact]
-    public void ObserveAgents_FromMeshHub_PopulatesCombobox()
+    public async Task ObserveAgents_FromMeshHub_PopulatesCombobox()
     {
-        var agents = AgentPickerProjection
+        var agents = await AgentPickerProjection
             .ObserveAgents(Workspace, Hub, currentPath: null)
             .Should().Within(15.Seconds())
             .Match(a => a.Count > 0);
@@ -94,9 +94,9 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
     }
 
     [Fact]
-    public void ObserveModels_FromMeshHub_PopulatesCombobox()
+    public async Task ObserveModels_FromMeshHub_PopulatesCombobox()
     {
-        var models = AgentPickerProjection
+        var models = await AgentPickerProjection
             .ObserveModels(Workspace, Hub, currentPath: null)
             .Should().Within(15.Seconds())
             .Match(m => m.Count > 0);
@@ -129,14 +129,14 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
     /// that one query failing doesn't take the other down.
     /// </summary>
     [Fact]
-    public void ObserveAgents_FromHostedSubHub_PopulatesCombobox()
+    public async Task ObserveAgents_FromHostedSubHub_PopulatesCombobox()
     {
         var portalHub = Mesh.GetHostedHub(
             new Address("portal", "test-user"),
             c => c.AddData());
         var workspace = portalHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
-        var agents = AgentPickerProjection
+        var agents = await AgentPickerProjection
             .ObserveAgents(workspace, portalHub, currentPath: null)
             .Should().Within(15.Seconds())
             .Match(a => a.Count > 0);
@@ -148,14 +148,14 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
     }
 
     [Fact]
-    public void ObserveModels_FromHostedSubHub_PopulatesCombobox()
+    public async Task ObserveModels_FromHostedSubHub_PopulatesCombobox()
     {
         var portalHub = Mesh.GetHostedHub(
             new Address("portal", "test-user-2"),
             c => c.AddData());
         var workspace = portalHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
-        var models = AgentPickerProjection
+        var models = await AgentPickerProjection
             .ObserveModels(workspace, portalHub, currentPath: null)
             .Should().Within(15.Seconds())
             .Match(m => m.Count > 0);
@@ -222,9 +222,9 @@ public class AgentPickerProjectionPartitionedTest : MonolithMeshTestBase
     }
 
     [Fact]
-    public void PartitionedPath_ObserveAgents_PopulatesCombobox()
+    public async Task PartitionedPath_ObserveAgents_PopulatesCombobox()
     {
-        var agents = AgentPickerProjection
+        var agents = await AgentPickerProjection
             .ObserveAgents(Workspace, Hub, currentPath: null)
             .Should().Within(15.Seconds())
             .Match(a => a.Count > 0);
@@ -237,7 +237,7 @@ public class AgentPickerProjectionPartitionedTest : MonolithMeshTestBase
     }
 
     [Fact]
-    public void PartitionedPath_ObserveAgents_FromHostedSubHub_PopulatesCombobox()
+    public async Task PartitionedPath_ObserveAgents_FromHostedSubHub_PopulatesCombobox()
     {
         // Closer to production: chat hub is a hosted sub-hub of the mesh hub.
         var portalHub = Mesh.GetHostedHub(
@@ -245,7 +245,7 @@ public class AgentPickerProjectionPartitionedTest : MonolithMeshTestBase
             c => c.AddData());
         var workspace = portalHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
-        var agents = AgentPickerProjection
+        var agents = await AgentPickerProjection
             .ObserveAgents(workspace, portalHub, currentPath: null)
             .Should().Within(15.Seconds())
             .Match(a => a.Count > 0);
@@ -255,9 +255,9 @@ public class AgentPickerProjectionPartitionedTest : MonolithMeshTestBase
     }
 
     [Fact]
-    public void PartitionedPath_ObserveModels_PopulatesCombobox()
+    public async Task PartitionedPath_ObserveModels_PopulatesCombobox()
     {
-        var models = AgentPickerProjection
+        var models = await AgentPickerProjection
             .ObserveModels(Workspace, Hub, currentPath: null)
             .Should().Within(15.Seconds())
             .Match(m => m.Count > 0);

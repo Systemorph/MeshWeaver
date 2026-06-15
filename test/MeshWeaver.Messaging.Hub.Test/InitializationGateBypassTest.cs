@@ -57,7 +57,7 @@ public class InitializationGateBypassTest(ITestOutputHelper output) : HubTestBas
             });
 
     [Fact]
-    public void InitializeHubRequest_BypassesNeverOpeningGate()
+    public async Task InitializeHubRequest_BypassesNeverOpeningGate()
     {
         // GetHost triggers hub construction → posts InitializeHubRequest → runs BuildupActions.
         var host = GetHost();
@@ -65,11 +65,11 @@ public class InitializationGateBypassTest(ITestOutputHelper output) : HubTestBas
 
         // 5s is generous; with the bypass this completes synchronously after construction.
         // Without the bypass the gate stays closed forever and the wait times out.
-        // The blocking .Should().Emit() asserts BuildupActions ran:
+        // The awaited .Should().Emit() asserts BuildupActions ran:
         // InitializeHubRequest must bypass every WithInitializationGate predicate so
         // BuildupActions can run and open user-defined readiness gates. If this fails,
         // the framework-level bypass list in MessageService.cs has regressed — see
         // Doc/Architecture/InitializationGates.md → 'Framework-bypassed messages'.
-        _buildupRan.Should().Within(5.Seconds()).Emit();
+        await _buildupRan.Should().Within(5.Seconds()).Emit();
     }
 }

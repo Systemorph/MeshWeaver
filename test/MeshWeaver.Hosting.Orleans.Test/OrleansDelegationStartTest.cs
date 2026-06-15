@@ -30,18 +30,17 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// 3. Create thread with Messages + IsExecuting=true + PendingUserMessage
 /// 4. WatchForExecution triggers -> starts streaming -> response cell gets text
 ///
-/// 🚨 Test is <c>void</c> + reactive assertions (no <c>async</c>/<c>await</c>):
-/// blocking inside an async test deadlocks the in-process hub scheduler — the
-/// agent's streaming execution shares the process and its continuations are
-/// starved by the captured async SynchronizationContext. See
-/// ReactiveTestAssertions.md §2 + ObservableAssertions remarks.
+/// 🚨 Test <c>await</c>s the reactive assertions: each terminal
+/// <c>ObservableAssertions</c> method bridges the stream to a Task at the test
+/// edge (the sanctioned <c>.FirstAsync()/.ToTask()</c> bridge) — no blocking
+/// wait inside the test body. See ObservableAssertions remarks.
 /// </summary>
 public class OrleansDelegationStartTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
     private IMessageHub GetClient([CallerMemberName] string? name = null)
         => base.GetClient($"deleg-{name}-{Guid.NewGuid():N}", "TestUser");
 
-    private IMessageDelivery<CreateNodeResponse> CreateNode(IMessageHub client, MeshNode node, string targetAddress)
+    private Task<IMessageDelivery<CreateNodeResponse>> CreateNode(IMessageHub client, MeshNode node, string targetAddress)
         => client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(targetAddress)))
             .Should().Within(30.Seconds()).Emit();
 
@@ -67,7 +66,7 @@ public class OrleansDelegationStartTest(ITestOutputHelper output) : OrleansShare
     /// Response cell should have agent text when execution completes.
     /// </summary>
     [Fact]
-    public void Delegation_CreateCellsThenThread_ExecutionStartsAndCompletes()
+    public async Task Delegation_CreateCellsThenThread_ExecutionStartsAndCompletes()
     {
         SharedOrleansFixture.SwappableFactory.SetInner(new DelegationEchoChatClientFactory());
         try
@@ -76,14 +75,14 @@ public class OrleansDelegationStartTest(ITestOutputHelper output) : OrleansShare
 
             // Create a parent thread first (delegations live under a response message)
             var parentNode = ThreadNodeType.BuildThreadNode("TestUser", "Parent for delegation test", "TestUser");
-            var parentResp = CreateNode(client, parentNode, "TestUser");
+            var parentResp = await CreateNode(client, parentNode, "TestUser");
             parentResp.Message.Success.Should().BeTrue(parentResp.Message.Error ?? "");
             var parentPath = parentResp.Message.Node!.Path!;
             Output.WriteLine($"Parent thread: {parentPath}");
 
             // Simulate a response message on the parent (delegation lives under it)
             var parentResponseId = Guid.NewGuid().ToString("N")[..8];
-            CreateNode(client, new MeshNode(parentResponseId, parentPath)
+            await CreateNode(client, new MeshNode(parentResponseId, parentPath)
             {
                 NodeType = ThreadMessageNodeType.NodeType, MainNode = "TestUser",
                 Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
@@ -103,19 +102,19 @@ public class OrleansDelegationStartTest(ITestOutputHelper output) : OrleansShare
             Output.WriteLine($"Sub-thread: {subThreadPath}, user={userMsgId}");
 
             // Create the sub-thread — WatchForExecution claims + dispatches the round.
-            var threadResp = CreateNode(client, subThreadNode, parentMsgPath);
+            var threadResp = await CreateNode(client, subThreadNode, parentMsgPath);
             threadResp.Message.Success.Should().BeTrue(threadResp.Message.Error ?? "");
             Output.WriteLine("Sub-thread created — WatchForExecution should trigger");
 
             // Wait for execution to complete; the response cell id is Messages[1]
             // (allocated by DispatchAfterClaim).
-            var settled = GetHubContent<MeshThread>(client, subThreadPath)
+            var settled = await GetHubContent<MeshThread>(client, subThreadPath)
                 .Should().Within(30.Seconds())
                 .Match(t => t is { IsExecuting: false } && t.Messages.Count >= 2);
             Output.WriteLine("Execution complete");
 
             var responsePath = $"{subThreadPath}/{settled!.Messages[1]}";
-            var responseMsg = GetHubContent<ThreadMessage>(client, responsePath)
+            var responseMsg = await GetHubContent<ThreadMessage>(client, responsePath)
                 .Should().Within(30.Seconds()).Match(m => !string.IsNullOrEmpty(m?.Text));
             responseMsg!.Text.Should().NotBeNullOrEmpty("agent must have written response");
             Output.WriteLine($"Response: {responseMsg.Text![..Math.Min(100, responseMsg.Text.Length)]}");

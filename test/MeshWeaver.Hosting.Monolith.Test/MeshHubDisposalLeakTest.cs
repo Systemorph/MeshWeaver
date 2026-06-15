@@ -44,7 +44,7 @@ public class MeshHubDisposalLeakTest(ITestOutputHelper output) : MonolithMeshTes
     private bool _selfDisposed;
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private WeakReference ExerciseAndWeakRefMeshHub()
+    private async Task<WeakReference> ExerciseAndWeakRefMeshHub()
     {
         var hub = Mesh;
         var factory = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -60,8 +60,8 @@ public class MeshHubDisposalLeakTest(ITestOutputHelper output) : MonolithMeshTes
             Name = "probe",
             State = MeshNodeState.Active,
         };
-        factory.CreateNode(node).Should().Within(60.Seconds()).Emit();
-        factory.UpdateNode(node with { Name = "probe-updated" }).Should().Within(60.Seconds()).Emit();
+        await factory.CreateNode(node).Should().Within(60.Seconds()).Emit();
+        await factory.UpdateNode(node with { Name = "probe-updated" }).Should().Within(60.Seconds()).Emit();
 
         return new WeakReference(hub);
     }
@@ -78,18 +78,18 @@ public class MeshHubDisposalLeakTest(ITestOutputHelper output) : MonolithMeshTes
     }
 
     [Fact]
-    public void MeshHub_IsCollected_AfterMeshAndServiceProviderDisposal()
+    public async Task MeshHub_IsCollected_AfterMeshAndServiceProviderDisposal()
     {
-        var weak = ExerciseAndWeakRefMeshHub();
+        var weak = await ExerciseAndWeakRefMeshHub();
         weak.IsAlive.Should().BeTrue("the mesh hub is held by the live ServiceProvider before disposal");
 
         var hub = Mesh;
         hub.Dispose();
-        hub.DisposalCompleted
+        await hub.DisposalCompleted
             .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
             .FirstOrDefaultAsync()
-            .ToTask()
-            .Wait(TimeSpan.FromSeconds(30));
+            .Timeout(TimeSpan.FromSeconds(30))
+            .ToTask();
 
         var sp = ServiceProvider;
         ServiceProvider = null!;

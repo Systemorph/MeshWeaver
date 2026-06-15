@@ -66,17 +66,17 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 60000)]
-    public void MotorXL_PathResolves()
+    public async Task MotorXL_PathResolves()
     {
-        var resolution = PathResolver.ResolvePath(MotorXLPath).Should().Emit();
+        var resolution = await PathResolver.ResolvePath(MotorXLPath).Should().Emit();
         resolution.Should().NotBeNull($"Path '{MotorXLPath}' should resolve");
         Output.WriteLine($"Resolved: Prefix={resolution!.Prefix}, Remainder={resolution.Remainder}");
     }
 
     [Fact(Timeout = 60000)]
-    public void MotorXL_LayoutArea_ReturnsContent()
+    public async Task MotorXL_LayoutArea_ReturnsContent()
     {
-        var resolution = PathResolver.ResolvePath(MotorXLPath).Should().Emit();
+        var resolution = await PathResolver.ResolvePath(MotorXLPath).Should().Emit();
         resolution.Should().NotBeNull();
 
         var address = new Address(resolution!.Prefix.ToString()!);
@@ -88,17 +88,17 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
 
-        var value = stream.Should().Within(50.Seconds()).Emit();
+        var value = await stream.Should().Within(50.Seconds()).Emit();
         value.Should().NotBe(default(JsonElement), "Layout area should return content, not spin forever");
     }
 
     [Fact(Timeout = 60000)]
-    public void Cession_Trace_HubConfiguration()
+    public async Task Cession_Trace_HubConfiguration()
     {
         var client = GetClient();
 
         // Resolve path first to get the actual hub address
-        var resolution = PathResolver.ResolvePath(MotorXLPath).Should().Emit();
+        var resolution = await PathResolver.ResolvePath(MotorXLPath).Should().Emit();
         resolution.Should().NotBeNull($"Path '{MotorXLPath}' should resolve");
         Output.WriteLine($"Resolved: Prefix={resolution!.Prefix}, Remainder={resolution.Remainder}");
 
@@ -106,7 +106,7 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
         Output.WriteLine($"Hub address: {address}");
 
         Output.WriteLine($"Initializing hub for {address}...");
-        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Within(50.Seconds()).Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Within(50.Seconds()).Emit();
         Output.WriteLine("Hub initialized.");
 
         var hostedHub = Mesh.GetHostedHub(address, HostedHubCreation.Never);
@@ -125,7 +125,7 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 60000)]
-    public void MotorXL_Overview_ShouldRender()
+    public async Task MotorXL_Overview_ShouldRender()
     {
         var client = GetClient(c => c.AddData(data => data));
         var address = new Address(MotorXLPath);
@@ -138,7 +138,7 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
 
         Output.WriteLine("Waiting for Overview area...");
-        var rawValue = stream.Should().Within(50.Seconds()).Emit();
+        var rawValue = await stream.Should().Within(50.Seconds()).Emit();
         Output.WriteLine($"Received raw value: {rawValue.Value.ValueKind}");
 
         rawValue.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,
@@ -156,13 +156,13 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
     ///      Task — callers don't see a generic timeout.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void NonExistentPath_Failure()
+    public async Task NonExistentPath_Failure()
     {
         const string missingPath = "Doc/Architecture/BusinessRules/Cession/Nonexistent";
 
         // 1+2: path resolution does NOT find a complete prefix match —
         //      either resolution is null or has a non-empty Remainder.
-        var resolution = PathResolver.ResolvePath(missingPath).Should().Within(20.Seconds()).Emit();
+        var resolution = await PathResolver.ResolvePath(missingPath).Should().Within(20.Seconds()).Emit();
         if (resolution is not null)
             resolution.Remainder.Should().NotBeNullOrEmpty(
                 $"Path '{missingPath}' should not resolve completely; closest ancestor + remainder is expected");
@@ -172,7 +172,7 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
         //      observable's OnError carries the failure as an exception.
         var address = new Address(missingPath);
         var client = GetClient();
-        var notification = client.Observe(new PingRequest(), o => o.WithTarget(address))
+        var notification = await client.Observe(new PingRequest(), o => o.WithTarget(address))
             .Materialize()
             .Should().Within(20.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
         var ex = notification.Exception!;
@@ -184,11 +184,11 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 60000)]
-    public void BusinessRulesDoc_RelativeReference_ResolvesToMotorXL()
+    public async Task BusinessRulesDoc_RelativeReference_ResolvesToMotorXL()
     {
         // The BusinessRules.md contains @@Cession/MotorXL which should resolve
         // relative to its own path Doc/Architecture/BusinessRules
-        var docNode = ReadNode(BusinessRulesDocPath).Should().Match(n => n is not null);
+        var docNode = await ReadNode(BusinessRulesDocPath).Should().Match(n => n is not null);
 
         docNode.Should().NotBeNull("BusinessRules doc node should exist");
 
@@ -201,7 +201,7 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
         resolvedPath.Should().Be(MotorXLPath);
 
         // And the resolved path actually finds a node
-        var resolution = PathResolver.ResolvePath(resolvedPath).Should().Emit();
+        var resolution = await PathResolver.ResolvePath(resolvedPath).Should().Emit();
         resolution.Should().NotBeNull($"Resolved path '{resolvedPath}' should find the MotorXL node");
     }
 }

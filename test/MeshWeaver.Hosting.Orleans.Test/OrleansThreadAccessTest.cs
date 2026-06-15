@@ -37,28 +37,23 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// 3. Submit a message and verify cells are pushed
 /// 4. Verify streaming response arrives
 ///
-/// 🚨 Tests are <c>void</c> + reactive assertions (no <c>async</c>/<c>await</c>):
-/// blocking inside an async test deadlocks the in-process hub scheduler — the
-/// agent's streaming execution shares the process and its continuations are
-/// starved by the captured async SynchronizationContext. See
-/// ReactiveTestAssertions.md §2 + ObservableAssertions remarks.
+/// 🚨 Tests <c>await</c> the reactive assertions: each terminal
+/// <c>ObservableAssertions</c> method bridges the stream to a Task at the test
+/// edge (the sanctioned <c>.FirstAsync()/.ToTask()</c> bridge) — no blocking
+/// wait inside the test body. See ObservableAssertions remarks.
 /// </summary>
 public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
-    // Synchronous client acquisition — await-free test bodies resolve the client
-    // hub once up front on the plain xUnit thread (no async SynchronizationContext
-    // to starve the in-process hub scheduler). All hub-reachable waits live inside
-    // .Should() blocking assertions afterward.
     private IMessageHub GetClient([CallerMemberName] string? name = null)
         => base.GetClient($"threadaccess-{name}-{Guid.NewGuid():N}", "TestUser");
 
     /// <summary>
     /// Creates a node via CreateNodeRequest, returns the created path.
     /// </summary>
-    private string CreateNode(IMessageHub client, MeshNode node, string targetAddress)
+    private async Task<string> CreateNode(IMessageHub client, MeshNode node, string targetAddress)
     {
         Output.WriteLine($"CreateNodeRequest: id={node.Id}, path={node.Path}, target={targetAddress}");
-        var response = client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(targetAddress)))
+        var response = await client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(targetAddress)))
             .Should().Within(30.Seconds()).Emit();
         Output.WriteLine($"CreateNodeResponse: success={response.Message.Success}, error={response.Message.Error ?? "(none)"}, path={response.Message.Node?.Path ?? "(null)"}");
         response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
@@ -102,7 +97,7 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
     /// 4. Verify the thread was created successfully
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void CreateThread_UnderMarkdownNode_Succeeds()
+    public async Task CreateThread_UnderMarkdownNode_Succeeds()
     {
         var client = GetClient();
         var suffix = Guid.NewGuid().ToString("N")[..4];
@@ -110,13 +105,13 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
         // (via the seeded Public_Access AccessAssignment with MainNode = "User"). A
         // root-level path like "TestOrg{suffix}" would fail the RLS Create check
         // because Public_Access is scoped to "User/*" only.
-        var orgPath = CreateNode(client,
+        var orgPath = await CreateNode(client,
             new MeshNode($"TestOrg{suffix}", "TestUser") { Name = "Test Organization", NodeType = "Markdown" },
             "TestUser");
         Output.WriteLine($"Organization created: {orgPath}");
 
         // 2. Create Markdown node under org
-        var docPath = CreateNode(client,
+        var docPath = await CreateNode(client,
             new MeshNode($"TestDoc{suffix}", orgPath) { Name = "Test Document", NodeType = "Markdown" },
             "TestUser");
         Output.WriteLine($"Document created: {docPath}");
@@ -126,13 +121,13 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
         Output.WriteLine($"BuildThreadNode: id={threadNode.Id}, ns={threadNode.Namespace}, path={threadNode.Path}");
 
         // Target the document address — same as the side panel does
-        var threadPath = CreateNode(client, threadNode, docPath);
+        var threadPath = await CreateNode(client, threadNode, docPath);
         Output.WriteLine($"Thread created: {threadPath}");
 
         threadPath.Should().Contain("_Thread/", "thread should be in _Thread satellite partition");
 
         // 4. Verify Thread content
-        var threadContent = GetHubContent<MeshThread>(client, threadPath)
+        var threadContent = await GetHubContent<MeshThread>(client, threadPath)
             .Should().Within(30.Seconds()).Match(c => c is not null);
         Output.WriteLine($"Thread verified: Messages={threadContent!.Messages.Count}");
     }
@@ -142,17 +137,17 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
     /// This should always work since the user has Admin on their own partition.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void CreateThread_UnderUserPartition_Succeeds()
+    public async Task CreateThread_UnderUserPartition_Succeeds()
     {
         var client = GetClient();
 
         var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "User thread test", "TestUser");
-        var threadPath = CreateNode(client, threadNode, "TestUser");
+        var threadPath = await CreateNode(client, threadNode, "TestUser");
 
         threadPath.Should().StartWith("TestUser/_Thread/");
         Output.WriteLine($"Thread under user partition: {threadPath}");
 
-        var content = GetHubContent<MeshThread>(client, threadPath)
+        var content = await GetHubContent<MeshThread>(client, threadPath)
             .Should().Within(30.Seconds()).Match(c => c is not null);
         content!.CreatedBy.Should().Be("TestUser");
     }
@@ -162,13 +157,13 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
     /// Mimics what the side panel does when a user types and submits.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void SubmitChat_FromSidePanel_CellsAppearAndStream()
+    public async Task SubmitChat_FromSidePanel_CellsAppearAndStream()
     {
         var client = GetClient();
 
         // 1. Create thread under user (side panel default when no context)
         var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Chat flow test", "TestUser");
-        var threadPath = CreateNode(client, threadNode, "TestUser");
+        var threadPath = await CreateNode(client, threadNode, "TestUser");
         Output.WriteLine($"Thread: {threadPath}");
 
         // 2. Submit message via workspace extension (like side panel SendMessageAsync)
@@ -180,12 +175,12 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
         Output.WriteLine("SubmitMessage succeeded");
 
         // 3. Wait for both cells to appear in stream (like ThreadChatView does)
-        var msgIds = ObserveThreadMessages(client, threadPath)
+        var msgIds = await ObserveThreadMessages(client, threadPath)
             .Should().Within(45.Seconds()).Match(ids => ids.Count >= 2);
         Output.WriteLine($"Message IDs: [{string.Join(", ", msgIds)}]");
 
         // 4. Verify user message cell content
-        var userMsg = GetHubContent<ThreadMessage>(client, $"{threadPath}/{msgIds[0]}")
+        var userMsg = await GetHubContent<ThreadMessage>(client, $"{threadPath}/{msgIds[0]}")
             .Should().Within(30.Seconds()).Match(c => c is not null);
         userMsg!.Role.Should().Be("user");
         userMsg.Text.Should().Be("Hello from side panel test");
@@ -193,7 +188,7 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
         Output.WriteLine($"User cell: '{userMsg.Text}'");
 
         // 5. Verify response cell streams and completes (non-empty text).
-        var responseMsg = GetHubContent<ThreadMessage>(client, $"{threadPath}/{msgIds[1]}")
+        var responseMsg = await GetHubContent<ThreadMessage>(client, $"{threadPath}/{msgIds[1]}")
             .Should().Within(45.Seconds()).Match(m => !string.IsNullOrEmpty(m?.Text));
         responseMsg!.Role.Should().Be("assistant");
         responseMsg.Type.Should().Be(ThreadMessageType.AgentResponse);
@@ -201,7 +196,7 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
         Output.WriteLine($"Response cell: '{responseMsg.Text}' ({responseMsg.Text!.Length} chars)");
 
         // 6. Verify Thread.Messages list is updated
-        var threadContent = GetHubContent<MeshThread>(client, threadPath)
+        var threadContent = await GetHubContent<MeshThread>(client, threadPath)
             .Should().Within(30.Seconds()).Match(c => c is { Messages.Count: >= 2 });
         threadContent!.Messages.Should().HaveCount(2);
         threadContent.Messages[0].Should().Be(msgIds[0]);
@@ -217,7 +212,7 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
     ///   PostPipeline -> OrleansRoutingService -> MessageHubGrain -> AccessControlPipeline
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void SubmitChat_WithCircuitContext_IdentityPropagates()
+    public async Task SubmitChat_WithCircuitContext_IdentityPropagates()
     {
         // 1. Create client hub simulating a portal circuit
         var client = GetClient();
@@ -235,7 +230,7 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
 
         // 3. Create thread under user partition (like the GUI does)
         var threadNode = ThreadNodeType.BuildThreadNode("TestUser", $"Identity chain test {Guid.NewGuid():N}", "TestUser");
-        var threadPath = CreateNode(client, threadNode, "TestUser");
+        var threadPath = await CreateNode(client, threadNode, "TestUser");
         Output.WriteLine($"Thread created: {threadPath}");
 
         // 4. Submit message - critical access-control path.
@@ -250,19 +245,19 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
             contextPath: "TestUser");
 
         // 5. Wait for both cells to appear in stream
-        var msgIds = ObserveThreadMessages(client, threadPath)
+        var msgIds = await ObserveThreadMessages(client, threadPath)
             .Should().Within(45.Seconds()).Match(ids => ids.Count >= 2);
         Output.WriteLine($"Message IDs: [{string.Join(", ", msgIds)}]");
 
         // 6. Verify user message cell content
-        var userMsg = GetHubContent<ThreadMessage>(client, $"{threadPath}/{msgIds[0]}")
+        var userMsg = await GetHubContent<ThreadMessage>(client, $"{threadPath}/{msgIds[0]}")
             .Should().Within(30.Seconds()).Match(c => c is not null);
         userMsg!.Role.Should().Be("user");
         userMsg.Text.Should().Be("Hello with identity");
         Output.WriteLine($"User cell verified: '{userMsg.Text}'");
 
         // 7. Wait for response to stream and complete
-        var responseMsg = GetHubContent<ThreadMessage>(client, $"{threadPath}/{msgIds[1]}")
+        var responseMsg = await GetHubContent<ThreadMessage>(client, $"{threadPath}/{msgIds[1]}")
             .Should().Within(45.Seconds()).Match(m => !string.IsNullOrEmpty(m?.Text));
         responseMsg!.Role.Should().Be("assistant");
         responseMsg.Text.Should().NotBeNullOrEmpty("streaming should produce a response");
@@ -286,7 +281,7 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
     /// </para>
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void SubmitChat_WithoutThreadPermission_ReturnsError()
+    public async Task SubmitChat_WithoutThreadPermission_ReturnsError()
     {
         var client = GetClient();
         var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
@@ -299,7 +294,7 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
         });
         var threadNode = ThreadNodeType.BuildThreadNode("TestUser",
             $"Error test {Guid.NewGuid():N}", "TestUser");
-        var threadPath = CreateNode(client, threadNode, "TestUser");
+        var threadPath = await CreateNode(client, threadNode, "TestUser");
         Output.WriteLine($"Thread created: {threadPath}");
 
         // Switch to unprivileged user (no Thread permission — no access assignment).
@@ -324,7 +319,7 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
         // assert no cell appears in a generous window. If the permission check were
         // bypassed (identity lost / pipeline misrouted), a cell WOULD appear here
         // and this assertion would fail — exactly the regression we guard against.
-        ObserveThreadMessages(client, threadPath)
+        await ObserveThreadMessages(client, threadPath)
             .Where(ids => ids.Count >= 1)
             .Should().NotEmit(within: 8.Seconds(),
                 because: "a user lacking Thread permission must NOT get the message ingested — " +
@@ -338,26 +333,26 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
     /// In PostgreSQL, these go to the satellite "threads" table.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void ThreadMessageNodes_AreChildrenOfThread()
+    public async Task ThreadMessageNodes_AreChildrenOfThread()
     {
         var client = GetClient();
 
         var threadNode = ThreadNodeType.BuildThreadNode("TestUser", $"Child node test {Guid.NewGuid():N}", "TestUser");
-        var threadPath = CreateNode(client, threadNode, "TestUser");
+        var threadPath = await CreateNode(client, threadNode, "TestUser");
 
         client.SubmitMessage(
             threadPath,
             "Test child nodes",
             contextPath: "TestUser");
 
-        var msgIds = ObserveThreadMessages(client, threadPath)
+        var msgIds = await ObserveThreadMessages(client, threadPath)
             .Should().Within(45.Seconds()).Match(ids => ids.Count >= 2);
 
         // Verify each message is at {threadPath}/{msgId}
         foreach (var msgId in msgIds)
         {
             var fullPath = $"{threadPath}/{msgId}";
-            var msg = GetHubContent<ThreadMessage>(client, fullPath)
+            var msg = await GetHubContent<ThreadMessage>(client, fullPath)
                 .Should().Within(30.Seconds()).Match(c => c is not null);
             Output.WriteLine($"Child node verified: {fullPath} => role={msg!.Role}, type={msg.Type}");
         }

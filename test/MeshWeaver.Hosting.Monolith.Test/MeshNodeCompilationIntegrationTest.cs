@@ -75,9 +75,9 @@ public class MeshNodeCompilationIntegrationTest(ITestOutputHelper output) : Mono
     }
 
     [Fact]
-    public void CompilesSimpleNodeTypeWithDefaultSources()
+    public async Task CompilesSimpleNodeTypeWithDefaultSources()
     {
-        var response = CreateAndCompile("Story",
+        var response = await CreateAndCompile("Story",
             new NodeTypeDefinition { Configuration = "config => config.WithContentType<Story>()" },
             ("code", @"
 public record Story
@@ -91,9 +91,9 @@ public record Story
     }
 
     [Fact]
-    public void CompileFailsWhenSourceCodeIsInvalid()
+    public async Task CompileFailsWhenSourceCodeIsInvalid()
     {
-        var response = CreateAndCompile("Broken",
+        var response = await CreateAndCompile("Broken",
             new NodeTypeDefinition { Configuration = "config => config.WithContentType<Broken>()" },
             ("code", "public record Broken { this is not valid C# }")).Should().Within(60.Seconds()).Emit();
 
@@ -102,10 +102,10 @@ public record Story
     }
 
     [Fact]
-    public void CompileWithMultipleSourceLocationsPullsInExternalCode()
+    public async Task CompileWithMultipleSourceLocationsPullsInExternalCode()
     {
         // Post NodeType has Platform record under its Source.
-        var postResponse = CreateAndCompile("Post",
+        var postResponse = await CreateAndCompile("Post",
             new NodeTypeDefinition { Configuration = "config => config.WithContentType<Post>()" },
             ("code", @"
 public record Platform
@@ -123,11 +123,11 @@ public record Post
         // Query is a live change feed (fan-out baked in) — it emits the
         // Added change when the just-created Code node surfaces, so we just match
         // the first snapshot that contains it. No Interval poll.
-        MeshService.Query<MeshNode>("namespace:type/Post/Source scope:subtree nodeType:Code")
+        await MeshService.Query<MeshNode>("namespace:type/Post/Source scope:subtree nodeType:Code")
             .Should().Within(15.Seconds()).Match(c => c.Items.Any(n => n.Path == "type/Post/Source/code"));
 
         // Profile NodeType references Platform via cross-NodeType Sources.
-        var response = CreateAndCompile("Profile",
+        var response = await CreateAndCompile("Profile",
             new NodeTypeDefinition
             {
                 Configuration = "config => config.WithContentType<Profile>()",

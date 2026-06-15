@@ -66,13 +66,13 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 20000)]
-    public void AuthenticatedUser_CanRead_UserNode_ByPath()
+    public async Task AuthenticatedUser_CanRead_UserNode_ByPath()
     {
         LoginAsUnprivilegedUser();
 
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
             "path:User/Roland"))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         Output.WriteLine($"Found {results.Count} results");
         foreach (var r in results)
@@ -84,13 +84,13 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 20000)]
-    public void AuthenticatedUser_CanRead_OrganizationNode_ByPath()
+    public async Task AuthenticatedUser_CanRead_OrganizationNode_ByPath()
     {
         LoginAsUnprivilegedUser();
 
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
             "path:Acme"))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         Output.WriteLine($"Found {results.Count} results");
         foreach (var r in results)
@@ -102,13 +102,13 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 20000)]
-    public void AuthenticatedUser_CanQuery_UserNodes_ByNodeType()
+    public async Task AuthenticatedUser_CanQuery_UserNodes_ByNodeType()
     {
         LoginAsUnprivilegedUser();
 
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
             "nodeType:User"))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Count >= 2).Items;
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Count >= 2)).Items;
 
         Output.WriteLine($"Found {results.Count} User nodes");
         foreach (var r in results)
@@ -120,13 +120,13 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 20000)]
-    public void AuthenticatedUser_CanQuery_SpaceNodes_ByNodeType()
+    public async Task AuthenticatedUser_CanQuery_SpaceNodes_ByNodeType()
     {
         LoginAsUnprivilegedUser();
 
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
             "nodeType:Space"))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Count >= 1).Items;
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Count >= 1)).Items;
 
         Output.WriteLine($"Found {results.Count} Space nodes");
         foreach (var r in results)
@@ -137,7 +137,7 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public void DynamicallyCreated_SpaceNode_RequiresPartitionAccess()
+    public async Task DynamicallyCreated_SpaceNode_RequiresPartitionAccess()
     {
         // "Creator" Admin at root is pre-seeded via ConfigureMesh's static AccessAssignment.
         var orgNode = new MeshNode("Globex")
@@ -146,16 +146,16 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
             NodeType = "Space",
             Content = new Space { Name = "Globex Corp" }
         };
-        var created = NodeFactory.CreateNode(orgNode).Should().Emit();
+        var created = await NodeFactory.CreateNode(orgNode).Should().Emit();
         created.Should().NotBeNull();
         Output.WriteLine($"Created: {created.Path}");
 
         // Unprivileged user cannot see the org (partition access controls visibility)
         LoginAsUnprivilegedUser();
 
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
             "path:Globex"))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         results.Should().BeEmpty("Organization instances require partition-level access, not public read");
 
@@ -167,7 +167,7 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
         // restore Alice for the post-grant query.
         TestUsers.DevLogin(Mesh);
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        meshService.CreateNode(AssignmentNodeFactory.UserRole("Alice", "Viewer", "Globex"))
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole("Alice", "Viewer", "Globex"))
             .Should().Emit();
         LoginAsUnprivilegedUser();
 
@@ -175,14 +175,14 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
         // synced query (the QueryAsync path checks live permissions). Without
         // this gate, the immediate query reads the cached snapshot from before
         // the grant landed → empty result.
-        Mesh.GetEffectivePermissions("Globex", "Alice")
+        await Mesh.GetEffectivePermissions("Globex", "Alice")
             .Should().Match(p => p.HasFlag(Permission.Read));
 
         // The grant has landed; accumulate the live query deltas until the
         // Globex node surfaces (Initial may still race the synced-query update).
-        var resultsAfterGrant = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
+        var resultsAfterGrant = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
             "path:Globex"))
-            .Should().Match(c => c.Items.Count == 1).Items;
+            .Should().Match(c => c.Items.Count == 1)).Items;
 
         resultsAfterGrant.Should().HaveCount(1, "Organization should be readable after granting Viewer role");
         resultsAfterGrant[0].Name.Should().Be("Globex Corp");

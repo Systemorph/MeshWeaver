@@ -46,33 +46,33 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
 
     // â”€â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-    private void SeedTree()
+    private async Task SeedTree()
     {
-        NodeFactory.CreateNode(new MeshNode("delparent", TestPartition)
+        await NodeFactory.CreateNode(new MeshNode("delparent", TestPartition)
         { Name = "Parent", NodeType = "Group" }).Should().Within(30.Seconds()).Emit();
-        NodeFactory.CreateNode(new MeshNode("c1", Root)
+        await NodeFactory.CreateNode(new MeshNode("c1", Root)
         { Name = "C1", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
-        NodeFactory.CreateNode(new MeshNode("c2", Root)
+        await NodeFactory.CreateNode(new MeshNode("c2", Root)
         { Name = "C2", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
-        NodeFactory.CreateNode(new MeshNode("gc", $"{Root}/c1")
+        await NodeFactory.CreateNode(new MeshNode("gc", $"{Root}/c1")
         { Name = "GC", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
     }
 
-    private DeleteNodeResponse Delete(DeleteNodeRequest req)
+    private async Task<DeleteNodeResponse> Delete(DeleteNodeRequest req)
     {
         // The DeleteNodeRequest handler is registered on the mesh hub (see
         // MeshExtensions.AddDefaultMeshHandlers → WithHandler<DeleteNodeRequest>).
         // Post to Mesh.Address so the handler runs and we get a structured
         // DeleteNodeResponse — no per-node-path routing, no NotFound at the
         // routing layer for missing-node deletes.
-        return Client.Observe(req, o => o.WithTarget(Mesh.Address))
-            .Should().Within(60.Seconds()).Emit().Message;
+        return (await Client.Observe(req, o => o.WithTarget(Mesh.Address))
+            .Should().Within(60.Seconds()).Emit()).Message;
     }
 
-    private bool NodeExists(string path)
+    private async Task<bool> NodeExists(string path)
     {
         // Authoritative owner-hub read; emits the node, or null on NotFound/timeout.
-        var node = ReadNode(path).Should().Within(ReadNodeTimeout).Emit();
+        var node = await ReadNode(path).Should().Within(ReadNodeTimeout).Emit();
         return node != null;
     }
 
@@ -81,7 +81,7 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
     /// routing fallback in <see cref="MonolithMeshTestBase.ReadNode"/>. Subscribes to a
     /// subtree query and waits until <paramref name="path"/> drops out.
     /// </summary>
-    private void WaitForNodeAbsence(string path)
+    private Task<IReadOnlySet<string>> WaitForNodeAbsence(string path)
         => WaitForQueryPathSet(
             $"path:{TestPartition} scope:subtree",
             set => !set.Contains(path));
@@ -91,11 +91,11 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
     /// Updated / Removed) into a running path set and blocks until
     /// <paramref name="predicate"/> first holds. Returns the satisfying set.
     /// </summary>
-    private IReadOnlySet<string> WaitForQueryPathSet(
+    private async Task<IReadOnlySet<string>> WaitForQueryPathSet(
         string query, Func<IReadOnlySet<string>, bool> predicate)
     {
         var paths = new HashSet<string>(StringComparer.Ordinal);
-        return MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
+        return await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Scan((IReadOnlySet<string>)paths, (acc, change) =>
             {
                 var set = (HashSet<string>)acc;
@@ -123,13 +123,13 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
     // â”€â”€â”€ Phase 1: collection + basic reasons â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 20_000)]
-    public void Leaf_Delete_SucceedsAndRemovesNode()
+    public async Task Leaf_Delete_SucceedsAndRemovesNode()
     {
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode("leaf", TestPartition) { Name = "Leaf", NodeType = "Markdown" })
             .Should().Within(30.Seconds()).Emit();
 
-        var response = Delete(new DeleteNodeRequest($"{TestPartition}/leaf"));
+        var response = await Delete(new DeleteNodeRequest($"{TestPartition}/leaf"));
 
         response.Success.Should().BeTrue($"expected OK, got: {response.Error}");
         response.Log.Should().NotBeNull();
@@ -138,15 +138,15 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
 
         // Catalog-bound wait — ReadNode would falsely "find" the leaf via
         // the TestPartition ancestor's MeshNodeReference reducer.
-        WaitForNodeAbsence($"{TestPartition}/leaf");
+        await WaitForNodeAbsence($"{TestPartition}/leaf");
     }
 
     [Fact(Timeout = 20_000)]
-    public void Recursive_Delete_RemovesEntireSubtree()
+    public async Task Recursive_Delete_RemovesEntireSubtree()
     {
-        SeedTree();
+        await SeedTree();
 
-        var response = Delete(new DeleteNodeRequest(Root) { Recursive = true });
+        var response = await Delete(new DeleteNodeRequest(Root) { Recursive = true });
 
         response.Success.Should().BeTrue($"expected OK, got: {response.Error}");
         response.Log!.AffectedPaths.Should().BeEquivalentTo(new[]
@@ -158,7 +158,7 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
         }, System.Text.Json.JsonSerializerOptions.Default);
 
         // Wait once for the catalog to drop ALL four — single subscription, not four.
-        var paths = WaitForQueryPathSet(
+        var paths = await WaitForQueryPathSet(
             $"path:{TestPartition} scope:subtree",
             set => !set.Contains(Root)
                 && !set.Contains($"{Root}/c1")
@@ -171,25 +171,25 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
     }
 
     [Fact(Timeout = 20_000)]
-    public void NonRecursive_WithChildren_Fails_HasChildren_NothingDeleted()
+    public async Task NonRecursive_WithChildren_Fails_HasChildren_NothingDeleted()
     {
-        SeedTree();
+        await SeedTree();
 
-        var response = Delete(new DeleteNodeRequest(Root));
+        var response = await Delete(new DeleteNodeRequest(Root));
 
         response.Success.Should().BeFalse();
         response.RejectionReason.Should().Be(NodeDeletionRejectionReason.HasChildren);
         response.Log!.Status.Should().Be(ActivityStatus.Failed);
 
         // Nothing should have been deleted.
-        NodeExists(Root).Should().BeTrue("parent must still exist after rejected delete");
-        NodeExists($"{Root}/c1").Should().BeTrue("children must still exist");
+        (await NodeExists(Root)).Should().BeTrue("parent must still exist after rejected delete");
+        (await NodeExists($"{Root}/c1")).Should().BeTrue("children must still exist");
     }
 
     [Fact(Timeout = 20_000)]
-    public void Missing_Node_Fails_NotFound()
+    public async Task Missing_Node_Fails_NotFound()
     {
-        var response = Delete(new DeleteNodeRequest($"{TestPartition}/does-not-exist"));
+        var response = await Delete(new DeleteNodeRequest($"{TestPartition}/does-not-exist"));
 
         response.Success.Should().BeFalse();
         response.RejectionReason.Should().Be(NodeDeletionRejectionReason.NodeNotFound);
@@ -200,9 +200,9 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
     // â”€â”€â”€ Phase 2: permission checks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 20_000)]
-    public void NoDeletePermission_OnRoot_Fails_Unauthorized_AndLogsPath()
+    public async Task NoDeletePermission_OnRoot_Fails_Unauthorized_AndLogsPath()
     {
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode("locked", TestPartition) { Name = "Locked", NodeType = "Markdown" })
             .Should().Within(30.Seconds()).Emit();
 
@@ -226,7 +226,7 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
         // get a DeleteNodeResponse.Fail â€” the invariant that matters for this test is: no
         // matter which gate trips, the node is NOT deleted. Materialize folds either outcome
         // (OnNext failed-response OR OnError) into a value we can assert reactively.
-        var notification = restrictedClient
+        var notification = await restrictedClient
             .Observe(new DeleteNodeRequest(path), o => o.WithTarget(new Address(path)))
             .Materialize()
             .Should().Within(20.Seconds())
@@ -251,23 +251,23 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
         // MeshQuery applies RLS.
         clientAccess.SetCircuitContext(TestUsers.Admin);
 
-        NodeExists(path).Should().BeTrue(
+        (await NodeExists(path)).Should().BeTrue(
             "node must not be deleted when caller lacks Delete permission");
     }
 
     // â”€â”€â”€ Phase 3: validator-based rejection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 20_000)]
-    public void Validator_RejectsRoot_Fails_ValidationFailed_LogsNodePath()
+    public async Task Validator_RejectsRoot_Fails_ValidationFailed_LogsNodePath()
     {
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode("blocked", TestPartition)
             {
                 Name = BlockingValidator.BlockedMarker,
                 NodeType = "Markdown"
             }).Should().Within(30.Seconds()).Emit();
 
-        var response = Delete(new DeleteNodeRequest($"{TestPartition}/blocked"));
+        var response = await Delete(new DeleteNodeRequest($"{TestPartition}/blocked"));
 
         response.Success.Should().BeFalse();
         response.RejectionReason.Should().Be(NodeDeletionRejectionReason.ValidationFailed);
@@ -275,35 +275,35 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
         LogMentions(response, $"{TestPartition}/blocked")
             .Should().BeTrue($"log should mention blocked path; got: {string.Join(" | ", response.Log.Messages.Select(m => m.Message))}");
 
-        NodeExists($"{TestPartition}/blocked").Should().BeTrue(
+        (await NodeExists($"{TestPartition}/blocked")).Should().BeTrue(
             "rejected delete must leave the node in place");
     }
 
     [Fact(Timeout = 20_000)]
-    public void Validator_RejectsDescendant_BlocksWholeSubtree_AllPathsListed()
+    public async Task Validator_RejectsDescendant_BlocksWholeSubtree_AllPathsListed()
     {
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode("mixed", TestPartition) { Name = "Mixed", NodeType = "Group" })
             .Should().Within(30.Seconds()).Emit();
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode("ok", $"{TestPartition}/mixed") { Name = "OK", NodeType = "Markdown" })
             .Should().Within(30.Seconds()).Emit();
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode("bad", $"{TestPartition}/mixed")
             {
                 Name = BlockingValidator.BlockedMarker,
                 NodeType = "Markdown"
             }).Should().Within(30.Seconds()).Emit();
 
-        var response = Delete(new DeleteNodeRequest($"{TestPartition}/mixed") { Recursive = true });
+        var response = await Delete(new DeleteNodeRequest($"{TestPartition}/mixed") { Recursive = true });
 
         response.Success.Should().BeFalse();
         response.RejectionReason.Should().Be(NodeDeletionRejectionReason.ValidationFailed);
 
         // Bulk atomicity: nothing in the subtree should be deleted.
-        NodeExists($"{TestPartition}/mixed").Should().BeTrue();
-        NodeExists($"{TestPartition}/mixed/ok").Should().BeTrue();
-        NodeExists($"{TestPartition}/mixed/bad").Should().BeTrue();
+        (await NodeExists($"{TestPartition}/mixed")).Should().BeTrue();
+        (await NodeExists($"{TestPartition}/mixed/ok")).Should().BeTrue();
+        (await NodeExists($"{TestPartition}/mixed/bad")).Should().BeTrue();
 
         // The ActivityLog should mention the offending descendant so the UI can show
         // the user exactly which node blocked the delete.
@@ -322,16 +322,16 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
     // â”€â”€â”€ Phase 3: warnings + ConfirmWarnings round-trip â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 20_000)]
-    public void Warnings_WithoutConfirm_Block_AndLogWarning()
+    public async Task Warnings_WithoutConfirm_Block_AndLogWarning()
     {
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode("warny", TestPartition)
             {
                 Name = WarningValidator.WarnMarker,
                 NodeType = "Markdown"
             }).Should().Within(30.Seconds()).Emit();
 
-        var response = Delete(new DeleteNodeRequest($"{TestPartition}/warny"));
+        var response = await Delete(new DeleteNodeRequest($"{TestPartition}/warny"));
 
         response.Success.Should().BeFalse();
         response.RejectionReason.Should().Be(NodeDeletionRejectionReason.WarningsRequireConfirmation);
@@ -339,21 +339,21 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
             m.LogLevel == Microsoft.Extensions.Logging.LogLevel.Warning
             && m.Message.Contains(WarningValidator.WarnText));
 
-        NodeExists($"{TestPartition}/warny").Should().BeTrue(
+        (await NodeExists($"{TestPartition}/warny")).Should().BeTrue(
             "warnings must block without ConfirmWarnings");
     }
 
     [Fact(Timeout = 20_000)]
-    public void Warnings_WithConfirm_Proceed_AndLogWarning()
+    public async Task Warnings_WithConfirm_Proceed_AndLogWarning()
     {
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode("warny2", TestPartition)
             {
                 Name = WarningValidator.WarnMarker,
                 NodeType = "Markdown"
             }).Should().Within(30.Seconds()).Emit();
 
-        var response = Delete(new DeleteNodeRequest($"{TestPartition}/warny2") { ConfirmWarnings = true });
+        var response = await Delete(new DeleteNodeRequest($"{TestPartition}/warny2") { ConfirmWarnings = true });
 
         response.Success.Should().BeTrue($"expected OK, got: {response.Error}");
         response.Log!.Status.Should().Be(ActivityStatus.Warning,
@@ -362,17 +362,17 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
             m.LogLevel == Microsoft.Extensions.Logging.LogLevel.Warning
             && m.Message.Contains(WarningValidator.WarnText));
 
-        WaitForNodeAbsence($"{TestPartition}/warny2");
+        await WaitForNodeAbsence($"{TestPartition}/warny2");
     }
 
     // â”€â”€â”€ Phase 4: bulk atomicity + ActivityLog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 20_000)]
-    public void Recursive_Delete_Log_ListsAllAffectedPathsAndSucceeded()
+    public async Task Recursive_Delete_Log_ListsAllAffectedPathsAndSucceeded()
     {
-        SeedTree();
+        await SeedTree();
 
-        var response = Delete(new DeleteNodeRequest(Root) { Recursive = true });
+        var response = await Delete(new DeleteNodeRequest(Root) { Recursive = true });
 
         response.Success.Should().BeTrue();
         response.Log!.Status.Should().Be(ActivityStatus.Succeeded);
@@ -427,11 +427,10 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
                 return services;
             });
 
-    protected override Task SetupAccessRightsAsync()
+    protected override async Task SetupAccessRightsAsync()
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        meshService.CreateNode(AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Admin", null))
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Admin", null))
             .Should().Within(30.Seconds()).Emit();
-        return Task.CompletedTask;
     }
 }

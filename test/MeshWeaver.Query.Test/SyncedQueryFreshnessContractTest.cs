@@ -50,21 +50,21 @@ public class SyncedQueryFreshnessContractTest(ITestOutputHelper output)
     /// LastModified half is the <c>IsDirty</c> contract — see the class summary.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void Edit_LiveQuery_ReEmitsWithFreshContentAndLastModified()
+    public async Task Edit_LiveQuery_ReEmitsWithFreshContentAndLastModified()
     {
         var q = Query("$fresh-contract").Replay(1).RefCount();
         using var keepAlive = q.Subscribe();
 
         var node = Subject("doc", "V1");
-        NodeFactory.CreateNode(node).Should().Emit();
-        var v1 = q.Where(a => a.Any(n => n.Path == node.Path && n.Name == "V1"))
-            .Should().Within(15.Seconds()).Emit()
+        await NodeFactory.CreateNode(node).Should().Emit();
+        var v1 = (await q.Where(a => a.Any(n => n.Path == node.Path && n.Name == "V1"))
+            .Should().Within(15.Seconds()).Emit())
             .Single(n => n.Path == node.Path);
 
-        NodeFactory.UpdateNode(v1 with { Name = "V2" }).Should().Emit();
+        await NodeFactory.UpdateNode(v1 with { Name = "V2" }).Should().Emit();
 
-        var v2 = q.Where(a => a.Any(n => n.Path == node.Path && n.Name == "V2"))
-            .Should().Within(15.Seconds()).Emit()
+        var v2 = (await q.Where(a => a.Any(n => n.Path == node.Path && n.Name == "V2"))
+            .Should().Within(15.Seconds()).Emit())
             .Single(n => n.Path == node.Path);
 
         v2.Name.Should().Be("V2",
@@ -83,7 +83,7 @@ public class SyncedQueryFreshnessContractTest(ITestOutputHelper output)
     /// itself (not an async-collected list) so it's deterministic.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void LiveSubscription_ObservesEdit_WithoutReQuery()
+    public async Task LiveSubscription_ObservesEdit_WithoutReQuery()
     {
         var node = Subject("watched", "V1");
 
@@ -94,18 +94,18 @@ public class SyncedQueryFreshnessContractTest(ITestOutputHelper output)
             .Replay(1).RefCount();
         using var keepAlive = live.Subscribe();
 
-        NodeFactory.CreateNode(node).Should().Emit();
-        live.Where(name => name == "V1").Should().Within(15.Seconds()).Emit();
+        await NodeFactory.CreateNode(node).Should().Emit();
+        await live.Where(name => name == "V1").Should().Within(15.Seconds()).Emit();
 
         // Read the live node to carry the current version, then edit it.
-        var v1 = Query("$fresh-watch-read")
+        var v1 = (await Query("$fresh-watch-read")
             .Where(a => a.Any(n => n.Path == node.Path && n.Name == "V1"))
-            .Should().Within(15.Seconds()).Emit()
+            .Should().Within(15.Seconds()).Emit())
             .Single(n => n.Path == node.Path);
-        NodeFactory.UpdateNode(v1 with { Name = "V2" }).Should().Emit();
+        await NodeFactory.UpdateNode(v1 with { Name = "V2" }).Should().Emit();
 
         // The SAME live subscription must surface V2 — no fresh query needed.
-        live.Where(name => name == "V2").Should().Within(15.Seconds()).Emit(
+        await live.Where(name => name == "V2").Should().Within(15.Seconds()).Emit(
             "a single live synced-query subscription must observe the edit on its own — "
             + "the watcher gets dirty by observing, not by re-querying");
     }

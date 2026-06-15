@@ -80,7 +80,7 @@ public class AutocompleteDelegationDeadlockTest : MonolithMeshTestBase
     /// on the ToTask continuation — classic ActionBlock deadlock.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void DelegatedAutocomplete_ConcurrentRequests_DoNotDeadlock()
+    public async Task DelegatedAutocomplete_ConcurrentRequests_DoNotDeadlock()
     {
         var provider = GetUnifiedReferenceProvider();
 
@@ -96,7 +96,7 @@ public class AutocompleteDelegationDeadlockTest : MonolithMeshTestBase
         // A re-entrant delegation deadlock would stall a stream's first emission → caught by Within.
         // (Waiting on completion — .ToList() — is the anti-pattern: under load the per-source 2s
         // Timeout timer is starved, so completion lags past the test budget even with no deadlock.)
-        Observable
+        await Observable
             .CombineLatest(Enumerable.Range(0, 8)
                 .Select(_ => provider.GetItems(Query, null).Where(snap => snap.Count > 0).Take(1)))
             .Should().Within(15.Seconds())
@@ -109,7 +109,7 @@ public class AutocompleteDelegationDeadlockTest : MonolithMeshTestBase
     /// posts back to the same hub the caller's handler is running on.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void DelegatedAutocomplete_RelativeContextSelfDelegation_ResolvesQuickly()
+    public async Task DelegatedAutocomplete_RelativeContextSelfDelegation_ResolvesQuickly()
     {
         var provider = GetUnifiedReferenceProvider();
 
@@ -117,7 +117,7 @@ public class AutocompleteDelegationDeadlockTest : MonolithMeshTestBase
         // contextPath node for its own completions (areas, data, content).
         // Progressive: the stream must produce its first snapshot promptly — a self-delegation
         // deadlock would stall it. We observe the first emission, never completion.
-        provider.GetItems("@", "Systemorph/Marketing")
+        await provider.GetItems("@", "Systemorph/Marketing")
             .Take(1).Should().Within(10.Seconds()).Emit();
     }
 
@@ -129,7 +129,7 @@ public class AutocompleteDelegationDeadlockTest : MonolithMeshTestBase
     /// without blocking.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void DelegatedAutocomplete_NonexistentTarget_DoesNotHang()
+    public async Task DelegatedAutocomplete_NonexistentTarget_DoesNotHang()
     {
         var provider = GetUnifiedReferenceProvider();
 
@@ -139,7 +139,7 @@ public class AutocompleteDelegationDeadlockTest : MonolithMeshTestBase
         // A delegation to a non-existent node must not stall the stream: the first snapshot (local
         // keywords) streams immediately and the dead delegation degrades to empty without blocking.
         // We observe the first emission, never completion.
-        provider.GetItems(Query, null)
+        await provider.GetItems(Query, null)
             .Take(1).Should().Within(15.Seconds()).Emit();
     }
 
@@ -149,7 +149,7 @@ public class AutocompleteDelegationDeadlockTest : MonolithMeshTestBase
     /// reentrantly from the source hub's aggregator handler.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void DelegatedAutocomplete_FanOutAcrossPartitions_DoesNotDeadlock()
+    public async Task DelegatedAutocomplete_FanOutAcrossPartitions_DoesNotDeadlock()
     {
         var provider = GetUnifiedReferenceProvider();
         var queries = new[]
@@ -166,7 +166,7 @@ public class AutocompleteDelegationDeadlockTest : MonolithMeshTestBase
         // observed PROGRESSIVELY — we wait for every one to produce a non-empty snapshot, proving the
         // cross-partition fan-out streams results without deadlocking, and never block on the slowest
         // delegation to complete (a re-entrant deadlock would stall a first emission → caught here).
-        Observable
+        await Observable
             .CombineLatest(queries
                 .Select(q => provider.GetItems(q, null).Where(snap => snap.Count > 0).Take(1)))
             .Should().Within(20.Seconds())

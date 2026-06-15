@@ -83,10 +83,10 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// that can race eventual-consistency lag (the Initial set is short and items
     /// trickle in as <c>Added</c>).
     /// </summary>
-    private IReadOnlyList<MeshNode> QueryUntil(string query, Func<IReadOnlyList<MeshNode>, bool> until)
+    private async Task<IReadOnlyList<MeshNode>> QueryUntil(string query, Func<IReadOnlyList<MeshNode>, bool> until)
     {
         var byPath = new Dictionary<string, MeshNode>(StringComparer.Ordinal);
-        return MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
+        return await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Scan((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>(), (_, change) =>
             {
                 if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
@@ -112,15 +112,15 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Uses the same query pattern as ProjectViews: path:{project}/Todo scope:subtree
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void MeshQuery_ShouldFindTodosByNodeType()
+    public async Task MeshQuery_ShouldFindTodosByNodeType()
     {
         // Query for all Todo items under ACME/ProductLaunch/Todo (same pattern used by ProjectViews)
         var query = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:subtree";
         Output.WriteLine($"Querying: {query}");
 
-        var results = MeshQuery
+        var results = (await MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery(query))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         Output.WriteLine($"Found {results.Count} Todo items:");
         foreach (var node in results.Take(10))
@@ -136,7 +136,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Test that IMeshService can find all 21 Todo nodes.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void MeshQuery_ShouldFindAll21TodoNodes()
+    public async Task MeshQuery_ShouldFindAll21TodoNodes()
     {
         // Query for all Todo items - we have 21 sample Todo items
         var query = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:subtree";
@@ -144,7 +144,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         // Accumulate deltas until at least 23 items have surfaced — the Initial
         // snapshot can be short on cold CI and items trickle in as Added.
-        var results = QueryUntil(query, r => r.Count >= 23);
+        var results = await QueryUntil(query, r => r.Count >= 23);
 
         Output.WriteLine($"Found {results.Count} Todo items:");
         foreach (var node in results)
@@ -160,19 +160,19 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Test that IMeshService filters by nodeType correctly.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void MeshQuery_ShouldFilterByNodeType()
+    public async Task MeshQuery_ShouldFilterByNodeType()
     {
         // Query without nodeType filter
         var queryWithoutFilter = "path:ACME/ProductLaunch/Todo scope:subtree";
-        var allResults = MeshQuery
+        var allResults = (await MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery(queryWithoutFilter))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Query with nodeType filter
         var queryWithFilter = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:subtree";
-        var filteredResults = MeshQuery
+        var filteredResults = (await MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery(queryWithFilter))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         Output.WriteLine($"Without filter: {allResults.Count}, With filter: {filteredResults.Count}");
 
@@ -189,7 +189,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Note: "Summary" view doesn't exist, using TodaysFocus as the overview/summary view.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void Summary_ShouldRenderWithData()
+    public async Task Summary_ShouldRenderWithData()
     {
         var workspace = GetClient().GetWorkspace();
         // TodaysFocus is the overview/summary view showing urgent items
@@ -200,7 +200,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
             projectAddress,
             reference);
 
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(10.Seconds()).Match(c => c != null);
 
@@ -212,7 +212,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Test that the AllTasks view renders with tasks grouped by status.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void AllTasks_ShouldRenderWithData()
+    public async Task AllTasks_ShouldRenderWithData()
     {
         var workspace = GetClient().GetWorkspace();
         var reference = new LayoutAreaReference("AllTasks");
@@ -222,7 +222,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
             projectAddress,
             reference);
 
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(10.Seconds()).Match(c => c is CatalogControl { Groups.Count: > 0 });
 
@@ -235,7 +235,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Test that the TodosByCategory view renders with actual task categories.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void TodosByCategory_ShouldRenderWithData()
+    public async Task TodosByCategory_ShouldRenderWithData()
     {
         var workspace = GetClient().GetWorkspace();
         var reference = new LayoutAreaReference("TodosByCategory");
@@ -246,7 +246,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
             reference);
 
         // Wait for CatalogControl with groups (the actual data view after loading completes)
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(10.Seconds()).Match(c => c is CatalogControl { Groups.Count: > 0 });
 
@@ -260,7 +260,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Note: "Planning" is a group name, not a view. Backlog is the view in this group.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void Planning_ShouldRenderWithData()
+    public async Task Planning_ShouldRenderWithData()
     {
         var workspace = GetClient().GetWorkspace();
         // "Planning" group contains Backlog view
@@ -279,7 +279,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
         // first-activation compile + per-test fresh-mesh data load runs longer on
         // slow CI agents / under full-suite load — the prior 30 s raced it and the
         // identical Backlog_ShouldRenderWithData test only passed on timing luck.
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(50.Seconds()).Match(c => c is CatalogControl { Groups.Count: > 0 } || c is MarkdownControl);
 
@@ -294,7 +294,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// renders without checking task content.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void MyTasks_ShouldRenderWithData()
+    public async Task MyTasks_ShouldRenderWithData()
     {
         // Note: Setting AccessService context on the client doesn't propagate to the server hub
         // in the test infrastructure. The view will render with "Guest" user context.
@@ -306,7 +306,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
             projectAddress,
             reference);
 
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(10.Seconds()).Match(c => c != null);
 
@@ -319,7 +319,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Test that the Backlog view renders with data.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void Backlog_ShouldRenderWithData()
+    public async Task Backlog_ShouldRenderWithData()
     {
         var workspace = GetClient().GetWorkspace();
         var reference = new LayoutAreaReference("Backlog");
@@ -332,7 +332,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
         // Same gating shape + 50 s cold-compile budget as Planning_ShouldRenderWithData
         // — wait for the loaded view rather than the first non-null emission, since
         // the area emits `null` while the ACME/Project NodeType is still compiling.
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(50.Seconds()).Match(c => c is CatalogControl { Groups.Count: > 0 } || c is MarkdownControl);
 
@@ -344,7 +344,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Test that the TodaysFocus view renders with data.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void TodaysFocus_ShouldRenderWithData()
+    public async Task TodaysFocus_ShouldRenderWithData()
     {
         var workspace = GetClient().GetWorkspace();
         var reference = new LayoutAreaReference("TodaysFocus");
@@ -355,7 +355,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
             reference);
 
         // TodaysFocus returns CatalogControl with groups or Markdown if no urgent tasks
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(10.Seconds()).Match(c => c != null);
 
@@ -372,7 +372,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Note: The IContentInitializable.Initialize() method calculates DueDate from DueDateOffsetDays.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void TodaysFocus_ShouldHaveExactlyThreeOverdueItems()
+    public async Task TodaysFocus_ShouldHaveExactlyThreeOverdueItems()
     {
         // Query for all Todo items
         var query = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:subtree";
@@ -381,7 +381,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
         // Accumulate the full Todo set (≥23) before filtering for overdue — the
         // exact-count assertion below requires the complete data set, which can
         // trickle in as Added deltas after a short Initial snapshot on cold CI.
-        var results = QueryUntil(query, r => r.Count >= 23);
+        var results = await QueryUntil(query, r => r.Count >= 23);
 
         Output.WriteLine($"Found {results.Count} Todo items");
 
@@ -441,7 +441,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// proving the hardcoded value was removed.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void MyTasks_UsesAccessService_NotHardcodedAlice()
+    public async Task MyTasks_UsesAccessService_NotHardcodedAlice()
     {
         // Act: Request MyTasks view WITHOUT setting any user context
         // If the bug is still present, it would show Alice's tasks
@@ -455,7 +455,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
             reference);
 
         // Wait for the view to render
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(10.Seconds()).Match(c => c != null);
 
@@ -469,14 +469,14 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// This test queries the actual data and verifies the expected task assignments.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void MyTasks_RolandShouldHaveTwoTasks()
+    public async Task MyTasks_RolandShouldHaveTwoTasks()
     {
         // Arrange: Query all Todo items to verify test data
         var query = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:subtree";
 
         // Accumulate the full Todo set (≥23) before filtering for Roland's tasks —
         // the exact-count assertion below requires the complete data set.
-        var results = QueryUntil(query, r => r.Count >= 23);
+        var results = await QueryUntil(query, r => r.Count >= 23);
 
         // Get Roland's tasks
         var rolandsTasks = new List<string>();

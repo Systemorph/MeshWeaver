@@ -55,14 +55,14 @@ public class AccessControlPipelineTest(ITestOutputHelper output) : MonolithMeshT
     }
 
     [Fact(Timeout = 10000)]
-    public void SubscribeRequest_WithoutReadPermission_ReturnsDeliveryFailure()
+    public async Task SubscribeRequest_WithoutReadPermission_ReturnsDeliveryFailure()
     {
         // User "NoAccess" has no roles at all
         var client = GetClientWithUser("NoAccess");
         var nodeAddress = new Address(NodePath);
 
         // Ensure hub is started
-        client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
 
         // Try to subscribe â€” should be denied by AccessControlPipeline
         var workspace = client.GetWorkspace();
@@ -70,42 +70,43 @@ public class AccessControlPipelineTest(ITestOutputHelper output) : MonolithMeshT
         var stream = workspace.GetRemoteStream<System.Text.Json.JsonElement, LayoutAreaReference>(
             nodeAddress, reference);
 
-        Action act = () => stream
+        Func<Task> act = () => stream
+            .FirstAsync()
             .Timeout(3.Seconds())
-            .Wait();
+            .ToTask();
 
-        var ex = act.Should().Throw<DeliveryFailureException>().Which;
+        var ex = (await act.Should().ThrowAsync<DeliveryFailureException>()).Which;
         ex.Message.Should().Contain("Access denied");
         ex.Message.Should().Contain("NoAccess");
         ex.Message.Should().Contain("Read");
     }
 
     [Fact(Timeout = 10000)]
-    public void SubscribeRequest_WithReadPermission_Succeeds()
+    public async Task SubscribeRequest_WithReadPermission_Succeeds()
     {
         // Grant Viewer role at runtime (tests live behavior change after grant).
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        meshService.CreateNode(AssignmentNodeFactory.UserRole("Viewer1", "Viewer", "PipelineTest"))
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole("Viewer1", "Viewer", "PipelineTest"))
             .Should().Emit();
 
         // Verify the permission was granted via the live effective-permission
         // stream. Probe for the Read flag and complete as soon as it surfaces.
-        Mesh.GetEffectivePermissions(NodePath, "Viewer1")
+        await Mesh.GetEffectivePermissions(NodePath, "Viewer1")
             .Should().Match(p => p.HasFlag(Permission.Read),
                 "Viewer1 with Viewer role should have Read permission");
     }
 
     [Fact(Timeout = 10000)]
-    public void GetDataRequest_WithoutReadPermission_ReturnsDeliveryFailure()
+    public async Task GetDataRequest_WithoutReadPermission_ReturnsDeliveryFailure()
     {
         var client = GetClientWithUser("NoAccess");
         var nodeAddress = new Address(NodePath);
 
         // GetDataRequest also has [RequiresPermission(Permission.Read)] —
         // the cold Observe observable surfaces DeliveryFailureException via OnError.
-        Action act = () => client.Observe(new GetDataRequest(new UnifiedReference("data:")), o => o.WithTarget(nodeAddress)).Wait();
+        Func<Task> act = () => client.Observe(new GetDataRequest(new UnifiedReference("data:")), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask();
 
-        var ex = act.Should().Throw<DeliveryFailureException>().Which;
+        var ex = (await act.Should().ThrowAsync<DeliveryFailureException>()).Which;
         ex.Message.Should().Contain("Access denied");
         ex.Message.Should().Contain("NoAccess");
     }
@@ -151,7 +152,7 @@ public class HubPermissionRuleSetTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     [Fact(Timeout = 10000)]
-    public void Admin_CanReadOrganizationHub_WithoutClaimBasedRoles()
+    public async Task Admin_CanReadOrganizationHub_WithoutClaimBasedRoles()
     {
         // In Orleans, claim-based roles from AccessContext aren't available.
         // Admin gets permissions from PublicAdminAccess at root, which should
@@ -162,7 +163,7 @@ public class HubPermissionRuleSetTest(ITestOutputHelper output) : MonolithMeshTe
         // Clear claim-based roles
         accessService.SetCircuitContext(null);
 
-        var permissions = Mesh.GetEffectivePermissions("Space", TestUsers.Admin.ObjectId)
+        var permissions = await Mesh.GetEffectivePermissions("Space", TestUsers.Admin.ObjectId)
             .Should().Match(p => p.HasFlag(Permission.Read));
 
         Output.WriteLine($"Permissions without claims: {permissions}");
@@ -186,9 +187,9 @@ public class OrganizationHubAccessTest(ITestOutputHelper output) : MonolithMeshT
             .AddSampleUsers();
 
     [Fact(Timeout = 10000)]
-    public void Admin_HasReadPermissionOnOrganizationPath()
+    public async Task Admin_HasReadPermissionOnOrganizationPath()
     {
-        var permissions = Mesh.GetEffectivePermissions("Space", TestUsers.Admin.ObjectId)
+        var permissions = await Mesh.GetEffectivePermissions("Space", TestUsers.Admin.ObjectId)
             .Should().Match(p => p.HasFlag(Permission.Read));
 
         Output.WriteLine($"Admin permissions on 'Space': {permissions}");
@@ -213,12 +214,12 @@ public class UserHubAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(
             .AddSampleUsers();
 
     [Fact(Timeout = 10000)]
-    public void AuthenticatedUser_CanReadUserHub()
+    public async Task AuthenticatedUser_CanReadUserHub()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         accessService.SetCircuitContext(new AccessContext { ObjectId = "unprivileged@example.com", Name = "Unprivileged User" });
 
-        var response = Mesh
+        var response = await Mesh
             .Observe(new GetDataRequest(new UnifiedReference("data:")), o => o.WithTarget(new Address("User")))
             .Should().Emit();
 
@@ -227,16 +228,17 @@ public class UserHubAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(
     }
 
     [Fact(Timeout = 10000)]
-    public void AnonymousUser_CannotReadUserHub()
+    public async Task AnonymousUser_CannotReadUserHub()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         accessService.SetCircuitContext(new AccessContext { ObjectId = "", Name = "" });
 
-        Action act = () =>
+        Func<Task> act = () =>
             Mesh.Observe(new GetDataRequest(new UnifiedReference("data:")), o => o.WithTarget(new Address("User")))
-                .Wait();
+                .FirstAsync()
+                .ToTask();
 
-        var ex = act.Should().Throw<DeliveryFailureException>().Which;
+        var ex = (await act.Should().ThrowAsync<DeliveryFailureException>()).Which;
         ex.Message.Should().Contain("Access denied");
     }
 }
@@ -256,9 +258,9 @@ public class UserSelfScopeAccessTest(ITestOutputHelper output) : MonolithMeshTes
             .AddMeshNodes(AssignmentNodeFactory.UserRole("charlie", "Admin", scope: "charlie"));
 
     [Fact(Timeout = 10000)]
-    public void UserAccessingOwnScope_ReturnsAdmin()
+    public async Task UserAccessingOwnScope_ReturnsAdmin()
     {
-        var permissions = Mesh.GetEffectivePermissions("alice", "alice")
+        var permissions = await Mesh.GetEffectivePermissions("alice", "alice")
             .Should().Match(p => p.HasFlag(Permission.Read) && p.HasFlag(Permission.Create)
                 && p.HasFlag(Permission.Update) && p.HasFlag(Permission.Delete));
 
@@ -269,9 +271,9 @@ public class UserSelfScopeAccessTest(ITestOutputHelper output) : MonolithMeshTes
     }
 
     [Fact(Timeout = 10000)]
-    public void UserAccessingOwnChild_ReturnsAdmin()
+    public async Task UserAccessingOwnChild_ReturnsAdmin()
     {
-        var permissions = Mesh.GetEffectivePermissions("bob/_Thread/t1", "bob")
+        var permissions = await Mesh.GetEffectivePermissions("bob/_Thread/t1", "bob")
             .Should().Match(p => p.HasFlag(Permission.Read) && p.HasFlag(Permission.Create)
                 && p.HasFlag(Permission.Update) && p.HasFlag(Permission.Delete));
 
@@ -282,35 +284,35 @@ public class UserSelfScopeAccessTest(ITestOutputHelper output) : MonolithMeshTes
     }
 
     [Fact(Timeout = 10000)]
-    public void AnonymousAccessingUserScope_NoFallback()
+    public async Task AnonymousAccessingUserScope_NoFallback()
     {
-        Mesh.GetEffectivePermissions("alice", WellKnownUsers.Anonymous)
+        await Mesh.GetEffectivePermissions("alice", WellKnownUsers.Anonymous)
             .Should().Match(p => p == Permission.None,
                 "Anonymous should not get self-scope fallback on another user's scope");
     }
 
     [Fact(Timeout = 10000)]
-    public void PublicAccessingUserScope_NoFallback()
+    public async Task PublicAccessingUserScope_NoFallback()
     {
-        Mesh.GetEffectivePermissions("alice", WellKnownUsers.Public)
+        await Mesh.GetEffectivePermissions("alice", WellKnownUsers.Public)
             .Should().Match(p => p == Permission.None,
                 "Public should not get self-scope fallback on another user's scope");
     }
 
     [Fact(Timeout = 10000)]
-    public void UserAccessingOtherUserScope_NoFallback()
+    public async Task UserAccessingOtherUserScope_NoFallback()
     {
-        Mesh.GetEffectivePermissions("alice", "bob")
+        await Mesh.GetEffectivePermissions("alice", "bob")
             .Should().Match(p => p == Permission.None,
                 "bob should not have any permissions on alice's scope without explicit assignment");
     }
 
     [Fact(Timeout = 10000)]
-    public void UserWithExplicitAdmin_FallbackIsNoOp()
+    public async Task UserWithExplicitAdmin_FallbackIsNoOp()
     {
         // charlie's explicit Admin is seeded statically in ConfigureMesh —
         // the assertion proves the self-scope fallback doesn't conflict with it.
-        var permissions = Mesh.GetEffectivePermissions("charlie", "charlie")
+        var permissions = await Mesh.GetEffectivePermissions("charlie", "charlie")
             .Should().Match(p => p.HasFlag(Permission.Read) && p.HasFlag(Permission.Create)
                 && p.HasFlag(Permission.Update) && p.HasFlag(Permission.Delete));
 
@@ -321,12 +323,12 @@ public class UserSelfScopeAccessTest(ITestOutputHelper output) : MonolithMeshTes
     }
 
     [Fact(Timeout = 10000)]
-    public void CaseInsensitivePath_Works()
+    public async Task CaseInsensitivePath_Works()
     {
         // Path uses uppercase "Alice" — the userId match must be case-insensitive
         // so a user accessing their own scope under a casing-different prefix still
         // resolves through the self-scope fallback.
-        var permissions = Mesh.GetEffectivePermissions("Alice/child", "alice")
+        var permissions = await Mesh.GetEffectivePermissions("Alice/child", "alice")
             .Should().Match(p => p.HasFlag(Permission.Read) && p.HasFlag(Permission.Create));
 
         permissions.Should().HaveFlag(Permission.Read,

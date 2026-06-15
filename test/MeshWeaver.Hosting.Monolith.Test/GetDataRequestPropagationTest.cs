@@ -40,7 +40,7 @@ public class GetDataRequestPropagationTest(ITestOutputHelper output) : MonolithM
     protected override bool ShareMeshAcrossTests => true;
 
     [Fact(Timeout = 30_000)]
-    public void LocalUpdate_VisibleViaPolledGetDataRequest()
+    public async Task LocalUpdate_VisibleViaPolledGetDataRequest()
     {
         Output.WriteLine("[test] start");
 
@@ -49,28 +49,28 @@ public class GetDataRequestPropagationTest(ITestOutputHelper output) : MonolithM
         var pathA = $"{TestPartition}/poll-a-{Guid.NewGuid():N}";
         var aId = pathA.Split('/').Last();
         Output.WriteLine($"[test] creating node {pathA}");
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode(aId, TestPartition) { Name = "A0", NodeType = "Markdown" }).Should().Emit();
         Output.WriteLine("[test] CreateNode succeeded");
 
         // 2. Read via GetDataRequest from a separate client. This is the
         //    polling read pattern — not a subscription.
         var client = GetClient(c => c.AddData());
-        var initial = ReadViaGetDataRequest(client, pathA).Should().Match(n => n is not null);
+        var initial = await ReadViaGetDataRequest(client, pathA).Should().Match(n => n is not null);
         initial!.Name.Should().Be("A0");
         Output.WriteLine($"[poll] initial read: Name={initial.Name}");
 
         // 3. Update via NodeFactory (which posts an UpdateNodeRequest — same
         //    surface area used in production where the layout area / handler
         //    invokes workspace.UpdateMeshNode locally on the owning hub).
-        NodeFactory.UpdateNode(initial with { Name = "A1" }).Should().Emit();
+        await NodeFactory.UpdateNode(initial with { Name = "A1" }).Should().Emit();
         Output.WriteLine("[update] posted A1");
 
         // 4. Poll via fresh GetDataRequests until we see A1. The interval IS the
         //    polling cadence; the .Match predicate IS the condition. If the
         //    per-call fresh reduce stream has the SetCurrentRequest race, this
         //    times out.
-        Observable.Interval(100.Milliseconds()).StartWith(0L)
+        await Observable.Interval(100.Milliseconds()).StartWith(0L)
             .SelectMany(_ => ReadViaGetDataRequest(client, pathA))
             .Should().Within(20.Seconds()).Match(current =>
             {

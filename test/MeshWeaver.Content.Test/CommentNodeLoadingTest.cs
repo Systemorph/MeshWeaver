@@ -44,9 +44,9 @@ public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTest
     /// Verifies that the comment node c1 can be loaded by exact path query.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void CommentNode_IsLoadableByExactPath()
+    public async Task CommentNode_IsLoadableByExactPath()
     {
-        var node = Mesh.GetMeshNode(DocPartitionCommentPath, ReadNodeTimeout).Should().Within(ReadNodeTimeout).Emit();
+        var node = await Mesh.GetMeshNode(DocPartitionCommentPath, ReadNodeTimeout).Should().Within(ReadNodeTimeout).Emit();
 
         node.Should().NotBeNull(
             $"Comment node at '{DocPartitionCommentPath}' should be loadable from the Doc partition");
@@ -62,9 +62,9 @@ public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTest
     /// Verifies the comment node content deserializes as a Comment object.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void CommentNode_HasValidCommentContent()
+    public async Task CommentNode_HasValidCommentContent()
     {
-        var node = Mesh.GetMeshNode(DocPartitionCommentPath, ReadNodeTimeout).Should().Within(ReadNodeTimeout).Emit();
+        var node = await Mesh.GetMeshNode(DocPartitionCommentPath, ReadNodeTimeout).Should().Within(ReadNodeTimeout).Emit();
 
         node.Should().NotBeNull();
         node!.Content.Should().BeOfType<Comment>();
@@ -84,12 +84,12 @@ public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTest
     /// via namespace query with nodeType filter.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void CommentNodes_AreDiscoverableByNamespaceQuery()
+    public async Task CommentNodes_AreDiscoverableByNamespaceQuery()
     {
-        var comments = MeshQuery
+        var comments = (await MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{DocPartitionNamespace} nodeType:{CommentNodeType.NodeType}"))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         comments.Should().NotBeEmpty(
             $"Namespace query should find comment nodes under '{DocPartitionNamespace}'");
@@ -111,10 +111,10 @@ public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTest
     /// Verifies the reply node under c1 is also loadable.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void ReplyNode_IsLoadableUnderComment()
+    public async Task ReplyNode_IsLoadableUnderComment()
     {
         var replyPath = $"{DocPartitionCommentPath}/reply1";
-        var node = Mesh.GetMeshNode(replyPath, ReadNodeTimeout).Should().Within(ReadNodeTimeout).Emit();
+        var node = await Mesh.GetMeshNode(replyPath, ReadNodeTimeout).Should().Within(ReadNodeTimeout).Emit();
 
         node.Should().NotBeNull($"Reply node at '{replyPath}' should be loadable");
         node!.Id.Should().Be("reply1");
@@ -128,12 +128,12 @@ public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTest
     /// This tests the full addressability chain -- not just persistence, but also hub routing.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void CommentNode_IsAddressable()
+    public async Task CommentNode_IsAddressable()
     {
         var client = GetClient();
         var address = new Address(DocPartitionCommentPath.Split('/'));
 
-        var response = client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
+        var response = await client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
 
         response.Should().NotBeNull(
             $"Hub at '{DocPartitionCommentPath}' should respond to PingRequest");

@@ -74,11 +74,11 @@ public class PostPipelineAccessContextTest(ITestOutputHelper output) : HubTestBa
     /// <c>ImpersonateAs...</c> tests below.</para>
     /// </summary>
     [Fact]
-    public void SubHub_with_no_user_context_leaves_context_null_and_fails_closed()
+    public async Task SubHub_with_no_user_context_leaves_context_null_and_fails_closed()
     {
         var client = GetClient();
 
-        var response = client
+        var response = await client
             .Observe(new CaptureContextRequest(), o => o.WithTarget(CreateHostAddress()))
             .Should().Within(10.Seconds()).Emit();
 
@@ -104,11 +104,11 @@ public class PostPipelineAccessContextTest(ITestOutputHelper output) : HubTestBa
     /// fallback, it will fail.
     /// </summary>
     [Fact]
-    public void Mesh_hub_with_no_user_context_does_NOT_self_impersonate()
+    public async Task Mesh_hub_with_no_user_context_does_NOT_self_impersonate()
     {
         var meshHub = Mesh; // injected by HubTestBase — Address = mesh/1
 
-        var response = meshHub
+        var response = await meshHub
             .Observe(new CaptureContextRequest(), o => o.WithTarget(CreateHostAddress()))
             .Should().Within(10.Seconds()).Emit();
 
@@ -134,7 +134,7 @@ public class PostPipelineAccessContextTest(ITestOutputHelper output) : HubTestBa
     /// of stream caches).
     /// </summary>
     [Fact]
-    public void ImpersonateAsSystem_scope_propagates_through_Post()
+    public async Task ImpersonateAsSystem_scope_propagates_through_Post()
     {
         var client = GetClient();
         var access = client.ServiceProvider.GetRequiredService<AccessService>();
@@ -142,7 +142,7 @@ public class PostPipelineAccessContextTest(ITestOutputHelper output) : HubTestBa
         IMessageDelivery<CaptureContextResponse> response;
         using (access.ImpersonateAsSystem())
         {
-            response = client
+            response = await client
                 .Observe(new CaptureContextRequest(), o => o.WithTarget(CreateHostAddress()))
                 .Should().Within(10.Seconds()).Emit();
         }
@@ -161,7 +161,7 @@ public class PostPipelineAccessContextTest(ITestOutputHelper output) : HubTestBa
     /// heartbeat pattern (JsonSynchronizationStream.cs:218, 292, 327).
     /// </summary>
     [Fact]
-    public void ImpersonateAsHub_scope_propagates_through_Post()
+    public async Task ImpersonateAsHub_scope_propagates_through_Post()
     {
         var client = GetClient();
         var access = client.ServiceProvider.GetRequiredService<AccessService>();
@@ -169,7 +169,7 @@ public class PostPipelineAccessContextTest(ITestOutputHelper output) : HubTestBa
         IMessageDelivery<CaptureContextResponse> response;
         using (access.ImpersonateAsHub(client))
         {
-            response = client
+            response = await client
                 .Observe(new CaptureContextRequest(), o => o.WithTarget(CreateHostAddress()))
                 .Should().Within(10.Seconds()).Emit();
         }

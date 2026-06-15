@@ -27,19 +27,19 @@ public class MultiQueryUnionEngineTests(ITestOutputHelper output) : MonolithMesh
     /// Reactive replacement for <c>QueryAsync(...).ToListAsync()</c>: the first
     /// <see cref="QueryChangeType.Initial"/> emission carries the full snapshot.
     /// </summary>
-    private IReadOnlyList<MeshNode> QueryNodes(MeshQueryRequest request)
-        => MeshQuery.Query<MeshNode>(request)
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+    private async Task<IReadOnlyList<MeshNode>> QueryNodes(MeshQueryRequest request)
+        => (await MeshQuery.Query<MeshNode>(request)
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
     [Fact]
-    public void FromQueries_QueryAsync_UnionsBothBranches()
+    public async Task FromQueries_QueryAsync_UnionsBothBranches()
     {
         var p = P();
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/A1") with { Name = "A1", NodeType = "Markdown" }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/A2") with { Name = "A2", NodeType = "Markdown" }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}_other/B1") with { Name = "B1", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/A1") with { Name = "A1", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/A2") with { Name = "A2", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}_other/B1") with { Name = "B1", NodeType = "Markdown" }).Should().Emit();
 
-        var results = QueryNodes(MeshQueryRequest.FromQueries(new[]
+        var results = await QueryNodes(MeshQueryRequest.FromQueries(new[]
         {
             $"path:{p} nodeType:Markdown scope:descendants",
             $"path:{p}_other nodeType:Markdown scope:descendants",
@@ -49,14 +49,14 @@ public class MultiQueryUnionEngineTests(ITestOutputHelper output) : MonolithMesh
     }
 
     [Fact]
-    public void FromQueries_DedupesNodeMatchedByMultipleBranches()
+    public async Task FromQueries_DedupesNodeMatchedByMultipleBranches()
     {
         var p = P();
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Shared") with { Name = "Shared", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Shared") with { Name = "Shared", NodeType = "Markdown" }).Should().Emit();
 
         // Both queries match the same node — the engine's path-keyed dedup must
         // collapse it to one entry.
-        var results = QueryNodes(MeshQueryRequest.FromQueries(new[]
+        var results = await QueryNodes(MeshQueryRequest.FromQueries(new[]
         {
             $"path:{p} nodeType:Markdown scope:descendants",
             $"path:{p} nodeType:Markdown scope:descendants",
@@ -67,13 +67,13 @@ public class MultiQueryUnionEngineTests(ITestOutputHelper output) : MonolithMesh
     }
 
     [Fact]
-    public void FromQueries_ObserveQuery_EmitsUnionedInitial()
+    public async Task FromQueries_ObserveQuery_EmitsUnionedInitial()
     {
         var p = P();
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/X") with { Name = "X", NodeType = "Markdown" }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}_other/Y") with { Name = "Y", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/X") with { Name = "X", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}_other/Y") with { Name = "Y", NodeType = "Markdown" }).Should().Emit();
 
-        var initial = MeshQuery
+        var initial = await MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQueries(new[]
             {
                 $"path:{p} nodeType:Markdown scope:descendants",

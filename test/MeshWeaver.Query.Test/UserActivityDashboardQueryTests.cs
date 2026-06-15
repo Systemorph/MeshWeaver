@@ -36,31 +36,31 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
     // â”€â”€ Query 1: Activity Feed â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 30000)]
-    public void ActivityFeed_ReturnsMainNodesWithActivitySatellites()
+    public async Task ActivityFeed_ReturnsMainNodesWithActivitySatellites()
     {
-        // Arrange: 3 main nodes; only 2 have _activity satellite children
-        NodeFactory.CreateNode(MeshNode.FromPath("af/project1") with
+        // Arrange: 3 main nodes; await only 2 have _activity satellite children
+        await NodeFactory.CreateNode(MeshNode.FromPath("af/project1") with
         {
             Name = "Project 1", NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("af/project1/_activity/log1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("af/project1/_activity/log1") with
         {
             Name = "Log 1", NodeType = "Activity",
             MainNode = "af/project1",
             Content = new ActivityLog("DataUpdate") { HubPath = "af/project1" }
         }).Should().Emit();
 
-        NodeFactory.CreateNode(MeshNode.FromPath("af/project2") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("af/project2") with
         {
             Name = "Project 2", NodeType = "Markdown"
         }).Should().Emit();
         // project2 has NO activity satellite
 
-        NodeFactory.CreateNode(MeshNode.FromPath("af/project3") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("af/project3") with
         {
             Name = "Project 3", NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("af/project3/_activity/log3") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("af/project3/_activity/log3") with
         {
             Name = "Log 3", NodeType = "Activity",
             MainNode = "af/project3",
@@ -68,7 +68,7 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
         }).Should().Emit();
 
         // Act: dashboard query scoped to namespace
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("source:activity namespace:af scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("source:activity namespace:af scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Assert: only the 2 nodes that have activity children
         results.Should().HaveCount(2);
@@ -79,16 +79,16 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
     }
 
     [Fact(Timeout = 60000)]
-    public void ActivityFeed_NoActivitySatellites_ReturnsEmpty()
+    public async Task ActivityFeed_NoActivitySatellites_ReturnsEmpty()
     {
         // Arrange: main nodes but no activity satellites
-        NodeFactory.CreateNode(MeshNode.FromPath("afEmpty/doc1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("afEmpty/doc1") with
         {
             Name = "Doc 1", NodeType = "Markdown"
         }).Should().Emit();
 
         // Act: scoped to the test namespace
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("source:activity namespace:afEmpty scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("source:activity namespace:afEmpty scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Assert: no activity satellites => empty
         results.Should().BeEmpty();
@@ -97,19 +97,19 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
     // â”€â”€ Query 2: Recently Viewed â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 30000)]
-    public void RecentlyViewed_InMemory_ReturnsMainNodes_ExcludesSatellites()
+    public async Task RecentlyViewed_InMemory_ReturnsMainNodes_ExcludesSatellites()
     {
         // Arrange: main nodes + satellite node
-        NodeFactory.CreateNode(MeshNode.FromPath("rv/doc1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("rv/doc1") with
         {
             Name = "Doc 1", NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("rv/doc2") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("rv/doc2") with
         {
             Name = "Doc 2", NodeType = "Markdown"
         }).Should().Emit();
         // Activity satellite (should be excluded by is:main)
-        NodeFactory.CreateNode(MeshNode.FromPath("rv/doc1/_activity/log1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("rv/doc1/_activity/log1") with
         {
             Name = "Activity", NodeType = "Activity",
             MainNode = "rv/doc1",
@@ -117,7 +117,7 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
         }).Should().Emit();
 
         // Act: dashboard query scoped to namespace
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("source:accessed namespace:rv scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("source:accessed namespace:rv scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Assert: main nodes returned, satellites excluded
         results.Should().HaveCount(2, "both doc1 and doc2 are main Markdown nodes");
@@ -133,7 +133,7 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
     // â”€â”€ Query 3: Latest Threads â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 30000)]
-    public void LatestThreads_ByNodeType_WithDescendantsScope()
+    public async Task LatestThreads_ByNodeType_WithDescendantsScope()
     {
         // Arrange: create context node and thread (use non-User namespace to avoid ACL)
         var contextPath = "ThreadCtx";
@@ -142,21 +142,21 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
         SeedTopLevel(new MeshNode(contextPath) { Name = "Thread Context", NodeType = "Markdown" });
 
         var client = GetClient();
-        var response = client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Help me with my project")), o => o.WithTarget(new Address(contextPath))).Should().Within(TimeSpan.FromSeconds(25)).Emit();
+        var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Help me with my project")), o => o.WithTarget(new Address(contextPath))).Should().Within(TimeSpan.FromSeconds(25)).Emit();
         response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         var threadPath = response.Message.Node!.Path!;
         Output.WriteLine($"Thread created at: {threadPath}");
 
         // Act 1: nodeType:Thread with scope:descendants â€” should find threads
-        var byType = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Thread scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var byType = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Thread scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
         Output.WriteLine($"nodeType:Thread scope:descendants => {byType.Count} results");
 
         // Act 2: namespace query â€” direct _Thread namespace query
-        var byNamespace = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{contextPath}/_Thread nodeType:Thread")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var byNamespace = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{contextPath}/_Thread nodeType:Thread")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
         Output.WriteLine($"namespace:{contextPath}/_Thread nodeType:Thread => {byNamespace.Count} results");
 
         // Act 3: exact dashboard query (no path, no scope)
-        var dashboardQuery = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Thread sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var dashboardQuery = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Thread sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
         Output.WriteLine($"nodeType:Thread sort:LastModified-desc (dashboard) => {dashboardQuery.Count} results");
 
         // Assert: at least scope:descendants must find it
@@ -175,7 +175,7 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
     // â”€â”€ Query 4: My Items â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 30000)]
-    public void MyItems_ReturnsOnlyMainContentNodes()
+    public async Task MyItems_ReturnsOnlyMainContentNodes()
     {
         var ns = "myItems";
 
@@ -184,17 +184,17 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
         SeedTopLevel(new MeshNode(ns) { Name = "My Items NS", NodeType = "Markdown" });
 
         // Main content nodes under the namespace
-        NodeFactory.CreateNode(MeshNode.FromPath($"{ns}/doc1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{ns}/doc1") with
         {
             Name = "Document 1", NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath($"{ns}/project1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{ns}/project1") with
         {
             Name = "Project 1", NodeType = "Markdown"
         }).Should().Emit();
 
         // Activity satellite (should be excluded by is:main)
-        NodeFactory.CreateNode(MeshNode.FromPath($"{ns}/doc1/_activity/log1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{ns}/doc1/_activity/log1") with
         {
             Name = "Activity", NodeType = "Activity",
             MainNode = $"{ns}/doc1",
@@ -203,11 +203,11 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
 
         // Thread satellite via CreateNodeRequest
         var client = GetClient();
-        var threadResponse = client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ns, "Thread in my items")), o => o.WithTarget(new Address(ns))).Should().Within(TimeSpan.FromSeconds(25)).Emit();
+        var threadResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ns, "Thread in my items")), o => o.WithTarget(new Address(ns))).Should().Within(TimeSpan.FromSeconds(25)).Emit();
         threadResponse.Message.Success.Should().BeTrue(threadResponse.Message.Error ?? "");
 
         // Act: exact dashboard query
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{ns} is:main context:search scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{ns} is:main context:search scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Assert: only main content nodes, no satellites
         results.Should().HaveCountGreaterThanOrEqualTo(2,

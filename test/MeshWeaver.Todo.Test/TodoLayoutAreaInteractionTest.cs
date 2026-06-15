@@ -18,7 +18,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     /// Test that verifies AllItems layout area renders correctly with our WithKey fix
     /// </summary>
     [Fact]
-    public void TodoList_ShouldRenderLayoutGridWithData()
+    public async Task TodoList_ShouldRenderLayoutGridWithData()
     {
         // Arrange
         var client = GetClient();
@@ -33,9 +33,9 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
 
         // Wait for the final layout control (skip loading states)
         Output.WriteLine("⏳ Waiting for layout area to render with data...");
-        var control = (LayoutGridControl)stream
+        var control = (LayoutGridControl)(await stream
             .GetControlStream(reference.Area!)
-            .Should().Within(10.Seconds()).Match(c => c is LayoutGridControl)!;
+            .Should().Within(10.Seconds()).Match(c => c is LayoutGridControl))!;
 
         // Assert
         Output.WriteLine($"✅ SUCCESS: LayoutGrid rendered with {control.Areas.Count} areas");
@@ -48,27 +48,27 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     /// Real interaction test: Click a button to change todo status and verify layout updates
     /// </summary>
     [Fact]
-    public void TodoList_ClickStartButton_ShouldMoveItemToInProgressAndUpdateActions()
+    public async Task TodoList_ClickStartButton_ShouldMoveItemToInProgressAndUpdateActions()
     {
         // Arrange
         var (_, stream, reference) = SetupTodoLayoutTest();
 
         // Step 1: Wait for initial layout to render with data
         Output.WriteLine("⏳ Step 1: Waiting for initial layout area to render...");
-        var layoutGrid = GetLayoutGrid(stream, reference);
+        var layoutGrid = await GetLayoutGrid(stream, reference);
 
         // Step 2: Get initial pending count
-        var initialPendingCount = CountPendingInLayout(stream, layoutGrid);
+        var initialPendingCount = await CountPendingInLayout(stream, layoutGrid);
         initialPendingCount.Should().BeGreaterThan(0, "Should have at least one pending todo item before starting test");
         Output.WriteLine($"✅ Step 2: Confirmed initial pending count: {initialPendingCount} todos");
 
         // Step 3: Find and click a button that would affect the unassigned pending items
-        var (button, areaName) = FindButtonByText(stream, layoutGrid, "Auto-Assign");
+        var (button, areaName) = await FindButtonByText(stream, layoutGrid, "Auto-Assign");
 
         // If no Auto-Assign button found, look for Start button
         if (button == null)
         {
-            (button, areaName) = FindButtonByText(stream, layoutGrid, "Start");
+            (button, areaName) = await FindButtonByText(stream, layoutGrid, "Start");
         }
 
         button.Should().NotBeNull("Should find at least one clickable button");
@@ -89,7 +89,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         if (buttonTitle.Contains("Auto-Assign"))
         {
             // Auto-assign doesn't change pending count, just moves items from unassigned to assigned
-            finalPendingCount = CountPendingInLayout(stream, GetLayoutGrid(stream, reference));
+            finalPendingCount = await CountPendingInLayout(stream, await GetLayoutGrid(stream, reference));
             Output.WriteLine($"✅ Step 5: Auto-assign clicked - pending count remains {finalPendingCount}");
             // We expect the count to stay the same or similar since items are still pending, just assigned
         }
@@ -97,7 +97,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         {
             // Start All should reduce pending count (move to InProgress): wait until the freshly
             // rendered layout reports fewer pending items than we started with.
-            finalPendingCount = WaitForPendingCount(stream, reference,
+            finalPendingCount = await WaitForPendingCount(stream, reference,
                 count => count < initialPendingCount, 5.Seconds());
             finalPendingCount.Should().BeLessThan(initialPendingCount, "Start All should reduce pending count");
             Output.WriteLine($"✅ Step 5: Start clicked - pending count reduced from {initialPendingCount} to {finalPendingCount}");
@@ -117,22 +117,22 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     /// Test clicking an individual start button for a specific todo item
     /// </summary>
     [Fact]
-    public void TodoList_ClickIndividualStartButton_ShouldMoveSpecificItemToInProgress()
+    public async Task TodoList_ClickIndividualStartButton_ShouldMoveSpecificItemToInProgress()
     {
         // Arrange
         var (_, stream, reference) = SetupTodoLayoutTest();
 
         // Step 1: Wait for initial layout to render with data
         Output.WriteLine("⏳ Step 1: Waiting for initial layout area to render...");
-        var layoutGrid = GetLayoutGrid(stream, reference);
+        var layoutGrid = await GetLayoutGrid(stream, reference);
 
         // Step 2: Get initial pending count
-        var initialPendingCount = CountPendingInLayout(stream, layoutGrid);
+        var initialPendingCount = await CountPendingInLayout(stream, layoutGrid);
         initialPendingCount.Should().BeGreaterThan(0, "Should have at least one pending todo item before starting test");
         Output.WriteLine($"✅ Step 2: Confirmed initial pending count: {initialPendingCount} todos");
 
         // Step 3: Find an individual start button (not "Start All")
-        var (button, areaName) = FindIndividualStartButton(stream, layoutGrid);
+        var (button, areaName) = await FindIndividualStartButton(stream, layoutGrid);
         button.Should().NotBeNull("Should find at least one individual start button");
         areaName.Should().NotBeNull("Button area name should not be null");
         var startButton = button!;
@@ -146,7 +146,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         var expectedFinalCount = initialPendingCount - 1;
         Output.WriteLine($"⏳ Step 5: Waiting for pending count to change from {initialPendingCount} to {expectedFinalCount}...");
 
-        var count = WaitForPendingCount(stream, reference, c => c == expectedFinalCount, 5.Seconds());
+        var count = await WaitForPendingCount(stream, reference, c => c == expectedFinalCount, 5.Seconds());
 
         // Validate the final state
         count.Should().Be(expectedFinalCount, $"Should have {expectedFinalCount} pending todos after clicking individual start button");
@@ -187,11 +187,11 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     /// when nothing materializes in time — the await-free equivalent of the old
     /// <c>FirstOrDefaultAsync().Timeout(...)</c> probe used to scan many areas tolerantly.
     /// </summary>
-    private static UiControl? TryGetControl(ISynchronizationStream<JsonElement> stream, string area, TimeSpan within)
+    private static async Task<UiControl?> TryGetControl(ISynchronizationStream<JsonElement> stream, string area, TimeSpan within)
     {
         try
         {
-            return stream.GetControlStream(area)
+            return await stream.GetControlStream(area)
                 .Should().Within(within).Match(control => control != null);
         }
         catch (AssertionException)
@@ -204,12 +204,12 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     /// <summary>
     /// Gets the current layout grid control from the stream (blocks inside the reactive assertion).
     /// </summary>
-    private LayoutGridControl GetLayoutGrid(ISynchronizationStream<JsonElement> stream, LayoutAreaReference reference)
+    private async Task<LayoutGridControl> GetLayoutGrid(ISynchronizationStream<JsonElement> stream, LayoutAreaReference reference)
     {
         Output.WriteLine("⏳ Waiting for layout area to render...");
-        var initialControl = (LayoutGridControl)stream
+        var initialControl = (LayoutGridControl)(await stream
             .GetControlStream(reference.Area!)
-            .Should().Within(10.Seconds()).Match(c => c is LayoutGridControl)!;
+            .Should().Within(10.Seconds()).Match(c => c is LayoutGridControl))!;
 
         Output.WriteLine($"✅ LayoutGrid rendered with {initialControl.Areas.Count} areas");
         return initialControl;
@@ -220,13 +220,13 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     /// returns it. The wait is reactive: a fresh "current pending count" snapshot is re-derived from
     /// the layout stream on a short interval until the predicate holds or the timeout elapses.
     /// </summary>
-    private int WaitForPendingCount(
+    private async Task<int> WaitForPendingCount(
         ISynchronizationStream<JsonElement> stream,
         LayoutAreaReference reference,
         Func<int, bool> predicate,
         TimeSpan timeout)
     {
-        return Observable
+        return await Observable
             .Interval(100.Milliseconds())
             .StartWith(0L)
             .SelectMany(_ => CurrentPendingCount(stream, reference))
@@ -240,7 +240,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     /// Each area control is read sequentially (blocking inside the reactive probe), mirroring the original
     /// per-area scan — no nested stream subscription, so no deadlock.
     /// </summary>
-    private int CountPendingInLayout(ISynchronizationStream<JsonElement> stream, LayoutGridControl layoutGrid)
+    private async Task<int> CountPendingInLayout(ISynchronizationStream<JsonElement> stream, LayoutGridControl layoutGrid)
     {
         Output.WriteLine("📊 Finding and validating Pending count...");
 
@@ -249,7 +249,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
             var areaName = area.Area.ToString();
             if (areaName == null) continue;
 
-            var areaControl = TryGetControl(stream, areaName, 2.Seconds());
+            var areaControl = await TryGetControl(stream, areaName, 2.Seconds());
             var count = ExtractPendingCount(areaControl);
             if (count != null)
             {
@@ -305,7 +305,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     /// <summary>
     /// Finds a button by searching for specific text in the button content
     /// </summary>
-    private (MenuItemControl? button, string? areaName) FindButtonByText(ISynchronizationStream<JsonElement> stream, LayoutGridControl layoutGrid, string searchText)
+    private async Task<(MenuItemControl? button, string? areaName)> FindButtonByText(ISynchronizationStream<JsonElement> stream, LayoutGridControl layoutGrid, string searchText)
     {
         Output.WriteLine($"🔍 Looking for button containing '{searchText}'...");
 
@@ -316,7 +316,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
 
             Output.WriteLine($"   Area: {areaName}");
 
-            var areaControls = TryGetControl(stream, areaName, 2.Seconds());
+            var areaControls = await TryGetControl(stream, areaName, 2.Seconds());
 
             if (areaControls is MenuItemControl button)
             {
@@ -342,7 +342,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
                         if (string.IsNullOrEmpty(stackAreaName))
                             continue;
 
-                        var stackAreaControl = TryGetControl(stream, stackAreaName, 2.Seconds());
+                        var stackAreaControl = await TryGetControl(stream, stackAreaName, 2.Seconds());
                         if (stackAreaControl is MenuItemControl stackButton)
                         {
                             var text = stackButton.Title?.ToString() ?? "";
@@ -369,24 +369,24 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     /// <summary>
     /// Finds an individual start button (not "Start All")
     /// </summary>
-    private (MenuItemControl? button, string? areaName) FindIndividualStartButton(ISynchronizationStream<JsonElement> stream, LayoutGridControl layoutGrid)
+    private async Task<(MenuItemControl? button, string? areaName)> FindIndividualStartButton(ISynchronizationStream<JsonElement> stream, LayoutGridControl layoutGrid)
     {
         Output.WriteLine("🔍 Looking for individual start button (not 'Start All')...");
 
-        return RecursivelyFindIndividualStartButton(stream, layoutGrid.Areas);
+        return await RecursivelyFindIndividualStartButton(stream, layoutGrid.Areas);
     }
 
     /// <summary>
     /// Recursively searches through areas and container controls to find individual start buttons
     /// </summary>
-    private (MenuItemControl? button, string? areaName) RecursivelyFindIndividualStartButton(ISynchronizationStream<JsonElement> stream, IEnumerable<NamedAreaControl> areas)
+    private async Task<(MenuItemControl? button, string? areaName)> RecursivelyFindIndividualStartButton(ISynchronizationStream<JsonElement> stream, IEnumerable<NamedAreaControl> areas)
     {
         foreach (var area in areas)
         {
             var areaName = area.Area.ToString();
             if (areaName == null) continue;
 
-            var areaControl = TryGetControl(stream, areaName, 2.Seconds());
+            var areaControl = await TryGetControl(stream, areaName, 2.Seconds());
 
             if (areaControl is MenuItemControl button)
             {
@@ -407,7 +407,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
                 if (stack.Areas != null)
                 {
                     // Recursively search within the stack control
-                    var result = RecursivelyFindIndividualStartButton(stream, stack.Areas);
+                    var result = await RecursivelyFindIndividualStartButton(stream, stack.Areas);
                     if (result.button != null)
                     {
                         return result;
@@ -421,7 +421,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
                 if (nestedGrid.Areas != null)
                 {
                     // Recursively search within the nested grid
-                    var result = RecursivelyFindIndividualStartButton(stream, nestedGrid.Areas);
+                    var result = await RecursivelyFindIndividualStartButton(stream, nestedGrid.Areas);
                     if (result.button != null)
                     {
                         return result;

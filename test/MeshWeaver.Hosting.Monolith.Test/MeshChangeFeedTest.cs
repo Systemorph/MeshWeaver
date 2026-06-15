@@ -46,9 +46,9 @@ public class MeshChangeFeedTest(ITestOutputHelper output) : MonolithMeshTestBase
         return SeedTopLevel(node);
     }
 
-    private void DeleteTestNode(string path)
+    private async Task DeleteTestNode(string path)
     {
-        var response = Mesh.Observe(new DeleteNodeRequest(path), o => o.WithTarget(Mesh.Address)).Should().Emit();
+        var response = await Mesh.Observe(new DeleteNodeRequest(path), o => o.WithTarget(Mesh.Address)).Should().Emit();
         response.Message.Error.Should().BeNullOrEmpty();
     }
 
@@ -92,51 +92,51 @@ public class MeshChangeFeedTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact]
-    public void CreateNode_PathResolverFindsIt()
+    public async Task CreateNode_PathResolverFindsIt()
     {
         // Resolve before create Ã¢â‚¬â€ should not find it
-        var before = PathResolver.ResolvePath("feed-resolve-1").Should().Emit();
+        var before = await PathResolver.ResolvePath("feed-resolve-1").Should().Emit();
 
         CreateTestNode("feed-resolve-1");
 
         // After create Ã¢â‚¬â€ cache was invalidated/pre-warmed by change event
-        var after = PathResolver.ResolvePath("feed-resolve-1").Should().Emit();
+        var after = await PathResolver.ResolvePath("feed-resolve-1").Should().Emit();
         after.Should().NotBeNull();
         after!.Prefix.Should().Contain("feed-resolve-1");
         after.Remainder.Should().BeNullOrEmpty();
     }
 
     [Fact]
-    public void DeleteNode_PathResolverNoLongerFindsIt()
+    public async Task DeleteNode_PathResolverNoLongerFindsIt()
     {
         var created = CreateTestNode("feed-gone-1");
 
         // Verify resolver finds it
-        var exists = PathResolver.ResolvePath(created.Path).Should().Emit();
+        var exists = await PathResolver.ResolvePath(created.Path).Should().Emit();
         exists.Should().NotBeNull();
 
         DeleteTestNode(created.Path);
 
         // After delete Ã¢â‚¬â€ cache evicted, resolver should not find it at that exact path
-        var gone = PathResolver.ResolvePath(created.Path).Should().Emit();
+        var gone = await PathResolver.ResolvePath(created.Path).Should().Emit();
         (gone == null || gone.Prefix != created.Path).Should().BeTrue(
             "deleted node should not resolve to its exact path");
     }
 
     [Fact]
-    public void NestedCreate_EvictsParentPartialMatch()
+    public async Task NestedCreate_EvictsParentPartialMatch()
     {
         // Create parent
         var parent = CreateTestNode("nest-parent-1");
 
         // Resolve nested path Ã¢â‚¬â€ caches partial match (parent with remainder)
-        var partial = PathResolver.ResolvePath($"{parent.Path}/nest-child-1").Should().Emit();
+        var partial = await PathResolver.ResolvePath($"{parent.Path}/nest-child-1").Should().Emit();
 
         // Create child
         CreateTestNode("nest-child-1", parent.Path);
 
         // Now nested path should resolve to child (stale cache evicted by Created event)
-        var afterChild = PathResolver.ResolvePath($"{parent.Path}/nest-child-1").Should().Emit();
+        var afterChild = await PathResolver.ResolvePath($"{parent.Path}/nest-child-1").Should().Emit();
         afterChild.Should().NotBeNull();
         afterChild!.Prefix.Should().Be($"{parent.Path}/nest-child-1");
         afterChild.Remainder.Should().BeNullOrEmpty();

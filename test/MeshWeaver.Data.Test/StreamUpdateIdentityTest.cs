@@ -39,7 +39,7 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [HubFact]
-    public void StreamUpdate_WithAsyncLocalIdentity_DelegateSeesCallerIdentity()
+    public async Task StreamUpdate_WithAsyncLocalIdentity_DelegateSeesCallerIdentity()
     {
         var host = GetHost();
         var workspace = host.GetWorkspace();
@@ -69,7 +69,7 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
             return (ChangeItem<EntityStore>?)null;
         }, _ => { });
 
-        var aliceSeen = seen
+        var aliceSeen = await seen
             .Should().Within(5.Seconds())
             .Match(id => id == "alice");
 
@@ -80,7 +80,7 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [HubFact]
-    public void StreamUpdate_WithoutAsyncLocalIdentity_FailsClosed()
+    public async Task StreamUpdate_WithoutAsyncLocalIdentity_FailsClosed()
     {
         var host = GetHost();
         var workspace = host.GetWorkspace();
@@ -103,7 +103,7 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
             return (ChangeItem<EntityStore>?)null;
         }, _ => { });
 
-        var seen = insideDelegate.Should().Within(5.Seconds()).Emit();
+        var seen = await insideDelegate.Should().Within(5.Seconds()).Emit();
 
         // 🚨 2026-05-21 — single fail-closed branch in the PostPipeline. Per
         // the directive "we should NEVER write something as hub", non-mesh

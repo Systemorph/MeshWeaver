@@ -45,7 +45,7 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// and returns its address. Replaces the legacy `kernel/*` standalone hub
     /// addressing — every kernel session is now an Activity-hosted sub-hub.
     /// </summary>
-    private Address CreateKernelSession()
+    private async Task<Address> CreateKernelSession()
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var kernelId = Guid.NewGuid().ToString("N");
@@ -59,7 +59,7 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
             State = MeshNodeState.Active,
             Content = new ActivityLog("KernelExecution") { Status = ActivityStatus.Running }
         };
-        meshService.CreateNode(activityNode).Should().Emit();
+        await meshService.CreateNode(activityNode).Should().Emit();
         return new Address($"{activityNamespace}/markdown-{kernelId}");
     }
 
@@ -89,10 +89,10 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
             .Select(log => log!);
 
     [Fact(Timeout = DefaultTimeoutMs)]
-    public void HelloWorld()
+    public async Task HelloWorld()
     {
         var client = GetClient();
-        var kernelAddress = CreateKernelSession();
+        var kernelAddress = await CreateKernelSession();
 
         var logStream = WatchForActivityLog(client, kernelAddress,
             l => l.Messages.Any(m => m.Message.Contains("Hello World")));
@@ -101,14 +101,14 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
             new SubmitCodeRequest("Console.WriteLine(\"Hello World\");"),
             o => o.WithTarget(kernelAddress));
 
-        var log = logStream.Should().Within(25.Seconds()).Emit();
+        var log = await logStream.Should().Within(25.Seconds()).Emit();
 
         log.Messages.Select(m => m.Message)
             .Should().Contain(m => m.Contains("Hello World"));
     }
 
     [Fact(Timeout = DefaultTimeoutMs)]
-    public void CalculatorDirectlyThroughKernel()
+    public async Task CalculatorDirectlyThroughKernel()
     {
         const string Code = @"using MeshWeaver.Layout;
 using static MeshWeaver.Layout.Controls;
@@ -119,7 +119,7 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
 ";
         const string Area = nameof(Area);
         var client = GetClient();
-        var kernelAddress = CreateKernelSession();
+        var kernelAddress = await CreateKernelSession();
 
         var stream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(kernelAddress, new LayoutAreaReference(Area));
 
@@ -127,18 +127,18 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
             new SubmitCodeRequest(Code) { Id = Area },
             o => o.WithTarget(kernelAddress));
 
-        var control = stream.GetControlStream(Area)
+        var control = await stream.GetControlStream(Area)
             .Should().Within(20.Seconds()).Match(x => x is not null);
 
         var stack = control.Should().BeOfType<StackControl>().Which;
-        control = stream.GetControlStream(stack.Areas.First().Area.ToString()!)
+        control = await stream.GetControlStream(stack.Areas.First().Area.ToString()!)
             .Should().Within(10.Seconds()).Match(x => x is not null);
         var editor = control.Should().BeOfType<EditorControl>().Which;
         editor.DataContext.Should().NotBeNull();
-        var data = stream.GetDataStream<object?>(new(editor.DataContext!))
+        var data = await stream.GetDataStream<object?>(new(editor.DataContext!))
             .Should().Within(10.Seconds()).Match(x => x is not null);
         stream.UpdatePointer(3, editor.DataContext, new("summand1"));
-        var md = stream.GetControlStream(stack.Areas.Last().Area.ToString()!)
+        var md = await stream.GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Should().Within(5.Seconds()).Match(x => !(x as MarkdownControl)?.Markdown?.ToString()?.Contains("3") == true);
 
         md.Should().BeOfType<MarkdownControl>().Which.Markdown.ToString().Should().Contain("5");
@@ -149,10 +149,10 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
     /// (the same path that Blazor interactive markdown views use).
     /// </summary>
     [Fact(Timeout = DefaultTimeoutMs)]
-    public void SubmitCodeRequest_ProducesLayoutAreaResult()
+    public async Task SubmitCodeRequest_ProducesLayoutAreaResult()
     {
         var client = GetClient();
-        var kernelAddress = CreateKernelSession();
+        var kernelAddress = await CreateKernelSession();
         const string viewId = "test-view-1";
 
         var stream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
@@ -162,7 +162,7 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
             new SubmitCodeRequest("MeshWeaver.Layout.Controls.Markdown(\"Hello from kernel\")") { Id = viewId },
             o => o.WithTarget(kernelAddress));
 
-        var control = stream.GetControlStream(viewId)
+        var control = await stream.GetControlStream(viewId)
             .Should().Within(15.Seconds()).Match(x => x is not null);
 
         control.Should().BeOfType<MarkdownControl>();
@@ -174,10 +174,10 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
     /// share state (like a notebook — variables persist between cells).
     /// </summary>
     [Fact(Timeout = DefaultTimeoutMs)]
-    public void MultipleSubmissions_ShareKernelState()
+    public async Task MultipleSubmissions_ShareKernelState()
     {
         var client = GetClient();
-        var kernelAddress = CreateKernelSession();
+        var kernelAddress = await CreateKernelSession();
 
         var stream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
             kernelAddress, new LayoutAreaReference("cell-2"));
@@ -192,7 +192,7 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
             new SubmitCodeRequest("MeshWeaver.Layout.Controls.Markdown($\"Value is {myValue}\")") { Id = "cell-2" },
             o => o.WithTarget(kernelAddress));
 
-        var control = stream.GetControlStream("cell-2")
+        var control = await stream.GetControlStream("cell-2")
             .Should().Within(15.Seconds()).Match(x => x is not null);
 
         control.Should().BeOfType<MarkdownControl>();
@@ -205,10 +205,10 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
     /// per-Activity MeshNode path; uniqueness comes from the kernel-id GUID.
     /// </summary>
     [Fact]
-    public void MultipleKernelSessions_HaveUniqueAddresses()
+    public async Task MultipleKernelSessions_HaveUniqueAddresses()
     {
-        var address1 = CreateKernelSession();
-        var address2 = CreateKernelSession();
+        var address1 = await CreateKernelSession();
+        var address2 = await CreateKernelSession();
 
         address1.Should().NotBe(address2, "Each kernel session should have a unique address");
     }
@@ -218,10 +218,10 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
     /// Submits block 1 (defines x), block 2 (uses x), block 3 (uses x again).
     /// </summary>
     [Fact(Timeout = DefaultTimeoutMs)]
-    public void ThreeSubmissions_ShareState()
+    public async Task ThreeSubmissions_ShareState()
     {
         var client = GetClient();
-        var kernelAddress = CreateKernelSession();
+        var kernelAddress = await CreateKernelSession();
 
         var stream2 = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
             kernelAddress, new LayoutAreaReference("s2"));
@@ -232,10 +232,10 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
         client.Post(new SubmitCodeRequest("MeshWeaver.Layout.Controls.Markdown($\"first: {sharedValue}\")") { Id = "s2" }, o => o.WithTarget(kernelAddress));
         client.Post(new SubmitCodeRequest("MeshWeaver.Layout.Controls.Markdown($\"second: {sharedValue * 2}\")") { Id = "s3" }, o => o.WithTarget(kernelAddress));
 
-        var r2 = stream2.GetControlStream("s2").Should().Within(20.Seconds()).Match(x => x is not null);
+        var r2 = await stream2.GetControlStream("s2").Should().Within(20.Seconds()).Match(x => x is not null);
         (r2 as MarkdownControl)!.Markdown.ToString().Should().Contain("first: 100");
 
-        var r3 = stream3.GetControlStream("s3").Should().Within(20.Seconds()).Match(x => x is not null);
+        var r3 = await stream3.GetControlStream("s3").Should().Within(20.Seconds()).Match(x => x is not null);
         (r3 as MarkdownControl)!.Markdown.ToString().Should().Contain("second: 200");
     }
 
@@ -245,10 +245,10 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
     /// If variables don't persist, subsequent blocks fail with CS0103 "does not exist".
     /// </summary>
     [Fact(Timeout = DefaultTimeoutMs)]
-    public void InteractiveShowcase_VariablesPersistAcrossAllBlocks()
+    public async Task InteractiveShowcase_VariablesPersistAcrossAllBlocks()
     {
         var client = GetClient();
-        var kernelAddress = CreateKernelSession();
+        var kernelAddress = await CreateKernelSession();
 
         // Act I — silent setup: variables, collections, and local functions
         const string actI = @"
@@ -308,19 +308,19 @@ var wordFreq = corpus.Split(' ')
         client.Post(new SubmitCodeRequest(actIV) { Id = "act-4" }, o => o.WithTarget(kernelAddress));
         client.Post(new SubmitCodeRequest(actV) { Id = "act-5" }, o => o.WithTarget(kernelAddress));
 
-        MarkdownControl GetMarkdown(ISynchronizationStream<JsonElement> stream, string areaId)
+        async Task<MarkdownControl> GetMarkdown(ISynchronizationStream<JsonElement> stream, string areaId)
         {
-            var control = stream.GetControlStream(areaId).Should().Within(20.Seconds()).Match(x => x is not null);
+            var control = await stream.GetControlStream(areaId).Should().Within(20.Seconds()).Match(x => x is not null);
             return (MarkdownControl)control!;
         }
 
-        GetMarkdown(stream2, "act-2").Markdown.ToString().Should().Contain("Uptime:",
+        (await GetMarkdown(stream2, "act-2")).Markdown.ToString().Should().Contain("Uptime:",
             "Act II must see `now` and `epoch` from Act I");
-        GetMarkdown(stream3, "act-3").Markdown.ToString().Should().Contain("Primes below 200: 46",
+        (await GetMarkdown(stream3, "act-3")).Markdown.ToString().Should().Contain("Primes below 200: 46",
             "Act III must see `primes` collection from Act I");
-        GetMarkdown(stream4, "act-4").Markdown.ToString().Should().Contain("Collatz(27) has 111 steps",
+        (await GetMarkdown(stream4, "act-4")).Markdown.ToString().Should().Contain("Collatz(27) has 111 steps",
             "Act IV must see `Collatz` local function from Act I");
-        GetMarkdown(stream5, "act-5").Markdown.ToString().Should().Contain("'the' (4x)",
+        (await GetMarkdown(stream5, "act-5")).Markdown.ToString().Should().Contain("'the' (4x)",
             "Act V must see `wordFreq` dictionary from Act I");
     }
 
@@ -333,7 +333,7 @@ var wordFreq = corpus.Split(' ')
     /// This exercises the exact pipeline used by the UI.
     /// </summary>
     [Fact(Timeout = DefaultTimeoutMs)]
-    public void InteractiveShowcaseMd_FullPipeline_AllBlocksExecute()
+    public async Task InteractiveShowcaseMd_FullPipeline_AllBlocksExecute()
     {
         var markdownPath = Path.Combine(
             Path.GetDirectoryName(GetType().Assembly.Location)!,
@@ -365,7 +365,7 @@ var wordFreq = corpus.Split(' ')
         Output.WriteLine($"Parsed {submissions.Count} submissions from markdown");
 
         var client = GetClient();
-        var kernelAddress = CreateKernelSession();
+        var kernelAddress = await CreateKernelSession();
 
         // Materialise the streams in a dictionary so the assertion loop can
         // pull them out by submission id. The workspace GetRemoteStream replays
@@ -391,7 +391,7 @@ var wordFreq = corpus.Split(' ')
             var stream = streams[submission.Id];
             try
             {
-                var control = stream.GetControlStream(submission.Id)
+                var control = await stream.GetControlStream(submission.Id)
                     .Should().Within(15.Seconds()).Match(x => x is not null);
 
                 var asMarkdown = (control as MarkdownControl);

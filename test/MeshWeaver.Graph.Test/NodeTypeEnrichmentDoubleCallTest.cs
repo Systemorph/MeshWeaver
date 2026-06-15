@@ -112,7 +112,7 @@ public class NodeTypeEnrichmentDoubleCallTest
     /// dead grain to every caller (which is exactly the prod symptom).
     /// </summary>
     [Fact(Timeout = 90_000)]
-    public void DoubleEnrichment_StaysWithinOneSlowPathTimeout()
+    public async Task DoubleEnrichment_StaysWithinOneSlowPathTimeout()
     {
         var (hub, _) = BuildMeshHub();
         var cfg = EmptyMeshConfiguration();
@@ -127,7 +127,7 @@ public class NodeTypeEnrichmentDoubleCallTest
         // Pass 1 — catalog-side enrichment via INodeConfigurationResolver. Slow
         // path fires (custom NodeType, no static fast path), times out at 30 s,
         // returns the compilation-error overlay node.
-        var afterCatalog = NodeTypeEnrichmentHelpers
+        var afterCatalog = await NodeTypeEnrichmentHelpers
             .EnrichWithNodeType(hub, cfg, compilationService: null, bareInstance)
             .Take(1)
             .Should().Within(SingleSlowPathBudget).Emit("the slow path must always emit — fall back to overlay");
@@ -141,7 +141,7 @@ public class NodeTypeEnrichmentDoubleCallTest
         // ResolveHubConfigurationObservable → EnrichWithNodeType. The bug: the
         // line-39 fast path requires AssemblyLocation, the overlay sets none,
         // and the slow path runs a SECOND 30 s window.
-        NodeTypeEnrichmentHelpers
+        await NodeTypeEnrichmentHelpers
             .EnrichWithNodeType(hub, cfg, compilationService: null, afterCatalog)
             .Take(1)
             .Should().Within(SingleSlowPathBudget).Emit();
@@ -164,7 +164,7 @@ public class NodeTypeEnrichmentDoubleCallTest
     /// downstream re-enrichment into a fresh 30 s wait — the bug.
     /// </summary>
     [Fact(Timeout = 10_000)]
-    public void PreEnrichedNode_DoesNotReEnterSlowPath()
+    public async Task PreEnrichedNode_DoesNotReEnterSlowPath()
     {
         var (hub, cache) = BuildMeshHub();
         var cfg = EmptyMeshConfiguration();
@@ -179,7 +179,7 @@ public class NodeTypeEnrichmentDoubleCallTest
         };
 
         var sw = Stopwatch.StartNew();
-        var result = NodeTypeEnrichmentHelpers
+        var result = await NodeTypeEnrichmentHelpers
             .EnrichWithNodeType(hub, cfg, compilationService: null, preEnriched)
             .Take(1)
             .Should().Within(5.Seconds()).Emit();

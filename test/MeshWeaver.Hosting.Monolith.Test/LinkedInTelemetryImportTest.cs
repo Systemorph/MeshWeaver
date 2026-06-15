@@ -82,9 +82,9 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
             });
 
     [Fact(Timeout = 130000)]
-    public void LinkedInTelemetryImport_CompilesAndRendersImportArea()
+    public async Task LinkedInTelemetryImport_CompilesAndRendersImportArea()
     {
-        NodeFactory.CreateNode(new MeshNode("LinkedInProfile", "Systemorph")
+        await NodeFactory.CreateNode(new MeshNode("LinkedInProfile", "Systemorph")
         {
             Name = "LinkedIn Profile",
             NodeType = MeshNode.NodeTypePath,
@@ -99,11 +99,11 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
             }
         }).Should().Emit();
 
-        CreateCode("LinkedInProfile", LinkedInProfileSource).Should().Emit();
-        CreateCode("LinkedInTelemetryImport", LinkedInTelemetryImportSource).Should().Emit();
+        await CreateCode("LinkedInProfile", LinkedInProfileSource).Should().Emit();
+        await CreateCode("LinkedInTelemetryImport", LinkedInTelemetryImportSource).Should().Emit();
 
         var instancePath = $"{NodeTypePath}/test-profile";
-        NodeFactory.CreateNode(new MeshNode("test-profile", NodeTypePath)
+        await NodeFactory.CreateNode(new MeshNode("test-profile", NodeTypePath)
         {
             Name = "Test",
             NodeType = NodeTypePath,
@@ -129,7 +129,7 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
         // cold local run) can take that long before the NodeType reaches a terminal
         // CompilationStatus. The class soft/hard deadlines above are widened to give
         // this legitimately-slow path room.
-        Mesh.GetWorkspace().GetMeshNodeStream(NodeTypePath)
+        await Mesh.GetWorkspace().GetMeshNodeStream(NodeTypePath)
             .Should().Within(45.Seconds())
             .Match(n => n.Content is NodeTypeDefinition d
                 && (d.CompilationStatus == CompilationStatus.Ok
@@ -137,7 +137,7 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
 
         // The NodeType must compile cleanly â€” render the Import area to trigger
         // the compile, then assert we got back a Stack containing the form.
-        var control = RenderArea(instancePath, "ImportTelemetry");
+        var control = await RenderArea(instancePath, "ImportTelemetry");
 
         control.Should().NotBeNull();
         control.Should().BeOfType<StackControl>("ImportTelemetry composes instructions + textarea + button + result via Controls.Stack");
@@ -155,7 +155,7 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
             Content = new CodeConfiguration { Code = source, Language = "csharp" }
         });
 
-    private UiControl RenderArea(string path, string area)
+    private async Task<UiControl> RenderArea(string path, string area)
     {
         var client = GetClient(c => c.AddData());
         var workspace = client.GetWorkspace();
@@ -171,7 +171,7 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
                 c => Output.WriteLine($"[{DateTime.UtcNow:O}] stream emission: kind={c.ChangeType} hasValue={c.Value.ValueKind != JsonValueKind.Undefined}"),
                 ex => Output.WriteLine($"[{DateTime.UtcNow:O}] stream ERROR: {ex.GetType().Name}: {ex.Message}"));
 
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Do(c => Output.WriteLine($"[{DateTime.UtcNow:O}] GetControlStream emission: {c?.GetType().Name ?? "null"}"))
             // 45 s (was 25 s): the cold instance-hub activation â€” assembly load

@@ -48,7 +48,7 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
             .AddLayoutClient()
             .WithTypes(typeof(MenuControl), typeof(NodeMenuItemDefinition));
 
-    private IReadOnlyList<NodeMenuItemDefinition> FetchNodeMenuItems(
+    private async Task<IReadOnlyList<NodeMenuItemDefinition>> FetchNodeMenuItems(
         IMessageHub client, Address nodeAddress)
     {
         var workspace = client.GetWorkspace();
@@ -63,7 +63,7 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
         // so its export items appear only in a LATER emission once the node
         // loads and Read resolves. Match on the snapshot that actually carries
         // the export items rather than grabbing the first non-null (partial) one.
-        var menuControl = stream
+        var menuControl = await stream
             .GetControlStream(MenuControl.GetMenuArea(NodeMenuItemsExtensions.NodeMenuContext))
             .Should().Within(10.Seconds()).Match(
                 x => x is MenuControl m
@@ -73,12 +73,12 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
     }
 
     [Fact(Timeout = 30000)]
-    public void MarkdownNode_NodeMenu_ContainsPdfAndDocxExportItems()
+    public async Task MarkdownNode_NodeMenu_ContainsPdfAndDocxExportItems()
     {
         var client = GetClient();
         var nodeAddress = new Address(MarkdownNodePath);
 
-        var items = FetchNodeMenuItems(client, nodeAddress);
+        var items = await FetchNodeMenuItems(client, nodeAddress);
 
         Output.WriteLine($"Node menu items for Markdown node: {items.Count}");
         foreach (var item in items)

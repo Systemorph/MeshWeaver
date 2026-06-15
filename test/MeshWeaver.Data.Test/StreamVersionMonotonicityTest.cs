@@ -30,7 +30,7 @@ public class StreamVersionMonotonicityTest(ITestOutputHelper output) : HubTestBa
                 .WithType<MyData>(t => t.WithKey(d => d.Id))));
 
     [HubFact]
-    public void OwnerAssignsStrictlyIncreasingVersions_AcrossSequentialUpdates()
+    public async Task OwnerAssignsStrictlyIncreasingVersions_AcrossSequentialUpdates()
     {
         var host = GetHost();
         var workspace = host.GetWorkspace();
@@ -56,7 +56,7 @@ public class StreamVersionMonotonicityTest(ITestOutputHelper output) : HubTestBa
 
         // Collect the first 4 versions (initial snapshot + 3 updates) and assert
         // they are strictly increasing — the owner's monotonic clock.
-        var collected = versions
+        var collected = await versions
             .Take(4)
             .ToList()
             .Should().Within(15.Seconds())

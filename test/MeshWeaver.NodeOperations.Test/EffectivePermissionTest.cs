@@ -26,16 +26,15 @@ public class EffectivePermissionTest(ITestOutputHelper output) : MonolithMeshTes
         => ConfigureMeshBase(builder)
             .AddSpaceType();
 
-    protected override Task SetupAccessRightsAsync()
+    protected override async Task SetupAccessRightsAsync()
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        meshService.CreateNode(AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Admin", null))
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Admin", null))
             .Should().Within(45.Seconds()).Emit();
-        return Task.CompletedTask;
     }
 
     [Fact(Timeout = 60000)]
-    public void CreateSpace_HasPermission_ReturnsAdmin()
+    public async Task CreateSpace_HasPermission_ReturnsAdmin()
     {
         var spaceNode = MeshNode.FromPath("Systemorph") with
         {
@@ -43,9 +42,9 @@ public class EffectivePermissionTest(ITestOutputHelper output) : MonolithMeshTes
             NodeType = SpaceNodeType.NodeType,
             Content = new Space { Name = "Systemorph" }
         };
-        NodeFactory.CreateNode(spaceNode).Should().Within(45.Seconds()).Emit();
+        await NodeFactory.CreateNode(spaceNode).Should().Within(45.Seconds()).Emit();
 
-        var permissions = Mesh.GetEffectivePermissions("Systemorph", TestUsers.Admin.ObjectId)
+        var permissions = await Mesh.GetEffectivePermissions("Systemorph", TestUsers.Admin.ObjectId)
             .Should().Within(90.Seconds()).Match(p => p != Permission.None);
 
         permissions.Should().NotBe(Permission.None,
@@ -62,10 +61,10 @@ public class EffectivePermissionTest(ITestOutputHelper output) : MonolithMeshTes
     /// "No suitable agent" bug was the agent catalog lacking exactly this.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void PublicReadPolicy_GrantsReadOnly_ToUserWithoutRole()
+    public async Task PublicReadPolicy_GrantsReadOnly_ToUserWithoutRole()
     {
         // World-readable, write-capped namespace via a PublicRead _Policy.
-        NodeFactory.CreateNode(MeshNode.FromPath("PublicCatalog/_Policy") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("PublicCatalog/_Policy") with
         {
             Name = "Catalog Access Policy",
             NodeType = "PartitionAccessPolicy",
@@ -75,14 +74,14 @@ public class EffectivePermissionTest(ITestOutputHelper output) : MonolithMeshTes
             }
         }).Should().Within(45.Seconds()).Emit();
 
-        NodeFactory.CreateNode(MeshNode.FromPath("PublicCatalog/Item1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("PublicCatalog/Item1") with
         {
             Name = "Item 1", NodeType = "Markdown"
         }).Should().Within(45.Seconds()).Emit();
 
         // A user with NO role anywhere near PublicCatalog.
         const string strangerId = "stranger@example.com";
-        var perms = Mesh.GetEffectivePermissions("PublicCatalog/Item1", strangerId)
+        var perms = await Mesh.GetEffectivePermissions("PublicCatalog/Item1", strangerId)
             .Should().Within(60.Seconds()).Match(p => p.HasFlag(Permission.Read));
 
         perms.Should().HaveFlag(Permission.Read,
@@ -99,16 +98,16 @@ public class EffectivePermissionTest(ITestOutputHelper output) : MonolithMeshTes
     /// some default-allow.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void WithoutPublicRead_RolelessUser_GetsNone()
+    public async Task WithoutPublicRead_RolelessUser_GetsNone()
     {
-        NodeFactory.CreateNode(MeshNode.FromPath("PrivateCatalog/Item1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("PrivateCatalog/Item1") with
         {
             Name = "Item 1", NodeType = "Markdown"
         }).Should().Within(45.Seconds()).Emit();
 
         const string strangerId = "stranger@example.com";
         // No PublicRead policy here → a role-less user is denied everything.
-        Mesh.GetEffectivePermissions("PrivateCatalog/Item1", strangerId)
+        await Mesh.GetEffectivePermissions("PrivateCatalog/Item1", strangerId)
             .Should().Within(60.Seconds()).Match(p => p == Permission.None);
     }
 }

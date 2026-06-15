@@ -217,7 +217,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
     #region DataContext Tests - Configuration and Persistence
 
     [Fact(Timeout = 30000)]
-    public void GraphHub_InitializesWithConfiguration()
+    public async Task GraphHub_InitializesWithConfiguration()
     {
         // No PingRequest needed: ReadNode goes directly to the storage
         // adapter and doesn't require the per-node hub to be activated.
@@ -228,21 +228,21 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
 
         // Verify graph node exists in persistence with correct NodeType
         // (Name comes from persistence, NodeType references type/graph definition)
-        var graphNode = ReadNode("graph").Should().Emit();
+        var graphNode = await ReadNode("graph").Should().Emit();
         graphNode.Should().NotBeNull("Graph node should exist in persistence");
         graphNode!.NodeType.Should().Be("type/graph");
     }
 
     [Fact(Timeout = 10000)]
-    public void Persistence_StoryContentIsPreserved()
+    public async Task Persistence_StoryContentIsPreserved()
     {
         // This test verifies that MeshNode.Content is correctly persisted
         // and can be loaded back from the persistence service
 
         // Static node read — no write before, catalog read is correct (no CQRS lag).
-        var storyNode = MeshQuery
+        var storyNode = (await MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery("path:graph/story1"))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial))
             .Items.FirstOrDefault();
 
         // Assert - content should be available
@@ -258,23 +258,23 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 10000)]
-    public void MeshNode_ChildrenAvailable_ViaPersistence()
+    public async Task MeshNode_ChildrenAvailable_ViaPersistence()
     {
         var client = GetClient();
         var graphAddress = new Address("graph");
 
         // Initialize graph hub
-        client.Observe(new PingRequest(), o => o.WithTarget(graphAddress)).Should().Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(graphAddress)).Should().Emit();
 
         // Act - get children via IMeshService. Query's first Initial
         // emission carries the full result set the old QueryAsync().ToListAsync()
         // returned; if children trickle in as Added, wait for the snapshot that
         // has all expected paths.
-        var children = MeshQuery
+        var children = (await MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:graph"))
             .Should().Match(c =>
                 c.Items.Any(n => n.Path == "graph/story1") &&
-                c.Items.Any(n => n.Path == "graph/story2"))
+                c.Items.Any(n => n.Path == "graph/story2")))
             .Items;
 
         // Assert - children should be available
@@ -297,7 +297,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
     // directly — the actual unit under test for "persistence preserves
     // Content shape" is the adapter, not the CreateNodeRequest pipeline.
     [Fact(Timeout = 10000)]
-    public void Persistence_CanCreateNodeWithContent()
+    public async Task Persistence_CanCreateNodeWithContent()
     {
         var newStory = MeshNode.FromPath("graph/story3") with
         {
@@ -311,9 +311,9 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
                 Points = 21
             }
         };
-        _persistence!.SaveNode(newStory, SetupJsonOptions).Should().Emit();
+        await _persistence!.SaveNode(newStory, SetupJsonOptions).Should().Emit();
 
-        var persistedNode = _persistence!.Read("graph/story3", SetupJsonOptions)
+        var persistedNode = await _persistence!.Read("graph/story3", SetupJsonOptions)
             .Should().Match(n => n is not null);
 
         persistedNode.Should().NotBeNull("New story should be persisted");
@@ -329,7 +329,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 10000)]
-    public void Persistence_CanUpdateNodeWithContent()
+    public async Task Persistence_CanUpdateNodeWithContent()
     {
         // This test verifies that nodes with Content can be updated directly via persistence.
         // Note: CreateNode rejects existing nodes ("Node already exists"),
@@ -340,7 +340,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         // bypassing the catalog index — this avoids the CQRS lag that made the
         // QueryAsync-based version flaky on CI.
 
-        var initialNode = _persistence!.Read("graph/story1", SetupJsonOptions)
+        var initialNode = await _persistence!.Read("graph/story1", SetupJsonOptions)
             .Should().Match(n => n is not null);
         initialNode.Should().NotBeNull();
         var initialContent = initialNode!.Content as TestStory;
@@ -358,9 +358,9 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
                 Points = 13
             }
         };
-        _persistence!.SaveNode(updatedNode, SetupJsonOptions).Should().Emit();
+        await _persistence!.SaveNode(updatedNode, SetupJsonOptions).Should().Emit();
 
-        var persistedNode = _persistence!.Read("graph/story1", SetupJsonOptions)
+        var persistedNode = await _persistence!.Read("graph/story1", SetupJsonOptions)
             .Should().Match(n => n is not null && (n.Content as TestStory)!.Title == "Updated Story");
         persistedNode.Should().NotBeNull();
         var content = persistedNode!.Content as TestStory;

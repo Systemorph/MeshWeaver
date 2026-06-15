@@ -85,14 +85,14 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
     }
 
     [HubFact]
-    public void ReadOnlyView_DisplaysStackControl()
+    public async Task ReadOnlyView_DisplaysStackControl()
     {
         var reference = new LayoutAreaReference(OverviewView);
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(), reference);
 
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(5.Seconds()).Match(x => x != null);
 
@@ -100,14 +100,14 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
     }
 
     [HubFact]
-    public void ReadOnlyView_HasLayoutGrid()
+    public async Task ReadOnlyView_HasLayoutGrid()
     {
         var reference = new LayoutAreaReference(OverviewView);
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(), reference);
 
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(5.Seconds()).Match(x => x != null);
 
@@ -118,7 +118,7 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
         var firstAreaName = stack.Areas.First().Area?.ToString();
         firstAreaName.Should().NotBeNullOrEmpty();
 
-        var gridControl = stream
+        var gridControl = await stream
             .GetControlStream(firstAreaName!)
             .Should().Within(5.Seconds()).Match(x => x != null);
 
@@ -126,7 +126,7 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
     }
 
     [HubFact]
-    public void ReadOnlyView_PropertiesHaveDataBinding()
+    public async Task ReadOnlyView_PropertiesHaveDataBinding()
     {
         var reference = new LayoutAreaReference(OverviewView);
         var workspace = GetClient().GetWorkspace();
@@ -134,7 +134,7 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
             CreateHostAddress(), reference);
 
         // Get data from stream
-        var data = stream
+        var data = await stream
             .GetDataStream<TestTodo>(new JsonPointerReference($"/data/\"{TestDataId}\""))
             .Should().Within(5.Seconds()).Match(x => x != null);
 
@@ -144,7 +144,7 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
     }
 
     [HubFact]
-    public void ClickOnProperty_SwitchesToEditControl()
+    public async Task ClickOnProperty_SwitchesToEditControl()
     {
         var reference = new LayoutAreaReference(nameof(EditToggleView));
         var hub = GetClient();
@@ -153,7 +153,7 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
             CreateHostAddress(), reference);
 
         // Get the initial control - should be a Stack with Label
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(5.Seconds()).Match(x => x != null);
 
@@ -171,7 +171,7 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
         hub.Post(new ClickedEvent(clickableArea!, stream.StreamId), o => o.WithTarget(CreateHostAddress()));
 
         // Wait for edit control to appear
-        var editControl = stream
+        var editControl = await stream
             .GetControlStream(clickableArea!)
             .Should().Within(3.Seconds()).Match(c => c is TextFieldControl or NumberFieldControl or SelectControl);
 
@@ -179,14 +179,14 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
     }
 
     [HubFact]
-    public void MarkdownView_RendersStackControl()
+    public async Task MarkdownView_RendersStackControl()
     {
         var reference = new LayoutAreaReference(nameof(MarkdownOverviewView));
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(), reference);
 
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(5.Seconds()).Match(x => x != null);
 
@@ -194,14 +194,14 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
     }
 
     [HubFact]
-    public void PreRenderedHtml_RendersMarkdownControl()
+    public async Task PreRenderedHtml_RendersMarkdownControl()
     {
         var reference = new LayoutAreaReference(nameof(PreRenderedHtmlView));
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(), reference);
 
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(5.Seconds()).Match(x => x != null);
 
@@ -214,7 +214,7 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
         var lastAreaName = stack.Areas.Last().Area?.ToString();
         lastAreaName.Should().NotBeNullOrEmpty();
 
-        var markdownControl = stream
+        var markdownControl = await stream
             .GetControlStream(lastAreaName!)
             .Should().Within(5.Seconds()).Match(x => x != null);
 
@@ -226,14 +226,14 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
     }
 
     [HubFact]
-    public void NoPreRenderedHtml_DoesNotAddMarkdownControl()
+    public async Task NoPreRenderedHtml_DoesNotAddMarkdownControl()
     {
         var reference = new LayoutAreaReference(nameof(NoPreRenderedHtmlView));
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(), reference);
 
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(5.Seconds()).Match(x => x != null);
 

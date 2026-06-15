@@ -50,10 +50,10 @@ public class UserIdentityLeakTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Layout area streams emit an initial state (menu + progress), then the
     /// actual rendered content in a subsequent update.
     /// </summary>
-    private static string WaitForContent(
+    private static async Task<string> WaitForContent(
         ISynchronizationStream<JsonElement> stream, string expectedSubstring, TimeSpan timeout)
     {
-        var changeItem = ((IObservable<ChangeItem<JsonElement>>)stream)
+        var changeItem = await ((IObservable<ChangeItem<JsonElement>>)stream)
             .Should().Within(timeout)
             .Match(ci => ci.Value.ToString().Contains(expectedSubstring, StringComparison.OrdinalIgnoreCase));
         return changeItem.Value.ToString();
@@ -106,7 +106,7 @@ public class UserIdentityLeakTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// not the viewer's name from AccessContext.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void ActivityArea_ShowsNodeOwnerName_NotViewerName()
+    public async Task ActivityArea_ShowsNodeOwnerName_NotViewerName()
     {
         // Login as Bob (different from Alice, the node owner)
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
@@ -116,7 +116,7 @@ public class UserIdentityLeakTest(ITestOutputHelper output) : MonolithMeshTestBa
         var aliceAddress = new Address("User/Alice");
 
         // Ensure the hub is ready
-        client.Observe(new PingRequest(), o => o.WithTarget(aliceAddress)).Should().Within(15.Seconds()).Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(aliceAddress)).Should().Within(15.Seconds()).Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(UserActivityLayoutAreas.ActivityArea);
@@ -124,7 +124,7 @@ public class UserIdentityLeakTest(ITestOutputHelper output) : MonolithMeshTestBa
             aliceAddress, reference);
 
         // Wait for the rendered content (contains "Alice" as the node owner name)
-        var json = WaitForContent(stream, "Alice", TimeSpan.FromSeconds(15));
+        var json = await WaitForContent(stream, "Alice", TimeSpan.FromSeconds(15));
 
         // The welcome banner should show "Alice" (the node owner), not "Bob" (the viewer)
         json.Should().NotContain("Welcome back, Bob",
@@ -136,7 +136,7 @@ public class UserIdentityLeakTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// with the welcome banner and chat section.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void ActivityArea_OwnerSeesPersonalDashboard()
+    public async Task ActivityArea_OwnerSeesPersonalDashboard()
     {
         // Login as Alice (the node owner)
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
@@ -145,7 +145,7 @@ public class UserIdentityLeakTest(ITestOutputHelper output) : MonolithMeshTestBa
         var client = GetClient();
         var aliceAddress = new Address("User/Alice");
 
-        client.Observe(new PingRequest(), o => o.WithTarget(aliceAddress)).Should().Within(15.Seconds()).Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(aliceAddress)).Should().Within(15.Seconds()).Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(UserActivityLayoutAreas.ActivityArea);
@@ -153,7 +153,7 @@ public class UserIdentityLeakTest(ITestOutputHelper output) : MonolithMeshTestBa
             aliceAddress, reference);
 
         // Wait for the rendered dashboard content
-        var json = WaitForContent(stream, "Welcome back", TimeSpan.FromSeconds(15));
+        var json = await WaitForContent(stream, "Welcome back", TimeSpan.FromSeconds(15));
 
         // Owner should see the personal dashboard
         json.Should().Contain("Welcome back, Alice",
@@ -165,7 +165,7 @@ public class UserIdentityLeakTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// (no "Welcome back" banner, no chat).
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void ActivityArea_VisitorSeesPublicProfile()
+    public async Task ActivityArea_VisitorSeesPublicProfile()
     {
         // Login as Bob (visiting Alice's page)
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
@@ -174,7 +174,7 @@ public class UserIdentityLeakTest(ITestOutputHelper output) : MonolithMeshTestBa
         var client = GetClient();
         var aliceAddress = new Address("User/Alice");
 
-        client.Observe(new PingRequest(), o => o.WithTarget(aliceAddress)).Should().Within(15.Seconds()).Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(aliceAddress)).Should().Within(15.Seconds()).Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(UserActivityLayoutAreas.ActivityArea);
@@ -182,7 +182,7 @@ public class UserIdentityLeakTest(ITestOutputHelper output) : MonolithMeshTestBa
             aliceAddress, reference);
 
         // Wait for the rendered profile content (visitor sees Alice's name in the profile card)
-        var json = WaitForContent(stream, "Alice", TimeSpan.FromSeconds(15));
+        var json = await WaitForContent(stream, "Alice", TimeSpan.FromSeconds(15));
 
         // Visitor should NOT see the personal welcome banner
         json.Should().NotContain("Welcome back",

@@ -27,7 +27,7 @@ namespace MeshWeaver.Messaging.Hub.Test;
 public class HeartBeatEventGateBypassTest(ITestOutputHelper output) : HubTestBase(output)
 {
     // ReplaySubject(1): the host's HeartBeatEvent handler may fire OnNext before
-    // the test's blocking .Should() subscribes, so a hot Subject would drop the
+    // the test's awaited .Should() subscribes, so a hot Subject would drop the
     // emission. Replay guarantees the signal is observed regardless of ordering.
     private readonly ReplaySubject<HeartBeatEvent> _heartBeatHandled = new(1);
 
@@ -52,7 +52,7 @@ public class HeartBeatEventGateBypassTest(ITestOutputHelper output) : HubTestBas
             });
 
     [Fact]
-    public void HeartBeatEvent_BypassesNeverOpeningGate()
+    public async Task HeartBeatEvent_BypassesNeverOpeningGate()
     {
         var host = GetHost();
         host.Should().NotBeNull();
@@ -64,12 +64,12 @@ public class HeartBeatEventGateBypassTest(ITestOutputHelper output) : HubTestBas
 
         // 5s is generous; with the bypass this completes promptly after delivery.
         // Without the bypass the gate stays closed forever and this fails on timeout.
-        // The blocking .Should().Emit() asserts the handler observed the heartbeat:
+        // The awaited .Should().Emit() asserts the handler observed the heartbeat:
         // HeartBeatEvent must bypass every WithInitializationGate predicate so
         // liveness signals reach hubs even while initialization gates are closed.
         // If this fails, the framework-level bypass list in MessageService.cs has
         // regressed — see Doc/Architecture/InitializationGates.md →
         // 'Framework-bypassed messages'.
-        _heartBeatHandled.Should().Within(5.Seconds()).Emit();
+        await _heartBeatHandled.Should().Within(5.Seconds()).Emit();
     }
 }

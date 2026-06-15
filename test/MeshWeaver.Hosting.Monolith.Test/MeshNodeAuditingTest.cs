@@ -26,17 +26,17 @@ public class MeshNodeAuditingTest(ITestOutputHelper output) : MonolithMeshTestBa
     protected override bool ShareMeshAcrossTests => true;
 
     [Fact(Timeout = 20000)]
-    public void CreateNodeRequest_StampsCreatedAndLastModifiedFromIdentity()
+    public async Task CreateNodeRequest_StampsCreatedAndLastModifiedFromIdentity()
     {
         var client = GetClient();
-        client.Observe(new PingRequest(), o => o.WithTarget(Mesh.Address)).Should().Within(15.Seconds()).Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(Mesh.Address)).Should().Within(15.Seconds()).Emit();
 
         var request = new CreateNodeRequest(
             new MeshNode("audit-create", TestPartition) { Name = "Audit Create", NodeType = "Markdown" })
         {
             CreatedBy = "alice@example.com"
         };
-        var response = client.Observe(request, o => o.WithTarget(Mesh.Address)).Should().Within(15.Seconds()).Emit();
+        var response = await client.Observe(request, o => o.WithTarget(Mesh.Address)).Should().Within(15.Seconds()).Emit();
 
         response.Message.Success.Should().BeTrue();
         var saved = response.Message.Node!;
@@ -47,10 +47,10 @@ public class MeshNodeAuditingTest(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact(Timeout = 20000)]
-    public void StreamUpdate_PreservesCreatedAndStampsLastModifiedFromIdentity()
+    public async Task StreamUpdate_PreservesCreatedAndStampsLastModifiedFromIdentity()
     {
         var client = GetClient();
-        client.Observe(new PingRequest(), o => o.WithTarget(Mesh.Address)).Should().Within(15.Seconds()).Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(Mesh.Address)).Should().Within(15.Seconds()).Emit();
 
         // Create
         var create = new CreateNodeRequest(
@@ -58,7 +58,7 @@ public class MeshNodeAuditingTest(ITestOutputHelper output) : MonolithMeshTestBa
         {
             CreatedBy = "alice@example.com"
         };
-        var createResp = client.Observe(create, o => o.WithTarget(Mesh.Address)).Should().Within(15.Seconds()).Emit();
+        var createResp = await client.Observe(create, o => o.WithTarget(Mesh.Address)).Should().Within(15.Seconds()).Emit();
         createResp.Message.Success.Should().BeTrue();
         var created = createResp.Message.Node!;
         var originalCreatedDate = created.CreatedDate;
@@ -75,7 +75,7 @@ public class MeshNodeAuditingTest(ITestOutputHelper output) : MonolithMeshTestBa
         MeshNode updated;
         try
         {
-            updated = Mesh.GetMeshNodeStream(created.Path)
+            updated = await Mesh.GetMeshNodeStream(created.Path)
                 .Update(n => n with { Name = "Renamed" })
                 .Should().Within(15.Seconds()).Emit();
         }
@@ -95,10 +95,10 @@ public class MeshNodeAuditingTest(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact(Timeout = 20000)]
-    public void CreateNode_PreservesExplicitCreatedDate()
+    public async Task CreateNode_PreservesExplicitCreatedDate()
     {
         var client = GetClient();
-        client.Observe(new PingRequest(), o => o.WithTarget(Mesh.Address)).Should().Within(15.Seconds()).Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(Mesh.Address)).Should().Within(15.Seconds()).Emit();
 
         // Import flows (e.g. file-system seed) set CreatedDate explicitly; the handler
         // must not overwrite it with "now".
@@ -109,7 +109,7 @@ public class MeshNodeAuditingTest(ITestOutputHelper output) : MonolithMeshTestBa
             NodeType = "Markdown",
             CreatedDate = historicCreated
         });
-        var response = client.Observe(request, o => o.WithTarget(Mesh.Address)).Should().Within(15.Seconds()).Emit();
+        var response = await client.Observe(request, o => o.WithTarget(Mesh.Address)).Should().Within(15.Seconds()).Emit();
 
         response.Message.Success.Should().BeTrue();
         response.Message.Node!.CreatedDate.Should().Be(historicCreated);

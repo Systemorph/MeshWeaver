@@ -26,13 +26,12 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
             .AddRowLevelSecurity();
     }
 
-    protected override Task SetupAccessRightsAsync()
+    protected override async Task SetupAccessRightsAsync()
     {
         // Grant Editor role to the default admin user on the test namespace
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        meshService.CreateNode(AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Editor", "Test"))
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Editor", "Test"))
             .Should().Within(45.Seconds()).Emit();
-        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -40,10 +39,10 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
     /// asynchronously. After creating an AccessAssignment, subscribing to the
     /// live <c>GetEffectivePermissions</c> stream and using
     /// <c>.Match(p => p.HasFlag(permission))</c> deterministically absorbs the
-    /// index-propagation race — no polling, no Task.Delay. Reactive (blocking)
-    /// assertion so callers stay <c>void</c>.
+    /// index-propagation race — no polling, no Task.Delay. Reactive (awaited)
+    /// assertion the callers <c>await</c>.
     /// </summary>
-    private void WaitForPermission(string path, string objectId, Permission permission)
+    private Task WaitForPermission(string path, string objectId, Permission permission)
         => Mesh.GetEffectivePermissions(path, objectId)
             .Should().Within(90.Seconds()).Match(p => p.HasFlag(permission));
 
@@ -52,7 +51,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
     /// The node should be persisted and retrievable.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void CreateNode_WithMarkdownContent_Succeeds()
+    public async Task CreateNode_WithMarkdownContent_Succeeds()
     {
         // Arrange
         var nodeId = $"Md_{Guid.NewGuid().AsString()}";
@@ -65,7 +64,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
         };
 
         // Act
-        var created = NodeFactory.CreateNode(node).Should().Within(45.Seconds()).Emit();
+        var created = await NodeFactory.CreateNode(node).Should().Within(45.Seconds()).Emit();
 
         // Assert
         created.Should().NotBeNull();
@@ -75,11 +74,11 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
         created.NodeType.Should().Be("Markdown");
 
         // Verify node exists via stream (CQRS-correct read after write)
-        var fetched = ReadNode(nodePath).Should().Within(45.Seconds()).Emit();
+        var fetched = await ReadNode(nodePath).Should().Within(45.Seconds()).Emit();
         fetched.Should().NotBeNull("node should be retrievable from persistence");
 
         // Cleanup
-        NodeFactory.DeleteNode(nodePath).Should().Within(45.Seconds()).Emit();
+        await NodeFactory.DeleteNode(nodePath).Should().Within(45.Seconds()).Emit();
     }
 
     /// <summary>
@@ -87,7 +86,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
     /// The RlsNodeValidator checks permission on the parent path.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void CreateNode_WithoutPermission_Rejected()
+    public async Task CreateNode_WithoutPermission_Rejected()
     {
         // Arrange — switch to "no-access-user" who has no permissions on "Restricted" namespace
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
@@ -108,13 +107,13 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
         {
             // Act & Assert — CreateNode must ERROR with UnauthorizedAccessException.
             // Materialize folds the OnError into a value so we assert it reactively
-            // (no await, no ThrowAsync).
-            var notification = NodeFactory.CreateNode(node).Materialize()
+            // (no ThrowAsync).
+            var notification = await NodeFactory.CreateNode(node).Materialize()
                 .Should().Within(45.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
             notification.Exception.Should().BeOfType<UnauthorizedAccessException>();
 
             // Verify node does NOT exist (per-node hub returns NotFound — ReadNode surfaces null)
-            var fetched = ReadNode(nodePath).Should().Within(45.Seconds()).Emit();
+            var fetched = await ReadNode(nodePath).Should().Within(45.Seconds()).Emit();
             fetched.Should().BeNull("rejected node should not exist");
         }
         finally
@@ -128,7 +127,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
     /// CreateNodeRequest with an invalid NodeType should be rejected.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void CreateNode_InvalidNodeType_Rejected()
+    public async Task CreateNode_InvalidNodeType_Rejected()
     {
         // Arrange
         var nodeId = $"Md_{Guid.NewGuid().AsString()}";
@@ -142,7 +141,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
 
         // Act & Assert — CreateNode must ERROR with InvalidOperationException.
         // Materialize folds the OnError into a value so we assert it reactively.
-        var notification = NodeFactory.CreateNode(node).Materialize()
+        var notification = await NodeFactory.CreateNode(node).Materialize()
             .Should().Within(45.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
         notification.Exception.Should().BeOfType<InvalidOperationException>();
         notification.Exception!.Message.Should().Contain("NodeType");
@@ -153,14 +152,14 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
     /// The mesh node's address is used as the AccessContext for authorization.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void CreateNode_ImpersonateAsHub_UsesHubIdentity()
+    public async Task CreateNode_ImpersonateAsHub_UsesHubIdentity()
     {
         // Arrange — grant access to the mesh hub's address
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var meshAddress = Mesh.Address.ToFullString();
-        meshService.CreateNode(AssignmentNodeFactory.UserRole(meshAddress, "Admin", "Impersonate"))
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(meshAddress, "Admin", "Impersonate"))
             .Should().Within(45.Seconds()).Emit();
-        WaitForPermission("Impersonate", meshAddress, Permission.Create);
+        await WaitForPermission("Impersonate", meshAddress, Permission.Create);
 
         var nodeId = $"Md_{Guid.NewGuid().AsString()}";
         var nodePath = $"Impersonate/{nodeId}";
@@ -174,11 +173,12 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
         // Act — create via ImpersonateAsHub scope (uses hub identity, not user identity).
-        // The blocking .Should().Emit() subscribes synchronously inside the `using`, so
-        // CarryAccessContext captures the hub identity at subscribe time.
+        // The awaited .Should().Emit() subscribes synchronously inside the `using` (the
+        // ToTask() bridge subscribes in the synchronous prologue before the await yields),
+        // so CarryAccessContext captures the hub identity at subscribe time.
         using (accessService.ImpersonateAsHub(Mesh))
         {
-            var created = NodeFactory.CreateNode(node).Should().Within(45.Seconds()).Emit();
+            var created = await NodeFactory.CreateNode(node).Should().Within(45.Seconds()).Emit();
 
             // Assert
             created.Should().NotBeNull();
@@ -186,7 +186,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
             created.State.Should().Be(MeshNodeState.Active);
 
             // Cleanup — still within hub scope, so hub has permission on "Impersonate" namespace
-            NodeFactory.DeleteNode(nodePath).Should().Within(45.Seconds()).Emit();
+            await NodeFactory.DeleteNode(nodePath).Should().Within(45.Seconds()).Emit();
         }
     }
 
@@ -195,14 +195,14 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
     /// has no read access should return no results (security filtering).
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void Query_WithoutImpersonation_ReturnsNoResults()
+    public async Task Query_WithoutImpersonation_ReturnsNoResults()
     {
         // Arrange — grant Admin to mesh hub on "Impersonate" namespace, but NOT to "no-access-user"
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var meshAddress = Mesh.Address.ToFullString();
-        meshService.CreateNode(AssignmentNodeFactory.UserRole(meshAddress, "Admin", "Impersonate"))
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(meshAddress, "Admin", "Impersonate"))
             .Should().Within(45.Seconds()).Emit();
-        WaitForPermission("Impersonate", meshAddress, Permission.Create);
+        await WaitForPermission("Impersonate", meshAddress, Permission.Create);
 
         var nodeId = $"Md_{Guid.NewGuid().AsString()}";
         var nodePath = $"Impersonate/{nodeId}";
@@ -218,7 +218,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
         // Create via impersonation scope (hub has access)
         using (accessService.ImpersonateAsHub(Mesh))
         {
-            NodeFactory.CreateNode(node).Should().Within(45.Seconds()).Emit();
+            await NodeFactory.CreateNode(node).Should().Within(45.Seconds()).Emit();
         }
 
         try
@@ -231,7 +231,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
             });
 
             // Act — query WITHOUT impersonation ("no-access-user" has no read access)
-            var initial = MeshQuery
+            var initial = await MeshQuery
                 .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{nodePath}"))
                 .Should().Within(45.Seconds()).Match(c => c.ChangeType == QueryChangeType.Initial);
 
@@ -244,7 +244,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
             TestUsers.DevLogin(Mesh);
             using (accessService.ImpersonateAsHub(Mesh))
             {
-                NodeFactory.DeleteNode(nodePath).Should().Within(45.Seconds()).Emit();
+                await NodeFactory.DeleteNode(nodePath).Should().Within(45.Seconds()).Emit();
             }
         }
     }
@@ -253,14 +253,14 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
     /// Query with ImpersonateAsHub should succeed when the hub has read access.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void Query_WithImpersonation_ReturnsNode()
+    public async Task Query_WithImpersonation_ReturnsNode()
     {
         // Arrange — grant Admin to mesh hub on "Impersonate" namespace
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var meshAddress = Mesh.Address.ToFullString();
-        meshService.CreateNode(AssignmentNodeFactory.UserRole(meshAddress, "Admin", "Impersonate"))
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(meshAddress, "Admin", "Impersonate"))
             .Should().Within(45.Seconds()).Emit();
-        WaitForPermission("Impersonate", meshAddress, Permission.Create);
+        await WaitForPermission("Impersonate", meshAddress, Permission.Create);
 
         var nodeId = $"Md_{Guid.NewGuid().AsString()}";
         var nodePath = $"Impersonate/{nodeId}";
@@ -276,17 +276,18 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
         // Create via impersonation scope (hub has access)
         using (accessService.ImpersonateAsHub(Mesh))
         {
-            NodeFactory.CreateNode(node).Should().Within(45.Seconds()).Emit();
+            await NodeFactory.CreateNode(node).Should().Within(45.Seconds()).Emit();
         }
 
         try
         {
             // Act — query WITH impersonation scope (hub has read access).
-            // The blocking .Should().Match() subscribes synchronously inside the `using`,
-            // so CarryAccessContext captures the hub identity at subscribe time.
+            // The awaited .Should().Match() subscribes synchronously inside the `using`
+            // (the ToTask() bridge subscribes in the synchronous prologue before the await
+            // yields), so CarryAccessContext captures the hub identity at subscribe time.
             using (accessService.ImpersonateAsHub(Mesh))
             {
-                var change = MeshQuery
+                var change = await MeshQuery
                     .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{nodePath}"))
                     .Should().Within(45.Seconds())
                     .Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Count > 0);
@@ -303,7 +304,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
             // Cleanup
             using (accessService.ImpersonateAsHub(Mesh))
             {
-                NodeFactory.DeleteNode(nodePath).Should().Within(45.Seconds()).Emit();
+                await NodeFactory.DeleteNode(nodePath).Should().Within(45.Seconds()).Emit();
             }
         }
     }

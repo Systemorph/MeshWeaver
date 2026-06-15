@@ -103,14 +103,14 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
     /// </remarks>
     [Theory(Timeout = 30000)]
     [MemberData(nameof(CornerstonePricingTestCases))]
-    public void NodeType_LoadsDataFromSourceDocuments(DataLoadingTestCase testCase)
+    public async Task NodeType_LoadsDataFromSourceDocuments(DataLoadingTestCase testCase)
     {
         var client = GetClient();
         var addressParts = testCase.NodeAddress.Split('/');
         var address = new Address(addressParts);
 
         // Initialize the node hub
-        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
 
         // Get the workspace
         var hub = Mesh.GetHostedHub(address);
@@ -120,10 +120,10 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
         // load can exceed 10 s when this test runs against a freshly-disposed mesh (no warm
         // type registry), so the inner reactive wait gets a 25 s budget inside the 30 s method
         // timeout — the load completes, it is just slow on the cold path.
-        var data = GetDynamicObservable(workspace, testCase.TypeName)
+        var data = (await GetDynamicObservable(workspace, testCase.TypeName)
             .Should()
             .Within(25.Seconds())
-            .Match(d => d != null && d.Length > 0)!;
+            .Match(d => d != null && d.Length > 0))!;
 
         // Verify data was loaded
         data.Should().NotBeNull($"{testCase.TypeName} should be loaded for {testCase.NodeAddress}");
@@ -157,14 +157,14 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
     /// </remarks>
     [Theory(Timeout = 40000)]
     [InlineData("Cornerstone/Microsoft/2026", new[] { "PropertyRisk", "ReinsuranceAcceptance", "ReinsuranceSection" })]
-    public void NodeHub_HasExpectedDataTypesRegistered(string nodeAddress, string[] expectedTypes)
+    public async Task NodeHub_HasExpectedDataTypesRegistered(string nodeAddress, string[] expectedTypes)
     {
         var client = GetClient();
         var addressParts = nodeAddress.Split('/');
         var address = new Address(addressParts);
 
         // Initialize the node hub
-        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
 
         // Get the type registry
         var hub = Mesh.GetHostedHub(address);
@@ -175,7 +175,7 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
         // after activation, so poll the registry until each type appears.
         foreach (var typeName in expectedTypes)
         {
-            var type = Observable.Interval(TimeSpan.FromMilliseconds(50))
+            var type = await Observable.Interval(TimeSpan.FromMilliseconds(50))
                 .StartWith(0L)
                 .Select(_ => typeRegistry.GetType(typeName))
                 .Where(t => t != null)
@@ -217,14 +217,14 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
     [InlineData("Cornerstone/Microsoft/2026", "PropertyRisk", "Id", "LocationName")]
     [InlineData("Cornerstone/Microsoft/2026", "ReinsuranceAcceptance", "Id", "Name")]
     [InlineData("Cornerstone/Microsoft/2026", "ReinsuranceSection", "Id", "Limit")]
-    public void LoadedData_HasValidStructure(string nodeAddress, string typeName, params string[] requiredProperties)
+    public async Task LoadedData_HasValidStructure(string nodeAddress, string typeName, params string[] requiredProperties)
     {
         var client = GetClient();
         var addressParts = nodeAddress.Split('/');
         var address = new Address(addressParts);
 
         // Initialize the node hub
-        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
 
         // Get the workspace and data
         var hub = Mesh.GetHostedHub(address);
@@ -233,10 +233,10 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
         // Cold-start headroom — see NodeType_LoadsDataFromSourceDocuments. The inner wait
         // gets 25 s inside the 30 s method timeout so a cold NodeType compile + source load
         // can finish before the assertion gives up.
-        var data = GetDynamicObservable(workspace, typeName)
+        var data = (await GetDynamicObservable(workspace, typeName)
             .Should()
             .Within(25.Seconds())
-            .Match(d => d != null && d.Length > 0)!;
+            .Match(d => d != null && d.Length > 0))!;
 
         // Verify each record has the required properties with non-null values
         foreach (var record in data)

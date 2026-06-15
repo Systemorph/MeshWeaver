@@ -2,6 +2,8 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using System.Threading.Tasks;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Documentation;
@@ -77,14 +79,14 @@ public class ContentImportSyncTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     [Fact(Timeout = 60000)]
-    public void ImportContent_CopiesBinaryAsset_IntoNodeContentCollection_WithoutHanging()
+    public async Task ImportContent_CopiesBinaryAsset_IntoNodeContentCollection_WithoutHanging()
     {
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         using (access.ImpersonateAsSystem())
         {
-            NodeFactory.CreateNode(
+            await NodeFactory.CreateNode(
                 new MeshNode("CISpace") { NodeType = "User", Name = "CISpace" }).Should().Within(StepTimeout).Emit();
-            NodeFactory.CreateNode(
+            await NodeFactory.CreateNode(
                 new MeshNode("Page", "CISpace") { NodeType = "Markdown", Name = "Page" })
                 .Should().Within(StepTimeout).Emit();
         }
@@ -92,7 +94,7 @@ public class ContentImportSyncTest(ITestOutputHelper output) : MonolithMeshTestB
         var client = GetClient();
         // Posts ImportContentRequest to the CISpace/Page hub; the handler copies TestSource → content
         // on the file-system IIoPool. A hang here trips the Within() — the prior async-copy failure mode.
-        var response = client.ImportContent("CISpace/Page")
+        var response = await client.ImportContent("CISpace/Page")
             .From("TestSource")
             .To("content")
             .Post()
@@ -109,21 +111,21 @@ public class ContentImportSyncTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     [Fact(Timeout = 60000)]
-    public void ImportContent_FromEmbeddedDocContent_CopiesUnifiedPathAssets()
+    public async Task ImportContent_FromEmbeddedDocContent_CopiesUnifiedPathAssets()
     {
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         using (access.ImpersonateAsSystem())
         {
-            NodeFactory.CreateNode(
+            await NodeFactory.CreateNode(
                 new MeshNode("CISpace") { NodeType = "User", Name = "CISpace" }).Should().Within(StepTimeout).Emit();
-            NodeFactory.CreateNode(
+            await NodeFactory.CreateNode(
                 new MeshNode("DocPage", "CISpace") { NodeType = "Markdown", Name = "Doc Page" })
                 .Should().Within(StepTimeout).Emit();
         }
 
         // Copy the real Content/DataMesh/UnifiedPath folder out of the EMBEDDED DocContent collection
         // into the node's content collection — the path that needs the slash-key GetFiles fix.
-        var response = GetClient().ImportContent("CISpace/DocPage")
+        var response = await GetClient().ImportContent("CISpace/DocPage")
             .From("DocContent", "DataMesh/UnifiedPath")
             .To("content")
             .Post()

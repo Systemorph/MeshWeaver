@@ -30,27 +30,27 @@ public class RecentlyAccessedSearchTest(ITestOutputHelper output) : MonolithMesh
     /// Reactive replacement for <c>QueryAsync(...).ToListAsync()</c>: the first
     /// <see cref="QueryChangeType.Initial"/> emission carries the full snapshot.
     /// </summary>
-    private IReadOnlyList<MeshNode> QueryNodes(string query)
-        => MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+    private async Task<IReadOnlyList<MeshNode>> QueryNodes(string query)
+        => (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
     [Fact(Timeout = 30000)]
-    public void RecentlyAccessed_OrderedByAccessTime_AcrossPartitions()
+    public async Task RecentlyAccessed_OrderedByAccessTime_AcrossPartitions()
     {
         // Arrange: create nodes in different partitions
         SeedTopLevel(new MeshNode("p1") { Name = "Partition 1", NodeType = "Group" });
-        NodeFactory.CreateNode(MeshNode.FromPath("p1/doc-a") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("p1/doc-a") with
         {
             Name = "Alpha Doc", NodeType = "Markdown"
         }).Should().Emit();
 
         SeedTopLevel(new MeshNode("p2") { Name = "Partition 2", NodeType = "Group" });
-        NodeFactory.CreateNode(MeshNode.FromPath("p2/doc-b") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("p2/doc-b") with
         {
             Name = "Beta Doc", NodeType = "Markdown"
         }).Should().Emit();
 
-        NodeFactory.CreateNode(MeshNode.FromPath("p1/doc-c") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("p1/doc-c") with
         {
             Name = "Gamma Doc", NodeType = "Markdown"
         }).Should().Emit();
@@ -75,7 +75,7 @@ public class RecentlyAccessedSearchTest(ITestOutputHelper output) : MonolithMesh
 
         // Wait actively until all 3 distinct tracked nodes have surfaced — fold the
         // live query's deltas into a running path set rather than a fixed wait.
-        var results = MeshQuery
+        var results = await MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 "source:accessed scope:descendants is:main sort:LastModified-desc context:search limit:10"))
             .Scan(ImmutableList<MeshNode>.Empty, (acc, c) =>
@@ -113,17 +113,17 @@ public class RecentlyAccessedSearchTest(ITestOutputHelper output) : MonolithMesh
     }
 
     [Fact(Timeout = 30000)]
-    public void RecentlyAccessed_NoAccess_ReturnsEmpty_OrMainNodes()
+    public async Task RecentlyAccessed_NoAccess_ReturnsEmpty_OrMainNodes()
     {
         // Arrange: nodes exist but no activity tracked
         SeedTopLevel(new MeshNode("noAccess") { Name = "No Access NS", NodeType = "Group" });
-        NodeFactory.CreateNode(MeshNode.FromPath("noAccess/doc") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("noAccess/doc") with
         {
             Name = "Unvisited", NodeType = "Markdown"
         }).Should().Emit();
 
         // Act
-        var results = QueryNodes("source:accessed scope:descendants is:main sort:LastModified-desc context:search limit:10");
+        var results = await QueryNodes("source:accessed scope:descendants is:main sort:LastModified-desc context:search limit:10");
 
         // Assert: In InMemory mode, source:accessed returns main nodes (no UserActivity JOIN).
         // In PostgreSQL, this would be empty (INNER JOIN on UserActivity would filter out unvisited nodes).

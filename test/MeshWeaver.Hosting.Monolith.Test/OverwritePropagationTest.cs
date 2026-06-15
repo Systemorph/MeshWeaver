@@ -23,11 +23,11 @@ public class OverwritePropagationTest(ITestOutputHelper output) : MonolithMeshTe
     protected override bool ShareMeshAcrossTests => true;
 
     [Fact(Timeout = 30_000)]
-    public void Overwrite_ReplacesFullNode_PropagatesViaOwner()
+    public async Task Overwrite_ReplacesFullNode_PropagatesViaOwner()
     {
         // 1. Create the owning node with TWO fields set (Name + Category).
         var pathA = $"{TestPartition}/ov";
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode("ov", TestPartition) { Name = "A0", Category = "C0", NodeType = "Markdown" })
             .Should().Within(20.Seconds()).Emit();
 
@@ -49,8 +49,8 @@ public class OverwritePropagationTest(ITestOutputHelper output) : MonolithMeshTe
         });
 
         // 3. Both mirrors observe the initial full snapshot.
-        bEmissions.Should().Within(10.Seconds()).Match(t => t.Name == "A0" && t.Category == "C0");
-        streamFromC.Select(ci => ci?.Name).Should().Within(10.Seconds()).Match(n => n == "A0");
+        await bEmissions.Should().Within(10.Seconds()).Match(t => t.Name == "A0" && t.Category == "C0");
+        await streamFromC.Select(ci => ci?.Name).Should().Within(10.Seconds()).Match(n => n == "A0");
 
         // 4. C OVERWRITES with a full node that changes Name and DROPS Category. Identity
         //    (Id/Namespace) targets the same node; the owner stamps Version on the Full.
@@ -60,7 +60,7 @@ public class OverwritePropagationTest(ITestOutputHelper output) : MonolithMeshTe
 
         // 5. B observes the FULL replace: Name flipped AND the previously-set Category is gone.
         //    (A merge patch could keep Category; a Full overwrite replaces the whole node.)
-        bEmissions.Should().Within(10.Seconds()).Match(
+        await bEmissions.Should().Within(10.Seconds()).Match(
             t => t.Name == "A1" && t.Category == null,
             "Overwrite lands a full node — the Category set before the overwrite must be cleared");
         Output.WriteLine("[b] saw full overwrite propagation");

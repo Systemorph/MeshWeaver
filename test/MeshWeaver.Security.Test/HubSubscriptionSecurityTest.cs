@@ -52,9 +52,9 @@ public class HubSubscriptionSecurityTest(ITestOutputHelper output) : MonolithMes
     /// A user with no roles should have no read permission on the hub.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void UnauthorizedUser_HasNoReadPermission()
+    public async Task UnauthorizedUser_HasNoReadPermission()
     {
-        Mesh.GetEffectivePermissions("SecuredHub", "NobodyUser")
+        await Mesh.GetEffectivePermissions("SecuredHub", "NobodyUser")
             .Should().Be(Permission.None,
                 "user with no role assignments should have zero permissions");
     }
@@ -64,7 +64,7 @@ public class HubSubscriptionSecurityTest(ITestOutputHelper output) : MonolithMes
     /// The stream error is about unmapped collections, not about access denial.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void Subscription_WithReadAccess_PassesAccessCheck()
+    public async Task Subscription_WithReadAccess_PassesAccessCheck()
     {
         // Admin's Viewer access on SecuredHub is pre-seeded via the static
         // AccessAssignment in ConfigureMesh — no runtime mutation needed.
@@ -72,7 +72,7 @@ public class HubSubscriptionSecurityTest(ITestOutputHelper output) : MonolithMes
 
         // Ensure hub is started
         var client = GetClient();
-        client.Observe(new PingRequest(), o => o.WithTarget(hubAddress))
+        await client.Observe(new PingRequest(), o => o.WithTarget(hubAddress))
             .Should().Within(20.Seconds()).Emit();
 
         var workspace = client.GetWorkspace();
@@ -81,7 +81,7 @@ public class HubSubscriptionSecurityTest(ITestOutputHelper output) : MonolithMes
         // The stream must ERROR (about unmapped collections) rather than emit — with
         // read access the error must NOT be "Access denied". Materialize folds the
         // OnError into a value so we assert it reactively (no await, no ThrowsAnyAsync).
-        var notification = stream
+        var notification = await stream
             .Timeout(5.Seconds())
             .Take(1)
             .Materialize()

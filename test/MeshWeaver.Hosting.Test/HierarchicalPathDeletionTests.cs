@@ -86,10 +86,10 @@ public class HierarchicalPathDeletionTests
     }
 
     [Fact]
-    public void SingleNode_no_descendants_deletes_root()
+    public async Task SingleNode_no_descendants_deletes_root()
     {
         var fake = new FakeDeleter();
-        var deleted = HierarchicalPathDeletion
+        var deleted = await HierarchicalPathDeletion
             .DeleteSubtree("root", Array.Empty<string>(), fake.Delete)
             .Should().Emit();
 
@@ -98,10 +98,10 @@ public class HierarchicalPathDeletionTests
     }
 
     [Fact]
-    public void LinearChain_deletes_deepest_first()
+    public async Task LinearChain_deletes_deepest_first()
     {
         var fake = new FakeDeleter();
-        var deleted = HierarchicalPathDeletion
+        var deleted = await HierarchicalPathDeletion
             .DeleteSubtree("a", new[] { "a/b", "a/b/c" }, fake.Delete)
             .Should().Emit();
 
@@ -110,10 +110,10 @@ public class HierarchicalPathDeletionTests
     }
 
     [Fact]
-    public void Siblings_both_complete_before_parent()
+    public async Task Siblings_both_complete_before_parent()
     {
         var fake = new FakeDeleter();
-        var deleted = HierarchicalPathDeletion
+        var deleted = await HierarchicalPathDeletion
             .DeleteSubtree("a", new[] { "a/b", "a/c" }, fake.Delete)
             .Should().Emit();
 
@@ -124,7 +124,7 @@ public class HierarchicalPathDeletionTests
     }
 
     [Fact]
-    public void Siblings_run_in_parallel_neither_blocks_the_other()
+    public async Task Siblings_run_in_parallel_neither_blocks_the_other()
     {
         // Gate both siblings — neither delete completes until we release it.
         // Both Start() calls must happen BEFORE we release either, proving
@@ -146,12 +146,12 @@ public class HierarchicalPathDeletionTests
         fake.Release("a/b");
         fake.Release("a/c");
 
-        var deleted = result.Should().Emit();
+        var deleted = await result.Should().Emit();
         deleted.Last().Should().Be("a");
     }
 
     [Fact]
-    public void Unrelated_branches_progress_independently()
+    public async Task Unrelated_branches_progress_independently()
     {
         // Tree:  root → branchA → leafA
         //         root → branchB → leafB
@@ -176,21 +176,22 @@ public class HierarchicalPathDeletionTests
 
         fake.Release("root/branchB/leafB");
 
-        var deleted = result.Should().Emit();
+        var deleted = await result.Should().Emit();
         deleted.Should().HaveCount(5);
         deleted.Last().Should().Be("root");
     }
 
     [Fact]
-    public void Failure_at_leaf_propagates_and_parent_is_not_deleted()
+    public async Task Failure_at_leaf_propagates_and_parent_is_not_deleted()
     {
         var fake = new FakeDeleter(failPaths: new[] { "a/b" });
 
-        Action act = () => HierarchicalPathDeletion
+        Func<Task> act = () => HierarchicalPathDeletion
             .DeleteSubtree("a", new[] { "a/b" }, fake.Delete)
-            .Wait();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(10))
+            .ToTask(TestContext.Current.CancellationToken);
 
-        act.Should().Throw<InvalidOperationException>()
+        (await act.Should().ThrowAsync<InvalidOperationException>())
             .WithMessage("*primed failure for 'a/b'*");
 
         fake.Completed.Should().BeEmpty("the failing leaf never completes");
@@ -199,19 +200,21 @@ public class HierarchicalPathDeletionTests
     }
 
     [Fact]
-    public void Failure_in_one_branch_does_not_block_sibling_starting_but_root_is_skipped()
+    public async Task Failure_in_one_branch_does_not_block_sibling_starting_but_root_is_skipped()
     {
         // branchA leaf fails; branchB succeeds. Root must not be deleted.
         var fake = new FakeDeleter(failPaths: new[] { "root/branchA/leafA" });
 
-        Action act = () => HierarchicalPathDeletion
+        Func<Task> act = () => HierarchicalPathDeletion
             .DeleteSubtree("root", new[]
             {
                 "root/branchA", "root/branchA/leafA",
                 "root/branchB", "root/branchB/leafB"
-            }, fake.Delete).Wait();
+            }, fake.Delete)
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(10))
+            .ToTask(TestContext.Current.CancellationToken);
 
-        act.Should().Throw<InvalidOperationException>()
+        (await act.Should().ThrowAsync<InvalidOperationException>())
             .WithMessage("*primed failure for 'root/branchA/leafA'*");
 
         // branchB's subtree may have completed (siblings run concurrently),
@@ -222,7 +225,7 @@ public class HierarchicalPathDeletionTests
     }
 
     [Fact]
-    public void Failure_exposes_partial_deletion_list_via_Data()
+    public async Task Failure_exposes_partial_deletion_list_via_Data()
     {
         // Linear chain a → b → c with primed failure at 'a'. c and b succeed
         // before a fails, so the caller should be able to recover the
@@ -231,9 +234,10 @@ public class HierarchicalPathDeletionTests
 
         try
         {
-            HierarchicalPathDeletion
+            await HierarchicalPathDeletion
                 .DeleteSubtree("a", new[] { "a/b", "a/b/c" }, fake.Delete)
-                .Wait();
+                .FirstAsync().Timeout(TimeSpan.FromSeconds(10))
+                .ToTask(TestContext.Current.CancellationToken);
             Assert.Fail("Expected an InvalidOperationException");
         }
         catch (InvalidOperationException ex)
@@ -245,11 +249,11 @@ public class HierarchicalPathDeletionTests
     }
 
     [Fact]
-    public void RootPath_added_if_missing_from_descendants_set()
+    public async Task RootPath_added_if_missing_from_descendants_set()
     {
         // descendants set doesn't contain the root — DeleteSubtree must add it.
         var fake = new FakeDeleter();
-        var deleted = HierarchicalPathDeletion
+        var deleted = await HierarchicalPathDeletion
             .DeleteSubtree("only-root", Array.Empty<string>(), fake.Delete)
             .Should().Emit();
 
@@ -257,12 +261,12 @@ public class HierarchicalPathDeletionTests
     }
 
     [Fact]
-    public void Each_path_invoked_at_most_once_even_if_present_twice()
+    public async Task Each_path_invoked_at_most_once_even_if_present_twice()
     {
         // Defensive: even if the descendants list duplicates 'a/b', the
         // ImmutableHashSet dedup should ensure deleteOne fires once per path.
         var fake = new FakeDeleter();
-        var deleted = HierarchicalPathDeletion
+        var deleted = await HierarchicalPathDeletion
             .DeleteSubtree("a", new[] { "a/b", "a/b" }, fake.Delete)
             .Should().Emit();
 

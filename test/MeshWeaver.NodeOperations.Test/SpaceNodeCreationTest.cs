@@ -23,7 +23,7 @@ public class SpaceNodeCreationTest(ITestOutputHelper output) : MonolithMeshTestB
             .AddSpaceType();
 
     [Fact(Timeout = 60000)]
-    public void Admin_CanCreateSpace()
+    public async Task Admin_CanCreateSpace()
     {
         var spaceId = $"TestSpace_{Guid.NewGuid():N}"[..20];
         var spacePath = spaceId;
@@ -34,7 +34,7 @@ public class SpaceNodeCreationTest(ITestOutputHelper output) : MonolithMeshTestB
             NodeType = SpaceNodeType.NodeType
         };
 
-        var created = NodeFactory.CreateNode(node).Should().Emit();
+        var created = await NodeFactory.CreateNode(node).Should().Emit();
 
         created.Should().NotBeNull("Admin should be able to create Space nodes");
         created.State.Should().Be(MeshNodeState.Active);
@@ -43,15 +43,15 @@ public class SpaceNodeCreationTest(ITestOutputHelper output) : MonolithMeshTestB
         created.Name.Should().Be("Test Space");
         Output.WriteLine($"Space created at: {created.Path}");
 
-        var fetched = ReadNode(spacePath).Should().Emit();
+        var fetched = await ReadNode(spacePath).Should().Emit();
         fetched.Should().NotBeNull("Created space should be queryable");
         fetched!.NodeType.Should().Be("Space");
 
-        NodeFactory.DeleteNode(spacePath).Should().Emit();
+        await NodeFactory.DeleteNode(spacePath).Should().Emit();
     }
 
     [Fact(Timeout = 60000)]
-    public void Admin_CanCreateSpaceWithContent()
+    public async Task Admin_CanCreateSpaceWithContent()
     {
         var spaceId = $"ContentSpace_{Guid.NewGuid():N}"[..20];
         var spacePath = spaceId;
@@ -73,13 +73,13 @@ public class SpaceNodeCreationTest(ITestOutputHelper output) : MonolithMeshTestB
             Content = spaceContent
         };
 
-        var created = NodeFactory.CreateNode(node).Should().Emit();
+        var created = await NodeFactory.CreateNode(node).Should().Emit();
 
         created.Should().NotBeNull();
         created.State.Should().Be(MeshNodeState.Active);
         created.NodeType.Should().Be("Space");
         Output.WriteLine($"Space with content created at: {created.Path}");
 
-        NodeFactory.DeleteNode(spacePath).Should().Emit();
+        await NodeFactory.DeleteNode(spacePath).Should().Emit();
     }
 }

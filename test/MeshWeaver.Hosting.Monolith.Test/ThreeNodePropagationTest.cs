@@ -55,14 +55,14 @@ public class ThreeNodePropagationTest(ITestOutputHelper output) : MonolithMeshTe
     protected override bool ShareMeshAcrossTests => true;
 
     [Fact(Timeout = 30_000)]
-    public void ChangeInC_PropagatesViaA_ToB()
+    public async Task ChangeInC_PropagatesViaA_ToB()
     {
         Output.WriteLine("[test] start");
 
         // 1. Create the owning node `a` with an initial Name.
         var pathA = $"{TestPartition}/a";
         Output.WriteLine($"[test] before CreateNode pathA={pathA}");
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode("a", TestPartition) { Name = "A0", NodeType = "Markdown" })
             .Should().Within(20.Seconds()).Emit();
         Output.WriteLine("[test] CreateNode succeeded");
@@ -92,14 +92,14 @@ public class ThreeNodePropagationTest(ITestOutputHelper output) : MonolithMeshTe
             });
 
         // 5. Wait for b's initial snapshot — proves the stream is wired up.
-        bNames.Should().Within(10.Seconds()).Match(n => n == "A0");
+        await bNames.Should().Within(10.Seconds()).Match(n => n == "A0");
         Output.WriteLine("[b] received initial snapshot 'A0'");
 
         // 6. Likewise wait for c — its Update closure receives the latest node so
         //    we want it to have seen at least one emission first (otherwise the
         //    update transform runs against null/stale state).
         var cNames = streamFromC.Select(ci => ci?.Name);
-        cNames.Should().Within(10.Seconds()).Match(n => n == "A0");
+        await cNames.Should().Within(10.Seconds()).Match(n => n == "A0");
 
         // 7. C writes via its stream. The synchronization protocol carries the
         //    patch to a's owning hub, which validates + applies + broadcasts.
@@ -111,7 +111,7 @@ public class ThreeNodePropagationTest(ITestOutputHelper output) : MonolithMeshTe
             .Subscribe(_ => { }, ex => Output.WriteLine($"[c] update error: {ex.Message}"));
 
         // 8. B's subscription must observe the new state — propagation through a.
-        bNames.Should().Within(10.Seconds()).Match(n => n == "A1",
+        await bNames.Should().Within(10.Seconds()).Match(n => n == "A1",
             "b's subscription must observe c's update via a's broadcast");
         Output.WriteLine("[b] saw 'A1' propagation");
     }

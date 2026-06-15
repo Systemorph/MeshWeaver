@@ -111,14 +111,14 @@ public class SearchExclusionIntegrationTest : MonolithMeshTestBase
         persistence.SaveNode(node, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
 
     [Fact(Timeout = 20000)]
-    public void Search_Context_Excludes_UnderscorePrefixedPaths()
+    public async Task Search_Context_Excludes_UnderscorePrefixedPaths()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         // WITH context:search → the dotfile node is hidden; the ordinary node is not.
-        var searchItems = meshQuery.Query<MeshNode>("path:ACME scope:descendants context:search")
+        var searchItems = (await meshQuery.Query<MeshNode>("path:ACME scope:descendants context:search")
             .Should().Within(20.Seconds())
-            .Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+            .Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         Output.WriteLine($"search results: [{string.Join(", ", searchItems.Select(n => n.Path))}]");
         searchItems.Should().Contain(n => n.Path == "ACME/Visible",
@@ -128,14 +128,14 @@ public class SearchExclusionIntegrationTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 20000)]
-    public void NoSearchContext_StillReturns_UnderscorePrefixedPaths()
+    public async Task NoSearchContext_StillReturns_UnderscorePrefixedPaths()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         // WITHOUT context:search → the dotfile node is still queryable (e.g. the composer's direct read).
-        var allItems = meshQuery.Query<MeshNode>("path:ACME scope:descendants")
+        var allItems = (await meshQuery.Query<MeshNode>("path:ACME scope:descendants")
             .Should().Within(20.Seconds())
-            .Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+            .Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         Output.WriteLine($"unscoped results: [{string.Join(", ", allItems.Select(n => n.Path))}]");
         allItems.Should().Contain(n => n.Path == "ACME/_Memex/Hidden",

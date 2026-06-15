@@ -56,12 +56,12 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
 
 
     [Fact]
-    public void TestEditorWithoutResult()
+    public async Task TestEditorWithoutResult()
     {
         var host = GetHost();
         var workspace = host.GetWorkspace();
         var area = workspace.GetStream(new LayoutAreaReference(nameof(EditorWithoutResult)));
-        var control = area
+        var control = await area
             .GetControlStream(nameof(EditorWithoutResult))
             .Should().Within(10.Seconds()).Match(x => x is not null);
 
@@ -74,9 +74,8 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
                 skin.Label.Should().NotBeNull();
                 skin.Description.Should().NotBeNull();
             });
-        var editorAreas = editor.Areas
-            .Select(a => area.GetControlStream(a.Area.ToString()!).Should().Within(5.Seconds()).Match(x => x is not null))
-            .ToArray();
+        var editorAreas = await Task.WhenAll(editor.Areas
+            .Select(a => area.GetControlStream(a.Area.ToString()!).Should().Within(5.Seconds()).Match(x => x is not null)));
 
         editorAreas.Should().HaveCount(2);
         editorAreas.Should()
@@ -85,7 +84,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
 
     }
     [Fact]
-    public void TestEditorWithResult()
+    public async Task TestEditorWithResult()
     {
         var client = GetClient();
 
@@ -93,12 +92,12 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
         var area = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(),
             new LayoutAreaReference(nameof(EditorWithResult)));
-        var control = area
+        var control = await area
             .GetControlStream(nameof(EditorWithResult))
             .Should().Within(10.Seconds()).Match(x => x is not null);
 
         var stack = control.Should().BeOfType<StackControl>().Subject;
-        control = area
+        control = await area
             .GetControlStream(stack.Areas.First().Area.ToString()!)
             .Should().Within(10.Seconds()).Match(x => x is not null);
 
@@ -111,16 +110,15 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
                 skin.Label.Should().NotBeNull();
                 skin.Description.Should().NotBeNull();
             });
-        var editorAreas = editor.Areas
-            .Select(a => area.GetControlStream(a.Area.ToString()!).Should().Within(5.Seconds()).Match(x => x is not null))
-            .ToArray();
+        var editorAreas = await Task.WhenAll(editor.Areas
+            .Select(a => area.GetControlStream(a.Area.ToString()!).Should().Within(5.Seconds()).Match(x => x is not null)));
 
         editorAreas.Should().HaveCount(2);
         editorAreas.Should()
             .AllBeOfType<NumberFieldControl>()
             ;
 
-        control = area
+        control = await area
             .GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Should().Within(10.Seconds()).Match(x => x is not null);
 
@@ -128,7 +126,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
 
         // update once ==> will issue "add", as 0 was not there
         area.UpdatePointer(1, editor.DataContext!, new("x"));
-        control = area
+        control = await area
             .GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Should().Within(10.Seconds()).Match(x => x is MarkdownControl { Markdown: not "0" });
 
@@ -136,14 +134,14 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
 
         // update once ==> will issue "replace"
         area.UpdatePointer(2, editor.DataContext, new("x"));
-        control = area
+        control = await area
             .GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Should().Within(10.Seconds()).Match(x => x is MarkdownControl { Markdown: not "1" });
 
         control.Should().BeOfType<MarkdownControl>().Subject.Markdown.Should().Be("2");
     }
     [Fact]
-    public void TestEditorWithDelayed()
+    public async Task TestEditorWithDelayed()
     {
         var client = GetClient();
 
@@ -151,12 +149,12 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
         var area = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(),
             new LayoutAreaReference(nameof(EditorWithDelayedResult)));
-        var control = area
+        var control = await area
             .GetControlStream(nameof(EditorWithDelayedResult))
             .Should().Within(10.Seconds()).Match(x => x is not null);
 
         var stack = control.Should().BeOfType<StackControl>().Subject;
-        control = area
+        control = await area
             .GetControlStream(stack.Areas.First().Area.ToString()!)
             .Should().Within(10.Seconds()).Match(x => x is not null);
 
@@ -181,7 +179,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
         // while staying well under 30s. Clamping this final wait to 10s (the value the other two
         // reads legitimately carried) is what made TestEditorWithDelayed fail in CI but pass
         // locally. Restore the original effective bound by waiting up to the method timeout.
-        var controls = controlStream.Where(x => x is not null).ToArray().Should().Within(30.Seconds()).Emit();
+        var controls = await controlStream.Where(x => x is not null).ToArray().Should().Within(30.Seconds()).Emit();
         controls.Length.Should().BeLessThanOrEqualTo(3);
         controls.Last().Should().BeOfType<MarkdownControl>().Which.Markdown.ToString().Should().StartWith("5");
     }
@@ -207,7 +205,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
     ];
 
 
-    private void ValidateListBenchmark<TControl>(ISynchronizationStream<JsonElement> stream, TControl control, ListPropertyBenchmark<TControl> benchmark)
+    private async Task ValidateListBenchmark<TControl>(ISynchronizationStream<JsonElement> stream, TControl control, ListPropertyBenchmark<TControl> benchmark)
         where TControl : ListControlBase<TControl>
     {
         control.Data.Should().BeOfType<JsonPointerReference>().Subject.Pointer.Should().Be(benchmark.Data);
@@ -223,7 +221,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
 
             if (benchmark.Options is not null)
             {
-                options = stream.Reduce(pointer)!
+                options = await stream.Reduce(pointer)!
                     .Select(p =>
                     {
                         var valueString = p.Value.ToString();
@@ -244,7 +242,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [Fact]
-    public void TestEditorWithListFormProperties()
+    public async Task TestEditorWithListFormProperties()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -253,19 +251,18 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
             CreateHostAddress(),
             new LayoutAreaReference(nameof(EditorWithListFormProperties)));
 
-        var control = stream
+        var control = await stream
             .GetControlStream(nameof(EditorWithListFormProperties))
             .Should().Within(10.Seconds()).Match(x => x is not null);
 
         var editor = control.Should().BeOfType<EditorControl>().Subject;
 
-        var controls = editor.Areas
-            .Select(a => stream.GetControlStream(a.Area.ToString()!).Should().Within(5.Seconds()).Match(x => x is not null))
-            .ToArray();
+        var controls = await Task.WhenAll(editor.Areas
+            .Select(a => stream.GetControlStream(a.Area.ToString()!).Should().Within(5.Seconds()).Match(x => x is not null)));
 
         controls.Should().HaveCount(ListPropertyBenchmarks.Length);
         for (int i = 0; i < controls.Length; i++)
-            ValidateListBenchmark(stream, (dynamic)controls[i]!, (dynamic)ListPropertyBenchmarks[i]);
+            await ValidateListBenchmark(stream, (dynamic)controls[i]!, (dynamic)ListPropertyBenchmarks[i]);
     }
 
 

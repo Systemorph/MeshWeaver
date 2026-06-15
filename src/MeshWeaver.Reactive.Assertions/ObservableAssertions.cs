@@ -1,23 +1,25 @@
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 
 namespace MeshWeaver.Reactive.Assertions;
 
 /// <summary>
-/// Entry points for fluent, await-free assertions on <see cref="IObservable{T}"/>.
+/// Entry points for fluent assertions on <see cref="IObservable{T}"/>.
 /// <para>
-/// Reactive code is best tested reactively. Instead of bridging a stream to a <see cref="System.Threading.Tasks.Task"/>
-/// and <c>await</c>-ing it, assert on the stream directly:
+/// Reactive code is best tested reactively. Instead of hand-rolling a blocking wait, the terminal
+/// assertions bridge the stream to a <see cref="System.Threading.Tasks.Task"/> at the test edge
+/// (the sanctioned <c>.FirstAsync()</c>/<c>.ToTask()</c> bridge) and you <c>await</c> them:
 /// </para>
 /// <example>
 /// <code>
 /// // Wait for the first snapshot that has two rows:
-/// meshQuery.Query(request).Should().Match(rows =&gt; rows.Count == 2);
+/// await meshQuery.Query(request).Should().Match(rows =&gt; rows.Count == 2);
 ///
 /// // Equality on the first emission:
-/// hub.GetEffectivePermissions(path).Should().Be(Permission.Read);
+/// await hub.GetEffectivePermissions(path).Should().Be(Permission.Read);
 ///
 /// // Negative — nothing should arrive:
-/// stream.Should().NotEmit(within: TimeSpan.FromMilliseconds(200));
+/// await stream.Should().NotEmit(within: TimeSpan.FromMilliseconds(200));
 /// </code>
 /// </example>
 /// </summary>
@@ -36,16 +38,15 @@ public static class ObservableAssertionExtensions
 }
 
 /// <summary>
-/// Fluent, await-free assertions over a reactive stream. Each terminal method subscribes, blocks
-/// (up to the timeout) for the relevant emission, and asserts — so test bodies stay declarative and
-/// free of <c>await</c>, mirroring how the platform itself runs (reactive, end-to-end).
+/// Fluent assertions over a reactive stream. Each terminal method subscribes, waits (up to the
+/// timeout) for the relevant emission, and asserts — so test bodies stay declarative.
 /// <para>
-/// The blocking wait is a pure synchronous <c>Subscribe</c> + <see cref="System.Threading.ManualResetEventSlim"/> —
-/// no <c>FirstAsync()</c>/<c>ToTask()</c> Rx→Task bridge ("nothing async ever"). A synchronous-replay source
-/// delivers during <c>Subscribe</c>, so the wait returns instantly; an async source blocks until the emission
-/// or the timeout. The wait is the single concession to synchronicity and lives in the assertion, never the
-/// test body. Keep test methods synchronous (<c>void</c>): blocking inside an <c>async</c> test can deadlock the
-/// framework's async context — the very thing reactive tests exist to avoid.
+/// The wait is the sanctioned test-edge Rx→Task bridge: the source is filtered, <c>Take(1)</c>'d,
+/// bounded with <c>Timeout</c>, and bridged via <c>.ToTask()</c> — never a thread-blocking
+/// <see cref="System.Threading.ManualResetEventSlim"/> + <c>Wait</c>. Each terminal assertion
+/// returns a <see cref="System.Threading.Tasks.Task"/> the test body <c>await</c>s; the bridge lives
+/// in the assertion, never the test body. <c>Within(...)</c> stays synchronous — it only configures
+/// the timeout for the rest of the chain.
 /// </para>
 /// </summary>
 /// <typeparam name="T">The element type of the observed stream.</typeparam>
@@ -61,7 +62,7 @@ public class ObservableAssertions<T>
         _timeout = timeout;
     }
 
-    /// <summary>Overrides the wait timeout for the rest of this chain.</summary>
+    /// <summary>Overrides the wait timeout for the rest of this chain. Synchronous — returns this.</summary>
     public ObservableAssertions<T> Within(TimeSpan timeout)
     {
         _timeout = timeout;
@@ -69,26 +70,26 @@ public class ObservableAssertions<T>
     }
 
     /// <summary>
-    /// Blocks (up to the timeout) for the first emission and returns it for further inspection.
+    /// Awaits (up to the timeout) the first emission and returns it for further inspection.
     /// Fails if the stream times out or completes without emitting.
     /// </summary>
-    public T Emit(string because = "")
+    public Task<T> Emit(string because = "")
         => WaitForFirst(null, "emit a value", because);
 
     /// <summary>
-    /// Blocks for the first emission satisfying <paramref name="predicate"/> and returns it. This is
+    /// Awaits the first emission satisfying <paramref name="predicate"/> and returns it. This is
     /// the workhorse — fold the assertion into the predicate, e.g.
-    /// <c>obs.Should().Match(x =&gt; x.Count == 2)</c>. Fails on timeout, or if the stream completes
-    /// without ever producing a matching value.
+    /// <c>await obs.Should().Match(x =&gt; x.Count == 2)</c>. Fails on timeout, or if the stream
+    /// completes without ever producing a matching value.
     /// </summary>
-    public T Match(Func<T, bool> predicate, string because = "")
+    public Task<T> Match(Func<T, bool> predicate, string because = "")
         => WaitForFirst(predicate ?? throw new ArgumentNullException(nameof(predicate)),
             "emit a value matching the predicate", because);
 
-    /// <summary>Blocks for the first emission and asserts it equals <paramref name="expected"/>.</summary>
-    public ObservableAssertions<T> Be(T expected, string because = "")
+    /// <summary>Awaits the first emission and asserts it equals <paramref name="expected"/>.</summary>
+    public async Task<ObservableAssertions<T>> Be(T expected, string because = "")
     {
-        var actual = Emit(because);
+        var actual = await Emit(because);
         if (!EqualityComparer<T>.Default.Equals(actual, expected))
             throw new ObservableAssertionException(
                 $"Expected the observable's first emission to be {Format(expected)}{Reason(because)}, but found {Format(actual)}.");
@@ -96,21 +97,22 @@ public class ObservableAssertions<T>
     }
 
     /// <summary>Asserts the observable completes within the timeout (a value is not required).</summary>
-    public ObservableAssertions<T> Complete(string because = "")
+    public async Task<ObservableAssertions<T>> Complete(string because = "")
     {
-        using var gate = new System.Threading.ManualResetEventSlim(false);
-        var completed = false;
-        Exception? failure = null;
-        using (_subject.Subscribe(_ => { }, ex => { failure = ex; gate.Set(); }, () => { completed = true; gate.Set(); }))
+        try
         {
-            gate.Wait(_timeout);
+            await _subject.IgnoreElements().Timeout(_timeout).ToTask();
         }
-        if (failure is not null)
-            throw new ObservableAssertionException(
-                $"Expected the observable to complete within {Describe(_timeout)}{Reason(because)}, but it errored: {failure.Message}.");
-        if (!completed)
+        catch (TimeoutException)
+        {
             throw new ObservableAssertionException(
                 $"Expected the observable to complete within {Describe(_timeout)}{Reason(because)}, but it did not.");
+        }
+        catch (Exception ex)
+        {
+            throw new ObservableAssertionException(
+                $"Expected the observable to complete within {Describe(_timeout)}{Reason(because)}, but it errored: {ex.Message}.");
+        }
         return this;
     }
 
@@ -119,17 +121,22 @@ public class ObservableAssertions<T>
     /// place a fixed wait is correct — a "nothing should happen" test has no positive signal to
     /// await. Keep <paramref name="within"/> short.
     /// </summary>
-    public ObservableAssertions<T> NotEmit(TimeSpan within, string because = "")
+    public async Task<ObservableAssertions<T>> NotEmit(TimeSpan within, string because = "")
     {
-        using var gate = new System.Threading.ManualResetEventSlim(false);
         T observed = default!;
         var emitted = false;
-        using (_subject.Subscribe(
-            value => { observed = value; emitted = true; gate.Set(); },
-            _ => gate.Set(),
-            () => gate.Set()))
+        try
         {
-            gate.Wait(within);
+            // Wait for the first emission, bounded by `within`. If something arrives, that's a
+            // failure; if the window elapses with nothing (Timeout), the source completes empty,
+            // or the source errors before emitting, the assertion holds — mirroring the original
+            // "no positive signal => pass" semantics.
+            observed = await _subject.Take(1).Timeout(within).ToTask();
+            emitted = true;
+        }
+        catch
+        {
+            // Timeout / empty-completion / pre-emission error — nothing was emitted, assertion holds.
         }
         if (emitted)
             throw new ObservableAssertionException(
@@ -137,27 +144,30 @@ public class ObservableAssertions<T>
         return this;
     }
 
-    private T WaitForFirst(Func<T, bool>? predicate, string expectation, string because)
+    private async Task<T> WaitForFirst(Func<T, bool>? predicate, string expectation, string because)
     {
         var source = predicate is null ? _subject : _subject.Where(predicate);
-        using var gate = new System.Threading.ManualResetEventSlim(false);
-        var result = default(T);
-        var found = false;
-        Exception? failure = null;
-        using (source.Subscribe(
-            value => { if (!found) { result = value; found = true; gate.Set(); } },
-            ex => { failure = ex; gate.Set(); },
-            () => gate.Set()))
+        try
         {
-            gate.Wait(_timeout);
+            return await source.Take(1).Timeout(_timeout).ToTask();
         }
-        if (failure is not null)
-            throw new ObservableAssertionException(
-                $"Expected the observable to {expectation} within {Describe(_timeout)}{Reason(because)}, but it errored: {failure.Message}.");
-        if (!found)
+        catch (TimeoutException)
+        {
             throw new ObservableAssertionException(
                 $"Expected the observable to {expectation} within {Describe(_timeout)}{Reason(because)}, but it did not.");
-        return result!;
+        }
+        catch (InvalidOperationException)
+        {
+            // Source completed without producing a (matching) value — Take(1).ToTask() throws
+            // InvalidOperationException("Sequence contains no elements"). Same "did not" outcome.
+            throw new ObservableAssertionException(
+                $"Expected the observable to {expectation} within {Describe(_timeout)}{Reason(because)}, but it did not.");
+        }
+        catch (Exception ex)
+        {
+            throw new ObservableAssertionException(
+                $"Expected the observable to {expectation} within {Describe(_timeout)}{Reason(because)}, but it errored: {ex.Message}.");
+        }
     }
 
     private static string Describe(TimeSpan t)

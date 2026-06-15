@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Threading.Tasks;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -28,22 +29,22 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
     /// of the old await-based helper — keeps the test bodies <c>void</c> and
     /// await-free per the reactive assertion model.
     /// </summary>
-    private static void WaitForChanges<T>(
+    private static async Task WaitForChanges<T>(
         List<T> changes,
         int expectedMinCount,
         int timeoutMs = 30_000)
-        => Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+        => await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .Where(_ => changes.Count >= expectedMinCount)
             .Should().Within(TimeSpan.FromMilliseconds(timeoutMs)).Emit(
                 $"expected at least {expectedMinCount} change(s) on the accumulator");
 
     [Fact]
-    public void ObserveQuery_EmitsAddedOnNewTodo()
+    public async Task ObserveQuery_EmitsAddedOnNewTodo()
     {
         var basePath = $"ACME/Group/Markdown/Added_{Guid.NewGuid():N}";
 
         // Arrange - Create initial todo
-        NodeFactory.CreateNode(MeshNode.FromPath($"{basePath}/task1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{basePath}/task1") with
         {
             Name = "Task 1",
             NodeType = "Markdown",
@@ -57,7 +58,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
                 $"path:{basePath} nodeType:Markdown state:Active scope:subtree"))
             .Subscribe(change => receivedChanges.Add(change));
 
-        WaitForChanges(receivedChanges, 1);
+        await WaitForChanges(receivedChanges, 1);
 
         // Assert initial
         receivedChanges.Should().HaveCount(1);
@@ -65,7 +66,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
         receivedChanges[0].Items.Should().HaveCount(1);
 
         // Act - Create new todo
-        NodeFactory.CreateNode(MeshNode.FromPath($"{basePath}/task2") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{basePath}/task2") with
         {
             Name = "Task 2",
             NodeType = "Markdown",
@@ -73,7 +74,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
             Content = new { Id = "task2", Title = "Task 2", Status = "Pending" }
         }).Should().Within(30.Seconds()).Emit();
 
-        WaitForChanges(receivedChanges, 2);
+        await WaitForChanges(receivedChanges, 2);
 
         // Assert - Added notification
         receivedChanges.Should().HaveCount(2);
@@ -85,12 +86,12 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
     }
 
     [Fact]
-    public void ObserveQuery_EmitsRemovedOnSoftDelete()
+    public async Task ObserveQuery_EmitsRemovedOnSoftDelete()
     {
         var basePath = $"ACME/Group/Markdown/Removed_{Guid.NewGuid():N}";
 
         // Arrange - Create initial todo as Active
-        NodeFactory.CreateNode(MeshNode.FromPath($"{basePath}/task1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{basePath}/task1") with
         {
             Name = "Task 1",
             NodeType = "Markdown",
@@ -104,14 +105,14 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
                 $"path:{basePath} nodeType:Markdown state:Active scope:subtree"))
             .Subscribe(change => receivedChanges.Add(change));
 
-        WaitForChanges(receivedChanges, 1);
+        await WaitForChanges(receivedChanges, 1);
 
         // Assert initial
         receivedChanges.Should().HaveCount(1);
         receivedChanges[0].Items.Should().HaveCount(1);
 
         // Act - Soft delete by changing state to Deleted
-        NodeFactory.UpdateNode(MeshNode.FromPath($"{basePath}/task1") with
+        await NodeFactory.UpdateNode(MeshNode.FromPath($"{basePath}/task1") with
         {
             Name = "Task 1",
             NodeType = "Markdown",
@@ -119,7 +120,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
             Content = new { Id = "task1", Title = "Task 1", Status = "Pending" }
         }).Should().Within(30.Seconds()).Emit();
 
-        WaitForChanges(receivedChanges, 2);
+        await WaitForChanges(receivedChanges, 2);
 
         // Assert - Removed notification (no longer matches state:Active filter)
         receivedChanges.Should().HaveCount(2);
@@ -131,12 +132,12 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
     }
 
     [Fact]
-    public void ObserveQuery_EmitsUpdatedOnStatusChange()
+    public async Task ObserveQuery_EmitsUpdatedOnStatusChange()
     {
         var basePath = $"ACME/Group/Markdown/Updated_{Guid.NewGuid():N}";
 
         // Arrange - Create initial todo
-        NodeFactory.CreateNode(MeshNode.FromPath($"{basePath}/task1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{basePath}/task1") with
         {
             Name = "Task 1 - Pending",
             NodeType = "Markdown",
@@ -150,13 +151,13 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
                 $"path:{basePath} nodeType:Markdown state:Active scope:subtree"))
             .Subscribe(change => receivedChanges.Add(change));
 
-        WaitForChanges(receivedChanges, 1);
+        await WaitForChanges(receivedChanges, 1);
 
         // Assert initial
         receivedChanges.Should().HaveCount(1);
 
         // Act - Update the todo status
-        NodeFactory.UpdateNode(MeshNode.FromPath($"{basePath}/task1") with
+        await NodeFactory.UpdateNode(MeshNode.FromPath($"{basePath}/task1") with
         {
             Name = "Task 1 - Completed",
             NodeType = "Markdown",
@@ -164,7 +165,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
             Content = new { Id = "task1", Title = "Task 1", Status = "Completed" }
         }).Should().Within(30.Seconds()).Emit();
 
-        WaitForChanges(receivedChanges, 2);
+        await WaitForChanges(receivedChanges, 2);
 
         // Assert - Updated notification
         receivedChanges.Should().HaveCount(2);
@@ -176,12 +177,12 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
     }
 
     [Fact]
-    public void ObserveQuery_DeletedItemsAppearInDeletedQuery()
+    public async Task ObserveQuery_DeletedItemsAppearInDeletedQuery()
     {
         var basePath = $"ACME/Group/Markdown/Deleted_{Guid.NewGuid():N}";
 
         // Arrange - Create initial todo
-        NodeFactory.CreateNode(MeshNode.FromPath($"{basePath}/task1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{basePath}/task1") with
         {
             Name = "Task 1",
             NodeType = "Markdown",
@@ -195,7 +196,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
                 $"path:{basePath} nodeType:Markdown state:Deleted scope:subtree"))
             .Subscribe(change => deletedChanges.Add(change));
 
-        WaitForChanges(deletedChanges, 1);
+        await WaitForChanges(deletedChanges, 1);
 
         // Assert initial - no deleted items
         deletedChanges.Should().HaveCount(1);
@@ -203,7 +204,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
         deletedChanges[0].Items.Should().BeEmpty();
 
         // Act - Soft delete the todo
-        NodeFactory.UpdateNode(MeshNode.FromPath($"{basePath}/task1") with
+        await NodeFactory.UpdateNode(MeshNode.FromPath($"{basePath}/task1") with
         {
             Name = "Task 1",
             NodeType = "Markdown",
@@ -211,7 +212,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
             Content = new { Id = "task1", Title = "Task 1", Status = "Pending" }
         }).Should().Within(30.Seconds()).Emit();
 
-        WaitForChanges(deletedChanges, 2);
+        await WaitForChanges(deletedChanges, 2);
 
         // Assert - Added notification in deleted query
         deletedChanges.Should().HaveCount(2);
@@ -223,19 +224,19 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
     }
 
     [Fact]
-    public void ObserveQuery_RestoreMovesFromDeletedToActive()
+    public async Task ObserveQuery_RestoreMovesFromDeletedToActive()
     {
         var basePath = $"ACME/Group/Markdown/Restore_{Guid.NewGuid():N}";
 
         // Arrange - Create a todo then soft-delete it
         // (CreateNode always confirms to Active, so we must update to Deleted after)
-        NodeFactory.CreateNode(MeshNode.FromPath($"{basePath}/task1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{basePath}/task1") with
         {
             Name = "Task 1",
             NodeType = "Markdown",
             Content = new { Id = "task1", Title = "Task 1", Status = "Pending" }
         }).Should().Within(30.Seconds()).Emit();
-        NodeFactory.UpdateNode(MeshNode.FromPath($"{basePath}/task1") with
+        await NodeFactory.UpdateNode(MeshNode.FromPath($"{basePath}/task1") with
         {
             Name = "Task 1",
             NodeType = "Markdown",
@@ -257,8 +258,8 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
             .Subscribe(change => deletedChanges.Add(change));
 
         // Wait for BOTH initial emissions (one per query subscription).
-        WaitForChanges(activeChanges, 1);
-        WaitForChanges(deletedChanges, 1);
+        await WaitForChanges(activeChanges, 1);
+        await WaitForChanges(deletedChanges, 1);
 
         // Assert initial states
         activeChanges.Should().HaveCount(1);
@@ -267,7 +268,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
         deletedChanges[0].Items.Should().HaveCount(1);
 
         // Act - Restore the todo (change state to Active)
-        NodeFactory.UpdateNode(MeshNode.FromPath($"{basePath}/task1") with
+        await NodeFactory.UpdateNode(MeshNode.FromPath($"{basePath}/task1") with
         {
             Name = "Task 1",
             NodeType = "Markdown",
@@ -276,8 +277,8 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
         }).Should().Within(30.Seconds()).Emit();
 
         // Wait for the restore to propagate to BOTH streams.
-        WaitForChanges(activeChanges, 2);
-        WaitForChanges(deletedChanges, 2);
+        await WaitForChanges(activeChanges, 2);
+        await WaitForChanges(deletedChanges, 2);
 
         // Assert - Active query gets Added, Deleted query gets Removed
         activeChanges.Should().HaveCount(2);
@@ -293,14 +294,14 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
     }
 
     [Fact]
-    public void ObserveQuery_CombineLatestUpdatesOnEitherChange()
+    public async Task ObserveQuery_CombineLatestUpdatesOnEitherChange()
     {
         var basePath = $"ACME/Group/Markdown/Combined_{Guid.NewGuid():N}";
 
         // This test simulates the AllTasks view which combines active and deleted streams
 
         // Arrange - Create one active and one deleted todo
-        NodeFactory.CreateNode(MeshNode.FromPath($"{basePath}/task1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{basePath}/task1") with
         {
             Name = "Active Task",
             NodeType = "Markdown",
@@ -308,13 +309,13 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
             Content = new { Id = "task1", Title = "Active Task", Status = "Pending" }
         }).Should().Within(30.Seconds()).Emit();
 
-        NodeFactory.CreateNode(MeshNode.FromPath($"{basePath}/task2") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{basePath}/task2") with
         {
             Name = "Deleted Task",
             NodeType = "Markdown",
             Content = new { Id = "task2", Title = "Deleted Task", Status = "Completed" }
         }).Should().Within(30.Seconds()).Emit();
-        NodeFactory.UpdateNode(MeshNode.FromPath($"{basePath}/task2") with
+        await NodeFactory.UpdateNode(MeshNode.FromPath($"{basePath}/task2") with
         {
             Name = "Deleted Task",
             NodeType = "Markdown",
@@ -376,7 +377,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
         // (1 active + 1 deleted) — replaces a fixed Task.Delay(300).
         // LastOrDefault on a value-tuple list returns default(tuple) whose
         // fields are null, so check Count > 0 before reading members.
-        Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .Where(_ => combinedResults.Count > 0
                 && combinedResults[^1].Active?.Count == 1
                 && combinedResults[^1].Deleted?.Count == 1)
@@ -389,7 +390,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
         lastResult.Deleted.Should().HaveCount(1);
 
         // Act - Add another active task
-        NodeFactory.CreateNode(MeshNode.FromPath($"{basePath}/task3") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{basePath}/task3") with
         {
             Name = "New Active Task",
             NodeType = "Markdown",
@@ -399,7 +400,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
 
         // Wait until the combined accumulator reflects the new active task —
         // replaces a fixed Task.Delay(300).
-        Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .Where(_ => combinedResults.Count > 0
                 && combinedResults[^1].Active?.Count == 2
                 && combinedResults[^1].Deleted?.Count == 1)

@@ -34,18 +34,13 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// went to the thread grain instead of the response message grain
 /// because the child nodes weren't created in persistence.
 ///
-/// 🚨 Tests are <c>void</c> + reactive assertions (no <c>async</c>/<c>await</c>):
-/// blocking inside an async test deadlocks the in-process hub scheduler — the
-/// agent's streaming execution shares the process and its continuations are
-/// starved by the captured async SynchronizationContext. See
-/// ReactiveTestAssertions.md §2 + ObservableAssertions remarks.
+/// 🚨 Tests <c>await</c> the reactive assertions: each terminal
+/// <c>ObservableAssertions</c> method bridges the stream to a Task at the test
+/// edge (the sanctioned <c>.FirstAsync()/.ToTask()</c> bridge) — no blocking
+/// wait inside the test body. See ObservableAssertions remarks.
 /// </summary>
 public class OrleansAutoExecuteTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
-    // Synchronous client acquisition — the await-free test bodies resolve the
-    // client hub once, up front, on the plain xUnit thread (no async context to
-    // starve). The hub-reachable waits all live inside .Should() blocking
-    // assertions afterward.
     private IMessageHub GetClient([CallerMemberName] string? name = null)
         => base.GetClient($"autoexec-{name}-{Guid.NewGuid():N}", "TestUser");
 
@@ -72,7 +67,7 @@ public class OrleansAutoExecuteTest(ITestOutputHelper output) : OrleansSharedTes
     /// and have final response text. Thread must end with IsExecuting=false.
     /// </summary>
     [Fact]
-    public void AutoExecute_CreatesResponseCell_And_CompletesExecution()
+    public async Task AutoExecute_CreatesResponseCell_And_CompletesExecution()
     {
         SharedOrleansFixture.SwappableFactory.SetInner(new AutoExecEchoChatClientFactory());
         try
@@ -90,14 +85,14 @@ public class OrleansAutoExecuteTest(ITestOutputHelper output) : OrleansSharedTes
             Output.WriteLine($"Thread: {threadPath}, user={userMsgId}");
 
             // Create the thread — AutoExecutePendingMessage should fire on grain activation
-            var createResponse = client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser")))
+            var createResponse = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser")))
                 .Should().Within(30.Seconds()).Emit();
             createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error ?? "");
             Output.WriteLine("Thread created, waiting for execution...");
 
             // Subscribing to the thread stream also activates the per-thread hub
             // (WatchForExecution → auto-execute dispatch). Wait for execution to settle.
-            var thread = GetHubContent<MeshThread>(client, threadPath)
+            var thread = await GetHubContent<MeshThread>(client, threadPath)
                 .Should().Within(30.Seconds())
                 .Match(t => t is { IsExecuting: false, PendingUserMessage: null }
                     && t.Messages.Count >= 2);
@@ -107,14 +102,14 @@ public class OrleansAutoExecuteTest(ITestOutputHelper output) : OrleansSharedTes
             // DispatchAfterClaim allocated for this round.
             var responseMsgId = thread!.Messages[1];
             var responsePath = $"{threadPath}/{responseMsgId}";
-            var response = GetHubContent<ThreadMessage>(client, responsePath)
+            var response = await GetHubContent<ThreadMessage>(client, responsePath)
                 .Should().Within(30.Seconds())
                 .Match(m => !string.IsNullOrEmpty(m?.Text));
             response!.Text.Should().NotBeNullOrEmpty("agent should have written response text");
             Output.WriteLine($"Response: {response.Text![..Math.Min(100, response.Text.Length)]}");
 
             // Verify user cell exists.
-            var userMsg = GetHubContent<ThreadMessage>(client, $"{threadPath}/{userMsgId}")
+            var userMsg = await GetHubContent<ThreadMessage>(client, $"{threadPath}/{userMsgId}")
                 .Should().Within(30.Seconds())
                 .Match(m => m is not null);
             userMsg!.Text.Should().Be("Hello Orleans auto-execute!");
@@ -133,7 +128,7 @@ public class OrleansAutoExecuteTest(ITestOutputHelper output) : OrleansSharedTes
     /// The response cell should have text != "" and != "Allocating agent...".
     /// </summary>
     [Fact]
-    public void AutoExecute_UpdateThreadMessageContent_RoutesToResponseGrain()
+    public async Task AutoExecute_UpdateThreadMessageContent_RoutesToResponseGrain()
     {
         SharedOrleansFixture.SwappableFactory.SetInner(new AutoExecEchoChatClientFactory());
         try
@@ -145,7 +140,7 @@ public class OrleansAutoExecuteTest(ITestOutputHelper output) : OrleansSharedTes
                 createdBy: "TestUser", agentName: "Orchestrator");
             var threadPath = threadNode.Path!;
 
-            client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser")))
+            await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser")))
                 .Should().Within(30.Seconds()).Emit();
 
             // Activate the per-thread hub by subscribing to its stream — CreateNodeRequest
@@ -156,12 +151,12 @@ public class OrleansAutoExecuteTest(ITestOutputHelper output) : OrleansSharedTes
             // Wait for the watcher to claim and allocate the response cell — its id is
             // Messages[1] (BuildThreadWithMessages returns "" for responseMsgId now;
             // DispatchAfterClaim allocates the real id).
-            var claimed = GetHubContent<MeshThread>(client, threadPath)
+            var claimed = await GetHubContent<MeshThread>(client, threadPath)
                 .Should().Within(30.Seconds()).Match(t => t is { Messages.Count: >= 2 });
             var responsePath = $"{threadPath}/{claimed!.Messages[1]}";
 
             // Wait for the response cell to have final text (not empty, not a placeholder).
-            var msg = GetHubContent<ThreadMessage>(client, responsePath)
+            var msg = await GetHubContent<ThreadMessage>(client, responsePath)
                 .Should().Within(30.Seconds())
                 .Match(m => m?.Text is { Length: > 0 } text
                     && !text.StartsWith("Allocating")

@@ -67,14 +67,14 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [Fact]
-    public void FileContentProvider_Auto_Converts_Docx()
+    public async Task FileContentProvider_Auto_Converts_Docx()
     {
         // Arrange
         var hub = GetClient();
         var fileContentProvider = hub.ServiceProvider.GetRequiredService<IFileContentProvider>();
 
         // Act — requesting a .docx file should auto-convert to markdown
-        var result = fileContentProvider.GetFileContent("content", "sample.docx")
+        var result = await fileContentProvider.GetFileContent("content", "sample.docx")
             .Should().Emit();
 
         // Assert
@@ -86,14 +86,14 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [Fact]
-    public void FileContentProvider_Returns_PlainText_For_Md()
+    public async Task FileContentProvider_Returns_PlainText_For_Md()
     {
         // Arrange
         var hub = GetClient();
         var fileContentProvider = hub.ServiceProvider.GetRequiredService<IFileContentProvider>();
 
         // Act — requesting a .md file should return as-is
-        var result = fileContentProvider.GetFileContent("content", "readme.md")
+        var result = await fileContentProvider.GetFileContent("content", "readme.md")
             .Should().Emit();
 
         // Assert
@@ -103,7 +103,7 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [Fact]
-    public void ContentAutocomplete_Filters_And_Scores_By_Query()
+    public async Task ContentAutocomplete_Filters_And_Scores_By_Query()
     {
         // Arrange
         var hub = GetClient();
@@ -115,7 +115,7 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
 
         // Act — query "sample" should match sample.docx but NOT readme.md.
         // Wait for the first snapshot that carries the matching file.
-        var items = contentProvider!.GetItems("sample")
+        var items = await contentProvider!.GetItems("sample")
             .Should().Match(snap => snap.Any(i => i.Label == "sample.docx"));
 
         // Assert — only matching files returned
@@ -135,7 +135,7 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [Fact]
-    public void ContentAutocomplete_ExactMatch_Gets_Highest_Priority()
+    public async Task ContentAutocomplete_ExactMatch_Gets_Highest_Priority()
     {
         // Arrange
         var hub = GetClient();
@@ -146,7 +146,7 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
         contentProvider.Should().NotBeNull();
 
         // Act — exact name match; wait for the first snapshot carrying it
-        var items = contentProvider!.GetItems("sample.docx")
+        var items = await contentProvider!.GetItems("sample.docx")
             .Should().Match(snap => snap.Any(i => i.Label == "sample.docx"));
 
         // Assert — exact match should score 3000
@@ -155,7 +155,7 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [Fact]
-    public void ContentAutocomplete_Wraps_Spaces_In_Quotes()
+    public async Task ContentAutocomplete_Wraps_Spaces_In_Quotes()
     {
         // Arrange — create a file with spaces in the name
         File.WriteAllText(Path.Combine(_contentBasePath, "my document.docx"), "");
@@ -169,7 +169,7 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
             .FirstOrDefault();
 
         // Act — wait for the first snapshot carrying the spaced file
-        var items = contentProvider!.GetItems("my doc")
+        var items = await contentProvider!.GetItems("my doc")
             .Should().Match(snap => snap.Any(i => i.Label == "my document.docx"));
 
         // Assert
@@ -184,13 +184,13 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [Fact]
-    public void GetDataRequest_Content_Prefix_Returns_Markdown_For_Docx()
+    public async Task GetDataRequest_Content_Prefix_Returns_Markdown_For_Docx()
     {
         // Arrange — the unified path content:content/sample.docx should auto-convert
         var hub = GetClient();
 
         // Act
-        var response = hub.Observe(
+        var response = await hub.Observe(
             new GetDataRequest(new UnifiedReference("content:content/sample.docx")),
             o => o.WithTarget(hub.Address)).Should().Within(10.Seconds()).Emit();
 
