@@ -138,7 +138,7 @@ API providers — add a key, choose models
 ┌─ Azure AI Foundry ──────────────────────────────── [API] ┐
 │ Endpoint  https://….services.ai.azure.com   [Save]  ✓     │
 │ API key   ••••••••••••••••                                 │
-│ Models    ☑ gpt-4o   ☑ o3-mini   ☐ cohere-embed-v-4-0      │
+│ Models    ☑ gpt-4o   ☑ o3-mini   ☐ embed-v-4-0             │
 └────────────────────────────────────────────────────────────┘
 ┌─ Anthropic ─────────────────────────────────────── [API] ┐
 │ API key  •••••••• [Save]    Models  ☑ claude-opus-4         │
