@@ -431,12 +431,9 @@ if (useLocalDb)
         .WithLifetime(ContainerLifetime.Persistent)
         .WithPgAdmin(pgAdmin => pgAdmin.WithLifetime(ContainerLifetime.Persistent));
     var db = postgres.AddDatabase("memex");
-    // Separate database (same server) for the content-indexing vector store.
-    var contentDb = postgres.AddDatabase("contentindex");
 
     dbMigration.WithReference(db).WaitFor(db);
     portal.WithReference(db).WaitFor(db);
-    portal.WithReference(contentDb).WaitFor(contentDb);
 }
 else
 {
@@ -451,13 +448,9 @@ else
         });
     var dbName = mode is "test" ? "memex-test" : "memex";
     var db = postgres.AddDatabase("memex", databaseName: dbName);
-    // Separate database (same server) for the content-indexing vector store.
-    var contentDbName = mode is "test" ? "contentindex-test" : "contentindex";
-    var contentDb = postgres.AddDatabase("contentindex", databaseName: contentDbName);
 
     dbMigration.WithReference(db).WaitFor(db);
     portal.WithReference(db).WaitFor(db);
-    portal.WithReference(contentDb).WaitFor(contentDb);
 }
 
 // Inject the portal's own external HTTPS endpoint as Mcp__BaseUrl so the
