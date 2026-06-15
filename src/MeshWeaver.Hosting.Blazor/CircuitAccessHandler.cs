@@ -2,6 +2,7 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components.Authorization;
@@ -105,7 +106,20 @@ public class CircuitAccessHandler : CircuitHandler
             var user = authState.User;
 
             if (user?.Identity?.IsAuthenticated != true)
-                return null;
+                // 🔒 Unauthenticated → an anonymous VIRTUAL user (vuser == anonymous), NEVER null.
+                // Returning null here was the read-protection hole: a null circuit context was
+                // silently elevated to `system-security` (Permission.All) at the sync-stream
+                // subscribe seam (JsonSynchronizationStream), so logged-out visitors could READ
+                // private Spaces by URL (e.g. /AgenticPension/). As a concrete anonymous VUser the
+                // circuit's reads flow through normal RLS: DENIED on private nodes, and still
+                // allowed on PublicRead content (Doc/login) because `publicGrant` is OR'd in for
+                // every identity (PermissionEvaluator). Shaped like VirtualUserMiddleware's guest.
+                return new AccessContext
+                {
+                    ObjectId = WellKnownUsers.Anonymous,
+                    Name = "Guest",
+                    IsVirtual = true
+                };
 
             var email = user.FindFirstValue(ClaimTypes.Email)
                         ?? user.FindFirstValue("email")
