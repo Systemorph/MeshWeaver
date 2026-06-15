@@ -3,6 +3,7 @@
 @using MeshWeaver.Blazor.Portal.Authentication
 @inject IAuthenticationNavigationService AuthNavService
 @inject NavigationManager Navigation
+@inject Microsoft.Extensions.Configuration.IConfiguration Configuration
 
 <PageTitle>Sign In - Memex Portal</PageTitle>
 
@@ -52,12 +53,18 @@
             </button>
         }
 
-        <div class="divider"><span>Publishing</span></div>
-        <button type="button" class="provider-btn-full provider-linkedin-publish" @onclick="NavigateToConnectLinkedIn"
-                title="Authorizes Memex to read &amp; publish LinkedIn posts on your behalf. Requires you to be signed in first — you'll be redirected back here if not.">
-            <span class="provider-icon-text">&#x1F4BC;</span>
-            <span>Connect LinkedIn for publishing</span>
-        </button>
+        @* LinkedIn publishing connect — only when LinkedIn publishing is actually configured
+           (Social:LinkedIn:ClientId). Without creds, /connect/linkedin errors 500, so the button
+           must not show on environments (e.g. atioz) that don't set the Social LinkedIn client. *@
+        @if (ShowLinkedInPublishing)
+        {
+            <div class="divider"><span>Publishing</span></div>
+            <button type="button" class="provider-btn-full provider-linkedin-publish" @onclick="NavigateToConnectLinkedIn"
+                    title="Authorizes Memex to read &amp; publish LinkedIn posts on your behalf. Requires you to be signed in first — you'll be redirected back here if not.">
+                <span class="provider-icon-text">&#x1F4BC;</span>
+                <span>Connect LinkedIn for publishing</span>
+            </button>
+        }
     </div>
 </div>
 
@@ -73,6 +80,7 @@
 
     private IReadOnlyList<ExternalProviderConfig> Providers { get; set; } = [];
     private bool ShowDevLogin { get; set; }
+    private bool ShowLinkedInPublishing { get; set; }
 
     private void NavigateToDevLogin()
     {
@@ -105,6 +113,10 @@
             Providers = navService.GetAvailableProviders();
             ShowDevLogin = navService.IsDevMode;
         }
+
+        // The "Connect LinkedIn for publishing" connect needs Social:LinkedIn:ClientId; hide the button
+        // entirely when it's absent (the connect endpoint 500s without it).
+        ShowLinkedInPublishing = !string.IsNullOrEmpty(Configuration["Social:LinkedIn:ClientId"]);
     }
 
     private string GetProviderLoginUrl(string providerName)
