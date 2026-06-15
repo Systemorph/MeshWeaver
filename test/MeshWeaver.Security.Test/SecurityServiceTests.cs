@@ -549,7 +549,7 @@ public class HubSelfAccessTests(ITestOutputHelper output) : MonolithMeshTestBase
         // (the partition provisioner) create a non-partition type there — and this class runs
         // strict RLS without PublicAdminAccess. The node just needs to exist for the
         // hub-self-access reads, so seed it under System.
-        SeedTopLevel(
+        await SeedTopLevel(
             new MeshNode("TestHub")
             {
                 Name = "Test Hub",

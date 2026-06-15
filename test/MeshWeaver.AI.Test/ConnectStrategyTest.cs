@@ -109,7 +109,7 @@ public class ConnectStrategyTest : AITestBase
         // whose partition already exists. A top-level node IS a partition root, so the
         // PartitionWriteGuard only lets System (the partition provisioner) create a
         // non-partition type there — seed it under System.
-        SeedTopLevel(new MeshNode(owner) { Name = owner, NodeType = "Markdown" });
+        await SeedTopLevel(new MeshNode(owner) { Name = owner, NodeType = "Markdown" });
 
         // 1. Not logged in initially (no credentials file).
         var loggedInBefore = await Manager.IsLoggedIn(ConnectProvider.ClaudeCode, configDir)

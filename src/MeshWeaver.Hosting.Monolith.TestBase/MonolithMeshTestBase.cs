@@ -1,5 +1,6 @@
 ﻿using System.Diagnostics;
 using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Reflection;
@@ -724,11 +725,29 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// (exactly as onboarding/migration do in production), so it bypasses the guard. Only the
     /// partition ROOT needs this — nested children create normally under the caller identity.
     /// </summary>
-    protected MeshNode SeedTopLevel(MeshNode node)
+    protected Task<MeshNode> SeedTopLevel(MeshNode node)
     {
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        using (access.ImpersonateAsSystem())
-            return NodeFactory.CreateNode(node).Timeout(TimeSpan.FromSeconds(30)).Wait();
+        // NON-BLOCKING: never `.Wait()` here. A blocking wait runs on the caller's
+        // thread, and under xUnit's single-threaded async sync-context
+        // (maxParallelThreads:1) that thread IS the only one that can pump the
+        // CreateNode completion — so `.Wait()` from an `async Task` test deadlocks
+        // (the test then dies at its [Fact(Timeout=…)] cap with an empty message).
+        // Bridge at the test edge instead: `.FirstAsync().ToTask()` and the caller
+        // `await`s. Observable.Using opens the ImpersonateAsSystem scope on Subscribe
+        // (here, synchronously, when .ToTask() subscribes) and keeps the System
+        // AsyncLocal alive for the lifetime of the create — so the write authorises
+        // as the platform provisioner (see PathResolutionService for the same shape).
+        return Observable.Using(
+                () => access.ImpersonateAsSystem(),
+                _ => NodeFactory.CreateNode(node))
+            // Subscribe off the test's single-threaded async sync-context (see
+            // ObservableAssertions): keeps the create round-trip on the thread pool
+            // instead of funnelling its continuations onto the one xUnit thread.
+            .SubscribeOn(TaskPoolScheduler.Default)
+            .Timeout(TimeSpan.FromSeconds(30))
+            .FirstAsync()
+            .ToTask();
     }
 
     /// <summary>

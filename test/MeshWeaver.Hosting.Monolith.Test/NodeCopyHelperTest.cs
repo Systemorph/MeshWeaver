@@ -46,7 +46,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : MonolithMeshTestBase
         // System identity (the legitimate partition provisioner) so the fixture exists for the
         // copy assertions. Nested fixtures create normally under the test (Admin) identity.
         if (string.IsNullOrEmpty(node.Namespace))
-            SeedTopLevel(node);
+            await SeedTopLevel(node);
         else
             await MeshService.CreateNode(node).Should().Within(30.Seconds()).Emit();
     }

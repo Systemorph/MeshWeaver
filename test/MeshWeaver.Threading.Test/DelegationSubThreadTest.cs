@@ -42,7 +42,7 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
         // Create context + thread
         var contextPath = "DelegationTestOrg";
         // Top-level partition root → seed under System (only the partition provisioner may create there).
-        SeedTopLevel(new MeshNode(contextPath) { Name = "Delegation Test", NodeType = "Markdown" });
+        await SeedTopLevel(new MeshNode(contextPath) { Name = "Delegation Test", NodeType = "Markdown" });
 
         var client = GetClient();
         var threadResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Test delegation")), o => o.WithTarget(new Address(contextPath))).Should().Within(15.Seconds()).Emit();
@@ -103,7 +103,7 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
         // Create context + thread + response message
         var contextPath = "HierarchyTestOrg";
         // Top-level partition root → seed under System (only the partition provisioner may create there).
-        SeedTopLevel(new MeshNode(contextPath) { Name = "Hierarchy Test", NodeType = "Markdown" });
+        await SeedTopLevel(new MeshNode(contextPath) { Name = "Hierarchy Test", NodeType = "Markdown" });
 
         var client = GetClient();
         var threadResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Test hierarchy")), o => o.WithTarget(new Address(contextPath))).Should().Within(15.Seconds()).Emit();
@@ -290,7 +290,7 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
         // Create context + thread
         var contextPath = "CoexistTestOrg";
         // Top-level partition root → seed under System (only the partition provisioner may create there).
-        SeedTopLevel(new MeshNode(contextPath) { Name = "Coexist Test", NodeType = "Markdown" });
+        await SeedTopLevel(new MeshNode(contextPath) { Name = "Coexist Test", NodeType = "Markdown" });
 
         var client = GetClient();
         var threadResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Test plan and delegations")), o => o.WithTarget(new Address(contextPath))).Should().Within(15.Seconds()).Emit();

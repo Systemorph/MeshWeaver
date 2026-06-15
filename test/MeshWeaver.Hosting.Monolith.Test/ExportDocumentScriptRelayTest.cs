@@ -53,7 +53,7 @@ public class ExportDocumentScriptRelayTest(ITestOutputHelper output) : MonolithM
         // PartitionWriteGuard rejects a normal user creating a Markdown there. It only needs
         // to EXIST as the parent of the source doc, so seed it under the System identity (the
         // legitimate partition provisioner). The nested source doc creates normally below.
-        SeedTopLevel(MeshNode.FromPath(ExportNs) with
+        await SeedTopLevel(MeshNode.FromPath(ExportNs) with
         {
             Name = "Test Export Root",
             NodeType = MarkdownNodeType.NodeType

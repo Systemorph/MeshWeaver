@@ -81,7 +81,7 @@ public class ModelsSettingsTabRenderTest : MonolithMeshTestBase
         var userId = "Roland";
         var nodeAddress = new Address(userId);
 
-        SeedTopLevel(new MeshNode(userId) { Name = "Roland", NodeType = "Markdown" });
+        await SeedTopLevel(new MeshNode(userId) { Name = "Roland", NodeType = "Markdown" });
 
         var workspace = Mesh.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.SettingsArea) { Id = ModelsSettingsTab.TabId };

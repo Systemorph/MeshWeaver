@@ -277,7 +277,7 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
         var p = P();
         // Top-level partition root → seed under System (only the partition provisioner may
         // create a non-partition type at the root).
-        SeedTopLevel(MeshNode.FromPath(p) with { Name = "TestOrg", NodeType = "Group" });
+        await SeedTopLevel(MeshNode.FromPath(p) with { Name = "TestOrg", NodeType = "Group" });
 
         var accumulated = ObserveAccumulated($"path:{p}").Replay();
         using var connection = accumulated.Connect();

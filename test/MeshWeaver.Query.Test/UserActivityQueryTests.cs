@@ -315,7 +315,7 @@ public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMes
         var p = P();
 
         // Create parent node first (top-level partition root → seed under System)
-        SeedTopLevel(MeshNode.FromPath(p) with
+        await SeedTopLevel(MeshNode.FromPath(p) with
         {
             Name = "Parent", NodeType = "Markdown"
         });
@@ -344,7 +344,7 @@ public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMes
         var p = P();
 
         // Create parent (top-level partition root → seed under System)
-        SeedTopLevel(MeshNode.FromPath(p) with
+        await SeedTopLevel(MeshNode.FromPath(p) with
         {
             Name = "Parent", NodeType = "Markdown"
         });

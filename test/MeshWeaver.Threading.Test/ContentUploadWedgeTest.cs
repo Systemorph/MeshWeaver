@@ -33,7 +33,7 @@ public class ContentUploadWedgeTest(ITestOutputHelper output) : MonolithMeshTest
     {
         var nodePath = $"NoColl{Guid.NewGuid():N}"[..16];
         // Top-level node → seed under System (partition guard).
-        SeedTopLevel(new MeshNode(nodePath) { Name = "No collections", NodeType = "Markdown" });
+        await SeedTopLevel(new MeshNode(nodePath) { Name = "No collections", NodeType = "Markdown" });
 
         var bytes = new byte[] { 1, 2, 3, 4 };
 

@@ -46,10 +46,10 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
         return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
-    private string CreateContextNode(string path)
+    private async Task<string> CreateContextNode(string path)
     {
         // Top-level partition root → seed under System (only the partition provisioner may create there).
-        SeedTopLevel(new MeshNode(path) { Name = path, NodeType = "Markdown" });
+        await SeedTopLevel(new MeshNode(path) { Name = path, NodeType = "Markdown" });
         return path;
     }
 
@@ -70,7 +70,7 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
     {
         var client = GetClient();
 
-        CreateContextNode(ContextPath);
+        await CreateContextNode(ContextPath);
         var threadPath = await CreateThread(client, ContextPath, "Persistence test message");
         Output.WriteLine($"Thread created at: {threadPath}");
 
@@ -103,7 +103,7 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
     {
         var client = GetClient();
 
-        CreateContextNode(ContextPath);
+        await CreateContextNode(ContextPath);
         var threadPath = await CreateThread(client, ContextPath, "Child query test");
 
         await ThreadFlow.SubmitAndWait(client, threadPath, "Test query by namespace",
@@ -134,7 +134,7 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
     {
         var client = GetClient();
 
-        CreateContextNode(ContextPath);
+        await CreateContextNode(ContextPath);
         var threadPath = await CreateThread(client, ContextPath, "Timeout test");
 
         var responseMsgId = await ThreadFlow.SubmitAndWait(client, threadPath,
@@ -149,7 +149,7 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
     {
         var client = GetClient();
 
-        CreateContextNode(ContextPath);
+        await CreateContextNode(ContextPath);
         var threadPath = await CreateThread(client, ContextPath, "Persistence test");
 
         await ThreadFlow.SubmitAndWait(client, threadPath, "Check persistence",

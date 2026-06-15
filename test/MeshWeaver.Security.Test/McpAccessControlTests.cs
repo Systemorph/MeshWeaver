@@ -121,7 +121,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         // the DevLogin admin throughout setup is simpler and free of the race.
 
         // Create namespace nodes
-        SeedTopLevel(new MeshNode("SharedOrg")
+        await SeedTopLevel(new MeshNode("SharedOrg")
         {
             Name = "Shared Organization",
             NodeType = "Group",
@@ -141,7 +141,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
             Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Confidential" },
         }).Should().Within(StepTimeout).Emit();
 
-        SeedTopLevel(new MeshNode("PrivateOrg")
+        await SeedTopLevel(new MeshNode("PrivateOrg")
         {
             Name = "Private Organization",
             NodeType = "Group",

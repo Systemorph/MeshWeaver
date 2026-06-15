@@ -34,7 +34,7 @@ public class MeshChangeFeedTest(ITestOutputHelper output) : MonolithMeshTestBase
     private new IPathResolver PathResolver => Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
     private CancellationToken Ct => new CancellationTokenSource(10_000).Token;
 
-    private MeshNode CreateTestNode(string id, string? ns = null)
+    private async Task<MeshNode> CreateTestNode(string id, string? ns = null)
     {
         // Top-level fixtures (empty namespace) are partition roots; the PartitionWriteGuard
         // rejects a normal user creating a non-partition-owning type (Markdown) there. These
@@ -43,7 +43,7 @@ public class MeshChangeFeedTest(ITestOutputHelper output) : MonolithMeshTestBase
         // the guard. SeedTopLevel routes through IMeshService.CreateNode — the same create
         // pipeline that publishes the MeshChangeFeed event and warms the path resolver.
         var node = new MeshNode(id, ns) { Name = $"Test {id}", NodeType = "Markdown" };
-        return SeedTopLevel(node);
+        return await SeedTopLevel(node);
     }
 
     private async Task DeleteTestNode(string path)
@@ -53,39 +53,39 @@ public class MeshChangeFeedTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact]
-    public void CreateNode_PublishesCreatedEvent()
+    public async Task CreateNode_PublishesCreatedEvent()
     {
         var events = new List<MeshChangeEvent>();
         using var sub = ChangeFeed.Subscribe(e => events.Add(e));
 
-        CreateTestNode("feed-create-1");
+        await CreateTestNode("feed-create-1");
 
         events.Should().Contain(e => e.Kind == MeshChangeKind.Created && e.Id == "feed-create-1");
     }
 
     [Fact]
-    public void DeleteNode_PublishesDeletedEvent()
+    public async Task DeleteNode_PublishesDeletedEvent()
     {
-        var created = CreateTestNode("feed-del-1");
+        var created = await CreateTestNode("feed-del-1");
 
         var events = new List<MeshChangeEvent>();
         using var sub = ChangeFeed.Subscribe(e => events.Add(e));
 
-        DeleteTestNode(created.Path);
+        await DeleteTestNode(created.Path);
 
         events.Should().Contain(e => e.Kind == MeshChangeKind.Deleted && e.Path.Contains("feed-del-1"));
     }
 
     [Fact]
-    public void FilteredSubscription_OnlyReceivesMatchingEvents()
+    public async Task FilteredSubscription_OnlyReceivesMatchingEvents()
     {
         var createEvents = new List<MeshChangeEvent>();
         var deleteEvents = new List<MeshChangeEvent>();
         using var createSub = ChangeFeed.Subscribe(e => createEvents.Add(e), MeshChangeKind.Created);
         using var deleteSub = ChangeFeed.Subscribe(e => deleteEvents.Add(e), MeshChangeKind.Deleted);
 
-        var created = CreateTestNode("feed-filter-1");
-        DeleteTestNode(created.Path);
+        var created = await CreateTestNode("feed-filter-1");
+        await DeleteTestNode(created.Path);
 
         createEvents.Should().OnlyContain(e => e.Kind == MeshChangeKind.Created);
         deleteEvents.Should().OnlyContain(e => e.Kind == MeshChangeKind.Deleted);
@@ -97,7 +97,7 @@ public class MeshChangeFeedTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Resolve before create Ã¢â‚¬â€ should not find it
         var before = await PathResolver.ResolvePath("feed-resolve-1").Should().Emit();
 
-        CreateTestNode("feed-resolve-1");
+        await CreateTestNode("feed-resolve-1");
 
         // After create Ã¢â‚¬â€ cache was invalidated/pre-warmed by change event
         var after = await PathResolver.ResolvePath("feed-resolve-1").Should().Emit();
@@ -109,13 +109,13 @@ public class MeshChangeFeedTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact]
     public async Task DeleteNode_PathResolverNoLongerFindsIt()
     {
-        var created = CreateTestNode("feed-gone-1");
+        var created = await CreateTestNode("feed-gone-1");
 
         // Verify resolver finds it
         var exists = await PathResolver.ResolvePath(created.Path).Should().Emit();
         exists.Should().NotBeNull();
 
-        DeleteTestNode(created.Path);
+        await DeleteTestNode(created.Path);
 
         // After delete Ã¢â‚¬â€ cache evicted, resolver should not find it at that exact path
         var gone = await PathResolver.ResolvePath(created.Path).Should().Emit();
@@ -127,13 +127,13 @@ public class MeshChangeFeedTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task NestedCreate_EvictsParentPartialMatch()
     {
         // Create parent
-        var parent = CreateTestNode("nest-parent-1");
+        var parent = await CreateTestNode("nest-parent-1");
 
         // Resolve nested path Ã¢â‚¬â€ caches partial match (parent with remainder)
         var partial = await PathResolver.ResolvePath($"{parent.Path}/nest-child-1").Should().Emit();
 
         // Create child
-        CreateTestNode("nest-child-1", parent.Path);
+        await CreateTestNode("nest-child-1", parent.Path);
 
         // Now nested path should resolve to child (stale cache evicted by Created event)
         var afterChild = await PathResolver.ResolvePath($"{parent.Path}/nest-child-1").Should().Emit();

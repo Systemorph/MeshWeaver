@@ -208,7 +208,7 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
         // 1. Create a context node and a thread under it
         var contextPath = "TestContext";
         // Top-level partition root → seed under System (only the partition provisioner may create there).
-        SeedTopLevel(new MeshNode(contextPath) { Name = "Test Context", NodeType = "Markdown" });
+        await SeedTopLevel(new MeshNode(contextPath) { Name = "Test Context", NodeType = "Markdown" });
 
         var client = GetClient();
         var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Parent thread for catalog test")), o => o.WithTarget(new Address(contextPath))).Should().Emit();

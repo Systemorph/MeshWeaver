@@ -56,8 +56,8 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
         // partition root, so the PartitionWriteGuard only lets System (the partition
         // provisioner) create a non-partition type there — seed these org/context roots
         // under System. The threads created beneath them belong to the test (Admin).
-        SeedTopLevel(new MeshNode("PartnerRe") { Name = "Partner Re", NodeType = "Markdown" });
-        SeedTopLevel(new MeshNode("ACME") { Name = "ACME Corp", NodeType = "Markdown" });
+        await SeedTopLevel(new MeshNode("PartnerRe") { Name = "Partner Re", NodeType = "Markdown" });
+        await SeedTopLevel(new MeshNode("ACME") { Name = "ACME Corp", NodeType = "Markdown" });
 
         // Create threads in two different namespaces via CreateNodeRequest
         var client = GetClient();
@@ -93,7 +93,7 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
         // only finds threads under the user's own namespace.
 
         // Arrange: create context node in a different namespace (top-level partition root → System).
-        SeedTopLevel(new MeshNode("External") { Name = "External Org", NodeType = "Markdown" });
+        await SeedTopLevel(new MeshNode("External") { Name = "External Org", NodeType = "Markdown" });
 
         var client = GetClient();
         var resp = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("External", "Thread in external namespace", AdminUserId)), o => o.WithTarget(new Address("External"))).Should().Within(TimeSpan.FromSeconds(25)).Emit();
@@ -229,7 +229,7 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
     public async Task CreateNodeRequest_Thread_StoresCreatedByInContent()
     {
         // Arrange (top-level partition root → System)
-        SeedTopLevel(new MeshNode("TestCtx") { Name = "Test Context", NodeType = "Markdown" });
+        await SeedTopLevel(new MeshNode("TestCtx") { Name = "Test Context", NodeType = "Markdown" });
 
         // Act: create thread via the production CreateNodeRequest path
         var client = GetClient();
