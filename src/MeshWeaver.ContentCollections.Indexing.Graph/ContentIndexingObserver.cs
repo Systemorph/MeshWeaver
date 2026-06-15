@@ -98,7 +98,10 @@ public sealed class ContentIndexingObserver : IContentUploadObserver
     /// honours <c>RequestedStatus = Cancelled</c>). Emits the activity path.
     /// </summary>
     /// <param name="collectionPaths">The qualified collection paths to re-index (e.g. <c>Systemorph/content</c>).</param>
-    public IObservable<string> ReindexAll(IReadOnlyCollection<string> collectionPaths)
+    /// <param name="onActivityCreated">Fires once with the activity path the moment it is created, so a
+    /// GUI (the Content Indexing settings tab) can bind its live progress panel immediately.</param>
+    public IObservable<string> ReindexAll(
+        IReadOnlyCollection<string> collectionPaths, Action<string>? onActivityCreated = null)
     {
         ArgumentNullException.ThrowIfNull(collectionPaths);
 
@@ -117,7 +120,8 @@ public sealed class ContentIndexingObserver : IContentUploadObserver
                 .ToObservable()
                 .Concat()
                 .DefaultIfEmpty(Unit.Default)
-                .TakeLast(1));
+                .TakeLast(1),
+            onActivityCreated);
     }
 
     private IObservable<Unit> ReindexCollection(string collectionPath, ContentIndexingActivityContext ctx) =>
