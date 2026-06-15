@@ -1,6 +1,8 @@
 using System.Collections.Generic;
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Text.Json;
+using MeshWeaver.Data;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -42,10 +44,48 @@ public sealed class ContentIndexingObserver : IContentUploadObserver
             ?? IoPool.Unbounded;
     }
 
-    // IContentService is hub-scoped (AddScoped), so a singleton observer must NOT capture it at
-    // construction (resolving a scoped service from the root singleton scope throws). Resolve it from
-    // the hub's own service provider — the hub IS the scope the collection config lives in — on demand.
-    private IContentService ContentService => hub.ServiceProvider.GetRequiredService<IContentService>();
+    /// <summary>
+    /// Resolves the content service WITH the qualified collection registered on it. A collection is only
+    /// resolvable by <c>GetCollectionAsync</c>/<c>GetContentAsync</c> after its config has been
+    /// <c>AddConfiguration</c>'d on the SAME content-service instance — the config is NOT pre-populated
+    /// for an arbitrary scope (this is exactly what <c>MeshOperations.Upload</c> does before writing).
+    /// So: fetch the owning node hub's collection config (the same <c>GetDataRequest</c> the static GET
+    /// endpoint + Upload use), re-name it to the qualified path + point it at the node, register it, and
+    /// hand back THAT instance for the reads. IContentService is hub-scoped, so resolve on demand.
+    /// </summary>
+    private IObservable<IContentService> RegisterCollection(string collectionPath)
+    {
+        var trimmed = collectionPath.Trim('/');
+        var lastSlash = trimmed.LastIndexOf('/');
+        if (lastSlash <= 0)
+            return Observable.Throw<IContentService>(new ArgumentException(
+                $"Collection path '{collectionPath}' must be '{{node}}/{{collection}}'.", nameof(collectionPath)));
+
+        var nodePath = trimmed[..lastSlash];
+        var collectionName = trimmed[(lastSlash + 1)..];
+        var targetAddress = (Address)nodePath;
+        var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
+
+        return hub.Observe(
+                new GetDataRequest(new ContentCollectionReference(new[] { collectionName })),
+                o => o.WithTarget(targetAddress))
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(30))
+            .Select(response =>
+            {
+                var configs = response?.Message switch
+                {
+                    GetDataResponse { Data: JsonElement je } =>
+                        JsonSerializer.Deserialize<ContentCollectionConfig[]>(je, hub.JsonSerializerOptions),
+                    GetDataResponse { Data: IReadOnlyCollection<ContentCollectionConfig> direct } => direct.ToArray(),
+                    _ => null
+                };
+                var sourceConfig = configs?.FirstOrDefault(c => c.Name == collectionName)
+                    ?? throw new ArgumentException($"Collection '{collectionName}' not found on '{nodePath}'.");
+                contentService.AddConfiguration(sourceConfig with { Name = trimmed, Address = targetAddress });
+                return contentService;
+            });
+    }
 
     /// <inheritdoc />
     public void OnUploaded(string collectionPath, string filePath)
@@ -70,7 +110,7 @@ public sealed class ContentIndexingObserver : IContentUploadObserver
             hub,
             PartitionOf(collectionPath),
             $"Index {fileName}",
-            ctx => ReadBytes(collectionPath, filePath, ctx.CancellationToken)
+            ctx => RegisterCollection(collectionPath).SelectMany(contentService => ReadBytes(contentService, collectionPath, filePath, ctx.CancellationToken)
                 .SelectMany(bytes =>
                 {
                     if (bytes is null)
@@ -88,7 +128,7 @@ public sealed class ContentIndexingObserver : IContentUploadObserver
                             ctx.Log($"'{filePath}': {result.Status} ({result.ChunkCount} chunk(s)).");
                             return Unit.Default;
                         });
-                }));
+                })));
     }
 
     /// <summary>
@@ -128,13 +168,13 @@ public sealed class ContentIndexingObserver : IContentUploadObserver
         Observable.Defer(() =>
         {
             ctx.Log($"Scanning collection '{collectionPath}'.");
-            return EnumerateFiles(collectionPath, ctx.CancellationToken)
+            return RegisterCollection(collectionPath).SelectMany(contentService => EnumerateFiles(contentService, collectionPath, ctx.CancellationToken)
                 // Sequentially index each file (Concat): each IndexFile leaf takes its own pool slots;
                 // serialising the walk keeps the activity log ordered and embed concurrency bounded.
                 .Select(filePath => Observable.Defer(() =>
                 {
                     ctx.CancellationToken.ThrowIfCancellationRequested();
-                    return ReadBytes(collectionPath, filePath, ctx.CancellationToken)
+                    return ReadBytes(contentService, collectionPath, filePath, ctx.CancellationToken)
                         .SelectMany(bytes =>
                         {
                             if (bytes is null)
@@ -152,18 +192,19 @@ public sealed class ContentIndexingObserver : IContentUploadObserver
                 .Concat()
                 .DefaultIfEmpty(Unit.Default)
                 .TakeLast(1)
-                .Do(_ => ctx.Log($"Collection '{collectionPath}' done."));
+                .Do(_ => ctx.Log($"Collection '{collectionPath}' done.")));
         });
 
     /// <summary>
     /// Reads a file's bytes back from the collection via the FileSystem I/O-pool leaf (never inline on
     /// the hub thread). Emits null when the file/collection is absent.
     /// </summary>
-    private IObservable<byte[]?> ReadBytes(string collectionPath, string filePath, CancellationToken ct) =>
+    private IObservable<byte[]?> ReadBytes(
+        IContentService contentService, string collectionPath, string filePath, CancellationToken ct) =>
         fileSystemPool.Invoke<byte[]?>(async token =>
         {
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, token);
-            var stream = await ContentService.GetContentAsync(collectionPath, filePath.TrimStart('/'), linked.Token)
+            var stream = await contentService.GetContentAsync(collectionPath, filePath.TrimStart('/'), linked.Token)
                 .ConfigureAwait(false);
             if (stream is null)
                 return null;
@@ -179,16 +220,18 @@ public sealed class ContentIndexingObserver : IContentUploadObserver
     /// Recursively enumerates every file path (relative to the collection root) in
     /// <paramref name="collectionPath"/>. Each walk step runs on the FileSystem I/O-pool leaf.
     /// </summary>
-    private IObservable<string> EnumerateFiles(string collectionPath, CancellationToken ct) =>
-        fileSystemPool.InvokeStream(token => WalkFiles(collectionPath, ct, token));
+    private IObservable<string> EnumerateFiles(
+        IContentService contentService, string collectionPath, CancellationToken ct) =>
+        fileSystemPool.InvokeStream(token => WalkFiles(contentService, collectionPath, ct, token));
 
     private async IAsyncEnumerable<string> WalkFiles(
+        IContentService contentService,
         string collectionPath,
         CancellationToken outerCt,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken poolCt)
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(outerCt, poolCt);
-        var collection = await ContentService.GetCollectionAsync(collectionPath, linked.Token).ConfigureAwait(false);
+        var collection = await contentService.GetCollectionAsync(collectionPath, linked.Token).ConfigureAwait(false);
         if (collection is null)
             yield break;
 
