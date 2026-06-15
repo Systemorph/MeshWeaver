@@ -21,12 +21,18 @@ public sealed class HarnessStaticRepoSource(BuiltInHarnessProvider provider) : I
     public bool Versioned => false;
 
     /// <inheritdoc />
-    // Content harness nodes only — drop the "_Policy" governance node (a "_"-prefixed segment after
-    // the partition root). The importer never overwrites/prunes governance; the in-memory provider
-    // keeps serving it where it still runs.
+    // Content harness nodes PLUS the partition's PublicRead "_Policy" (PartitionAccessPolicy). On the
+    // SYNCED path the in-memory provider that used to serve the policy is gated off, so WITHOUT
+    // importing it the Harness partition has NO read policy → every user (even admins — partitions are
+    // not data-superuser readable) is denied Read → the Harness/MeshWeaver hub init throws
+    // UnauthorizedAccessException → FAILED hub → the chat composer's harness picker can't load → the
+    // composer disappears (atioz 2026-06-15; Orleans repro: OrleansHarnessPartitionPublicReadTest).
+    // Only OTHER "_"-governance (e.g. per-user _Access grants) is dropped; the partition-level access
+    // policy MUST travel to the DB partition.
     public IReadOnlyList<MeshNode> EnumerateSourceNodes() =>
         provider.GetStaticNodes()
-            .Where(n => !n.Segments.Skip(1).Any(seg => seg.StartsWith('_')))
+            .Where(n => n.NodeType == "PartitionAccessPolicy"
+                        || !n.Segments.Skip(1).Any(seg => seg.StartsWith('_')))
             .ToArray();
 
     /// <inheritdoc />

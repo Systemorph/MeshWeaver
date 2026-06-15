@@ -22,12 +22,16 @@ public sealed class AgentStaticRepoSource(BuiltInAgentProvider provider) : IStat
     public bool Versioned => false;
 
     /// <inheritdoc />
-    // Content agent nodes only — drop the _Policy/_Access governance nodes (a "_"-prefixed segment
-    // after the partition root). The importer never overwrites/prunes governance, and the in-memory
-    // provider keeps serving it.
+    // Content agent nodes PLUS the partition's PublicRead "_Policy" (PartitionAccessPolicy). On the
+    // SYNCED path the in-memory provider that served the policy is gated off, so the policy MUST be
+    // imported or the partition has no read policy → its nodes are unreadable (same wedge as Harness —
+    // see HarnessStaticRepoSource + OrleansHarnessPartitionPublicReadTest). Agent happens to work on
+    // atioz today only because its policy persisted in the DB before the sync-gate existed; a fresh
+    // env would fail identically. Only OTHER "_"-governance (per-user _Access grants) is dropped.
     public IReadOnlyList<MeshNode> EnumerateSourceNodes() =>
         provider.GetStaticNodes()
-            .Where(n => !n.Segments.Skip(1).Any(seg => seg.StartsWith('_')))
+            .Where(n => n.NodeType == "PartitionAccessPolicy"
+                        || !n.Segments.Skip(1).Any(seg => seg.StartsWith('_')))
             .ToArray();
 
     /// <inheritdoc />

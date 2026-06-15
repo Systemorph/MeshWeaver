@@ -52,19 +52,30 @@ public class CommandHarnessImportSourceTest(ITestOutputHelper output) : Monolith
     }
 
     [Fact(Timeout = 60000)]
-    public void HarnessStaticRepoSource_Emits_Harnesses_DropsGovernance()
+    public void HarnessStaticRepoSource_Emits_Harnesses_AndImportsPublicReadPolicy()
     {
         var source = new HarnessStaticRepoSource(
             Mesh.ServiceProvider.GetRequiredService<BuiltInHarnessProvider>());
 
         source.Partition.Should().Be("Harness");
 
-        var harnesses = source.EnumerateSourceNodes();
-        // The native MeshWeaver harness is always present; the "_Policy" governance node is dropped
-        // (the importer never imports/prunes governance — the in-memory provider keeps serving it).
-        harnesses.Should().Contain(n => n.Id == Harnesses.MeshWeaver);
-        harnesses.Should().NotContain(n => n.Id.StartsWith('_'));
-        harnesses.Should().AllSatisfy(n =>
+        var nodes = source.EnumerateSourceNodes();
+
+        // The native MeshWeaver harness content node is always present.
+        nodes.Should().Contain(n => n.Id == Harnesses.MeshWeaver);
+
+        // The partition's PublicRead "_Policy" MUST be imported onto the synced DB partition. Without
+        // it the partition has no read policy → Harness/MeshWeaver is unreadable → its hub init fails →
+        // the composer's harness picker can't load (atioz 2026-06-15; OrleansHarnessPartitionPublicReadTest).
+        var policy = nodes.SingleOrDefault(n => n.NodeType == "PartitionAccessPolicy");
+        policy.Should().NotBeNull("the partition PublicRead _Policy must travel to the synced partition");
+        ((MeshWeaver.Mesh.Security.PartitionAccessPolicy)policy!.Content!).PublicRead.Should().BeTrue();
+
+        // Only OTHER "_"-governance (per-user _Access grants) is dropped — the partition policy travels.
+        nodes.Should().NotContain(n => n.Id.StartsWith('_') && n.NodeType != "PartitionAccessPolicy");
+
+        // Every NON-policy node is a typed harness content node.
+        nodes.Where(n => n.NodeType != "PartitionAccessPolicy").Should().AllSatisfy(n =>
         {
             n.NodeType.Should().Be(HarnessNodeType.NodeType);
             n.Content.Should().BeOfType<Harness>();
