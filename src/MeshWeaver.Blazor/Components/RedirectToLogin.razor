@@ -1,0 +1,20 @@
+@* Sends a LOGGED-OUT visitor to the unified /login page, preserving where they came from
+   (returnUrl) so login bounces them straight back to the page they tried to open.
+
+   Rendered from ApplicationPage's AccessDenied branch under <AuthorizeView><NotAuthorized>:
+   a logged-OUT user who hits a node they can't see is taken to login (logging in may grant
+   access) instead of a dead "Access Denied" page; a logged-IN user who simply lacks access
+   still gets Access Denied — re-authenticating wouldn't help.
+
+   /login and the returnUrl parameter are the AuthenticationOptions defaults (the unified login
+   page the portal serves). forceLoad does a full navigation so any wedged interactive circuit
+   on the protected page is dropped. *@
+@inject NavigationManager Navigation
+@code {
+    protected override void OnInitialized()
+    {
+        // Navigation.Uri is the absolute URL the visitor tried to open — "where they came from".
+        var returnUrl = Uri.EscapeDataString(Navigation.Uri);
+        Navigation.NavigateTo($"/login?returnUrl={returnUrl}", forceLoad: true);
+    }
+}

@@ -4,6 +4,7 @@
 @using MeshWeaver.Blazor.Components
 @using MeshWeaver.Mesh.Services
 @using MeshWeaver.Messaging
+@using Microsoft.AspNetCore.Components.Authorization
 
 <FluentDesignTheme @bind-Mode="@Mode" StorageName="theme" />
 
@@ -34,11 +35,20 @@
     }
     else if (Status.Phase == NavigationPhase.AccessDenied)
     {
-        <div class="error-container">
-            <h2>Access Denied</h2>
-            <p>@Status.Message</p>
-            <p>If you believe you should have access, ask the partition owner to grant it.</p>
-        </div>
+        <AuthorizeView>
+            <Authorized>
+                @* Logged IN but lacks access to this partition — re-authenticating wouldn't help. *@
+                <div class="error-container">
+                    <h2>Access Denied</h2>
+                    <p>@Status.Message</p>
+                    <p>If you believe you should have access, ask the partition owner to grant it.</p>
+                </div>
+            </Authorized>
+            <NotAuthorized>
+                @* Logged OUT + no access → send to login, returning here afterward (logging in may grant access). *@
+                <RedirectToLogin />
+            </NotAuthorized>
+        </AuthorizeView>
     }
     else if (Status.Phase == NavigationPhase.Error)
     {
