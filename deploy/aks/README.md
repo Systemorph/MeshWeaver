@@ -594,7 +594,7 @@ migration and the portal:
 |---|---|---|
 | `Parameters:embedding-endpoint` | `Embedding__Endpoint` | Azure AI Foundry embeddings endpoint (Cohere embed-v4). Empty ⇒ full-text only. |
 | `Parameters:embedding-key` | `Embedding__ApiKey` | Secret — only emitted when set (ACA/compose reject empty secrets). |
-| `Parameters:embedding-model` | `Embedding__Model` | Defaults to `cohere-embed-v-4-0`. Migration + portal must agree (sizes the vector column). |
+| `Parameters:embedding-model` | `Embedding__Model` | Defaults to `embed-v-4-0` (the Cohere embed-v4 Azure AI Foundry deployment name). Migration + portal must agree (sizes the vector column). |
 
 Set them via `dotnet user-secrets` / env / GitHub secrets at publish time, e.g.:
 

@@ -11,7 +11,6 @@ public class EmbeddingOptions
     private static readonly FrozenDictionary<string, int> ModelDimensions =
         new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
         {
-            ["cohere-embed-v-4-0"] = 1536,
             ["embed-v-4-0"] = 1536,
             ["text-embedding-3-small"] = 1536,
             ["text-embedding-3-large"] = 3072,
@@ -22,7 +21,7 @@ public class EmbeddingOptions
 
     public string? Endpoint { get; set; }
     public string? ApiKey { get; set; }
-    public string Model { get; set; } = "cohere-embed-v-4-0";
+    public string Model { get; set; } = "embed-v-4-0";
 
     /// <summary>
     /// Vector dimensions. Auto-derived from <see cref="Model"/> for known models; defaults to 1536.

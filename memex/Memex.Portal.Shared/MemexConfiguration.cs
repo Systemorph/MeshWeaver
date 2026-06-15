@@ -540,10 +540,15 @@ public static class MemexConfiguration
                     // collection mapping below and the "attachments" mapping further down.
                     var nodePath = config.Address.ToString();
 
-                    if (contentStorageConfig != null)
+                    // Content lives ONCE per Space (partition root), NOT on every node. A child-node
+                    // path (e.g. "AgenticPension/Dokument") must not get its own content collection —
+                    // it inherits the Space's via ExposeInChildren below. Mounting per-child created
+                    // overlapping/orphaned collections (content/{space}/{child}/…) and node-level content
+                    // refs; indexing is likewise per-Space (one content_chunks table per partition schema).
+                    // Gate on the partition root: a single-segment node path (no '/').
+                    if (contentStorageConfig != null && !nodePath.Contains('/'))
                     {
-                        // Scope static media (SVG, PNG, JPG) to a per-node subdirectory
-                        // so each hub serves only its own content files.
+                        // Scope static media (SVG, PNG, JPG) to the Space's content subdirectory.
                         var contentSubdir = $"content/{nodePath}";
                         // Combine with original BasePath for FileSystem; for AzureBlob, subdirectory is the blob prefix
                         var basePath = string.IsNullOrEmpty(contentStorageConfig.BasePath)

@@ -64,8 +64,8 @@ public sealed record MemexOptions
     /// <summary>Embeddings API key (secret). Only emitted to containers when set.</summary>
     public string? EmbeddingApiKey { get; init; }
 
-    /// <summary>Embeddings model / deployment name. Default <c>cohere-embed-v-4-0</c>.</summary>
-    public string EmbeddingModel { get; init; } = "cohere-embed-v-4-0";
+    /// <summary>Embeddings model / deployment name. Default <c>embed-v-4-0</c> (the Cohere embed-v4 Azure AI Foundry deployment name).</summary>
+    public string EmbeddingModel { get; init; } = "embed-v-4-0";
 
     /// <summary>The portal's externally reachable base URL; the co-hosted CLIs connect back to <c>{BaseUrl}/mcp</c>. Defaults to the portal's own endpoint.</summary>
     public string? BaseUrl { get; init; }
