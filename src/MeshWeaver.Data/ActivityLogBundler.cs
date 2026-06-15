@@ -88,6 +88,15 @@ public class ActivityLogBundler : IDisposable
             bundle.Timer = null;
         }
 
+        // 🚨 Never log to the activity log once disposal has begun. _onFlush round-trips
+        // through the hub/storage that is tearing down (persistence.Read(hubPath).Take(1),
+        // no Timeout, then persistence.Write of the {hubPath}/_activity/{id} node). During
+        // disposal that read never completes, so the flush subscription wedges and the hub
+        // never finishes tearing down — its path then routes nowhere and the NEXT read of
+        // it hangs forever ("ReadNode did not emit"). This catches a debounce timer that
+        // fires concurrently with Dispose; the dispose path itself no longer flushes.
+        if (_disposed) return;
+
         var log = bundle.ToActivityLog() with { HubPath = _hubPath };
 
         // Sync invocation — onFlush is responsible for its own reactive composition
@@ -103,20 +112,27 @@ public class ActivityLogBundler : IDisposable
         }
     }
 
-    private void FlushAll()
-    {
-        foreach (var key in _activeBundles.Keys.ToArray())
-        {
-            if (_activeBundles.TryRemove(key, out var bundle))
-                FlushBundle(bundle);
-        }
-    }
-
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-        FlushAll();
+        // Stop every debounce timer WITHOUT flushing. Flushing here would log to the
+        // activity log during hub disposal — _onFlush round-trips through the tearing-down
+        // hub/storage and wedges the teardown (see FlushBundle). The pending bundle is a
+        // best-effort audit SUMMARY ("Bundled N data change(s)"); the underlying data
+        // changes are already persisted, so dropping the summary on shutdown is correct and
+        // far cheaper than a wedged hub whose path then hangs every subsequent read.
+        foreach (var key in _activeBundles.Keys.ToArray())
+        {
+            if (_activeBundles.TryRemove(key, out var bundle))
+            {
+                lock (bundle.TimerLock)
+                {
+                    bundle.Timer?.Dispose();
+                    bundle.Timer = null;
+                }
+            }
+        }
     }
 
     private record struct BundleKey(string? ChangedBy, string Category);
