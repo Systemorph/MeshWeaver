@@ -1345,6 +1345,13 @@ public class MeshOperations
                         using var ms = new MemoryStream(bytes);
                         await collection.SaveFileAsync(dir, fileName, ms).ConfigureAwait(false);
 
+                        // Post-upload seam: notify registered observers (e.g. the content-indexing
+                        // pipeline) AFTER the save succeeds. Fire-and-forget — each observer starts its
+                        // own off-band work (an Activity), so the upload response returns immediately
+                        // and indexing never runs inline on this pooled continuation. No-op when no
+                        // observer is registered; ContentCollections itself takes no indexing/AI/pg dep.
+                        hub.RaiseContentUploaded(qualifiedCollectionName, filePath);
+
                         return JsonSerializer.Serialize(new
                         {
                             status = "Uploaded",
