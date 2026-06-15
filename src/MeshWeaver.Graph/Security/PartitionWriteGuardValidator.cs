@@ -172,8 +172,10 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
                     userId ?? "(anonymous)", context.Node.Path, context.Node.NodeType ?? "(untyped)");
                 return Observable.Return(NodeValidationResult.Invalid(
                     $"Cannot create '{context.Node.Path}' at the top level: the root namespace ('') is reserved for " +
-                    $"partitions, and a '{context.Node.NodeType ?? "untyped"}' node does not own one (only User and Space do). " +
-                    $"Put it in {ownSpace}, or create a Space first and add it there.",
+                    $"partition roots, so a top-level node MUST be a partition-owning type — it must be a Space " +
+                    $"(which provisions the partition's schema). A '{context.Node.NodeType ?? "untyped"}' node does not " +
+                    $"own a partition (only User and Space do). Create it as a Space (inspect the required shape via its " +
+                    $"content schema at 'Space/schema'), or put your content in {ownSpace}.",
                     NodeRejectionReason.InvalidPath));
             }
         }
