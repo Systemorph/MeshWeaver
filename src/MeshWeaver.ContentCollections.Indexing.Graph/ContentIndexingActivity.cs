@@ -143,7 +143,13 @@ internal static class ContentIndexingActivity
     {
         workspace.GetMeshNodeStream(activityPath).Update(node =>
         {
-            if (node.Content is not ActivityLog log) return node;
+            // ContentAs<T>, NOT `Content as ActivityLog`: the activity node is owned by the partition's
+            // _Activity hub, so this cross-hub Update lambda diffs against a LOCAL mirror whose Content
+            // can be a JsonElement (not strongly-typed). A plain cast would be null → the update no-ops →
+            // the RFC 7396 patch is never sent. ContentAs deserializes the JsonElement so the write lands.
+            // (project_baddata_contentas_pattern.)
+            var log = node.ContentAs<ActivityLog>(workspace.Hub.JsonSerializerOptions, logger);
+            if (log is null) return node;
             return node with { Content = log with { Messages = log.Messages.Add(new LogMessage(message, level)) } };
         }).Subscribe(_ => { }, ex => logger?.LogWarning(ex, "Indexing activity log append failed for {Path}", activityPath));
     }
@@ -153,7 +159,12 @@ internal static class ContentIndexingActivity
     {
         return workspace.GetMeshNodeStream(activityPath).Update(node =>
         {
-            if (node.Content is not ActivityLog log) return node;
+            // ContentAs<T>, NOT `Content as ActivityLog`: the cross-hub Update lambda diffs against a
+            // local mirror whose Content may be a JsonElement; a plain cast would no-op and the terminal
+            // Status would never be written → the activity hangs Running forever (the ReindexAll / Upload
+            // indexing-activity timeout). See project_baddata_contentas_pattern.
+            var log = node.ContentAs<ActivityLog>(workspace.Hub.JsonSerializerOptions, logger);
+            if (log is null) return node;
             var messages = string.IsNullOrEmpty(finalMessage)
                 ? log.Messages
                 : log.Messages.Add(new LogMessage(finalMessage,

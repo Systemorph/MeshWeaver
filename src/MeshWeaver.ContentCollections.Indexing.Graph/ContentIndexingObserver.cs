@@ -66,6 +66,17 @@ public sealed class ContentIndexingObserver : IContentUploadObserver
         var targetAddress = (Address)nodePath;
         var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
 
+        // Local-first: if this hub's content service already resolves the qualified collection
+        // (registered directly on this hub, or cached from a prior RegisterCollection), use it —
+        // NO node-hub round-trip. The cross-hub GetDataRequest below targets the OWNING node hub
+        // (the production shape, where the config lives on the node); when that node has no such
+        // collection it answers a DeliveryFailure and the 30 s Timeout stalls the WHOLE indexing
+        // activity (the ReindexAll / Upload indexing-activity timeout — confirmed via msg-trace:
+        // GetDataRequest → Forwarded isOnTarget=False → DeliveryFailure). Resolving locally first
+        // fixes that AND avoids re-fetching an already-known config.
+        if (contentService.GetAllCollectionConfigs().Any(c => c.Name == trimmed))
+            return Observable.Return(contentService);
+
         return hub.Observe(
                 new GetDataRequest(new ContentCollectionReference(new[] { collectionName })),
                 o => o.WithTarget(targetAddress))
