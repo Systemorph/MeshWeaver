@@ -225,41 +225,31 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
             .Should().Within(25.Seconds()).Match(p => p is not null);
         responsePath.Should().NotBeNull("response cell must exist for streaming to land on it");
 
-        // Subscribe to the response cell's MeshNode stream and collect emissions
-        // (timestamp + text length). Stop once we see the terminal Completed/Cancelled/Error
-        // status — or the 20 s budget elapses.
+        // Collect emissions (timestamp + text length) reactively from the response
+        // cell's MeshNode stream until the terminal Completed/Cancelled/Error status
+        // arrives — or the 20 s budget elapses. NO blocking wait: a
+        // ManualResetEventSlim.Wait() on the test's single-threaded async sync-context
+        // (maxParallelThreads:1) would deadlock the very thread that pumps these stream
+        // emissions, so the terminal write that would Set() the gate could never land.
+        // TakeUntil(terminal-predicate) OR TakeUntil(20 s timer) completes the sequence
+        // and ToList() yields whatever was captured — mirroring the original
+        // "wait up to 20 s or until terminal, then analyse what arrived".
         var workspace = client.GetWorkspace();
-        var emissions = new List<(DateTimeOffset Ts, int Len, string Text, ThreadMessageStatus? Status)>();
-        var firstEmissionDone = false;
-        using var collected = new ManualResetEventSlim(false);
-        var sub = workspace
+        var emissions = await workspace
             .GetMeshNodeStream(responsePath!)
             .Where(c => c is not null)
             .Select(c => c!.Content as ThreadMessage)
             .Where(m => m is not null)
-            .Subscribe(m =>
-            {
-                lock (emissions)
-                {
-                    emissions.Add((DateTimeOffset.UtcNow, m!.Text.Length, m.Text, m.Status));
-                    firstEmissionDone = true;
-                    if (m.Status is ThreadMessageStatus.Completed
-                                  or ThreadMessageStatus.Cancelled
-                                  or ThreadMessageStatus.Error)
-                        collected.Set();
-                }
-            });
+            .Select(m => (Ts: DateTimeOffset.UtcNow, Len: m!.Text.Length, Text: m.Text,
+                Status: (ThreadMessageStatus?)m.Status))
+            .TakeUntil(e => e.Status is ThreadMessageStatus.Completed
+                                      or ThreadMessageStatus.Cancelled
+                                      or ThreadMessageStatus.Error)
+            .TakeUntil(Observable.Timer(20.Seconds()))
+            .ToList()
+            .ToTask(ct);
 
-        try
-        {
-            collected.Wait(20_000, ct);
-        }
-        finally
-        {
-            sub.Dispose();
-        }
-
-        firstEmissionDone.Should().BeTrue(
+        emissions.Should().NotBeEmpty(
             "the response stream must emit at least once — if it doesn't, streaming never landed on the response cell");
 
         // The TestChatClient yields 6 words with 10 ms delays. Even allowing for

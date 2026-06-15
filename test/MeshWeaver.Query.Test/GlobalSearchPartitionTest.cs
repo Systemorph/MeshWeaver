@@ -47,7 +47,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
             Name = "Test Corporation",
             NodeType = "Markdown"
         };
-        SeedTopLevel(orgNode);
+        await SeedTopLevel(orgNode);
 
         // Act: global search with no path (like the top search bar)
         var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("scope:descendants sort:LastModified-desc limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
@@ -61,7 +61,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public async Task GlobalSearch_ReturnsOrganizationByName()
     {
         // Arrange
-        SeedTopLevel(new MeshNode("AcmeCorp")
+        await SeedTopLevel(new MeshNode("AcmeCorp")
         {
             Name = "Acme Corporation",
             NodeType = "Markdown"
@@ -79,7 +79,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public async Task GlobalSearch_ReturnsChildNodesUnderOrganization()
     {
         // Arrange: create org + child markdown node
-        SeedTopLevel(new MeshNode("MegaCorp")
+        await SeedTopLevel(new MeshNode("MegaCorp")
         {
             Name = "Mega Corporation",
             NodeType = "Markdown"
@@ -107,7 +107,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public async Task Autocomplete_FindsOrganizationByPrefix()
     {
         // Arrange
-        SeedTopLevel(new MeshNode("AlphaCorp")
+        await SeedTopLevel(new MeshNode("AlphaCorp")
         {
             Name = "Alpha Corporation",
             NodeType = "Markdown"
@@ -127,7 +127,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public async Task Autocomplete_FindsOrganizationByPartialName()
     {
         // Arrange
-        SeedTopLevel(new MeshNode("BetaInc")
+        await SeedTopLevel(new MeshNode("BetaInc")
         {
             Name = "Beta Incorporated",
             NodeType = "Markdown"
@@ -149,7 +149,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public async Task NodeTypeQuery_FindsOrganizations()
     {
         // Arrange
-        SeedTopLevel(new MeshNode("GammaCorp")
+        await SeedTopLevel(new MeshNode("GammaCorp")
         {
             Name = "Gamma Corp",
             NodeType = "Markdown"
@@ -169,13 +169,13 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public async Task GlobalSearch_ReturnsNodesFromMultiplePartitions()
     {
         // Arrange: two orgs in different partitions
-        SeedTopLevel(new MeshNode("OrgA")
+        await SeedTopLevel(new MeshNode("OrgA")
         {
             Name = "Organization A",
             NodeType = "Markdown"
         });
 
-        SeedTopLevel(new MeshNode("OrgB")
+        await SeedTopLevel(new MeshNode("OrgB")
         {
             Name = "Organization B",
             NodeType = "Markdown"
@@ -210,7 +210,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public async Task TextSearch_FindsNodesAcrossPartitions()
     {
         // Arrange
-        SeedTopLevel(new MeshNode("DeltaCorp")
+        await SeedTopLevel(new MeshNode("DeltaCorp")
         {
             Name = "Delta Corporation",
             NodeType = "Markdown"
@@ -238,7 +238,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public async Task GlobalSearch_WithAccessAssignment_ReturnsGrantedNodes()
     {
         // Arrange: create org + grant current user access
-        SeedTopLevel(new MeshNode("SecureCorp")
+        await SeedTopLevel(new MeshNode("SecureCorp")
         {
             Name = "Secure Corporation",
             NodeType = "Markdown"
@@ -264,7 +264,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public async Task RoutingHints_PathRestrictsToPartition()
     {
         // Arrange
-        SeedTopLevel(new MeshNode("EpsilonCorp")
+        await SeedTopLevel(new MeshNode("EpsilonCorp")
         {
             Name = "Epsilon Corp",
             NodeType = "Markdown"

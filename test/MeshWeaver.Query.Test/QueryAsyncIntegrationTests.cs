@@ -79,7 +79,7 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_ScopeDescendants_SearchesAllChildren()
     {
         var p = P();
-        SeedTopLevel(new MeshNode(p) { Name = "Root", NodeType = "Group" }); // top-level partition root → System
+        await SeedTopLevel(new MeshNode(p) { Name = "Root", NodeType = "Group" }); // top-level partition root → System
         await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/acme") with { Name = "Acme Corp", NodeType = "Markdown" }).Should().Emit();
         await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/acme/project") with { Name = "Project X", NodeType = "Code" }).Should().Emit();
         await NodeFactory.CreateNode(MeshNode.FromPath("other_desc/company") with { Name = "Other Company", NodeType = "Markdown" }).Should().Emit();
@@ -94,7 +94,7 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_ScopeAncestors_SearchesParentPaths()
     {
         var p = P();
-        SeedTopLevel(new MeshNode(p) { Name = "Organization Root", NodeType = "Group" }); // top-level partition root → System
+        await SeedTopLevel(new MeshNode(p) { Name = "Organization Root", NodeType = "Group" }); // top-level partition root → System
         await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/acme") with { Name = "Acme Corp", NodeType = "Markdown" }).Should().Emit();
         await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/acme/project") with { Name = "Project X", NodeType = "Code" }).Should().Emit();
 
@@ -226,7 +226,7 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_ScopeChildren_SearchesImmediateChildrenOnly()
     {
         var p = P();
-        SeedTopLevel(new MeshNode(p) { Name = "Products", NodeType = "Group" }); // top-level partition root → System
+        await SeedTopLevel(new MeshNode(p) { Name = "Products", NodeType = "Group" }); // top-level partition root → System
         await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/laptop") with { Name = "Laptop", NodeType = "Markdown" }).Should().Emit();
         await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/phone") with { Name = "Phone", NodeType = "Markdown" }).Should().Emit();
         await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/laptop/accessories") with { Name = "Accessories", NodeType = "Markdown" }).Should().Emit();

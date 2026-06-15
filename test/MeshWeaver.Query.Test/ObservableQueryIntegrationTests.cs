@@ -70,7 +70,7 @@ public class ObservableQueryIntegrationTests(ITestOutputHelper output) : Monolit
     public async Task ScopeExact_OnlyNotifiesOnExactPathChanges()
     {
         var p = P();
-        SeedTopLevel(MeshNode.FromPath(p) with { Name = "ExactOrg", NodeType = "Group" }); // top-level partition root → System
+        await SeedTopLevel(MeshNode.FromPath(p) with { Name = "ExactOrg", NodeType = "Group" }); // top-level partition root → System
 
         var accumulated = ObserveAccumulated($"path:{p}").Replay();
         using var connection = accumulated.Connect();
@@ -153,7 +153,7 @@ public class ObservableQueryIntegrationTests(ITestOutputHelper output) : Monolit
     public async Task ScopeAncestors_NotifiesOnAncestorChanges()
     {
         var p = P();
-        SeedTopLevel(MeshNode.FromPath(p) with { Name = "AncOrg", NodeType = "Group" }); // top-level partition root → System
+        await SeedTopLevel(MeshNode.FromPath(p) with { Name = "AncOrg", NodeType = "Group" }); // top-level partition root → System
         await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project") with { Name = "Project", NodeType = "Markdown" }).Should().Emit();
         await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project/Task") with { Name = "Task", NodeType = "Code" }).Should().Emit();
 
@@ -179,7 +179,7 @@ public class ObservableQueryIntegrationTests(ITestOutputHelper output) : Monolit
     public async Task ScopeSubtree_NotifiesOnSelfAndDescendantChanges()
     {
         var p = P();
-        SeedTopLevel(MeshNode.FromPath(p) with { Name = "SubOrg", NodeType = "Group" }); // top-level partition root → System
+        await SeedTopLevel(MeshNode.FromPath(p) with { Name = "SubOrg", NodeType = "Group" }); // top-level partition root → System
 
         var accumulated = ObserveAccumulated($"path:{p} scope:subtree").Replay();
         using var connection = accumulated.Connect();
@@ -199,7 +199,7 @@ public class ObservableQueryIntegrationTests(ITestOutputHelper output) : Monolit
     public async Task ScopeHierarchy_NotifiesOnAncestorsSelfAndDescendantChanges()
     {
         var p = P();
-        SeedTopLevel(MeshNode.FromPath(p) with { Name = "HRoot", NodeType = "Group" }); // top-level partition root → System
+        await SeedTopLevel(MeshNode.FromPath(p) with { Name = "HRoot", NodeType = "Group" }); // top-level partition root → System
         await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/HCo") with { Name = "HCo", NodeType = "Code" }).Should().Emit();
         await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/HCo/Project") with { Name = "Project", NodeType = "Markdown" }).Should().Emit();
 
@@ -227,7 +227,7 @@ public class ObservableQueryIntegrationTests(ITestOutputHelper output) : Monolit
     public async Task RecursiveDelete_EmitsRemovedForAllDeletedNodes()
     {
         var p = P();
-        SeedTopLevel(MeshNode.FromPath(p) with { Name = "DelOrg", NodeType = "Group" }); // top-level partition root → System
+        await SeedTopLevel(MeshNode.FromPath(p) with { Name = "DelOrg", NodeType = "Group" }); // top-level partition root → System
         await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project") with { Name = "Project", NodeType = "Markdown" }).Should().Emit();
         await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project/Task") with { Name = "Task", NodeType = "Code" }).Should().Emit();
 

@@ -36,7 +36,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
         var existingPricing = await ReadNode("pricing").Should().Emit();
         if (existingPricing == null)
         {
-            SeedTopLevel(MeshNode.FromPath(PricingPath) with
+            await SeedTopLevel(MeshNode.FromPath(PricingPath) with
             {
                 Name = "Pricing",
                 Icon = "Calculator",
@@ -47,7 +47,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
         var existingApp = await ReadNode("app").Should().Emit();
         if (existingApp == null)
         {
-            SeedTopLevel(MeshNode.FromPath(AppPath) with
+            await SeedTopLevel(MeshNode.FromPath(AppPath) with
             {
                 Name = "Applications",
                 Icon = "App",
@@ -158,7 +158,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
         // Child under the System-seeded `pricing` partition — seed via System too (the partition
         // owner granted no Write to the test's Admin identity; fixtures only need to EXIST so the
         // System-impersonated resolver query can find them).
-        SeedTopLevel(MeshNode.FromPath("pricing/Annual Report") with
+        await SeedTopLevel(MeshNode.FromPath("pricing/Annual Report") with
         {
             Name = "Annual Report",
             NodeType = "Markdown",
@@ -179,7 +179,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
         // Child under the System-seeded `pricing` partition — seed via System too (the partition
         // owner granted no Write to the test's Admin identity; fixtures only need to EXIST so the
         // System-impersonated resolver query can find them).
-        SeedTopLevel(MeshNode.FromPath("pricing/Annual Report") with
+        await SeedTopLevel(MeshNode.FromPath("pricing/Annual Report") with
         {
             Name = "Annual Report",
             NodeType = "Markdown",

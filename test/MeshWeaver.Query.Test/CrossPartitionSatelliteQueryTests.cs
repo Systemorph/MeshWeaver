@@ -48,8 +48,8 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
         // Arrange: create two partitions with threads in each. Top-level partition roots are
         // seeded under System (only the partition provisioner may create a non-partition type
         // at the root); the threads beneath them belong to the test (Admin).
-        SeedTopLevel(new MeshNode("PartitionA") { Name = "Partition A", NodeType = "Markdown" });
-        SeedTopLevel(new MeshNode("PartitionB") { Name = "Partition B", NodeType = "Markdown" });
+        await SeedTopLevel(new MeshNode("PartitionA") { Name = "Partition A", NodeType = "Markdown" });
+        await SeedTopLevel(new MeshNode("PartitionB") { Name = "Partition B", NodeType = "Markdown" });
 
         var client = GetClient();
 
@@ -78,8 +78,8 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
     public async Task NodeTypeThread_WithNamespace_SearchesSinglePartition()
     {
         // Arrange: threads in two partitions (top-level partition roots → seed under System).
-        SeedTopLevel(new MeshNode("NsX") { Name = "Namespace X", NodeType = "Markdown" });
-        SeedTopLevel(new MeshNode("NsY") { Name = "Namespace Y", NodeType = "Markdown" });
+        await SeedTopLevel(new MeshNode("NsX") { Name = "Namespace X", NodeType = "Markdown" });
+        await SeedTopLevel(new MeshNode("NsY") { Name = "Namespace Y", NodeType = "Markdown" });
 
         var client = GetClient();
 
@@ -106,8 +106,8 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
     {
         // Arrange: create nodes with comments in different partitions (top-level partition
         // roots → seed under System).
-        SeedTopLevel(new MeshNode("CmtOrgA") { Name = "Org A", NodeType = "Markdown" });
-        SeedTopLevel(new MeshNode("CmtOrgB") { Name = "Org B", NodeType = "Markdown" });
+        await SeedTopLevel(new MeshNode("CmtOrgA") { Name = "Org A", NodeType = "Markdown" });
+        await SeedTopLevel(new MeshNode("CmtOrgB") { Name = "Org B", NodeType = "Markdown" });
 
         await NodeFactory.CreateNode(MeshNode.FromPath("CmtOrgA/doc1") with
         {

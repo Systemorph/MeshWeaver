@@ -247,7 +247,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     public async Task SecurePersistence_LoggedOutUser_CanAccessPublicNamespace()
     {
         // Admin context (DevLogin) is active for the seed creates.
-        SeedTopLevel(new MeshNode("PublicArea") { Name = "Public Area", NodeType = "Group" });
+        await SeedTopLevel(new MeshNode("PublicArea") { Name = "Public Area", NodeType = "Group" });
         await NodeFactory.CreateNode(new MeshNode("Doc1", "PublicArea") { Name = "Document 1", NodeType = "Group" }).Should().Emit();
         await NodeFactory.CreateNode(new MeshNode("Doc2", "PublicArea") { Name = "Document 2", NodeType = "Group" }).Should().Emit();
         ClearAdminContext();
@@ -264,7 +264,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public async Task SecurePersistence_LoggedOutUser_CannotAccessPrivateNamespace()
     {
-        SeedTopLevel(new MeshNode("PrivateArea") { Name = "Private Area", NodeType = "Group" });
+        await SeedTopLevel(new MeshNode("PrivateArea") { Name = "Private Area", NodeType = "Group" });
         await NodeFactory.CreateNode(new MeshNode("Secret1", "PrivateArea") { Name = "Secret 1", NodeType = "Group" }).Should().Emit();
         ClearAdminContext();
 
@@ -277,8 +277,8 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public async Task SecurePersistence_LoggedOutUser_SeesOnlyPublicRootChildren()
     {
-        SeedTopLevel(new MeshNode("OpenProject") { Name = "Open Project", NodeType = "Group" });
-        SeedTopLevel(new MeshNode("ClosedProject") { Name = "Closed Project", NodeType = "Group" });
+        await SeedTopLevel(new MeshNode("OpenProject") { Name = "Open Project", NodeType = "Group" });
+        await SeedTopLevel(new MeshNode("ClosedProject") { Name = "Closed Project", NodeType = "Group" });
         ClearAdminContext();
 
         var rootChildren = (await MeshQuery.Query<MeshNode>(new MeshQueryRequest { Query = "namespace:", UserId = "" })
@@ -349,13 +349,13 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public async Task MeshQuery_AnonymousUser_CanQueryPublicOrganizations()
     {
-        SeedTopLevel(new MeshNode("Systemorph")
+        await SeedTopLevel(new MeshNode("Systemorph")
         {
             Name = "Systemorph",
             NodeType = "Group"
         });
 
-        SeedTopLevel(new MeshNode("ACME")
+        await SeedTopLevel(new MeshNode("ACME")
         {
             Name = "ACME",
             NodeType = "Group"
@@ -380,13 +380,13 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     {
         var accessService = Mesh.ServiceProvider.GetService<AccessService>();
 
-        SeedTopLevel(new MeshNode("MeshWeaver2")
+        await SeedTopLevel(new MeshNode("MeshWeaver2")
         {
             Name = "MeshWeaver2",
             NodeType = "Group"
         });
 
-        SeedTopLevel(new MeshNode("SecretOrg")
+        await SeedTopLevel(new MeshNode("SecretOrg")
         {
             Name = "SecretOrg",
             NodeType = "Group"
@@ -413,9 +413,9 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var publicNode = new MeshNode("PublicDoc", "Public") { Name = "Public Document", NodeType = "Group" };
         var restrictedNode = new MeshNode("PrivateDoc", "Private") { Name = "Private Document", NodeType = "Group" };
 
-        SeedTopLevel(new MeshNode("Public") { Name = "Public", NodeType = "Group" });
+        await SeedTopLevel(new MeshNode("Public") { Name = "Public", NodeType = "Group" });
         await NodeFactory.CreateNode(publicNode).Should().Emit();
-        SeedTopLevel(new MeshNode("Private") { Name = "Private", NodeType = "Group" });
+        await SeedTopLevel(new MeshNode("Private") { Name = "Private", NodeType = "Group" });
         await NodeFactory.CreateNode(restrictedNode).Should().Emit();
         ClearAdminContext();
 
@@ -438,7 +438,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     public async Task MeshQuery_AuthenticatedUser_SeesRestrictedNodes()
     {
         var restrictedNode = new MeshNode("SecretDoc", "Secret") { Name = "Secret Document", NodeType = "Group" };
-        SeedTopLevel(new MeshNode("Secret") { Name = "Secret", NodeType = "Group" });
+        await SeedTopLevel(new MeshNode("Secret") { Name = "Secret", NodeType = "Group" });
         await NodeFactory.CreateNode(restrictedNode).Should().Emit();
         ClearAdminContext();
 
@@ -455,13 +455,13 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     {
         var accessService = Mesh.ServiceProvider.GetService<AccessService>();
 
-        SeedTopLevel(new MeshNode("PublicOrg3")
+        await SeedTopLevel(new MeshNode("PublicOrg3")
         {
             Name = "PublicOrg3",
             NodeType = "Code"
         });
 
-        SeedTopLevel(new MeshNode("PrivateOrg3")
+        await SeedTopLevel(new MeshNode("PrivateOrg3")
         {
             Name = "PrivateOrg3",
             NodeType = "Code"
@@ -513,7 +513,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public async Task SecurePersistence_NodeInUserNamespace_VisibleViaExplicitAnonymousGrant()
     {
-        SeedTopLevel(new MeshNode("Profiles") { Name = "Profiles", NodeType = "Group" });
+        await SeedTopLevel(new MeshNode("Profiles") { Name = "Profiles", NodeType = "Group" });
         await NodeFactory.CreateNode(new MeshNode("AliceProfile", "Profiles") { Name = "Alice Profile", NodeType = "Markdown" }).Should().Emit();
         ClearAdminContext();
 
@@ -526,13 +526,13 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public async Task SecurePersistence_NodeTypeDefinition_VisibleWithExplicitGrant()
     {
-        SeedTopLevel(new MeshNode("CustomType")
+        await SeedTopLevel(new MeshNode("CustomType")
         {
             Name = "CustomType",
             NodeType = "NodeType"
         });
 
-        SeedTopLevel(new MeshNode("CustomInstance")
+        await SeedTopLevel(new MeshNode("CustomInstance")
         {
             Name = "CustomInstance",
             NodeType = "Group"
@@ -552,7 +552,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public async Task SecurePersistence_NodeInPrivateNamespace_HiddenWithoutGrant()
     {
-        SeedTopLevel(new MeshNode("SecretArea") { Name = "Secret Area", NodeType = "Group" });
+        await SeedTopLevel(new MeshNode("SecretArea") { Name = "Secret Area", NodeType = "Group" });
         await NodeFactory.CreateNode(new MeshNode("Doc1", "SecretArea") { Name = "Secret Doc", NodeType = "Group" }).Should().Emit();
         ClearAdminContext();
 

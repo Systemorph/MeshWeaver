@@ -1,3 +1,4 @@
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 
@@ -41,12 +42,22 @@ public static class ObservableAssertionExtensions
 /// Fluent assertions over a reactive stream. Each terminal method subscribes, waits (up to the
 /// timeout) for the relevant emission, and asserts — so test bodies stay declarative.
 /// <para>
-/// The wait is the sanctioned test-edge Rx→Task bridge: the source is filtered, <c>Take(1)</c>'d,
-/// bounded with <c>Timeout</c>, and bridged via <c>.ToTask()</c> — never a thread-blocking
-/// <see cref="System.Threading.ManualResetEventSlim"/> + <c>Wait</c>. Each terminal assertion
-/// returns a <see cref="System.Threading.Tasks.Task"/> the test body <c>await</c>s; the bridge lives
-/// in the assertion, never the test body. <c>Within(...)</c> stays synchronous — it only configures
+/// The wait is the sanctioned test-edge Rx→Task bridge: the source is <c>SubscribeOn</c>'d onto the
+/// thread pool, filtered, <c>Take(1)</c>'d, bounded with <c>Timeout</c>, and bridged via <c>.ToTask()</c> —
+/// never a thread-blocking <see cref="System.Threading.ManualResetEventSlim"/> + <c>Wait</c>. Each terminal
+/// assertion returns a <see cref="System.Threading.Tasks.Task"/> the test body <c>await</c>s; the bridge
+/// lives in the assertion, never the test body. <c>Within(...)</c> stays synchronous — it only configures
 /// the timeout for the rest of the chain.
+/// </para>
+/// <para>
+/// 🚨 The <see cref="System.Reactive.Concurrency.TaskPoolScheduler"/> <c>SubscribeOn</c> is load-bearing,
+/// not cosmetic. xUnit runs <c>async Task</c> tests under a single-threaded <c>MaxConcurrencySyncContext</c>
+/// (<c>maxParallelThreads: 1</c>). If a cold mesh observable is subscribed directly on that thread, the
+/// mesh's async continuations get funnelled back onto the one sync-context thread and serialise/starve —
+/// a path that profiled at 8 s versus 3 ms when the same subscribe ran off the context
+/// (AddressResolutionTest, 2026-06-15). Subscribing on the pool keeps every mesh round-trip on the thread
+/// pool where it belongs; only the final awaited result hops back to the test. Do NOT remove the
+/// <c>SubscribeOn</c>.
 /// </para>
 /// </summary>
 /// <typeparam name="T">The element type of the observed stream.</typeparam>
@@ -101,7 +112,8 @@ public class ObservableAssertions<T>
     {
         try
         {
-            await _subject.IgnoreElements().Timeout(_timeout).ToTask();
+            await _subject.SubscribeOn(TaskPoolScheduler.Default)
+                .IgnoreElements().Timeout(_timeout).ToTask();
         }
         catch (TimeoutException)
         {
@@ -131,7 +143,8 @@ public class ObservableAssertions<T>
             // failure; if the window elapses with nothing (Timeout), the source completes empty,
             // or the source errors before emitting, the assertion holds — mirroring the original
             // "no positive signal => pass" semantics.
-            observed = await _subject.Take(1).Timeout(within).ToTask();
+            observed = await _subject.SubscribeOn(TaskPoolScheduler.Default)
+                .Take(1).Timeout(within).ToTask();
             emitted = true;
         }
         catch
@@ -149,7 +162,8 @@ public class ObservableAssertions<T>
         var source = predicate is null ? _subject : _subject.Where(predicate);
         try
         {
-            return await source.Take(1).Timeout(_timeout).ToTask();
+            return await source.SubscribeOn(TaskPoolScheduler.Default)
+                .Take(1).Timeout(_timeout).ToTask();
         }
         catch (TimeoutException)
         {
