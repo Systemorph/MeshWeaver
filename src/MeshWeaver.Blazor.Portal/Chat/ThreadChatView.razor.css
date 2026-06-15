@@ -540,6 +540,21 @@
     border-color: var(--accent-stroke-control-rest);
 }
 
+/* Keyboard-highlighted row (↑/↓). Accent box so the Enter target is obvious — distinct from hover. */
+.thread-chat-widget-item--active {
+    background: var(--neutral-fill-stealth-hover);
+    border-color: var(--accent-fill-rest);
+    outline: 1px solid var(--accent-fill-rest);
+    outline-offset: -1px;
+}
+
+/* The picker widget takes focus when opened so arrow keys reach it; don't draw a focus ring on the
+   container itself (the highlighted row is the affordance). */
+.thread-chat-widget:focus,
+.thread-chat-widget:focus-visible {
+    outline: none;
+}
+
 .thread-chat-widget-item-name {
     font-weight: 600;
     font-size: 0.9rem;

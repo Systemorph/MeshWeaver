@@ -587,7 +587,9 @@ public static class MemexConfiguration
                         .AddInvitationsSettingsTab()
                         .AddInboxSettingsTab()
                         // GitHub Sync tab — shows only on Space nodes (self-filtered).
-                        .AddGitHubSyncSettingsTab();
+                        .AddGitHubSyncSettingsTab()
+                        // Content Indexing tab — Space nodes, only when the indexing pipeline is active.
+                        .AddContentIndexSettingsTab();
                 })
                 // Add activity tracking to record user access patterns via ActivityLogBundler
                 .AddActivityTracking();

@@ -58,6 +58,14 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private NodePickerRequest? pendingPicker;
     private IReadOnlyList<MeshNode> pickerNodes = [];
 
+    // Keyboard navigation of the command picker (the /agent etc. node list). The list is a focusable
+    // widget; ↑/↓ move _pickerHighlight, Enter commits, Escape dismisses. _focusPickerOnRender moves
+    // focus from the Monaco editor (where the command was typed) onto the widget when it opens, so the
+    // arrow keys reach the widget instead of being swallowed by Monaco.
+    private int _pickerHighlight;
+    private ElementReference _pickerWidget;
+    private bool _focusPickerOnRender;
+
     private bool _isDisposed;
     private IDisposable? _navContextSubscription;
     private NavigationContext? _currentNavContext;
@@ -918,6 +926,21 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     }
 
     /// <summary>
+    /// When the command picker has just opened, move keyboard focus from the Monaco editor onto the
+    /// picker widget so ↑/↓/Enter/Escape operate the list (Monaco would otherwise swallow the arrows).
+    /// </summary>
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        await base.OnAfterRenderAsync(firstRender);
+        if (_focusPickerOnRender && pendingPicker is not null)
+        {
+            _focusPickerOnRender = false;
+            try { await _pickerWidget.FocusAsync(); }
+            catch { /* widget may not be in the DOM yet — harmless */ }
+        }
+    }
+
+    /// <summary>
     /// Generic node picker for any <see cref="NodePickerRequest"/>: queries the mesh for the
     /// command's node query and either auto-selects an exact name match (when the user typed an
     /// argument, e.g. <c>/model gpt-4o</c>) or shows the picker list. One render path serves every
@@ -958,9 +981,41 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
                 pendingPicker = picker;
                 pickerNodes = nodes;
+                _pickerHighlight = 0;
+                _focusPickerOnRender = true; // move focus off Monaco onto the widget so ↑/↓ reach it
                 lastCommandStatus = null;
                 StateHasChanged();
             }));
+    }
+
+    /// <summary>
+    /// Keyboard navigation of the command picker list: ↑/↓ move the highlight (wrapping), Enter commits
+    /// the highlighted node, Escape dismisses. Fires on the focused widget (see <see cref="_focusPickerOnRender"/>),
+    /// so the arrow keys are handled here instead of by the Monaco editor.
+    /// </summary>
+    private void OnPickerKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
+    {
+        if (pendingPicker is null || pickerNodes.Count == 0)
+            return;
+
+        switch (e.Key)
+        {
+            case "ArrowDown":
+                _pickerHighlight = (_pickerHighlight + 1) % pickerNodes.Count;
+                StateHasChanged();
+                break;
+            case "ArrowUp":
+                _pickerHighlight = (_pickerHighlight - 1 + pickerNodes.Count) % pickerNodes.Count;
+                StateHasChanged();
+                break;
+            case "Enter":
+                if (_pickerHighlight >= 0 && _pickerHighlight < pickerNodes.Count)
+                    SelectFromPicker(pendingPicker, pickerNodes[_pickerHighlight]);
+                break;
+            case "Escape":
+                DismissWidget();
+                break;
+        }
     }
 
     private static bool PickerNodeMatches(MeshNode node, string term, bool exact)

@@ -417,15 +417,22 @@ else
            to the command's composer field. No per-command widget. *@
         @if (pendingPicker is { } picker)
         {
-            <div class="thread-chat-widget">
+            <div class="thread-chat-widget"
+                 tabindex="0"
+                 @ref="_pickerWidget"
+                 @onkeydown="OnPickerKeyDown"
+                 @onkeydown:preventDefault="true"
+                 @onkeydown:stopPropagation="true">
                 <div class="thread-chat-widget-header">
                     <span>@picker.Title</span>
                     <button class="thread-msg-action-btn" @onclick="DismissWidget" title="Close">&#10005;</button>
                 </div>
                 <div class="thread-chat-widget-list">
-                    @foreach (var node in pickerNodes)
+                    @for (var i = 0; i < pickerNodes.Count; i++)
                     {
-                        <button class="thread-chat-widget-item"
+                        var node = pickerNodes[i];
+                        var isActive = i == _pickerHighlight;
+                        <button class="thread-chat-widget-item @(isActive ? "thread-chat-widget-item--active" : "")"
                                 @onclick="@(() => SelectFromPicker(picker, node))">
                             @if (!string.IsNullOrEmpty(node.Icon))
                             {
