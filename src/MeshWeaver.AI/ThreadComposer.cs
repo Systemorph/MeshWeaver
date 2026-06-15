@@ -37,19 +37,19 @@ public record ThreadComposer
 
     /// <summary>Selected harness node path (a <c>nodeType:Harness</c> catalog node).</summary>
     [Description("Harness")]
-    [MeshNode("namespace:Harness nodeType:Harness",
+    [MeshNode("namespace:Harness nodeType:Harness sort:order",
         Layout = MeshNodePickerLayout.Thin, Open = MeshNodePickerOpenDirection.Up, DefaultToFirst = true)]
     public string? Harness { get; init; }
 
     /// <summary>Selected agent node path (a <c>nodeType:Agent</c> node).</summary>
     [Description("Agent")]
-    [MeshNode("namespace:Agent nodeType:Agent",
+    [MeshNode("namespace:Agent nodeType:Agent sort:order",
         Layout = MeshNodePickerLayout.Thin, Open = MeshNodePickerOpenDirection.Up, DefaultToFirst = true)]
     public string? AgentName { get; init; }
 
     /// <summary>Selected model node path (a <c>nodeType:LanguageModel</c> node).</summary>
     [Description("Model")]
-    [MeshNode("namespace:_Provider nodeType:LanguageModel scope:descendants",
+    [MeshNode("namespace:_Provider nodeType:LanguageModel scope:descendants sort:order",
         Layout = MeshNodePickerLayout.Thin, Open = MeshNodePickerOpenDirection.Up, DefaultToFirst = true)]
     public string? ModelName { get; init; }
 

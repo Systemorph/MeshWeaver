@@ -193,12 +193,15 @@
     color: var(--neutral-foreground-hint, #666);
 }
 
-/* Open-upward dropdown — for bottom-anchored fields (e.g. the chat composer). */
+/* Open-upward dropdown — for bottom-anchored fields (e.g. the chat composer). Bound the height to
+   the space available ABOVE the field so it doesn't grow up over the panel header (the chat-composer
+   overlap). Whichever is smaller wins: the 300px cap or ~half the viewport. */
 .mesh-node-picker-dropdown--top {
     top: auto;
     bottom: 100%;
     margin-top: 0;
     margin-bottom: 2px;
+    max-height: min(300px, 45vh);
 }
 
 /* Thin / compact variant — small icon, name only, minimal vertical footprint. */
