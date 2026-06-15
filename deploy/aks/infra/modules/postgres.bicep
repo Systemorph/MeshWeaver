@@ -65,9 +65,6 @@ param highAvailability bool = true
 @description('Name of the application database to create.')
 param databaseName string = 'memex'
 
-@description('Name of the SEPARATE content-index vector database to create on the same server.')
-param contentIndexDatabaseName string = 'contentindex'
-
 @description('Tags applied to every resource.')
 param tags object = {}
 
@@ -128,24 +125,9 @@ resource memexDatabase 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024
   ]
 }
 
-// Content-indexing vector store — a SEPARATE database on the SAME server, so chunk embeddings never
-// share tables with mesh data. The portal's indexing pipeline self-provisions its schema on first use.
-resource contentIndexDatabase 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08-01' = {
-  parent: postgres
-  name: contentIndexDatabaseName
-  properties: {
-    charset: 'UTF8'
-    collation: 'en_US.utf8'
-  }
-  dependsOn: [
-    azureExtensions
-  ]
-}
-
 output serverName string = postgres.name
 output serverId string = postgres.id
 // Private FQDN — resolves to the VNet NIC IP only inside the VNet / over the VPN.
 output fullyQualifiedDomainName string = postgres.properties.fullyQualifiedDomainName
 output databaseName string = memexDatabase.name
-output contentIndexDatabaseName string = contentIndexDatabase.name
 output administratorLogin string = administratorLogin

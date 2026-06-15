@@ -70,8 +70,9 @@ public class PostgreSqlChunkedContentVectorStoreTests : IAsyncLifetime
             Chunk(2, "charlie chunk", OneHot(2)),
         };
 
-        // Provision (idempotent) + replace the file's chunks.
-        await _store.EnsureProvisioned().Should().Within(60.Seconds()).Emit();
+        // Provision the partition schema (idempotent; collection "Docs" → schema "docs") + replace the
+        // file's chunks. The CRUD methods derive + provision the schema themselves too.
+        await _store.EnsureProvisioned("docs").Should().Within(60.Seconds()).Emit();
         await _store.ReplaceFileChunks(collection, file, chunks).Should().Within(30.Seconds()).Emit();
 
         // GetFileHash returns the recorded whole-file hash.

@@ -3,7 +3,6 @@ using MeshWeaver.Hosting.PostgreSql;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
-using Npgsql;
 
 namespace MeshWeaver.ContentCollections.Indexing.PostgreSql;
 
@@ -48,17 +47,5 @@ public static class PostgreSqlContentIndexingExtensions
 
             return services;
         });
-    }
-
-    /// <summary>
-    /// Derives the content-index vector connection string from the mesh's PRIMARY Postgres connection
-    /// by switching only the database name — a SEPARATE database on the SAME server. Lets a host
-    /// activate content indexing with no second connection string plumbed: when
-    /// <c>ConnectionStrings:contentindex</c> is unset, derive it from <c>ConnectionStrings:memex</c>.
-    /// </summary>
-    public static string DeriveVectorConnectionString(string primaryConnectionString, string database = "contentindex")
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(primaryConnectionString);
-        return new NpgsqlConnectionStringBuilder(primaryConnectionString) { Database = database }.ConnectionString;
     }
 }
