@@ -36,6 +36,17 @@ public sealed class PostgreSqlChunkedContentVectorStore : IChunkedContentVectorS
     private readonly int _dimensions;
     private readonly IIoPool _pool;
 
+    /// <summary>Target database name (from the vector connection string), e.g. <c>contentindex</c>.</summary>
+    private readonly string? _databaseName;
+
+    /// <summary>
+    /// Connection string to the SAME server's maintenance (<c>postgres</c>) database, used once to
+    /// <c>CREATE DATABASE</c> the target if it does not yet exist. Null when the target name is empty,
+    /// is already <c>postgres</c>, or is not a safe identifier — in which case the database is assumed
+    /// to be provisioned by the deployment infra.
+    /// </summary>
+    private readonly string? _maintenanceConnectionString;
+
     /// <summary>
     /// Promise-cache of the one-shot CREATE EXTENSION + CREATE TABLE provisioning. Instance field
     /// (never static) so its lifetime is this store's. <see cref="IoPoolExtensions.Run"/> is eager +
@@ -79,6 +90,21 @@ public sealed class PostgreSqlChunkedContentVectorStore : IChunkedContentVectorS
         dsBuilder.UseVector();
         _dataSource = dsBuilder.Build();
 
+        // The target db (e.g. "contentindex") is a SEPARATE database on the same server. The
+        // deployment infra declares + provisions it, but the store also creates it if absent (so it
+        // works on a server where the infra hasn't caught up yet — e.g. a live AKS flexible server).
+        // CREATE DATABASE runs against the server's "postgres" maintenance db, never the target itself.
+        _databaseName = csb.Database;
+        _maintenanceConnectionString = IsSafeDatabaseIdentifier(_databaseName)
+            && !string.Equals(_databaseName, "postgres", StringComparison.OrdinalIgnoreCase)
+            ? new NpgsqlConnectionStringBuilder(csb.ConnectionString)
+            {
+                Database = "postgres",
+                MaxPoolSize = 1,
+                ConnectionIdleLifetime = 15,
+            }.ConnectionString
+            : null;
+
         _pool = ioPoolRegistry?.Get($"{IoPoolNames.PostgresAdapterPrefix}vector") ?? IoPool.Unbounded;
     }
 
@@ -93,6 +119,11 @@ public sealed class PostgreSqlChunkedContentVectorStore : IChunkedContentVectorS
         _provisioned.GetOrAdd(ProvisionKey, _ =>
             _pool.Run(async ct =>
             {
+                // 0. Ensure the target database itself exists (separate db on the same server). No-op
+                //    when the infra already provisioned it; creates it otherwise. MUST precede any use
+                //    of _dataSource, which targets that (possibly not-yet-existent) database.
+                await EnsureDatabaseExistsAsync(ct).ConfigureAwait(false);
+
                 // CREATE EXTENSION as plain SQL first (works even before UseVector() can resolve the
                 // type OID), then reload the type catalog so the vector parameters bind, then the
                 // tables/indexes — exactly the order PostgreSqlSchemaInitializer.InitializeAsync uses.
@@ -107,6 +138,50 @@ public sealed class PostgreSqlChunkedContentVectorStore : IChunkedContentVectorS
 
                 return Unit.Default;
             }));
+
+    /// <summary>
+    /// Creates the target database on the same server if it does not yet exist (connecting to the
+    /// server's <c>postgres</c> maintenance db). Idempotent: skips when the db is present, and a
+    /// concurrent create (42P04 duplicate_database) is treated as success. No-op when no maintenance
+    /// connection is available (unsafe/empty/<c>postgres</c> target) — the db is then assumed
+    /// infra-provisioned and a missing db surfaces as a loud connect error downstream.
+    /// </summary>
+    private async Task EnsureDatabaseExistsAsync(CancellationToken ct)
+    {
+        if (_maintenanceConnectionString is null || string.IsNullOrEmpty(_databaseName))
+            return;
+
+        await using var conn = new NpgsqlConnection(_maintenanceConnectionString);
+        await conn.OpenAsync(ct).ConfigureAwait(false);
+
+        await using (var check = conn.CreateCommand())
+        {
+            check.CommandText = "SELECT 1 FROM pg_database WHERE datname = $1";
+            check.Parameters.AddWithValue(_databaseName);
+            if (await check.ExecuteScalarAsync(ct).ConfigureAwait(false) is not null)
+                return;
+        }
+
+        // CREATE DATABASE cannot run inside a transaction or take a parameterised name. The name is a
+        // validated safe identifier (see ctor), quoted to tolerate hyphens (e.g. "contentindex-test").
+        await using var create = conn.CreateCommand();
+        create.CommandText = $"CREATE DATABASE \"{_databaseName}\"";
+        try
+        {
+            await create.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.DuplicateDatabase)
+        {
+            // A concurrent provisioner won the race — the database now exists, which is the goal.
+        }
+    }
+
+    /// <summary>
+    /// A database name safe to embed (quoted) in a <c>CREATE DATABASE</c> statement: non-empty and
+    /// containing no double-quote (the only character that could escape a quoted identifier).
+    /// </summary>
+    private static bool IsSafeDatabaseIdentifier(string? name) =>
+        !string.IsNullOrWhiteSpace(name) && !name.Contains('"');
 
     /// <inheritdoc/>
     public IObservable<string?> GetFileHash(string collectionPath, string filePath) =>

@@ -19,6 +19,13 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />
+    <!-- Content → vector index (core tech): chunk/embed/store on a separate Postgres vector DB,
+         per-file Document nodes, chunk-search autocomplete. Inert unless ConnectionStrings:contentindex
+         + embeddings are configured (so the monolith compiles it but never activates it). -->
+    <ProjectReference Include="..\..\src\MeshWeaver.ContentCollections.Indexing\MeshWeaver.ContentCollections.Indexing.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.ContentCollections.Indexing.Graph\MeshWeaver.ContentCollections.Indexing.Graph.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.ContentCollections.Indexing.PostgreSql\MeshWeaver.ContentCollections.Indexing.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.PostgreSql\MeshWeaver.Hosting.PostgreSql.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Kernel.Hub\MeshWeaver.Kernel.Hub.csproj" />
     <!-- AI Services -->
     <ProjectReference Include="..\..\src\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />

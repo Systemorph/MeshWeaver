@@ -48,6 +48,11 @@ public static class MemexHostingExtensions
         // connection string (injected as ConnectionStrings:orleans); the migration creates the
         // Orleans membership tables and the portal silo uses AdoNet clustering against it.
         var clusteringDb = postgres.AddDatabase("orleans");
+        // Content-indexing vector store lives in its OWN database on the SAME Postgres server, so
+        // chunk embeddings never share tables with mesh data. Aspire owns the db + its connection
+        // string (injected as ConnectionStrings:contentindex); the portal's content-indexing pipeline
+        // self-provisions the schema (content_chunks + content_files + HNSW) on first use.
+        var contentDb = postgres.AddDatabase("contentindex");
 
         // --- One-shot DB migration; the portal waits for it to complete (mirrors DbVersionGate) ---
         // The migration also mirrors the built-in documentation into the `doc` Postgres schema for
@@ -72,7 +77,9 @@ public static class MemexHostingExtensions
             .WithExternalHttpEndpoints()
             .WithReference(db)
             .WithReference(clusteringDb)
+            .WithReference(contentDb)
             .WaitFor(db)
+            .WaitFor(contentDb)
             .WaitForCompletion(migration)
             .WithEnvironment("ASPNETCORE_HTTP_PORTS", "8080")
             // Backend axis (Phase-0 switch in Memex.Portal.Distributed/Program.cs).
