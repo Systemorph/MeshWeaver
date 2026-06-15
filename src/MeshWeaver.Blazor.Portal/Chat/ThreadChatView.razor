@@ -489,10 +489,20 @@ else
             </div>
         }
 
-        @* Compact bottom row: context chip(s) + Send. Harness, agent and model are chosen via the
-           /harness, /agent and /model slash-commands (which pop the pickers above and write the same
-           composer node); what's selected shows in the read-only status row above. No comboboxes. *@
+        @* Compact bottom row: the three framework MeshNodePicker comboboxes (harness · agent · model,
+           via ThreadComposerView.SelectorsArea) + context chip(s) + Send. The pickers are the nice
+           framework control (search, keyboard nav, icons), data-bound to the composer; the /harness
+           /agent /model slash-commands write the SAME composer node. *@
         <div class="thread-chat-bottom-row" style="display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; margin-top: 4px;">
+            @if (!string.IsNullOrEmpty(_templatePath))
+            {
+                <div class="thread-chat-selectors" style="flex: 1 1 auto; min-width: 0;">
+                    <LayoutAreaView @key="@($"composer-sel-{_templatePath}")"
+                                    ViewModel="@(new LayoutAreaControl(_templatePath, new LayoutAreaReference(ThreadComposerView.SelectorsArea)))"
+                                    Stream="@Stream"
+                                    Area="@($"composer-sel-{_templatePath}")" />
+                </div>
+            }
             @if (contextChips.Count > 0)
             {
                 <div class="thread-chat-context" style="flex: 1 1 auto; min-width: 0; overflow: hidden;">

@@ -78,7 +78,13 @@ public static class ThreadComposerView
             .WithView((h, _) => h.Workspace.GetMeshNodeStream()
                 .Where(n => ThreadComposerNodeType.ComposerOf(n, h.Hub.JsonSerializerOptions, Logger(h)) is not null)
                 .Take(1)
-                .Select(node => (UiControl?)BuildHarnessPicker(h, ComposerContext(h, node))));
+                // All THREE framework MeshNodePickerControls (harness · agent · model) — search,
+                // keyboard nav, icons, default-to-first for free. Replaces the hand-rolled command
+                // picker widget (a regression): a node-pick command now just surfaces the same nice
+                // control the composer already uses. Each is data-bound to its [MeshNode] property
+                // and auto-persists to the composer node.
+                .Select(node => (UiControl?)BuildSelectorRow(
+                    h, EditLayoutArea.GetDataId(h.Hub.Address.ToString()), ComposerContext(h, node))));
 
     /// <summary>
     /// The composer node's default area: data-bound message editor + selector row + Send.
