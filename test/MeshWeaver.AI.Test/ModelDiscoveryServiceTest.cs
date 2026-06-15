@@ -39,10 +39,10 @@ public class ModelDiscoveryServiceTest : AITestBase
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
     private ModelDiscoveryService Discovery => Mesh.ServiceProvider.GetRequiredService<ModelDiscoveryService>();
 
-    private void CreateUserProvider(string ownerPath, string providerName, string modelId)
+    private async Task CreateUserProvider(string ownerPath, string providerName, string modelId)
     {
         var providerPath = $"{ownerPath}/{ModelProviderNodeType.RootNamespace}/{providerName}";
-        MeshService.CreateNode(new MeshNode(providerName, $"{ownerPath}/{ModelProviderNodeType.RootNamespace}")
+        await MeshService.CreateNode(new MeshNode(providerName, $"{ownerPath}/{ModelProviderNodeType.RootNamespace}")
         {
             NodeType = ModelProviderNodeType.NodeType,
             Name = providerName,
@@ -56,7 +56,7 @@ public class ModelDiscoveryServiceTest : AITestBase
                 Models = ImmutableArray.Create(modelId),
             }
         }).Should().Within(20.Seconds()).Emit();
-        MeshService.CreateNode(new MeshNode(modelId, providerPath)
+        await MeshService.CreateNode(new MeshNode(modelId, providerPath)
         {
             NodeType = LanguageModelNodeType.NodeType,
             Name = modelId,
@@ -72,12 +72,12 @@ public class ModelDiscoveryServiceTest : AITestBase
     }
 
     [Fact]
-    public void GetModelsAtNode_ReturnsSatelliteSubtree()
+    public async Task GetModelsAtNode_ReturnsSatelliteSubtree()
     {
         var owner = $"owner-{Guid.NewGuid():N}";
-        CreateUserProvider(owner, "Anthropic", "claude-opus-4-7");
+        await CreateUserProvider(owner, "Anthropic", "claude-opus-4-7");
 
-        var snapshot = Discovery.GetModelsAtNode(owner)
+        var snapshot = await Discovery.GetModelsAtNode(owner)
             .Should().Within(15.Seconds()).Match(s => s.Count >= 2);
 
         snapshot.Should().Contain(n => n.NodeType == ModelProviderNodeType.NodeType
@@ -87,17 +87,17 @@ public class ModelDiscoveryServiceTest : AITestBase
     }
 
     [Fact]
-    public void GetModelsForNodeHierarchy_UnionsAncestorLevels()
+    public async Task GetModelsForNodeHierarchy_UnionsAncestorLevels()
     {
         var owner = $"org-{Guid.NewGuid():N}";
         var child = $"{owner}/Project1";
 
         // Two providers â€” one at the org level, one at the child level.
-        CreateUserProvider(owner, "Anthropic", "claude-sonnet-4-6");
-        CreateUserProvider(child, "OpenAI", "gpt-4o-mini");
+        await CreateUserProvider(owner, "Anthropic", "claude-sonnet-4-6");
+        await CreateUserProvider(child, "OpenAI", "gpt-4o-mini");
 
         // Asking for the child's hierarchy should see BOTH (its own + org's).
-        var snapshot = Discovery.GetModelsForNodeHierarchy(child)
+        var snapshot = await Discovery.GetModelsForNodeHierarchy(child)
             .Should().Within(20.Seconds()).Match(s => s.Any(n => n.Provider() == "Anthropic")
                      && s.Any(n => n.Provider() == "OpenAI"));
 
@@ -108,16 +108,16 @@ public class ModelDiscoveryServiceTest : AITestBase
     }
 
     [Fact]
-    public void GetEffectiveModels_CombinesNodePathAndNodeTypePath()
+    public async Task GetEffectiveModels_CombinesNodePathAndNodeTypePath()
     {
         var nodePath = $"nodeOwner-{Guid.NewGuid():N}";
         var nodeTypePath = $"ntOwner-{Guid.NewGuid():N}";
 
         // One provider on the node-path side, one on the NodeType side.
-        CreateUserProvider(nodePath, "Anthropic", "claude-opus-4-7");
-        CreateUserProvider(nodeTypePath, "OpenAI", "gpt-4o");
+        await CreateUserProvider(nodePath, "Anthropic", "claude-opus-4-7");
+        await CreateUserProvider(nodeTypePath, "OpenAI", "gpt-4o");
 
-        var snapshot = Discovery.GetEffectiveModels(nodePath, nodeTypePath)
+        var snapshot = await Discovery.GetEffectiveModels(nodePath, nodeTypePath)
             .Should().Within(20.Seconds()).Match(s => s.Any(n => n.Provider() == "Anthropic")
                      && s.Any(n => n.Provider() == "OpenAI"));
 

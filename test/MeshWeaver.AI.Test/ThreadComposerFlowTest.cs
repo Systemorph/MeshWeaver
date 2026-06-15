@@ -62,7 +62,7 @@ public class ThreadComposerFlowTest : AITestBase
     // ─── StartThread: composer copy + context namespace ───
 
     [Fact]
-    public void StartThread_WithComposer_CreatesUnderContext_AndEmbedsEmptiedComposer()
+    public async Task StartThread_WithComposer_CreatesUnderContext_AndEmbedsEmptiedComposer()
     {
         var client = GetClient();
         var threadCreated = new System.Reactive.Subjects.AsyncSubject<MeshNode>();
@@ -90,7 +90,7 @@ public class ThreadComposerFlowTest : AITestBase
             composer: composer,
             onCreated: node => { threadCreated.OnNext(node); threadCreated.OnCompleted(); });
 
-        var created = threadCreated.Should().Emit();
+        var created = await threadCreated.Should().Emit();
         created!.Path.Should().StartWith(
             $"{MonolithMeshTestBase.TestPartition}/{ThreadNodeType.ThreadPartition}/",
             "the thread must live under {context}/_Thread/{speakingId}");
@@ -105,7 +105,7 @@ public class ThreadComposerFlowTest : AITestBase
         thread.Composer.ModelName.Should().Be(composer.ModelName);
 
         // The round still dispatches normally (selection paths are normalized at execution).
-        var committed = WaitForThread(
+        var committed = await WaitForThread(
             created.Path!,
             t => t.IngestedMessageIds.Count >= 1 && t.Messages.Count >= 2,
             timeoutMs: 30_000);
@@ -115,9 +115,9 @@ public class ThreadComposerFlowTest : AITestBase
     // ─── SubmitComposer: drain + empty, one atomic update ───
 
     [Fact]
-    public void SubmitComposer_DrainsDraft_CarriesSelection_AndEmptiesComposer()
+    public async Task SubmitComposer_DrainsDraft_CarriesSelection_AndEmptiesComposer()
     {
-        var threadPath = SeedThreadWithComposer(new ThreadComposer
+        var threadPath = await SeedThreadWithComposer(new ThreadComposer
         {
             MessageContent = "typed into the composer",
             Harness = $"{HarnessNodeType.RootNamespace}/{Harnesses.MeshWeaver}",
@@ -131,7 +131,7 @@ public class ThreadComposerFlowTest : AITestBase
 
         // ONE atomic update: the draft is queued AND the composer is emptied together —
         // any emission with the message queued must already show the emptied composer.
-        var queued = WaitForThread(
+        var queued = await WaitForThread(
             threadPath,
             t => t.UserMessageIds.Count >= 1,
             timeoutMs: 15_000);
@@ -142,11 +142,11 @@ public class ThreadComposerFlowTest : AITestBase
 
         // The round ingests and the materialised user cell carries the composer's
         // text + selection (as the picked paths — normalized only at execution).
-        var committed = WaitForThread(
+        var committed = await WaitForThread(
             threadPath,
             t => t.IngestedMessageIds.Count >= 1 && t.Messages.Count >= 2,
             timeoutMs: 30_000);
-        var userCell = ReadNode($"{threadPath}/{committed.Messages[0]}").Should().Emit();
+        var userCell = await ReadNode($"{threadPath}/{committed.Messages[0]}").Should().Emit();
         var userMessage = (userCell!.Content as ThreadMessage)!;
         userMessage.Text.Should().Be("typed into the composer");
         userMessage.AgentName.Should().Be("Agent/Assistant");
@@ -155,19 +155,19 @@ public class ThreadComposerFlowTest : AITestBase
     }
 
     [Fact]
-    public void SubmitComposer_ExplicitText_OverridesDraft()
+    public async Task SubmitComposer_ExplicitText_OverridesDraft()
     {
-        var threadPath = SeedThreadWithComposer(new ThreadComposer { MessageContent = "stale draft" });
+        var threadPath = await SeedThreadWithComposer(new ThreadComposer { MessageContent = "stale draft" });
         var client = GetClient();
 
         client.SubmitComposer(threadPath, userText: "typed live in monaco",
             createdBy: "rbuergi@systemorph.com");
 
-        var committed = WaitForThread(
+        var committed = await WaitForThread(
             threadPath,
             t => t.IngestedMessageIds.Count >= 1 && t.Messages.Count >= 2,
             timeoutMs: 30_000);
-        var userCell = ReadNode($"{threadPath}/{committed.Messages[0]}").Should().Emit();
+        var userCell = await ReadNode($"{threadPath}/{committed.Messages[0]}").Should().Emit();
         (userCell!.Content as ThreadMessage)!.Text.Should().Be("typed live in monaco");
         committed.Composer!.MessageContent.Should().BeNull("draft is cleared even when explicit text was sent");
     }
@@ -175,7 +175,7 @@ public class ThreadComposerFlowTest : AITestBase
     [Fact]
     public async Task SubmitComposer_NothingToSubmit_IsANoOp()
     {
-        var threadPath = SeedThreadWithComposer(new ThreadComposer());
+        var threadPath = await SeedThreadWithComposer(new ThreadComposer());
         var client = GetClient();
 
         client.SubmitComposer(threadPath, createdBy: "rbuergi@systemorph.com");
@@ -183,7 +183,7 @@ public class ThreadComposerFlowTest : AITestBase
         // Negative test — no positive signal to filter for; sanctioned "confirm nothing
         // happened" delay (CLAUDE.md → Task.Delay exceptions).
         await Task.Delay(750, TestContext.Current.CancellationToken);
-        var thread = ReadThread(threadPath);
+        var thread = await ReadThread(threadPath);
         thread.UserMessageIds.Should().BeEmpty("empty composer + no text must not queue anything");
         thread.PendingUserMessages.Should().BeEmpty();
     }
@@ -235,11 +235,11 @@ public class ThreadComposerFlowTest : AITestBase
 
     // ─── Helpers ───
 
-    private string SeedThreadWithComposer(ThreadComposer composer)
+    private async Task<string> SeedThreadWithComposer(ThreadComposer composer)
     {
         var threadId = Guid.NewGuid().AsString();
         var threadPath = $"{MonolithMeshTestBase.TestPartition}/{ThreadNodeType.ThreadPartition}/{threadId}";
-        NodeFactory.CreateNode(MeshNode.FromPath(threadPath) with
+        await NodeFactory.CreateNode(MeshNode.FromPath(threadPath) with
         {
             Name = $"Composer Test Thread {threadId}",
             NodeType = ThreadNodeType.NodeType,
@@ -253,24 +253,24 @@ public class ThreadComposerFlowTest : AITestBase
         return threadPath;
     }
 
-    private MeshThread ReadThread(string threadPath)
+    private async Task<MeshThread> ReadThread(string threadPath)
     {
-        var node = ReadNode(threadPath).Should().Emit();
+        var node = await ReadNode(threadPath).Should().Emit();
         node.Should().NotBeNull($"thread node {threadPath} must exist");
         var content = node!.Content as MeshThread;
         content.Should().NotBeNull($"thread {threadPath} must have MeshThread content");
         return content!;
     }
 
-    private MeshThread WaitForThread(
+    private async Task<MeshThread> WaitForThread(
         string threadPath,
         Func<MeshThread, bool> predicate,
         int timeoutMs)
-        => Mesh.GetWorkspace().GetMeshNodeStream(threadPath)
+        => (await Mesh.GetWorkspace().GetMeshNodeStream(threadPath)
             .Select(n => n.Content as MeshThread)
             .Where(t => t is not null)
             .Should().Within(TimeSpan.FromMilliseconds(timeoutMs))
-            .Match(t => predicate(t!))!;
+            .Match(t => predicate(t!)))!;
 
     // ─── Fake chat client (minimal) ───
 

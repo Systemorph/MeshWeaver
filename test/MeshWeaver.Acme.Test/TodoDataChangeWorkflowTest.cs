@@ -199,9 +199,9 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Test that a Todo node can be retrieved via the persistence service.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void TodoNode_CanBeRetrievedViaPersistence()
+    public async Task TodoNode_CanBeRetrievedViaPersistence()
     {
-        var todoNode = ReadNode("ACME/ProductLaunch/Todo/DefinePersona")
+        var todoNode = await ReadNode("ACME/ProductLaunch/Todo/DefinePersona")
             .Should().Within(60.Seconds()).Match(n => n is not null);
 
         todoNode.Should().NotBeNull("Todo node should exist");
@@ -217,11 +217,11 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Test that child Todo nodes can be enumerated via IMeshService.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void ChildTodos_CanBeEnumeratedViaQuery()
+    public async Task ChildTodos_CanBeEnumeratedViaQuery()
     {
-        var todos = MeshQuery
+        var todos = (await MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:ACME/ProductLaunch/Todo"))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         todos.Should().NotBeEmpty("Should have child Todo nodes");
         todos.Should().HaveCountGreaterThan(10, "Should have at least 10 Todo items");
@@ -237,9 +237,9 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Test that Todo content can be deserialized correctly.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void TodoContent_CanBeDeserializedCorrectly()
+    public async Task TodoContent_CanBeDeserializedCorrectly()
     {
-        var todoNode = ReadNode("ACME/ProductLaunch/Todo/DefinePersona")
+        var todoNode = await ReadNode("ACME/ProductLaunch/Todo/DefinePersona")
             .Should().Within(60.Seconds()).Match(n => n is not null);
 
         todoNode.Should().NotBeNull();
@@ -264,10 +264,10 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Test that DataChangeRequest can be used to update Todo content.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void DataChangeRequest_CanBeCreatedForTodoUpdate()
+    public async Task DataChangeRequest_CanBeCreatedForTodoUpdate()
     {
         // Get the original todo
-        var todoNode = ReadNode("ACME/ProductLaunch/Todo/DefinePersona")
+        var todoNode = await ReadNode("ACME/ProductLaunch/Todo/DefinePersona")
             .Should().Within(60.Seconds()).Match(n => n is not null);
         todoNode.Should().NotBeNull();
 
@@ -283,13 +283,13 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Test that the Project hub can receive requests.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void ProjectHub_CanReceiveRequests()
+    public async Task ProjectHub_CanReceiveRequests()
     {
         var client = GetClient();
         var projectAddress = new Address("ACME/ProductLaunch");
 
         // Verify the hub is accessible
-        var response = client.Observe(new PingRequest(), o => o.WithTarget(projectAddress)).Should().Emit();
+        var response = await client.Observe(new PingRequest(), o => o.WithTarget(projectAddress)).Should().Emit();
 
         response.Should().NotBeNull("Project hub should respond to ping");
         Output.WriteLine($"Project hub is accessible at {projectAddress}");
@@ -299,13 +299,13 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Test that the Todo hub can receive requests.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void TodoHub_CanReceiveRequests()
+    public async Task TodoHub_CanReceiveRequests()
     {
         var client = GetClient();
         var todoAddress = new Address("ACME/ProductLaunch/Todo/DefinePersona");
 
         // Verify the hub is accessible
-        var response = client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).Should().Emit();
+        var response = await client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).Should().Emit();
 
         response.Should().NotBeNull("Todo hub should respond to ping");
         Output.WriteLine($"Todo hub is accessible at {todoAddress}");
@@ -315,7 +315,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Test that multiple Todo hubs can be accessed independently.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void MultipleTodoHubs_CanBeAccessedIndependently()
+    public async Task MultipleTodoHubs_CanBeAccessedIndependently()
     {
         var client = GetClient();
 
@@ -330,7 +330,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         {
             var todoAddress = new Address(addressPath);
 
-            var response = client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).Should().Emit();
+            var response = await client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).Should().Emit();
 
             response.Should().NotBeNull($"Todo hub at {addressPath} should respond");
             Output.WriteLine($"Successfully accessed: {addressPath}");
@@ -342,7 +342,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Note: "Summary" view doesn't exist, using TodaysFocus as the overview view.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void SummaryView_RespondsToDataAccess()
+    public async Task SummaryView_RespondsToDataAccess()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -356,7 +356,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
             reference);
 
         Output.WriteLine("Getting initial TodaysFocus view...");
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(30.Seconds()).Match(c => c != null);
 
@@ -371,14 +371,14 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// This tests the pattern used by the Edit operation.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void UpdateStatus_ViaDataChangeRequest_ShouldWork()
+    public async Task UpdateStatus_ViaDataChangeRequest_ShouldWork()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
 
         // Get the original todo
         var todoAddress = new Address("ACME/ProductLaunch/Todo/DefinePersona");
-        var todoNode = ReadNode("ACME/ProductLaunch/Todo/DefinePersona")
+        var todoNode = await ReadNode("ACME/ProductLaunch/Todo/DefinePersona")
             .Should().Within(60.Seconds()).Match(n => n is not null);
         todoNode.Should().NotBeNull();
 
@@ -405,10 +405,10 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// This tests the pattern used by the Delete operation.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void DeleteTodo_ViaDataChangeRequest_PatternIsAvailable()
+    public async Task DeleteTodo_ViaDataChangeRequest_PatternIsAvailable()
     {
         // Get an existing todo to verify the pattern
-        var todoNode = ReadNode("ACME/ProductLaunch/Todo/DefinePersona")
+        var todoNode = await ReadNode("ACME/ProductLaunch/Todo/DefinePersona")
             .Should().Within(60.Seconds()).Match(n => n is not null);
         todoNode.Should().NotBeNull();
 
@@ -445,7 +445,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Test that the AllTasks view renders with groups.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void AllTasksView_ShouldIncludeNewTaskButton()
+    public async Task AllTasksView_ShouldIncludeNewTaskButton()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -457,7 +457,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
             reference);
 
         Output.WriteLine("Getting AllTasks view...");
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(30.Seconds()).Match(c => c != null);
 
@@ -470,7 +470,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Note: "Details" view is named "Overview" in Todo.json.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void DetailsView_ShouldIncludeCrudButtons()
+    public async Task DetailsView_ShouldIncludeCrudButtons()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -483,7 +483,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
             reference);
 
         Output.WriteLine("Getting Overview view...");
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(30.Seconds()).Match(c => c != null);
 
@@ -496,7 +496,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// This tests the dynamically compiled ProjectViews code including the Deleted section.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void AllTasksView_CompilesAndRendersWithDeletedSection()
+    public async Task AllTasksView_CompilesAndRendersWithDeletedSection()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -505,13 +505,13 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var todoPath = "ACME/ProductLaunch/Todo/DefinePersona";
 
         // Get original node
-        var originalNode = ReadNode(todoPath)
+        var originalNode = await ReadNode(todoPath)
             .Should().Within(60.Seconds()).Match(n => n is not null);
         originalNode.Should().NotBeNull();
 
         // Soft delete a todo to ensure Deleted section has content
         var deletedNode = originalNode! with { State = MeshNodeState.Deleted };
-        UpdateNodeViaStream(deletedNode).Should().Emit();
+        await UpdateNodeViaStream(deletedNode).Should().Emit();
         Output.WriteLine("Soft-deleted a todo item");
 
         // Request the AllTasks view - this will trigger dynamic compilation
@@ -520,7 +520,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
             reference);
 
         Output.WriteLine("Getting AllTasks view (triggers ProjectViews compilation)...");
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(30.Seconds()).Match(c => c != null);
 
@@ -534,22 +534,22 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Test that soft delete changes the node state to Deleted.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void SoftDelete_ChangesStateToDeleted()
+    public async Task SoftDelete_ChangesStateToDeleted()
     {
         var todoPath = "ACME/ProductLaunch/Todo/DefinePersona";
 
         // Get the original todo
-        var originalNode = ReadNode(todoPath)
+        var originalNode = await ReadNode(todoPath)
             .Should().Within(60.Seconds()).Match(n => n is not null);
         originalNode.Should().NotBeNull("Todo node should exist");
         Output.WriteLine($"Original state: {originalNode!.State}");
 
         // Perform soft delete by setting state to Deleted
         var deletedNode = originalNode with { State = MeshNodeState.Deleted };
-        UpdateNodeViaStream(deletedNode).Should().Emit();
+        await UpdateNodeViaStream(deletedNode).Should().Emit();
 
         // Verify the state changed (stream read â€” no catalog lag)
-        var updatedNode = ReadNode(todoPath)
+        var updatedNode = await ReadNode(todoPath)
             .Should().Within(60.Seconds()).Match(n => n is not null && n.State == MeshNodeState.Deleted);
         updatedNode.Should().NotBeNull("Node should still exist after soft delete");
         updatedNode!.State.Should().Be(MeshNodeState.Deleted, "State should be Deleted after soft delete");
@@ -561,14 +561,14 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Test that querying with state:Active excludes deleted items.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void QueryWithStateActive_ExcludesDeletedItems()
+    public async Task QueryWithStateActive_ExcludesDeletedItems()
     {
         var todoPath = "ACME/ProductLaunch/Todo/DefinePersona";
         var activeQuery = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo state:Active scope:subtree";
 
         // Capture the initial active set + the original todo from the same
         // Query subscription â€” initial emission is the full snapshot.
-        var initialItems = MeshQuery
+        var initialItems = await MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery(activeQuery))
             .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
             .Select(c => c.Items)
@@ -579,11 +579,11 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
 
         // Soft delete the node
         var deletedNode = originalNode! with { State = MeshNodeState.Deleted };
-        UpdateNodeViaStream(deletedNode).Should().Emit();
+        await UpdateNodeViaStream(deletedNode).Should().Emit();
 
         // Wait for the catalog to reflect the state change â€” Query emits a
         // Removed/Updated delta when DefinePersona stops matching state:Active.
-        var paths = ObserveQueryPathSet(activeQuery)
+        var paths = await ObserveQueryPathSet(activeQuery)
             .Should().Within(60.Seconds()).Match(set => !set.Contains(todoPath));
 
         paths.Should().NotContain(todoPath,
@@ -596,14 +596,14 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Test that querying with state:Deleted only returns deleted items.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void QueryWithStateDeleted_OnlyReturnsDeletedItems()
+    public async Task QueryWithStateDeleted_OnlyReturnsDeletedItems()
     {
         var todoPath = "ACME/ProductLaunch/Todo/DefinePersona";
         var activeQuery = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo state:Active scope:subtree";
         var deletedQuery = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo state:Deleted scope:subtree";
 
         // Capture original from the live active set (set query â€” Query is correct).
-        var initialActive = MeshQuery
+        var initialActive = await MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery(activeQuery))
             .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
             .Select(c => c.Items)
@@ -614,10 +614,10 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
 
         // Soft delete
         var deletedNode = originalNode! with { State = MeshNodeState.Deleted };
-        UpdateNodeViaStream(deletedNode).Should().Emit();
+        await UpdateNodeViaStream(deletedNode).Should().Emit();
 
         // Wait for the catalog to surface DefinePersona in the deleted set.
-        var paths = ObserveQueryPathSet(deletedQuery)
+        var paths = await ObserveQueryPathSet(deletedQuery)
             .Should().Within(60.Seconds()).Match(set => set.Contains(todoPath));
 
         paths.Should().Contain(todoPath,
@@ -630,31 +630,31 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Test that restore changes the node state back to Active.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void Restore_ChangesStateBackToActive()
+    public async Task Restore_ChangesStateBackToActive()
     {
         var todoPath = "ACME/ProductLaunch/Todo/DefinePersona";
 
         // Get the original todo
-        var originalNode = ReadNode(todoPath)
+        var originalNode = await ReadNode(todoPath)
             .Should().Within(60.Seconds()).Match(n => n is not null);
         originalNode.Should().NotBeNull();
 
         // First soft delete
         var deletedNode = originalNode! with { State = MeshNodeState.Deleted };
-        UpdateNodeViaStream(deletedNode).Should().Emit();
+        await UpdateNodeViaStream(deletedNode).Should().Emit();
 
         // Verify it's deleted (stream read)
-        var deletedCheck = ReadNode(todoPath)
+        var deletedCheck = await ReadNode(todoPath)
             .Should().Within(60.Seconds()).Match(n => n is not null && n.State == MeshNodeState.Deleted);
         deletedCheck!.State.Should().Be(MeshNodeState.Deleted);
         Output.WriteLine("Node is now Deleted");
 
         // Now restore
         var restoredNode = deletedCheck with { State = MeshNodeState.Active };
-        UpdateNodeViaStream(restoredNode).Should().Emit();
+        await UpdateNodeViaStream(restoredNode).Should().Emit();
 
         // Verify it's active again (stream read)
-        var activeCheck = ReadNode(todoPath)
+        var activeCheck = await ReadNode(todoPath)
             .Should().Within(60.Seconds()).Match(n => n is not null && n.State == MeshNodeState.Active);
         activeCheck!.State.Should().Be(MeshNodeState.Active, "State should be Active after restore");
         Output.WriteLine("Node successfully restored to Active state");
@@ -665,7 +665,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Test that permanent (hard) delete removes the node completely.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void PermanentDelete_RemovesNodeCompletely()
+    public async Task PermanentDelete_RemovesNodeCompletely()
     {
         // Create a temporary test node for this test
         var testId = $"TestTodo_{Guid.NewGuid():N}";
@@ -681,17 +681,17 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         };
 
         // Create the test node and wait for the catalog to surface it.
-        NodeFactory.CreateNode(testNode).Should().Emit();
+        await NodeFactory.CreateNode(testNode).Should().Emit();
         Output.WriteLine($"Created test node at {testPath}");
-        ObserveQueryPathSet(subtreeQuery)
+        await ObserveQueryPathSet(subtreeQuery)
             .Should().Within(60.Seconds()).Match(set => set.Contains(testPath));
 
         // Permanently delete it
-        NodeFactory.DeleteNode(testPath).Should().Emit();
+        await NodeFactory.DeleteNode(testPath).Should().Emit();
         Output.WriteLine("Permanently deleted test node");
 
         // Wait for the catalog to drop the deleted path.
-        var paths = ObserveQueryPathSet(subtreeQuery)
+        var paths = await ObserveQueryPathSet(subtreeQuery)
             .Should().Within(60.Seconds()).Match(set => !set.Contains(testPath));
         paths.Should().NotContain(testPath, "Node should not exist after permanent delete");
         Output.WriteLine($"Catalog reflects permanent delete: {paths.Count} remaining items");

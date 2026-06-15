@@ -91,17 +91,15 @@ public class ConnectStrategyTest : AITestBase
         return found ?? path;
     }
 
-    // 🚨 Reactive assertions ONLY — this test MUST stay a `void` method with NO
-    // `await` / `.ToTask()` / `.GetAwaiter().GetResult()`. SubmitCode's connect chain
-    // completes INLINE on the mesh hub's action block (the last child-model
-    // CreateNodeResponse triggers CombineLatest → Connected synchronously there). An
-    // `await ...ToTask()` would resume the continuation ON that action-block thread, and
-    // the subsequent BLOCKING reads (GetMeshNodeStream, .Match) would then deadlock against
-    // the action block needing to serve those very reads — the 8s + 15s = 23s stall this
-    // test used to hit. A `void` method's reactive assertions block the TEST thread, never
-    // the action block, so the chain completes freely. See ReactiveTestAssertions.md.
+    // 🚨 The reactive ObservableAssertions API is now async — each terminal (Emit/Match)
+    // bridges the stream to a Task via the sanctioned `.FirstAsync().Timeout().ToTask()`
+    // edge and is `await`ed here. xUnit runs test continuations on the thread pool (no
+    // SynchronizationContext), so the awaited continuation does NOT resume on the mesh
+    // hub's action-block thread — the deadlock the old blocking-wait comment warned about
+    // (continuation resuming on the action block, then blocking on reads that same block
+    // must serve) does not apply to the Task bridge. See ReactiveTestAssertions.md.
     [Fact]
-    public void PasteCodeFlow_CapturesToken_WritesEncryptedModelProvider_RoundTrips()
+    public async Task PasteCodeFlow_CapturesToken_WritesEncryptedModelProvider_RoundTrips()
     {
         var owner = $"user-{Guid.NewGuid():N}";
         var configDir = Path.Combine(Path.GetTempPath(), $"connect-test-{Guid.NewGuid():N}", ".claude");
@@ -114,19 +112,19 @@ public class ConnectStrategyTest : AITestBase
         SeedTopLevel(new MeshNode(owner) { Name = owner, NodeType = "Markdown" });
 
         // 1. Not logged in initially (no credentials file).
-        var loggedInBefore = Manager.IsLoggedIn(ConnectProvider.ClaudeCode, configDir)
+        var loggedInBefore = await Manager.IsLoggedIn(ConnectProvider.ClaudeCode, configDir)
             .Should().Within(10.Seconds()).Emit();
         loggedInBefore.Should().BeFalse();
 
         // 2. Connect → the fake CLI prints an auth URL → Connecting state with the URL.
-        var connecting = Manager.StartConnect(owner, ConnectProvider.ClaudeCode, configDir)
+        var connecting = await Manager.StartConnect(owner, ConnectProvider.ClaudeCode, configDir)
             .Should().Within(10.Seconds()).Emit();
         var challenge = connecting.Should().BeOfType<ConnectStatus.Connecting>().Which.Challenge;
         challenge.RequiresPastedCode.Should().BeTrue();
         challenge.VerificationUrl.Should().StartWith("https://");
 
         // 3. Submit the code → the fake CLI prints the token → Connected, provider node written.
-        var connected = Manager.SubmitCode(owner, ConnectProvider.ClaudeCode, "the-pasted-code")
+        var connected = await Manager.SubmitCode(owner, ConnectProvider.ClaudeCode, "the-pasted-code")
             .Should().Within(20.Seconds()).Emit();
         Output.WriteLine($"[diag] connect status = {connected.GetType().Name}: {connected}");
         var ok = connected.Should().BeOfType<ConnectStatus.Connected>().Which;
@@ -135,7 +133,7 @@ public class ConnectStrategyTest : AITestBase
         ok.KeyFingerprint.Should().NotBe("(empty)");
 
         // Diagnostic single-node read — confirms the satellite read path resolves.
-        var directRead = Mesh.GetWorkspace().GetMeshNodeStream(ok.ProviderNodePath)
+        var directRead = await Mesh.GetWorkspace().GetMeshNodeStream(ok.ProviderNodePath)
             .Take(1).Timeout(8.Seconds())
             .Catch((Exception ex) => { Output.WriteLine($"[diag] direct read threw: {ex.Message}"); return Observable.Return<MeshNode?>(null); })
             .Should().Within(10.Seconds()).Emit();
@@ -146,10 +144,10 @@ public class ConnectStrategyTest : AITestBase
         var providerService = Mesh.ServiceProvider.GetRequiredService<ModelProviderService>();
         // Pre-warm the synced query so the owner partition is active before the per-node read
         // (mirrors ModelProviderServiceTest.RotateKey).
-        var listed = providerService.GetProvidersForOwner(owner)
+        var listed = await providerService.GetProvidersForOwner(owner)
             .Should().Within(15.Seconds()).Match(p => p.Count > 0);
         Output.WriteLine($"[diag] providers listed={listed.Count} key fp={listed[0].ApiKeyFingerprint}");
-        var node = workspace.GetMeshNodeStream(ok.ProviderNodePath)
+        var node = await workspace.GetMeshNodeStream(ok.ProviderNodePath)
             .Should().Within(15.Seconds())
             .Match(n => (n.Content as ModelProviderConfiguration)?.ApiKey is { Length: > 0 });
         var storedKey = ((ModelProviderConfiguration)node.Content!).ApiKey!;
@@ -161,7 +159,7 @@ public class ConnectStrategyTest : AITestBase
         var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
         resolver.EnsureSubscription();
         resolver.WatchPartition(owner);
-        var resolution = Observable.Interval(TimeSpan.FromMilliseconds(50))
+        var resolution = await Observable.Interval(TimeSpan.FromMilliseconds(50))
             .Select(_ => resolver.Resolve("sonnet"))
             .Should().Within(15.Seconds()).Match(r => r.ApiKey != null);
         resolution.ApiKey.Should().StartWith("sk-ant-FAKE-TOKEN",

@@ -42,7 +42,7 @@ public class DeadStreamSafetyTest(ITestOutputHelper output) : HubTestBase(output
 {
     private record Empty;
 
-    private SynchronizationStream<Empty> CreateAgainstDisposingHost()
+    private async Task<SynchronizationStream<Empty>> CreateAgainstDisposingHost()
     {
         var host = GetHost();
 
@@ -52,11 +52,11 @@ public class DeadStreamSafetyTest(ITestOutputHelper output) : HubTestBase(output
         host.Dispose();
         // RunLevel check in ctor compares against MessageHubRunLevel.Started.
         // Wait briefly for the dispose to begin so RunLevel is past Started.
-        host.DisposalCompleted
+        await host.DisposalCompleted
             .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
             .FirstOrDefaultAsync()
-            .ToTask()
-            .Wait(2.Seconds()).Should().BeTrue("host should dispose within 2s");
+            .Timeout(2.Seconds())
+            .ToTask(TestContext.Current.CancellationToken);
 
         var reduceManager = new ReduceManager<Empty>(host);
         return new SynchronizationStream<Empty>(
@@ -68,19 +68,19 @@ public class DeadStreamSafetyTest(ITestOutputHelper output) : HubTestBase(output
     }
 
     [HubFact]
-    public void Ctor_OnDisposingHost_DoesNotThrow_AndProducesDeadStream()
+    public async Task Ctor_OnDisposingHost_DoesNotThrow_AndProducesDeadStream()
     {
         // Pre-fix: ObjectDisposedException at the user's call site (Reduce
         // chain). Post-fix: ctor returns a "dead" stream, no exception.
-        Action act = () => CreateAgainstDisposingHost();
-        act.Should().NotThrow(
+        Func<Task> act = () => CreateAgainstDisposingHost();
+        await act.Should().NotThrowAsync(
             "the dead-stream branch must replace the throw with a benign no-op stream");
     }
 
     [HubFact]
-    public void OnNext_OnDeadStream_DoesNotThrow_AndCompletesSubscribers()
+    public async Task OnNext_OnDeadStream_DoesNotThrow_AndCompletesSubscribers()
     {
-        var stream = CreateAgainstDisposingHost();
+        var stream = await CreateAgainstDisposingHost();
         var emitted = false;
         var errored = false;
         var completed = false;
@@ -102,9 +102,9 @@ public class DeadStreamSafetyTest(ITestOutputHelper output) : HubTestBase(output
     }
 
     [HubFact]
-    public void Update_OnDeadStream_SignalsDisposedToProducer()
+    public async Task Update_OnDeadStream_SignalsDisposedToProducer()
     {
-        var stream = CreateAgainstDisposingHost();
+        var stream = await CreateAgainstDisposingHost();
         var updateInvoked = false;
         Exception? signaled = null;
 
@@ -126,9 +126,9 @@ public class DeadStreamSafetyTest(ITestOutputHelper output) : HubTestBase(output
     }
 
     [HubFact]
-    public void RegisterForDisposal_OnDeadStream_DisposesImmediately()
+    public async Task RegisterForDisposal_OnDeadStream_DisposesImmediately()
     {
-        var stream = CreateAgainstDisposingHost();
+        var stream = await CreateAgainstDisposingHost();
         var disposed = false;
         var disposable = new ActionDisposable(() => disposed = true);
 
@@ -143,9 +143,9 @@ public class DeadStreamSafetyTest(ITestOutputHelper output) : HubTestBase(output
     }
 
     [HubFact]
-    public void Dispose_OnDeadStream_DoesNotThrow()
+    public async Task Dispose_OnDeadStream_DoesNotThrow()
     {
-        var stream = CreateAgainstDisposingHost();
+        var stream = await CreateAgainstDisposingHost();
         var act = () => stream.Dispose();
         act.Should().NotThrow("Dispose on a dead stream must skip the null Hub branch cleanly");
     }
@@ -164,7 +164,7 @@ public class DeadStreamSafetyTest(ITestOutputHelper output) : HubTestBase(output
     /// <c>Post</c> short-circuits to a dropped delivery before the pipeline ever runs.</para>
     /// </summary>
     [HubFact]
-    public void Post_OnDisposingHost_DropsWithoutInvokingPipeline()
+    public async Task Post_OnDisposingHost_DropsWithoutInvokingPipeline()
     {
         var armed = false;
         var pipelineInvokedWhileArmed = false;
@@ -183,11 +183,11 @@ public class DeadStreamSafetyTest(ITestOutputHelper output) : HubTestBase(output
 
         // Drive the host to teardown (RunLevel >= DisposeHostedHubs).
         host.Dispose();
-        host.DisposalCompleted
+        await host.DisposalCompleted
             .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
             .FirstOrDefaultAsync()
-            .ToTask()
-            .Wait(2.Seconds()).Should().BeTrue("host should dispose within 2s");
+            .Timeout(2.Seconds())
+            .ToTask(TestContext.Current.CancellationToken);
 
         armed = true;
 

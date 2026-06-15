@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Kernel;
@@ -53,7 +54,7 @@ public class DataCubesDocBlocksTest(ITestOutputHelper output) : MonolithMeshTest
             ?? [];
 
     /// <summary>Activity-hosted kernel session — same shape the markdown view creates.</summary>
-    private Address CreateKernelSession()
+    private async Task<Address> CreateKernelSession()
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var kernelId = Guid.NewGuid().ToString("N");
@@ -67,7 +68,7 @@ public class DataCubesDocBlocksTest(ITestOutputHelper output) : MonolithMeshTest
             State = MeshNodeState.Active,
             Content = new ActivityLog("KernelExecution") { Status = ActivityStatus.Running }
         };
-        meshService.CreateNode(activityNode).Should().Emit();
+        await meshService.CreateNode(activityNode).Should().Emit();
         return new Address($"{activityNamespace}/markdown-{kernelId}");
     }
 
@@ -82,14 +83,14 @@ public class DataCubesDocBlocksTest(ITestOutputHelper output) : MonolithMeshTest
     }
 
     [Fact(Timeout = DefaultTimeoutMs)]
-    public void EveryExecutableBlock_RendersAControl()
+    public async Task EveryExecutableBlock_RendersAControl()
     {
         var client = GetClient();
         var failures = new List<string>();
 
         foreach (var submission in ExtractSubmissions())
         {
-            var kernelAddress = CreateKernelSession();
+            var kernelAddress = await CreateKernelSession();
             var areaId = submission.Id;
             Output.WriteLine($"--- executing block '{areaId}' on {kernelAddress}");
 
@@ -111,7 +112,7 @@ public class DataCubesDocBlocksTest(ITestOutputHelper output) : MonolithMeshTest
             client.Post(submission, o => o.WithTarget(kernelAddress));
 
             // Either the control renders (success) or the kernel reports an error.
-            var outcome = stream.GetControlStream(areaId)
+            var outcome = await stream.GetControlStream(areaId)
                 .Where(c => c is not null)
                 .Select(c => (Error: (string?)null, Control: (object?)c))
                 .Merge(errorLog.Select(e => (Error: (string?)e, Control: (object?)null)))

@@ -52,17 +52,17 @@ public class NotificationServiceIntegrationTests(PostgreSqlFixture fixture, ITes
     }
 
     [Fact(Timeout = 60000)]
-    public void CreateNotification_EndToEnd_LandsInNotificationsTable()
+    public async Task CreateNotification_EndToEnd_LandsInNotificationsTable()
     {
         var ct = TestContext.Current.CancellationToken;
         var ns = $"notif_test_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
-        Mesh.ProvisionPartition(ns);   // no lazy create — provision the partition (incl. its
+        await Mesh.ProvisionPartition(ns);   // no lazy create — provision the partition (incl. its
                                        // `notifications` satellite table) before writing
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         // Seed a main entity so the satellite has a real parent.
         var mainPath = $"{ns}/doc";
-        meshService.CreateNode(new MeshNode("doc", ns)
+        await meshService.CreateNode(new MeshNode("doc", ns)
         {
             NodeType = "Markdown",
             Name = "doc",
@@ -70,7 +70,7 @@ public class NotificationServiceIntegrationTests(PostgreSqlFixture fixture, ITes
         }).Should().Within(30.Seconds()).Emit();
 
         // Act: call the public NotificationService API the bell + thread hook use.
-        var notif = NotificationService.CreateNotification(
+        var notif = await NotificationService.CreateNotification(
                 meshService,
                 mainNodePath: mainPath,
                 title: "Doc ready",
@@ -88,29 +88,29 @@ public class NotificationServiceIntegrationTests(PostgreSqlFixture fixture, ITes
         // Verify the row landed in the dedicated `notifications` table inside
         // the partition schema, NOT in mesh_nodes or annotations.
         using var ds = NpgsqlDataSource.Create(_fixture.ConnectionString);
-        ds.ScalarLong($"SELECT COUNT(*) FROM \"{ns}\".notifications WHERE id = @id",
+        await ds.ScalarLong($"SELECT COUNT(*) FROM \"{ns}\".notifications WHERE id = @id",
                 new[] { ("id", (object)notif.Id!) }, ct)
             .Should().Within(30.Seconds()).Be(1L,
                 "the satellite must land in the dedicated notifications table");
 
-        ds.ScalarLong($"SELECT COUNT(*) FROM \"{ns}\".mesh_nodes WHERE id = @id",
+        await ds.ScalarLong($"SELECT COUNT(*) FROM \"{ns}\".mesh_nodes WHERE id = @id",
                 new[] { ("id", (object)notif.Id!) }, ct)
             .Should().Within(30.Seconds()).Be(0L,
                 "the satellite must NOT land in mesh_nodes (regression would mean routing broke)");
     }
 
     [Fact(Timeout = 60000)]
-    public void MultipleNotifications_AccumulateAndAreQueryable_ViaNodeTypeFilter()
+    public async Task MultipleNotifications_AccumulateAndAreQueryable_ViaNodeTypeFilter()
     {
         var ct = TestContext.Current.CancellationToken;
         var ns = $"notif_test2_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
-        Mesh.ProvisionPartition(ns);   // no lazy create — provision the partition first
+        await Mesh.ProvisionPartition(ns);   // no lazy create — provision the partition first
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         // Seed a main entity (any node type works; notifications are satellites
         // of arbitrary entities — Markdown is already registered via AddGraph).
         var docPath = $"{ns}/doc-1";
-        meshService.CreateNode(new MeshNode("doc-1", ns)
+        await meshService.CreateNode(new MeshNode("doc-1", ns)
         {
             NodeType = "Markdown",
             Name = "doc-1",
@@ -120,7 +120,7 @@ public class NotificationServiceIntegrationTests(PostgreSqlFixture fixture, ITes
         // Emit three notifications (simulating three round completions).
         for (var i = 0; i < 3; i++)
         {
-            NotificationService.CreateNotification(
+            await NotificationService.CreateNotification(
                     meshService,
                     mainNodePath: docPath,
                     title: $"Round {i} ready",
@@ -133,7 +133,7 @@ public class NotificationServiceIntegrationTests(PostgreSqlFixture fixture, ITes
 
         // Direct PG count — all three sit in the partition's notifications table.
         using var ds = NpgsqlDataSource.Create(_fixture.ConnectionString);
-        ds.ScalarLong($"SELECT COUNT(*) FROM \"{ns}\".notifications WHERE main_node = @mn",
+        await ds.ScalarLong($"SELECT COUNT(*) FROM \"{ns}\".notifications WHERE main_node = @mn",
                 new[] { ("mn", (object)docPath) }, ct)
             .Should().Within(30.Seconds()).Be(3L);
     }

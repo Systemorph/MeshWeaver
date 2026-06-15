@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.GitSync;
 using MeshWeaver.Mesh;
@@ -12,10 +13,10 @@ namespace MeshWeaver.GitSync.Test;
 public class GitHubCredentialServiceTest(ITestOutputHelper output) : GitHubSyncTestBase(output)
 {
     [Fact(Timeout = 60000)]
-    public void Save_Then_Get_RoundTripsDecryptedToken()
+    public async Task Save_Then_Get_RoundTripsDecryptedToken()
     {
-        Connect(token: "ghp_secret_ABC123", login: "octocat");
-        var cred = WaitForCredential();
+        await Connect(token: "ghp_secret_ABC123", login: "octocat");
+        var cred = await WaitForCredential();
 
         Assert.Equal("ghp_secret_ABC123", cred.AccessToken);
         Assert.Equal("octocat", cred.GitHubLogin);
@@ -23,11 +24,11 @@ public class GitHubCredentialServiceTest(ITestOutputHelper output) : GitHubSyncT
     }
 
     [Fact(Timeout = 60000)]
-    public void StoredToken_IsEncryptedAtRest()
+    public async Task StoredToken_IsEncryptedAtRest()
     {
-        Connect(token: "ghp_secret_ABC123");
+        await Connect(token: "ghp_secret_ABC123");
 
-        var node = WaitForNode(GitHubCredentialService.CredentialPath(UserId));
+        var node = await WaitForNode(GitHubCredentialService.CredentialPath(UserId));
         var stored = ExtractCredential(node);
 
         Assert.NotNull(stored);
@@ -38,11 +39,11 @@ public class GitHubCredentialServiceTest(ITestOutputHelper output) : GitHubSyncT
     }
 
     [Fact(Timeout = 60000)]
-    public void Delete_RemovesCredential()
+    public async Task Delete_RemovesCredential()
     {
-        Connect();
-        Credentials.Delete(UserId).Timeout(30.Seconds()).Wait();
-        Assert.True(IsAbsent(GitHubCredentialService.CredentialPath(UserId)));
+        await Connect();
+        await Credentials.Delete(UserId).Timeout(30.Seconds()).ToTask();
+        Assert.True(await IsAbsent(GitHubCredentialService.CredentialPath(UserId)));
     }
 
     private GitHubCredential? ExtractCredential(MeshNode node) => node.Content switch

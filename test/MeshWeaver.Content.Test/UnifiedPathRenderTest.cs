@@ -1,5 +1,7 @@
 using System;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
+using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -28,14 +30,14 @@ public class UnifiedPathRenderTest(ITestOutputHelper output) : MonolithMeshTestB
 
     // A node with distinctive content so the rendered JSON is unambiguous. Created under System
     // because a top-level partition root (User) requires it; rendered as the (admin) test user.
-    private Address SeedNodeWithContent(string partition)
+    private async Task<Address> SeedNodeWithContent(string partition)
     {
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         using (access.ImpersonateAsSystem())
         {
-            NodeFactory.CreateNode(
+            await NodeFactory.CreateNode(
                 new MeshNode(partition) { NodeType = "User", Name = partition }).Should().Emit();
-            NodeFactory.CreateNode(
+            await NodeFactory.CreateNode(
                 new MeshNode("Page", partition)
                 {
                     NodeType = "Markdown",
@@ -47,14 +49,14 @@ public class UnifiedPathRenderTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     [Fact]
-    public void DataArea_RendersCurrentNodeContentAsJson()
+    public async Task DataArea_RendersCurrentNodeContentAsJson()
     {
-        var address = SeedNodeWithContent("UcrDataRenderUser");
+        var address = await SeedNodeWithContent("UcrDataRenderUser");
 
         var workspace = GetClient().GetWorkspace();
         // The area emits a "Building layout..." placeholder first, then the rendered
         // content — Match() waits for the frame that actually contains the node's data.
-        var value = workspace
+        var value = await workspace
             .GetRemoteStream<JsonElement, LayoutAreaReference>(
                 address, new LayoutAreaReference(MeshNodeLayoutAreas.DataArea))
             .Should().Within(40.Seconds())
@@ -67,13 +69,13 @@ public class UnifiedPathRenderTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     [Fact]
-    public void SchemaArea_RendersCurrentNodeSchema()
+    public async Task SchemaArea_RendersCurrentNodeSchema()
     {
-        var address = SeedNodeWithContent("UcrSchemaRenderUser");
+        var address = await SeedNodeWithContent("UcrSchemaRenderUser");
 
         var workspace = GetClient().GetWorkspace();
         // Wait past the "Building layout..." placeholder for the rendered schema frame.
-        var value = workspace
+        var value = await workspace
             .GetRemoteStream<JsonElement, LayoutAreaReference>(
                 address, new LayoutAreaReference(MeshNodeLayoutAreas.SchemaArea))
             .Should().Within(40.Seconds())

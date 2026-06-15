@@ -40,18 +40,17 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder);
 
-    protected override Task SetupAccessRightsAsync()
+    protected override async Task SetupAccessRightsAsync()
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         // Grant admin on TestPartition to the test runner so this base's
         // CreateNode setup succeeds. Tests then switch ambient identity to
         // unprivileged users to assert that downstream SubscribeRequests
         // carry the SWITCHED identity, not the admin's, and not System.
-        meshService.CreateNode(
+        await meshService.CreateNode(
             AssignmentNodeFactory.UserRole(
                 Mesh.Address.ToFullString(), "Admin", TestPartition))
             .Should().Within(30.Seconds()).Emit();
-        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -68,7 +67,7 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
     /// <c>"alice"</c>.</para>
     /// </summary>
     [Fact(Timeout = 20_000)]
-    public void SubscribeRequest_FromRealUser_CarriesUserIdentity()
+    public async Task SubscribeRequest_FromRealUser_CarriesUserIdentity()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -79,18 +78,18 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
         // it. So set up the grant first, then assert read succeeds.
         using (accessService.ImpersonateAsSystem())
         {
-            meshService.CreateNode(
+            await meshService.CreateNode(
                 AssignmentNodeFactory.UserRole("alice", "Editor", TestPartition))
                 .Should().Within(15.Seconds()).Emit();
         }
-        Mesh.GetEffectivePermissions(TestPartition, "alice")
+        await Mesh.GetEffectivePermissions(TestPartition, "alice")
             .Should().Within(90.Seconds()).Match(p => p.HasFlag(Permission.Read));
 
         accessService.SetContext(new AccessContext { ObjectId = "alice", Name = "Alice" });
 
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
         var stream = workspace.GetMeshNodeStream(TestPartition);
-        var first = stream
+        var first = await stream
             .Should().Within(10.Seconds())
             .Match(c => c != null);
 
@@ -108,7 +107,7 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
     /// matches, and the subscription throws "Access denied: user 'sync/…'".
     /// </summary>
     [Fact(Timeout = 20_000)]
-    public void SubscribeRequest_FromSyncHubPrincipal_FallsBackToSystem()
+    public async Task SubscribeRequest_FromSyncHubPrincipal_FallsBackToSystem()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
@@ -127,7 +126,7 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
         // emits. Without the fix, the SubscribeRequest carries the sync/{guid}
         // identity → owner denies → OnError or empty.
         var stream = workspace.GetMeshNodeStream(TestPartition);
-        var first = stream
+        var first = await stream
             .Should().Within(10.Seconds())
             .Match(c => c != null);
 
@@ -143,7 +142,7 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
     /// owner can decide. System is the right fallback for "no identity".
     /// </summary>
     [Fact(Timeout = 20_000)]
-    public void SubscribeRequest_WithNullContext_FallsBackToSystem()
+    public async Task SubscribeRequest_WithNullContext_FallsBackToSystem()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         accessService.SetContext(null);
@@ -152,7 +151,7 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
 
         var stream = workspace.GetMeshNodeStream(TestPartition);
-        var first = stream
+        var first = await stream
             .Should().Within(10.Seconds())
             .Match(c => c != null);
 
@@ -176,7 +175,7 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
     /// ObjectId at the owner side must be "alice" — not "system-security".</para>
     /// </summary>
     [Fact(Timeout = 20_000)]
-    public void LayoutAreaSubscription_DeniesWhenUserLacksPermission_ProvesIdentityRouted()
+    public async Task LayoutAreaSubscription_DeniesWhenUserLacksPermission_ProvesIdentityRouted()
     {
         // The disambiguating shape: subscribe as a user WITHOUT permission.
         // If Alice's identity were silently dropped to "system-security"
@@ -190,7 +189,7 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
         var stream = workspace.GetMeshNodeStream(TestPartition);
 
-        var notification = stream
+        var notification = await stream
             .Where(c => c != null)
             .Materialize()
             .Should().Within(15.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
@@ -213,7 +212,7 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
     /// Test 6.
     /// </summary>
     [Fact(Timeout = 20_000)]
-    public void SubscribeRequest_PerUserNode_GrantedUserReceivesContent()
+    public async Task SubscribeRequest_PerUserNode_GrantedUserReceivesContent()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -224,13 +223,13 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
         var nodePath = $"{TestPartition}/{nodeId}";
         using (accessService.ImpersonateAsSystem())
         {
-            meshService.CreateNode(new MeshNode(nodeId, TestPartition)
+            await meshService.CreateNode(new MeshNode(nodeId, TestPartition)
             {
                 Name = "Alice's private note",
                 NodeType = "Markdown"
             }).Should().Within(15.Seconds()).Emit();
 
-            meshService.CreateNode(
+            await meshService.CreateNode(
                 AssignmentNodeFactory.UserRole("alice", "Editor", nodePath))
                 .Should().Within(15.Seconds()).Emit();
         }
@@ -239,7 +238,7 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
         // synced cache — without this, the SubscribeRequest race-loses against
         // the synced-query refresh and the test sees Read-denied even though
         // the assignment has been persisted.
-        Mesh.GetEffectivePermissions(nodePath, "alice")
+        await Mesh.GetEffectivePermissions(nodePath, "alice")
             .Should().Within(90.Seconds()).Match(p => p.HasFlag(Permission.Read));
 
         // Switch to Alice. With my fix, SubscribeRequest carries
@@ -249,7 +248,7 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
         var stream = workspace.GetMeshNodeStream(nodePath);
 
-        var first = stream
+        var first = await stream
             .Should().Within(10.Seconds())
             .Match(c => c != null);
 
@@ -269,7 +268,7 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
     /// regression.</para>
     /// </summary>
     [Fact(Timeout = 20_000)]
-    public void SubscribeRequest_PerUserNode_NonGrantedUserDenied()
+    public async Task SubscribeRequest_PerUserNode_NonGrantedUserDenied()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -278,13 +277,13 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
         var nodePath = $"{TestPartition}/{nodeId}";
         using (accessService.ImpersonateAsSystem())
         {
-            meshService.CreateNode(new MeshNode(nodeId, TestPartition)
+            await meshService.CreateNode(new MeshNode(nodeId, TestPartition)
             {
                 Name = "Alice-only note",
                 NodeType = "Markdown"
             }).Should().Within(15.Seconds()).Emit();
 
-            meshService.CreateNode(
+            await meshService.CreateNode(
                 AssignmentNodeFactory.UserRole("alice", "Editor", nodePath))
                 .Should().Within(15.Seconds()).Emit();
         }
@@ -293,7 +292,7 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
         // synced cache — without this, the SubscribeRequest race-loses against
         // the synced-query refresh and the test sees Read-denied even though
         // the assignment has been persisted.
-        Mesh.GetEffectivePermissions(nodePath, "alice")
+        await Mesh.GetEffectivePermissions(nodePath, "alice")
             .Should().Within(90.Seconds()).Match(p => p.HasFlag(Permission.Read));
 
         // Bob has no grant on the per-user node. Switch to him.
@@ -307,7 +306,7 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
         // grant on the Alice-only node and replies with DeliveryFailure.
         // If the System bypass were back, Bob would silently see Alice's
         // private content — this is the canonical regression catch.
-        var notification = stream
+        var notification = await stream
             .Where(c => c != null)
             .Materialize()
             .Should().Within(15.Seconds()).Match(n => n.Kind == NotificationKind.OnError);

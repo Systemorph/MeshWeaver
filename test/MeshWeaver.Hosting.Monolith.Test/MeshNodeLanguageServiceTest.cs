@@ -63,7 +63,7 @@ public class MeshNodeLanguageServiceTest(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact]
-    public void CheckSpeculative_RenameTypeInOneFile_SurfacesDiagnosticInSibling()
+    public async Task CheckSpeculative_RenameTypeInOneFile_SurfacesDiagnosticInSibling()
     {
         // Two source files: file A defines `Story`, file B has a `StoryList` whose
         // `Items` property references `Story[]`. Both currently compile cleanly.
@@ -79,7 +79,7 @@ public record StoryList
     public Story[] Items { get; init; } = System.Array.Empty<Story>();
 }";
 
-        SeedNodeType(
+        await SeedNodeType(
             "RenameDemo",
             new NodeTypeDefinition { Configuration = "config => config.WithContentType<Story>()" },
             ("StoryDefs.cs", fileA),
@@ -98,7 +98,7 @@ public record StoryItem
     public string Title { get; init; } = string.Empty;
 }";
 
-        var diagnostics = LanguageService
+        var diagnostics = await LanguageService
             .CheckSpeculative(nodeTypePath, fileAPath, renamedA)
             .Should().Within(60.Seconds()).Emit();
 
@@ -117,10 +117,10 @@ public record StoryItem
     }
 
     [Fact]
-    public void CheckSpeculative_CleanProposal_ReturnsNoErrors()
+    public async Task CheckSpeculative_CleanProposal_ReturnsNoErrors()
     {
         // Single-source NodeType, propose a clean replacement → no errors expected.
-        SeedNodeType(
+        await SeedNodeType(
             "CleanDemo",
             new NodeTypeDefinition { Configuration = "config => config.WithContentType<Demo>()" },
             ("Demo.cs", @"
@@ -139,7 +139,7 @@ public record Demo
     public string Title { get; init; } = string.Empty;
 }";
 
-        var diagnostics = LanguageService
+        var diagnostics = await LanguageService
             .CheckSpeculative(nodeTypePath, demoPath, improvedDemo)
             .Should().Within(60.Seconds()).Emit();
 
@@ -149,7 +149,7 @@ public record Demo
     }
 
     [Fact]
-    public void CheckSpeculative_AddsNuGetReferenceDirective_ResolvesAndCompiles()
+    public async Task CheckSpeculative_AddsNuGetReferenceDirective_ResolvesAndCompiles()
     {
         // Existing source has no #r. Proposed code adds a `#r "nuget:Humanizer, 2.14.1"`
         // directive and uses one of its extension methods — the speculative compile must
@@ -160,7 +160,7 @@ public record Demo
         // path here is exactly the same one CompileAsyncCore uses for #r resolution, so a
         // green check here proves end-to-end (parse → strip → resolve → re-reference →
         // re-parse → bind → diagnose).
-        SeedNodeType(
+        await SeedNodeType(
             "NuGetDemo",
             new NodeTypeDefinition { Configuration = "config => config.WithContentType<NuGetDemo>()" },
             ("NuGetDemo.cs", @"
@@ -181,7 +181,7 @@ public record NuGetDemo
     public string Pretty() => Id.Humanize();
 }";
 
-        var diagnostics = LanguageService
+        var diagnostics = await LanguageService
             .CheckSpeculative(nodeTypePath, sourcePath, proposedWithNuGet)
             .Should().Within(TimeSpan.FromSeconds(120)).Emit();  // first-time NuGet resolve can be slow
 
@@ -202,12 +202,12 @@ public record NuGetDemo
     }
 
     [Fact]
-    public void CheckSpeculative_NewFilePathNotInSourceSet_TreatedAsAdditionalFile()
+    public async Task CheckSpeculative_NewFilePathNotInSourceSet_TreatedAsAdditionalFile()
     {
         // Seed a NodeType with ONE source file. Pass a sourcePath that doesn't exist in the
         // current set + a clean record proposal — SpeculativeCompilation must append it as
         // a new tree, not silently drop it. Proof: a syntax error in the new file surfaces.
-        SeedNodeType(
+        await SeedNodeType(
             "AppendDemo",
             new NodeTypeDefinition { Configuration = "config => config.WithContentType<AppendDemo>()" },
             ("AppendDemo.cs", @"
@@ -227,7 +227,7 @@ public static class Helper
     public static string Greet() { return ""hi"" }
 }";
 
-        var diagnostics = LanguageService
+        var diagnostics = await LanguageService
             .CheckSpeculative(nodeTypePath, newFilePath, brokenNewFile)
             .Should().Within(60.Seconds()).Emit();
 
@@ -241,13 +241,13 @@ public static class Helper
     }
 
     [Fact]
-    public void GetDiagnostics_CleanType_ReturnsNoErrors()
+    public async Task GetDiagnostics_CleanType_ReturnsNoErrors()
     {
         // Sanity: a NodeType whose committed source compiles cleanly should produce no
         // diagnostic errors from the cached compilation. Differentiates from the
         // "compile status = Ok" surface — this reads diagnostics directly off the
         // CSharpCompilation, no emit cache involvement.
-        SeedNodeType(
+        await SeedNodeType(
             "DiagDemo",
             new NodeTypeDefinition { Configuration = "config => config.WithContentType<DiagDemo>()" },
             ("DiagDemo.cs", @"
@@ -256,7 +256,7 @@ public record DiagDemo
     public string Id { get; init; } = string.Empty;
 }")).Should().Within(60.Seconds()).Emit();
 
-        var diagnostics = LanguageService
+        var diagnostics = await LanguageService
             .GetDiagnostics("type/DiagDemo")
             .Should().Within(60.Seconds()).Emit();
 
@@ -266,7 +266,7 @@ public record DiagDemo
     }
 
     [Fact]
-    public void GetHover_OnPropertyInsideRecord_ReturnsMarkdown()
+    public async Task GetHover_OnPropertyInsideRecord_ReturnsMarkdown()
     {
         // Position the cursor over the `string` keyword in a property declaration, expect
         // a hover that mentions System.String — proves the path → DocumentId mapping +
@@ -276,7 +276,7 @@ public record HoverDemo
 {
     public string Id { get; init; } = string.Empty;
 }";
-        SeedNodeType(
+        await SeedNodeType(
             "HoverDemo",
             new NodeTypeDefinition { Configuration = "config => config.WithContentType<HoverDemo>()" },
             ("HoverDemo.cs", source)).Should().Within(60.Seconds()).Emit();
@@ -285,7 +285,7 @@ public record HoverDemo
         // Line 3 (0-based) is "    public string Id { get; init; } = string.Empty;"
         // "    public string " — characters 0-3 are spaces, "public" 4-9, " " 10, "string" 11-16.
         // Position char 14 lands inside "string" — solid hover anchor.
-        var hover = LanguageService
+        var hover = await LanguageService
             .GetHover("type/HoverDemo", "type/HoverDemo/Source/HoverDemo.cs", new SourcePosition(3, 14))
             .Should().Within(60.Seconds()).Emit();
 
@@ -297,7 +297,7 @@ public record HoverDemo
     }
 
     [Fact]
-    public void GetCompletions_AfterMemberAccessDot_ReturnsTypeMembers()
+    public async Task GetCompletions_AfterMemberAccessDot_ReturnsTypeMembers()
     {
         // Position the cursor right after `string.` inside a method body, expect Roslyn's
         // CompletionService to offer the standard System.String static members
@@ -311,7 +311,7 @@ public class CompletionDemo
         return x;
     }
 }";
-        SeedNodeType(
+        await SeedNodeType(
             "CompletionDemo",
             new NodeTypeDefinition { Configuration = "config => config.WithContentType<CompletionDemo>()" },
             ("CompletionDemo.cs", source)).Should().Within(60.Seconds()).Emit();
@@ -319,7 +319,7 @@ public class CompletionDemo
         // Line 5 (0-based): "        var x = string."
         //   chars 0-7: spaces, "var" 8-10, " " 11, "x" 12, " = " 13-15, "string" 16-21, "." 22.
         // Position char 23 = right after the dot.
-        var completions = LanguageService
+        var completions = await LanguageService
             .GetCompletions(
                 "type/CompletionDemo",
                 "type/CompletionDemo/Source/CompletionDemo.cs",

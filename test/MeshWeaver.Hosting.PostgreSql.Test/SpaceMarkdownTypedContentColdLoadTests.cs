@@ -61,14 +61,14 @@ public class SpaceMarkdownTypedContentColdLoadTests(PostgreSqlFixture fixture, I
     }
 
     [Fact(Timeout = 120000)]
-    public void MarkdownChild_UnderSpace_ColdHubReload_ContentStaysTyped()
+    public async Task MarkdownChild_UnderSpace_ColdHubReload_ContentStaysTyped()
     {
         var ct = TestContext.Current.CancellationToken;
         var spaceId = $"pgtyped{Guid.NewGuid():N}".ToLowerInvariant()[..16];
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         // 1. Space partition root — same shape as AgenticPension on atioz.
-        var space = meshService.CreateNode(new MeshNode(spaceId)
+        var space = await meshService.CreateNode(new MeshNode(spaceId)
         {
             NodeType = SpaceNodeType.NodeType,
             Name = spaceId,
@@ -79,7 +79,7 @@ public class SpaceMarkdownTypedContentColdLoadTests(PostgreSqlFixture fixture, I
 
         // 2. Markdown child with TYPED MarkdownContent (the AgenticPension/Overview shape).
         var childPath = $"{spaceId}/Overview";
-        var child = meshService.CreateNode(new MeshNode("Overview", spaceId)
+        var child = await meshService.CreateNode(new MeshNode("Overview", spaceId)
         {
             NodeType = "Markdown",
             Name = "Overview",
@@ -91,7 +91,7 @@ public class SpaceMarkdownTypedContentColdLoadTests(PostgreSqlFixture fixture, I
         // 3. The persisted row must carry the polymorphic discriminator — pins that the
         //    WRITE was correct (the atioz verification: $type present in PG). The save is
         //    debounced (200 ms), so poll the row reactively until it lands.
-        var discriminator = Observable.Interval(TimeSpan.FromMilliseconds(250)).StartWith(0L)
+        var discriminator = await Observable.Interval(TimeSpan.FromMilliseconds(250)).StartWith(0L)
             .SelectMany(_ => _fixture.DataSource.Probe(
                     $"""SELECT content->>'$type' FROM "{spaceId}".mesh_nodes WHERE id = 'Overview'""",
                     [],
@@ -105,7 +105,7 @@ public class SpaceMarkdownTypedContentColdLoadTests(PostgreSqlFixture fixture, I
         // 4. Warm baseline: a read against the still-live per-node hub must be typed.
         //    (This is the read the existing suites cover — it does NOT exercise the
         //    cold load path the portal hits after a pod restart / recycle.)
-        var warm = Mesh.GetMeshNodeStream(childPath)
+        var warm = await Mesh.GetMeshNodeStream(childPath)
             .Where(n => n is not null).Take(1)
             .Should().Within(30.Seconds()).Emit();
         warm!.Content.Should().BeOfType<MarkdownContent>("the warm read serves the typed in-process content");
@@ -121,7 +121,7 @@ public class SpaceMarkdownTypedContentColdLoadTests(PostgreSqlFixture fixture, I
 
         Mesh.Post(new DisposeRequest(), o => o.WithTarget(hostedAddress));
 
-        Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
+        await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
             .Select(_ => Mesh.GetHostedHub(hostedAddress, HostedHubCreation.Never))
             .Should().Within(30.Seconds()).Match(
                 h => h is null
@@ -132,7 +132,7 @@ public class SpaceMarkdownTypedContentColdLoadTests(PostgreSqlFixture fixture, I
         // 6. Owner round-trip read (GetDataRequest → freshly activated hub). Retry on a
         //    cadence: a read landing while the old hub is mid-teardown can fail or return
         //    null until routing re-creates the hub.
-        var reloaded = Observable.Interval(TimeSpan.FromMilliseconds(250)).StartWith(0L)
+        var reloaded = await Observable.Interval(TimeSpan.FromMilliseconds(250)).StartWith(0L)
             .SelectMany(_ => ReadNode(childPath))
             .Where(n => n is not null)
             .Should().Within(60.Seconds()).Emit();
@@ -155,14 +155,14 @@ public class SpaceMarkdownTypedContentColdLoadTests(PostgreSqlFixture fixture, I
     /// names the bad discriminator, so the writing agent corrects the shape immediately.
     /// </summary>
     [Fact(Timeout = 120000)]
-    public void MarkdownChild_CreateWithUnresolvableContentDiscriminator_FailsClosed()
+    public async Task MarkdownChild_CreateWithUnresolvableContentDiscriminator_FailsClosed()
     {
         var ct = TestContext.Current.CancellationToken;
         var spaceId = $"pgbadt{Guid.NewGuid():N}".ToLowerInvariant()[..16];
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         // Space partition root — valid.
-        meshService.CreateNode(new MeshNode(spaceId)
+        await meshService.CreateNode(new MeshNode(spaceId)
         {
             NodeType = SpaceNodeType.NodeType,
             Name = spaceId,
@@ -175,7 +175,7 @@ public class SpaceMarkdownTypedContentColdLoadTests(PostgreSqlFixture fixture, I
         var agentShape = JsonSerializer.Deserialize<JsonElement>(
             """{"$type":"MarkdownConfiguration","markdown":"# Broken\n\nNever typeable."}""");
 
-        var notification = meshService.CreateNode(new MeshNode("BrokenOverview", spaceId)
+        var notification = await meshService.CreateNode(new MeshNode("BrokenOverview", spaceId)
             {
                 NodeType = "Markdown",
                 Name = "Broken Overview",
@@ -194,7 +194,7 @@ public class SpaceMarkdownTypedContentColdLoadTests(PostgreSqlFixture fixture, I
             "the rejection must name the unresolvable discriminator so the caller can fix the shape");
 
         // And nothing may have leaked into the partition's main table.
-        var rows = _fixture.DataSource.ScalarLong(
+        var rows = await _fixture.DataSource.ScalarLong(
                 $"""SELECT count(*) FROM "{spaceId}".mesh_nodes WHERE id = 'BrokenOverview'""", ct)
             .Should().Within(20.Seconds()).Emit();
         rows.Should().Be(0L, "a rejected create must not write a row");

@@ -38,7 +38,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     // ── CORE TEST: Organization node appears in global search ──────────
 
     [Fact(Timeout = 30000)]
-    public void GlobalSearch_ReturnsOrganizationNode()
+    public async Task GlobalSearch_ReturnsOrganizationNode()
     {
         // Arrange: create an Organization at the root of its partition
         // This mimics "PartnerRe" — namespace="" id="TestCorp" nodeType=Organization
@@ -50,7 +50,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
         SeedTopLevel(orgNode);
 
         // Act: global search with no path (like the top search bar)
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("scope:descendants sort:LastModified-desc limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("scope:descendants sort:LastModified-desc limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Assert: the Organization should appear
         results.Should().Contain(n => n.Path == "TestCorp",
@@ -58,7 +58,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     }
 
     [Fact(Timeout = 30000)]
-    public void GlobalSearch_ReturnsOrganizationByName()
+    public async Task GlobalSearch_ReturnsOrganizationByName()
     {
         // Arrange
         SeedTopLevel(new MeshNode("AcmeCorp")
@@ -68,7 +68,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
         });
 
         // Act: search by text that matches the name
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("Acme scope:descendants limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("Acme scope:descendants limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Assert
         results.Should().Contain(n => n.Path == "AcmeCorp",
@@ -76,7 +76,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     }
 
     [Fact(Timeout = 30000)]
-    public void GlobalSearch_ReturnsChildNodesUnderOrganization()
+    public async Task GlobalSearch_ReturnsChildNodesUnderOrganization()
     {
         // Arrange: create org + child markdown node
         SeedTopLevel(new MeshNode("MegaCorp")
@@ -85,14 +85,14 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
             NodeType = "Markdown"
         });
 
-        NodeFactory.CreateNode(new MeshNode("readme", "MegaCorp")
+        await NodeFactory.CreateNode(new MeshNode("readme", "MegaCorp")
         {
             Name = "Getting Started",
             NodeType = "Markdown"
         }).Should().Emit();
 
         // Act: search all descendants
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("scope:descendants limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("scope:descendants limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Assert: both org and child should appear
         results.Should().Contain(n => n.Path == "MegaCorp",
@@ -104,7 +104,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     // ── Autocomplete ──────────────────────────────────────────────────
 
     [Fact(Timeout = 30000)]
-    public void Autocomplete_FindsOrganizationByPrefix()
+    public async Task Autocomplete_FindsOrganizationByPrefix()
     {
         // Arrange
         SeedTopLevel(new MeshNode("AlphaCorp")
@@ -114,7 +114,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
         });
 
         // Act: autocomplete with "Alpha" prefix (like typing in search bar)
-        var suggestions = MeshQuery
+        var suggestions = await MeshQuery
             .Autocomplete("", "Alpha", limit: 20)
             .Should().Match(r => r.Any(s => s.Path == "AlphaCorp"));
 
@@ -124,7 +124,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     }
 
     [Fact(Timeout = 30000)]
-    public void Autocomplete_FindsOrganizationByPartialName()
+    public async Task Autocomplete_FindsOrganizationByPartialName()
     {
         // Arrange
         SeedTopLevel(new MeshNode("BetaInc")
@@ -134,7 +134,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
         });
 
         // Act: autocomplete with partial name
-        var suggestions = MeshQuery
+        var suggestions = await MeshQuery
             .Autocomplete("", "Beta", limit: 20)
             .Should().Match(r => r.Any(s => s.Path == "BetaInc"));
 
@@ -146,7 +146,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     // ── nodeType:Markdown specific query ──────────────────────────
 
     [Fact(Timeout = 30000)]
-    public void NodeTypeQuery_FindsOrganizations()
+    public async Task NodeTypeQuery_FindsOrganizations()
     {
         // Arrange
         SeedTopLevel(new MeshNode("GammaCorp")
@@ -156,7 +156,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
         });
 
         // Act: search by nodeType
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Markdown scope:descendants limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Markdown scope:descendants limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Assert
         results.Should().Contain(n => n.Path == "GammaCorp",
@@ -166,7 +166,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     // ── Multiple partitions ──────────────────────────────────────────
 
     [Fact(Timeout = 30000)]
-    public void GlobalSearch_ReturnsNodesFromMultiplePartitions()
+    public async Task GlobalSearch_ReturnsNodesFromMultiplePartitions()
     {
         // Arrange: two orgs in different partitions
         SeedTopLevel(new MeshNode("OrgA")
@@ -182,20 +182,20 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
         });
 
         // Also create a child in each
-        NodeFactory.CreateNode(new MeshNode("doc1", "OrgA")
+        await NodeFactory.CreateNode(new MeshNode("doc1", "OrgA")
         {
             Name = "Doc in A",
             NodeType = "Markdown"
         }).Should().Emit();
 
-        NodeFactory.CreateNode(new MeshNode("doc2", "OrgB")
+        await NodeFactory.CreateNode(new MeshNode("doc2", "OrgB")
         {
             Name = "Doc in B",
             NodeType = "Markdown"
         }).Should().Emit();
 
         // Act: global search
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("scope:descendants limit:100")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("scope:descendants limit:100")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Assert: all nodes from both partitions should appear
         results.Should().Contain(n => n.Path == "OrgA", "OrgA should appear");
@@ -207,7 +207,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     // ── Text search across partitions ────────────────────────────────
 
     [Fact(Timeout = 30000)]
-    public void TextSearch_FindsNodesAcrossPartitions()
+    public async Task TextSearch_FindsNodesAcrossPartitions()
     {
         // Arrange
         SeedTopLevel(new MeshNode("DeltaCorp")
@@ -216,14 +216,14 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
             NodeType = "Markdown"
         });
 
-        NodeFactory.CreateNode(new MeshNode("report", "DeltaCorp")
+        await NodeFactory.CreateNode(new MeshNode("report", "DeltaCorp")
         {
             Name = "Delta Quarterly Report",
             NodeType = "Markdown"
         }).Should().Emit();
 
         // Act: search for "Delta"
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("Delta scope:descendants limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("Delta scope:descendants limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Assert: both the org and the child with "Delta" in name should appear
         results.Should().Contain(n => n.Path == "DeltaCorp",
@@ -235,7 +235,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     // ── Access control: only accessible partitions ───────────────────
 
     [Fact(Timeout = 30000)]
-    public void GlobalSearch_WithAccessAssignment_ReturnsGrantedNodes()
+    public async Task GlobalSearch_WithAccessAssignment_ReturnsGrantedNodes()
     {
         // Arrange: create org + grant current user access
         SeedTopLevel(new MeshNode("SecureCorp")
@@ -247,11 +247,11 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
         // Grant the admin user (already logged in) Viewer role on SecureCorp
         // — runtime AccessAssignment node via IMeshService.CreateNode.
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        meshService.CreateNode(AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Viewer", "SecureCorp"))
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Viewer", "SecureCorp"))
             .Should().Within(TimeSpan.FromSeconds(25)).Emit();
 
         // Act: search
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("scope:descendants limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("scope:descendants limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Assert
         results.Should().Contain(n => n.Path == "SecureCorp",
@@ -261,7 +261,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     // ── Query routing hints ──────────────────────────────────────────
 
     [Fact(Timeout = 30000)]
-    public void RoutingHints_PathRestrictsToPartition()
+    public async Task RoutingHints_PathRestrictsToPartition()
     {
         // Arrange
         SeedTopLevel(new MeshNode("EpsilonCorp")
@@ -270,14 +270,14 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
             NodeType = "Markdown"
         });
 
-        NodeFactory.CreateNode(new MeshNode("project", "EpsilonCorp")
+        await NodeFactory.CreateNode(new MeshNode("project", "EpsilonCorp")
         {
             Name = "Main Project",
             NodeType = "Markdown"
         }).Should().Emit();
 
         // Act: search with explicit namespace (routing rule should restrict to EpsilonCorp partition)
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:EpsilonCorp scope:descendants limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:EpsilonCorp scope:descendants limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Assert: should find nodes in EpsilonCorp
         results.Should().Contain(n => n.Path == "EpsilonCorp/project",

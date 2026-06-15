@@ -58,9 +58,9 @@ public class ThreadSubmissionIntegrationTest : AITestBase
     // â”€â”€â”€ Submit into existing thread â”€â”€â”€
 
     [Fact]
-    public void Submit_ExistingThread_UserMessageIngested_OutputCellAppears()
+    public async Task Submit_ExistingThread_UserMessageIngested_OutputCellAppears()
     {
-        var threadPath = SeedEmptyThread();
+        var threadPath = await SeedEmptyThread();
         var client = GetClient();
 
         client.SubmitMessage(
@@ -70,7 +70,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
             authorName: "Tester");
 
         // Wait for the watcher to ingest the user message into a round.
-        var committed = WaitForThread(
+        var committed = await WaitForThread(
             threadPath,
             t => t.IngestedMessageIds.Count >= 1 && t.Messages.Count >= 2,
             timeoutMs: 30_000);
@@ -84,7 +84,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
     // â”€â”€â”€ CreateThreadAndSubmit â”€â”€â”€
 
     [Fact]
-    public void CreateThreadAndSubmit_CreatesThreadAndFirstRound()
+    public async Task CreateThreadAndSubmit_CreatesThreadAndFirstRound()
     {
         var threadCreated = new System.Reactive.Subjects.AsyncSubject<MeshNode>();
         var client = GetClient();
@@ -95,11 +95,11 @@ public class ThreadSubmissionIntegrationTest : AITestBase
             createdBy: "rbuergi@systemorph.com",
             onCreated: node => { threadCreated.OnNext(node); threadCreated.OnCompleted(); });
 
-        var created = threadCreated.Should().Emit();
+        var created = await threadCreated.Should().Emit();
         created.Path.Should().NotBeNullOrEmpty();
         var threadPath = created.Path!;
 
-        var committed = WaitForThread(
+        var committed = await WaitForThread(
             threadPath,
             t => t.IngestedMessageIds.Count >= 1 && t.Messages.Count >= 2,
             timeoutMs: 15_000);
@@ -111,9 +111,9 @@ public class ThreadSubmissionIntegrationTest : AITestBase
     // â”€â”€â”€ Batched ingestion â”€â”€â”€
 
     [Fact]
-    public void Submit_ThreeRapidSubmissions_AllIngestedIntoOneRound()
+    public async Task Submit_ThreeRapidSubmissions_AllIngestedIntoOneRound()
     {
-        var threadPath = SeedEmptyThread();
+        var threadPath = await SeedEmptyThread();
 
         var client = GetClient();
 
@@ -122,19 +122,19 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         client.SubmitMessage(threadPath, "Third", createdBy: "rbuergi@systemorph.com");
 
         // Wait for at least one round to commit.
-        var committed = WaitForThread(
+        var committed = await WaitForThread(
             threadPath,
             t => t.IngestedMessageIds.Count >= 1 && t.Messages.Count >= 2,
             timeoutMs: 15_000);
 
         // Give the watcher a moment to finish any further rounds, then assert final state:
         // All three user messages should end up ingested; the dispatched round(s) produced >=1 output cell.
-        WaitForThread(
+        await WaitForThread(
             threadPath,
             t => t.IngestedMessageIds.Count == 3,
             timeoutMs: 30_000);
 
-        var final = ReadThread(threadPath);
+        var final = await ReadThread(threadPath);
         final.IngestedMessageIds.Should().HaveCount(3, "all three user messages should be ingested");
         // ImmutableList<string> on both sides — plain strings, no polymorphism, so JsonSerializerOptions.Default.
         // Set-equal to UserMessageIds â€” dispatch is one user message per round
@@ -148,15 +148,15 @@ public class ThreadSubmissionIntegrationTest : AITestBase
     // â”€â”€â”€ Resubmit: truncates after the replayed message, new round dispatches â”€â”€â”€
 
     [Fact]
-    public void Resubmit_TruncatesAfterReplayedMessage_NewRoundCreated()
+    public async Task Resubmit_TruncatesAfterReplayedMessage_NewRoundCreated()
     {
-        var threadPath = SeedEmptyThread();
+        var threadPath = await SeedEmptyThread();
         var client = GetClient();
 
         // Round 1: submit u1 and wait for it to complete.
         client.SubmitMessage(
             threadPath, "First", createdBy: "rbuergi@systemorph.com");
-        var afterRoundOne = WaitForThread(
+        var afterRoundOne = await WaitForThread(
             threadPath,
             t => !t.IsExecuting && t.IngestedMessageIds.Count == 1 && t.Messages.Count == 2,
             timeoutMs: 30_000);
@@ -174,7 +174,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         // the server watcher dispatches the new round almost immediately after the truncation
         // commits, often before we can observe it. Instead assert the end state: u1 is
         // ingested again, a NEW response cell (!= r1) follows, and IsExecuting is back to false.
-        var afterResubmit = WaitForThread(
+        var afterResubmit = await WaitForThread(
             threadPath,
             t => t.IngestedMessageIds.Contains(u1)
                  && t.Messages.Count == 2
@@ -190,9 +190,9 @@ public class ThreadSubmissionIntegrationTest : AITestBase
     // â”€â”€â”€ Failure recovery: error renders as an assistant response cell â”€â”€â”€
 
     [Fact]
-    public void SubmissionFailure_RecordsErrorAsOutputCell_InThreadMessages()
+    public async Task SubmissionFailure_RecordsErrorAsOutputCell_InThreadMessages()
     {
-        var threadPath = SeedEmptyThread();
+        var threadPath = await SeedEmptyThread();
         var client = GetClient();
 
         // Simulate a failure path by invoking the production helper directly
@@ -206,7 +206,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
 
         // Wait for the thread to reflect: user id appended + an error response cell appended
         // + user id marked as ingested (so watcher doesn't retry).
-        var final = WaitForThread(
+        var final = await WaitForThread(
             threadPath,
             t => t.Messages.Contains(fakeUserMsgId)
                  && t.IngestedMessageIds.Contains(fakeUserMsgId)
@@ -220,7 +220,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
 
         // The second entry must be an assistant cell with the error in its Text.
         var errorCellId = final.Messages[1];
-        var errorCell = ReadNode($"{threadPath}/{errorCellId}").Should().Emit();
+        var errorCell = await ReadNode($"{threadPath}/{errorCellId}").Should().Emit();
         errorCell.Should().NotBeNull();
         var content = errorCell!.Content as ThreadMessage;
         content.Should().NotBeNull();
@@ -231,9 +231,9 @@ public class ThreadSubmissionIntegrationTest : AITestBase
     // â”€â”€â”€ Tool-call scenario: 3 rapid submits during a 1s "tool call" â”€â”€â”€
 
     [Fact]
-    public void Submit_ThreeMessagesDuringActiveRound_QueuedThenBatchedIntoSecondRound()
+    public async Task Submit_ThreeMessagesDuringActiveRound_QueuedThenBatchedIntoSecondRound()
     {
-        var threadPath = SeedEmptyThread();
+        var threadPath = await SeedEmptyThread();
         var client = GetClient();
 
         // Use the slow-model factory so round 1 takes ~1 second.
@@ -246,7 +246,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
             modelName: slowModel, createdBy: "rbuergi@systemorph.com");
 
         // Wait for round 1 to start (IsExecuting=true). This proves u1 has been ingested.
-        var roundOneStart = WaitForThread(
+        var roundOneStart = await WaitForThread(
             threadPath,
             t => t.IsExecuting && t.IngestedMessageIds.Count == 1,
             timeoutMs: 5_000);
@@ -269,7 +269,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         // semantics (the assertions explicitly tolerate round 1 having already
         // finished). 3s under-budgeted the 2-core CI runner while the slow-model
         // round executes concurrently; the wait is burned only on the slow path.
-        var pendingState = WaitForThread(
+        var pendingState = await WaitForThread(
             threadPath,
             t => t.UserMessageIds.Count == 4,
             timeoutMs: 15_000);
@@ -284,7 +284,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         pendingState.IngestedMessageIds.Should().BeSubsetOf(pendingState.UserMessageIds);
 
         // Wait for all 4 to become ingested. This requires round 1 to finish, then round 2 to commit.
-        var final = WaitForThread(
+        var final = await WaitForThread(
             threadPath,
             t => t.IngestedMessageIds.Count == 4 && !t.IsExecuting,
             timeoutMs: 20_000);
@@ -313,9 +313,9 @@ public class ThreadSubmissionIntegrationTest : AITestBase
     // â”€â”€â”€ Queue-don't-cancel: new input during execution waits until round completes â”€â”€â”€
 
     [Fact]
-    public void Submit_DuringExecution_QueuedUntilRoundCompletes_ThenNextRoundDispatches()
+    public async Task Submit_DuringExecution_QueuedUntilRoundCompletes_ThenNextRoundDispatches()
     {
-        var threadPath = SeedEmptyThread();
+        var threadPath = await SeedEmptyThread();
         var client = GetClient();
         var slowModel = "slow-model";
 
@@ -324,7 +324,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
             threadPath, "First (slow)",
             modelName: slowModel, createdBy: "rbuergi@systemorph.com");
 
-        WaitForThread(
+        await WaitForThread(
             threadPath,
             t => t.IsExecuting && t.IngestedMessageIds.Count == 1,
             timeoutMs: 5_000);
@@ -337,7 +337,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
             modelName: slowModel, createdBy: "rbuergi@systemorph.com");
 
         // Final: both rounds complete cleanly. [u1, r1, u2, r2].
-        var final = WaitForThread(
+        var final = await WaitForThread(
             threadPath,
             t => !t.IsExecuting && t.IngestedMessageIds.Count == 2,
             timeoutMs: 20_000);
@@ -357,9 +357,9 @@ public class ThreadSubmissionIntegrationTest : AITestBase
     /// response cell is created.
     /// </summary>
     [Fact]
-    public void Submit_SingleSubmit_ProducesExactlyOneResponseCell()
+    public async Task Submit_SingleSubmit_ProducesExactlyOneResponseCell()
     {
-        var threadPath = SeedEmptyThread();
+        var threadPath = await SeedEmptyThread();
         var client = GetClient();
 
         client.SubmitMessage(
@@ -369,7 +369,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
             authorName: "Tester");
 
         // Wait for the round to settle.
-        var settled = WaitForThread(
+        var settled = await WaitForThread(
             threadPath,
             t => !t.IsExecuting && t.IngestedMessageIds.Count == 1,
             timeoutMs: 30_000);
@@ -378,12 +378,12 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         // past the single [user, response] pair; a 500ms quiet window with no
         // growth confirms exactly-once. NotEmit asserts the BAD event never
         // arrives — the reactive form of "wait to confirm nothing happened".
-        Mesh.GetWorkspace().GetMeshNodeStream(threadPath)
+        await Mesh.GetWorkspace().GetMeshNodeStream(threadPath)
             .Select(n => n.Content as MeshThread)
             .Where(t => t is not null && t!.Messages.Count > 2)
             .Should().NotEmit(500.Milliseconds());
 
-        var final = ReadThread(threadPath);
+        var final = await ReadThread(threadPath);
 
         // The thread should record exactly: [user, response]. If a second round dispatched,
         // Messages would contain a second response cell id.
@@ -393,9 +393,9 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         final.UserMessageIds.Should().HaveCount(1);
 
         // Cross-check at the node level: count actual ThreadMessage assistant cells.
-        var msgNodes = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
+        var msgNodes = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{threadPath} nodeType:{ThreadMessageNodeType.NodeType}"))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
         var responseCells = msgNodes
             .Where(n => (n.Content as ThreadMessage)?.Role == "assistant")
             .ToList();
@@ -415,7 +415,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
     /// request/response — the only mutation API is <c>stream.Update</c>.
     /// </summary>
     [Fact]
-    public void ThreadComposer_PersistsMessageContentAndComboboxes_ReadBackViaGetMeshNodeStream()
+    public async Task ThreadComposer_PersistsMessageContentAndComboboxes_ReadBackViaGetMeshNodeStream()
     {
         var client = GetClient();
         var chatInputPath = ThreadComposerNodeType.PathFor(MonolithMeshTestBase.TestPartition);
@@ -425,7 +425,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         // FromPath splits the namespace from the id — `new MeshNode(path)` would bake the
         // slashes into the Id with an EMPTY namespace, which the PartitionWriteGuard (correctly)
         // rejects as a malformed top-level node.
-        NodeFactory.CreateNode(MeshNode.FromPath(chatInputPath) with
+        await NodeFactory.CreateNode(MeshNode.FromPath(chatInputPath) with
         {
             Name = "Chat Input",
             NodeType = ThreadComposerNodeType.NodeType,
@@ -458,11 +458,11 @@ public class ThreadSubmissionIntegrationTest : AITestBase
 
         // Read it back through the same hub.GetMeshNodeStream surface — every picked field
         // is reflected on the ThreadComposer record.
-        var stored = client.GetMeshNodeStream(chatInputPath)
+        var stored = (await client.GetMeshNodeStream(chatInputPath)
             .Select(n => n?.Content as ThreadComposer)
             .Where(c => c is { MessageContent: "draft hello" })
             .Should().Within(TimeSpan.FromSeconds(10))
-            .Match(_ => true)!;
+            .Match(_ => true))!;
 
         stored.Harness.Should().Be(Harnesses.MeshWeaver);
         stored.AgentName.Should().Be("Assistant");
@@ -476,7 +476,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
     /// thread is covered by <see cref="Submit_ExistingThread_UserMessageIngested_OutputCellAppears"/>.)
     /// </summary>
     [Fact]
-    public void StartThread_FromComposer_CreatesThread_SelectedAgentRidesOntoUserCell()
+    public async Task StartThread_FromComposer_CreatesThread_SelectedAgentRidesOntoUserCell()
     {
         var client = GetClient();
         var threadCreated = new System.Reactive.Subjects.AsyncSubject<MeshNode>();
@@ -488,10 +488,10 @@ public class ThreadSubmissionIntegrationTest : AITestBase
             createdBy: "rbuergi@systemorph.com",
             onCreated: node => { threadCreated.OnNext(node); threadCreated.OnCompleted(); });
 
-        var created = threadCreated.Should().Emit();
+        var created = await threadCreated.Should().Emit();
         var threadPath = created.Path!;
 
-        var committed = WaitForThread(
+        var committed = await WaitForThread(
             threadPath,
             t => t.IngestedMessageIds.Count >= 1 && t.Messages.Count >= 2,
             timeoutMs: 15_000);
@@ -500,20 +500,20 @@ public class ThreadSubmissionIntegrationTest : AITestBase
 
         // The selected agent (a "combobox") flows from the composer through StartThread
         // onto the materialised user cell.
-        var userCell = ReadNode($"{threadPath}/{committed.Messages[0]}").Should().Emit();
+        var userCell = await ReadNode($"{threadPath}/{committed.Messages[0]}").Should().Emit();
         (userCell!.Content as ThreadMessage)!.AgentName.Should().Be("Assistant");
     }
 
     // â”€â”€â”€ Helpers â”€â”€â”€
 
-    private string SeedEmptyThread()
+    private async Task<string> SeedEmptyThread()
     {
         var threadId = Guid.NewGuid().AsString();
         var threadPath = $"{MonolithMeshTestBase.TestPartition}/{ThreadNodeType.ThreadPartition}/{threadId}";
         // FromPath splits the namespace ("TestData/_Thread") from the id — `new MeshNode(path)`
         // would bake the slashes into the Id with an EMPTY namespace, which the
         // PartitionWriteGuard (correctly) rejects as a malformed top-level node.
-        NodeFactory.CreateNode(MeshNode.FromPath(threadPath) with
+        await NodeFactory.CreateNode(MeshNode.FromPath(threadPath) with
         {
             Name = $"Test Thread {threadId}",
             NodeType = ThreadNodeType.NodeType,
@@ -523,9 +523,9 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         return threadPath;
     }
 
-    private MeshThread ReadThread(string threadPath)
+    private async Task<MeshThread> ReadThread(string threadPath)
     {
-        var node = ReadNode(threadPath).Should().Emit();
+        var node = await ReadNode(threadPath).Should().Emit();
         node.Should().NotBeNull($"thread node {threadPath} must exist");
         var content = node!.Content as MeshThread;
         content.Should().NotBeNull($"thread {threadPath} must have MeshThread content");
@@ -542,15 +542,15 @@ public class ThreadSubmissionIntegrationTest : AITestBase
     /// emits on every commit, so the predicate sees every state transition
     /// exactly once. See AGENTS.md → "Never Task.Delay to wait for propagation".
     /// </summary>
-    private MeshThread WaitForThread(
+    private async Task<MeshThread> WaitForThread(
         string threadPath,
         Func<MeshThread, bool> predicate,
         int timeoutMs)
-        => Mesh.GetWorkspace().GetMeshNodeStream(threadPath)
+        => (await Mesh.GetWorkspace().GetMeshNodeStream(threadPath)
             .Select(n => n.Content as MeshThread)
             .Where(t => t is not null)
             .Should().Within(TimeSpan.FromMilliseconds(timeoutMs))
-            .Match(t => predicate(t!))!;
+            .Match(t => predicate(t!)))!;
 
     // â”€â”€â”€ Fake chat client (minimal) â”€â”€â”€
 

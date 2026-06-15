@@ -61,7 +61,7 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
     /// (no User/Auth mirror write); subsequent reads find it at the bare <c>{username}</c> path.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void CreateUser_WritesPartitionRootOnly_NoUserMirror()
+    public async Task CreateUser_WritesPartitionRootOnly_NoUserMirror()
     {
         var username = $"obtest-{Guid.NewGuid():N}".ToLowerInvariant()[..16];
 
@@ -81,7 +81,7 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
         MeshNode emitted;
         using (accessService.ImpersonateAsSystem())
         {
-            emitted = service.CreateUser(request).Should().Emit();
+            emitted = await service.CreateUser(request).Should().Emit();
         }
 
         // The observable emits the partition-root node — that's the canonical
@@ -94,7 +94,7 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
         emitted.NodeType.Should().Be("User");
 
         // (a) Per-user partition root — path = "{username}", ns = ""
-        var partitionRoot = ReadNode(username).Should().Emit();
+        var partitionRoot = await ReadNode(username).Should().Emit();
         partitionRoot.Should().NotBeNull("partition-root entry must be readable at the bare path");
         partitionRoot!.NodeType.Should().Be("User");
         partitionRoot.Namespace.Should().BeNullOrEmpty();
@@ -104,7 +104,7 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
         // first-segment and lazily provisioned a stray `user` schema; it is gone.
         // Login now resolves `nodeType:User` via the Auth partition (fed by the V27
         // mirror trigger from this partition-root write) — see CreateUser_LoginQueryFindsUserByEmail.
-        var catalogMirror = ReadNode($"User/{username}").Should().Emit();
+        var catalogMirror = await ReadNode($"User/{username}").Should().Emit();
         catalogMirror.Should().BeNull(
             "onboarding must NOT write into the User/Auth mirror partition — the per-user " +
             "partition root is the single onboarding write; the auth mirror is maintained by the trigger");
@@ -121,7 +121,7 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
     /// "Node already exists" — it folds into an update so onboarding completes.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void CreateUser_WhenPartitionRootExists_RepairsViaUpdate_NoThrow()
+    public async Task CreateUser_WhenPartitionRootExists_RepairsViaUpdate_NoThrow()
     {
         var username = $"obtest-{Guid.NewGuid():N}".ToLowerInvariant()[..16];
         var service = Mesh.ServiceProvider.GetRequiredService<UserOnboardingService>();
@@ -133,16 +133,16 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
         using (accessService.ImpersonateAsSystem())
         {
             // First onboarding writes the partition root.
-            service.CreateUser(request).Should().Emit();
+            await service.CreateUser(request).Should().Emit();
             // Second call must repair (update) the existing root, not throw.
-            repaired = service.CreateUser(request with { FullName = "Repaired Name" })
+            repaired = await service.CreateUser(request with { FullName = "Repaired Name" })
                 .Should().Emit();
         }
 
         repaired.Should().NotBeNull();
         repaired.Id.Should().Be(username);
 
-        var root = ReadNode(username).Should().Emit();
+        var root = await ReadNode(username).Should().Emit();
         root.Should().NotBeNull();
         root!.Name.Should().Be("Repaired Name",
             "the second CreateUser must have updated the existing partition root, not dead-ended");
@@ -155,7 +155,7 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
     /// namespace-agnostic; in prod the Auth mirror trigger also surfaces it in the Auth schema).
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void CreateUser_LoginQueryFindsUserByEmail()
+    public async Task CreateUser_LoginQueryFindsUserByEmail()
     {
         var username = $"obtest-{Guid.NewGuid():N}".ToLowerInvariant()[..16];
         var email = $"{username}@example.com";
@@ -164,7 +164,7 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         using (accessService.ImpersonateAsSystem())
         {
-            service.CreateUser(new UserOnboardingRequest(username, email, FullName: "Login Test"))
+            await service.CreateUser(new UserOnboardingRequest(username, email, FullName: "Login Test"))
                 .Should().Emit();
         }
 
@@ -172,7 +172,7 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
         // by email. We use IMeshService (public surface; the middleware uses the
         // internal IMeshQueryCore but the query string + result shape are identical).
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var found = meshService
+        var found = await meshService
             .Query<MeshNode>(
                 MeshQueryRequest.FromQuery(
                     $"nodeType:User content.email:{email} limit:1"))
@@ -194,7 +194,7 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
     /// of onboarding. The gate now probes the partition root and skips when absent.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void TrackActivity_BeforeOnboarding_DoesNotCreatePartition()
+    public async Task TrackActivity_BeforeOnboarding_DoesNotCreatePartition()
     {
         var ghost = $"ghost-{Guid.NewGuid():N}".ToLowerInvariant()[..16];
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
@@ -214,7 +214,7 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
         // routes to the non-existent ghost partition and hangs). Assert nothing was
         // written under the {ghost} partition. If the gate had failed, the ghost
         // partition would exist and its activity node would show up here.
-        var result = meshService
+        var result = await meshService
             .Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:UserActivity"))
             .Should().Within(8.Seconds()).Match(_ => true);
         result.Items.Should().NotContain(
@@ -230,7 +230,7 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
     /// this would fail, so a green positive proves the negative is meaningful.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void TrackActivity_AfterOnboarding_WritesActivity()
+    public async Task TrackActivity_AfterOnboarding_WritesActivity()
     {
         var username = $"obtest-{Guid.NewGuid():N}".ToLowerInvariant()[..16];
         var service = Mesh.ServiceProvider.GetRequiredService<UserOnboardingService>();
@@ -239,7 +239,7 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
 
         using (accessService.ImpersonateAsSystem())
         {
-            service.CreateUser(new UserOnboardingRequest(
+            await service.CreateUser(new UserOnboardingRequest(
                     username, $"{username}@example.com", FullName: "Track Test"))
                 .Should().Emit();
             Mesh.Post(new TrackActivityRequest(
@@ -247,7 +247,7 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
             { ActivityType = ActivityType.Login });
         }
 
-        var result = meshService
+        var result = await meshService
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"nodeType:UserActivity content.userId:{username}"))
             .Should().Within(15.Seconds()).Match(c => c.Items.Count > 0);

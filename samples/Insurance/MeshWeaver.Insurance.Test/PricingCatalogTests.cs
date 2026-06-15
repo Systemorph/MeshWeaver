@@ -26,10 +26,10 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
     }
 
     [Fact(Timeout = 30000)]
-    public void GetPricingCatalog_ShouldReturnPricings()
+    public async Task GetPricingCatalog_ShouldReturnPricings()
     {
         // Act - Get the pricing catalog from the Insurance hub
-        var pricings = GetPricings().Should().Match(p => p.Count > 0, "catalog should contain sample pricings");
+        var pricings = await GetPricings().Should().Match(p => p.Count > 0, "catalog should contain sample pricings");
 
         // Assert - Verify that the catalog contains pricings
         pricings.Should().NotBeNull("catalog should not be null");
@@ -49,10 +49,10 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
     }
 
     [Fact(Timeout = 30000)]
-    public void GetPricingCatalog_ShouldHaveValidDimensions()
+    public async Task GetPricingCatalog_ShouldHaveValidDimensions()
     {
         // Act
-        var pricings = GetPricings().Should().Match(p => p.Count > 0);
+        var pricings = await GetPricings().Should().Match(p => p.Count > 0);
 
         // Assert - Verify dimension fields are populated
         pricings.Should().NotBeEmpty();
@@ -69,10 +69,10 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
     }
 
     [Fact(Timeout = 30000)]
-    public void GetPricingCatalog_ShouldHaveValidDates()
+    public async Task GetPricingCatalog_ShouldHaveValidDates()
     {
         // Act
-        var pricings = GetPricings().Should().Match(p => p.Count > 0);
+        var pricings = await GetPricings().Should().Match(p => p.Count > 0);
 
         // Assert
         pricings.Should().NotBeEmpty();
@@ -100,13 +100,13 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
     }
 
     [Fact(Timeout = 30000)]
-    public void PricingHub_ShouldStartSuccessfully()
+    public async Task PricingHub_ShouldStartSuccessfully()
     {
         // This test verifies that the pricing hub initializes correctly
         // by successfully retrieving the catalog without errors
 
         // Act
-        var pricings = GetPricings().Should().Match(p => p.Count > 0, "hub should start and return catalog");
+        var pricings = await GetPricings().Should().Match(p => p.Count > 0, "hub should start and return catalog");
 
         // Assert - Hub started if we can get data
         pricings.Should().NotBeNull("hub should start and return catalog");
@@ -121,7 +121,7 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
     }
 
     [Fact(Timeout = 30000)]
-    public void GetPricingCatalog_UsingLayoutAreaReference_ShouldReturnPricingsControl()
+    public async Task GetPricingCatalog_UsingLayoutAreaReference_ShouldReturnPricingsControl()
     {
         // Arrange
         var reference = new LayoutAreaReference("Pricings");
@@ -135,8 +135,8 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
         );
 
         // Get the control from the stream
-        var control = stream.GetControlStream(reference.Area!)
-            .Should().Within(10.Seconds()).Match(x => x != null)!;
+        var control = (await stream.GetControlStream(reference.Area!)
+            .Should().Within(10.Seconds()).Match(x => x != null))!;
 
         // Assert
         control.Should().NotBeNull("layout area should return a control");

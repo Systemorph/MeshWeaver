@@ -44,7 +44,7 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
     /// must land a UserActivity node at the expected path.
     /// </summary>
     [Fact(Timeout = 20_000)]
-    public void TrackActivity_WithUsername_CreatesNodeAtExpectedPath()
+    public async Task TrackActivity_WithUsername_CreatesNodeAtExpectedPath()
     {
         const string user = "alice";
         const string nodePath = "alice/MyDoc";
@@ -52,7 +52,7 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
         // ONBOARD-FIRST gate (HandleTrackActivity, commit 981a86c9e): the first-time
         // create is skipped unless the user's partition root already exists. Production
         // always has it (onboarding ran first); reproduce that precondition here.
-        OnboardPartitionRoot(user);
+        await OnboardPartitionRoot(user);
 
         Mesh.Post(new TrackActivityRequest(
             NodePath: nodePath,
@@ -61,7 +61,7 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
             NodeType: "Markdown",
             Namespace: "alice"));
 
-        var node = PollForFirst($"namespace:{user}/_UserActivity nodeType:UserActivity");
+        var node = await PollForFirst($"namespace:{user}/_UserActivity nodeType:UserActivity");
 
         node.Should().NotBeNull("a UserActivity node must be created at {user}/_UserActivity after a TrackActivityRequest");
         node!.Path.Should().Be($"{user}/_UserActivity/{nodePath.Replace("/", "_")}");
@@ -76,7 +76,7 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
     /// handler must log a warning and skip.
     /// </summary>
     [Fact(Timeout = 20_000)]
-    public void TrackActivity_WithEmailShapedUserId_IsRejected()
+    public async Task TrackActivity_WithEmailShapedUserId_IsRejected()
     {
         const string emailUser = "bob@example.com";
 
@@ -90,7 +90,7 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
         // No node with a '@'-shaped path should ever materialise — the handler
         // logs a warning and returns. Negative assertion: flatten the live
         // query's items and assert nothing matching arrives within the window.
-        MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:UserActivity"))
+        await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:UserActivity"))
             .SelectMany(c => c.Items)
             .Where(n => n.Path != null && n.Path.Contains('@'))
             .Should().NotEmit(within: TimeSpan.FromSeconds(2),
@@ -109,7 +109,7 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
     /// folds via <c>stream.Update</c>.
     /// </summary>
     [Fact(Timeout = 30_000)]
-    public void TrackActivity_ConcurrentSamePath_DoesNotRaceAlreadyExists()
+    public async Task TrackActivity_ConcurrentSamePath_DoesNotRaceAlreadyExists()
     {
         const string user = "charlie";
         const string nodePath = "charlie/doc";
@@ -117,7 +117,7 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
         // ONBOARD-FIRST gate (HandleTrackActivity, commit 981a86c9e): activity tracking
         // never creates a partition ahead of onboarding. Seed the partition root so the
         // gate lets the concurrent creates through (production state when activity flows).
-        OnboardPartitionRoot(user);
+        await OnboardPartitionRoot(user);
 
         // Fire 5 requests for the SAME path. Under the buggy probe-and-fork
         // shape, all 5 see the path-not-found probe before any of them succeeds
@@ -132,15 +132,15 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
                 Namespace: user));
         }
 
-        var node = PollForFirst($"namespace:{user}/_UserActivity nodeType:UserActivity");
+        var node = await PollForFirst($"namespace:{user}/_UserActivity nodeType:UserActivity");
         node.Should().NotBeNull("at least one concurrent TrackActivityRequest must land a node");
 
         // After settling, exactly one record per (user, encodedPath) — concurrent
         // tracks merge into the same record's AccessCount, not duplicate records.
-        var all = MeshQuery
+        var all = (await MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{user}/_UserActivity nodeType:UserActivity"))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
         all.Should().HaveCount(1,
             "concurrent tracks for the same path must coalesce into one record, not race-create duplicates");
     }
@@ -153,7 +153,7 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
     /// onboarding (<c>UserOnboardingService.CreateUser</c>) always lands this row before any
     /// activity flows; these tests reproduce that precondition.
     /// </summary>
-    private void OnboardPartitionRoot(string user)
+    private async Task OnboardPartitionRoot(string user)
     {
         // User-node creation is restricted to portal/own-scope identities (the
         // UserNodeType portal-create rule). Impersonate as the user so the
@@ -164,16 +164,16 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
         Mesh.ServiceProvider.GetRequiredService<AccessService>()
             .SetCircuitContext(new AccessContext { ObjectId = user, Name = user });
 
-        NodeFactory.CreateNode(new MeshNode(user)
+        await NodeFactory.CreateNode(new MeshNode(user)
         {
             NodeType = "User",
             Name = user,
             State = MeshNodeState.Active,
         }).Should().Emit();
 
-        // The gate reads the root from storage; wait for the owner-hub round-trip to
+        // The gate reads the root from storage; await wait for the owner-hub round-trip to
         // confirm persistence before posting activity so the create branch isn't skipped.
-        ReadNode(user).Should().Match(n => n is { State: MeshNodeState.Active });
+        await ReadNode(user).Should().Match(n => n is { State: MeshNodeState.Active });
     }
 
     /// <summary>
@@ -182,8 +182,8 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
     /// <c>Observable.Interval</c> re-query poll. The activity handler's
     /// asynchronous create/update surfaces through the same change feed.
     /// </summary>
-    private MeshNode? PollForFirst(string query)
-        => MeshQuery
+    private async Task<MeshNode?> PollForFirst(string query)
+        => await MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Scan(ImmutableList<MeshNode>.Empty, (acc, c) =>
                 c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset

@@ -20,10 +20,10 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     protected override bool ShareMeshAcrossTests => true;
 
     [Fact(Timeout = 20000)]
-    public void PingPong()
+    public async Task PingPong()
     {
         var client = GetClient();
-        var response = client
+        var response = await client
             .Observe(new PingRequest(), o => o.WithTarget(Mesh.Address))
             .Should().Within(10.Seconds()).Emit();
         response.Should().NotBeNull();
@@ -32,12 +32,12 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
 
     [Fact(Timeout = 20000)]
-    public void PingToNonExistentHub_ThrowsDeliveryFailure()
+    public async Task PingToNonExistentHub_ThrowsDeliveryFailure()
     {
         var client = GetClient();
         var nonExistentAddress = new Address("NonExistent", "Hub");
 
-        var notification = client.Observe(new PingRequest(), o => o.WithTarget(nonExistentAddress))
+        var notification = await client.Observe(new PingRequest(), o => o.WithTarget(nonExistentAddress))
             .Materialize()
             .Should().Within(10.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
         var ex = notification.Exception!;
@@ -49,7 +49,7 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     }
 
     [Fact(Timeout = 20000)]
-    public void StreamToNonExistentHub_ThrowsDeliveryFailure()
+    public async Task StreamToNonExistentHub_ThrowsDeliveryFailure()
     {
         var client = GetClient(c => c.AddData());
         var nonExistentAddress = new Address("NonExistent", "Hub");
@@ -59,7 +59,7 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             nonExistentAddress,
             new LayoutAreaReference("Overview"));
 
-        var notification = stream
+        var notification = await stream
             .Materialize()
             .Should().Within(10.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
         var ex = notification.Exception!;

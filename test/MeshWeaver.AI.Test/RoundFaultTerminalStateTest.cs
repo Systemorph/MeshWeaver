@@ -48,11 +48,11 @@ public class RoundFaultTerminalStateTest : AITestBase
     }
 
     [Fact]
-    public void StreamThrows_AfterExecutingFlip_ThreadReachesTerminalState_NoWatchdog()
+    public async Task StreamThrows_AfterExecutingFlip_ThreadReachesTerminalState_NoWatchdog()
     {
         var threadId = Guid.NewGuid().AsString();
         var threadPath = $"{MonolithMeshTestBase.TestPartition}/{ThreadNodeType.ThreadPartition}/{threadId}";
-        NodeFactory.CreateNode(MeshNode.FromPath(threadPath) with
+        await NodeFactory.CreateNode(MeshNode.FromPath(threadPath) with
         {
             Name = $"Fault Test Thread {threadId}",
             NodeType = ThreadNodeType.NodeType,
@@ -69,7 +69,7 @@ public class RoundFaultTerminalStateTest : AITestBase
         // handling (catch → Error cell → Idle) or, if the fault escapes, via the watcher's
         // terminal-state writer — never by waiting out a watchdog. Budget is far below any
         // stuck-round grace period.
-        var terminal = Mesh.GetWorkspace().GetMeshNodeStream(threadPath)
+        var terminal = await Mesh.GetWorkspace().GetMeshNodeStream(threadPath)
             .Select(n => n?.Content as MeshThread)
             .Where(t => t is not null)
             .Should().Within(TimeSpan.FromSeconds(20))
@@ -82,7 +82,7 @@ public class RoundFaultTerminalStateTest : AITestBase
         // The response cell carries the error.
         terminal.Messages.Should().HaveCountGreaterThanOrEqualTo(2, "user cell + error response cell");
         var responseCellPath = $"{threadPath}/{terminal.Messages[^1]}";
-        var cell = Mesh.GetWorkspace().GetMeshNodeStream(responseCellPath)
+        var cell = await Mesh.GetWorkspace().GetMeshNodeStream(responseCellPath)
             .Select(n => n?.Content as ThreadMessage)
             .Should().Within(TimeSpan.FromSeconds(10))
             .Match(m => m is { Status: ThreadMessageStatus.Error });

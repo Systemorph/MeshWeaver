@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Threading.Tasks;
 using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
@@ -38,10 +39,10 @@ public class OrleansResubmitDeadlockTest(ITestOutputHelper output) : OrleansShar
     private IMessageHub GetClient([CallerMemberName] string? name = null)
         => base.GetClient($"resubmit-{name}-{Guid.NewGuid():N}", "TestUser");
 
-    private string CreateNode(IMessageHub client, MeshNode node, string targetAddress)
+    private async Task<string> CreateNode(IMessageHub client, MeshNode node, string targetAddress)
     {
         Output.WriteLine($"CreateNodeRequest: id={node.Id}, path={node.Path}, target={targetAddress}");
-        var response = client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(targetAddress)))
+        var response = await client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(targetAddress)))
             .Should().Within(45.Seconds()).Emit();
         Output.WriteLine($"CreateNodeResponse: success={response.Message.Success}, error={response.Message.Error ?? "(none)"}, path={response.Message.Node?.Path ?? "(null)"}, nodeType={response.Message.Node?.NodeType ?? "(null)"}");
         response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
@@ -77,24 +78,24 @@ public class OrleansResubmitDeadlockTest(ITestOutputHelper output) : OrleansShar
     /// meshService.CreateNode (Observable) + workspace.UpdateMeshNode (non-blocking).
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void Resubmit_AfterExecution_DoesNotDeadlock()
+    public async Task Resubmit_AfterExecution_DoesNotDeadlock()
     {
         var client = GetClient();
 
         // 1. Create and execute a thread
         var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Resubmit deadlock test", "TestUser");
-        var threadPath = CreateNode(client, threadNode, "TestUser");
+        var threadPath = await CreateNode(client, threadNode, "TestUser");
 
         client.SubmitMessage(
             threadPath,
             "First message",
             contextPath: "TestUser");
-        var msgIds = ObserveThreadMessages(client, threadPath)
+        var msgIds = await ObserveThreadMessages(client, threadPath)
             .Should().Within(45.Seconds()).Match(ids => ids.Count >= 2);
         Output.WriteLine($"Initial messages: [{string.Join(", ", msgIds)}]");
 
         // Wait for execution to complete
-        GetContent<MeshThread>(client, threadPath)
+        await GetContent<MeshThread>(client, threadPath)
             .Should().Within(45.Seconds()).Match(t => t?.IsExecuting == false);
         Output.WriteLine("Initial execution complete");
 
@@ -114,7 +115,7 @@ public class OrleansResubmitDeadlockTest(ITestOutputHelper output) : OrleansShar
 
         // Observe the SETTLED resubmitted state on the live replaying stream:
         // IsExecuting=false AND messages changed from the original set.
-        var newThread = workspace.GetMeshNodeStream(threadPath)
+        var newThread = await workspace.GetMeshNodeStream(threadPath)
             .Select(node => node?.Content as MeshThread)
             .Do(t => Output.WriteLine(
                 $"[Resubmit-wait] Status={t?.Status} IsExecuting={t?.IsExecuting} " +

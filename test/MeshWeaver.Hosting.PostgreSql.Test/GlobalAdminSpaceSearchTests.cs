@@ -83,23 +83,23 @@ public class GlobalAdminSpaceSearchTests
         return partitions;
     }
 
-    private Dictionary<string, (NpgsqlDataSource Ds, PostgreSqlStorageAdapter Adapter)> SetupOrganizations(CancellationToken ct)
+    private Task<Dictionary<string, (NpgsqlDataSource Ds, PostgreSqlStorageAdapter Adapter)>> SetupOrganizations(CancellationToken ct)
         => SetupOrganizationsAsync(ct).Run().Should().Within(90.Seconds()).Emit();
 
-    private List<MeshNode> CallSearchAcrossSchemas(
+    private Task<List<MeshNode>> CallSearchAcrossSchemas(
         string whereClause, string? userId, string orderBy, int limit, CancellationToken ct)
         => CallSearchAcrossSchemasAsync(whereClause, userId, orderBy, limit, ct)
             .Run().Should().Within(30.Seconds()).Emit();
 
     [Fact(Timeout = 60000)]
-    public void GlobalAdmin_SeesAllOrganizations_ViaCrossSchemaSearch()
+    public async Task GlobalAdmin_SeesAllOrganizations_ViaCrossSchemaSearch()
     {
         var ct = TestContext.Current.CancellationToken;
-        var partitions = SetupOrganizations(ct);
+        var partitions = await SetupOrganizations(ct);
 
         // Global Admin: has partition_access to ALL org partitions
         const string adminUserId = "globaladmin";
-        _fixture.DataSource.ExecuteNonQuery(
+        await _fixture.DataSource.ExecuteNonQuery(
             "DELETE FROM public.partition_access; " +
             "INSERT INTO public.partition_access (user_id, partition) VALUES " +
             "('globaladmin', 'alphaorg'), ('globaladmin', 'betaorg'), ('globaladmin', 'gammaorg')", ct)
@@ -107,7 +107,7 @@ public class GlobalAdminSpaceSearchTests
 
         // Query: nodeType:Organization — the fixed query for Organization Search
         var nodeTypeFilter = $"LOWER(n.node_type) = '{SpaceNodeType.NodeType.ToLowerInvariant()}'";
-        var results = CallSearchAcrossSchemas(
+        var results = await CallSearchAcrossSchemas(
             nodeTypeFilter, adminUserId, "last_modified DESC", 50, ct);
 
         results.Should().HaveCount(3, "Global Admin should see all 3 organizations");
@@ -118,17 +118,17 @@ public class GlobalAdminSpaceSearchTests
     }
 
     [Fact(Timeout = 60000)]
-    public void PublicRead_StillRequiresPartitionAccess()
+    public async Task PublicRead_StillRequiresPartitionAccess()
     {
         var ct = TestContext.Current.CancellationToken;
-        SetupOrganizations(ct);
+        await SetupOrganizations(ct);
 
         // Regular user with NO partition_access — even public_read must not bypass partition check
-        _fixture.DataSource.ExecuteNonQuery("DELETE FROM public.partition_access", ct)
+        await _fixture.DataSource.ExecuteNonQuery("DELETE FROM public.partition_access", ct)
             .Should().Within(30.Seconds()).Emit();
 
         var nodeTypeFilter = $"LOWER(n.node_type) = '{SpaceNodeType.NodeType.ToLowerInvariant()}'";
-        var results = CallSearchAcrossSchemas(
+        var results = await CallSearchAcrossSchemas(
             nodeTypeFilter, "regularuser", "last_modified DESC", 50, ct);
 
         results.Should().BeEmpty(
@@ -136,19 +136,19 @@ public class GlobalAdminSpaceSearchTests
     }
 
     [Fact(Timeout = 60000)]
-    public void PublicRead_SkipsNodeLevelChecks_WithinAccessiblePartition()
+    public async Task PublicRead_SkipsNodeLevelChecks_WithinAccessiblePartition()
     {
         var ct = TestContext.Current.CancellationToken;
-        SetupOrganizations(ct);
+        await SetupOrganizations(ct);
 
         // Give user partition_access to AlphaOrg only (no node-level permissions)
-        _fixture.DataSource.ExecuteNonQuery(
+        await _fixture.DataSource.ExecuteNonQuery(
             "DELETE FROM public.partition_access; " +
             "INSERT INTO public.partition_access (user_id, partition) VALUES ('regularuser', 'alphaorg')", ct)
             .Should().Within(30.Seconds()).Emit();
 
         // Search for all nodes — public_read types visible without node-level perms, but only in alphaorg
-        var results = CallSearchAcrossSchemas(
+        var results = await CallSearchAcrossSchemas(
             "", "regularuser", "last_modified DESC", 50, ct);
 
         // Should see Organization nodes from AlphaOrg (public_read + partition_access)

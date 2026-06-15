@@ -47,7 +47,7 @@ public class UseWithoutSeeResolverTest : AITestBase
     // Revisit with WaitForPermission-style settling on CheckPermission(providerPath,
     // userA, Read) before asserting, and verify the org-partition grant loads.
     [Fact(Skip = "Cross-partition shared-provider grant propagation + system-ingest timing not yet reliable in the monolith harness; resolver logic is in place. See comment.")]
-    public void Read_GrantsUse_NoRead_FailsClosed()
+    public async Task Read_GrantsUse_NoRead_FailsClosed()
     {
         var service = Mesh.ServiceProvider.GetRequiredService<ModelProviderService>();
         var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
@@ -56,7 +56,7 @@ public class UseWithoutSeeResolverTest : AITestBase
         // Create the org provider in the acme partition (queryable storage), with
         // a unique model id so it can't collide with the root catalog.
         var modelId = $"claude-org-{Guid.NewGuid():N}";
-        var created = service.CreateProvider("acme", "Anthropic", "sk-org-secret",
+        var created = await service.CreateProvider("acme", "Anthropic", "sk-org-secret",
                 modelIdsOverride: new[] { modelId })
             .Should().Within(20.Seconds()).Emit();
         var providerPath = created.ProviderNode.Path!;   // acme/_Memex/Anthropic
@@ -64,7 +64,7 @@ public class UseWithoutSeeResolverTest : AITestBase
         // userA HAS Read -> can USE the key (resolver reads it under system identity).
         accessService.SetCircuitContext(new AccessContext { ObjectId = "userA", Name = "User A" });
         resolver.WatchSharedProvider(providerPath, "userA");
-        var allowed = Observable.Interval(TimeSpan.FromMilliseconds(100))
+        var allowed = await Observable.Interval(TimeSpan.FromMilliseconds(100))
             .Select(_ => resolver.Resolve(modelId))
             .Should().Within(20.Seconds()).Match(r => r.ApiKey != null);
         allowed.ApiKey.Should().Be("sk-org-secret",
@@ -74,7 +74,7 @@ public class UseWithoutSeeResolverTest : AITestBase
         // it's already ingested in the resolver's shared snapshot.
         accessService.SetCircuitContext(new AccessContext { ObjectId = "userB", Name = "User B" });
         resolver.WatchSharedProvider(providerPath, "userB");
-        var denied = Observable.Timer(TimeSpan.FromSeconds(2))
+        var denied = await Observable.Timer(TimeSpan.FromSeconds(2))
             .Select(_ => resolver.Resolve(modelId))
             .Should().Within(8.Seconds()).Emit();
         denied.ApiKey.Should().BeNull(

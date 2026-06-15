@@ -36,34 +36,34 @@ public class MultiQueryUnionTests
         _fixture = fixture;
     }
 
-    private void SeedTwoNamespaces()
+    private async Task SeedTwoNamespaces()
     {
         var ct = TestContext.Current.CancellationToken;
-        _fixture.CleanData().Should().Within(60.Seconds()).Emit();
+        await _fixture.CleanData().Should().Within(60.Seconds()).Emit();
         var adapter = _fixture.StorageAdapter;
 
         // Namespace A — two Agent nodes.
-        adapter.Write(new MeshNode("Orchestrator", "Agent")
+        await adapter.Write(new MeshNode("Orchestrator", "Agent")
         { Name = "Orchestrator", NodeType = "Agent" }, _options).Should().Within(30.Seconds()).Emit();
-        adapter.Write(new MeshNode("Coder", "Agent")
+        await adapter.Write(new MeshNode("Coder", "Agent")
         { Name = "Coder", NodeType = "Agent" }, _options).Should().Within(30.Seconds()).Emit();
 
         // Namespace B — one Agent node + non-Agent node (must NOT show up).
-        adapter.Write(new MeshNode("CustomBot", "User/Roland")
+        await adapter.Write(new MeshNode("CustomBot", "User/Roland")
         { Name = "Custom Bot", NodeType = "Agent" }, _options).Should().Within(30.Seconds()).Emit();
-        adapter.Write(new MeshNode("Notes", "User/Roland")
+        await adapter.Write(new MeshNode("Notes", "User/Roland")
         { Name = "Notes", NodeType = "Markdown" }, _options).Should().Within(30.Seconds()).Emit();
 
         // Anonymous read access so request.UserId == null queries return rows.
         var ac = _fixture.AccessControl;
-        ac.Grant("Agent", "Anonymous", "Read", isAllow: true, ct).Should().Within(30.Seconds()).Emit();
-        ac.Grant("User", "Anonymous", "Read", isAllow: true, ct).Should().Within(30.Seconds()).Emit();
+        await ac.Grant("Agent", "Anonymous", "Read", isAllow: true, ct).Should().Within(30.Seconds()).Emit();
+        await ac.Grant("User", "Anonymous", "Read", isAllow: true, ct).Should().Within(30.Seconds()).Emit();
     }
 
     [Fact]
-    public void MultiQuery_QueryAsync_UnionsBothNamespaces()
+    public async Task MultiQuery_QueryAsync_UnionsBothNamespaces()
     {
-        SeedTwoNamespaces();
+        await SeedTwoNamespaces();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
         var request = MeshQueryRequest.FromQueries(new[]
         {
@@ -71,8 +71,8 @@ public class MultiQueryUnionTests
             "namespace:User/Roland nodeType:Agent", // Children-of-User/Roland → CustomBot
         });
 
-        var results = query.QueryList(request, _options, TestContext.Current.CancellationToken)
-            .Should().Within(30.Seconds()).Emit()
+        var results = (await query.QueryList(request, _options, TestContext.Current.CancellationToken)
+            .Should().Within(30.Seconds()).Emit())
             .Cast<MeshNode>().ToList();
 
         // Three Agent nodes total; non-Agent "Notes" node is filtered out by the second query's nodeType clause.
@@ -85,9 +85,9 @@ public class MultiQueryUnionTests
     }
 
     [Fact]
-    public void MultiQuery_QueryAsync_DedupesNodeMatchedByMultipleBranches()
+    public async Task MultiQuery_QueryAsync_DedupesNodeMatchedByMultipleBranches()
     {
-        SeedTwoNamespaces();
+        await SeedTwoNamespaces();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
         // Both queries match Agent/Orchestrator. Postgres UNION dedupes — so the
@@ -101,8 +101,8 @@ public class MultiQueryUnionTests
             "namespace:Agent nodeType:Agent",
         });
 
-        var results = query.QueryList(request, _options, TestContext.Current.CancellationToken)
-            .Should().Within(30.Seconds()).Emit()
+        var results = (await query.QueryList(request, _options, TestContext.Current.CancellationToken)
+            .Should().Within(30.Seconds()).Emit())
             .Cast<MeshNode>().ToList();
 
         results.Select(n => n.Path).Should().BeEquivalentTo(new[]
@@ -113,9 +113,9 @@ public class MultiQueryUnionTests
     }
 
     [Fact]
-    public void MultiQuery_ObserveQuery_EmitsUnionedSnapshot()
+    public async Task MultiQuery_ObserveQuery_EmitsUnionedSnapshot()
     {
-        SeedTwoNamespaces();
+        await SeedTwoNamespaces();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
         var request = MeshQueryRequest.FromQueries(new[]
         {
@@ -123,7 +123,7 @@ public class MultiQueryUnionTests
             "namespace:User/Roland nodeType:Agent",
         });
 
-        var initial = query.Query<MeshNode>(request, _options)
+        var initial = await query.Query<MeshNode>(request, _options)
             .Should().Within(30.Seconds()).Match(c => c.ChangeType == QueryChangeType.Initial);
 
         initial.Items.Select(n => n.Path).Should().BeEquivalentTo(new[]
@@ -135,18 +135,18 @@ public class MultiQueryUnionTests
     }
 
     [Fact]
-    public void MultiQuery_SelectExcludesContent_SkipsJsonbFetch()
+    public async Task MultiQuery_SelectExcludesContent_SkipsJsonbFetch()
     {
         // select:path on every branch → adapter emits NULL::jsonb AS content in
         // the SELECT, so returned MeshNodes have Content=null even though the
         // rows have non-trivial JSONB content in the DB. Proves the optimization
         // fires end-to-end through the multi-query UNION ALL path.
-        SeedTwoNamespaces();
+        await SeedTwoNamespaces();
         var adapter = _fixture.StorageAdapter;
 
         // Re-write Orchestrator with explicit content so at least one row has a
         // non-null content blob in the DB (the seed path writes Content=null).
-        adapter.Write(new MeshNode("Orchestrator", "Agent")
+        await adapter.Write(new MeshNode("Orchestrator", "Agent")
         {
             Name = "Orchestrator", NodeType = "Agent",
             Content = JsonSerializer.Deserialize<object>("""{"role":"primary"}""", _options)
@@ -159,7 +159,7 @@ public class MultiQueryUnionTests
             parser.Parse("namespace:User/Roland nodeType:Agent select:path"),
         };
 
-        var results = adapter.QueryNodesAsync(parsed, _options, ct: TestContext.Current.CancellationToken)
+        var results = await adapter.QueryNodesAsync(parsed, _options, ct: TestContext.Current.CancellationToken)
             .Collect(TestContext.Current.CancellationToken)
             .Should().Within(30.Seconds()).Emit();
 
@@ -174,7 +174,7 @@ public class MultiQueryUnionTests
             parser.Parse("namespace:Agent nodeType:Agent"),
             parser.Parse("namespace:User/Roland nodeType:Agent"),
         };
-        var withContent = adapter.QueryNodesAsync(parsedWithContent, _options, ct: TestContext.Current.CancellationToken)
+        var withContent = await adapter.QueryNodesAsync(parsedWithContent, _options, ct: TestContext.Current.CancellationToken)
             .Collect(TestContext.Current.CancellationToken)
             .Should().Within(30.Seconds()).Emit();
 
@@ -182,9 +182,9 @@ public class MultiQueryUnionTests
     }
 
     [Fact]
-    public void SingleQuery_StillRoutesThroughLegacyPath()
+    public async Task SingleQuery_StillRoutesThroughLegacyPath()
     {
-        SeedTwoNamespaces();
+        await SeedTwoNamespaces();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
         // Sanity: passing a single-element Queries array (or just FromQuery)
@@ -193,12 +193,12 @@ public class MultiQueryUnionTests
         var multi = MeshQueryRequest.FromQueries(new[] { "namespace:Agent nodeType:Agent" });
         var single = MeshQueryRequest.FromQuery("namespace:Agent nodeType:Agent");
 
-        var multiResults = query.QueryList(multi, _options, TestContext.Current.CancellationToken)
-            .Should().Within(30.Seconds()).Emit()
+        var multiResults = (await query.QueryList(multi, _options, TestContext.Current.CancellationToken)
+            .Should().Within(30.Seconds()).Emit())
             .Cast<MeshNode>().ToList();
 
-        var singleResults = query.QueryList(single, _options, TestContext.Current.CancellationToken)
-            .Should().Within(30.Seconds()).Emit()
+        var singleResults = (await query.QueryList(single, _options, TestContext.Current.CancellationToken)
+            .Should().Within(30.Seconds()).Emit())
             .Cast<MeshNode>().ToList();
 
         multiResults.Select(n => n.Path).Should().BeEquivalentTo(

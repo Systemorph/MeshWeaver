@@ -36,18 +36,18 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
     [Fact]
-    public void ObserveQuery_AfterCreate_ReturnsTheJustCreatedNode()
+    public async Task ObserveQuery_AfterCreate_ReturnsTheJustCreatedNode()
     {
         var path = $"{Ns}/created-node";
 
-        MeshService.CreateNode(MeshNode.FromPath(path) with
+        await MeshService.CreateNode(MeshNode.FromPath(path) with
         {
             Name = "Created",
             NodeType = "Markdown",
             Content = MarkdownContent.Parse("Hello", "", path)
         }).Should().Emit();
 
-        var change = MeshService.Query<MeshNode>(
+        var change = await MeshService.Query<MeshNode>(
                 MeshQueryRequest.FromQuery($"path:{path}"))
             .Should().Within(5.Seconds())
             .Match(c => c.ChangeType == QueryChangeType.Initial);
@@ -58,24 +58,24 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
     }
 
     [Fact]
-    public void ObserveQuery_AfterUpdate_ReturnsTheLatestContent()
+    public async Task ObserveQuery_AfterUpdate_ReturnsTheLatestContent()
     {
         var path = $"{Ns}/updated-node";
 
-        var created = MeshService.CreateNode(MeshNode.FromPath(path) with
+        var created = await MeshService.CreateNode(MeshNode.FromPath(path) with
         {
             Name = "v1",
             NodeType = "Markdown",
             Content = MarkdownContent.Parse("first", "", path)
         }).Should().Emit();
 
-        MeshService.UpdateNode(created with
+        await MeshService.UpdateNode(created with
         {
             Name = "v2",
             Content = MarkdownContent.Parse("second", "", path)
         }).Should().Emit();
 
-        var change = MeshService.Query<MeshNode>(
+        var change = await MeshService.Query<MeshNode>(
                 MeshQueryRequest.FromQuery($"path:{path}"))
             .Should().Within(5.Seconds())
             .Match(c => c.ChangeType == QueryChangeType.Initial);
@@ -88,28 +88,28 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
     }
 
     [Fact]
-    public void ObserveQuery_DescendantsAfterUpdate_ReturnsLatestContentForEachItem()
+    public async Task ObserveQuery_DescendantsAfterUpdate_ReturnsLatestContentForEachItem()
     {
-        MeshService.CreateNode(MeshNode.FromPath(Ns) with { Name = "Root", NodeType = "Markdown" }).Should().Emit();
-        MeshService.CreateNode(MeshNode.FromPath($"{Ns}/A") with
+        await MeshService.CreateNode(MeshNode.FromPath(Ns) with { Name = "Root", NodeType = "Markdown" }).Should().Emit();
+        await MeshService.CreateNode(MeshNode.FromPath($"{Ns}/A") with
         {
             Name = "v1-A", NodeType = "Markdown",
             Content = MarkdownContent.Parse("a-first", "", $"{Ns}/A")
         }).Should().Emit();
-        MeshService.CreateNode(MeshNode.FromPath($"{Ns}/B") with
+        await MeshService.CreateNode(MeshNode.FromPath($"{Ns}/B") with
         {
             Name = "v1-B", NodeType = "Markdown",
             Content = MarkdownContent.Parse("b-first", "", $"{Ns}/B")
         }).Should().Emit();
 
         // Mutate B only.
-        MeshService.UpdateNode(MeshNode.FromPath($"{Ns}/B") with
+        await MeshService.UpdateNode(MeshNode.FromPath($"{Ns}/B") with
         {
             Name = "v2-B", NodeType = "Markdown",
             Content = MarkdownContent.Parse("b-second", "", $"{Ns}/B")
         }).Should().Emit();
 
-        var change = MeshService.Query<MeshNode>(
+        var change = await MeshService.Query<MeshNode>(
                 MeshQueryRequest.FromQuery($"path:{Ns} scope:descendants"))
             .Should().Within(5.Seconds())
             .Match(c => c.ChangeType == QueryChangeType.Initial
@@ -136,7 +136,7 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
     /// and the debounce subscription (also wrapped in Task.Run).
     /// </summary>
     [Fact]
-    public void ObserveQuery_ReceivesAddNotification_WhenNodeCreatedAfterSubscription()
+    public async Task ObserveQuery_ReceivesAddNotification_WhenNodeCreatedAfterSubscription()
     {
         const string ns = "TestData/Freshness/LiveAdd";
 
@@ -150,16 +150,16 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
         using var conn = hotChanges.Connect();
 
         // Wait for the initial (empty) emission.
-        hotChanges.Should().Within(5.Seconds()).Match(c => c.ChangeType == QueryChangeType.Initial);
+        await hotChanges.Should().Within(5.Seconds()).Match(c => c.ChangeType == QueryChangeType.Initial);
 
         // Now create a node — the change-notifier debounce should deliver an Add.
-        MeshService.CreateNode(MeshNode.FromPath($"{ns}/live-1") with
+        await MeshService.CreateNode(MeshNode.FromPath($"{ns}/live-1") with
         {
             Name = "Live-1", NodeType = "Markdown",
             Content = MarkdownContent.Parse("hello", "", $"{ns}/live-1")
         }).Should().Emit();
 
-        var addChange = hotChanges
+        var addChange = await hotChanges
             .Should().Within(10.Seconds())
             .Match(c => c.ChangeType == QueryChangeType.Added && c.Items.Any(n => n.Path == $"{ns}/live-1"));
 
@@ -168,13 +168,13 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
     }
 
     [Fact]
-    public void ObserveQuery_ReceivesUpdateNotification_WhenNodeUpdatedAfterSubscription()
+    public async Task ObserveQuery_ReceivesUpdateNotification_WhenNodeUpdatedAfterSubscription()
     {
         const string ns = "TestData/Freshness/LiveUpdate";
         var path = $"{ns}/live-upd";
 
         // Seed the node first.
-        MeshService.CreateNode(MeshNode.FromPath(path) with
+        await MeshService.CreateNode(MeshNode.FromPath(path) with
         {
             Name = "v1", NodeType = "Markdown",
             Content = MarkdownContent.Parse("original", "", path)
@@ -186,16 +186,16 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
         using var conn = hotChanges.Connect();
 
         // Wait for initial result containing v1.
-        hotChanges.Should().Within(5.Seconds()).Match(c => c.ChangeType == QueryChangeType.Initial);
+        await hotChanges.Should().Within(5.Seconds()).Match(c => c.ChangeType == QueryChangeType.Initial);
 
         // Update after subscription.
-        MeshService.UpdateNode(MeshNode.FromPath(path) with
+        await MeshService.UpdateNode(MeshNode.FromPath(path) with
         {
             Name = "v2", NodeType = "Markdown",
             Content = MarkdownContent.Parse("updated", "", path)
         }).Should().Emit();
 
-        var updChange = hotChanges
+        var updChange = await hotChanges
             .Should().Within(10.Seconds())
             .Match(c => c.ChangeType == QueryChangeType.Updated && c.Items.Any(n => n.Name == "v2"));
 
@@ -217,7 +217,7 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
     /// production-side bug behind the test cluster, not a test-pattern flaw.
     /// </summary>
     [Fact(Timeout = 15_000)]
-    public void ObserveQuery_AccessAssignment_AddedEventArrives_AfterCreateNode()
+    public async Task ObserveQuery_AccessAssignment_AddedEventArrives_AfterCreateNode()
     {
         const string scope = "RepoTest";
         const string ns = scope + "/_Access";
@@ -230,17 +230,17 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
         using var conn = hot.Connect();
 
         // Wait for Initial (empty — no AccessAssignments at this scope yet).
-        var initial = hot.Should().Within(5.Seconds())
+        var initial = await hot.Should().Within(5.Seconds())
             .Match(c => c.ChangeType == QueryChangeType.Initial);
         initial.Items.Should().BeEmpty("no AccessAssignments seeded at this scope");
 
         // Now create an AccessAssignment via the standard CreateNode flow.
-        MeshService.CreateNode(AssignmentNodeFactory.UserRole(
+        await MeshService.CreateNode(AssignmentNodeFactory.UserRole(
                 "test-user", "Admin", scope))
             .Should().Emit();
 
         // The hot subscription must receive an Added event with the new node.
-        var added = hot
+        var added = await hot
             .Should().Within(8.Seconds())
             .Match(c => c.ChangeType == QueryChangeType.Added
                 && c.Items.Any(n => n.Path == $"{ns}/test-user_Access"));
@@ -263,18 +263,18 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
     /// production-side bug behind the test cluster.
     /// </summary>
     [Fact(Timeout = 15_000)]
-    public void ObserveQuery_AccessAssignment_InitialIncludesPriorCreate()
+    public async Task ObserveQuery_AccessAssignment_InitialIncludesPriorCreate()
     {
         const string scope = "RepoTest2";
         const string ns = scope + "/_Access";
 
         // Create FIRST.
-        MeshService.CreateNode(AssignmentNodeFactory.UserRole(
+        await MeshService.CreateNode(AssignmentNodeFactory.UserRole(
                 "test-user", "Admin", scope))
             .Should().Emit();
 
         // THEN subscribe — Initial must reflect the prior write.
-        var initial = MeshService.Query<MeshNode>(
+        var initial = await MeshService.Query<MeshNode>(
                 MeshQueryRequest.FromQuery($"namespace:{ns} nodeType:AccessAssignment"))
             .Should().Within(5.Seconds())
             .Match(c => c.ChangeType == QueryChangeType.Initial
@@ -292,19 +292,19 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
     /// not a framework bug.
     /// </summary>
     [Fact(Timeout = 15_000)]
-    public void SecurityService_AfterCreate_GrantsPermission_OnFirstSubscribe()
+    public async Task SecurityService_AfterCreate_GrantsPermission_OnFirstSubscribe()
     {
         const string scope = "RepoTest3";
         const string userId = "test-user-3";
         // permission check on Mesh hub
 
         // Create AccessAssignment first.
-        MeshService.CreateNode(AssignmentNodeFactory.UserRole(userId, "Admin", scope))
+        await MeshService.CreateNode(AssignmentNodeFactory.UserRole(userId, "Admin", scope))
             .Should().Emit();
 
         // SecurityService subscribe — must emit a permission-set with Create within 5s.
         // This is the EXACT chain WaitForPermissionAsync depends on.
-        var perm = Mesh.GetEffectivePermissions(scope, userId)
+        var perm = await Mesh.GetEffectivePermissions(scope, userId)
             .Should().Within(5.Seconds())
             .Match(p => p.HasFlag(MeshWeaver.Mesh.Security.Permission.Create));
 
@@ -318,17 +318,17 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
     /// If THIS fails, the AccessObject vs. userId matching breaks for hub-shaped IDs.
     /// </summary>
     [Fact(Timeout = 15_000)]
-    public void SecurityService_HubAddressUserId_GrantsPermission()
+    public async Task SecurityService_HubAddressUserId_GrantsPermission()
     {
         var meshAddress = Mesh.Address.ToFullString();
         // permission check on Mesh hub
 
         Output.WriteLine($"meshAddress = '{meshAddress}'");
 
-        MeshService.CreateNode(AssignmentNodeFactory.UserRole(meshAddress, "Admin", "Impersonate"))
+        await MeshService.CreateNode(AssignmentNodeFactory.UserRole(meshAddress, "Admin", "Impersonate"))
             .Should().Emit();
 
-        var perm = Mesh.GetEffectivePermissions("Impersonate", meshAddress)
+        var perm = await Mesh.GetEffectivePermissions("Impersonate", meshAddress)
             .Should().Within(5.Seconds())
             .Match(p => p.HasFlag(MeshWeaver.Mesh.Security.Permission.Create));
 

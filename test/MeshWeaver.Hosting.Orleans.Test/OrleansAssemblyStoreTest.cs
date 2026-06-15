@@ -31,7 +31,7 @@ public class OrleansAssemblyStoreTest(ITestOutputHelper output) : OrleansTestBas
     protected override short InitialSilosCount => 2;
 
     [Fact(Timeout = 30000)]
-    public void Put_on_one_silo_is_visible_as_TryGet_hit_on_another()
+    public async Task Put_on_one_silo_is_visible_as_TryGet_hit_on_another()
     {
         // Grab the assembly store from two distinct silos in the cluster. Orleans
         // TestCluster spins up 2 silos by default (Primary + Secondary).
@@ -49,23 +49,23 @@ public class OrleansAssemblyStoreTest(ITestOutputHelper output) : OrleansTestBas
         var bytes = Encoding.UTF8.GetBytes("compiled-on-silo-0");
 
         // Put on silo A — Observable, wait for the single emission.
-        var putPath = siloA.Put(nodeTypePath, version, bytes, pdbBytes: null).Should().Emit();
+        var putPath = await siloA.Put(nodeTypePath, version, bytes, pdbBytes: null).Should().Emit();
         File.Exists(putPath).Should().BeTrue();
 
         // TryGet on silo B — must see the same file thanks to the shared root.
-        var getPath = siloB.TryGetAssemblyPath(nodeTypePath, version).Should().Emit();
+        var getPath = await siloB.TryGetAssemblyPath(nodeTypePath, version).Should().Emit();
         getPath.Should().NotBeNull("silo B must observe silo A's write via shared storage");
         File.ReadAllBytes(getPath!).Should().BeEquivalentTo(bytes, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     [Fact(Timeout = 30000)]
-    public void TryGet_on_unknown_version_emits_null_across_the_cluster()
+    public async Task TryGet_on_unknown_version_emits_null_across_the_cluster()
     {
         var silos = Cluster.Silos;
         var siloA = ((InProcessSiloHandle)silos[0]).SiloHost.Services.GetRequiredService<IAssemblyStore>();
 
         // The store emits an explicit null for an unknown version.
-        siloA.TryGetAssemblyPath("Never/Compiled", version: 999999999L)
+        await siloA.TryGetAssemblyPath("Never/Compiled", version: 999999999L)
             .Should().Match(path => path is null);
     }
 }

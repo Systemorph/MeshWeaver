@@ -59,19 +59,19 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
             .WithTypes([new KeyValuePair<string, Type>(nameof(AccessAssignment), typeof(AccessAssignment))]);
 
     [Fact(Timeout = 20000)]
-    public void AccessControl_RendersStackControl()
+    public async Task AccessControl_RendersStackControl()
     {
         // Seed data so the layout has something to render — runtime mutation
         // (this test specifically exercises the layout's reactive re-render).
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        meshService.CreateNode(AssignmentNodeFactory.UserRole("TestUser", "Viewer", "ACME"))
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole("TestUser", "Viewer", "ACME"))
             .Should().Emit();
 
         var client = GetClient();
         var nodeAddress = new Address(NodePath);
 
         // Initialize the hub
-        client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.AccessControlArea);
@@ -81,7 +81,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
             reference);
 
         // Get the rendered root control
-        var control = stream.GetControlStream(reference.Area!)
+        var control = await stream.GetControlStream(reference.Area!)
             .Where(x => x != null)
             .Should().Within(10.Seconds()).Emit();
 
@@ -91,19 +91,19 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact(Timeout = 20000)]
-    public void AccessControl_ShowsInheritedAndLocalSections()
+    public async Task AccessControl_ShowsInheritedAndLocalSections()
     {
         // Seed both inherited and local assignments — runtime to drive layout updates.
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        meshService.CreateNode(AssignmentNodeFactory.UserRole("InheritedUser", "Viewer", "ACME"))
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole("InheritedUser", "Viewer", "ACME"))
             .Should().Emit();
-        meshService.CreateNode(AssignmentNodeFactory.UserRole("LocalUser", "Editor", NodePath))
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole("LocalUser", "Editor", NodePath))
             .Should().Emit();
 
         var client = GetClient();
         var nodeAddress = new Address(NodePath);
 
-        client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.AccessControlArea);
@@ -113,7 +113,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
             reference);
 
         // Get root control
-        var control = stream.GetControlStream(reference.Area!)
+        var control = await stream.GetControlStream(reference.Area!)
             .Where(x => x != null)
             .Should().Within(10.Seconds()).Emit();
 
@@ -134,26 +134,26 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact(Timeout = 20000)]
-    public void AccessControl_NestedNode_ShowsInheritedAssignments()
+    public async Task AccessControl_NestedNode_ShowsInheritedAssignments()
     {
         // Create actual nodes so the hubs exist
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode("ACME", TestPartition) { Name = "ACME", NodeType = "Group" }).Should().Emit();
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode("Documentation", $"{TestPartition}/ACME") { Name = "Documentation", NodeType = "Markdown" }).Should().Emit();
 
         // Seed assignments at runtime (test of layout's reactive behavior).
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        meshService.CreateNode(AssignmentNodeFactory.UserRole("ParentUser", "Viewer", $"{TestPartition}/ACME"))
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole("ParentUser", "Viewer", $"{TestPartition}/ACME"))
             .Should().Emit();
-        meshService.CreateNode(AssignmentNodeFactory.UserRole("NestedUser", "Editor", $"{TestPartition}/ACME/Documentation"))
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole("NestedUser", "Editor", $"{TestPartition}/ACME/Documentation"))
             .Should().Emit();
 
         var client = GetClient();
         var nestedPath = $"{TestPartition}/ACME/Documentation";
         var nodeAddress = new Address(nestedPath);
 
-        client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.AccessControlArea);
@@ -162,7 +162,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
             nodeAddress,
             reference);
 
-        var control = stream.GetControlStream(reference.Area!)
+        var control = await stream.GetControlStream(reference.Area!)
             .Where(x => x != null)
             .Should().Within(10.Seconds()).Emit();
 
@@ -171,15 +171,15 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact(Timeout = 20000)]
-    public void AccessControl_DeeplyNestedPath_InheritsFromAllAncestors()
+    public async Task AccessControl_DeeplyNestedPath_InheritsFromAllAncestors()
     {
         // Assignments are pre-seeded via static AccessAssignment nodes in ConfigureMesh.
         // Verify permissions via the live effective-permission stream.
         var deepPath = "Org/Division/Team/Project";
 
-        var rootPerms = Mesh.GetEffectivePermissions(deepPath, "RootUser").Should().Match(p => p == Permission.All);
-        var divPerms = Mesh.GetEffectivePermissions(deepPath, "DivUser").Should().Match(p => p.HasFlag(Permission.Update));
-        var deepPerms = Mesh.GetEffectivePermissions(deepPath, "DeepUser").Should().Match(p => p == (Permission.Read | Permission.Execute | Permission.Api));
+        var rootPerms = await Mesh.GetEffectivePermissions(deepPath, "RootUser").Should().Match(p => p == Permission.All);
+        var divPerms = await Mesh.GetEffectivePermissions(deepPath, "DivUser").Should().Match(p => p.HasFlag(Permission.Update));
+        var deepPerms = await Mesh.GetEffectivePermissions(deepPath, "DeepUser").Should().Match(p => p == (Permission.Read | Permission.Execute | Permission.Api));
 
         rootPerms.Should().Be(Permission.All, "RootUser with Admin at Org should have all permissions on deeply nested path");
         divPerms.Should().HaveFlag(Permission.Update, "DivUser with Editor at Org/Division should have update on deeply nested path");
@@ -187,15 +187,15 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact(Timeout = 20000)]
-    public void SecurityService_NestedPath_ReturnsCorrectPermissions()
+    public async Task SecurityService_NestedPath_ReturnsCorrectPermissions()
     {
         // Assignments are pre-seeded via ConfigureMesh's static AccessAssignment nodes.
         // Verify permissions via the live effective-permission stream.
         var nestedPath = "MyOrg/Project/SubFolder";
 
-        var globalPerms = Mesh.GetEffectivePermissions(nestedPath, "GlobalAdmin").Should().Match(p => p == Permission.All);
-        var orgPerms = Mesh.GetEffectivePermissions(nestedPath, "OrgEditor").Should().Match(p => p.HasFlag(Permission.Update));
-        var projectPerms = Mesh.GetEffectivePermissions(nestedPath, "ProjectViewer").Should().Match(p => p == (Permission.Read | Permission.Execute | Permission.Api));
+        var globalPerms = await Mesh.GetEffectivePermissions(nestedPath, "GlobalAdmin").Should().Match(p => p == Permission.All);
+        var orgPerms = await Mesh.GetEffectivePermissions(nestedPath, "OrgEditor").Should().Match(p => p.HasFlag(Permission.Update));
+        var projectPerms = await Mesh.GetEffectivePermissions(nestedPath, "ProjectViewer").Should().Match(p => p == (Permission.Read | Permission.Execute | Permission.Api));
 
         globalPerms.Should().Be(Permission.All, "GlobalAdmin with global Admin role should have all permissions");
         orgPerms.Should().HaveFlag(Permission.Update, "OrgEditor with Editor at MyOrg should have update on nested path");
@@ -212,7 +212,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
     /// (root stack → ContentArea → form stack → picker) is reachable without
     /// per-test recursion boilerplate.
     /// </summary>
-    private static List<(string Area, T Control)> CollectControls<T>(
+    private static async Task<List<(string Area, T Control)>> CollectControls<T>(
         ISynchronizationStream<JsonElement> stream,
         UiControl root,
         string rootArea)
@@ -236,7 +236,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
                     var childArea = named.Area?.ToString();
                     if (string.IsNullOrEmpty(childArea))
                         continue;
-                    var child = ReadControlOrNull(stream, childArea);
+                    var child = await ReadControlOrNull(stream, childArea);
                     if (child != null)
                         queue.Enqueue((child, childArea));
                 }
@@ -249,7 +249,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
                 var contentArea = dlgContentArea.ToString();
                 if (!string.IsNullOrEmpty(contentArea))
                 {
-                    var content = ReadControlOrNull(stream, contentArea);
+                    var content = await ReadControlOrNull(stream, contentArea);
                     if (content != null)
                         queue.Enqueue((content, contentArea));
                 }
@@ -260,18 +260,18 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
     }
 
     /// <summary>
-    /// Tolerant single-control read: blocks for the first non-null control in
+    /// Tolerant single-control read: awaits the first non-null control in
     /// <paramref name="area"/>, returning <c>null</c> on timeout (the
     /// <c>Timeout(span, fallback)</c> overload swaps in a null-emitting
-    /// observable instead of throwing). Synchronous — no Rx→Task bridge.
+    /// observable instead of throwing). No blocking Rx→Task bridge.
     /// </summary>
-    private static UiControl? ReadControlOrNull(
+    private static Task<UiControl?> ReadControlOrNull(
         ISynchronizationStream<JsonElement> stream, string area)
         => stream.GetControlStream(area)
             .Where(c => c != null)
             .Take(1)
             .Timeout(5.Seconds(), Observable.Return<UiControl?>(null))
-            .Wait();
+            .ToTask();
 
     /// <summary>
     /// The + Add Assignment button must be rendered for an admin viewer.
@@ -280,7 +280,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
     /// different AccessService instance), silently hiding the button.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void AccessControl_AdminViewer_RendersAddAssignmentButton()
+    public async Task AccessControl_AdminViewer_RendersAddAssignmentButton()
     {
         var client = GetClient();
         // DevLogin on the client hub so the SubscribeRequest's PostPipeline stamps
@@ -288,7 +288,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         TestUsers.DevLogin(client);
 
         var nodeAddress = new Address(NodePath);
-        client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.AccessControlArea);
@@ -296,10 +296,10 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
             nodeAddress,
             reference);
 
-        var rootControl = stream.GetControlStream(reference.Area!)
+        var rootControl = await stream.GetControlStream(reference.Area!)
             .Should().Within(15.Seconds()).Match(c => c is StackControl s && s.Areas?.Count >= 4)!;
 
-        var buttons = CollectControls<ButtonControl>(stream, rootControl, reference.Area!);
+        var buttons = await CollectControls<ButtonControl>(stream, rootControl, reference.Area!);
         var addButton = buttons.FirstOrDefault(b =>
             b.Control.Data?.ToString()?.Contains("Add Assignment", StringComparison.OrdinalIgnoreCase) == true);
 
@@ -315,13 +315,13 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
     /// attributes surface in tests rather than in the running UI.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void AccessControl_AddAssignmentDialog_HasSubjectAndRolePickersWithExpectedQueries()
+    public async Task AccessControl_AddAssignmentDialog_HasSubjectAndRolePickersWithExpectedQueries()
     {
         var client = GetClient();
         TestUsers.DevLogin(client);
 
         var nodeAddress = new Address(NodePath);
-        client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.AccessControlArea);
@@ -329,10 +329,10 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
             nodeAddress,
             reference);
 
-        var rootControl = stream.GetControlStream(reference.Area!)
+        var rootControl = await stream.GetControlStream(reference.Area!)
             .Should().Within(15.Seconds()).Match(c => c is StackControl s && s.Areas?.Count >= 4)!;
 
-        var buttons = CollectControls<ButtonControl>(stream, rootControl, reference.Area!);
+        var buttons = await CollectControls<ButtonControl>(stream, rootControl, reference.Area!);
         var (buttonArea, _) = buttons.First(b =>
             b.Control.Data?.ToString()?.Contains("Add Assignment", StringComparison.OrdinalIgnoreCase) == true);
 
@@ -340,14 +340,14 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         // the DialogControl into the $Dialog area.
         client.Post(new ClickedEvent(buttonArea, stream.StreamId), o => o.WithTarget(nodeAddress));
 
-        var dialog = stream.GetControlStream(DialogControl.DialogArea)
+        var dialog = await stream.GetControlStream(DialogControl.DialogArea)
             .Where(c => c is DialogControl)
             .Should().Within(10.Seconds()).Emit();
 
         var dialogControl = dialog.Should().BeOfType<DialogControl>().Which;
         dialogControl.Title?.ToString().Should().Be("Add Assignment");
 
-        var pickers = CollectControls<MeshNodePickerControl>(
+        var pickers = await CollectControls<MeshNodePickerControl>(
             stream, dialogControl, DialogControl.DialogArea);
 
         pickers.Should().HaveCount(2,

@@ -241,14 +241,14 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
     // ---- ExecuteScript --------------------------------------------------------
 
     [Fact]
-    public void ExecuteScript_ForIsExecutableCodeNode_CompletesWithoutError()
+    public async Task ExecuteScript_ForIsExecutableCodeNode_CompletesWithoutError()
     {
         // Seed the script directly via IMeshService (the "created through
         // IMeshService" path per our testing rule â€” script nodes skip the MCP
         // plugin Create so we're not tangling the test with Create semantics).
         var id = $"exec-{Guid.NewGuid():N}";
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        meshService.CreateNode(
+        await meshService.CreateNode(
             new MeshNode(id, "Scripts")
             {
                 Name = "Hello Script",
@@ -261,7 +261,7 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
             }).Should().Emit();
 
         var ops = new MeshOperations(Mesh);
-        var result = ops.ExecuteScript($"@Scripts/{id}", timeoutSeconds: 30)
+        var result = await ops.ExecuteScript($"@Scripts/{id}", timeoutSeconds: 30)
             .Should().Within(35.Seconds()).Emit();
 
         // Budget is 30s on the kernel completion callback. The key assertion is

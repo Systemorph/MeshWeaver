@@ -68,7 +68,7 @@ public class ModelsSettingsTabRenderTest : MonolithMeshTestBase
                 .AddModelsSettingsTab());
 
     [Fact(Timeout = 60000)]
-    public void Models_Tab_Splits_ApiList_Vs_CliConnect()
+    public async Task Models_Tab_Splits_ApiList_Vs_CliConnect()
     {
         // Render against the test user's own partition node (auto-admin login → Permission.Api).
         // The auto-admin's ObjectId is "Roland", so "Roland" is the user's own partition — and
@@ -89,7 +89,7 @@ public class ModelsSettingsTabRenderTest : MonolithMeshTestBase
 
         // The eagerly-built API + CLI cards land in the store once the content pane renders.
         // Wait until the whole store JSON contains both the CLI Connect button and the API list.
-        var storeJson = stream
+        var storeJson = await stream
             .Select(change => change.Value.GetRawText())
             .Where(json =>
                 json.Contains("Connect Claude Code", StringComparison.Ordinal) &&

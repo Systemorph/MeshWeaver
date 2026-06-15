@@ -56,81 +56,81 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     protected override Task SetupAccessRightsAsync() => Task.CompletedTask;
 
     [Fact(Timeout = 20000)]
-    public void GetEffectivePermissions_WithAdminRole_ReturnsAllPermissions()
+    public async Task GetEffectivePermissions_WithAdminRole_ReturnsAllPermissions()
     {
-        Mesh.GetEffectivePermissions("org/acme/project", "user123")
+        await Mesh.GetEffectivePermissions("org/acme/project", "user123")
             .Should().Match(p => p == Permission.All);
     }
 
     [Fact(Timeout = 20000)]
-    public void GetEffectivePermissions_WithViewerRole_ReturnsReadOnly()
+    public async Task GetEffectivePermissions_WithViewerRole_ReturnsReadOnly()
     {
-        Mesh.GetEffectivePermissions("org/acme/docs", "viewer123")
+        await Mesh.GetEffectivePermissions("org/acme/docs", "viewer123")
             .Should().Match(p => p == (Permission.Read | Permission.Execute | Permission.Api));
     }
 
     [Fact(Timeout = 20000)]
-    public void GetEffectivePermissions_WithEditorRole_ReturnsReadCreateUpdate()
+    public async Task GetEffectivePermissions_WithEditorRole_ReturnsReadCreateUpdate()
     {
         var editorPerms = Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export;
-        Mesh.GetEffectivePermissions("org/acme/project/docs", "editor123")
+        await Mesh.GetEffectivePermissions("org/acme/project/docs", "editor123")
             .Should().Match(p => p == editorPerms);
     }
 
     [Fact(Timeout = 20000)]
-    public void GetEffectivePermissions_NoRoles_ReturnsNone()
+    public async Task GetEffectivePermissions_NoRoles_ReturnsNone()
     {
-        Mesh.GetEffectivePermissions("org/private/secure", "newuser")
+        await Mesh.GetEffectivePermissions("org/private/secure", "newuser")
             .Should().Match(p => p == Permission.None);
     }
 
     [Fact(Timeout = 20000)]
-    public void GetEffectivePermissions_WithInheritance_InheritsFromParent()
+    public async Task GetEffectivePermissions_WithInheritance_InheritsFromParent()
     {
-        Mesh.GetEffectivePermissions("org/parent/child/grandchild", "inherituser")
+        await Mesh.GetEffectivePermissions("org/parent/child/grandchild", "inherituser")
             .Should().Match(p => p == Permission.All);
     }
 
     [Fact(Timeout = 20000)]
-    public void GetEffectivePermissions_WithGlobalRole_AppliesEverywhere()
+    public async Task GetEffectivePermissions_WithGlobalRole_AppliesEverywhere()
     {
-        Mesh.GetEffectivePermissions("some/random/path", "globaladmin")
+        await Mesh.GetEffectivePermissions("some/random/path", "globaladmin")
             .Should().Match(p => p == Permission.All);
     }
 
     [Fact(Timeout = 20000)]
-    public void GetEffectivePermissions_CombinesMultipleRoles()
+    public async Task GetEffectivePermissions_CombinesMultipleRoles()
     {
         // multiuser has Editor at "org/project1/subproject"; multiuser_v has Viewer at "org/project1".
         // Reading multiuser at the deeper path returns Editor permissions only.
         var editorPerms = Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export;
-        Mesh.GetEffectivePermissions("org/project1/subproject", "multiuser")
+        await Mesh.GetEffectivePermissions("org/project1/subproject", "multiuser")
             .Should().Match(p => p == editorPerms);
     }
 
     [Fact(Timeout = 20000)]
-    public void HasPermission_WithSufficientPermissions_ReturnsTrue()
+    public async Task HasPermission_WithSufficientPermissions_ReturnsTrue()
     {
-        Mesh.CheckPermission("org/docs/readme", "readuser", Permission.Read)
+        await Mesh.CheckPermission("org/docs/readme", "readuser", Permission.Read)
             .Should().Match(canRead => canRead);
     }
 
     [Fact(Timeout = 20000)]
-    public void HasPermission_WithoutSufficientPermissions_ReturnsFalse()
+    public async Task HasPermission_WithoutSufficientPermissions_ReturnsFalse()
     {
-        var canDelete = Mesh.CheckPermission("org/restricted/data", "readonlyuser", Permission.Delete).Should().Emit();
+        var canDelete = await Mesh.CheckPermission("org/restricted/data", "readonlyuser", Permission.Delete).Should().Emit();
         canDelete.Should().BeFalse();
     }
 
     [Fact(Timeout = 20000)]
-    public void AddUserRole_CreatesAssignment()
+    public async Task AddUserRole_CreatesAssignment()
     {
-        Mesh.GetEffectivePermissions("org/newproject", "newassignee")
+        await Mesh.GetEffectivePermissions("org/newproject", "newassignee")
             .Should().Match(p => p.HasFlag(Permission.Update));
     }
 
     [Fact(Timeout = 20000)]
-    public void RemoveUserRole_RemovesAssignment()
+    public async Task RemoveUserRole_RemovesAssignment()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var savedContext = accessService.CircuitContext;
@@ -143,11 +143,11 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
 
             // Create a temporary assignment then remove it via DeleteNode
             var assignment = AssignmentNodeFactory.UserRole("removetest", "Admin", "org/removeproject");
-            meshService.CreateNode(assignment).Should().Emit();
+            await meshService.CreateNode(assignment).Should().Emit();
 
             // Verify the assignment took effect first (so the test fails on a hung
             // CREATE, not a hung DELETE).
-            Mesh.GetEffectivePermissions("org/removeproject", "removetest")
+            await Mesh.GetEffectivePermissions("org/removeproject", "removetest")
                 .Should().Match(p => p == Permission.All);
 
             // org/removeproject must always keep at least one administrator
@@ -155,16 +155,16 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
             // not the last-admin removal (which is correctly rejected). Wait until the
             // read-side surface the validator reads (IMeshService.Query) shows the co-admin.
             var coAdmin = AssignmentNodeFactory.UserRole("removeproject_coadmin", "Admin", "org/removeproject");
-            meshService.CreateNode(coAdmin).Should().Emit();
-            meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{coAdmin.Path}"))
+            await meshService.CreateNode(coAdmin).Should().Emit();
+            await meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{coAdmin.Path}"))
                 .Where(c => c.Items.Any(n => n.Id == coAdmin.Id))
                 .Take(1).Timeout(TimeSpan.FromSeconds(10))
                 .Should().Emit();
 
-            meshService.DeleteNode(assignment.Path!).Should().Emit();
+            await meshService.DeleteNode(assignment.Path!).Should().Emit();
 
             // Wait for the synced query to drop the deleted node (eventual consistency).
-            Mesh.GetEffectivePermissions("org/removeproject", "removetest")
+            await Mesh.GetEffectivePermissions("org/removeproject", "removetest")
                 .Should().Match(p => p == Permission.None);
         }
         finally
@@ -190,7 +190,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     /// create it.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void RuntimeCreateNode_AccessAssignment_GrantsPermission()
+    public async Task RuntimeCreateNode_AccessAssignment_GrantsPermission()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var savedContext = accessService.CircuitContext;
@@ -201,7 +201,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         try
         {
             // Pre-condition: the user has no permissions on the scope (no static seed).
-            Mesh.GetEffectivePermissions(scope, userId)
+            await Mesh.GetEffectivePermissions(scope, userId)
                 .Should().Match(p => p == Permission.None,
                     "the user has no static AccessAssignment for this scope");
 
@@ -212,12 +212,12 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
 
             var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
             var assignment = AssignmentNodeFactory.UserRole(userId, "Admin", scope);
-            meshService.CreateNode(assignment).Should().Emit();
+            await meshService.CreateNode(assignment).Should().Emit();
 
             // The new assignment must now be visible to permission checks. Match
             // on the first emission carrying the new role so the test is robust
             // against the synced-query emitting one stale snapshot first.
-            Mesh.GetEffectivePermissions(scope, userId)
+            await Mesh.GetEffectivePermissions(scope, userId)
                 .Should().Match(p => p == Permission.All,
                     "Admin role on the scope grants every permission once the synced query observes the new node");
         }
@@ -234,7 +234,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     /// when calling SecurityService.HasPermission.
     /// </summary>
     [Fact(Timeout = 10_000)]
-    public void DeliveryAccessContext_RolesFlow_ToReceiverPermissionCheck()
+    public async Task DeliveryAccessContext_RolesFlow_ToReceiverPermissionCheck()
     {
         using var scope = Mesh.ServiceProvider.CreateScope();
         var accessService = scope.ServiceProvider.GetRequiredService<AccessService>();
@@ -261,14 +261,14 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         // the claim-based Admin from the delivery context. The chain must still
         // resolve Permission.All; if SecurityService didn't read claim-based
         // roles, we'd see Permission.None.
-        sec.GetEffectivePermissions("any/scope", userId)
+        await sec.GetEffectivePermissions("any/scope", userId)
             .Should().Be(Permission.All,
                 "claim-based Admin restored from delivery.AccessContext must grant " +
                 "all permissions on the receiver's permission check");
     }
 
     [Fact(Timeout = 10_000)]
-    public void ClaimBasedAdmin_GrantsImmediately_EvenWhenNoStaticAssignment()
+    public async Task ClaimBasedAdmin_GrantsImmediately_EvenWhenNoStaticAssignment()
     {
         // Resolve a scoped SecurityService directly so the AccessContext we
         // set is the one it reads.
@@ -280,7 +280,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
 
         // Sanity: this user has NO static AccessAssignment in ConfigureMesh.
         accessService.SetCircuitContext(new AccessContext { ObjectId = userId, Name = userId });
-        sec.GetEffectivePermissions("any/scope", userId)
+        await sec.GetEffectivePermissions("any/scope", userId)
             .Should().Be(Permission.None,
                 "without claim-based roles, the user has no permissions");
 
@@ -293,7 +293,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
             Roles = new[] { "Admin" }
         });
 
-        sec.GetEffectivePermissions("any/scope", userId)
+        await sec.GetEffectivePermissions("any/scope", userId)
             .Should().Be(Permission.All,
                 "claim-based Admin must grant all permissions regardless of the " +
                 "synced-query state");
@@ -304,7 +304,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     /// through the permission-check path the AccessControlPipeline actually calls.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void RuntimeCreateNode_AccessAssignment_HasPermissionReturnsTrue()
+    public async Task RuntimeCreateNode_AccessAssignment_HasPermissionReturnsTrue()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var savedContext = accessService.CircuitContext;
@@ -315,18 +315,18 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         try
         {
             // Sanity: no permission before creating the assignment.
-            Mesh.CheckPermission(scope, userId, Permission.Read).Should().Emit()
+            (await Mesh.CheckPermission(scope, userId, Permission.Read).Should().Emit())
                 .Should().BeFalse();
 
             accessService.SetCircuitContext(new AccessContext { ObjectId = "globaladmin", Name = "globaladmin" });
 
             var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
             var assignment = AssignmentNodeFactory.UserRole(userId, "Admin", scope);
-            meshService.CreateNode(assignment).Should().Emit();
+            await meshService.CreateNode(assignment).Should().Emit();
 
             // After CreateNode completes, the permission check must observe the
             // new role. Wait reactively for the grant to surface.
-            Mesh.CheckPermission(scope, userId, Permission.Read)
+            await Mesh.CheckPermission(scope, userId, Permission.Read)
                 .Should().Match(granted => granted,
                     "Admin role granted at runtime via CreateNode must be visible to the " +
                     "permission check — otherwise AccessControlPipeline rejects every message that " +
@@ -339,9 +339,9 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact(Timeout = 20000)]
-    public void AnonymousUser_GetsAnonymousPermissions()
+    public async Task AnonymousUser_GetsAnonymousPermissions()
     {
-        Mesh.GetEffectivePermissions("org/public/area", "")
+        await Mesh.GetEffectivePermissions("org/public/area", "")
             .Should().Match(p => p == (Permission.Read | Permission.Execute | Permission.Api));
     }
 
@@ -353,17 +353,17 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     /// through to claim-based roles.
     /// </summary>
     [Fact(Timeout = 30_000)]
-    public void PermissionChecks_DoNotPayTimeoutFallback()
+    public async Task PermissionChecks_DoNotPayTimeoutFallback()
     {
         // Warm the SecurityService with one throw-away check so the
         // first-call cold paths (DI resolution, hub activation) don't
         // count against the perf budget.
-        Mesh.GetEffectivePermissions("warmup/scope", "warmup-user").Should().Emit();
+        await Mesh.GetEffectivePermissions("warmup/scope", "warmup-user").Should().Emit();
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
         for (int i = 0; i < 20; i++)
         {
-            Mesh.GetEffectivePermissions($"some/scope/{i}", $"u{i}").Should().Emit();
+            await Mesh.GetEffectivePermissions($"some/scope/{i}", $"u{i}").Should().Emit();
         }
         sw.Stop();
 
@@ -407,7 +407,7 @@ public class RlsNodeValidatorTests(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     [Fact(Timeout = 20000)]
-    public void ValidateAsync_WithoutPermission_ReturnsUnauthorized()
+    public async Task ValidateAsync_WithoutPermission_ReturnsUnauthorized()
     {
         var validator = Mesh.ServiceProvider.GetServices<INodeValidator>()
             .OfType<RlsNodeValidator>()
@@ -421,14 +421,14 @@ public class RlsNodeValidatorTests(ITestOutputHelper output) : MonolithMeshTestB
             AccessContext = new AccessContext { ObjectId = "unauthorized-user" }
         };
 
-        var result = validator!.Validate(context).Should().Emit();
+        var result = await validator!.Validate(context).Should().Emit();
 
         result.IsValid.Should().BeFalse();
         result.Reason.Should().Be(NodeRejectionReason.Unauthorized);
     }
 
     [Fact(Timeout = 20000)]
-    public void ValidateAsync_WithPermission_ReturnsValid()
+    public async Task ValidateAsync_WithPermission_ReturnsValid()
     {
         var validator = Mesh.ServiceProvider.GetServices<INodeValidator>()
             .OfType<RlsNodeValidator>()
@@ -446,7 +446,7 @@ public class RlsNodeValidatorTests(ITestOutputHelper output) : MonolithMeshTestB
             AccessContext = new AccessContext { ObjectId = userId }
         };
 
-        var result = validator!.Validate(context).Should().Emit();
+        var result = await validator!.Validate(context).Should().Emit();
 
         result.IsValid.Should().BeTrue();
     }
@@ -456,7 +456,7 @@ public class RlsNodeValidatorTests(ITestOutputHelper output) : MonolithMeshTestB
     /// even without explicit permission grants.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void ValidateAsync_SelfAccess_MainNodeMatchesUserId_ReturnsValid()
+    public async Task ValidateAsync_SelfAccess_MainNodeMatchesUserId_ReturnsValid()
     {
         var validator = Mesh.ServiceProvider.GetServices<INodeValidator>()
             .OfType<RlsNodeValidator>()
@@ -475,7 +475,7 @@ public class RlsNodeValidatorTests(ITestOutputHelper output) : MonolithMeshTestB
                 AccessContext = new AccessContext { ObjectId = hubIdentity }
             };
 
-            var result = validator!.Validate(context).Should().Emit();
+            var result = await validator!.Validate(context).Should().Emit();
             result.IsValid.Should().BeTrue($"hub should have {op} access to its own node (MainNode == userId)");
         }
     }
@@ -484,7 +484,7 @@ public class RlsNodeValidatorTests(ITestOutputHelper output) : MonolithMeshTestB
     /// Self-access rule should NOT apply when MainNode does not match userId.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void ValidateAsync_SelfAccess_MainNodeMismatch_ChecksPermissions()
+    public async Task ValidateAsync_SelfAccess_MainNodeMismatch_ChecksPermissions()
     {
         var validator = Mesh.ServiceProvider.GetServices<INodeValidator>()
             .OfType<RlsNodeValidator>()
@@ -499,7 +499,7 @@ public class RlsNodeValidatorTests(ITestOutputHelper output) : MonolithMeshTestB
             AccessContext = new AccessContext { ObjectId = "different-user" }
         };
 
-        var result = validator!.Validate(context).Should().Emit();
+        var result = await validator!.Validate(context).Should().Emit();
         result.IsValid.Should().BeFalse("user should NOT have self-access when MainNode != userId");
     }
 
@@ -563,7 +563,7 @@ public class HubSelfAccessTests(ITestOutputHelper output) : MonolithMeshTestBase
     /// even without any explicit permission grants.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void Hub_CanQueryOwnNode_WithImpersonateAsHub()
+    public async Task Hub_CanQueryOwnNode_WithImpersonateAsHub()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
@@ -575,8 +575,8 @@ public class HubSelfAccessTests(ITestOutputHelper output) : MonolithMeshTestBase
         using (accessService.ImpersonateAsHub(hub))
         {
             var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-            node = meshService.Query<MeshNode>(MeshQueryRequest.FromQuery("path:TestHub"))
-                .Should().Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Count > 0).Items.FirstOrDefault();
+            node = (await meshService.Query<MeshNode>(MeshQueryRequest.FromQuery("path:TestHub"))
+                .Should().Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Count > 0)).Items.FirstOrDefault();
         }
 
         node.Should().NotBeNull("hub should always be able to see its own node");
@@ -588,7 +588,7 @@ public class HubSelfAccessTests(ITestOutputHelper output) : MonolithMeshTestBase
     /// should NOT be able to see the hub's node.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void UnauthorizedUser_CannotQueryHubNode()
+    public async Task UnauthorizedUser_CannotQueryHubNode()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
@@ -598,8 +598,8 @@ public class HubSelfAccessTests(ITestOutputHelper output) : MonolithMeshTestBase
         try
         {
             var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-            var node = meshService.Query<MeshNode>(MeshQueryRequest.FromQuery("path:TestHub"))
-                .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items.FirstOrDefault();
+            var node = (await meshService.Query<MeshNode>(MeshQueryRequest.FromQuery("path:TestHub"))
+                .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items.FirstOrDefault();
             node.Should().BeNull("unauthorized user should not see the hub's node without permissions");
         }
         finally
@@ -628,20 +628,20 @@ public class SampleDataSecurityTests(ITestOutputHelper output) : MonolithMeshTes
     }
 
     [Fact(Timeout = 20000)]
-    public void Roland_WithGlobalAdminRole_CanEditArchitectureNode()
+    public async Task Roland_WithGlobalAdminRole_CanEditArchitectureNode()
     {
         const string userId = "Roland";
         const string nodePath = "MeshWeaver/Documentation/Architecture";
 
-        var permissions = Mesh.GetEffectivePermissions(nodePath, userId).Should().Match(p => p == Permission.All);
-        var canEdit = Mesh.CheckPermission(nodePath, userId, Permission.Update).Should().Emit();
+        var permissions = await Mesh.GetEffectivePermissions(nodePath, userId).Should().Match(p => p == Permission.All);
+        var canEdit = await Mesh.CheckPermission(nodePath, userId, Permission.Update).Should().Emit();
 
         permissions.Should().Be(Permission.All, "Roland has global Admin role");
         canEdit.Should().BeTrue("Roland should be able to edit the Architecture node");
     }
 
     [Fact(Timeout = 20000)]
-    public void Roland_GlobalAdmin_CanEditAnyNode()
+    public async Task Roland_GlobalAdmin_CanEditAnyNode()
     {
         const string userId = "Roland";
 
@@ -655,31 +655,31 @@ public class SampleDataSecurityTests(ITestOutputHelper output) : MonolithMeshTes
 
         foreach (var path in paths)
         {
-            var canEdit = Mesh.CheckPermission(path, userId, Permission.Update).Should().Emit();
+            var canEdit = await Mesh.CheckPermission(path, userId, Permission.Update).Should().Emit();
             canEdit.Should().BeTrue($"Roland should be able to edit '{path}' as global Admin");
         }
     }
 
     [Fact(Timeout = 20000)]
-    public void Alice_WithAcmeEditorRole_CanEditInAcmeOnly()
+    public async Task Alice_WithAcmeEditorRole_CanEditInAcmeOnly()
     {
         const string userId = "Alice";
 
-        var canEditAcme = Mesh.CheckPermission("ACME/Project/Task1", userId, Permission.Update).Should().Emit();
-        var canEditMeshWeaver = Mesh.CheckPermission("MeshWeaver/Documentation", userId, Permission.Update).Should().Emit();
+        var canEditAcme = await Mesh.CheckPermission("ACME/Project/Task1", userId, Permission.Update).Should().Emit();
+        var canEditMeshWeaver = await Mesh.CheckPermission("MeshWeaver/Documentation", userId, Permission.Update).Should().Emit();
 
         canEditAcme.Should().BeTrue("Alice should be able to edit in Software namespace");
         canEditMeshWeaver.Should().BeFalse("Alice should NOT be able to edit in MeshWeaver namespace");
     }
 
     [Fact(Timeout = 20000)]
-    public void PublicUser_WithMeshWeaverViewerRole_CannotEdit()
+    public async Task PublicUser_WithMeshWeaverViewerRole_CannotEdit()
     {
         const string userId = "Public";
         const string nodePath = "MeshWeaver/Documentation/Architecture";
 
-        var canEdit = Mesh.CheckPermission(nodePath, userId, Permission.Update).Should().Emit();
-        var canRead = Mesh.CheckPermission(nodePath, userId, Permission.Read).Should().Emit();
+        var canEdit = await Mesh.CheckPermission(nodePath, userId, Permission.Update).Should().Emit();
+        var canRead = await Mesh.CheckPermission(nodePath, userId, Permission.Read).Should().Emit();
 
         canRead.Should().BeTrue("Public user should be able to read MeshWeaver content");
         canEdit.Should().BeFalse("Public user should NOT be able to edit MeshWeaver content");
@@ -717,70 +717,70 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
     }
 
     [Fact(Timeout = 20000)]
-    public void PolicyCapsPermissions_EditorCappedToRead()
+    public async Task PolicyCapsPermissions_EditorCappedToRead()
     {
-        Mesh.GetEffectivePermissions("org/docs", "editor1")
+        await Mesh.GetEffectivePermissions("org/docs", "editor1")
             .Should().Match(p => p == (Permission.Read | Permission.Execute | Permission.Api | Permission.Export));
     }
 
     [Fact(Timeout = 20000)]
-    public void PolicyCapsAdmin_GlobalAdminCappedToRead()
+    public async Task PolicyCapsAdmin_GlobalAdminCappedToRead()
     {
         const string userId = "admin1";
         const string docNs = "platform/docs";
         var capped = Permission.Read | Permission.Execute | Permission.Api | Permission.Export;
 
-        var docPermissions = Mesh.GetEffectivePermissions(docNs, userId).Should().Match(p => p == capped);
+        var docPermissions = await Mesh.GetEffectivePermissions(docNs, userId).Should().Match(p => p == capped);
         docPermissions.Should().Be(capped);
 
-        var childPermissions = Mesh.GetEffectivePermissions("platform/docs/readme", userId).Should().Match(p => p == capped);
+        var childPermissions = await Mesh.GetEffectivePermissions("platform/docs/readme", userId).Should().Match(p => p == capped);
         childPermissions.Should().Be(capped);
 
-        var otherPermissions = Mesh.GetEffectivePermissions("platform/code", userId).Should().Match(p => p == Permission.All);
+        var otherPermissions = await Mesh.GetEffectivePermissions("platform/code", userId).Should().Match(p => p == Permission.All);
         otherPermissions.Should().Be(Permission.All);
     }
 
     [Fact(Timeout = 20000)]
-    public void PolicyDoesNotAffectSiblingNamespace()
+    public async Task PolicyDoesNotAffectSiblingNamespace()
     {
-        Mesh.GetEffectivePermissions("ACME/Project", "user2")
+        await Mesh.GetEffectivePermissions("ACME/Project", "user2")
             .Should().Match(p => p == Permission.All, "ACME should not be affected by Doc_test_pol policy");
     }
 
     [Fact(Timeout = 20000)]
-    public void NestedPoliciesAccumulate()
+    public async Task NestedPoliciesAccumulate()
     {
         var orgExpected = Permission.Read | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export;
-        var orgPermissions = Mesh.GetEffectivePermissions("org_nest/general", "user3").Should().Match(p => p == orgExpected);
+        var orgPermissions = await Mesh.GetEffectivePermissions("org_nest/general", "user3").Should().Match(p => p == orgExpected);
         orgPermissions.Should().Be(orgExpected, "org level allows Read + Comment + Execute + Thread + Api + Export");
 
         var restrictedExpected = Permission.Read | Permission.Execute | Permission.Api | Permission.Export;
-        var restrictedPermissions = Mesh.GetEffectivePermissions("org_nest/restricted/item", "user3").Should().Match(p => p == restrictedExpected);
+        var restrictedPermissions = await Mesh.GetEffectivePermissions("org_nest/restricted/item", "user3").Should().Match(p => p == restrictedExpected);
         restrictedPermissions.Should().Be(restrictedExpected, "nested policy further restricts to Read + Execute + Api + Export only (Thread also denied)");
     }
 
     [Fact(Timeout = 20000)]
-    public void BreaksInheritance_DiscardsParentRoles()
+    public async Task BreaksInheritance_DiscardsParentRoles()
     {
         // user4 has Admin globally, but isolated namespace breaks inheritance
-        Mesh.GetEffectivePermissions("isolated/item", "user4")
+        await Mesh.GetEffectivePermissions("isolated/item", "user4")
             .Should().Match(p => p == Permission.None, "inherited Admin from global should be discarded");
     }
 
     [Fact(Timeout = 20000)]
-    public void BreaksInheritance_KeepsLocalRoles()
+    public async Task BreaksInheritance_KeepsLocalRoles()
     {
         // user5 has Admin globally + Editor at scoped (which breaks inheritance)
         var editorPerms = Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export;
-        Mesh.GetEffectivePermissions("scoped/item", "user5")
+        await Mesh.GetEffectivePermissions("scoped/item", "user5")
             .Should().Match(p => p == editorPerms,
                 "local Editor role should survive, inherited Admin should be discarded");
     }
 
     [Fact(Timeout = 20000)]
-    public void PolicyAppliesToPublicUser()
+    public async Task PolicyAppliesToPublicUser()
     {
-        Mesh.GetEffectivePermissions("org/public_capped", WellKnownUsers.Public)
+        await Mesh.GetEffectivePermissions("org/public_capped", WellKnownUsers.Public)
             .Should().Match(p => p == (Permission.Execute | Permission.Api),
                 "Public user permissions should be capped to Execute + Api only (Read denied by policy)");
     }
@@ -811,49 +811,49 @@ public class StaticNamespacePolicyTests(ITestOutputHelper output) : MonolithMesh
     }
 
     [Fact(Timeout = 20000)]
-    public void DocNamespace_AdminCappedToReadOnly()
+    public async Task DocNamespace_AdminCappedToReadOnly()
     {
         var expected = Permission.Read | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export;
-        Mesh.GetEffectivePermissions("Doc/GettingStarted", "admin_doc")
+        await Mesh.GetEffectivePermissions("Doc/GettingStarted", "admin_doc")
             .Should().Match(p => p == expected, "Doc namespace allows read + comment + thread + export but not create/update/delete");
     }
 
     [Fact(Timeout = 20000)]
-    public void DocNamespace_EditorCappedToReadOnly()
+    public async Task DocNamespace_EditorCappedToReadOnly()
     {
         var expected = Permission.Read | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export;
-        Mesh.GetEffectivePermissions("Doc/AI/AgenticAI", "editor_doc")
+        await Mesh.GetEffectivePermissions("Doc/AI/AgenticAI", "editor_doc")
             .Should().Match(p => p == expected, "Doc namespace allows read + comment + thread + export but not create/update/delete");
     }
 
     [Fact(Timeout = 20000)]
-    public void AgentNamespace_AdminCappedToReadOnly()
+    public async Task AgentNamespace_AdminCappedToReadOnly()
     {
         var expected = Permission.Read | Permission.Execute | Permission.Api | Permission.Export;
-        Mesh.GetEffectivePermissions("Agent/ThreadNamer", "admin_agent")
+        await Mesh.GetEffectivePermissions("Agent/ThreadNamer", "admin_agent")
             .Should().Match(p => p == expected, "Agent namespace has a static read-only policy");
     }
 
     [Fact(Timeout = 20000)]
-    public void RoleNamespace_AdminCappedToReadOnly()
+    public async Task RoleNamespace_AdminCappedToReadOnly()
     {
         var expected = Permission.Read | Permission.Execute | Permission.Api | Permission.Export;
-        Mesh.GetEffectivePermissions("Role/Admin", "admin_role")
+        await Mesh.GetEffectivePermissions("Role/Admin", "admin_role")
             .Should().Match(p => p == expected, "Role namespace has a static read-only policy");
     }
 
     [Fact(Timeout = 20000)]
-    public void StaticPolicy_DoesNotAffectOtherNamespaces()
+    public async Task StaticPolicy_DoesNotAffectOtherNamespaces()
     {
-        Mesh.GetEffectivePermissions("ACME/Project/Task1", "admin_other")
+        await Mesh.GetEffectivePermissions("ACME/Project/Task1", "admin_other")
             .Should().Match(p => p == Permission.All, "ACME is not a static namespace, Admin should have full access");
     }
 
     [Fact(Timeout = 20000)]
-    public void StaticPolicy_DocRootItselfCapped()
+    public async Task StaticPolicy_DocRootItselfCapped()
     {
         var expected = Permission.Read | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export;
-        Mesh.GetEffectivePermissions("Doc", "admin_docroot")
+        await Mesh.GetEffectivePermissions("Doc", "admin_docroot")
             .Should().Match(p => p == expected, "Doc root itself should be capped to Read + Comment + Execute + Thread + Api + Export");
     }
 }

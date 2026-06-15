@@ -89,9 +89,9 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
         return client;
     }
 
-    private string CreateNode(IMessageHub client, MeshNode node, string targetAddress)
+    private async Task<string> CreateNode(IMessageHub client, MeshNode node, string targetAddress)
     {
-        var response = client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(targetAddress)))
+        var response = await client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(targetAddress)))
             .Should().Within(30.Seconds()).Emit();
         response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         return response.Message.Node!.Path!;
@@ -122,7 +122,7 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
     /// 5. Parent completes with text
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void Delegation_ToolCallsAppear_WithDelegationPath()
+    public async Task Delegation_ToolCallsAppear_WithDelegationPath()
     {
         var suffix = Guid.NewGuid().ToString("N")[..6];
         var client = GetClient($"del-{suffix}");
@@ -130,7 +130,7 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
 
         // 1. Create thread
         var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Delegation tool call test", "TestUser");
-        var threadPath = CreateNode(client, threadNode, "TestUser");
+        var threadPath = await CreateNode(client, threadNode, "TestUser");
         Output.WriteLine($"1. Thread: {threadPath}");
 
         // 2. Project the thread's message-id list off the live stream.
@@ -150,13 +150,13 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
         Output.WriteLine("2. Message submitted");
 
         // 4. Wait for message cells (user + response).
-        var msgIds = messageIds.Should().Within(30.Seconds()).Match(ids => ids.Count >= 2);
+        var msgIds = await messageIds.Should().Within(30.Seconds()).Match(ids => ids.Count >= 2);
         var responsePath = $"{threadPath}/{msgIds[1]}";
         Output.WriteLine($"3. Response message: {msgIds[1]}");
 
         // 5. Wait for execution to complete (text appears + all tool calls have results).
         Output.WriteLine("4. Waiting for tool calls on response...");
-        var finalResponse = workspace.GetMeshNodeStream(responsePath)
+        var finalResponse = await workspace.GetMeshNodeStream(responsePath)
             .Select(node =>
             {
                 var msg = node?.Content as ThreadMessage;
@@ -182,7 +182,7 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
 
         // 7. Verify sub-thread exists and completed
         var subThreadPath = delegationCall.DelegationPath!;
-        var subThread = GetHubContent<MeshThread>(client, subThreadPath)
+        var subThread = await GetHubContent<MeshThread>(client, subThreadPath)
             .Should().Within(30.Seconds()).Match(t => t is { Messages.Count: >= 2 });
         subThread!.Messages.Should().HaveCount(2, "sub-thread should have user + response");
         Output.WriteLine($"7. Sub-thread: {subThreadPath}, messages={subThread.Messages.Count}");
@@ -194,7 +194,7 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
     /// a message that previously triggered delegation.
     /// </summary>
     [Fact(Timeout = 120000)]
-    public void Resubmit_AfterDelegation_DoesNotDeadlock()
+    public async Task Resubmit_AfterDelegation_DoesNotDeadlock()
     {
         var suffix = Guid.NewGuid().ToString("N")[..6];
         var client = GetClient($"del-{suffix}");
@@ -202,7 +202,7 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
 
         // 1. Create thread and submit
         var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Resubmit delegation test", "TestUser");
-        var threadPath = CreateNode(client, threadNode, "TestUser");
+        var threadPath = await CreateNode(client, threadNode, "TestUser");
 
         var threadStream = workspace.GetMeshNodeStream(threadPath)
             .Select(node => node?.Content as MeshThread);
@@ -211,13 +211,13 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
             threadPath,
             "Delegate something",
             contextPath: "TestUser");
-        var msgIds = threadStream
+        var msgIds = await threadStream
             .Select(t => t?.Messages ?? (IReadOnlyList<string>)System.Collections.Immutable.ImmutableList<string>.Empty)
             .Should().Within(45.Seconds()).Match(ids => ids.Count >= 2);
         Output.WriteLine($"1. Initial messages: [{string.Join(", ", msgIds)}]");
 
         // 2. Wait for execution to complete
-        threadStream.Should().Within(45.Seconds()).Match(t => t is { IsExecuting: false });
+        await threadStream.Should().Within(45.Seconds()).Match(t => t is { IsExecuting: false });
         Output.WriteLine("2. Initial execution complete");
 
         // 3. Resubmit
@@ -231,7 +231,7 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
             threadPath, msgIds[0],
             newUserText: "Delegate something");
 
-        var newThread = threadStream
+        var newThread = await threadStream
             .Should().Within(45.Seconds())
             .Match(t => t is { IsExecuting: false }
                 && t.Messages.Count >= 2

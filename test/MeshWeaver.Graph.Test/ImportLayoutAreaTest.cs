@@ -44,14 +44,14 @@ public class ImportLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
         => base.ConfigureClient(configuration).AddLayoutClient(d => d);
 
     [HubFact]
-    public void ImportForm_RendersStackControl()
+    public async Task ImportForm_RendersStackControl()
     {
         var reference = new LayoutAreaReference(ImportView);
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(), reference);
 
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(5.Seconds()).Match(x => x != null);
 
@@ -59,14 +59,14 @@ public class ImportLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
     }
 
     [HubFact]
-    public void ImportForm_HasMultipleAreas()
+    public async Task ImportForm_HasMultipleAreas()
     {
         var reference = new LayoutAreaReference(ImportView);
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(), reference);
 
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(5.Seconds()).Match(x => x != null);
 
@@ -78,14 +78,14 @@ public class ImportLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
     }
 
     [HubFact]
-    public void ImportForm_HasNamespacePicker()
+    public async Task ImportForm_HasNamespacePicker()
     {
         var reference = new LayoutAreaReference(ImportView);
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(), reference);
 
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(5.Seconds()).Match(x => x != null);
 
@@ -99,7 +99,7 @@ public class ImportLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
             var areaName = area.Area?.ToString();
             if (string.IsNullOrEmpty(areaName)) continue;
 
-            var areaControl = stream
+            var areaControl = await stream
                 .GetControlStream(areaName)
                 .Should().Within(3.Seconds()).Match(x => x != null);
 
@@ -114,14 +114,14 @@ public class ImportLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
     }
 
     [HubFact]
-    public void ImportForm_HasSourceTypeRadioGroup()
+    public async Task ImportForm_HasSourceTypeRadioGroup()
     {
         var reference = new LayoutAreaReference(ImportView);
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(), reference);
 
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(5.Seconds()).Match(x => x != null);
 
@@ -135,7 +135,7 @@ public class ImportLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
             var areaName = area.Area?.ToString();
             if (string.IsNullOrEmpty(areaName)) continue;
 
-            var areaControl = stream
+            var areaControl = await stream
                 .GetControlStream(areaName)
                 .Should().Within(3.Seconds()).Match(x => x != null);
 
@@ -153,7 +153,7 @@ public class ImportLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
                     var nestedName = nestedArea.Area?.ToString();
                     if (string.IsNullOrEmpty(nestedName)) continue;
 
-                    var nestedControl = stream
+                    var nestedControl = await stream
                         .GetControlStream(nestedName)
                         .Should().Within(3.Seconds()).Match(x => x != null);
 
@@ -171,14 +171,14 @@ public class ImportLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
     }
 
     [HubFact]
-    public void ImportForm_HasCancelButton()
+    public async Task ImportForm_HasCancelButton()
     {
         var reference = new LayoutAreaReference(ImportView);
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(), reference);
 
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(5.Seconds()).Match(x => x != null);
 
@@ -191,7 +191,7 @@ public class ImportLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
             var areaName = area.Area?.ToString();
             if (string.IsNullOrEmpty(areaName)) continue;
 
-            var areaControl = stream
+            var areaControl = await stream
                 .GetControlStream(areaName)
                 .Should().Within(3.Seconds()).Match(x => x != null);
 

@@ -73,12 +73,12 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
     /// After execution completes, the response message should have non-empty text.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void ResponseText_StreamsToMessageNode()
+    public async Task ResponseText_StreamsToMessageNode()
     {
         var client = GetUniqueClient();
 
         // Create thread
-        var response = client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Streaming text test")), o => o.WithTarget(new Address(ContextPath)))
+        var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Streaming text test")), o => o.WithTarget(new Address(ContextPath)))
             .Should().Within(30.Seconds()).Emit();
         response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         var threadPath = response.Message.Node!.Path!;
@@ -99,13 +99,13 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
             threadPath,
             "Tell me something",
             contextPath: ContextPath);
-        var msgIds = messageIds.Should().Within(45.Seconds()).Match(ids => ids.Count >= 2);
+        var msgIds = await messageIds.Should().Within(45.Seconds()).Match(ids => ids.Count >= 2);
         var responseMsgId = msgIds[1];
         Output.WriteLine($"Response message: {responseMsgId}");
 
         // Wait for the response message to gain text.
         var responsePath = $"{threadPath}/{responseMsgId}";
-        var responseMsg = GetHubContent<ThreadMessage>(client, responsePath)
+        var responseMsg = await GetHubContent<ThreadMessage>(client, responsePath)
             .Should().Within(45.Seconds()).Match(m => !string.IsNullOrEmpty(m?.Text));
 
         responseMsg!.Text.Should().NotBeNullOrEmpty("response should have streamed text");
@@ -118,12 +118,12 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
     /// Traces every step to find where communication breaks.
     /// </summary>
     [Fact(Timeout = 120000)]
-    public void DelegationFlow_SubThreadStreamsText_ParentCompletes()
+    public async Task DelegationFlow_SubThreadStreamsText_ParentCompletes()
     {
         var client = GetUniqueClient();
 
         // Create thread
-        var response = client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Delegation flow test")), o => o.WithTarget(new Address(ContextPath)))
+        var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Delegation flow test")), o => o.WithTarget(new Address(ContextPath)))
             .Should().Within(30.Seconds()).Emit();
         response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         var threadPath = response.Message.Node!.Path!;
@@ -163,7 +163,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
         Output.WriteLine("3. Message submitted successfully");
 
         // Wait for 2 message IDs
-        var msgIds = messageIds.Should().Within(45.Seconds()).Match(ids => ids.Count >= 2);
+        var msgIds = await messageIds.Should().Within(45.Seconds()).Match(ids => ids.Count >= 2);
         Output.WriteLine($"4. Messages appeared: [{string.Join(", ", msgIds)}]");
         var responseMsgId = msgIds[1];
         var responsePath = $"{threadPath}/{responseMsgId}";
@@ -173,7 +173,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
         // empty — text-chunk pushes can land before the tool-call entry is committed,
         // so require ToolCalls.Count > 0 too.
         Output.WriteLine("5. Waiting for response message content...");
-        var finalResponse = GetHubContent<ThreadMessage>(client, responsePath)
+        var finalResponse = await GetHubContent<ThreadMessage>(client, responsePath)
             .Select(m =>
             {
                 if (m != null && (m.ToolCalls.Count > 0 || !string.IsNullOrEmpty(m.Text)))
@@ -206,13 +206,13 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
     /// sub-thread's response message. Tests the FULL real-world path.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void Delegation_ParentShowsToolCall_SubThreadStreamsText_LiveUpdate()
+    public async Task Delegation_ParentShowsToolCall_SubThreadStreamsText_LiveUpdate()
     {
         var client = GetUniqueClient();
         var workspace = client.GetWorkspace();
 
         // 1. Create thread
-        var createResp = client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Delegation live test")), o => o.WithTarget(new Address(ContextPath)))
+        var createResp = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Delegation live test")), o => o.WithTarget(new Address(ContextPath)))
             .Should().Within(30.Seconds()).Emit();
         createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
         var threadPath = createResp.Message.Node!.Path!;
@@ -226,10 +226,10 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
         Output.WriteLine("2. Message submitted");
 
         // 3. Wait for 2 messages (user + response)
-        var msgIds = workspace.GetMeshNodeStream(threadPath)
+        var msgIds = await workspace.GetMeshNodeStream(threadPath)
             .Select(node =>
             {
-                
+
                 return (node?.Content as MeshThread)?.Messages
                        ?? (IReadOnlyList<string>)System.Collections.Immutable.ImmutableList<string>.Empty;
             })
@@ -240,7 +240,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
 
         // 4. Wait for response-message tool call with DelegationPath.
         Output.WriteLine("4. Waiting for delegation tool call on response message stream...");
-        var msgWithDelegation = workspace.GetMeshNodeStream(responsePath)
+        var msgWithDelegation = await workspace.GetMeshNodeStream(responsePath)
             .Select(node =>
             {
                 var msg = node?.Content as ThreadMessage;
@@ -257,7 +257,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
 
         // 5. Wait for parent execution to complete (text appears).
         Output.WriteLine("6. Waiting for parent to complete...");
-        var completed = GetHubContent<ThreadMessage>(client, responsePath)
+        var completed = await GetHubContent<ThreadMessage>(client, responsePath)
             .Should().Within(30.Seconds()).Match(m => !string.IsNullOrEmpty(m?.Text));
 
         completed!.Text.Should().NotBeNullOrEmpty("parent should have text after delegation completes");
@@ -273,13 +273,13 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
     /// This is what Blazor sees — the layout area stream, not the raw entity stream.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void LayoutArea_ReceivesUpdateThreadMessageContent_ViaLayoutStream()
+    public async Task LayoutArea_ReceivesUpdateThreadMessageContent_ViaLayoutStream()
     {
         var client = GetUniqueClient();
         var workspace = client.GetWorkspace();
 
         // 1. Create thread + submit message
-        var createResp = client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Layout stream test")), o => o.WithTarget(new Address(ContextPath)))
+        var createResp = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Layout stream test")), o => o.WithTarget(new Address(ContextPath)))
             .Should().Within(30.Seconds()).Emit();
         var threadPath = createResp.Message.Node!.Path!;
         Output.WriteLine($"1. Thread: {threadPath}");
@@ -291,7 +291,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
         Output.WriteLine("2. Submitted");
 
         // 2. Wait for response message to appear
-        var msgIds = workspace.GetMeshNodeStream(threadPath)
+        var msgIds = await workspace.GetMeshNodeStream(threadPath)
             .Select(node => (node?.Content as MeshThread)?.Messages
                              ?? (IReadOnlyList<string>)System.Collections.Immutable.ImmutableList<string>.Empty)
             .Should().Within(30.Seconds()).Match(ids => ids.Count >= 2);
@@ -300,7 +300,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
         Output.WriteLine($"3. Response: {responseMsgId}");
 
         // 3. Wait for execution to complete (text appears on raw entity stream).
-        var completed = GetHubContent<ThreadMessage>(client, responsePath)
+        var completed = await GetHubContent<ThreadMessage>(client, responsePath)
             .Should().Within(45.Seconds()).Match(m => !string.IsNullOrEmpty(m?.Text));
         Output.WriteLine($"4. Execution done: text={completed!.Text?.Length ?? 0}");
 

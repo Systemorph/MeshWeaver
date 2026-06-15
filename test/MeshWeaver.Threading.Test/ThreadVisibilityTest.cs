@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -33,10 +33,10 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             .AddSampleUsers();
 
     [Fact]
-    public void QueryThread_ByPath_ReturnsRolandsThread()
+    public async Task QueryThread_ByPath_ReturnsRolandsThread()
     {
         // Create a thread under Roland's namespace
-        NodeFactory.CreateNode(new MeshNode("test-thread-1", $"User/{RolandId}/_Thread")
+        await NodeFactory.CreateNode(new MeshNode("test-thread-1", $"User/{RolandId}/_Thread")
         {
             Name = "Roland's test thread",
             NodeType = ThreadNodeType.NodeType,
@@ -45,19 +45,19 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
         }).Should().Emit();
 
         // Query by path â€” should find it
-        var result = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
+        var result = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
             $"path:User/{RolandId}/_Thread/test-thread-1"))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items.FirstOrDefault();
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items.FirstOrDefault();
 
         result.Should().NotBeNull("Roland's thread should be queryable by path");
         result!.Name.Should().Be("Roland's test thread");
     }
 
     [Fact]
-    public void QueryThreads_ByNodeType_RolandSeesOwnThread()
+    public async Task QueryThreads_ByNodeType_RolandSeesOwnThread()
     {
         // Create thread under Roland
-        NodeFactory.CreateNode(new MeshNode("visible-thread", $"User/{RolandId}/_Thread")
+        await NodeFactory.CreateNode(new MeshNode("visible-thread", $"User/{RolandId}/_Thread")
         {
             Name = "Roland visible thread",
             NodeType = ThreadNodeType.NodeType,
@@ -68,7 +68,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
         // Query as Roland â€” scope:descendants matches the real portal fan-out behavior.
         // Accumulate live deltas so a node arriving in a post-Initial Added emission
         // still satisfies the assertion (eventual-consistency safe).
-        var threads = AccumulateQuery("nodeType:Thread scope:descendants",
+        var threads = await AccumulateQuery("nodeType:Thread scope:descendants",
             acc => acc.Any(n => n.Name == "Roland visible thread"));
 
         threads.Should().Contain(n => n.Name == "Roland visible thread",
@@ -76,10 +76,10 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact]
-    public void QueryThreads_SamuelCannotSeeRolandsThread()
+    public async Task QueryThreads_SamuelCannotSeeRolandsThread()
     {
         // Create thread under Roland (as admin â€” self-access allows creation under own scope)
-        NodeFactory.CreateNode(new MeshNode("private-thread", $"User/{RolandId}/_Thread")
+        await NodeFactory.CreateNode(new MeshNode("private-thread", $"User/{RolandId}/_Thread")
         {
             Name = "Roland private thread",
             NodeType = ThreadNodeType.NodeType,
@@ -99,10 +99,10 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact]
-    public void QueryThreads_InNamespace_RolandSeesOwnThread()
+    public async Task QueryThreads_InNamespace_RolandSeesOwnThread()
     {
         // Create thread under Roland
-        NodeFactory.CreateNode(new MeshNode("ns-thread", $"User/{RolandId}/_Thread")
+        await NodeFactory.CreateNode(new MeshNode("ns-thread", $"User/{RolandId}/_Thread")
         {
             Name = "Roland ns thread",
             NodeType = ThreadNodeType.NodeType,
@@ -111,7 +111,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
         }).Should().Emit();
 
         // Query with namespace scope (like MeshNodeLayoutAreas.Threads uses)
-        var threads = AccumulateQuery($"nodeType:Thread namespace:User/{RolandId}/_Thread",
+        var threads = await AccumulateQuery($"nodeType:Thread namespace:User/{RolandId}/_Thread",
             acc => acc.Any(n => n.Name == "Roland ns thread"));
 
         threads.Should().Contain(n => n.Name == "Roland ns thread",
@@ -119,10 +119,10 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact]
-    public void GlobalThreadSearch_ShowsOwnThread()
+    public async Task GlobalThreadSearch_ShowsOwnThread()
     {
         // Create thread under Roland (same as sidebar thread history query)
-        NodeFactory.CreateNode(new MeshNode("getting-started-a1b2", $"User/{RolandId}/_Thread")
+        await NodeFactory.CreateNode(new MeshNode("getting-started-a1b2", $"User/{RolandId}/_Thread")
         {
             Name = "Getting Started",
             NodeType = ThreadNodeType.NodeType,
@@ -133,7 +133,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
         // Global search: same query as ThreadChatView sidebar history.
         // In the real portal (partitioned persistence), RoutingMeshQueryProvider
         // adds scope:descendants during fan-out. In non-partitioned tests, we add it explicitly.
-        var threads = AccumulateQuery(
+        var threads = await AccumulateQuery(
             "nodeType:Thread limit:20 sort:LastModified-desc scope:descendants",
             acc => acc.Any(n => n.Id == "getting-started-a1b2"));
 
@@ -142,7 +142,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact]
-    public void QueryThreads_SortByLastModifiedDesc_NewestFirst()
+    public async Task QueryThreads_SortByLastModifiedDesc_NewestFirst()
     {
         // Create threads with different timestamps
         var oldThread = new MeshNode("old-thread", $"User/{RolandId}/_Thread")
@@ -153,7 +153,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             LastModified = DateTimeOffset.UtcNow.AddDays(-10),
             Content = new MeshThread()
         };
-        NodeFactory.CreateNode(oldThread).Should().Emit();
+        await NodeFactory.CreateNode(oldThread).Should().Emit();
 
         var newThread = new MeshNode("new-thread", $"User/{RolandId}/_Thread")
         {
@@ -163,14 +163,14 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             LastModified = DateTimeOffset.UtcNow,
             Content = new MeshThread()
         };
-        NodeFactory.CreateNode(newThread).Should().Emit();
+        await NodeFactory.CreateNode(newThread).Should().Emit();
 
         // Query with sort:LastModified-desc. Match the emission carrying BOTH
         // threads so its Items preserve the query's sort order.
-        var threads = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
+        var threads = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
             "nodeType:Thread sort:LastModified-desc scope:descendants"))
             .Should().Match(c => c.Items.Any(t => t.Name == "Old thread")
-                              && c.Items.Any(t => t.Name == "New thread")).Items.ToList();
+                              && c.Items.Any(t => t.Name == "New thread"))).Items.ToList();
 
         threads.Should().HaveCountGreaterThanOrEqualTo(2);
 
@@ -181,10 +181,10 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact]
-    public void AutocompleteUsers_StillVisibleForAccessControl()
+    public async Task AutocompleteUsers_StillVisibleForAccessControl()
     {
         // Autocomplete for users should return all users (public read)
-        var suggestions = MeshQuery.Autocomplete("User", "Sam")
+        var suggestions = await MeshQuery.Autocomplete("User", "Sam")
             .Should().Match(r => r.Any(s => s.Name == "Samuel"));
 
         suggestions.Should().Contain(s => s.Name == "Samuel",
@@ -197,11 +197,11 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// <paramref name="predicate"/> holds. Eventual-consistency safe: a node that
     /// arrives in a post-Initial <c>Added</c> emission still satisfies the wait.
     /// </summary>
-    private System.Collections.Generic.IReadOnlyList<MeshNode> AccumulateQuery(
+    private async Task<System.Collections.Generic.IReadOnlyList<MeshNode>> AccumulateQuery(
         string query, Func<System.Collections.Generic.IReadOnlyList<MeshNode>, bool> predicate)
     {
         var byPath = System.Collections.Immutable.ImmutableDictionary<string, MeshNode>.Empty;
-        return MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
+        return await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Scan(byPath, (acc, change) =>
             {
                 if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)

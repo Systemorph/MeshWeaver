@@ -61,7 +61,7 @@ public class TopLevelIndexTests(PostgreSqlFixture fixture, ITestOutputHelper out
         """;
 
     [Fact(Timeout = 60000)]
-    public void TopLevelIndex_MaterializesPartitionRoots_WithoutFanOut()
+    public async Task TopLevelIndex_MaterializesPartitionRoots_WithoutFanOut()
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
@@ -70,19 +70,19 @@ public class TopLevelIndexTests(PostgreSqlFixture fixture, ITestOutputHelper out
         // then write the root row into it.
         var p1 = $"tli{Guid.NewGuid():N}".ToLowerInvariant()[..14];
         var p2 = $"tli{Guid.NewGuid():N}".ToLowerInvariant()[..14];
-        Mesh.ProvisionPartition(p1);
-        Mesh.ProvisionPartition(p2);
+        await Mesh.ProvisionPartition(p1);
+        await Mesh.ProvisionPartition(p2);
 
-        meshService.CreateNode(new MeshNode(p1)
+        await meshService.CreateNode(new MeshNode(p1)
         { NodeType = "Markdown", Name = $"Space {p1}", State = MeshNodeState.Active })
             .Should().Within(30.Seconds()).Emit();
-        meshService.CreateNode(new MeshNode(p2)
+        await meshService.CreateNode(new MeshNode(p2)
         { NodeType = "Markdown", Name = $"Space {p2}", State = MeshNodeState.Active })
             .Should().Within(30.Seconds()).Emit();
 
         // Also write a CHILD node in p1 — namespace=p1, id=child → it must NOT appear in the
         // top-level index (only namespace='' partition roots do).
-        meshService.CreateNode(new MeshNode("child", p1)
+        await meshService.CreateNode(new MeshNode("child", p1)
         { NodeType = "Markdown", Name = "child doc", State = MeshNodeState.Active })
             .Should().Within(30.Seconds()).Emit();
 
@@ -138,13 +138,13 @@ public class TopLevelIndexTests(PostgreSqlFixture fixture, ITestOutputHelper out
         var token = $"ac{Guid.NewGuid():N}".ToLowerInvariant()[..12];
         var pMatch = $"{token}x";                                  // id + name contain the prefix
         var pOther = $"zz{Guid.NewGuid():N}".ToLowerInvariant()[..12]; // unrelated
-        Mesh.ProvisionPartition(pMatch);   // no lazy create — provision the partition roots first
-        Mesh.ProvisionPartition(pOther);
+        await Mesh.ProvisionPartition(pMatch);   // no lazy create — provision the partition roots first
+        await Mesh.ProvisionPartition(pOther);
 
-        meshService.CreateNode(new MeshNode(pMatch)
+        await meshService.CreateNode(new MeshNode(pMatch)
         { NodeType = "Markdown", Name = $"{token} space", State = MeshNodeState.Active })
             .Should().Within(30.Seconds()).Emit();
-        meshService.CreateNode(new MeshNode(pOther)
+        await meshService.CreateNode(new MeshNode(pOther)
         { NodeType = "Markdown", Name = "Unrelated", State = MeshNodeState.Active })
             .Should().Within(30.Seconds()).Emit();
 

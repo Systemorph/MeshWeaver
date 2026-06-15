@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
@@ -53,9 +53,9 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
         return path;
     }
 
-    private string CreateThread(IMessageHub client, string ns, string text)
+    private async Task<string> CreateThread(IMessageHub client, string ns, string text)
     {
-        var response = client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ns, text)),
+        var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ns, text)),
             o => o.WithTarget(new Address(ns))).Should().Within(30.Seconds()).Emit();
         response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         return response.Message.Node!.Path!;
@@ -66,31 +66,31 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
     /// server-side dispatcher after a <see cref="ThreadSubmission.Submit"/> call.
     /// </summary>
     [Fact]
-    public void ExecuteThread_PersistsToCorrectPartition()
+    public async Task ExecuteThread_PersistsToCorrectPartition()
     {
         var client = GetClient();
 
         CreateContextNode(ContextPath);
-        var threadPath = CreateThread(client, ContextPath, "Persistence test message");
+        var threadPath = await CreateThread(client, ContextPath, "Persistence test message");
         Output.WriteLine($"Thread created at: {threadPath}");
 
         threadPath.Should().StartWith($"{ContextPath}/");
         threadPath.Should().Contain($"/{ThreadNodeType.ThreadPartition}/");
 
-        var responseMsgId = ThreadFlow.SubmitAndWait(client, threadPath,
+        var responseMsgId = await ThreadFlow.SubmitAndWait(client, threadPath,
             "Hello from persistence test", contextPath: ContextPath).Should().Within(20.Seconds()).Emit();
 
-        var thread = ThreadFlow.ReadThread(client, threadPath,
+        var thread = await ThreadFlow.ReadThread(client, threadPath,
             t => t.Messages.Count >= 2).Should().Within(20.Seconds()).Emit();
         thread.Messages.Should().HaveCount(2);
         Output.WriteLine($"Messages: [{string.Join(", ", thread.Messages)}]");
 
-        var userContent = ThreadFlow.ReadMessage(client, threadPath, thread.Messages[0],
+        var userContent = await ThreadFlow.ReadMessage(client, threadPath, thread.Messages[0],
             m => m.Role == "user").Should().Within(20.Seconds()).Emit();
         userContent.Text.Should().Be("Hello from persistence test");
         Output.WriteLine($"User message OK: '{userContent.Text}'");
 
-        var responseContent = ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
+        var responseContent = await ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
             m => m.Role == "assistant").Should().Within(20.Seconds()).Emit();
         responseContent.Type.Should().Be(ThreadMessageType.AgentResponse);
         Output.WriteLine($"Response message node exists at: {threadPath}/{responseMsgId}");
@@ -99,21 +99,21 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
     }
 
     [Fact]
-    public void ExecuteThread_ChildMessagesQueryableByNamespace()
+    public async Task ExecuteThread_ChildMessagesQueryableByNamespace()
     {
         var client = GetClient();
 
         CreateContextNode(ContextPath);
-        var threadPath = CreateThread(client, ContextPath, "Child query test");
+        var threadPath = await CreateThread(client, ContextPath, "Child query test");
 
-        ThreadFlow.SubmitAndWait(client, threadPath, "Test query by namespace",
+        await ThreadFlow.SubmitAndWait(client, threadPath, "Test query by namespace",
             contextPath: ContextPath).Should().Within(20.Seconds()).Emit();
 
-        ThreadFlow.ReadThread(client, threadPath, t => t.Messages.Count >= 2).Should().Within(20.Seconds()).Emit();
+        await ThreadFlow.ReadThread(client, threadPath, t => t.Messages.Count >= 2).Should().Within(20.Seconds()).Emit();
 
-        var children = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
+        var children = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{threadPath} nodeType:{ThreadMessageNodeType.NodeType}"))
-            .Should().Match(c => c.Items.Count >= 2).Items;
+            .Should().Match(c => c.Items.Count >= 2)).Items;
 
         children.Should().HaveCountGreaterThanOrEqualTo(2);
         Output.WriteLine($"Found {children.Count} ThreadMessage children:");
@@ -130,14 +130,14 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
     }
 
     [Fact]
-    public void ExecuteThread_SubmitMessageDoesNotTimeout()
+    public async Task ExecuteThread_SubmitMessageDoesNotTimeout()
     {
         var client = GetClient();
 
         CreateContextNode(ContextPath);
-        var threadPath = CreateThread(client, ContextPath, "Timeout test");
+        var threadPath = await CreateThread(client, ContextPath, "Timeout test");
 
-        var responseMsgId = ThreadFlow.SubmitAndWait(client, threadPath,
+        var responseMsgId = await ThreadFlow.SubmitAndWait(client, threadPath,
             "Test no timeout", contextPath: ContextPath, timeout: 15.Seconds()).Should().Within(15.Seconds()).Emit();
 
         responseMsgId.Should().NotBeNullOrEmpty("SubmitMessageResponse should arrive without timeout");
@@ -145,17 +145,17 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
     }
 
     [Fact]
-    public void ExecuteThread_ThreadContentPersisted()
+    public async Task ExecuteThread_ThreadContentPersisted()
     {
         var client = GetClient();
 
         CreateContextNode(ContextPath);
-        var threadPath = CreateThread(client, ContextPath, "Persistence test");
+        var threadPath = await CreateThread(client, ContextPath, "Persistence test");
 
-        ThreadFlow.SubmitAndWait(client, threadPath, "Check persistence",
+        await ThreadFlow.SubmitAndWait(client, threadPath, "Check persistence",
             contextPath: ContextPath).Should().Within(20.Seconds()).Emit();
 
-        var thread = ThreadFlow.ReadThread(client, threadPath,
+        var thread = await ThreadFlow.ReadThread(client, threadPath,
             t => t.Messages.Count >= 2).Should().Within(20.Seconds()).Emit();
         thread.Messages.Should().HaveCountGreaterThanOrEqualTo(2,
             "Messages must be persisted with message IDs");

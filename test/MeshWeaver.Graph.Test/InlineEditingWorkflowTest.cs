@@ -71,14 +71,14 @@ public class InlineEditingWorkflowTest(ITestOutputHelper output) : HubTestBase(o
     }
 
     [HubFact]
-    public void Overview_RendersWithClickableProperties()
+    public async Task Overview_RendersWithClickableProperties()
     {
         var reference = new LayoutAreaReference(OverviewView);
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(), reference);
 
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(5.Seconds()).Match(x => x != null);
 
@@ -88,14 +88,14 @@ public class InlineEditingWorkflowTest(ITestOutputHelper output) : HubTestBase(o
     }
 
     [HubFact]
-    public void Overview_ContainsLayoutGrid()
+    public async Task Overview_ContainsLayoutGrid()
     {
         var reference = new LayoutAreaReference(OverviewView);
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(), reference);
 
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(5.Seconds()).Match(x => x != null);
 
@@ -103,7 +103,7 @@ public class InlineEditingWorkflowTest(ITestOutputHelper output) : HubTestBase(o
         var firstArea = stack.Areas.First().Area?.ToString();
         firstArea.Should().NotBeNullOrEmpty();
 
-        var gridControl = stream
+        var gridControl = await stream
             .GetControlStream(firstArea!)
             .Should().Within(5.Seconds()).Match(x => x != null);
 
@@ -111,7 +111,7 @@ public class InlineEditingWorkflowTest(ITestOutputHelper output) : HubTestBase(o
     }
 
     [HubFact]
-    public void ClickedEvent_SwitchesToEditMode()
+    public async Task ClickedEvent_SwitchesToEditMode()
     {
         var reference = new LayoutAreaReference(EditableView);
         var hub = GetClient();
@@ -120,7 +120,7 @@ public class InlineEditingWorkflowTest(ITestOutputHelper output) : HubTestBase(o
             CreateHostAddress(), reference);
 
         // Get initial control - Stack with Label and clickable area
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(5.Seconds()).Match(x => x != null);
 
@@ -136,7 +136,7 @@ public class InlineEditingWorkflowTest(ITestOutputHelper output) : HubTestBase(o
         hub.Post(new ClickedEvent(clickableArea!, stream.StreamId), o => o.WithTarget(CreateHostAddress()));
 
         // Wait for edit control
-        var editControl = stream
+        var editControl = await stream
             .GetControlStream(clickableArea!)
             .Should().Within(3.Seconds()).Match(c => c is TextFieldControl or NumberFieldControl or SelectControl);
 
@@ -144,7 +144,7 @@ public class InlineEditingWorkflowTest(ITestOutputHelper output) : HubTestBase(o
     }
 
     [HubFact]
-    public void DataBinding_ReflectsInitialValues()
+    public async Task DataBinding_ReflectsInitialValues()
     {
         var reference = new LayoutAreaReference(OverviewView);
         var workspace = GetClient().GetWorkspace();
@@ -152,7 +152,7 @@ public class InlineEditingWorkflowTest(ITestOutputHelper output) : HubTestBase(o
             CreateHostAddress(), reference);
 
         // Verify data is bound correctly
-        var data = stream
+        var data = await stream
             .GetDataStream<EditableItem>(new JsonPointerReference($"/data/\"{TestDataId}\""))
             .Should().Within(5.Seconds()).Match(x => x != null);
 
@@ -163,7 +163,7 @@ public class InlineEditingWorkflowTest(ITestOutputHelper output) : HubTestBase(o
     }
 
     [HubFact]
-    public void DataUpdate_PropagatesViaStream()
+    public async Task DataUpdate_PropagatesViaStream()
     {
         var reference = new LayoutAreaReference(EditableView);
         var hub = GetClient();
@@ -172,7 +172,7 @@ public class InlineEditingWorkflowTest(ITestOutputHelper output) : HubTestBase(o
             CreateHostAddress(), reference);
 
         // Wait for initial render
-        stream
+        await stream
             .GetControlStream(reference.Area!)
             .Should().Within(5.Seconds()).Match(x => x != null);
 
@@ -183,7 +183,7 @@ public class InlineEditingWorkflowTest(ITestOutputHelper output) : HubTestBase(o
         stream.UpdatePointer(newValue, dataPointer, new JsonPointerReference(""));
 
         // Verify the update propagated
-        var updated = stream
+        var updated = await stream
             .GetDataStream<EditableItem>(new JsonPointerReference(dataPointer))
             .Should().Within(3.Seconds()).Match(x => x?.Category == "Updated Category");
 
@@ -193,14 +193,14 @@ public class InlineEditingWorkflowTest(ITestOutputHelper output) : HubTestBase(o
     }
 
     [HubFact]
-    public void MarkdownView_RendersCorrectly()
+    public async Task MarkdownView_RendersCorrectly()
     {
         var reference = new LayoutAreaReference(MarkdownView);
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(), reference);
 
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(5.Seconds()).Match(x => x != null);
 

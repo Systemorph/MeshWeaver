@@ -50,7 +50,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
     }
 
     [HubFact]
-    public void TestEntityView()
+    public async Task TestEntityView()
     {
         var reference = DomainLayoutAreas.GetDetailsReference(nameof(DataRecord), "Hello");
         var client = GetClient();
@@ -59,7 +59,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             CreateHostAddress(),
             reference
         );
-        var content = stream.GetControlStream(reference.Area!)
+        var content = await stream.GetControlStream(reference.Area!)
             .Should().Within(10.Seconds()).Match(x => x != null);
         var stack = content
             .Should()
@@ -67,7 +67,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             .Which;
 
         // The last area is a reactive view that resolves to BuildPropertyForm() → StackControl
-        var controlFromStream = stream
+        var controlFromStream = await stream
             .GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Should().Within(10.Seconds()).Match(x => x != null);
         var formStack = controlFromStream.Should().BeOfType<StackControl>().Which;
@@ -75,19 +75,19 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         // Navigate into the form to find a control with DataContext:
         // formStack → first area (LayoutGridControl) → first property area (StackControl) → last area (reactive control with DataContext)
         var gridAreaId = formStack.Areas.First().Area.ToString()!;
-        var gridControl = stream
+        var gridControl = await stream
             .GetControlStream(gridAreaId)
             .Should().Within(10.Seconds()).Match(x => x != null);
         var grid = gridControl.Should().BeOfType<LayoutGridControl>().Which;
 
         var propAreaId = grid.Areas.First().Area.ToString()!;
-        var propControl = stream
+        var propControl = await stream
             .GetControlStream(propAreaId)
             .Should().Within(10.Seconds()).Match(x => x != null);
         var propStack = propControl.Should().BeOfType<StackControl>().Which;
 
         var reactiveAreaId = propStack.Areas.Last().Area.ToString()!;
-        var reactiveControl = stream
+        var reactiveControl = await stream
             .GetControlStream(reactiveAreaId)
             .Should().Within(10.Seconds()).Match(x => x != null);
         var dataContext = reactiveControl!.DataContext;
@@ -96,25 +96,25 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
 
         var namePointer = new JsonPointerReference($"displayName");
         var nameStream = stream.DataBind<string>(namePointer, dataContext);
-        var value = nameStream
+        var value = await nameStream
             .Where(x => x != null)
             .Should().Within(10.Seconds()).Match(x => x != null);
         value.Should().NotBeNull();
         value.Should().Be("Hello");
 
         var objectStream = stream.DataBind<JsonElement>(new(dataContext!));
-        var obj = objectStream.Should().Within(10.Seconds()).Emit();
+        var obj = await objectStream.Should().Within(10.Seconds()).Emit();
         const string Universe = nameof(Universe);
 
         var jsonModel = obj.AsNode()?.ToJsonString();
         var model = new ModelParameter<JsonElement>(string.IsNullOrEmpty(jsonModel) ? default : JsonDocument.Parse(jsonModel).RootElement, (m,r)=>m.GetValueFromModel(r));
         model.Update(new JsonPatch(PatchOperation.Replace(JsonPointer.Parse("/displayName"), JsonNode.Parse($"\"{Universe}\""))));
 
-        var log = stream.SubmitModel(model)
+        var log = await stream.SubmitModel(model)
             .Should().Emit();
         log.Status.Should().Be(ActivityStatus.Succeeded);
 
-        value = stream
+        value = await stream
             .DataBind<string>(namePointer, dataContext!, (x, _) => (string)x!)
             .Where(x => x != "Hello")
             .Should().Within(10.Seconds()).Match(x => x != null);
@@ -125,12 +125,12 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             reference
         );
         // After re-opening, the form is again a StackControl
-        controlFromStream = stream
+        controlFromStream = await stream
             .GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Should().Within(10.Seconds()).Match(x => x != null);
 
         controlFromStream.Should().BeOfType<StackControl>();
-        value = stream
+        value = await stream
             .GetDataBoundObservable<string>(namePointer, dataContext!)
             .Should().Within(10.Seconds()).Match(x => x != null);
 
@@ -139,7 +139,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
 
 
     [HubFact]
-    public void TestCatalog()
+    public async Task TestCatalog()
     {
         var host = GetHost();
         var reference = DomainLayoutAreas.GetCatalogReference(nameof(DataRecord));
@@ -149,19 +149,19 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             CreateHostAddress(),
             reference
         );
-        var content = stream.GetControlStream(reference.Area!)
+        var content = await stream.GetControlStream(reference.Area!)
             .Should().Within(10.Seconds()).Match(x => x != null);
         var stack = content
             .Should()
             .BeOfType<StackControl>()
             .Which;
 
-        var control = stream
+        var control = await stream
             .GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Should().Within(10.Seconds()).Match(x => x is not null);
         var dataGrid = control.Should().BeOfType<DataGridControl>().Which;
         var pointer = dataGrid.Data.Should().BeOfType<JsonPointerReference>().Which;
-        var dataStream = stream
+        var dataStream = await stream
             .GetDataStream<IEnumerable<object>>(pointer)
             .Should().Within(10.Seconds()).Match(x => x is not null);
         dataStream.Should().BeOfType<IEnumerable<object>>().Which.Should().HaveCount(2);

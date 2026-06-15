@@ -38,7 +38,7 @@ public class CompileLeafStabilityTest(ITestOutputHelper output) : MonolithMeshTe
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
     [Fact(Timeout = 240_000)]
-    public void CompileAndGetConfigurations_FreshNodeTypes_AllEmitWithinBound()
+    public async Task CompileAndGetConfigurations_FreshNodeTypes_AllEmitWithinBound()
     {
         var compilationService = Mesh.ServiceProvider
             .GetRequiredService<IMeshNodeCompilationService>();
@@ -57,10 +57,10 @@ public class CompileLeafStabilityTest(ITestOutputHelper output) : MonolithMeshTe
                 },
                 State = MeshNodeState.Active
             };
-            MeshService.CreateNode(typeNode).Should().Within(30.Seconds()).Emit(
+            await MeshService.CreateNode(typeNode).Should().Within(30.Seconds()).Emit(
                 $"iteration {i}: NodeType create must emit");
 
-            MeshService.CreateNode(new MeshNode("code", $"{nodeTypePath}/Source")
+            await MeshService.CreateNode(new MeshNode("code", $"{nodeTypePath}/Source")
             {
                 NodeType = "Code",
                 Name = "code",
@@ -75,7 +75,7 @@ public class CompileLeafStabilityTest(ITestOutputHelper output) : MonolithMeshTe
             Output.WriteLine($"=== iteration {i}: driving compile leaf ===");
 
             // Drive the LEAF directly — bypasses the kickoff/inline-dispatch path.
-            var result = compilationService.CompileAndGetConfigurations(typeNode)
+            var result = await compilationService.CompileAndGetConfigurations(typeNode)
                 .Should().Within(25.Seconds()).Emit(
                     $"iteration {i}: the compile leaf must emit an outcome (no stall)");
 
@@ -97,7 +97,7 @@ public class CompileLeafStabilityTest(ITestOutputHelper output) : MonolithMeshTe
     /// inline-dispatch wiring; both green means the kickoff path is stable.
     /// </summary>
     [Fact(Timeout = 300_000)]
-    public void Kickoff_FreshNodeTypes_AllSettle_NoStall()
+    public async Task Kickoff_FreshNodeTypes_AllSettle_NoStall()
     {
         const int iterations = 8;
 
@@ -117,10 +117,10 @@ public class CompileLeafStabilityTest(ITestOutputHelper output) : MonolithMeshTe
                 },
                 State = MeshNodeState.Active
             };
-            MeshService.CreateNode(typeNode).Should().Within(30.Seconds()).Emit(
+            await MeshService.CreateNode(typeNode).Should().Within(30.Seconds()).Emit(
                 $"dispatch iteration {i}: NodeType create must emit");
 
-            MeshService.CreateNode(new MeshNode("code", $"{nodeTypePath}/Source")
+            await MeshService.CreateNode(new MeshNode("code", $"{nodeTypePath}/Source")
             {
                 NodeType = "Code",
                 Name = "code",
@@ -136,7 +136,7 @@ public class CompileLeafStabilityTest(ITestOutputHelper output) : MonolithMeshTe
 
             // The kickoff runs RunCompile INLINE on the NodeType hub. It must SETTLE to
             // a terminal status; a stall sticks at Compiling and times out here.
-            var def = Mesh.GetMeshNodeStream(nodeTypePath)
+            var def = await Mesh.GetMeshNodeStream(nodeTypePath)
                 .Should().Within(40.Seconds())
                 .Match(n => n?.Content is NodeTypeDefinition d
                     && d.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error);

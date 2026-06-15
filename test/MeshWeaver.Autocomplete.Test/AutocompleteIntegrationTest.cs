@@ -104,13 +104,13 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
     #region Multi-Source Chat Autocomplete
 
     [Fact(Timeout = 30000)]
-    public void ChatAutocomplete_AtText_ReturnsFromMultipleSources()
+    public async Task ChatAutocomplete_AtText_ReturnsFromMultipleSources()
     {
         // Typing "@Sys" in chat — should get results from:
         // Source A: AutocompleteRequest to current hub (local providers)
         // Source B: Subtree query
         // Source C: Cross-partition broadening
-        var batches = Orchestrator
+        var batches = await Orchestrator
             .GetCompletions("@Sys", "Systemorph")
             .ToList().Should().Within(30.Seconds()).Emit();
 
@@ -130,10 +130,10 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public void ChatAutocomplete_PartitionDrillDown_ShowsChildrenAndKeywords()
+    public async Task ChatAutocomplete_PartitionDrillDown_ShowsChildrenAndKeywords()
     {
         // Typing "@/ACME/" — should show children of ACME partition AND keyword suggestions
-        var batches = Orchestrator
+        var batches = await Orchestrator
             .GetCompletions("@/ACME/", null)
             .ToList().Should().Within(30.Seconds()).Emit();
 
@@ -158,11 +158,11 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public void ChatAutocomplete_LocalResultsFirst_HigherPriorityThanGlobal()
+    public async Task ChatAutocomplete_LocalResultsFirst_HigherPriorityThanGlobal()
     {
         // When typing in the context of "Systemorph/Marketing", local results
         // should have higher priority than cross-partition results
-        var batches = Orchestrator
+        var batches = await Orchestrator
             .GetCompletions("@", "Systemorph/Marketing")
             .ToList().Should().Within(30.Seconds()).Emit();
 
@@ -190,12 +190,12 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
     #region AutocompleteAsync — Score-First Ordering
 
     [Fact(Timeout = 30000)]
-    public void AutocompleteAsync_ScoreFirstOrdering_HigherScoresFirst()
+    public async Task AutocompleteAsync_ScoreFirstOrdering_HigherScoresFirst()
     {
         // AutocompleteAsync should now order by score descending, then path length
-        var suggestions = MeshQuery
+        var suggestions = (await MeshQuery
             .AutocompleteAsync("", "", 20)
-            .ToObservableSequence().ToList().Should().Within(30.Seconds()).Emit().ToArray();
+            .ToObservableSequence().ToList().Should().Within(30.Seconds()).Emit()).ToArray();
 
         Output.WriteLine($"Top-level suggestions ({suggestions.Length}):");
         foreach (var s in suggestions)
@@ -212,16 +212,16 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public void AutocompleteAsync_WithContext_ProximityBoostApplied()
+    public async Task AutocompleteAsync_WithContext_ProximityBoostApplied()
     {
         // Items closer to contextPath should get boosted scores
-        var withContext = MeshQuery
+        var withContext = (await MeshQuery
             .AutocompleteAsync("ACME", "", AutocompleteMode.RelevanceFirst, 20, "ACME")
-            .ToObservableSequence().ToList().Should().Within(30.Seconds()).Emit().ToArray();
+            .ToObservableSequence().ToList().Should().Within(30.Seconds()).Emit()).ToArray();
 
-        var withoutContext = MeshQuery
+        var withoutContext = (await MeshQuery
             .AutocompleteAsync("ACME", "", 20)
-            .ToObservableSequence().ToList().Should().Within(30.Seconds()).Emit().ToArray();
+            .ToObservableSequence().ToList().Should().Within(30.Seconds()).Emit()).ToArray();
 
         Output.WriteLine($"With context 'ACME': {withContext.Length} items");
         foreach (var s in withContext.Take(5))
@@ -242,12 +242,12 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public void AutocompleteAsync_ShorterPathsPreferred_WhenScoresEqual()
+    public async Task AutocompleteAsync_ShorterPathsPreferred_WhenScoresEqual()
     {
         // When scores are the same, shorter paths should come first
-        var suggestions = MeshQuery
+        var suggestions = (await MeshQuery
             .AutocompleteAsync("ACME", "", 30)
-            .ToObservableSequence().ToList().Should().Within(30.Seconds()).Emit().ToArray();
+            .ToObservableSequence().ToList().Should().Within(30.Seconds()).Emit()).ToArray();
 
         Output.WriteLine($"ACME children ({suggestions.Length}):");
         foreach (var s in suggestions)
@@ -271,7 +271,7 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
     #region Content Provider — Slash Format
 
     [Fact(Timeout = 30000)]
-    public void ContentProvider_InsertText_UsesSlashFormat()
+    public async Task ContentProvider_InsertText_UsesSlashFormat()
     {
         // Content autocomplete should produce @content/path not @content:path
         var providers = Mesh.ServiceProvider.GetServices<IAutocompleteProvider>();
@@ -285,9 +285,9 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
         }
 
         // Universal format check over the settled snapshot (the final, complete item set).
-        var items = contentProvider
+        var items = (await contentProvider
             .GetItems("@", null)
-            .TakeLast(1).Should().Within(30.Seconds()).Emit().ToArray();
+            .TakeLast(1).Should().Within(30.Seconds()).Emit()).ToArray();
 
         Output.WriteLine($"Content items: {items.Length}");
         foreach (var item in items)
@@ -310,7 +310,7 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
     #region Unified Reference — Keywords Use Slash
 
     [Fact(Timeout = 30000)]
-    public void UnifiedReference_Keywords_UseSlashNotColon()
+    public async Task UnifiedReference_Keywords_UseSlashNotColon()
     {
         var providers = Mesh.ServiceProvider.GetServices<IAutocompleteProvider>();
         var unifiedProvider = providers
@@ -319,11 +319,10 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
 
         // Type @/ACME/ProductLaunch/ to get keyword suggestions (needs 2+ completed segments).
         // Reactive: wait for the first snapshot that actually carries the keyword category.
-        var items = unifiedProvider!
+        var items = (await unifiedProvider!
             .GetItems("@/ACME/ProductLaunch/", null)
             .Should().Within(30.Seconds())
-            .Match(snap => snap.Any(i => i.Category == "Keywords"))
-            .ToArray();
+            .Match(snap => snap.Any(i => i.Category == "Keywords"))).ToArray();
 
         var keywords = items.Where(i => i.Category == "Keywords").ToArray();
 
@@ -372,12 +371,12 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
     #region Cross-Partition — Multiple Partitions Queried
 
     [Fact(Timeout = 30000)]
-    public void AutocompleteAsync_CrossPartition_ReturnsFromMultiplePartitions()
+    public async Task AutocompleteAsync_CrossPartition_ReturnsFromMultiplePartitions()
     {
         // Global autocomplete (empty basePath) should return nodes from multiple partitions
-        var suggestions = MeshQuery
+        var suggestions = (await MeshQuery
             .AutocompleteAsync("", "", 30)
-            .ToObservableSequence().ToList().Should().Within(30.Seconds()).Emit().ToArray();
+            .ToObservableSequence().ToList().Should().Within(30.Seconds()).Emit()).ToArray();
 
         Output.WriteLine($"Global suggestions ({suggestions.Length}):");
         foreach (var s in suggestions)
@@ -395,12 +394,12 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public void ChatAutocomplete_GlobalFanOut_ReachesOtherPartitions()
+    public async Task ChatAutocomplete_GlobalFanOut_ReachesOtherPartitions()
     {
         // When typing "@ACM" from Systemorph context, broadening should find ACME.
         // Reactive: wait for the FIRST batch whose items contain ACME — we bring results
         // when they come, never block on the slowest cross-partition fan-out completing.
-        var acmeBatch = Orchestrator
+        var acmeBatch = await Orchestrator
             .GetCompletions("@ACM", "Systemorph")
             .Should().Within(30.Seconds())
             .Match(batch => batch.Items.Any(i =>

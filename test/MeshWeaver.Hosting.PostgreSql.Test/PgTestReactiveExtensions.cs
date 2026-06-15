@@ -131,14 +131,12 @@ internal static class PgTestReactiveExtensions
     /// <see cref="IPartitionStorageProvider.EnsurePartitionProvisioned"/> (PG → the
     /// <c>ensure_partition_schema</c> DDL). This is the schema-creation a Space/User performs on
     /// create; full-mesh tests call it before writing into a fresh partition, because the storage
-    /// router no longer lazily CREATE SCHEMAs. Blocks on the composed observable (test-edge §2a).
+    /// router no longer lazily CREATE SCHEMAs. Awaited at the test edge — never blocks.
     /// </summary>
-    public static void ProvisionPartition(this IMessageHub mesh, string ns) =>
+    public static Task ProvisionPartition(this IMessageHub mesh, string ns) =>
         mesh.ServiceProvider.GetServices<IPartitionStorageProvider>()
             .Select(p => p.EnsurePartitionProvisioned(ns))
             .Concat()
             .DefaultIfEmpty(Unit.Default)
-            .ToTask()
-            .GetAwaiter()
-            .GetResult();
+            .ToTask();
 }

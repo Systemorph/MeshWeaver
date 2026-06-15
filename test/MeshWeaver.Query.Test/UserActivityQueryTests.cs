@@ -35,31 +35,31 @@ public class UserActivityQueryTests(ITestOutputHelper output) : MonolithMeshTest
     /// Must return only main content nodes — no Thread, ThreadMessage, or AccessAssignment.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void MyItems_ExcludesThreads()
+    public async Task MyItems_ExcludesThreads()
     {
         var p = P();
 
         // Create main content nodes (both Markdown — Code is a satellite type excluded from search)
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/doc1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/doc1") with
         {
             Name = "My Document",
             NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/doc2") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/doc2") with
         {
             Name = "My Notes",
             NodeType = "Markdown"
         }).Should().Emit();
 
         // Create a Thread satellite (satellite type → MainNode auto-set to namespace)
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Thread/thread1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Thread/thread1") with
         {
             Name = "Discussion Thread",
             NodeType = "Thread"
         }).Should().Emit();
 
         // Query: the exact "My Items" query from UserActivityLayoutAreas.BuildChildren
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{p} is:main context:search scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{p} is:main context:search scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Threads must NOT appear
         results.Should().HaveCount(2);
@@ -68,30 +68,30 @@ public class UserActivityQueryTests(ITestOutputHelper output) : MonolithMeshTest
     }
 
     [Fact(Timeout = 30000)]
-    public void MyItems_ExcludesThreadMessages()
+    public async Task MyItems_ExcludesThreadMessages()
     {
         var p = P();
 
         // Main content
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/notes") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/notes") with
         {
             Name = "Notes",
             NodeType = "Markdown"
         }).Should().Emit();
 
         // Thread + ThreadMessage satellites
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Thread/t1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Thread/t1") with
         {
             Name = "Thread 1",
             NodeType = "Thread"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Thread/t1/msg1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Thread/t1/msg1") with
         {
             Name = "Message 1",
             NodeType = "ThreadMessage"
         }).Should().Emit();
 
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{p} is:main context:search scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{p} is:main context:search scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         results.Should().ContainSingle();
         results[0].Name.Should().Be("Notes");
@@ -100,19 +100,19 @@ public class UserActivityQueryTests(ITestOutputHelper output) : MonolithMeshTest
     }
 
     [Fact(Timeout = 30000)]
-    public void MyItems_ExcludesAccessAssignments()
+    public async Task MyItems_ExcludesAccessAssignments()
     {
         var p = P();
 
         // Main content
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/project") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/project") with
         {
             Name = "My Project",
             NodeType = "Markdown"
         }).Should().Emit();
 
         // AccessAssignment satellite
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Access/user1_Access") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Access/user1_Access") with
         {
             Name = "User1 Access",
             NodeType = "AccessAssignment",
@@ -124,7 +124,7 @@ public class UserActivityQueryTests(ITestOutputHelper output) : MonolithMeshTest
             }
         }).Should().Emit();
 
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{p} is:main context:search scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{p} is:main context:search scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         results.Should().ContainSingle();
         results[0].Name.Should().Be("My Project");
@@ -136,41 +136,41 @@ public class UserActivityQueryTests(ITestOutputHelper output) : MonolithMeshTest
     /// and verify the "My Items" query returns only main content.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void MyItems_OnlyReturnsMainContentNodes()
+    public async Task MyItems_OnlyReturnsMainContentNodes()
     {
         var p = P();
 
         // Main content nodes (Code is a satellite type excluded from search, so use Markdown for both)
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/doc") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/doc") with
         {
             Name = "Document", NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/notes") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/notes") with
         {
             Name = "Notes", NodeType = "Markdown"
         }).Should().Emit();
 
         // Satellite: Thread
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Thread/t1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Thread/t1") with
         {
             Name = "Thread", NodeType = "Thread"
         }).Should().Emit();
 
         // Satellite: ThreadMessage
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Thread/t1/m1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Thread/t1/m1") with
         {
             Name = "Message", NodeType = "ThreadMessage"
         }).Should().Emit();
 
         // Satellite: AccessAssignment
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Access/a1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Access/a1") with
         {
             Name = "Access", NodeType = "AccessAssignment",
             Content = new AccessAssignment { AccessObject = "u1", Roles = [new RoleAssignment { Role = "Reader" }] }
         }).Should().Emit();
 
         // Satellite: Activity log
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_activity/log1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_activity/log1") with
         {
             Name = "Activity", NodeType = "Activity",
             MainNode = p,
@@ -178,13 +178,13 @@ public class UserActivityQueryTests(ITestOutputHelper output) : MonolithMeshTest
         }).Should().Emit();
 
         // Satellite: Comment
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/doc/_Comment/c1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/doc/_Comment/c1") with
         {
             Name = "Comment", NodeType = "Comment",
             MainNode = $"{p}/doc"
         }).Should().Emit();
 
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{p} is:main context:search scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{p} is:main context:search scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Only the two main content nodes should appear
         results.Should().HaveCount(2);
@@ -203,23 +203,23 @@ public class UserActivityQueryTests(ITestOutputHelper output) : MonolithMeshTest
     /// Nodes with explicit MainNode != Path should be excluded.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void IsMain_ExcludesNodesWithDifferentMainNode()
+    public async Task IsMain_ExcludesNodesWithDifferentMainNode()
     {
         var p = P();
 
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/main") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/main") with
         {
             Name = "Main Node", NodeType = "Markdown"
         }).Should().Emit();
 
         // Manually create a node with MainNode pointing elsewhere
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/satellite") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/satellite") with
         {
             Name = "Satellite Node", NodeType = "Markdown",
             MainNode = $"{p}/main"
         }).Should().Emit();
 
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{p} is:main scope:descendants")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{p} is:main scope:descendants")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         results.Should().ContainSingle();
         results[0].Name.Should().Be("Main Node");
@@ -229,16 +229,16 @@ public class UserActivityQueryTests(ITestOutputHelper output) : MonolithMeshTest
     /// Test the activity feed query (source:activity) also excludes satellites.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void ActivityFeed_ExcludesSatelliteNodeTypes()
+    public async Task ActivityFeed_ExcludesSatelliteNodeTypes()
     {
         var p = P();
 
         // Main content node with activity log
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/project") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/project") with
         {
             Name = "Project", NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/project/_activity/log1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/project/_activity/log1") with
         {
             Name = "Project Activity", NodeType = "Activity",
             MainNode = $"{p}/project",
@@ -246,12 +246,12 @@ public class UserActivityQueryTests(ITestOutputHelper output) : MonolithMeshTest
         }).Should().Emit();
 
         // AccessAssignment with activity log — should NOT appear in activity feed
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Access/a1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Access/a1") with
         {
             Name = "Access", NodeType = "AccessAssignment",
             Content = new AccessAssignment { AccessObject = "u1", Roles = [new RoleAssignment { Role = "Reader" }] }
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Access/a1/_activity/log1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Access/a1/_activity/log1") with
         {
             Name = "Access Activity", NodeType = "Activity",
             MainNode = $"{p}/_Access/a1",
@@ -259,7 +259,7 @@ public class UserActivityQueryTests(ITestOutputHelper output) : MonolithMeshTest
         }).Should().Emit();
 
         // source:activity auto-sets is:main=true
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"source:activity namespace:{p} scope:descendants")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"source:activity namespace:{p} scope:descendants")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Only the main content node should appear, not AccessAssignment
         results.Should().ContainSingle();
@@ -284,22 +284,22 @@ public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMes
     /// via source:activity (verifies the query pipeline, not the bundler).
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void ActivityQuery_ReturnsMainNodeWithActivityLog()
+    public async Task ActivityQuery_ReturnsMainNodeWithActivityLog()
     {
         var p = P();
 
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/doc") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/doc") with
         {
             Name = "Document", NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/doc/_activity/log1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/doc/_activity/log1") with
         {
             Name = "Edit activity", NodeType = "Activity",
             MainNode = $"{p}/doc",
             Content = new ActivityLog("DataUpdate") { HubPath = $"{p}/doc" }
         }).Should().Emit();
 
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"source:activity namespace:{p} scope:descendants")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"source:activity namespace:{p} scope:descendants")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         results.Should().ContainSingle();
         results[0].Name.Should().Be("Document");
@@ -310,7 +310,7 @@ public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMes
     /// because it's a satellite type (MainNode != Path after auto-setting).
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void ActivityTracking_SkipsAccessAssignment()
+    public async Task ActivityTracking_SkipsAccessAssignment()
     {
         var p = P();
 
@@ -321,7 +321,7 @@ public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMes
         });
 
         // Create AccessAssignment (satellite type)
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Access/u1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Access/u1") with
         {
             Name = "User1 Access", NodeType = "AccessAssignment",
             Content = new AccessAssignment { AccessObject = "u1", Roles = [new RoleAssignment { Role = "Reader" }] }
@@ -329,7 +329,7 @@ public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMes
 
         // Check: no activity log should ever appear under the AccessAssignment node.
         // Negative assertion — flatten the live query's items and assert nothing arrives.
-        MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{p}/_Access/u1/_activity scope:descendants"))
+        await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{p}/_Access/u1/_activity scope:descendants"))
             .SelectMany(c => c.Items)
             .Should().NotEmit(within: TimeSpan.FromSeconds(2),
                 "AccessAssignment is a satellite type and should not have activity logs");
@@ -339,7 +339,7 @@ public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMes
     /// Thread nodes are satellite types — activity logs should not be created for them.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void ActivityTracking_SkipsThreadNodes()
+    public async Task ActivityTracking_SkipsThreadNodes()
     {
         var p = P();
 
@@ -350,13 +350,13 @@ public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMes
         });
 
         // Create Thread (satellite type)
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Thread/t1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Thread/t1") with
         {
             Name = "Discussion", NodeType = "Thread"
         }).Should().Emit();
 
         // Negative assertion — no activity log should ever appear under the Thread node.
-        MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{p}/_Thread/t1/_activity scope:descendants"))
+        await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{p}/_Thread/t1/_activity scope:descendants"))
             .SelectMany(c => c.Items)
             .Should().NotEmit(within: TimeSpan.FromSeconds(2),
                 "Thread is a satellite type and should not have activity logs");
@@ -367,23 +367,23 @@ public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMes
     /// satellite types created via NodeFactory.CreateNode should have MainNode == Namespace (not Path).
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void SatelliteTypes_HaveMainNodeSetToNamespace()
+    public async Task SatelliteTypes_HaveMainNodeSetToNamespace()
     {
         var p = P();
 
         // Create satellite nodes via the normal NodeFactory.CreateNode path
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Thread/t1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Thread/t1") with
         {
             Name = "Thread", NodeType = "Thread"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Access/a1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Access/a1") with
         {
             Name = "Access", NodeType = "AccessAssignment",
             Content = new AccessAssignment { AccessObject = "u1", Roles = [new RoleAssignment { Role = "Reader" }] }
         }).Should().Emit();
 
         // Query with nodeType condition to include satellites in results
-        var threadNodes = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{p}/_Thread/t1")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var threadNodes = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{p}/_Thread/t1")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
         threadNodes.Should().ContainSingle();
         var threadNode = threadNodes[0];
         threadNode.MainNode.Should().NotBe(threadNode.Path,
@@ -391,7 +391,7 @@ public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMes
         threadNode.MainNode.Should().Be($"{p}/_Thread",
             "Thread's MainNode should point to the parent namespace");
 
-        var accessNodes = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{p}/_Access/a1")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var accessNodes = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{p}/_Access/a1")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
         accessNodes.Should().ContainSingle();
         var accessNode = accessNodes[0];
         accessNode.MainNode.Should().NotBe(accessNode.Path,

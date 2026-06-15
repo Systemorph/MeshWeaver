@@ -82,7 +82,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
     /// Test that the Details view renders for a Todo item.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void Details_ShouldRenderTodoItem()
+    public async Task Details_ShouldRenderTodoItem()
     {
         var client = GetClient();
         var todoAddress = new Address("ACME/ProductLaunch/Todo/DefinePersona");
@@ -91,7 +91,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
         // does NOT self-activate cleanly — without this init the subscription errors
         // with "Hub '…' initialization failed". (Removing it produced that failure;
         // restored per the empirical keep rule.)
-        client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).Should().Within(30.Seconds()).Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).Should().Within(30.Seconds()).Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Overview");
@@ -101,7 +101,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
             reference);
 
         Output.WriteLine("Waiting for Details view to render...");
-        var value = stream.Should().Within(50.Seconds()).Emit();
+        var value = await stream.Should().Within(50.Seconds()).Emit();
 
         Output.WriteLine($"Received value");
         value.Should().NotBe(default(JsonElement), "Details view should render for a Todo item");
@@ -111,14 +111,14 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
     /// Test that the Thumbnail view renders for a Todo item.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void Thumbnail_ShouldRenderTodoItem()
+    public async Task Thumbnail_ShouldRenderTodoItem()
     {
         var client = GetClient();
         var todoAddress = new Address("ACME/ProductLaunch/Todo/LaunchEvent");
 
         // Load-bearing ping: Todo-instance node hubs require init before the
         // layout-area subscription, else it errors "Hub '…' initialization failed".
-        client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).Should().Within(30.Seconds()).Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).Should().Within(30.Seconds()).Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Thumbnail");
@@ -128,7 +128,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
             reference);
 
         Output.WriteLine("Waiting for Thumbnail view to render...");
-        var value = stream.Should().Within(50.Seconds()).Emit();
+        var value = await stream.Should().Within(50.Seconds()).Emit();
 
         Output.WriteLine($"Received value");
         value.Should().NotBe(default(JsonElement), "Thumbnail view should render for a Todo item");
@@ -138,14 +138,14 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
     /// Test that the Overview view renders for a Todo.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void Details_ShouldRenderAsStackControl()
+    public async Task Details_ShouldRenderAsStackControl()
     {
         var client = GetClient();
         var todoAddress = new Address("ACME/ProductLaunch/Todo/DefinePersona");
 
         // Load-bearing ping: Todo-instance node hubs require init before the
         // layout-area subscription, else it errors "Hub '…' initialization failed".
-        client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).Should().Within(30.Seconds()).Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).Should().Within(30.Seconds()).Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Overview");
@@ -155,7 +155,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
             reference);
 
         Output.WriteLine("Waiting for Overview view to render...");
-        var value = stream.Should().Within(50.Seconds()).Emit();
+        var value = await stream.Should().Within(50.Seconds()).Emit();
 
         value.Should().NotBe(default(JsonElement), "Overview view should render");
         Output.WriteLine($"Overview view rendered");
@@ -165,7 +165,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
     /// Test that multiple Todo items can be accessed independently.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void MultipleTodos_CanBeAccessedIndependently()
+    public async Task MultipleTodos_CanBeAccessedIndependently()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -184,13 +184,13 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
 
             // Load-bearing ping: Todo-instance node hubs require init before the
             // layout-area subscription, else it errors "Hub '…' initialization failed".
-            client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).Should().Within(30.Seconds()).Emit();
+            await client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).Should().Within(30.Seconds()).Emit();
 
             var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
                 todoAddress,
                 reference);
 
-            var value = stream.Should().Within(50.Seconds()).Emit();
+            var value = await stream.Should().Within(50.Seconds()).Emit();
 
             value.Should().NotBe(default(JsonElement), $"Details view should render for {todoAddress}");
             Output.WriteLine($"Successfully rendered: {todoAddress}");
@@ -224,13 +224,13 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
     /// Verifies that the hub is created with proper configuration.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void Trace_LayoutAreaRendering()
+    public async Task Trace_LayoutAreaRendering()
     {
         var client = GetClient();
         var parentAddress = new Address("ACME/ProductLaunch");
 
         Output.WriteLine("Initializing hub for ACME/ProductLaunch...");
-        client.Observe(new PingRequest(), o => o.WithTarget(parentAddress)).Should().Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(parentAddress)).Should().Emit();
         Output.WriteLine("Hub initialized.");
 
         // Get the hosted hub directly
@@ -264,7 +264,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
     /// Areas may take time to populate due to NodeType compilation.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void ProductLaunch_Overview_ShouldRender()
+    public async Task ProductLaunch_Overview_ShouldRender()
     {
         var client = GetClient();
         var parentAddress = new Address("ACME/ProductLaunch");
@@ -280,7 +280,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
 
         Output.WriteLine("Waiting for Overview area...");
         // Wait for a value - areas may take time to populate due to NodeType compilation
-        var rawValue = stream.Should().Within(50.Seconds()).Emit();
+        var rawValue = await stream.Should().Within(50.Seconds()).Emit();
         Output.WriteLine($"Received raw value: {rawValue.Value.ValueKind}");
 
         // Verify we received a response (even if areas haven't populated yet due to async compilation)
@@ -293,7 +293,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
     /// This tests the exact URL: /ACME/ProductLaunch/Create?type=ACME%2FProject%2FTodo
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void CreateArea_WithTypeParam_ShouldRenderCreateForm()
+    public async Task CreateArea_WithTypeParam_ShouldRenderCreateForm()
     {
         var client = GetClient();
         var parentAddress = new Address("ACME/ProductLaunch");
@@ -310,7 +310,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
             parentAddress,
             referenceNoId);
 
-        var rawNoId = streamNoId.Should().Within(50.Seconds()).Emit();
+        var rawNoId = await streamNoId.Should().Within(50.Seconds()).Emit();
         Output.WriteLine($"Create without Id - raw value kind: {rawNoId.Value.ValueKind}");
         Output.WriteLine($"Create without Id - areas empty? {rawNoId.Value.ToString().Contains("\"areas\":{}")}");
 
@@ -329,14 +329,14 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
         Output.WriteLine("Waiting for stream value...");
 
         // First just get any value from the stream to debug
-        var rawChange = stream.Should().Within(10.Seconds()).Emit();
+        var rawChange = await stream.Should().Within(10.Seconds()).Emit();
         var rawValue = rawChange.Value;
         Output.WriteLine($"Received raw value: {rawValue.ValueKind}");
         Output.WriteLine($"Raw JSON (first 500 chars): {rawValue.ToString().Substring(0, Math.Min(500, rawValue.ToString().Length))}");
 
         // Now try to get the control stream
         Output.WriteLine("Trying GetControlStream...");
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(10.Seconds()).Match(x => x is not null);
 

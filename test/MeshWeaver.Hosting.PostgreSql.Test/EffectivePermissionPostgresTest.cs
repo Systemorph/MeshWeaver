@@ -72,7 +72,7 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
     /// the pg_notify pipeline and the Admin grant is invisible on the
     /// initial subscription.
     /// </summary>
-    protected override Task SetupAccessRightsAsync()
+    protected override async Task SetupAccessRightsAsync()
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var adminGrant = AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Admin", null);
@@ -89,7 +89,7 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
         // OnError is folded back into a benign emission via Catch so the
         // blocking .Emit() doesn't surface it (this override stays Task-shaped
         // but its body is fully reactive — no await, §2a).
-        meshService.CreateNode(adminGrant)
+        await meshService.CreateNode(adminGrant)
             .SelectMany(_ => workspace
                 .GetMeshNodeStream(adminGrant.Path)
                 .Where(n => n != null)
@@ -100,11 +100,10 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
                     ? Observable.Return<MeshNode>(null!)
                     : Observable.Throw<MeshNode>(ex))
             .Should().Within(90.Seconds()).Emit();
-        return Task.CompletedTask;
     }
 
     [Fact(Timeout = 60000)]
-    public void CreateOrganization_HasPermission_ReturnsAdmin()
+    public async Task CreateOrganization_HasPermission_ReturnsAdmin()
     {
         // 1) OrganizationNodeType is installed via ConfigureMesh above
         const string orgId = "Systemorph";
@@ -142,10 +141,10 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
         // step is async and races the org create otherwise. Also persist
         // the Admin/Partition MeshNode so subsequent reads via the workspace
         // see the partition's catalog entry.
-        pgProvider.EnsureSchemaForPartitionAsync(partitionDef, TestContext.Current.CancellationToken)
+        await pgProvider.EnsureSchemaForPartitionAsync(partitionDef, TestContext.Current.CancellationToken)
             .ToObservable().Should().Within(60.Seconds()).Emit();
         pgProvider.RegisterPartition(partitionDef);
-        meshService.CreateNode(partitionNode)
+        await meshService.CreateNode(partitionNode)
             .Should().Within(90.Seconds()).Emit();
 
         // 3) Create Organization "Systemorph"
@@ -155,7 +154,7 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
             NodeType = SpaceNodeType.NodeType,
             Content = new Space { Name = orgId }
         };
-        NodeFactory.CreateNode(orgNode).Should().Within(90.Seconds()).Emit();
+        await NodeFactory.CreateNode(orgNode).Should().Within(90.Seconds()).Emit();
 
         // 4) Ask SecurityService.HasPermission for this node — wait for the
         // synced AccessAssignment query to surface the post-create Admin grant.
@@ -163,7 +162,7 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
         // AccessAssignment.
         // Without fix: returns Permission.None (GetChildrenAsync filters satellite nodes)
         // With fix: returns Permission.All (GetAllChildrenAsync includes satellites)
-        var permissions = Mesh.GetEffectivePermissions("Systemorph", TestUsers.Admin.ObjectId)
+        var permissions = await Mesh.GetEffectivePermissions("Systemorph", TestUsers.Admin.ObjectId)
             .Should().Within(90.Seconds()).Match(p => p == Permission.All);
         permissions.Should().NotBe(Permission.None,
             "Creator should have permissions from persisted AccessAssignment on the Organization");
@@ -184,7 +183,7 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
     /// distributed mode that the in-memory test cannot catch.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void RuntimeCreateNode_AccessAssignment_PgBacked_GrantsPermission()
+    public async Task RuntimeCreateNode_AccessAssignment_PgBacked_GrantsPermission()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var savedContext = accessService.CircuitContext;
@@ -194,7 +193,7 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
 
         try
         {
-            var before = Mesh.GetEffectivePermissions(scope, userId)
+            var before = await Mesh.GetEffectivePermissions(scope, userId)
                 .Should().Within(90.Seconds()).Emit();
             before.Should().Be(Permission.None);
 
@@ -225,7 +224,7 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
                 TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
                 Versioned = true,
             };
-            pgProvider.EnsureSchemaForPartitionAsync(partitionDef, TestContext.Current.CancellationToken)
+            await pgProvider.EnsureSchemaForPartitionAsync(partitionDef, TestContext.Current.CancellationToken)
                 .ToObservable().Should().Within(60.Seconds()).Emit();
             pgProvider.RegisterPartition(partitionDef);
             var partitionNode = new MeshNode(scope, "Admin/Partition")
@@ -235,12 +234,12 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
                 State = MeshNodeState.Active,
                 Content = partitionDef
             };
-            meshService.CreateNode(partitionNode).Should().Within(90.Seconds()).Emit();
+            await meshService.CreateNode(partitionNode).Should().Within(90.Seconds()).Emit();
 
             var assignment = AssignmentNodeFactory.UserRole(userId, "Admin", scope);
-            meshService.CreateNode(assignment).Should().Within(90.Seconds()).Emit();
+            await meshService.CreateNode(assignment).Should().Within(90.Seconds()).Emit();
 
-            var after = Mesh.GetEffectivePermissions(scope, userId)
+            var after = await Mesh.GetEffectivePermissions(scope, userId)
                 .Should().Within(90.Seconds()).Match(p => p.HasFlag(Permission.Read));
             after.Should().Be(Permission.All);
         }
@@ -262,7 +261,7 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
     /// at the ROOT path "" (and still covers the <c>Admin/Invitation</c> subtree the tab manages).
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void RootScopeAdminGrant_PassesRootAdminGate()
+    public async Task RootScopeAdminGrant_PassesRootAdminGate()
     {
         const string userId = "pg-platform-admin";
         var rootGrant = AssignmentNodeFactory.UserRole(userId, "Admin", scope: null);
@@ -271,7 +270,7 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
 
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var workspace = Mesh.GetWorkspace();
-        meshService.CreateNode(rootGrant)
+        await meshService.CreateNode(rootGrant)
             .SelectMany(_ => workspace
                 .GetMeshNodeStream(rootGrant.Path)
                 .Where(n => n != null)
@@ -284,10 +283,10 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
             .Should().Within(90.Seconds()).Emit();
 
         // AdminMenuGate's exact check is the ROOT path "".
-        Mesh.GetEffectivePermissions("", userId)
+        await Mesh.GetEffectivePermissions("", userId)
             .Should().Within(90.Seconds()).Match(p => p == Permission.All);
         // And the root grant must still cover the Admin/Invitation subtree the tab manages.
-        Mesh.GetEffectivePermissions("Admin/Invitation", userId)
+        await Mesh.GetEffectivePermissions("Admin/Invitation", userId)
             .Should().Within(90.Seconds()).Match(p => p == Permission.All);
     }
 

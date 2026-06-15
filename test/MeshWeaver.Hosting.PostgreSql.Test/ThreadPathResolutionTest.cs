@@ -34,10 +34,10 @@ public class ThreadPathResolutionTest
     }
 
     [Fact(Timeout = 60000)]
-    public void ThreadNode_StoredInThreadsTable_FoundByGetNodeAsync()
+    public async Task ThreadNode_StoredInThreadsTable_FoundByGetNodeAsync()
     {
         var ct = TestContext.Current.CancellationToken;
-        CleanData(ct);
+        await CleanData(ct);
 
         var partitionDef = new PartitionDefinition
         {
@@ -46,10 +46,10 @@ public class ThreadPathResolutionTest
             TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
 
-        var (ds, adapter) = CreateSchema("testorg", partitionDef, ct);
+        var (ds, adapter) = await CreateSchema("testorg", partitionDef, ct);
 
         // Create org root in mesh_nodes
-        adapter.Write(new MeshNode("TestOrg") { Name = "Test Org", NodeType = "Markdown" }, _options)
+        await adapter.Write(new MeshNode("TestOrg") { Name = "Test Org", NodeType = "Markdown" }, _options)
             .Should().Within(30.Seconds()).Emit();
 
         // Create a thread in threads table (path contains _Thread)
@@ -60,19 +60,19 @@ public class ThreadPathResolutionTest
             MainNode = "TestOrg",
             Content = new MeshThread { CreatedBy = "testuser" }
         };
-        adapter.Write(threadNode, _options).Should().Within(30.Seconds()).Emit();
+        await adapter.Write(threadNode, _options).Should().Within(30.Seconds()).Emit();
 
         // Verify thread is readable by path
-        var found = adapter.Read("TestOrg/_Thread/my-thread", _options).Should().Within(30.Seconds()).Emit();
+        var found = await adapter.Read("TestOrg/_Thread/my-thread", _options).Should().Within(30.Seconds()).Emit();
         found.Should().NotBeNull("thread should be found in threads table");
         found!.Name.Should().Be("Test Thread");
     }
 
     [Fact(Timeout = 60000)]
-    public void ThreadMessage_UnderThread_FoundByGetNodeAsync()
+    public async Task ThreadMessage_UnderThread_FoundByGetNodeAsync()
     {
         var ct = TestContext.Current.CancellationToken;
-        CleanData(ct);
+        await CleanData(ct);
 
         var partitionDef = new PartitionDefinition
         {
@@ -81,36 +81,36 @@ public class ThreadPathResolutionTest
             TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
 
-        var (ds, adapter) = CreateSchema("testorg", partitionDef, ct);
+        var (ds, adapter) = await CreateSchema("testorg", partitionDef, ct);
 
-        adapter.Write(new MeshNode("TestOrg") { Name = "Test Org", NodeType = "Markdown" }, _options)
+        await adapter.Write(new MeshNode("TestOrg") { Name = "Test Org", NodeType = "Markdown" }, _options)
             .Should().Within(30.Seconds()).Emit();
 
         // Thread
-        adapter.Write(new MeshNode("my-thread", "TestOrg/_Thread")
+        await adapter.Write(new MeshNode("my-thread", "TestOrg/_Thread")
         {
             Name = "Test Thread", NodeType = "Thread", MainNode = "TestOrg",
             Content = new MeshThread()
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // ThreadMessage under thread
-        adapter.Write(new MeshNode("msg1", "TestOrg/_Thread/my-thread")
+        await adapter.Write(new MeshNode("msg1", "TestOrg/_Thread/my-thread")
         {
             Name = "Message 1", NodeType = "ThreadMessage", MainNode = "TestOrg",
             Content = new MeshWeaver.AI.ThreadMessage { Role = "user", Text = "Hello" }
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // Verify message is found
-        var found = adapter.Read("TestOrg/_Thread/my-thread/msg1", _options).Should().Within(30.Seconds()).Emit();
+        var found = await adapter.Read("TestOrg/_Thread/my-thread/msg1", _options).Should().Within(30.Seconds()).Emit();
         found.Should().NotBeNull("ThreadMessage should be found in threads table");
         found!.NodeType.Should().Be("ThreadMessage");
     }
 
     [Fact(Timeout = 60000)]
-    public void SubThread_DeeplyNested_FoundByGetNodeAsync()
+    public async Task SubThread_DeeplyNested_FoundByGetNodeAsync()
     {
         var ct = TestContext.Current.CancellationToken;
-        CleanData(ct);
+        await CleanData(ct);
 
         var partitionDef = new PartitionDefinition
         {
@@ -119,19 +119,19 @@ public class ThreadPathResolutionTest
             TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
 
-        var (ds, adapter) = CreateSchema("testorg", partitionDef, ct);
+        var (ds, adapter) = await CreateSchema("testorg", partitionDef, ct);
 
-        adapter.Write(new MeshNode("TestOrg") { Name = "Test Org", NodeType = "Markdown" }, _options)
+        await adapter.Write(new MeshNode("TestOrg") { Name = "Test Org", NodeType = "Markdown" }, _options)
             .Should().Within(30.Seconds()).Emit();
 
         // Thread → Message → Sub-thread (delegation pattern)
-        adapter.Write(new MeshNode("parent-thread", "TestOrg/_Thread")
+        await adapter.Write(new MeshNode("parent-thread", "TestOrg/_Thread")
         {
             Name = "Parent Thread", NodeType = "Thread", MainNode = "TestOrg",
             Content = new MeshThread()
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        adapter.Write(new MeshNode("msg1", "TestOrg/_Thread/parent-thread")
+        await adapter.Write(new MeshNode("msg1", "TestOrg/_Thread/parent-thread")
         {
             Name = "Response", NodeType = "ThreadMessage", MainNode = "TestOrg",
             Content = new MeshWeaver.AI.ThreadMessage { Role = "assistant", Text = "..." }
@@ -139,24 +139,24 @@ public class ThreadPathResolutionTest
 
         // Sub-thread: 6 segments deep
         var subThreadPath = "TestOrg/_Thread/parent-thread/msg1/sub-thread";
-        adapter.Write(new MeshNode("sub-thread", "TestOrg/_Thread/parent-thread/msg1")
+        await adapter.Write(new MeshNode("sub-thread", "TestOrg/_Thread/parent-thread/msg1")
         {
             Name = "Sub Thread", NodeType = "Thread", MainNode = "TestOrg",
             Content = new MeshThread()
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // Verify sub-thread is found (must resolve to threads table via _Thread in path)
-        var found = adapter.Read(subThreadPath, _options).Should().Within(30.Seconds()).Emit();
+        var found = await adapter.Read(subThreadPath, _options).Should().Within(30.Seconds()).Emit();
         found.Should().NotBeNull("sub-thread should be found in threads table via _Thread path segment");
         found!.Name.Should().Be("Sub Thread");
         found.NodeType.Should().Be("Thread");
     }
 
     [Fact(Timeout = 60000)]
-    public void SubThread_FoundByFindBestPrefixMatchAsync()
+    public async Task SubThread_FoundByFindBestPrefixMatchAsync()
     {
         var ct = TestContext.Current.CancellationToken;
-        CleanData(ct);
+        await CleanData(ct);
 
         var partitionDef = new PartitionDefinition
         {
@@ -165,31 +165,31 @@ public class ThreadPathResolutionTest
             TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
 
-        var (ds, adapter) = CreateSchema("testorg", partitionDef, ct);
+        var (ds, adapter) = await CreateSchema("testorg", partitionDef, ct);
 
-        adapter.Write(new MeshNode("TestOrg") { Name = "Test Org", NodeType = "Markdown" }, _options)
+        await adapter.Write(new MeshNode("TestOrg") { Name = "Test Org", NodeType = "Markdown" }, _options)
             .Should().Within(30.Seconds()).Emit();
 
-        adapter.Write(new MeshNode("parent-thread", "TestOrg/_Thread")
+        await adapter.Write(new MeshNode("parent-thread", "TestOrg/_Thread")
         {
             Name = "Parent Thread", NodeType = "Thread", MainNode = "TestOrg",
             Content = new MeshThread()
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        adapter.Write(new MeshNode("msg1", "TestOrg/_Thread/parent-thread")
+        await adapter.Write(new MeshNode("msg1", "TestOrg/_Thread/parent-thread")
         {
             Name = "Response", NodeType = "ThreadMessage", MainNode = "TestOrg",
             Content = new MeshWeaver.AI.ThreadMessage { Role = "assistant", Text = "..." }
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        adapter.Write(new MeshNode("sub-thread", "TestOrg/_Thread/parent-thread/msg1")
+        await adapter.Write(new MeshNode("sub-thread", "TestOrg/_Thread/parent-thread/msg1")
         {
             Name = "Sub Thread", NodeType = "Thread", MainNode = "TestOrg",
             Content = new MeshThread()
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // FindBestPrefixMatch for the sub-thread path — must find it in threads table
-        var (match, segments) = adapter.FindBestPrefixMatch(
+        var (match, segments) = await adapter.FindBestPrefixMatch(
             "TestOrg/_Thread/parent-thread/msg1/sub-thread", _options)
             .Should().Within(30.Seconds()).Emit();
 
@@ -199,10 +199,10 @@ public class ThreadPathResolutionTest
     }
 
     [Fact(Timeout = 60000)]
-    public void SubThread_FoundByFindBestPrefixMatch_ForDeeperPath()
+    public async Task SubThread_FoundByFindBestPrefixMatch_ForDeeperPath()
     {
         var ct = TestContext.Current.CancellationToken;
-        CleanData(ct);
+        await CleanData(ct);
 
         var partitionDef = new PartitionDefinition
         {
@@ -211,24 +211,24 @@ public class ThreadPathResolutionTest
             TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
 
-        var (ds, adapter) = CreateSchema("testorg", partitionDef, ct);
+        var (ds, adapter) = await CreateSchema("testorg", partitionDef, ct);
 
-        adapter.Write(new MeshNode("TestOrg") { Name = "Test Org", NodeType = "Markdown" }, _options)
+        await adapter.Write(new MeshNode("TestOrg") { Name = "Test Org", NodeType = "Markdown" }, _options)
             .Should().Within(30.Seconds()).Emit();
 
-        adapter.Write(new MeshNode("parent-thread", "TestOrg/_Thread")
+        await adapter.Write(new MeshNode("parent-thread", "TestOrg/_Thread")
         {
             Name = "Parent Thread", NodeType = "Thread", MainNode = "TestOrg",
             Content = new MeshThread()
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        adapter.Write(new MeshNode("msg1", "TestOrg/_Thread/parent-thread")
+        await adapter.Write(new MeshNode("msg1", "TestOrg/_Thread/parent-thread")
         {
             Name = "Response", NodeType = "ThreadMessage", MainNode = "TestOrg",
             Content = new MeshWeaver.AI.ThreadMessage { Role = "assistant", Text = "..." }
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        adapter.Write(new MeshNode("sub-thread", "TestOrg/_Thread/parent-thread/msg1")
+        await adapter.Write(new MeshNode("sub-thread", "TestOrg/_Thread/parent-thread/msg1")
         {
             Name = "Sub Thread", NodeType = "Thread", MainNode = "TestOrg",
             Content = new MeshThread()
@@ -236,7 +236,7 @@ public class ThreadPathResolutionTest
 
         // Ask for a path DEEPER than the sub-thread (e.g., a message in the sub-thread)
         // FindBestPrefixMatch should find the sub-thread as the deepest match
-        var (match, segments) = adapter.FindBestPrefixMatch(
+        var (match, segments) = await adapter.FindBestPrefixMatch(
             "TestOrg/_Thread/parent-thread/msg1/sub-thread/sub-msg1", _options)
             .Should().Within(30.Seconds()).Emit();
 
@@ -265,10 +265,10 @@ public class ThreadPathResolutionTest
     /// elsewhere (e.g. multi-provider aggregation, access-control filter).</para>
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void PathQuery_MultiValuePathListIncludingSatellitePath_ReturnsThreadRow()
+    public async Task PathQuery_MultiValuePathListIncludingSatellitePath_ReturnsThreadRow()
     {
         var ct = TestContext.Current.CancellationToken;
-        CleanData(ct);
+        await CleanData(ct);
 
         var partitionDef = new PartitionDefinition
         {
@@ -277,7 +277,7 @@ public class ThreadPathResolutionTest
             TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
 
-        var (ds, adapter) = CreateSchema("testorg", partitionDef, ct);
+        var (ds, adapter) = await CreateSchema("testorg", partitionDef, ct);
 
         // Grant Anonymous Read so the Query isn't filtered out by RLS —
         // the prod bug exists independent of access control; we want to isolate
@@ -288,13 +288,13 @@ public class ThreadPathResolutionTest
         // Seed: partition root + thread in _Thread satellite. This is the exact
         // shape of the prod row (verified via MCP) — the difference is that
         // the prod data is in `systemorph.threads`, here it's `testorg.threads`.
-        adapter.Write(new MeshNode("TestOrg")
+        await adapter.Write(new MeshNode("TestOrg")
         {
             Name = "Test Org",
             NodeType = "Markdown"
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        adapter.Write(new MeshNode("add-markus-kleiner-as-admin-c578", "TestOrg/_Thread")
+        await adapter.Write(new MeshNode("add-markus-kleiner-as-admin-c578", "TestOrg/_Thread")
         {
             Name = "add markus kleiner as admin",
             NodeType = "Thread",
@@ -316,7 +316,7 @@ public class ThreadPathResolutionTest
         // Sanity check: adapter.Read (already known to work — existing tests
         // ThreadNode_StoredInThreadsTable_FoundByGetNodeAsync) DOES find the row.
         // That confirms the row is in the threads table with the right path.
-        var direct = adapter.Read(
+        var direct = await adapter.Read(
             "TestOrg/_Thread/add-markus-kleiner-as-admin-c578", _options)
             .Should().Within(30.Seconds()).Emit();
         direct.Should().NotBeNull("adapter direct read finds the thread row");
@@ -325,7 +325,7 @@ public class ThreadPathResolutionTest
         // that partition_access is populated for Anonymous. The raw reader probe
         // is genuine async DB I/O; bridge it at the SDK boundary so this test
         // body stays void + blocking-reactive (§2a).
-        var (threadRows, meshRows, pa, uep) = ProbeRowCounts(ds, ct);
+        var (threadRows, meshRows, pa, uep) = await ProbeRowCounts(ds, ct);
         // Surface via xUnit's test output so we see the actual data
         // shape on failure. Diagnostic only — assertions below pin the
         // behaviour.
@@ -351,7 +351,7 @@ public class ThreadPathResolutionTest
         {
             UserId = MeshWeaver.Mesh.Security.WellKnownUsers.System,
         };
-        var singleSnapshot = query
+        var singleSnapshot = await query
             .Query<MeshNode>(singlePathRequest, _options)
             .Should().Within(30.Seconds()).Emit();
         singleSnapshot.Items.Select(n => n.Path).Should().Contain(
@@ -365,7 +365,7 @@ public class ThreadPathResolutionTest
         {
             UserId = MeshWeaver.Mesh.Security.WellKnownUsers.System,
         };
-        var snapshot = query
+        var snapshot = await query
             .Query<MeshNode>(systemRequest, _options)
             .Should().Within(30.Seconds()).Emit();
 
@@ -401,10 +401,10 @@ public class ThreadPathResolutionTest
     /// Anonymous on systemorph) and PathResolutionService emits NotFound.</para>
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void PathResolution_AsAnonymous_NoPartitionAccess_StillFindsSatelliteRow_UnderSystemBypass()
+    public async Task PathResolution_AsAnonymous_NoPartitionAccess_StillFindsSatelliteRow_UnderSystemBypass()
     {
         var ct = TestContext.Current.CancellationToken;
-        CleanData(ct);
+        await CleanData(ct);
 
         var partitionDef = new PartitionDefinition
         {
@@ -412,17 +412,17 @@ public class ThreadPathResolutionTest
             Schema = "privateorg",
             TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
-        var (ds, adapter) = CreateSchema("privateorg", partitionDef, ct);
+        var (ds, adapter) = await CreateSchema("privateorg", partitionDef, ct);
 
         // Deliberately NO partition_access for Anonymous and NO UEP entry for
         // Anonymous. The schema is "private" by default — only explicitly
         // granted users can read.
-        adapter.Write(new MeshNode("PrivateOrg")
+        await adapter.Write(new MeshNode("PrivateOrg")
         {
             Name = "Private Org",
             NodeType = "Markdown",
         }, _options).Should().Within(30.Seconds()).Emit();
-        adapter.Write(new MeshNode("secret-thread", "PrivateOrg/_Thread")
+        await adapter.Write(new MeshNode("secret-thread", "PrivateOrg/_Thread")
         {
             Name = "Secret",
             NodeType = "Thread",
@@ -435,7 +435,7 @@ public class ThreadPathResolutionTest
         var query = new PostgreSqlMeshQuery(adapter);
         var anonRequest = MeshQueryRequest.FromQuery(
             "path:PrivateOrg/_Thread/secret-thread");
-        var anonSnapshot = query
+        var anonSnapshot = await query
             .Query<MeshNode>(anonRequest, _options)
             .Should().Within(30.Seconds()).Emit();
         anonSnapshot.Items.Should().BeEmpty(
@@ -449,7 +449,7 @@ public class ThreadPathResolutionTest
         {
             UserId = MeshWeaver.Mesh.Security.WellKnownUsers.System,
         };
-        var systemSnapshot = query
+        var systemSnapshot = await query
             .Query<MeshNode>(systemRequest, _options)
             .Should().Within(30.Seconds()).Emit();
         systemSnapshot.Items.Should().ContainSingle(n =>
@@ -469,10 +469,10 @@ public class ThreadPathResolutionTest
     /// partition's tables only.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void PathResolution_SatelliteUnderPartition_OnlyHitsThatPartition()
+    public async Task PathResolution_SatelliteUnderPartition_OnlyHitsThatPartition()
     {
         var ct = TestContext.Current.CancellationToken;
-        CleanData(ct);
+        await CleanData(ct);
 
         // Create TWO partitions, each with a thread row at the same satellite
         // suffix. If the query fans out, both would surface; if it pins to the
@@ -487,19 +487,19 @@ public class ThreadPathResolutionTest
             Namespace = "OrgB", Schema = "orgb",
             TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
-        var (dsA, adapterA) = CreateSchema("orga", defA, ct);
-        var (dsB, adapterB) = CreateSchema("orgb", defB, ct);
+        var (dsA, adapterA) = await CreateSchema("orga", defA, ct);
+        var (dsB, adapterB) = await CreateSchema("orgb", defB, ct);
 
-        adapterA.Write(new MeshNode("OrgA") { NodeType = "Markdown" }, _options)
+        await adapterA.Write(new MeshNode("OrgA") { NodeType = "Markdown" }, _options)
             .Should().Within(30.Seconds()).Emit();
-        adapterA.Write(new MeshNode("t1", "OrgA/_Thread")
+        await adapterA.Write(new MeshNode("t1", "OrgA/_Thread")
         {
             NodeType = "Thread", MainNode = "OrgA",
             Content = new MeshThread { CreatedBy = "u" }
         }, _options).Should().Within(30.Seconds()).Emit();
-        adapterB.Write(new MeshNode("OrgB") { NodeType = "Markdown" }, _options)
+        await adapterB.Write(new MeshNode("OrgB") { NodeType = "Markdown" }, _options)
             .Should().Within(30.Seconds()).Emit();
-        adapterB.Write(new MeshNode("t1", "OrgB/_Thread")
+        await adapterB.Write(new MeshNode("t1", "OrgB/_Thread")
         {
             NodeType = "Thread", MainNode = "OrgB",
             Content = new MeshThread { CreatedBy = "u" }
@@ -514,7 +514,7 @@ public class ThreadPathResolutionTest
         {
             UserId = MeshWeaver.Mesh.Security.WellKnownUsers.System,
         };
-        var snapshot = query
+        var snapshot = await query
             .Query<MeshNode>(request, _options)
             .Should().Within(30.Seconds()).Emit();
 
@@ -534,15 +534,15 @@ public class ThreadPathResolutionTest
     // InitializeAsync/DisposeAsync container lifecycle stays async.
     // -------------------------------------------------------------------
 
-    private void CleanData(CancellationToken ct)
+    private Task CleanData(CancellationToken ct)
         => _fixture.CleanData().Should().Within(60.Seconds()).Emit();
 
-    private (NpgsqlDataSource Ds, PostgreSqlStorageAdapter Adapter) CreateSchema(
+    private Task<(NpgsqlDataSource Ds, PostgreSqlStorageAdapter Adapter)> CreateSchema(
         string schema, PartitionDefinition partitionDef, CancellationToken ct)
         => _fixture.CreateSchemaAdapter(schema, partitionDef, ct)
             .Should().Within(60.Seconds()).Emit();
 
-    private static (long ThreadRows, long MeshRows, long PartitionAccess, long Uep)
+    private static Task<(long ThreadRows, long MeshRows, long PartitionAccess, long Uep)>
         ProbeRowCounts(NpgsqlDataSource ds, CancellationToken ct)
         => ds.Probe(@"
             SELECT

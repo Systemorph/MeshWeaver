@@ -70,12 +70,12 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
     }
 
     [Fact(Timeout = 20000)]
-    public void Admin_CanSee_AllPartitions()
+    public async Task Admin_CanSee_AllPartitions()
     {
         // Default login is admin (Roland)
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
             $"namespace:{PartitionNodeType.Namespace} nodeType:{PartitionNodeType.NodeType}"))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         Output.WriteLine($"Found {results.Count} partitions");
         foreach (var r in results)
@@ -87,13 +87,13 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
     }
 
     [Fact(Timeout = 20000)]
-    public void AuthenticatedUser_CanRead_PartitionNodes()
+    public async Task AuthenticatedUser_CanRead_PartitionNodes()
     {
         LoginAsUnprivilegedUser();
 
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
             $"namespace:{PartitionNodeType.Namespace} nodeType:{PartitionNodeType.NodeType}"))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         Output.WriteLine($"Found {results.Count} partitions as unprivileged user");
         foreach (var r in results)
@@ -105,11 +105,11 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
     }
 
     [Fact(Timeout = 20000)]
-    public void PartitionNode_HasCorrectNamespace()
+    public async Task PartitionNode_HasCorrectNamespace()
     {
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
             "path:Admin/Partition/TestPartition"))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         results.Should().HaveCount(1);
         var partition = results.First();
@@ -122,11 +122,11 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
     }
 
     [Fact(Timeout = 20000)]
-    public void DocumentationPartition_HasDocNamespace()
+    public async Task DocumentationPartition_HasDocNamespace()
     {
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
             "path:Admin/Partition/Documentation"))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         results.Should().HaveCount(1);
         var partition = results.First();

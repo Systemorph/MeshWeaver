@@ -71,13 +71,13 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests that workspace initializes correctly with the predefined test data
     /// </summary>
     [Fact]
-    public void Workspace_ShouldInitializeWithTestData()
+    public async Task Workspace_ShouldInitializeWithTestData()
     {
         // arrange
         var workspace = GetHost().GetWorkspace();
 
         // act
-        var data = workspace
+        var data = await workspace
             .GetObservable<WorkspaceTestData>()
             .Should().Within(10.Seconds())
             .Emit();
@@ -92,14 +92,14 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests that workspace can retrieve a specific item by its key
     /// </summary>
     [Fact]
-    public void Workspace_GetObservableWithKey_ShouldReturnSpecificItem()
+    public async Task Workspace_GetObservableWithKey_ShouldReturnSpecificItem()
     {
         // arrange
         var workspace = GetHost().GetWorkspace();
         var expectedItem = WorkspaceTestData.TestData.First(x => x.Id == "2");
 
         // act
-        var item = workspace
+        var item = await workspace
             .GetObservable<WorkspaceTestData>("2")
             .Should().Within(10.Seconds())
             .Match(x => x is not null);
@@ -112,13 +112,13 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests that workspace returns null when querying for a non-existent key
     /// </summary>
     [Fact]
-    public void Workspace_GetObservableWithNonExistentKey_ShouldReturnNull()
+    public async Task Workspace_GetObservableWithNonExistentKey_ShouldReturnNull()
     {
         // arrange
         var workspace = GetHost().GetWorkspace();
 
         // act
-        var item = workspace
+        var item = await workspace
             .GetObservable<WorkspaceTestData>("999")
             .Should().Within(5.Seconds())
             .Emit();
@@ -131,13 +131,13 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests that workspace can filter items using predicate expressions
     /// </summary>
     [Fact]
-    public void Workspace_FilterByPredicate_ShouldReturnMatchingItems()
+    public async Task Workspace_FilterByPredicate_ShouldReturnMatchingItems()
     {
         // arrange
         var workspace = GetHost().GetWorkspace();
 
         // act
-        var activeItems = workspace
+        var activeItems = await workspace
             .GetObservable<WorkspaceTestData>()
             .Select(collection => collection.Where(x => x.IsActive).ToArray())
             .Should().Within(10.Seconds())
@@ -150,7 +150,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
          /// Tests that updating an item triggers observable changes in the workspace
          /// </summary>
     [Fact(Timeout = 30000)] // 30 second timeout to prevent hanging
-    public void Workspace_UpdateItem_ShouldTriggerObservableChanges()
+    public async Task Workspace_UpdateItem_ShouldTriggerObservableChanges()
     {
         // arrange
         var client = GetClient();
@@ -168,17 +168,17 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
             .Subscribe(changeCounts.OnNext);
 
         // Wait for initial data — the first emission is change #1.
-        var initialChangeCount = changeCounts.Should().Within(10.Seconds()).Match(c => c >= 1);
+        var initialChangeCount = await changeCounts.Should().Within(10.Seconds()).Match(c => c >= 1);
 
         // act
-        client.Observe(DataChangeRequest.Update(new object[] { updatedItem }), o => o.WithTarget(CreateClientAddress()))
+        await client.Observe(DataChangeRequest.Update(new object[] { updatedItem }), o => o.WithTarget(CreateClientAddress()))
             .Should().Within(10.Seconds()).Emit();
 
         // assert — the update produces a further change event (count strictly grows).
-        changeCounts.Should().Within(10.Seconds()).Match(c => c > initialChangeCount);
+        await changeCounts.Should().Within(10.Seconds()).Match(c => c > initialChangeCount);
 
         // and the new value is present in the workspace.
-        var currentData = workspace
+        var currentData = await workspace
             .GetObservable<WorkspaceTestData>()
             .Should().Within(10.Seconds())
             .Match(x => x.Any(item => item.Id == "1" && item.Name == "Updated First Item"));
@@ -189,13 +189,13 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
          /// Tests that deleting an item removes it from the workspace collection
          /// </summary>
     [Fact(Timeout = 30000)] // 30 second timeout to prevent hanging
-    public void Workspace_DeleteItem_ShouldRemoveFromCollection()
+    public async Task Workspace_DeleteItem_ShouldRemoveFromCollection()
     {
         // arrange
         var client = GetClient();
         var workspace = client.GetWorkspace();
 
-        var initialData = workspace
+        var initialData = await workspace
             .GetObservable<WorkspaceTestData>()
             .Should().Within(10.Seconds())
             .Emit();
@@ -203,11 +203,11 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         var itemToDelete = initialData.First(x => x.Id == "3");
 
         // act
-        client.Observe(DataChangeRequest.Delete(new object[] { itemToDelete }, "TestUser"), o => o.WithTarget(CreateClientAddress()))
+        await client.Observe(DataChangeRequest.Delete(new object[] { itemToDelete }, "TestUser"), o => o.WithTarget(CreateClientAddress()))
             .Should().Within(10.Seconds()).Emit();
 
         // assert
-        var updatedData = workspace
+        var updatedData = await workspace
             .GetObservable<WorkspaceTestData>()
             .Should().Within(10.Seconds())
             .Match(x => x.Count == 2);
@@ -220,13 +220,13 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests that data change requests with activities properly log changes
     /// </summary>
     [Fact]
-    public void DataChangeRequest_WithActivity_ShouldLogChanges()
+    public async Task DataChangeRequest_WithActivity_ShouldLogChanges()
     {        // arrange
         var client = GetClient();
         var updateItem = new WorkspaceTestData("1", "Logged Update", DateTime.UtcNow);
 
         // act
-        var response = client.Observe(DataChangeRequest.Update(new object[] { updateItem }), o => o.WithTarget(CreateClientAddress()))
+        var response = await client.Observe(DataChangeRequest.Update(new object[] { updateItem }), o => o.WithTarget(CreateClientAddress()))
             .Should().Within(10.Seconds()).Emit();
 
         // assert
@@ -239,7 +239,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests that collection references provide proper stream access to collections
     /// </summary>
     [Fact]
-    public void CollectionReference_ShouldProvideStreamAccess()
+    public async Task CollectionReference_ShouldProvideStreamAccess()
     {
         // arrange
         var workspace = GetHost().GetWorkspace();
@@ -248,7 +248,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var stream = workspace.GetStream(collectionRef);
         ((object?)stream).Should().NotBeNull();
-        var collection = stream!
+        var collection = await stream!
             .Where(c => c.Value != null)
             .Select(c => c.Value!.Instances.Values.Cast<WorkspaceTestData>().ToArray())
             .Should().Within(10.Seconds())
@@ -263,7 +263,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests that entity references provide access to specific items in the workspace
     /// </summary>
     [Fact]
-    public void EntityReference_ShouldProvideSpecificItemAccess()
+    public async Task EntityReference_ShouldProvideSpecificItemAccess()
     {
         // arrange
         var workspace = GetHost().GetWorkspace();
@@ -272,7 +272,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var stream = workspace.GetStream(entityRef);
         ((object?)stream).Should().NotBeNull();
-        var item = stream!
+        var item = await stream!
             .Where(c => c.Value != null)
             .Select(c => c.Value as WorkspaceTestData)
             .Should().Within(10.Seconds())
@@ -286,7 +286,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
          /// Tests that multiple clients can synchronize data changes across the workspace
          /// </summary>
     [Fact]
-    public void Workspace_MultipleClients_ShouldSynchronizeData()
+    public async Task Workspace_MultipleClients_ShouldSynchronizeData()
     {
         // arrange
         var client1 = GetClient();
@@ -294,13 +294,13 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         var updateItem = new WorkspaceTestData("1", "Multi-Client Update", DateTime.UtcNow);
 
         // act - update from client1
-        var response = client1.Observe(DataChangeRequest.Update([updateItem]), o => o.WithTarget(CreateClientAddress()))
+        var response = await client1.Observe(DataChangeRequest.Update([updateItem]), o => o.WithTarget(CreateClientAddress()))
             .Should().Within(10.Seconds()).Emit();
 
         response.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         Logger.LogInformation("*** Data Change Finished");
         // assert - client2 should see the change
-        var client2Data = client2
+        var client2Data = await client2
             .GetWorkspace()
             .GetObservable<WorkspaceTestData>()
             .Should().Within(10.Seconds())

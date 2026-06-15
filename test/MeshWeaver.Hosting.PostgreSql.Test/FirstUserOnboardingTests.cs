@@ -41,10 +41,10 @@ public class FirstUserOnboardingTests
     /// Verifies the user gets all permissions and partition_access to the admin partition.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void FirstUser_GetsGlobalAdminRole()
+    public async Task FirstUser_GetsGlobalAdminRole()
     {
         var ct = TestContext.Current.CancellationToken;
-        _fixture.CleanData().Should().Within(60.Seconds()).Emit();
+        await _fixture.CleanData().Should().Within(60.Seconds()).Emit();
 
         // Create admin schema (global admin assignments live here)
         var partitionDef = new PartitionDefinition
@@ -53,16 +53,16 @@ public class FirstUserOnboardingTests
             Schema = "admin",
             TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
-        var (adminDs, adminAdapter) = _fixture.CreateSchemaAdapter("admin", partitionDef, ct)
+        var (adminDs, adminAdapter) = await _fixture.CreateSchemaAdapter("admin", partitionDef, ct)
             .Should().Within(60.Seconds()).Emit();
 
         // Create User schema
-        var (_, userAdapter) = _fixture.CreateSchemaAdapter("user", null, ct)
+        var (_, userAdapter) = await _fixture.CreateSchemaAdapter("user", null, ct)
             .Should().Within(60.Seconds()).Emit();
 
         // Step 1: Create User node (simulates NodeFactory.CreateNodeAsync in onboarding)
         const string username = "firstadmin";
-        userAdapter.Write(new MeshNode(username, "User")
+        await userAdapter.Write(new MeshNode(username, "User")
         {
             Name = "First Admin",
             NodeType = "User",
@@ -79,7 +79,7 @@ public class FirstUserOnboardingTests
         // → namespace = "Admin/_Access", stored in admin.access table
         var ns = "Admin/_Access";
         var nodeId = $"{username}_Access";
-        adminAdapter.Write(new MeshNode(nodeId, ns)
+        await adminAdapter.Write(new MeshNode(nodeId, ns)
         {
             Name = username,
             NodeType = "AccessAssignment",
@@ -95,18 +95,18 @@ public class FirstUserOnboardingTests
 
         // Step 3: Rebuild permissions (normally triggered by DB trigger)
         var adminAccessControl = new PostgreSqlAccessControl(adminDs);
-        adminAccessControl.RebuildDenormalizedTableAsync(ct).Run().Should().Within(30.Seconds()).Emit();
+        await adminAccessControl.RebuildDenormalizedTableAsync(ct).Run().Should().Within(30.Seconds()).Emit();
 
         // Verify: user has all permissions at Admin/_Access scope
         var allPermissions = new[] { "Read", "Create", "Update", "Delete", "Comment", "Execute", "Thread" };
         foreach (var perm in allPermissions)
         {
-            adminAccessControl.HasPermissionAsync(username, "Admin/_Access", perm, ct).Run()
+            await adminAccessControl.HasPermissionAsync(username, "Admin/_Access", perm, ct).Run()
                 .Should().Within(30.Seconds()).Be(true);
         }
 
         // Verify: partition_access entry exists for admin partition
-        var partitions = _fixture.DataSource.Rows(
+        var partitions = await _fixture.DataSource.Rows(
             "SELECT partition FROM public.partition_access WHERE user_id = @uid ORDER BY partition",
             new[] { ("uid", (object)username) },
             reader => reader.GetString(0), ct)
@@ -121,10 +121,10 @@ public class FirstUserOnboardingTests
     /// Organizations have PublicRead=true so they're visible to any authenticated user.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void FirstUser_CanSeeAllOrganizations_ViaCrossSchema()
+    public async Task FirstUser_CanSeeAllOrganizations_ViaCrossSchema()
     {
         var ct = TestContext.Current.CancellationToken;
-        _fixture.CleanData().Should().Within(60.Seconds()).Emit();
+        await _fixture.CleanData().Should().Within(60.Seconds()).Emit();
 
         var partitionDef = new PartitionDefinition
         {
@@ -132,13 +132,13 @@ public class FirstUserOnboardingTests
         };
 
         // Create admin schema with global admin
-        var (adminDs, adminAdapter) = _fixture.CreateSchemaAdapter(
+        var (adminDs, adminAdapter) = await _fixture.CreateSchemaAdapter(
             "admin",
             partitionDef with { Namespace = "Admin", Schema = "admin" }, ct)
             .Should().Within(60.Seconds()).Emit();
 
         const string username = "globaladmin";
-        adminAdapter.Write(new MeshNode($"{username}_Access", "Admin/_Access")
+        await adminAdapter.Write(new MeshNode($"{username}_Access", "Admin/_Access")
         {
             Name = username,
             NodeType = "AccessAssignment",
@@ -153,18 +153,18 @@ public class FirstUserOnboardingTests
         }, _options).Should().Within(30.Seconds()).Emit();
 
         var adminAccessControl = new PostgreSqlAccessControl(adminDs);
-        adminAccessControl.RebuildDenormalizedTableAsync(ct).Run().Should().Within(30.Seconds()).Emit();
+        await adminAccessControl.RebuildDenormalizedTableAsync(ct).Run().Should().Within(30.Seconds()).Emit();
 
         // Create 2 org schemas with Organization nodes
         var orgNames = new[] { "OrgAlpha", "OrgBeta" };
         foreach (var org in orgNames)
         {
             var schemaName = org.ToLowerInvariant();
-            var (ds, adapter) = _fixture.CreateSchemaAdapter(
+            var (ds, adapter) = await _fixture.CreateSchemaAdapter(
                 schemaName, partitionDef with { Namespace = org, Schema = schemaName }, ct)
                 .Should().Within(60.Seconds()).Emit();
 
-            adapter.Write(new MeshNode(org)
+            await adapter.Write(new MeshNode(org)
             {
                 Name = $"{org} Corp",
                 NodeType = SpaceNodeType.NodeType,
@@ -174,24 +174,24 @@ public class FirstUserOnboardingTests
 
             // Register Organization as public_read in each org schema
             var ac = new PostgreSqlAccessControl(ds);
-            ac.SyncNodeTypePermissionsAsync(
+            await ac.SyncNodeTypePermissionsAsync(
                 [new NodeTypePermission(SpaceNodeType.NodeType, PublicRead: true)], ct)
                 .Run().Should().Within(30.Seconds()).Emit();
         }
 
         // Populate searchable_schemas
-        PopulateSearchableSchemasAsync(orgNames.Select(o => o.ToLowerInvariant()), ct)
+        await PopulateSearchableSchemasAsync(orgNames.Select(o => o.ToLowerInvariant()), ct)
             .Run().Should().Within(30.Seconds()).Emit();
 
         // Grant partition_access to globaladmin for all org schemas
-        _fixture.DataSource.ExecuteNonQuery(
+        await _fixture.DataSource.ExecuteNonQuery(
             "DELETE FROM public.partition_access; " +
             "INSERT INTO public.partition_access (user_id, partition) VALUES " +
             "('globaladmin', 'orgalpha'), ('globaladmin', 'orgbeta')", ct)
             .Should().Within(30.Seconds()).Emit();
 
         // Cross-schema search for Organization nodes as globaladmin
-        var results = CallSearchAcrossSchemasAsync(
+        var results = await CallSearchAcrossSchemasAsync(
             $"LOWER(n.node_type) = '{SpaceNodeType.NodeType.ToLowerInvariant()}'",
             username, "last_modified DESC", 50, ct)
             .Run().Should().Within(30.Seconds()).Emit();

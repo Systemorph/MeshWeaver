@@ -58,9 +58,9 @@ public class OrleansDelegationFlowTest(ITestOutputHelper output) : OrleansTestBa
     private IMessageHub GetClient()
         => base.GetClient($"flow-{Guid.NewGuid():N}", "TestUser");
 
-    private string CreateNode(IMessageHub client, MeshNode node, string targetAddress)
+    private async Task<string> CreateNode(IMessageHub client, MeshNode node, string targetAddress)
     {
-        var response = client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(targetAddress)))
+        var response = await client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(targetAddress)))
             .Should().Within(30.Seconds()).Emit();
         response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         return response.Message.Node!.Path!;
@@ -82,13 +82,13 @@ public class OrleansDelegationFlowTest(ITestOutputHelper output) : OrleansTestBa
     /// Verifies that access context flows through the entire chain.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void Delegation_CreatesSubThread_WithCorrectIdentity()
+    public async Task Delegation_CreatesSubThread_WithCorrectIdentity()
     {
         var client = GetClient();
 
         // Create a thread
         var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Delegation flow test", "TestUser");
-        var threadPath = CreateNode(client, threadNode, "TestUser");
+        var threadPath = await CreateNode(client, threadNode, "TestUser");
         Output.WriteLine($"Thread: {threadPath}");
 
         // Project the thread's message-id list off the live stream.
@@ -110,12 +110,12 @@ public class OrleansDelegationFlowTest(ITestOutputHelper output) : OrleansTestBa
         Output.WriteLine("SubmitMessage succeeded");
 
         // Wait for message IDs (user + response).
-        var msgIds = messageIds.Should().Within(45.Seconds()).Match(ids => ids.Count >= 2);
+        var msgIds = await messageIds.Should().Within(45.Seconds()).Match(ids => ids.Count >= 2);
         Output.WriteLine($"Message IDs: [{string.Join(", ", msgIds)}]");
 
         // Wait for execution to complete (agent streams + delegation + sub-thread):
         // the response cell either gains a delegation tool call or its text mentions it.
-        var responseMsg = ObserveResponseCell(client, $"{threadPath}/{msgIds[1]}")
+        var responseMsg = await ObserveResponseCell(client, $"{threadPath}/{msgIds[1]}")
             .Should().Within(40.Seconds())
             .Match(m => m?.ToolCalls?.Any(tc => tc.Name?.Contains("delegate") == true) == true
                 || m?.Text?.Contains("delegat", StringComparison.OrdinalIgnoreCase) == true);

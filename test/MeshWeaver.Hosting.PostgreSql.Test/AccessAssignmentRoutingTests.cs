@@ -29,7 +29,7 @@ public class AccessAssignmentRoutingTests
     }
 
     [Fact(Timeout = 60000)]
-    public void AccessAssignment_DirectChild_RoutesToAccessTable()
+    public async Task AccessAssignment_DirectChild_RoutesToAccessTable()
     {
         var ct = TestContext.Current.CancellationToken;
 
@@ -40,7 +40,7 @@ public class AccessAssignmentRoutingTests
             Schema = "testorg_access",
             TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
-        var (ds, adapter) = _fixture.CreateSchemaAdapter("testorg_access", partitionDef, ct)
+        var (ds, adapter) = await _fixture.CreateSchemaAdapter("testorg_access", partitionDef, ct)
             .Should().Within(60.Seconds()).Emit();
 
         try
@@ -64,13 +64,13 @@ public class AccessAssignmentRoutingTests
                 }
             };
 
-            adapter.Write(accessNode, _options).Should().Within(60.Seconds()).Emit();
+            await adapter.Write(accessNode, _options).Should().Within(60.Seconds()).Emit();
 
             // Verify: node should be in the `access` table, NOT in `mesh_nodes`
-            var accessCount = ds.ScalarLong(
+            var accessCount = await ds.ScalarLong(
                 "SELECT count(*) FROM access WHERE id = 'rbuergi_Access' AND namespace = 'TestOrg'", ct)
                 .Should().Within(30.Seconds()).Emit();
-            var meshNodesCount = ds.ScalarLong(
+            var meshNodesCount = await ds.ScalarLong(
                 "SELECT count(*) FROM mesh_nodes WHERE id = 'rbuergi_Access' AND namespace = 'TestOrg'", ct)
                 .Should().Within(30.Seconds()).Emit();
 
@@ -86,12 +86,12 @@ public class AccessAssignmentRoutingTests
         }
         finally
         {
-            ds.DisposeReactive().Should().Within(30.Seconds()).Emit();
+            await ds.DisposeReactive().Should().Within(30.Seconds()).Emit();
         }
     }
 
     [Fact(Timeout = 60000)]
-    public void AccessAssignment_ViaAccessSegment_RoutesToAccessTable()
+    public async Task AccessAssignment_ViaAccessSegment_RoutesToAccessTable()
     {
         var ct = TestContext.Current.CancellationToken;
 
@@ -102,7 +102,7 @@ public class AccessAssignmentRoutingTests
             Schema = "orgaccseg",
             TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
-        var (ds, adapter) = _fixture.CreateSchemaAdapter("orgaccseg", partitionDef, ct)
+        var (ds, adapter) = await _fixture.CreateSchemaAdapter("orgaccseg", partitionDef, ct)
             .Should().Within(60.Seconds()).Emit();
 
         try
@@ -124,13 +124,13 @@ public class AccessAssignmentRoutingTests
                 }
             };
 
-            adapter.Write(accessNode, _options).Should().Within(60.Seconds()).Emit();
+            await adapter.Write(accessNode, _options).Should().Within(60.Seconds()).Emit();
 
             // Verify: node in `access` table (path-based routing matches _Access segment)
-            var accessCount = ds.ScalarLong(
+            var accessCount = await ds.ScalarLong(
                 "SELECT count(*) FROM access WHERE id = 'rbuergi_Access' AND namespace = 'OrgAccSeg/_Access'", ct)
                 .Should().Within(30.Seconds()).Emit();
-            var meshNodesCount = ds.ScalarLong(
+            var meshNodesCount = await ds.ScalarLong(
                 "SELECT count(*) FROM mesh_nodes WHERE id = 'rbuergi_Access'", ct)
                 .Should().Within(30.Seconds()).Emit();
 
@@ -139,12 +139,12 @@ public class AccessAssignmentRoutingTests
         }
         finally
         {
-            ds.DisposeReactive().Should().Within(30.Seconds()).Emit();
+            await ds.DisposeReactive().Should().Within(30.Seconds()).Emit();
         }
     }
 
     [Fact(Timeout = 60000)]
-    public void AccessAssignment_UnderAccessSegment_AlsoRoutesToAccessTable()
+    public async Task AccessAssignment_UnderAccessSegment_AlsoRoutesToAccessTable()
     {
         var ct = TestContext.Current.CancellationToken;
 
@@ -155,7 +155,7 @@ public class AccessAssignmentRoutingTests
             Schema = "testorg2_access",
             TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
-        var (ds, adapter) = _fixture.CreateSchemaAdapter("testorg2_access", partitionDef, ct)
+        var (ds, adapter) = await _fixture.CreateSchemaAdapter("testorg2_access", partitionDef, ct)
             .Should().Within(60.Seconds()).Emit();
 
         try
@@ -178,10 +178,10 @@ public class AccessAssignmentRoutingTests
                 }
             };
 
-            adapter.Write(accessNode, _options).Should().Within(60.Seconds()).Emit();
+            await adapter.Write(accessNode, _options).Should().Within(60.Seconds()).Emit();
 
             // Verify: also in `access` table (path-based routing works for _Access segment)
-            var accessCount = ds.ScalarLong(
+            var accessCount = await ds.ScalarLong(
                 "SELECT count(*) FROM access WHERE id = 'rbuergi_Access'", ct)
                 .Should().Within(30.Seconds()).Emit();
 
@@ -190,7 +190,7 @@ public class AccessAssignmentRoutingTests
         }
         finally
         {
-            ds.DisposeReactive().Should().Within(30.Seconds()).Emit();
+            await ds.DisposeReactive().Should().Within(30.Seconds()).Emit();
         }
     }
 }

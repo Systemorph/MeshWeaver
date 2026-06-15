@@ -1,3 +1,4 @@
+using System.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Security;
@@ -31,31 +32,31 @@ public class AdminPartitionAdminTests(ITestOutputHelper output) : MonolithMeshTe
                 AssignmentNodeFactory.UserRole("AcmeEditor", "Editor", "ACME"));
 
     [Fact]
-    public void PlatformAdmin_IsGlobalAdmin()
-        => Mesh.IsGlobalAdmin("AdminBoss").Should().Match(isAdmin => isAdmin);
+    public async Task PlatformAdmin_IsGlobalAdmin()
+        => await Mesh.IsGlobalAdmin("AdminBoss").Should().Match(isAdmin => isAdmin);
 
     [Fact]
-    public void PlatformAdmin_HasAllOnAdminPartition_IncludingInvitations()
+    public async Task PlatformAdmin_HasAllOnAdminPartition_IncludingInvitations()
     {
-        Mesh.GetEffectivePermissions("Admin", "AdminBoss").Should().Match(p => p == Permission.All);
+        await Mesh.GetEffectivePermissions("Admin", "AdminBoss").Should().Match(p => p == Permission.All);
         // Invitations live in the Admin partition — a platform admin manages them.
-        Mesh.GetEffectivePermissions("Admin/Invitation", "AdminBoss").Should().Match(p => p == Permission.All);
+        await Mesh.GetEffectivePermissions("Admin/Invitation", "AdminBoss").Should().Match(p => p == Permission.All);
     }
 
     [Fact]
-    public void PlatformAdmin_HasNoStandingAccessToSpacesOrUsers()
+    public async Task PlatformAdmin_HasNoStandingAccessToSpacesOrUsers()
     {
         // 🚨 The directive: an Admin/_Access grant gives NO standing access to spaces nor
         // user partitions. Cross-partition data changes require explicit elevation.
-        Mesh.GetEffectivePermissions("ACME", "AdminBoss").Should().Match(p => p == Permission.None);
-        Mesh.GetEffectivePermissions("ACME/Project/Task", "AdminBoss").Should().Match(p => p == Permission.None);
-        Mesh.GetEffectivePermissions("someuser/Underwriting", "AdminBoss").Should().Match(p => p == Permission.None);
+        await Mesh.GetEffectivePermissions("ACME", "AdminBoss").Should().Match(p => p == Permission.None);
+        await Mesh.GetEffectivePermissions("ACME/Project/Task", "AdminBoss").Should().Match(p => p == Permission.None);
+        await Mesh.GetEffectivePermissions("someuser/Underwriting", "AdminBoss").Should().Match(p => p == Permission.None);
     }
 
     [Fact]
-    public void NonPlatformUser_IsNotGlobalAdmin()
+    public async Task NonPlatformUser_IsNotGlobalAdmin()
     {
-        Mesh.IsGlobalAdmin("AcmeEditor").Should().Match(isAdmin => !isAdmin);
-        Mesh.IsGlobalAdmin("nobody").Should().Match(isAdmin => !isAdmin);
+        await Mesh.IsGlobalAdmin("AcmeEditor").Should().Match(isAdmin => !isAdmin);
+        await Mesh.IsGlobalAdmin("nobody").Should().Match(isAdmin => !isAdmin);
     }
 }

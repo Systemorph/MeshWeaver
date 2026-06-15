@@ -1,4 +1,6 @@
 using System;
+using System.Reactive.Threading.Tasks;
+using System.Threading.Tasks;
 using MeshWeaver.Documentation;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -27,14 +29,14 @@ public class SyncedPartitionReadOnlyTest(ITestOutputHelper output) : MonolithMes
     [Theory]
     [InlineData("Doc")]                      // the partition Space root (namespace="")
     [InlineData("Doc/DataMesh/UnifiedPath")] // a page under the root
-    public void Doc_IsPublicReadOnly(string path)
+    public async Task Doc_IsPublicReadOnly(string path)
     {
         // A plain user with no explicit grant. Even though the test mesh seeds Public→Admin at root
         // (so this user resolves to Admin = Permission.All), the Doc/_Policy cap strips C/U/D at the
         // Doc scope and below — proving the synced space cannot be written, not even by an admin.
         const string user = "ordinary.user@example.com";
 
-        Mesh.GetEffectivePermissions(path, user)
+        await Mesh.GetEffectivePermissions(path, user)
             .Should().Within(StepTimeout)
             .Match(p => p.HasFlag(Permission.Read)
                         && !p.HasFlag(Permission.Create)

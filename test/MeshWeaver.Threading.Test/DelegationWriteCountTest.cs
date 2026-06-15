@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
@@ -68,14 +68,14 @@ public class DelegationWriteCountTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     [Fact]
-    public void Delegation_ParentToolCalls_ContainsExactlyOneEntryPerDelegationPath()
+    public async Task Delegation_ParentToolCalls_ContainsExactlyOneEntryPerDelegationPath()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
 
         // 1) Create parent thread + submit a message that triggers a delegation.
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, "trigger delegation", "TestUser");
-        var create = client.Observe(new CreateNodeRequest(threadNode),
+        var create = await client.Observe(new CreateNodeRequest(threadNode),
             o => o.WithTarget(Mesh.Address)).Should().Within(60.Seconds()).Emit();
         create.Message.Success.Should().BeTrue(create.Message.Error ?? "");
         var parentThreadPath = create.Message.Node!.Path!;
@@ -88,7 +88,7 @@ public class DelegationWriteCountTest(ITestOutputHelper output) : MonolithMeshTe
             "do it",
             contextPath: ContextPath);
 
-        var parentMsgIds = parentSyncStream
+        var parentMsgIds = await parentSyncStream
             .Select(c => (c?.Content as MeshThread)?.Messages ?? [])
             .Should().Within(20.Seconds()).Match(ids => ids.Count >= 2);
         var parentRespId = parentMsgIds[1];
@@ -101,7 +101,7 @@ public class DelegationWriteCountTest(ITestOutputHelper output) : MonolithMeshTe
         var responseStream = workspace
             .GetMeshNodeStream(parentRespPath);
 
-        var completed = responseStream
+        var completed = await responseStream
             .Select(c => c?.Content as ThreadMessage)
             .Should().Within(45.Seconds()).Match(m => m is { Status: ThreadMessageStatus.Completed or ThreadMessageStatus.Cancelled or ThreadMessageStatus.Error });
 

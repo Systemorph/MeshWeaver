@@ -26,51 +26,51 @@ public class UserPartitionVisibilityTests
         _fixture = fixture;
     }
 
-    private List<MeshNode> Query(PostgreSqlMeshQuery query, MeshQueryRequest request)
-        => query.QueryList(request, _options, TestContext.Current.CancellationToken)
-            .Should().Within(30.Seconds()).Emit()
+    private async Task<List<MeshNode>> Query(PostgreSqlMeshQuery query, MeshQueryRequest request)
+        => (await query.QueryList(request, _options, TestContext.Current.CancellationToken)
+            .Should().Within(30.Seconds()).Emit())
             .OfType<MeshNode>().ToList();
 
-    private void SeedTwoUserPartitions()
+    private async Task SeedTwoUserPartitions()
     {
         var ct = TestContext.Current.CancellationToken;
-        _fixture.CleanData().Should().Within(60.Seconds()).Emit();
+        await _fixture.CleanData().Should().Within(60.Seconds()).Emit();
         var adapter = _fixture.StorageAdapter;
         var ac = _fixture.AccessControl;
 
         // Register User as a public-read node type (profile visible, content private)
-        ac.SyncNodeTypePermissionsAsync([
+        await ac.SyncNodeTypePermissionsAsync([
             new NodeTypePermission("User", PublicRead: true)
         ], ct).Run().Should().Within(30.Seconds()).Emit();
 
         // Create user nodes
-        adapter.Write(new MeshNode("Alice", "User")
+        await adapter.Write(new MeshNode("Alice", "User")
         {
             Name = "Alice",
             NodeType = "User"
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        adapter.Write(new MeshNode("Bob", "User")
+        await adapter.Write(new MeshNode("Bob", "User")
         {
             Name = "Bob",
             NodeType = "User"
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // Create private content in Alice's partition
-        adapter.Write(new MeshNode("SecretProject", "User/Alice")
+        await adapter.Write(new MeshNode("SecretProject", "User/Alice")
         {
             Name = "Alice's Secret Project",
             NodeType = "Markdown"
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        adapter.Write(new MeshNode("Notes", "User/Alice")
+        await adapter.Write(new MeshNode("Notes", "User/Alice")
         {
             Name = "Alice's Private Notes",
             NodeType = "Markdown"
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // Create private content in Bob's partition
-        adapter.Write(new MeshNode("MyWork", "User/Bob")
+        await adapter.Write(new MeshNode("MyWork", "User/Bob")
         {
             Name = "Bob's Work",
             NodeType = "Markdown"
@@ -79,19 +79,19 @@ public class UserPartitionVisibilityTests
         // Grant each user full access to their own namespace
         foreach (var perm in new[] { "Read", "Create", "Update", "Delete", "Comment", "Execute" })
         {
-            ac.Grant("User/Alice", "Alice", perm, isAllow: true, ct).Should().Within(30.Seconds()).Emit();
-            ac.Grant("User/Bob", "Bob", perm, isAllow: true, ct).Should().Within(30.Seconds()).Emit();
+            await ac.Grant("User/Alice", "Alice", perm, isAllow: true, ct).Should().Within(30.Seconds()).Emit();
+            await ac.Grant("User/Bob", "Bob", perm, isAllow: true, ct).Should().Within(30.Seconds()).Emit();
         }
     }
 
     [Fact]
-    public void BobCannotSeeAlicePartitionContent()
+    public async Task BobCannotSeeAlicePartitionContent()
     {
-        SeedTwoUserPartitions();
+        await SeedTwoUserPartitions();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
         var request = MeshQueryRequest.FromQuery("path:User/Alice scope:descendants", "Bob");
-        var results = Query(query, request);
+        var results = await Query(query, request);
 
         // Bob should see zero content nodes â€” subnodes require explicit access
         results
@@ -100,26 +100,26 @@ public class UserPartitionVisibilityTests
     }
 
     [Fact]
-    public void AliceCanSeeOwnPartitionContent()
+    public async Task AliceCanSeeOwnPartitionContent()
     {
-        SeedTwoUserPartitions();
+        await SeedTwoUserPartitions();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
         var request = MeshQueryRequest.FromQuery("path:User/Alice scope:descendants", "Alice");
-        var results = Query(query, request);
+        var results = await Query(query, request);
 
         results.Should().Contain(n => n.Name == "Alice's Secret Project");
         results.Should().Contain(n => n.Name == "Alice's Private Notes");
     }
 
     [Fact]
-    public void AliceCannotSeeBobPartitionContent()
+    public async Task AliceCannotSeeBobPartitionContent()
     {
-        SeedTwoUserPartitions();
+        await SeedTwoUserPartitions();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
         var request = MeshQueryRequest.FromQuery("path:User/Bob scope:descendants", "Alice");
-        var results = Query(query, request);
+        var results = await Query(query, request);
 
         results
             .Where(n => n.NodeType != "User")
@@ -127,26 +127,26 @@ public class UserPartitionVisibilityTests
     }
 
     [Fact]
-    public void BobCanSeeOwnPartitionContent()
+    public async Task BobCanSeeOwnPartitionContent()
     {
-        SeedTwoUserPartitions();
+        await SeedTwoUserPartitions();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
         var request = MeshQueryRequest.FromQuery("path:User/Bob scope:descendants", "Bob");
-        var results = Query(query, request);
+        var results = await Query(query, request);
 
         results.Should().Contain(n => n.Name == "Bob's Work");
     }
 
     [Fact]
-    public void UnknownUserCannotSeeAnyPartitionContent()
+    public async Task UnknownUserCannotSeeAnyPartitionContent()
     {
-        SeedTwoUserPartitions();
+        await SeedTwoUserPartitions();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
         // Charlie has no grants at all
         var request = MeshQueryRequest.FromQuery("path:User scope:descendants", "Charlie");
-        var results = Query(query, request);
+        var results = await Query(query, request);
 
         // Charlie should only see User nodes (public-read), not any partition content
         results.Where(n => n.NodeType != "User")
@@ -154,22 +154,22 @@ public class UserPartitionVisibilityTests
     }
 
     [Fact]
-    public void ExplicitGrant_MakesPartitionContentVisible()
+    public async Task ExplicitGrant_MakesPartitionContentVisible()
     {
-        SeedTwoUserPartitions();
+        await SeedTwoUserPartitions();
         var ac = _fixture.AccessControl;
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
         // Initially Bob cannot see Alice's project
         var request = MeshQueryRequest.FromQuery("path:User/Alice/SecretProject", "Bob");
-        var before = Query(query, request);
+        var before = await Query(query, request);
         before.Should().BeEmpty("Bob has no access before explicit grant");
 
         // Alice shares her project with Bob
-        ac.Grant("User/Alice/SecretProject", "Bob", "Read", isAllow: true, ct: TestContext.Current.CancellationToken).Should().Within(30.Seconds()).Emit();
+        await ac.Grant("User/Alice/SecretProject", "Bob", "Read", isAllow: true, ct: TestContext.Current.CancellationToken).Should().Within(30.Seconds()).Emit();
 
         // Now Bob can see it
-        var after = Query(query, request);
+        var after = await Query(query, request);
 
         after.Should().HaveCount(1);
         after[0].Name.Should().Be("Alice's Secret Project");

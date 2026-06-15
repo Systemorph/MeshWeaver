@@ -54,11 +54,11 @@ public class PatchDataRequestTest : MonolithMeshTestBase
             });
 
     [Fact]
-    public void PatchDataRequest_MergesPartialFields_LeavesOmittedIntact()
+    public async Task PatchDataRequest_MergesPartialFields_LeavesOmittedIntact()
     {
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var id = $"pdr-{Guid.NewGuid():N}";
-        mesh.CreateNode(new MeshNode(id, "ACME")
+        await mesh.CreateNode(new MeshNode(id, "ACME")
         {
             Name = "Original",
             NodeType = TestNodeType,
@@ -70,14 +70,14 @@ public class PatchDataRequestTest : MonolithMeshTestBase
         // Post the PatchDataRequest with only { name: "Patched" } â€” the hub handler
         // applies this as a merge patch on its own MeshNode workspace stream.
         var patchJson = JsonSerializer.Serialize(new { name = "Patched" });
-        var patchResp = Mesh.Observe(
+        var patchResp = (await Mesh.Observe(
             new PatchDataRequest(new MeshNodeReference(), new RawJson(patchJson)),
             o => o.WithTarget(new Address(path)))
-            .Should().Emit().Message;
+            .Should().Emit()).Message;
         patchResp.Success.Should().BeTrue(patchResp.Error ?? "no error provided");
 
         // Round-trip: GetDataRequest on MeshNodeReference must see the merged state.
-        var getResponse = Mesh.Observe(
+        var getResponse = await Mesh.Observe(
             new GetDataRequest(new MeshNodeReference()),
             o => o.WithTarget(new Address(path)))
             .Should().Emit();

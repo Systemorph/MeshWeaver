@@ -36,17 +36,17 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
             .Scan(ImmutableList<QueryResultChange<MeshNode>>.Empty, (acc, c) => acc.Add(c));
 
     [Fact]
-    public void ObserveQuery_EmitsInitialResults()
+    public async Task ObserveQuery_EmitsInitialResults()
     {
         // 🟢 Role-model reactive test: NO `await`, no `Task`. The creates are driven by the
         // assertion's subscribe, and we wait for the stream's matching emission via
         // `.Should().Match(...)` — see Doc/Architecture/ReactiveTestAssertions.md.
         var p = P();
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project1") with { Name = "Project 1", NodeType = "Markdown" }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project2") with { Name = "Project 2", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project1") with { Name = "Project 1", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project2") with { Name = "Project 2", NodeType = "Markdown" }).Should().Emit();
 
         // Act — wait for the initial emission to carry both items.
-        var changes = ObserveAccumulated($"path:{p} nodeType:Markdown scope:descendants")
+        var changes = await ObserveAccumulated($"path:{p} nodeType:Markdown scope:descendants")
             .Should(WaitTimeout)
             .Match(acc => acc.Count >= 1 && acc[0].Items.Count >= 2);
 
@@ -58,22 +58,22 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact]
-    public void ObserveQuery_EmitsAddedOnNewNode()
+    public async Task ObserveQuery_EmitsAddedOnNewNode()
     {
         var p = P();
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project1") with { Name = "Project 1", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project1") with { Name = "Project 1", NodeType = "Markdown" }).Should().Emit();
 
         var accumulated = ObserveAccumulated($"path:{p} nodeType:Markdown scope:descendants").Replay();
         using var connection = accumulated.Connect();
 
         // Wait for initial emission.
-        accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 1);
+        await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 1);
 
         // Act - Add a new matching node.
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project2") with { Name = "Project 2", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project2") with { Name = "Project 2", NodeType = "Markdown" }).Should().Emit();
 
         // Wait for the Added emission.
-        var changes = accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 2);
+        var changes = await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 2);
 
         // Assert
         changes.Should().HaveCount(2);
@@ -83,23 +83,23 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact]
-    public void ObserveQuery_EmitsRemovedOnDeletedNode()
+    public async Task ObserveQuery_EmitsRemovedOnDeletedNode()
     {
         var p = P();
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project1") with { Name = "Project 1", NodeType = "Markdown" }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project2") with { Name = "Project 2", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project1") with { Name = "Project 1", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project2") with { Name = "Project 2", NodeType = "Markdown" }).Should().Emit();
 
         var accumulated = ObserveAccumulated($"path:{p} nodeType:Markdown scope:descendants").Replay();
         using var connection = accumulated.Connect();
 
         // Wait for initial emission with both items.
-        accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 1 && acc[0].Items.Count >= 2);
+        await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 1 && acc[0].Items.Count >= 2);
 
         // Act - Delete a node
-        NodeFactory.DeleteNode($"{p}/Project1").Should().Emit();
+        await NodeFactory.DeleteNode($"{p}/Project1").Should().Emit();
 
         // Wait for the Removed emission.
-        var changes = accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 2);
+        var changes = await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 2);
 
         // Assert
         changes.Should().HaveCount(2);
@@ -109,28 +109,28 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact]
-    public void ObserveQuery_IgnoresChangesOutsideScope()
+    public async Task ObserveQuery_IgnoresChangesOutsideScope()
     {
         var p = P();
         var other = $"Other_{p}";
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project1") with { Name = "Project 1", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project1") with { Name = "Project 1", NodeType = "Markdown" }).Should().Emit();
 
         var accumulated = ObserveAccumulated($"path:{p} nodeType:Markdown scope:descendants").Replay();
         using var connection = accumulated.Connect();
 
         // Wait for initial emission.
-        accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 1);
+        await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 1);
 
         // Act - Add a node outside the scope (different path).
-        NodeFactory.CreateNode(MeshNode.FromPath($"{other}/Project2") with { Name = "Project 2", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{other}/Project2") with { Name = "Project 2", NodeType = "Markdown" }).Should().Emit();
 
         // Trigger an in-scope change after the out-of-scope create so we have a positive
         // signal that the system processed the second event without a fixed sleep.
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project3") with { Name = "Project 3", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project3") with { Name = "Project 3", NodeType = "Markdown" }).Should().Emit();
 
         // Wait until the in-scope emission shows up; the out-of-scope create must
         // not have produced its own emission.
-        var changes = accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 2 && acc.Skip(1).Any(c =>
+        var changes = await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 2 && acc.Skip(1).Any(c =>
             c.ChangeType == QueryChangeType.Added &&
             c.Items.Any(i => i.Name == "Project 3")));
 
@@ -141,24 +141,24 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact]
-    public void ObserveQuery_IgnoresChangesNotMatchingFilter()
+    public async Task ObserveQuery_IgnoresChangesNotMatchingFilter()
     {
         var p = P();
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project1") with { Name = "Project 1", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project1") with { Name = "Project 1", NodeType = "Markdown" }).Should().Emit();
 
         var accumulated = ObserveAccumulated($"path:{p} nodeType:Markdown scope:descendants").Replay();
         using var connection = accumulated.Connect();
 
         // Wait for initial emission.
-        accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 1);
+        await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 1);
 
         // Act - Add a node within scope but not matching filter (different nodeType).
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Task1") with { Name = "Task 1", NodeType = "Code" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Task1") with { Name = "Task 1", NodeType = "Code" }).Should().Emit();
 
         // Trigger a matching change to get a positive signal.
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project2") with { Name = "Project 2", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project2") with { Name = "Project 2", NodeType = "Markdown" }).Should().Emit();
 
-        var changes = accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 2 && acc.Skip(1).Any(c =>
+        var changes = await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 2 && acc.Skip(1).Any(c =>
             c.ChangeType == QueryChangeType.Added &&
             c.Items.Any(i => i.Name == "Project 2")));
 
@@ -169,22 +169,22 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact]
-    public void ObserveQuery_BatchesRapidChanges()
+    public async Task ObserveQuery_BatchesRapidChanges()
     {
         var p = P();
         var accumulated = ObserveAccumulated($"path:{p} nodeType:Markdown scope:descendants").Replay();
         using var connection = accumulated.Connect();
 
         // Wait for initial empty emission.
-        accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 1);
+        await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 1);
 
         // Act - Add multiple nodes rapidly (within debounce window).
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project1") with { Name = "Project 1", NodeType = "Markdown" }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project2") with { Name = "Project 2", NodeType = "Markdown" }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project3") with { Name = "Project 3", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project1") with { Name = "Project 1", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project2") with { Name = "Project 2", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project3") with { Name = "Project 3", NodeType = "Markdown" }).Should().Emit();
 
         // Wait until the post-initial Added emissions cover all three items.
-        var changes = accumulated.Should(WaitTimeout).Match(acc =>
+        var changes = await accumulated.Should(WaitTimeout).Match(acc =>
         {
             if (acc.Count < 2) return false;
             var added = acc.Skip(1)
@@ -208,21 +208,21 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact]
-    public void ObserveQuery_VersionIncrementsWithEachChange()
+    public async Task ObserveQuery_VersionIncrementsWithEachChange()
     {
         var p = P();
         var accumulated = ObserveAccumulated($"path:{p} nodeType:Markdown scope:descendants").Replay();
         using var connection = accumulated.Connect();
 
         // Wait for initial emission.
-        accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 1);
+        await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 1);
 
-        // Act - Add nodes one at a time, waiting for each to flow through.
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project1") with { Name = "Project 1", NodeType = "Markdown" }).Should().Emit();
-        accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 2);
+        // Act - Add nodes one at a time, await waiting for each to flow through.
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project1") with { Name = "Project 1", NodeType = "Markdown" }).Should().Emit();
+        await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 2);
 
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project2") with { Name = "Project 2", NodeType = "Markdown" }).Should().Emit();
-        var changes = accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 3);
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project2") with { Name = "Project 2", NodeType = "Markdown" }).Should().Emit();
+        var changes = await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 3);
 
         // Assert - Versions should be incrementing.
         changes.Should().HaveCountGreaterThanOrEqualTo(2);
@@ -233,10 +233,10 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact]
-    public void ObserveQuery_DisposalStopsNotifications()
+    public async Task ObserveQuery_DisposalStopsNotifications()
     {
         var p = P();
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project1") with { Name = "Project 1", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project1") with { Name = "Project 1", NodeType = "Markdown" }).Should().Emit();
 
         // Thread-safe: the OnNext callback fires on the change-feed thread while the test thread
         // reads the count. A plain List races here (the original flake).
@@ -249,8 +249,8 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
         // Wait until THIS subscription (not a separate one) has recorded its initial emission, so
         // the pre-dispose baseline is deterministic. The original waited on a *different*
         // subscription's initial, so the test subscription's own initial could still be in flight
-        // when Dispose ran — and land afterwards, growing the count and failing the assert.
-        Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+        // when Dispose ran — and land afterwards, await growing the count and failing the assert.
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .Select(_ => receivedChanges.Count)
             .Should(WaitTimeout)
             .Match(c => c >= 1);
@@ -261,9 +261,9 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
 
         // Add a node after disposal and wait — via a FRESH subscription that DOES emit — until the
         // system has processed the Added (its Initial snapshot shows both nodes). If the disposed
-        // subscription were still live, the change feed would have grown its queue by now.
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project2") with { Name = "Project 2", NodeType = "Markdown" }).Should().Emit();
-        ObserveAccumulated($"path:{p} nodeType:Markdown scope:descendants")
+        // subscription were still live, await the change feed would have grown its queue by now.
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project2") with { Name = "Project 2", NodeType = "Markdown" }).Should().Emit();
+        await ObserveAccumulated($"path:{p} nodeType:Markdown scope:descendants")
             .Should(WaitTimeout)
             .Match(acc => acc.Count >= 1 && acc[0].Items.Count >= 2);
 
@@ -272,7 +272,7 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact]
-    public void ObserveQuery_ScopeExact_OnlyNotifiesOnExactPath()
+    public async Task ObserveQuery_ScopeExact_OnlyNotifiesOnExactPath()
     {
         var p = P();
         // Top-level partition root → seed under System (only the partition provisioner may
@@ -283,18 +283,18 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
         using var connection = accumulated.Connect();
 
         // Wait for initial emission.
-        accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 1);
+        await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 1);
 
-        // Act - Modify the exact path; expect Updated.
-        NodeFactory.UpdateNode(MeshNode.FromPath(p) with { Name = "TestOrg Updated", NodeType = "Group" }).Should().Emit();
-        var afterUpdate = accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 2);
+        // Act - Modify the exact path; await expect Updated.
+        await NodeFactory.UpdateNode(MeshNode.FromPath(p) with { Name = "TestOrg Updated", NodeType = "Group" }).Should().Emit();
+        var afterUpdate = await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 2);
         afterUpdate[1].ChangeType.Should().Be(QueryChangeType.Updated);
 
         // Act - Add a child (should NOT trigger). Then update self again to get a positive signal.
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project") with { Name = "Project", NodeType = "Markdown" }).Should().Emit();
-        NodeFactory.UpdateNode(MeshNode.FromPath(p) with { Name = "TestOrg Updated 2", NodeType = "Group" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project") with { Name = "Project", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.UpdateNode(MeshNode.FromPath(p) with { Name = "TestOrg Updated 2", NodeType = "Group" }).Should().Emit();
 
-        var afterChild = accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 3);
+        var afterChild = await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 3);
 
         // The third emission should be the second update — never any emission for the child.
         afterChild[2].ChangeType.Should().Be(QueryChangeType.Updated);
@@ -302,26 +302,26 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact]
-    public void ObserveQuery_ScopeChildren_OnlyNotifiesOnDirectChildren()
+    public async Task ObserveQuery_ScopeChildren_OnlyNotifiesOnDirectChildren()
     {
         var p = P();
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project1") with { Name = "Project 1", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project1") with { Name = "Project 1", NodeType = "Markdown" }).Should().Emit();
 
         var accumulated = ObserveAccumulated($"namespace:{p}").Replay();
         using var connection = accumulated.Connect();
 
         // Wait for initial emission.
-        accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 1);
+        await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 1);
 
-        // Act - Add a direct child; expect a second emission.
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project2") with { Name = "Project 2", NodeType = "Markdown" }).Should().Emit();
-        accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 2);
+        // Act - Add a direct child; await expect a second emission.
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project2") with { Name = "Project 2", NodeType = "Markdown" }).Should().Emit();
+        await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 2);
 
         // Act - Add a grandchild (should NOT trigger). Add another direct child as positive signal.
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project1/Task") with { Name = "Task", NodeType = "Code" }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project3") with { Name = "Project 3", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project1/Task") with { Name = "Task", NodeType = "Code" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project3") with { Name = "Project 3", NodeType = "Markdown" }).Should().Emit();
 
-        var changes = accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 3);
+        var changes = await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 3);
 
         // Assert - third emission is for the direct child Project3, not the grandchild.
         var addedNames = changes.Skip(1)

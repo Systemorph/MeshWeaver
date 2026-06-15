@@ -53,11 +53,11 @@ public class ModelProviderServiceTest : AITestBase
     private IWorkspace Workspace => Mesh.GetWorkspace();
 
     [Fact]
-    public void CreateProvider_CreatesProviderNode_AndDefaultModelChildren()
+    public async Task CreateProvider_CreatesProviderNode_AndDefaultModelChildren()
     {
         var owner = $"user-{Guid.NewGuid():N}";
 
-        var result = Service.CreateProvider(
+        var result = await Service.CreateProvider(
             ownerPath: owner,
             provider: "Anthropic",
             apiKey: "sk-ant-TEST-1234",
@@ -84,18 +84,18 @@ public class ModelProviderServiceTest : AITestBase
     }
 
     [Fact]
-    public void GetProvidersForOwner_ReturnsLiveCollection()
+    public async Task GetProvidersForOwner_ReturnsLiveCollection()
     {
         var owner = $"user-{Guid.NewGuid():N}";
 
-        var before = Service.GetProvidersForOwner(owner)
+        var before = await Service.GetProvidersForOwner(owner)
             .Should().Within(5.Seconds()).Emit();
         before.Should().BeEmpty();
 
-        Service.CreateProvider(owner, "Anthropic", "sk-x")
+        await Service.CreateProvider(owner, "Anthropic", "sk-x")
             .Should().Within(20.Seconds()).Emit();
 
-        var after = Service.GetProvidersForOwner(owner)
+        var after = await Service.GetProvidersForOwner(owner)
             .Should().Within(10.Seconds()).Match(list => list.Count > 0);
 
         after.Should().HaveCount(1);
@@ -106,22 +106,22 @@ public class ModelProviderServiceTest : AITestBase
     }
 
     [Fact]
-    public void RotateKey_UpdatesApiKeyOnly()
+    public async Task RotateKey_UpdatesApiKeyOnly()
     {
         var owner = $"user-{Guid.NewGuid():N}";
 
-        var created = Service.CreateProvider(owner, "Anthropic", "sk-old", label: "L")
+        var created = await Service.CreateProvider(owner, "Anthropic", "sk-old", label: "L")
             .Should().Within(20.Seconds()).Emit();
         var path = created.ProviderNode.Path;
 
         // Pre-warm the synced query so the Update finds the path registered.
-        Service.GetProvidersForOwner(owner)
+        await Service.GetProvidersForOwner(owner)
             .Should().Within(10.Seconds()).Match(p => p.Count > 0);
 
-        var ok = Service.RotateKey(path, "sk-new").Should().Emit();
+        var ok = await Service.RotateKey(path, "sk-new").Should().Emit();
         ok.Should().BeTrue();
 
-        var updated = Workspace.GetMeshNodeStream(path)
+        var updated = await Workspace.GetMeshNodeStream(path)
             .Should().Within(10.Seconds()).Match(n => (n.Content as ModelProviderConfiguration)?.ApiKey == "sk-new");
         var cfg = updated.Content.Should().BeOfType<ModelProviderConfiguration>().Which;
         cfg.ApiKey.Should().Be("sk-new");

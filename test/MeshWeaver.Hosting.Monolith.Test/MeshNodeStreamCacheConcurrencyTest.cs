@@ -37,14 +37,14 @@ public class MeshNodeStreamCacheConcurrencyTest(ITestOutputHelper output) : Mono
     private const string Namespace = $"{TestPartition}/CacheConcurrency";
 
     [Fact(Timeout = 30_000)]
-    public void GetQuery_ManyConcurrentCallersSameId_AllSeeSameSnapshot()
+    public async Task GetQuery_ManyConcurrentCallersSameId_AllSeeSameSnapshot()
     {
         var cache = Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         var id = $"$concurrency-test-{Guid.NewGuid():N}";
         var query = $"namespace:{Namespace} nodeType:Markdown";
 
         // Seed one node so the snapshot is non-empty.
-        NodeFactory.CreateNode(new MeshNode("seed", Namespace)
+        await NodeFactory.CreateNode(new MeshNode("seed", Namespace)
         {
             Name = "Seed",
             NodeType = "Markdown",
@@ -60,7 +60,7 @@ public class MeshNodeStreamCacheConcurrencyTest(ITestOutputHelper output) : Mono
         // assert all N subscribers see the same snapshot. No Task.Run: the
         // observable fan-out IS the concurrency.
         const int Concurrency = 64;
-        var results = Observable.Merge(Enumerable.Range(0, Concurrency)
+        var results = await Observable.Merge(Enumerable.Range(0, Concurrency)
                 .Select(_ => cache.GetQuery(id, query)
                     .Take(1)
                     .Select(snapshot => snapshot.Select(n => n.Path).OrderBy(p => p).ToList())))
@@ -77,7 +77,7 @@ public class MeshNodeStreamCacheConcurrencyTest(ITestOutputHelper output) : Mono
     }
 
     [Fact(Timeout = 30_000)]
-    public void GetQuery_ReturnsLiveUpdatesAfterRuntimeCreate()
+    public async Task GetQuery_ReturnsLiveUpdatesAfterRuntimeCreate()
     {
         var cache = Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         var id = $"$live-update-test-{Guid.NewGuid():N}";
@@ -90,11 +90,11 @@ public class MeshNodeStreamCacheConcurrencyTest(ITestOutputHelper output) : Mono
             .Subscribe(snapshot => { lock (liveSnapshots) liveSnapshots.Add(snapshot.Count()); });
 
         // Seed two nodes.
-        NodeFactory.CreateNode(new MeshNode("live-1", Namespace)
+        await NodeFactory.CreateNode(new MeshNode("live-1", Namespace)
         {
             Name = "Live 1", NodeType = "Markdown", State = MeshNodeState.Active,
         }).Should().Within(15.Seconds()).Emit();
-        NodeFactory.CreateNode(new MeshNode("live-2", Namespace)
+        await NodeFactory.CreateNode(new MeshNode("live-2", Namespace)
         {
             Name = "Live 2", NodeType = "Markdown", State = MeshNodeState.Active,
         }).Should().Within(15.Seconds()).Emit();
@@ -102,7 +102,7 @@ public class MeshNodeStreamCacheConcurrencyTest(ITestOutputHelper output) : Mono
         // Subscribers attaching AFTER the writes must see at least 2 nodes —
         // the AutoConnect(1) Replay buffer should reflect the live state, not
         // the empty Initial.
-        var lateSubscriberCount = cache.GetQuery(id, query)
+        var lateSubscriberCount = await cache.GetQuery(id, query)
             .Should().Within(10.Seconds()).Match(s => s.Count() >= 2);
         lateSubscriberCount.Count().Should().BeGreaterThanOrEqualTo(2);
 
@@ -113,11 +113,11 @@ public class MeshNodeStreamCacheConcurrencyTest(ITestOutputHelper output) : Mono
     }
 
     [Fact(Timeout = 30_000)]
-    public void GetQuery_ConcurrentDifferentIds_AllResolveIndependently()
+    public async Task GetQuery_ConcurrentDifferentIds_AllResolveIndependently()
     {
         var cache = Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
 
-        NodeFactory.CreateNode(new MeshNode("indep-seed", Namespace)
+        await NodeFactory.CreateNode(new MeshNode("indep-seed", Namespace)
         {
             Name = "Seed", NodeType = "Markdown", State = MeshNodeState.Active,
         }).Should().Within(15.Seconds()).Emit();
@@ -129,7 +129,7 @@ public class MeshNodeStreamCacheConcurrencyTest(ITestOutputHelper output) : Mono
         const int Concurrency = 32;
         var query = $"namespace:{Namespace} nodeType:Markdown";
 
-        var results = Observable.Merge(Enumerable.Range(0, Concurrency)
+        var results = await Observable.Merge(Enumerable.Range(0, Concurrency)
                 .Select(i => cache.GetQuery($"$independent-{i}", query)
                     .Take(1)
                     .Select(snapshot => snapshot.Any(n => n.Path == $"{Namespace}/indep-seed"))))

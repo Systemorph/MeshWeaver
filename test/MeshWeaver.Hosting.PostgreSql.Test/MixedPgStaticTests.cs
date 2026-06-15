@@ -47,10 +47,10 @@ public class MixedPgStaticTests(PostgreSqlFixture fixture, ITestOutputHelper out
     }
 
     [Fact(Timeout = 60000)]
-    public void Read_Doc_FromEmbedded_Not_PG()
+    public async Task Read_Doc_FromEmbedded_Not_PG()
     {
         var resolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
-        var resolution = resolver.ResolvePath("Doc")
+        var resolution = await resolver.ResolvePath("Doc")
             .Where(r => r is not null).Take(1).Timeout(15.Seconds())
             .Catch<AddressResolution?, TimeoutException>(_ => Observable.Return<AddressResolution?>(null))
             .Should().Within(30.Seconds()).Emit();
@@ -59,10 +59,10 @@ public class MixedPgStaticTests(PostgreSqlFixture fixture, ITestOutputHelper out
     }
 
     [Fact(Timeout = 60000)]
-    public void Write_FreshPartition_RoutesToPg()
+    public async Task Write_FreshPartition_RoutesToPg()
     {
         var ns = $"pg9b_{Guid.NewGuid():N}".ToLowerInvariant()[..16];
-        Mesh.ProvisionPartition(ns);   // no lazy create — provision the partition first
+        await Mesh.ProvisionPartition(ns);   // no lazy create — provision the partition first
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var node = new MeshNode("note", ns)
         {
@@ -70,13 +70,13 @@ public class MixedPgStaticTests(PostgreSqlFixture fixture, ITestOutputHelper out
             Name = "note",
             State = MeshNodeState.Active,
         };
-        var saved = meshService.CreateNode(node).Should().Within(30.Seconds()).Emit();
+        var saved = await meshService.CreateNode(node).Should().Within(30.Seconds()).Emit();
         saved.Should().NotBeNull(
             "writable PG catch-all must accept a write into a provisioned partition; static read-only providers must decline");
         saved.Path.Should().Be($"{ns}/note");
 
         var workspace = Mesh.GetWorkspace();
-        var readBack = workspace.GetMeshNodeStream($"{ns}/note")
+        var readBack = await workspace.GetMeshNodeStream($"{ns}/note")
             .Where(n => n is not null).Take(1).Timeout(10.Seconds())
             .Catch<MeshNode?, TimeoutException>(_ => Observable.Return<MeshNode?>(null))
             .Should().Within(30.Seconds()).Emit();

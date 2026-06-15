@@ -43,7 +43,7 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
     // â”€â”€ Thread fan-out â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 30000)]
-    public void NodeTypeThread_FansOutAcrossAllPartitions()
+    public async Task NodeTypeThread_FansOutAcrossAllPartitions()
     {
         // Arrange: create two partitions with threads in each. Top-level partition roots are
         // seeded under System (only the partition provisioner may create a non-partition type
@@ -53,18 +53,18 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
 
         var client = GetClient();
 
-        var resp1 = client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("PartitionA", "Thread in A", AdminUserId)), o => o.WithTarget(new Address("PartitionA"))).Should().Within(TimeSpan.FromSeconds(25)).Emit();
+        var resp1 = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("PartitionA", "Thread in A", AdminUserId)), o => o.WithTarget(new Address("PartitionA"))).Should().Within(TimeSpan.FromSeconds(25)).Emit();
         resp1.Message.Success.Should().BeTrue(resp1.Message.Error ?? "");
         var threadA = resp1.Message.Node!.Path!;
         Output.WriteLine($"Thread A: {threadA}");
 
-        var resp2 = client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("PartitionB", "Thread in B", AdminUserId)), o => o.WithTarget(new Address("PartitionB"))).Should().Within(TimeSpan.FromSeconds(25)).Emit();
+        var resp2 = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("PartitionB", "Thread in B", AdminUserId)), o => o.WithTarget(new Address("PartitionB"))).Should().Within(TimeSpan.FromSeconds(25)).Emit();
         resp2.Message.Success.Should().BeTrue(resp2.Message.Error ?? "");
         var threadB = resp2.Message.Node!.Path!;
         Output.WriteLine($"Thread B: {threadB}");
 
         // Act: query nodeType:Thread without namespace â€” should fan out to all _Thread tables
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Thread sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Thread sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         Output.WriteLine($"nodeType:Thread => {results.Count} results: [{string.Join(", ", results.Select(r => r.Path))}]");
 
@@ -75,7 +75,7 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
     }
 
     [Fact(Timeout = 30000)]
-    public void NodeTypeThread_WithNamespace_SearchesSinglePartition()
+    public async Task NodeTypeThread_WithNamespace_SearchesSinglePartition()
     {
         // Arrange: threads in two partitions (top-level partition roots → seed under System).
         SeedTopLevel(new MeshNode("NsX") { Name = "Namespace X", NodeType = "Markdown" });
@@ -83,14 +83,14 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
 
         var client = GetClient();
 
-        var resp1 = client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("NsX", "X thread", AdminUserId)), o => o.WithTarget(new Address("NsX"))).Should().Within(TimeSpan.FromSeconds(25)).Emit();
+        var resp1 = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("NsX", "X thread", AdminUserId)), o => o.WithTarget(new Address("NsX"))).Should().Within(TimeSpan.FromSeconds(25)).Emit();
         resp1.Message.Success.Should().BeTrue(resp1.Message.Error ?? "");
 
-        var resp2 = client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("NsY", "Y thread", AdminUserId)), o => o.WithTarget(new Address("NsY"))).Should().Within(TimeSpan.FromSeconds(25)).Emit();
+        var resp2 = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("NsY", "Y thread", AdminUserId)), o => o.WithTarget(new Address("NsY"))).Should().Within(TimeSpan.FromSeconds(25)).Emit();
         resp2.Message.Success.Should().BeTrue(resp2.Message.Error ?? "");
 
         // Act: query with explicit namespace â€” should only return threads from NsX
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:NsX nodeType:Thread sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:NsX nodeType:Thread sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         Output.WriteLine($"namespace:NsX nodeType:Thread => {results.Count} results");
 
@@ -102,18 +102,18 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
     // â”€â”€ Comment fan-out â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 30000)]
-    public void NodeTypeComment_FansOutAcrossAllPartitions()
+    public async Task NodeTypeComment_FansOutAcrossAllPartitions()
     {
         // Arrange: create nodes with comments in different partitions (top-level partition
         // roots → seed under System).
         SeedTopLevel(new MeshNode("CmtOrgA") { Name = "Org A", NodeType = "Markdown" });
         SeedTopLevel(new MeshNode("CmtOrgB") { Name = "Org B", NodeType = "Markdown" });
 
-        NodeFactory.CreateNode(MeshNode.FromPath("CmtOrgA/doc1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("CmtOrgA/doc1") with
         {
             Name = "Doc A", NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("CmtOrgB/doc2") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("CmtOrgB/doc2") with
         {
             Name = "Doc B", NodeType = "Markdown"
         }).Should().Emit();
@@ -132,11 +132,11 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
             MainNode = "CmtOrgB/doc2"
         };
 
-        NodeFactory.CreateNode(commentA).Should().Emit();
-        NodeFactory.CreateNode(commentB).Should().Emit();
+        await NodeFactory.CreateNode(commentA).Should().Emit();
+        await NodeFactory.CreateNode(commentB).Should().Emit();
 
         // Act: query nodeType:Comment without namespace
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Comment sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Comment sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         Output.WriteLine($"nodeType:Comment => {results.Count} results: [{string.Join(", ", results.Select(r => r.Path))}]");
 

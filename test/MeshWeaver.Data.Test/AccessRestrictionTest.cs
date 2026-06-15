@@ -91,7 +91,7 @@ public class TypeLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestB
             );
 
     [Fact]
-    public void Create_AsNonAdmin_ShouldFail()
+    public async Task Create_AsNonAdmin_ShouldFail()
     {
         // Arrange
         var client = GetClient();
@@ -108,7 +108,7 @@ public class TypeLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestB
         var newItem = new RestrictedEntity("2", "New Restricted", "test");
 
         // Act
-        var response = client.Observe(new DataChangeRequest { Creations = [newItem] }, o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
+        var response = await client.Observe(new DataChangeRequest { Creations = [newItem] }, o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -118,7 +118,7 @@ public class TypeLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestB
     }
 
     [Fact]
-    public void Create_AsAdmin_ShouldSucceed()
+    public async Task Create_AsAdmin_ShouldSucceed()
     {
         // Arrange
         var client = GetClient();
@@ -135,7 +135,7 @@ public class TypeLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestB
         var newItem = new RestrictedEntity("3", "Admin Created", "test");
 
         // Act
-        var response = client.Observe(new DataChangeRequest { Creations = [newItem] }, o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
+        var response = await client.Observe(new DataChangeRequest { Creations = [newItem] }, o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -143,7 +143,7 @@ public class TypeLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestB
 
         // Verify item was created
         var workspace = client.GetWorkspace();
-        var items = workspace
+        var items = await workspace
             .GetObservable<RestrictedEntity>()
             .Should().Within(5.Seconds())
             .Match(x => x.Any(item => item.Id == "3"));
@@ -152,7 +152,7 @@ public class TypeLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestB
     }
 
     [Fact]
-    public void Read_AsNonAdmin_ShouldSucceed()
+    public async Task Read_AsNonAdmin_ShouldSucceed()
     {
         // Arrange - Read is allowed for all users
         var client = GetClient();
@@ -168,7 +168,7 @@ public class TypeLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestB
 
         // Act - Read existing items
         var workspace = client.GetWorkspace();
-        var items = workspace
+        var items = await workspace
             .GetObservable<RestrictedEntity>()
             .Should().Within(5.Seconds())
             .Emit();
@@ -234,7 +234,7 @@ public class RowLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
             );
 
     [Fact]
-    public void Update_OtherUsersEntity_ShouldFail()
+    public async Task Update_OtherUsersEntity_ShouldFail()
     {
         // Arrange
         var client = GetClient();
@@ -251,7 +251,7 @@ public class RowLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
         var updatedItem = new OwnedEntity("2", "Hijacked Name", "user2");
 
         // Act
-        var response = client.Observe(DataChangeRequest.Update([updatedItem]), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
+        var response = await client.Observe(DataChangeRequest.Update([updatedItem]), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -261,7 +261,7 @@ public class RowLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
     }
 
     [Fact]
-    public void Update_OwnEntity_ShouldSucceed()
+    public async Task Update_OwnEntity_ShouldSucceed()
     {
         // Arrange
         var client = GetClient();
@@ -278,7 +278,7 @@ public class RowLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
         var updatedItem = new OwnedEntity("1", "Updated My Entity", "user1");
 
         // Act
-        var response = client.Observe(DataChangeRequest.Update([updatedItem]), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
+        var response = await client.Observe(DataChangeRequest.Update([updatedItem]), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -286,7 +286,7 @@ public class RowLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
 
         // Verify item was updated
         var workspace = client.GetWorkspace();
-        var items = workspace
+        var items = await workspace
             .GetObservable<OwnedEntity>()
             .Should().Within(5.Seconds())
             .Match(x => x.Any(item => item.Name == "Updated My Entity"));
@@ -295,7 +295,7 @@ public class RowLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
     }
 
     [Fact]
-    public void Delete_OtherUsersEntity_ShouldFail()
+    public async Task Delete_OtherUsersEntity_ShouldFail()
     {
         // Arrange
         var client = GetClient();
@@ -312,7 +312,7 @@ public class RowLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
         var entityToDelete = new OwnedEntity("2", "User2's Entity", "user2");
 
         // Act
-        var response = client.Observe(DataChangeRequest.Delete([entityToDelete], "user1"), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
+        var response = await client.Observe(DataChangeRequest.Delete([entityToDelete], "user1"), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -320,7 +320,7 @@ public class RowLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
 
         // Verify entity still exists
         var workspace = client.GetWorkspace();
-        var items = workspace
+        var items = await workspace
             .GetObservable<OwnedEntity>()
             .Should().Within(5.Seconds())
             .Emit();
@@ -328,7 +328,7 @@ public class RowLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
     }
 
     [Fact]
-    public void Delete_SharedEntity_ShouldSucceed()
+    public async Task Delete_SharedEntity_ShouldSucceed()
     {
         // Arrange
         var client = GetClient();
@@ -345,7 +345,7 @@ public class RowLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
         var entityToDelete = new OwnedEntity("3", "Shared Entity", "shared");
 
         // Act
-        var response = client.Observe(DataChangeRequest.Delete([entityToDelete], "anyuser"), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
+        var response = await client.Observe(DataChangeRequest.Delete([entityToDelete], "anyuser"), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -403,7 +403,7 @@ public class GlobalAccessRestrictionTest(ITestOutputHelper output) : HubTestBase
             );
 
     [Fact]
-    public void Delete_AsAnonymous_ShouldFail()
+    public async Task Delete_AsAnonymous_ShouldFail()
     {
         // Arrange
         var client = GetClient();
@@ -415,7 +415,7 @@ public class GlobalAccessRestrictionTest(ITestOutputHelper output) : HubTestBase
         var entityToDelete = new SimpleEntity("1", "Simple Item 1");
 
         // Act
-        var response = client.Observe(DataChangeRequest.Delete([entityToDelete], "anonymous"), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
+        var response = await client.Observe(DataChangeRequest.Delete([entityToDelete], "anonymous"), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -425,7 +425,7 @@ public class GlobalAccessRestrictionTest(ITestOutputHelper output) : HubTestBase
 
         // Verify entity still exists
         var workspace = client.GetWorkspace();
-        var items = workspace
+        var items = await workspace
             .GetObservable<SimpleEntity>()
             .Should().Within(5.Seconds())
             .Emit();
@@ -433,7 +433,7 @@ public class GlobalAccessRestrictionTest(ITestOutputHelper output) : HubTestBase
     }
 
     [Fact]
-    public void Delete_AsAuthenticated_ShouldSucceed()
+    public async Task Delete_AsAuthenticated_ShouldSucceed()
     {
         // Arrange
         var client = GetClient();
@@ -450,7 +450,7 @@ public class GlobalAccessRestrictionTest(ITestOutputHelper output) : HubTestBase
         var entityToDelete = new SimpleEntity("2", "Simple Item 2");
 
         // Act
-        var response = client.Observe(DataChangeRequest.Delete([entityToDelete], "authuser"), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
+        var response = await client.Observe(DataChangeRequest.Delete([entityToDelete], "authuser"), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -458,7 +458,7 @@ public class GlobalAccessRestrictionTest(ITestOutputHelper output) : HubTestBase
     }
 
     [Fact]
-    public void Create_AsAnonymous_ShouldSucceed()
+    public async Task Create_AsAnonymous_ShouldSucceed()
     {
         // Arrange - Create is allowed for anonymous (only Delete is restricted)
         var client = GetClient();
@@ -470,7 +470,7 @@ public class GlobalAccessRestrictionTest(ITestOutputHelper output) : HubTestBase
         var newItem = new SimpleEntity("3", "Anonymous Created");
 
         // Act
-        var response = client.Observe(new DataChangeRequest { Creations = [newItem] }, o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
+        var response = await client.Observe(new DataChangeRequest { Creations = [newItem] }, o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -478,7 +478,7 @@ public class GlobalAccessRestrictionTest(ITestOutputHelper output) : HubTestBase
 
         // Verify item was created
         var workspace = client.GetWorkspace();
-        var items = workspace
+        var items = await workspace
             .GetObservable<SimpleEntity>()
             .Should().Within(5.Seconds())
             .Match(x => x.Any(item => item.Id == "3"));
@@ -546,7 +546,7 @@ public class CombinedAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
             );
 
     [Fact]
-    public void Create_AsAnonymous_ShouldFailGlobalRestriction()
+    public async Task Create_AsAnonymous_ShouldFailGlobalRestriction()
     {
         // Arrange
         var client = GetClient();
@@ -558,7 +558,7 @@ public class CombinedAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
         var newItem = new RestrictedEntity("2", "Anonymous Attempt", "test");
 
         // Act
-        var response = client.Observe(new DataChangeRequest { Creations = [newItem] }, o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
+        var response = await client.Observe(new DataChangeRequest { Creations = [newItem] }, o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // Assert - Should fail at global restriction (RequireAuthentication)
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -566,7 +566,7 @@ public class CombinedAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
     }
 
     [Fact]
-    public void Create_AsAuthenticatedNonAdmin_ShouldFailTypeRestriction()
+    public async Task Create_AsAuthenticatedNonAdmin_ShouldFailTypeRestriction()
     {
         // Arrange
         var client = GetClient();
@@ -583,7 +583,7 @@ public class CombinedAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
         var newItem = new RestrictedEntity("3", "User Attempt", "test");
 
         // Act
-        var response = client.Observe(new DataChangeRequest { Creations = [newItem] }, o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
+        var response = await client.Observe(new DataChangeRequest { Creations = [newItem] }, o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // Assert - Should pass global but fail type-specific (AdminOnlyCreate)
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -591,7 +591,7 @@ public class CombinedAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
     }
 
     [Fact]
-    public void Create_AsAdmin_ShouldSucceed()
+    public async Task Create_AsAdmin_ShouldSucceed()
     {
         // Arrange
         var client = GetClient();
@@ -608,7 +608,7 @@ public class CombinedAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
         var newItem = new RestrictedEntity("4", "Admin Created", "test");
 
         // Act
-        var response = client.Observe(new DataChangeRequest { Creations = [newItem] }, o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
+        var response = await client.Observe(new DataChangeRequest { Creations = [newItem] }, o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // Assert - Should pass both global and type-specific restrictions
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -616,7 +616,7 @@ public class CombinedAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
     }
 
     [Fact]
-    public void Update_AsAuthenticatedNonAdmin_ShouldSucceed()
+    public async Task Update_AsAuthenticatedNonAdmin_ShouldSucceed()
     {
         // Arrange - Update only requires authentication (AdminOnlyCreate is for Create only)
         var client = GetClient();
@@ -633,7 +633,7 @@ public class CombinedAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
         var updatedItem = new RestrictedEntity("1", "Updated by User", "general");
 
         // Act
-        var response = client.Observe(DataChangeRequest.Update([updatedItem]), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
+        var response = await client.Observe(DataChangeRequest.Update([updatedItem]), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // Assert - Update should succeed (not restricted to Admin)
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;

@@ -22,13 +22,13 @@ public class CommandAutocompleteTest(ITestOutputHelper output) : MonolithMeshTes
         base.ConfigureMesh(builder).AddAI();
 
     [Fact(Timeout = 60000)]
-    public void Autocomplete_ListsBuiltInCommands_FromCatalogAndRegistry()
+    public async Task Autocomplete_ListsBuiltInCommands_FromCatalogAndRegistry()
     {
         var provider = new CommandAutocompleteProvider(Mesh.ServiceProvider);
 
         // Wait until the Command catalog has surfaced (the agent command arrives via the nodeType:Command
         // query, which is async on first load); the registry command (/help) is synchronous.
-        var items = provider.GetItems("/")
+        var items = await provider.GetItems("/")
             .Should().Within(15.Seconds())
             .Match(c => c.Any(i => i.Label == "/agent"));
 

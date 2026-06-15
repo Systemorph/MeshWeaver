@@ -28,11 +28,10 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// Submits a 3rd message and verifies the agent sees ALL previous messages
 /// via the live response cell (not from cache or local workspace).
 ///
-/// 🚨 Test is <c>void</c> + reactive assertions (no <c>async</c>/<c>await</c>):
-/// blocking inside an async test deadlocks the in-process hub scheduler — the
-/// agent's streaming execution shares the process and its continuations are
-/// starved by the captured async SynchronizationContext. See
-/// ReactiveTestAssertions.md §2 + ObservableAssertions remarks.
+/// 🚨 Test <c>await</c>s the reactive assertions: each terminal
+/// <c>ObservableAssertions</c> method bridges the stream to a Task at the test
+/// edge (the sanctioned <c>.FirstAsync()/.ToTask()</c> bridge) — no blocking
+/// wait inside the test body. See ObservableAssertions remarks.
 /// </summary>
 public class OrleansChatHistoryTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
@@ -42,7 +41,7 @@ public class OrleansChatHistoryTest(ITestOutputHelper output) : OrleansSharedTes
         => base.GetClient($"hist-{name}-{Guid.NewGuid():N}", "TestUser");
 
     [Fact]
-    public void ColdStart_AgentSeesAllPreviousMessages()
+    public async Task ColdStart_AgentSeesAllPreviousMessages()
     {
         // Swap to echo factory
         SharedOrleansFixture.SwappableFactory.SetInner(new EchoChatClientFactory());
@@ -76,14 +75,14 @@ public class OrleansChatHistoryTest(ITestOutputHelper output) : OrleansSharedTes
             Output.WriteLine("Append dispatched");
 
             // Resolve message ids — last id is the new agent response cell.
-            var msgIds = messagesStream.Should().Within(30.Seconds()).Match(ids => ids.Count >= 6);
+            var msgIds = await messagesStream.Should().Within(30.Seconds()).Match(ids => ids.Count >= 6);
             var responseMsgId = msgIds[^1];
             var responsePath = $"{ThreadPath}/{responseMsgId}";
             Output.WriteLine($"Response cell: {responseMsgId} (full list: [{string.Join(",", msgIds)}])");
 
             // Wait for the response cell text to fill in. The EchoChatClient's final
             // streaming text always contains "received" once execution is done.
-            var responseMsg = workspace.GetMeshNodeStream(responsePath)
+            var responseMsg = await workspace.GetMeshNodeStream(responsePath)
                 .Select(node =>
                 {
                     if (node?.Content is ThreadMessage tm) return tm;

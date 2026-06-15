@@ -69,7 +69,7 @@ public class NonExistentOwnerNoHeartbeatStormTest(ITestOutputHelper output) : Hu
             .AddData(data => data.AddHubSource(CreateHostAddress(), ds => ds.WithType<GhostData>()));
 
     [HubFact]
-    public void SubscribeToNonExistentOwner_FailsFast_AndStopsHeartbeat()
+    public async Task SubscribeToNonExistentOwner_FailsFast_AndStopsHeartbeat()
     {
         var host = GetHost();      // activate the owner hub
         var client = GetClient();
@@ -78,7 +78,7 @@ public class NonExistentOwnerNoHeartbeatStormTest(ITestOutputHelper output) : Hu
         // Opening the remote stream posts the SubscribeRequest to the owner (which fails
         // NotFound) and sets up the heartbeat synchronously. The stream must surface the
         // failure as a TERMINAL OnError fast — never a forever-cold wait.
-        var error = workspace.GetObservable<GhostData>("ghost-id")
+        var error = await workspace.GetObservable<GhostData>("ghost-id")
             .Materialize()
             .Should().Within(10.Seconds())
             .Match(n => n.Kind == NotificationKind.OnError,

@@ -41,12 +41,12 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// the error should propagate as an exception on the stream â€” not cause a silent timeout.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void SubscribeRequest_RejectedByValidator_PropagatesException()
+    public async Task SubscribeRequest_RejectedByValidator_PropagatesException()
     {
         var client = GetClient();
         var hubAddress = new Address("SecuredHub");
 
-        client.Observe(new PingRequest(), o => o.WithTarget(hubAddress)).Should().Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(hubAddress)).Should().Emit();
 
         var subscriberHub = Mesh.ServiceProvider.CreateMessageHub(
             new Address("subscriber", "1"),
@@ -55,11 +55,12 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
         var workspace = subscriberHub.GetWorkspace();
         var stream = workspace.GetRemoteStream<EntityStore>(hubAddress, new CollectionsReference("test"));
 
-        Action act = () => stream
+        Func<Task> act = () => stream
+            .FirstAsync()
             .Timeout(5.Seconds())
-            .Wait();
+            .ToTask();
 
-        var ex = act.Should().Throw<Exception>().Which;
+        var ex = (await act.Should().ThrowAsync<Exception>()).Which;
         ex.Should().NotBeOfType<TimeoutException>(
             "subscription rejection should propagate as an exception, not cause a silent timeout");
         ex.ToString().Should().Contain("Access denied",
@@ -71,7 +72,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// The VUserAccessRule allows portal namespace identities.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void PortalHub_CanCreateVUserNode_WithImpersonateScope()
+    public async Task PortalHub_CanCreateVUserNode_WithImpersonateScope()
     {
         var portalHub = Mesh.ServiceProvider.CreateMessageHub(
             new Address("portal", "test1"),
@@ -93,7 +94,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         using (accessService.ImpersonateAsHub(portalHub))
         {
-            var created = nodeFactory.CreateNode(vUserNode).Should().Emit();
+            var created = await nodeFactory.CreateNode(vUserNode).Should().Emit();
             created.Should().NotBeNull();
             created.Path.Should().Be("VUser/testVUser");
         }
@@ -104,7 +105,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// The VUserAccessRule replaces RLS and only allows portal namespace identities.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void NonPortalIdentity_CannotCreateVUserNode()
+    public async Task NonPortalIdentity_CannotCreateVUserNode()
     {
         var nodeFactory = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
@@ -120,8 +121,8 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
         };
 
         // "some-user" is not in the portal namespace â€” VUserAccessRule denies
-        Action act = () => nodeFactory.CreateNode(vUserNode).Wait();
-        act.Should().Throw<Exception>();
+        Func<Task> act = () => nodeFactory.CreateNode(vUserNode).FirstAsync().ToTask();
+        await act.Should().ThrowAsync<Exception>();
     }
 
     /// <summary>
@@ -130,7 +131,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// This mirrors how VirtualUserMiddleware creates VUser nodes.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void PortalHub_ImpersonateAsHub_CanCreateVUser()
+    public async Task PortalHub_ImpersonateAsHub_CanCreateVUser()
     {
         // Create a portal hub
         var portalHub = Mesh.ServiceProvider.CreateMessageHub(
@@ -150,7 +151,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         // Post CreateNodeRequest directly with ImpersonateAsHub() â€” bypasses IMeshService.
         // Target the mesh hub where CreateNodeRequest handler is registered.
-        var response = portalHub.Observe(new CreateNodeRequest(vUserNode), o => o.WithTarget(Mesh.Address).ImpersonateAsHub())
+        var response = await portalHub.Observe(new CreateNodeRequest(vUserNode), o => o.WithTarget(Mesh.Address).ImpersonateAsHub())
             .Should().Emit();
 
         response.Message.Success.Should().BeTrue(
@@ -164,7 +165,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// The VUserAccessRule only allows identities in the "portal" namespace.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void NonPortalHub_ImpersonateAsHub_CannotCreateVUser()
+    public async Task NonPortalHub_ImpersonateAsHub_CannotCreateVUser()
     {
         // Create a non-portal hub
         var analyticsHub = Mesh.ServiceProvider.CreateMessageHub(
@@ -184,7 +185,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         // Post CreateNodeRequest with ImpersonateAsHub() â€” non-portal identity should be denied.
         // Target the mesh hub where CreateNodeRequest handler is registered.
-        var response = analyticsHub.Observe(new CreateNodeRequest(vUserNode), o => o.WithTarget(Mesh.Address).ImpersonateAsHub())
+        var response = await analyticsHub.Observe(new CreateNodeRequest(vUserNode), o => o.WithTarget(Mesh.Address).ImpersonateAsHub())
             .Should().Emit();
 
         response.Message.Success.Should().BeFalse(

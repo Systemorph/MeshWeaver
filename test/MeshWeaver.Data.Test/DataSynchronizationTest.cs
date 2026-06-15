@@ -58,11 +58,11 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
     /// Tests basic data synchronization from client to host workspace
     /// </summary>
     [HubFact]
-    public void TestBasicSynchronization()
+    public async Task TestBasicSynchronization()
     {
         var client = GetClient();
         var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
-        var businessUnits = workspace.GetObservable<BusinessUnit>().Should().Within(3.Seconds()).Emit();
+        var businessUnits = await workspace.GetObservable<BusinessUnit>().Should().Within(3.Seconds()).Emit();
         businessUnits.Should().HaveCountGreaterThan(1);
 
         var businessUnit = businessUnits.First();
@@ -71,7 +71,7 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
         client.Post(new DataChangeRequest { Updates = [businessUnit] });
 
         // get the data from the client again
-        var loadedInstance = workspace
+        var loadedInstance = await workspace
             .GetObservable<BusinessUnit>(businessUnit.SystemName)
             .Should().Within(3.Seconds())
             .Match(x => x!.DisplayName != oldName);
@@ -82,7 +82,7 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
         // change to land. No grace-period Task.Delay needed (was a holdover
         // from a non-reactive era).
         var hostWorkspace = GetHost().ServiceProvider.GetRequiredService<IWorkspace>();
-        loadedInstance = hostWorkspace
+        loadedInstance = await hostWorkspace
             .GetObservable<BusinessUnit>(businessUnit.SystemName)
             .Should().Within(3.Seconds())
             .Match(x => x!.DisplayName != oldName);
@@ -92,11 +92,11 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
     /// Tests data reduction functionality after updates are applied
     /// </summary>
     [HubFact]
-    public void ReduceAfterUpdate()
+    public async Task ReduceAfterUpdate()
     {
         var host = GetHost();
         var workspace = host.GetWorkspace();
-        var businessUnits = workspace.GetStream<BusinessUnit>()!.Should().Within(3.Seconds()).Emit();
+        var businessUnits = await workspace.GetStream<BusinessUnit>()!.Should().Within(3.Seconds()).Emit();
         businessUnits.Should().HaveCountGreaterThan(1);
 
         var businessUnit = businessUnits!.First();
@@ -105,13 +105,13 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
         host.Post(new DataChangeRequest { Updates = [businessUnit] });
 
         // get the data from the client again
-        var loadedInstance = workspace
+        var loadedInstance = await workspace
             .GetObservable<BusinessUnit>(businessUnit.SystemName)
             .Should().Within(3.Seconds())
             .Match(x => x!.DisplayName != oldName);
         loadedInstance.Should().Be(businessUnit);
 
-        var linesOfBusiness = workspace.GetStream<LineOfBusiness>()!.Should().Within(3.Seconds()).Emit();
+        var linesOfBusiness = await workspace.GetStream<LineOfBusiness>()!.Should().Within(3.Seconds()).Emit();
         linesOfBusiness.Should().NotBeEmpty();
     }
 }

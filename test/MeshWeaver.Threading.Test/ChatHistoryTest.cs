@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
@@ -45,23 +45,23 @@ public class ChatHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         return base.ConfigureClient(configuration).AddData();
     }
 
-    private string CreateThread(IMessageHub client, string text)
+    private async Task<string> CreateThread(IMessageHub client, string text)
     {
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, text, "TestUser");
-        var response = client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(Mesh.Address)).Should().Within(60.Seconds()).Emit();
+        var response = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(Mesh.Address)).Should().Within(60.Seconds()).Emit();
         response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         return response.Message.Node!.Path!;
     }
 
-    private string SubmitAndWait(IMessageHub client, string threadPath, string text)
+    private async Task<string> SubmitAndWait(IMessageHub client, string threadPath, string text)
     {
-        var responseMsgId = ThreadFlow.SubmitAndWait(client, threadPath, text,
+        var responseMsgId = await ThreadFlow.SubmitAndWait(client, threadPath, text,
             contextPath: ContextPath, timeout: 60.Seconds()).Should().Within(60.Seconds()).Emit();
 
         // CompletedAt is the deterministic "streaming finished" signal â€” only set
         // by the terminal PushToResponseMessage call in ExecuteMessageAsync. Beats
         // text-pattern matching against in-flight placeholders.
-        var finalMessage = ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
+        var finalMessage = await ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
             m => m.CompletedAt != null && !string.IsNullOrEmpty(m.Text),
             timeout: 60.Seconds()).Should().Within(60.Seconds()).Emit();
 
@@ -69,35 +69,35 @@ public class ChatHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     }
 
     [Fact]
-    public void ThreeMessages_AgentSeesFullHistory()
+    public async Task ThreeMessages_AgentSeesFullHistory()
     {
         var client = GetClient();
-        var threadPath = CreateThread(client, "History test");
+        var threadPath = await CreateThread(client, "History test");
 
-        var response1 = SubmitAndWait(client, threadPath, "First message");
+        var response1 = await SubmitAndWait(client, threadPath, "First message");
         Output.WriteLine($"Response 1: {response1}");
         response1.Should().Contain("2 messages", "first message: system + user");
 
-        var response2 = SubmitAndWait(client, threadPath, "Second message");
+        var response2 = await SubmitAndWait(client, threadPath, "Second message");
         Output.WriteLine($"Response 2: {response2}");
         response2.Should().Contain("4 messages", "second message: system + 2 history + 1 new");
 
-        var response3 = SubmitAndWait(client, threadPath, "Third message");
+        var response3 = await SubmitAndWait(client, threadPath, "Third message");
         Output.WriteLine($"Response 3: {response3}");
         response3.Should().Contain("6 messages", "third message: system + 4 history + 1 new");
     }
 
     [Fact]
-    public void TwoMessages_NoDuplicates_CorrectRoles()
+    public async Task TwoMessages_NoDuplicates_CorrectRoles()
     {
         var client = GetClient();
-        var threadPath = CreateThread(client, "Duplicate check");
+        var threadPath = await CreateThread(client, "Duplicate check");
 
-        var response1 = SubmitAndWait(client, threadPath, "Hello");
+        var response1 = await SubmitAndWait(client, threadPath, "Hello");
         Output.WriteLine($"Response 1: {response1}");
         response1.Should().Contain("2 messages", "first call: system prompt + user message");
 
-        var response2 = SubmitAndWait(client, threadPath, "World");
+        var response2 = await SubmitAndWait(client, threadPath, "World");
         Output.WriteLine($"Response 2: {response2}");
         response2.Should().Contain("4 messages",
             "second call: system + 2 history (user+assistant) + 1 new user = 4 total");

@@ -69,7 +69,7 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
     /// The collection is configured on the CLIENT hub, not a remote hub.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public void MapContentCollection_RegistersCollectionWithCorrectBasePath()
+    public async Task MapContentCollection_RegistersCollectionWithCorrectBasePath()
     {
         // Arrange - create a client with MapContentCollection configured on it
         var client = GetClient(c => c
@@ -79,7 +79,7 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
         Output.WriteLine($"Client address: {client.Address}");
 
         // Act - request the avatars collection configuration from the client's own hub
-        var response = client.Observe(new GetDataRequest(new ContentCollectionReference(["avatars"])), o => o.WithTarget(client.Address)) // Send to self
+        var response = await client.Observe(new GetDataRequest(new ContentCollectionReference(["avatars"])), o => o.WithTarget(client.Address)) // Send to self
             .Should().Emit();
 
         // Assert
@@ -106,7 +106,7 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
     /// Test that MapContentCollection with empty subdirectory uses the source base path.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public void MapContentCollection_WithEmptySubdirectory_UsesSourceBasePath()
+    public async Task MapContentCollection_WithEmptySubdirectory_UsesSourceBasePath()
     {
         // Arrange
         var client = GetClient(c => c
@@ -114,7 +114,7 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
             .MapContentCollection("storage", "TestStorage", ""));
 
         // Act
-        var response = client.Observe(new GetDataRequest(new ContentCollectionReference(["storage"])), o => o.WithTarget(client.Address))
+        var response = await client.Observe(new GetDataRequest(new ContentCollectionReference(["storage"])), o => o.WithTarget(client.Address))
             .Should().Emit();
 
         // Assert
@@ -138,7 +138,7 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
     /// The mapped collection config will be null when the source collection is not found.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public void MapContentCollection_WithMissingSourceCollection_ReturnsNullConfig()
+    public async Task MapContentCollection_WithMissingSourceCollection_ReturnsNullConfig()
     {
         // Arrange - configure with a non-existent source collection
         var client = GetClient(c => c
@@ -146,7 +146,7 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
             .MapContentCollection("files", "NonExistentCollection", "subdir"));
 
         // Act - requesting the collection should return empty/null because source doesn't exist
-        var response = client.Observe(new GetDataRequest(new ContentCollectionReference(["files"])), o => o.WithTarget(client.Address))
+        var response = await client.Observe(new GetDataRequest(new ContentCollectionReference(["files"])), o => o.WithTarget(client.Address))
             .Should().Emit();
 
         // Assert - response should have no configs because the source collection wasn't found
@@ -164,7 +164,7 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
     /// Test that GetAllCollectionConfigs returns all registered collections.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public void MapContentCollection_GetAllConfigs_ReturnsAllCollections()
+    public async Task MapContentCollection_GetAllConfigs_ReturnsAllCollections()
     {
         // Arrange - create a client with multiple collections
         var client = GetClient(c => c
@@ -173,7 +173,7 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
             .MapContentCollection("collection2", "TestStorage", "dir2"));
 
         // Act - request all collection configurations (empty array)
-        var response = client.Observe(new GetDataRequest(new ContentCollectionReference()), o => o.WithTarget(client.Address))
+        var response = await client.Observe(new GetDataRequest(new ContentCollectionReference()), o => o.WithTarget(client.Address))
             .Should().Emit();
 
         // Assert

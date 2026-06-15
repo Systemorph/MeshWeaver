@@ -73,11 +73,11 @@ public class UserNodeAccessTest(ITestOutputHelper output) : MonolithMeshTestBase
                 AssignmentNodeFactory.UserRole("Alice", Role.Viewer.Id, "ACME")
             );
 
-    private Permission GetPermissions(string path, string userId)
-        => Mesh.GetEffectivePermissions(path, userId).Should().Within(15.Seconds()).Emit();
+    private async Task<Permission> GetPermissions(string path, string userId)
+        => await Mesh.GetEffectivePermissions(path, userId).Should().Within(15.Seconds()).Emit();
 
     [Fact(Timeout = 10000)]
-    public void Visitor_CanRead_UserNodeItself()
+    public async Task Visitor_CanRead_UserNodeItself()
     {
         // Bob can read User/Alice through the persistence layer's INodeTypeAccessRule (UserAccessRule),
         // which grants public read on User-typed nodes with path == "User/{id}".
@@ -89,16 +89,16 @@ public class UserNodeAccessTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         // Query is the live change feed — match the first snapshot that
         // surfaces the node (fan-out + security filter baked in).
-        MeshQuery.Query<MeshNode>(new MeshQueryRequest { Query = "path:User/Alice" })
+        await MeshQuery.Query<MeshNode>(new MeshQueryRequest { Query = "path:User/Alice" })
             .Should().Within(15.Seconds()).Match(c => c.Items.Any(),
                 "User nodes (User/Alice) should be readable by any authenticated user via INodeTypeAccessRule");
     }
 
     [Fact(Timeout = 10000)]
-    public void Visitor_CannotRead_UserChildNode()
+    public async Task Visitor_CannotRead_UserChildNode()
     {
         // Bob checks permissions on User/Alice/MyThread (a child node)
-        var permissions = GetPermissions("User/Alice/MyThread", "Bob");
+        var permissions = await GetPermissions("User/Alice/MyThread", "Bob");
 
         permissions.HasFlag(Permission.Read).Should().BeFalse(
             "Child nodes under a User (User/Alice/MyThread) should NOT be publicly readable — " +
@@ -106,30 +106,30 @@ public class UserNodeAccessTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 10000)]
-    public void Owner_CanRead_OwnChildNode()
+    public async Task Owner_CanRead_OwnChildNode()
     {
         // Alice checks permissions on her own child node (she has Admin role on User/Alice)
-        var permissions = GetPermissions("User/Alice/MyThread", "Alice");
+        var permissions = await GetPermissions("User/Alice/MyThread", "Alice");
 
         permissions.HasFlag(Permission.Read).Should().BeTrue(
             "The User node owner should be able to read their own child nodes (via Admin role on User/Alice scope)");
     }
 
     [Fact(Timeout = 10000)]
-    public void Visitor_CannotUpdate_UserNode()
+    public async Task Visitor_CannotUpdate_UserNode()
     {
         // Bob checks update permissions on User/Alice
-        var permissions = GetPermissions("User/Alice", "Bob");
+        var permissions = await GetPermissions("User/Alice", "Bob");
 
         permissions.HasFlag(Permission.Update).Should().BeFalse(
             "Visitors should not have update permissions on someone else's User node");
     }
 
     [Fact(Timeout = 10000)]
-    public void Owner_CanRead_OwnUserNode()
+    public async Task Owner_CanRead_OwnUserNode()
     {
         // Alice checks permissions on her own User node
-        var permissions = GetPermissions("User/Alice", "Alice");
+        var permissions = await GetPermissions("User/Alice", "Alice");
 
         permissions.HasFlag(Permission.Read).Should().BeTrue(
             "The owner should be able to read their own User node");
@@ -138,10 +138,10 @@ public class UserNodeAccessTest(ITestOutputHelper output) : MonolithMeshTestBase
     // === File upload permission tests ===
 
     [Fact(Timeout = 10000)]
-    public void Visitor_CannotUploadFiles_ToUserNode()
+    public async Task Visitor_CannotUploadFiles_ToUserNode()
     {
         // Bob should NOT have update permission on User/Alice
-        var permissions = GetPermissions("User/Alice", "Bob");
+        var permissions = await GetPermissions("User/Alice", "Bob");
 
         permissions.HasFlag(Permission.Update).Should().BeFalse(
             "Visitors should not have update permission on someone else's User node — " +
@@ -149,10 +149,10 @@ public class UserNodeAccessTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 10000)]
-    public void Visitor_CannotUploadFiles_ToOrganization()
+    public async Task Visitor_CannotUploadFiles_ToOrganization()
     {
         // Bob should NOT have update permission on ACME (no access assignment)
-        var permissions = GetPermissions("ACME", "Bob");
+        var permissions = await GetPermissions("ACME", "Bob");
 
         permissions.HasFlag(Permission.Update).Should().BeFalse(
             "Users without explicit access should not have update permission on organizations — " +
@@ -173,40 +173,40 @@ public class UserNodeAccessTest(ITestOutputHelper output) : MonolithMeshTestBase
     // === Organization (Group) access tests ===
 
     [Fact(Timeout = 10000)]
-    public void Visitor_CannotRead_Organization()
+    public async Task Visitor_CannotRead_Organization()
     {
         // Bob has no access assignment on ACME
-        var permissions = GetPermissions("ACME", "Bob");
+        var permissions = await GetPermissions("ACME", "Bob");
 
         permissions.HasFlag(Permission.Read).Should().BeFalse(
             "Users without explicit access should NOT be able to read an organization (Group node)");
     }
 
     [Fact(Timeout = 10000)]
-    public void Visitor_CannotRead_OrganizationChild()
+    public async Task Visitor_CannotRead_OrganizationChild()
     {
         // Bob has no access to ACME or its children
-        var permissions = GetPermissions("ACME/Project1", "Bob");
+        var permissions = await GetPermissions("ACME/Project1", "Bob");
 
         permissions.HasFlag(Permission.Read).Should().BeFalse(
             "Users without explicit access should NOT be able to read organization child nodes");
     }
 
     [Fact(Timeout = 10000)]
-    public void Member_CanRead_Organization()
+    public async Task Member_CanRead_Organization()
     {
         // Alice has Viewer role on ACME
-        var permissions = GetPermissions("ACME", "Alice");
+        var permissions = await GetPermissions("ACME", "Alice");
 
         permissions.HasFlag(Permission.Read).Should().BeTrue(
             "Users with explicit Viewer access should be able to read the organization");
     }
 
     [Fact(Timeout = 10000)]
-    public void Member_CanRead_OrganizationChild()
+    public async Task Member_CanRead_OrganizationChild()
     {
         // Alice has Viewer role on ACME — should inherit to children
-        var permissions = GetPermissions("ACME/Project1", "Alice");
+        var permissions = await GetPermissions("ACME/Project1", "Alice");
 
         permissions.HasFlag(Permission.Read).Should().BeTrue(
             "Users with Viewer access on an organization should be able to read its child nodes (inherited)");

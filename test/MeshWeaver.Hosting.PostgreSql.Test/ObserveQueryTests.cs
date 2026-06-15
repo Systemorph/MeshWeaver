@@ -63,7 +63,7 @@ public class ObserveQueryTests : IAsyncLifetime
         // row, so asserting "exactly one change" was a flake under load. The
         // contract this test pins is the SHAPE of the Initial emission, not
         // the absence of subsequent ones.
-        var initialChange = _query.Query<MeshNode>(request, _options)
+        var initialChange = await _query.Query<MeshNode>(request, _options)
             .Should().Within(10.Seconds()).Match(c => c.ChangeType == QueryChangeType.Initial);
 
         initialChange.Items.Should().HaveCount(1);

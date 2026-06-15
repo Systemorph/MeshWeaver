@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Threading;
@@ -27,7 +27,7 @@ public class AccessContextToolCallTest(ITestOutputHelper output) : MonolithMeshT
             .AddSampleUsers();
 
     [Fact]
-    public void AccessContextAIFunction_RestoresIdentity_BeforeToolCall()
+    public async Task AccessContextAIFunction_RestoresIdentity_BeforeToolCall()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
@@ -64,7 +64,7 @@ public class AccessContextToolCallTest(ITestOutputHelper output) : MonolithMeshT
         accessService.Context.Should().BeNull("context should be cleared before test");
 
         // Invoke the wrapped tool (Task-based AI-SDK boundary → bridge to a stream)
-        wrapped.InvokeAsync(
+        await wrapped.InvokeAsync(
                 new AIFunctionArguments(new Dictionary<string, object?> { ["input"] = "hello" }), CancellationToken.None)
             .AsTask().ToObservable().Should().Within(10.Seconds()).Emit();
 
@@ -75,7 +75,7 @@ public class AccessContextToolCallTest(ITestOutputHelper output) : MonolithMeshT
     }
 
     [Fact]
-    public void AccessContextAIFunction_WithoutExecutionContext_DoesNotCrash()
+    public async Task AccessContextAIFunction_WithoutExecutionContext_DoesNotCrash()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
@@ -93,7 +93,7 @@ public class AccessContextToolCallTest(ITestOutputHelper output) : MonolithMeshT
         accessService.SetContext(null);
 
         // Should not throw — Task-based AI-SDK boundary bridged to a stream.
-        var result = wrapped.InvokeAsync(
+        var result = await wrapped.InvokeAsync(
                 new AIFunctionArguments(new Dictionary<string, object?> { ["input"] = "hello" }), CancellationToken.None)
             .AsTask().ToObservable().Should().Within(10.Seconds()).Emit();
         result.Should().NotBeNull();

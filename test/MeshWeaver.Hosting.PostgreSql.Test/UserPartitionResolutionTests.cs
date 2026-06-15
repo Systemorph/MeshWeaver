@@ -70,7 +70,7 @@ public class UserPartitionResolutionTests(PostgreSqlFixture fixture, ITestOutput
     /// contract end-to-end — Postgres-backed.</para>
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void ResolvePath_UserPartitionRoot_ReturnsUserNode()
+    public async Task ResolvePath_UserPartitionRoot_ReturnsUserNode()
     {
         const string username = "rbuergi_test_resolve";
 
@@ -97,7 +97,7 @@ public class UserPartitionResolutionTests(PostgreSqlFixture fixture, ITestOutput
             TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
             Versioned = true,
         };
-        pgProvider.EnsureSchemaForPartitionAsync(partitionDef, TestTimeout)
+        await pgProvider.EnsureSchemaForPartitionAsync(partitionDef, TestTimeout)
             .ToObservable().Should().Within(60.Seconds()).Emit();
         pgProvider.RegisterPartition(partitionDef);
 
@@ -108,7 +108,7 @@ public class UserPartitionResolutionTests(PostgreSqlFixture fixture, ITestOutput
             State = MeshNodeState.Active,
             Content = partitionDef,
         };
-        meshService.CreateNode(partitionNode)
+        await meshService.CreateNode(partitionNode)
             .Should().Within(60.Seconds()).Emit();
 
         // 2) Write the bare User row directly into the per-user schema at
@@ -120,11 +120,11 @@ public class UserPartitionResolutionTests(PostgreSqlFixture fixture, ITestOutput
             NodeType = "User",
             State = MeshNodeState.Active,
         };
-        meshService.CreateNode(userNode)
+        await meshService.CreateNode(userNode)
             .Should().Within(60.Seconds()).Emit();
 
         // 3) Resolve.
-        var resolution = pathResolver.ResolvePath(username)
+        var resolution = await pathResolver.ResolvePath(username)
             .Should().Within(60.Seconds()).Emit();
 
         // 4) Assert.
@@ -151,7 +151,7 @@ public class UserPartitionResolutionTests(PostgreSqlFixture fixture, ITestOutput
     /// path resolution alone isn't enough if the hub never activates.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void GetMeshNodeStream_UserPartitionRoot_EmitsUserNode()
+    public async Task GetMeshNodeStream_UserPartitionRoot_EmitsUserNode()
     {
         const string username = "rbuergi_test_stream";
 
@@ -174,11 +174,11 @@ public class UserPartitionResolutionTests(PostgreSqlFixture fixture, ITestOutput
             TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
             Versioned = true,
         };
-        pgProvider.EnsureSchemaForPartitionAsync(partitionDef, TestTimeout)
+        await pgProvider.EnsureSchemaForPartitionAsync(partitionDef, TestTimeout)
             .ToObservable().Should().Within(60.Seconds()).Emit();
         pgProvider.RegisterPartition(partitionDef);
 
-        meshService.CreateNode(new MeshNode(username, "Admin/Partition")
+        await meshService.CreateNode(new MeshNode(username, "Admin/Partition")
         {
             NodeType = "Partition",
             Name = username,
@@ -186,14 +186,14 @@ public class UserPartitionResolutionTests(PostgreSqlFixture fixture, ITestOutput
             Content = partitionDef,
         }).Should().Within(60.Seconds()).Emit();
 
-        meshService.CreateNode(MeshNode.FromPath(username) with
+        await meshService.CreateNode(MeshNode.FromPath(username) with
         {
             Name = "Test User",
             NodeType = "User",
             State = MeshNodeState.Active,
         }).Should().Within(60.Seconds()).Emit();
 
-        var node = workspace
+        var node = await workspace
             .GetMeshNodeStream(username)
             .Where(n => n != null)
             .Take(1)

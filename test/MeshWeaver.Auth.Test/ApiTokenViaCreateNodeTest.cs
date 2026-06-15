@@ -46,7 +46,7 @@ public class ApiTokenViaCreateNodeTest(ITestOutputHelper output) : MonolithMeshT
             Mesh.ServiceProvider.GetRequiredService<ILogger<ApiTokenService>>());
 
     [Fact]
-    public void CreateApiToken_LandsInUserPartition_NotLegacyUserNamespace()
+    public async Task CreateApiToken_LandsInUserPartition_NotLegacyUserNamespace()
     {
         var (rawToken, hash, hashPrefix) = NewToken();
         var userTokenNamespace = $"{UserId}/ApiToken";
@@ -68,7 +68,7 @@ public class ApiTokenViaCreateNodeTest(ITestOutputHelper output) : MonolithMeshT
             },
         };
 
-        var created = MeshService.CreateNode(tokenNode).Should().Emit();
+        var created = await MeshService.CreateNode(tokenNode).Should().Emit();
 
         created.Should().NotBeNull();
         created.Namespace.Should().Be(userTokenNamespace,
@@ -81,7 +81,7 @@ public class ApiTokenViaCreateNodeTest(ITestOutputHelper output) : MonolithMeshT
     }
 
     [Fact]
-    public void CreateApiToken_PersistsHashedContent_RawTokenNeverStored()
+    public async Task CreateApiToken_PersistsHashedContent_RawTokenNeverStored()
     {
         var (rawToken, hash, hashPrefix) = NewToken();
 
@@ -101,7 +101,7 @@ public class ApiTokenViaCreateNodeTest(ITestOutputHelper output) : MonolithMeshT
             },
         };
 
-        var created = MeshService.CreateNode(tokenNode).Should().Emit();
+        var created = await MeshService.CreateNode(tokenNode).Should().Emit();
 
         var stored = created.Content as ApiToken
                      ?? DeserializeContent<ApiToken>(created);
@@ -114,13 +114,13 @@ public class ApiTokenViaCreateNodeTest(ITestOutputHelper output) : MonolithMeshT
     }
 
     [Fact]
-    public void CreateApiTokenIndex_LandsInApitokenPartition_PointsAtUserPath()
+    public async Task CreateApiTokenIndex_LandsInApitokenPartition_PointsAtUserPath()
     {
         var (rawToken, hash, hashPrefix) = NewToken();
         var tokenPath = $"{UserId}/ApiToken/{hashPrefix}";
 
         // Step 1: user-scoped token node
-        MeshService.CreateNode(new MeshNode(hashPrefix, $"{UserId}/ApiToken")
+        await MeshService.CreateNode(new MeshNode(hashPrefix, $"{UserId}/ApiToken")
         {
             NodeType = "ApiToken",
             State = MeshNodeState.Active,
@@ -148,7 +148,7 @@ public class ApiTokenViaCreateNodeTest(ITestOutputHelper output) : MonolithMeshT
             },
         };
 
-        var createdIndex = MeshService.CreateNode(indexNode).Should().Emit();
+        var createdIndex = await MeshService.CreateNode(indexNode).Should().Emit();
 
         createdIndex.Should().NotBeNull();
         createdIndex.Namespace.Should().Be("ApiToken");
@@ -169,14 +169,14 @@ public class ApiTokenViaCreateNodeTest(ITestOutputHelper output) : MonolithMeshT
     /// before building the principal — if it returns the token, MCP authenticates.
     /// </summary>
     [Fact]
-    public void ValidateToken_AfterCreateNode_AuthenticatesForMcp()
+    public async Task ValidateToken_AfterCreateNode_AuthenticatesForMcp()
     {
         var (rawToken, hash, hashPrefix) = NewToken();
         var tokenPath = $"{UserId}/ApiToken/{hashPrefix}";
 
         // Same writes the production CreateToken composes — but routed through
         // IMeshService.CreateNode directly, with no service in between.
-        MeshService.CreateNode(new MeshNode(hashPrefix, $"{UserId}/ApiToken")
+        await MeshService.CreateNode(new MeshNode(hashPrefix, $"{UserId}/ApiToken")
         {
             NodeType = "ApiToken",
             State = MeshNodeState.Active,
@@ -193,7 +193,7 @@ public class ApiTokenViaCreateNodeTest(ITestOutputHelper output) : MonolithMeshT
             },
         }).Should().Emit();
 
-        MeshService.CreateNode(new MeshNode(hashPrefix, "ApiToken")
+        await MeshService.CreateNode(new MeshNode(hashPrefix, "ApiToken")
         {
             NodeType = "ApiToken",
             State = MeshNodeState.Active,
@@ -205,7 +205,7 @@ public class ApiTokenViaCreateNodeTest(ITestOutputHelper output) : MonolithMeshT
         // right after the create (read-side index lag) — re-issue on a 50 ms
         // interval until the token becomes visible.
         var service = GetApiTokenService();
-        var validated = Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+        var validated = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .SelectMany(_ => service.ValidateToken(rawToken).Take(1))
             .Should().Match(v => v is not null);
 
@@ -219,12 +219,12 @@ public class ApiTokenViaCreateNodeTest(ITestOutputHelper output) : MonolithMeshT
     }
 
     [Fact]
-    public void ValidateToken_RevokedAfterCreateNode_McpRejects()
+    public async Task ValidateToken_RevokedAfterCreateNode_McpRejects()
     {
         var (rawToken, hash, hashPrefix) = NewToken();
         var tokenPath = $"{UserId}/ApiToken/{hashPrefix}";
 
-        MeshService.CreateNode(new MeshNode(hashPrefix, $"{UserId}/ApiToken")
+        await MeshService.CreateNode(new MeshNode(hashPrefix, $"{UserId}/ApiToken")
         {
             NodeType = "ApiToken",
             State = MeshNodeState.Active,
@@ -241,20 +241,20 @@ public class ApiTokenViaCreateNodeTest(ITestOutputHelper output) : MonolithMeshT
             },
         }).Should().Emit();
 
-        MeshService.CreateNode(new MeshNode(hashPrefix, "ApiToken")
+        await MeshService.CreateNode(new MeshNode(hashPrefix, "ApiToken")
         {
             NodeType = "ApiToken",
             State = MeshNodeState.Active,
             Content = new ApiTokenIndex { TokenHash = hash, TokenPath = tokenPath },
         }).Should().Emit();
 
-        var result = GetApiTokenService().ValidateToken(rawToken).Should().Emit();
+        var result = await GetApiTokenService().ValidateToken(rawToken).Should().Emit();
 
         result.Should().BeNull("revoked tokens must not authenticate, regardless of how they were written");
     }
 
     [Fact]
-    public void ValidateToken_HashMismatchOnIndex_McpRejects()
+    public async Task ValidateToken_HashMismatchOnIndex_McpRejects()
     {
         // Belt-and-braces: even if the index points at a token whose hash differs
         // (corruption / tampering), validation must fail.
@@ -262,7 +262,7 @@ public class ApiTokenViaCreateNodeTest(ITestOutputHelper output) : MonolithMeshT
         var tokenPath = $"{UserId}/ApiToken/{hashPrefix}";
         const string tamperedHash = "0000000000000000000000000000000000000000000000000000000000000000";
 
-        MeshService.CreateNode(new MeshNode(hashPrefix, $"{UserId}/ApiToken")
+        await MeshService.CreateNode(new MeshNode(hashPrefix, $"{UserId}/ApiToken")
         {
             NodeType = "ApiToken",
             State = MeshNodeState.Active,
@@ -278,14 +278,14 @@ public class ApiTokenViaCreateNodeTest(ITestOutputHelper output) : MonolithMeshT
             },
         }).Should().Emit();
 
-        MeshService.CreateNode(new MeshNode(hashPrefix, "ApiToken")
+        await MeshService.CreateNode(new MeshNode(hashPrefix, "ApiToken")
         {
             NodeType = "ApiToken",
             State = MeshNodeState.Active,
             Content = new ApiTokenIndex { TokenHash = hash, TokenPath = tokenPath },
         }).Should().Emit();
 
-        var result = GetApiTokenService().ValidateToken(rawToken).Should().Emit();
+        var result = await GetApiTokenService().ValidateToken(rawToken).Should().Emit();
 
         result.Should().BeNull("a hash mismatch between index and token must reject — defence in depth");
     }

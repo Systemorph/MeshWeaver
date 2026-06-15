@@ -46,7 +46,7 @@ public class SnapshotImportTest(ITestOutputHelper output) : HubTestBase(output)
 
 
     [Fact]
-    public void SnapshotImport_SimpleTest()
+    public async Task SnapshotImport_SimpleTest()
     {
         const string content =
             @"@@MyRecord
@@ -59,11 +59,11 @@ B4,B,4
 
         var client = GetClient();
         var importRequest = new ImportRequest(content);
-        var importResponse = client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
             .Should().Within(10.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
-        var ret = GetData<MyRecord>(ImportAddress, x => x.Count >= 4);
+        var ret = await GetData<MyRecord>(ImportAddress, x => x.Count >= 4);
 
         ret.Should().HaveCount(4);
 
@@ -76,23 +76,23 @@ SystemName,DisplayName
 ";
 
         importRequest = new ImportRequest(content2) { UpdateOptions = new() { Snapshot = true } };
-        importResponse = client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
+        importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
             .Should().Within(10.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
 
-        ret = GetData<MyRecord>(ImportAddress, x => x.Count == 1);
+        ret = await GetData<MyRecord>(ImportAddress, x => x.Count == 1);
 
         ret.Should().HaveCount(1);
         ret.Should().ContainSingle().Which.Number.Should().Be(5);
 
-        var ret2 = GetData<MyRecord>(CreateHostAddress(), x => x.Count == 1);
+        var ret2 = await GetData<MyRecord>(CreateHostAddress(), x => x.Count == 1);
         ret2.Should().HaveCount(1);
         ret2.Should().ContainSingle().Which.Number.Should().Be(5);
     }
 
     [Fact]
-    public void SnapshotImport_AndThenRegularImportTest()
+    public async Task SnapshotImport_AndThenRegularImportTest()
     {
         const string content1 =
             @"@@MyRecord
@@ -105,10 +105,10 @@ B4,B,4
 
         var client = GetClient();
         var importRequest = new ImportRequest(content1);
-        var importResponse = client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
             .Should().Within(10.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
-        var ret = GetData<MyRecord>(ImportAddress, x => x.Count >= 4);
+        var ret = await GetData<MyRecord>(ImportAddress, x => x.Count >= 4);
 
         ret.Should().HaveCount(4);
 
@@ -122,11 +122,11 @@ SystemName,DisplayName
 
         //snapshot
         importRequest = new ImportRequest(content2) { UpdateOptions = new() { Snapshot = true } };
-        importResponse = client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
+        importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
             .Should().Within(10.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
-        ret = GetData<MyRecord>(ImportAddress, x => x.Count == 1);
+        ret = await GetData<MyRecord>(ImportAddress, x => x.Count == 1);
 
         ret.Should().HaveCount(1);
         ret.Should().ContainSingle().Which.Number.Equals(5);
@@ -141,16 +141,16 @@ SystemName2,DisplayName2
 
         //not snapshot
         importRequest = new ImportRequest(content3);
-        importResponse = client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
+        importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
             .Should().Within(10.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
-        ret = GetData<MyRecord>(ImportAddress, x => x.Count >= 2);
+        ret = await GetData<MyRecord>(ImportAddress, x => x.Count >= 2);
 
         ret.Should().HaveCount(2);
     }
 
-    private IReadOnlyCollection<TData> GetData<TData>(
+    private async Task<IReadOnlyCollection<TData>> GetData<TData>(
         Address address,
         System.Func<IReadOnlyCollection<TData>, bool> predicate,
         TimeSpan? timeout = null)
@@ -158,7 +158,7 @@ SystemName2,DisplayName2
         timeout ??= 10.Seconds();
         var hub = Mesh.GetHostedHub(address);
         var workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
-        return workspace
+        return await workspace
             .GetObservable<TData>()
             .Should().Within(timeout.Value).Match(predicate);
     }

@@ -89,10 +89,10 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
     /// ACME Space node appears, so the tests aren't flaky in environments where the
     /// scan hasn't yet seen the ACME organization node.
     /// </summary>
-    private IReadOnlyList<MeshNode> QueryUntilAcmeIndexed(string query)
+    private async Task<IReadOnlyList<MeshNode>> QueryUntilAcmeIndexed(string query)
     {
         var byPath = new Dictionary<string, MeshNode>(StringComparer.Ordinal);
-        return MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
+        return await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Scan((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>(), (_, change) =>
             {
                 if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
@@ -114,9 +114,9 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
     }
 
     [Fact(Timeout = 60000)]
-    public void SubtreeSearch_FindsOrganizationRootNode()
+    public async Task SubtreeSearch_FindsOrganizationRootNode()
     {
-        var results = QueryUntilAcmeIndexed(
+        var results = await QueryUntilAcmeIndexed(
             "*ACME* scope:subtree is:main limit:50");
 
         results.Should().Contain(n => n.Path == "ACME" && n.NodeType == "Space",
@@ -124,13 +124,13 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
     }
 
     [Fact(Timeout = 60000)]
-    public void DescendantsSearch_FindsOrganizationRootNode()
+    public async Task DescendantsSearch_FindsOrganizationRootNode()
     {
         // Updated 2026-04-24: was DescendantsSearch_MissesOrganizationRootNode and asserted
         // the bug behavior. The query engine was fixed elsewhere; scope:descendants now
         // returns the ACME root node when its name matches the wildcard. Test now asserts
         // the corrected behavior so a future regression of the original bug is caught.
-        var results = QueryUntilAcmeIndexed(
+        var results = await QueryUntilAcmeIndexed(
             "*ACME* scope:descendants is:main limit:50");
 
         results.Should().Contain(n => n.Path == "ACME" && n.NodeType == "Space",
@@ -157,9 +157,9 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
     }
 
     [Fact(Timeout = 60000)]
-    public void PortalSearch_WithContextSearch_FindsAcme()
+    public async Task PortalSearch_WithContextSearch_FindsAcme()
     {
-        var results = QueryUntilAcmeIndexed(
+        var results = await QueryUntilAcmeIndexed(
             "*ACME* scope:subtree context:search is:main limit:50");
 
         results.Should().Contain(n => n.Path == "ACME",
@@ -181,11 +181,11 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
     /// index lag: if the engine has ACME, the bound collection must contain it.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void SearchSuggestions_FreeText_BindsWholeCollectionContainingMatch()
+    public async Task SearchSuggestions_FreeText_BindsWholeCollectionContainingMatch()
     {
         // Gate on the engine actually returning ACME so the assertion below can't
         // be excused by the catalog scan not having indexed it yet.
-        var indexed = QueryUntilAcmeIndexed(
+        var indexed = await QueryUntilAcmeIndexed(
             "*ACME* scope:descendants context:search is:main limit:50");
         indexed.Should().Contain(n => n.Path == "ACME",
             "precondition: the mesh query engine must return the ACME node");
@@ -194,7 +194,7 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
         // snapshot that contains ACME. MeshSearch.Suggestions merges every source
         // progressively; the assertion accepts the first snapshot in which the
         // match appears (later sources only add/re-order).
-        var snapshot = MeshSearch
+        var snapshot = await MeshSearch
             .Suggestions(MeshQuery, "ACME", contextPath: null, maxResults: 10)
             .Should().Within(30.Seconds())
             .Match(list => list.Any(s => s.Path == "ACME"));
@@ -204,7 +204,7 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
     }
 
     [Fact(Timeout = 60000)]
-    public void AcmeOrganization_IsAccessibleToAuthenticatedUser()
+    public async Task AcmeOrganization_IsAccessibleToAuthenticatedUser()
     {
         // This tests what the portal does when navigating to /ACME:
         // SecurePersistenceServiceDecorator.HasReadAccessAsync → SpaceAccessRule
@@ -216,7 +216,7 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
         // and the first emission can be false before the scan catches the
         // ACME/_Access partition. Block for the granted emission over a short window.
         var userId = TestUsers.Admin.ObjectId;
-        var hasRead = Mesh.CheckPermission("ACME", userId, Permission.Read)
+        var hasRead = await Mesh.CheckPermission("ACME", userId, Permission.Read)
             .Should().Within(25.Seconds()).Match(granted => granted);
         hasRead.Should().BeTrue(
             "authenticated users should have Read access to ACME via Public_Access.json Viewer role");
@@ -229,7 +229,7 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
         // cache miss that returns the JSON-shape default before the markdown
         // parser runs). Block until the typed Space shape lands so the
         // assertion isn't flaky on cold cache.
-        var node = ReadNode("ACME")
+        var node = await ReadNode("ACME")
             .Should().Within(25.Seconds()).Match(n => n?.NodeType == "Space");
         node.Should().NotBeNull("ACME node should exist");
         node!.NodeType.Should().Be("Space");

@@ -126,7 +126,7 @@ public class NavigationServiceTest
     #region InitializeAsync Tests
 
     [Fact]
-    public void InitializeAsync_SubscribesToLocationChanged()
+    public async Task InitializeAsync_SubscribesToLocationChanged()
     {
         // Arrange
         var service = CreateService();
@@ -143,7 +143,7 @@ public class NavigationServiceTest
 
         // Stream-wait for the NavigationContext emission that carries the
         // expected Area — replaces a Task.Delay(100) propagation wait.
-        var receivedContext = service.NavigationContext.Should().Within(WaitTimeout)
+        var receivedContext = await service.NavigationContext.Should().Within(WaitTimeout)
             .Match(ctx => ctx?.Area == "Overview");
 
         receivedContext.Should().NotBeNull();
@@ -151,7 +151,7 @@ public class NavigationServiceTest
     }
 
     [Fact]
-    public void InitializeAsync_CalledTwice_OnlySubscribesOnce()
+    public async Task InitializeAsync_CalledTwice_OnlySubscribesOnce()
     {
         // Arrange
         var service = CreateService();
@@ -169,7 +169,7 @@ public class NavigationServiceTest
         service.InitializeAsync(); // Second call should be idempotent
         // Stream-wait for the bootstrap navigation to materialise into a
         // NavigationContext for "ACME" — replaces a Task.Delay(100) barrier.
-        service.NavigationContext.Should().Within(WaitTimeout)
+        await service.NavigationContext.Should().Within(WaitTimeout)
             .Match(ctx => ctx?.Namespace == "ACME");
 
         // Assert - verify only one subscription by checking only one event fires
@@ -187,7 +187,7 @@ public class NavigationServiceTest
         // Stream-wait for the navigation to land — when we see Path="ACME/Other"
         // come through the NavigationContext, the LocationChanged handler has
         // fully reacted.
-        service.NavigationContext.Should().Within(WaitTimeout)
+        await service.NavigationContext.Should().Within(WaitTimeout)
             .Match(ctx => ctx?.Path == "ACME/Other");
 
         eventCount.Should().Be(1);
@@ -215,7 +215,7 @@ public class NavigationServiceTest
     #region Path Resolution Tests
 
     [Fact]
-    public void OnLocationChanged_ResolvesPath_CreatesNavigationContext()
+    public async Task OnLocationChanged_ResolvesPath_CreatesNavigationContext()
     {
         // Arrange
         var service = CreateService();
@@ -228,7 +228,7 @@ public class NavigationServiceTest
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/ACME/Project/Dashboard/123");
-        service.NavigationContext.Should().Within(WaitTimeout)
+        await service.NavigationContext.Should().Within(WaitTimeout)
             .Match(ctx => ctx?.Path == "ACME/Project/Dashboard/123");
 
         // Assert
@@ -238,7 +238,7 @@ public class NavigationServiceTest
     }
 
     [Fact]
-    public void OnLocationChanged_RaisesNavigationContextChangedEvent()
+    public async Task OnLocationChanged_RaisesNavigationContextChangedEvent()
     {
         // Arrange
         var service = CreateService();
@@ -251,7 +251,7 @@ public class NavigationServiceTest
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/ACME/Project");
-        var receivedContext = service.NavigationContext.Should().Within(WaitTimeout)
+        var receivedContext = await service.NavigationContext.Should().Within(WaitTimeout)
             .Match(ctx => ctx?.Namespace == "ACME/Project");
 
         // Assert
@@ -260,7 +260,7 @@ public class NavigationServiceTest
     }
 
     [Fact]
-    public void OnLocationChanged_WhenResolutionNull_KeepsStaleContext_UntilRetriesExhaust()
+    public async Task OnLocationChanged_WhenResolutionNull_KeepsStaleContext_UntilRetriesExhaust()
     {
         // The old behavior cleared Context and fired OnNavigationContextChanged(null)
         // immediately, which caused the "Page Not Found" card to flash before the
@@ -280,7 +280,7 @@ public class NavigationServiceTest
         service.InitializeAsync();
         // Stream-wait for the bootstrap navigation to land — replaces a
         // Task.Delay(50) propagation barrier.
-        service.NavigationContext.Should().Within(WaitTimeout)
+        await service.NavigationContext.Should().Within(WaitTimeout)
             .Match(ctx => ctx?.Namespace == "ACME");
 
         var previousContext = service.Context;
@@ -295,13 +295,13 @@ public class NavigationServiceTest
         // Assert: during the retry window the UI still reports the previous resolved
         // context (or at least did not receive a null-context invocation that would
         // trigger the "Page Not Found" render). 100 ms < first retry delay (500 ms).
-        service.NavigationContext.Where(ctx => ctx is null).Should().NotEmit(
+        await service.NavigationContext.Where(ctx => ctx is null).Should().NotEmit(
             TimeSpan.FromMilliseconds(100),
             "the 404 flash bug was caused by firing a null context before retries had a chance");
     }
 
     [Fact]
-    public void OnLocationChanged_ParsesRemainderIntoAreaAndId()
+    public async Task OnLocationChanged_ParsesRemainderIntoAreaAndId()
     {
         // Arrange
         var service = CreateService();
@@ -314,7 +314,7 @@ public class NavigationServiceTest
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/ACME/Project/Dashboard/item-123");
-        service.NavigationContext.Should().Within(WaitTimeout)
+        await service.NavigationContext.Should().Within(WaitTimeout)
             .Match(ctx => ctx?.Area == "Dashboard" && ctx?.Id == "item-123");
 
         // Assert
@@ -324,7 +324,7 @@ public class NavigationServiceTest
     }
 
     [Fact]
-    public void OnLocationChanged_WithNoRemainder_SetsAreaAndIdNull()
+    public async Task OnLocationChanged_WithNoRemainder_SetsAreaAndIdNull()
     {
         // Arrange
         var service = CreateService();
@@ -337,7 +337,7 @@ public class NavigationServiceTest
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/ACME/Project");
-        service.NavigationContext.Should().Within(WaitTimeout)
+        await service.NavigationContext.Should().Within(WaitTimeout)
             .Match(ctx => ctx?.Namespace == "ACME/Project" && ctx.Area == null);
 
         // Assert
@@ -347,7 +347,7 @@ public class NavigationServiceTest
     }
 
     [Fact]
-    public void OnLocationChanged_WithAreaOnlyRemainder_SetsIdNull()
+    public async Task OnLocationChanged_WithAreaOnlyRemainder_SetsIdNull()
     {
         // Arrange
         var service = CreateService();
@@ -360,7 +360,7 @@ public class NavigationServiceTest
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/ACME/Project/Dashboard");
-        service.NavigationContext.Should().Within(WaitTimeout)
+        await service.NavigationContext.Should().Within(WaitTimeout)
             .Match(ctx => ctx?.Area == "Dashboard" && ctx.Id == null);
 
         // Assert
@@ -370,7 +370,7 @@ public class NavigationServiceTest
     }
 
     [Fact]
-    public void OnLocationChanged_ConfigNodeWithAreaSuffix_ResolvesAreaCorrectly()
+    public async Task OnLocationChanged_ConfigNodeWithAreaSuffix_ResolvesAreaCorrectly()
     {
         // Arrange - simulates Organization/Search where Organization is a config node
         var service = CreateService();
@@ -384,7 +384,7 @@ public class NavigationServiceTest
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/Organization/Search");
-        service.NavigationContext.Should().Within(WaitTimeout)
+        await service.NavigationContext.Should().Within(WaitTimeout)
             .Match(ctx => ctx?.Namespace == "Organization" && ctx.Area == "Search");
 
         // Assert
@@ -395,7 +395,7 @@ public class NavigationServiceTest
     }
 
     [Fact]
-    public void OnLocationChanged_ConfigNodeWithAreaAndId_ResolvesCorrectly()
+    public async Task OnLocationChanged_ConfigNodeWithAreaAndId_ResolvesCorrectly()
     {
         // Arrange - simulates Organization/Settings/Metadata
         var service = CreateService();
@@ -408,7 +408,7 @@ public class NavigationServiceTest
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/Organization/Settings/Metadata");
-        service.NavigationContext.Should().Within(WaitTimeout)
+        await service.NavigationContext.Should().Within(WaitTimeout)
             .Match(ctx => ctx?.Namespace == "Organization" && ctx.Area == "Settings" && ctx.Id == "Metadata");
 
         // Assert
@@ -419,7 +419,7 @@ public class NavigationServiceTest
     }
 
     [Fact]
-    public void OnLocationChanged_UserNodeWithArea_ResolvesCorrectly()
+    public async Task OnLocationChanged_UserNodeWithArea_ResolvesCorrectly()
     {
         // Arrange - simulates User/Roland/Settings where User/Roland is a persisted node
         var service = CreateService();
@@ -432,7 +432,7 @@ public class NavigationServiceTest
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/User/Roland/Settings");
-        service.NavigationContext.Should().Within(WaitTimeout)
+        await service.NavigationContext.Should().Within(WaitTimeout)
             .Match(ctx => ctx?.Namespace == "User/Roland" && ctx.Area == "Settings");
 
         // Assert
@@ -447,7 +447,7 @@ public class NavigationServiceTest
     #region Creatable Types Tests
 
     [Fact]
-    public void OnLocationChanged_WhenMeshNodeChanges_ReloadsCreatableTypes()
+    public async Task OnLocationChanged_WhenMeshNodeChanges_ReloadsCreatableTypes()
     {
         // Arrange
         var service = CreateService();
@@ -465,7 +465,7 @@ public class NavigationServiceTest
         // subsequent navigation kicks off a CLEAN second load.
         _navigationManager.SetUri("http://localhost/ACME");
         service.InitializeAsync();
-        service.CreatableTypes.Should().Within(WaitTimeout)
+        await service.CreatableTypes.Should().Within(WaitTimeout)
             .Match(s => !s.IsLoading && s.Items.Any(t => t.NodeTypePath == "ACME/Todo"));
 
         // Change to different node path
@@ -480,7 +480,7 @@ public class NavigationServiceTest
         _navigationManager.SimulateLocationChanged("http://localhost/ACME/Project");
         // Stream-wait for the second snapshot (2 items, Done) — replaces a
         // Task.Delay(200) propagation barrier.
-        service.CreatableTypes.Should().Within(WaitTimeout)
+        await service.CreatableTypes.Should().Within(WaitTimeout)
             .Match(s => !s.IsLoading && s.Items.Count == 2
                 && s.Items.Any(t => t.NodeTypePath == "ACME/Project/Story")
                 && s.Items.Any(t => t.NodeTypePath == "ACME/Project/Todo"));
@@ -493,7 +493,7 @@ public class NavigationServiceTest
     }
 
     [Fact]
-    public void OnLocationChanged_WhenMeshNodeSame_DoesNotReloadCreatableTypes()
+    public async Task OnLocationChanged_WhenMeshNodeSame_DoesNotReloadCreatableTypes()
     {
         // Arrange
         var service = CreateService();
@@ -516,7 +516,7 @@ public class NavigationServiceTest
         _navigationManager.SetUri("http://localhost/ACME/Project");
         service.InitializeAsync();
         // Stream-wait for the first load to complete — replaces Task.Delay(100).
-        service.CreatableTypes.Should().Within(WaitTimeout)
+        await service.CreatableTypes.Should().Within(WaitTimeout)
             .Match(s => !s.IsLoading && s.Items.Any(t => t.NodeTypePath == "ACME/Project/Todo"));
 
         // Navigate to different area within same node
@@ -530,7 +530,7 @@ public class NavigationServiceTest
         // completion. If a creatable-types reload were going to fire, it
         // would have done so by now. Replaces a Task.Delay(100) negative wait
         // with a synchronous "navigation done" wait.
-        service.NavigationContext.Should().Within(WaitTimeout)
+        await service.NavigationContext.Should().Within(WaitTimeout)
             .Match(ctx => ctx?.Area == "Dashboard");
 
         // Assert - should only load once (during initialization)
@@ -538,7 +538,7 @@ public class NavigationServiceTest
     }
 
     [Fact]
-    public void LoadCreatableTypes_EmitsLoadingThenDoneSnapshots()
+    public async Task LoadCreatableTypes_EmitsLoadingThenDoneSnapshots()
     {
         // Arrange
         var service = CreateService();
@@ -562,7 +562,7 @@ public class NavigationServiceTest
         // Stream-wait for the Done snapshot — replaces Task.Delay(300). The
         // Loading snapshot lands synchronously before this returns, so the
         // accumulator will have captured both states.
-        service.CreatableTypes.Should().Within(WaitTimeout)
+        await service.CreatableTypes.Should().Within(WaitTimeout)
             .Match(s => !s.IsLoading && s.Items.Count == 2);
 
         // Assert — observable provider emits the whole snapshot:
@@ -573,7 +573,7 @@ public class NavigationServiceTest
     }
 
     [Fact]
-    public void CreatableTypesSnapshot_IsLoadingTransitions()
+    public async Task CreatableTypesSnapshot_IsLoadingTransitions()
     {
         // Arrange
         var service = CreateService();
@@ -595,7 +595,7 @@ public class NavigationServiceTest
         // Stream-wait for the IsLoading=false transition with items present —
         // replaces a Task.Delay(200). The IsLoading=true emission lands
         // synchronously before this returns, so loadingStates has both.
-        service.CreatableTypes.Should().Within(WaitTimeout)
+        await service.CreatableTypes.Should().Within(WaitTimeout)
             .Match(s => !s.IsLoading && s.Items.Count > 0);
 
         // Assert - should see true while loading, false when done
@@ -637,7 +637,7 @@ public class NavigationServiceTest
     #region Satellite Node Tests
 
     [Fact]
-    public void OnLocationChanged_SatelliteNode_CurrentNamespacePointsAtMainNode()
+    public async Task OnLocationChanged_SatelliteNode_CurrentNamespacePointsAtMainNode()
     {
         // User browses to a thread under PartnerRe/AIConsulting. The thread node's MainNode
         // points back at the parent that owns it, so CurrentNamespace â€” which downstream
@@ -665,7 +665,7 @@ public class NavigationServiceTest
         // SimulateLocationChanged — same shape as the other passing tests.
         _navigationManager.SimulateLocationChanged($"http://localhost/{SatellitePath}");
         // Stream-wait for the navigation to land with the satellite context.
-        service.NavigationContext.Should().Within(WaitTimeout)
+        await service.NavigationContext.Should().Within(WaitTimeout)
             .Match(ctx => ctx?.IsSatellite == true);
 
         service.CurrentNamespace.Should().Be(MainNode);
@@ -675,7 +675,7 @@ public class NavigationServiceTest
     }
 
     [Fact]
-    public void OnLocationChanged_RegularNode_CurrentNamespaceMatchesNamespace()
+    public async Task OnLocationChanged_RegularNode_CurrentNamespaceMatchesNamespace()
     {
         // For a non-satellite node, CurrentNamespace and Namespace are the same.
         // PrimaryPath falls back to Namespace when Node is null, so this also covers
@@ -700,7 +700,7 @@ public class NavigationServiceTest
         _navigationManager.SimulateLocationChanged("http://localhost/PartnerRe/AIConsulting");
         // Stream-wait for the navigation to land — PrimaryPath becoming the
         // main node path is the positive signal.
-        service.NavigationContext.Should().Within(WaitTimeout)
+        await service.NavigationContext.Should().Within(WaitTimeout)
             .Match(ctx => ctx?.PrimaryPath == "PartnerRe/AIConsulting");
 
         service.CurrentNamespace.Should().Be("PartnerRe/AIConsulting");
@@ -709,7 +709,7 @@ public class NavigationServiceTest
     }
 
     [Fact]
-    public void OnLocationChanged_SatelliteNode_LoadsCreatableTypesForMainNode()
+    public async Task OnLocationChanged_SatelliteNode_LoadsCreatableTypesForMainNode()
     {
         // The creatable-types background load also keys off PrimaryPath so menus on
         // satellite pages reflect what can be created on the parent node.
@@ -738,7 +738,7 @@ public class NavigationServiceTest
         service.InitializeAsync();
         // Stream-wait for the creatable-types load for the main node to land
         // — replaces a Task.Delay(150).
-        service.CreatableTypes.Should().Within(WaitTimeout)
+        await service.CreatableTypes.Should().Within(WaitTimeout)
             .Match(s => !s.IsLoading && s.Items.Any(t => t.NodeTypePath == "PartnerRe/AIConsulting/Story"));
 
         // Discard the IObservable result — this is an NSubstitute received-call

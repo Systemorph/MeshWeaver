@@ -24,23 +24,23 @@ public class StaticNodeQueryContextTests(ITestOutputHelper output) : MonolithMes
     /// Reactive replacement for <c>QueryAsync(...).ToListAsync()</c>: the first
     /// <see cref="QueryChangeType.Initial"/> emission carries the full snapshot.
     /// </summary>
-    private IReadOnlyList<MeshNode> QueryNodes(string query)
-        => MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
+    private async Task<IReadOnlyList<MeshNode>> QueryNodes(string query)
+        => (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Should().Within(System.TimeSpan.FromSeconds(30))
-            .Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+            .Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
     [Fact(Timeout = 30000)]
-    public void SearchContext_ExcludesStaticNodes()
+    public async Task SearchContext_ExcludesStaticNodes()
     {
         // Arrange: create a real user-content node with "Markdown" in its name
-        // so we can verify it IS returned while the type definition "Markdown" is NOT.
-        NodeFactory.CreateNode(MeshNode.FromPath("snq/my-markdown-doc") with
+        // so we can verify it IS returnawait ed while the type definition "Markdown" is NOT.
+        await NodeFactory.CreateNode(MeshNode.FromPath("snq/my-markdown-doc") with
         {
             Name = "My Markdown Document", NodeType = "Markdown"
         }).Should().Emit();
 
         // Act: text search for "Markdown" with context:search
-        var results = QueryNodes("*Markdown* scope:descendants context:search is:main limit:50");
+        var results = await QueryNodes("*Markdown* scope:descendants context:search is:main limit:50");
 
         Output.WriteLine($"Results: {results.Count}");
         foreach (var r in results)
@@ -64,10 +64,10 @@ public class StaticNodeQueryContextTests(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact(Timeout = 30000)]
-    public void NoContext_IncludesStaticNodes()
+    public async Task NoContext_IncludesStaticNodes()
     {
         // Act: query for nodeType definitions WITHOUT context:search
-        var results = QueryNodes("nodeType:Markdown scope:descendants limit:50");
+        var results = await QueryNodes("nodeType:Markdown scope:descendants limit:50");
 
         Output.WriteLine($"Results without context: {results.Count}");
         foreach (var r in results)
@@ -79,21 +79,21 @@ public class StaticNodeQueryContextTests(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact(Timeout = 30000)]
-    public void SearchContext_IsMain_ExcludesNonMainNodes()
+    public async Task SearchContext_IsMain_ExcludesNonMainNodes()
     {
         // Arrange: create a main node and a satellite node
-        NodeFactory.CreateNode(MeshNode.FromPath("snq2/main-doc") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("snq2/main-doc") with
         {
             Name = "Main Document", NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("snq2/main-doc/_Comment/c1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("snq2/main-doc/_Comment/c1") with
         {
             Name = "A Comment", NodeType = "Comment",
             MainNode = "snq2/main-doc"
         }).Should().Emit();
 
         // Act: search with is:main and context:search
-        var results = QueryNodes("*Document* namespace:snq2 scope:descendants context:search is:main");
+        var results = await QueryNodes("*Document* namespace:snq2 scope:descendants context:search is:main");
 
         Output.WriteLine($"Results: {results.Count}");
         foreach (var r in results)

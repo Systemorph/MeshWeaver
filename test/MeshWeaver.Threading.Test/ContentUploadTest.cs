@@ -1,4 +1,4 @@
-﻿using System.Reactive.Linq;
+using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System;
 using System.Threading;
@@ -34,7 +34,7 @@ public class ContentUploadTest(ITestOutputHelper output) : MonolithMeshTestBase(
     }
 
     [Fact]
-    public void SaveContentRequest_UploadsSvgToContentCollection()
+    public async Task SaveContentRequest_UploadsSvgToContentCollection()
     {
         // Create a context node with content collections
         var contextPath = "UploadTestOrg";
@@ -47,7 +47,7 @@ public class ContentUploadTest(ITestOutputHelper output) : MonolithMeshTestBase(
         var client = GetClient();
         try
         {
-            var response = client.Observe(new SaveContentRequest
+            var response = await client.Observe(new SaveContentRequest
                 {
                     CollectionName = "content",
                     FilePath = "test-diagram.svg",

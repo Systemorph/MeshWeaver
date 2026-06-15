@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.GitSync;
@@ -37,87 +38,87 @@ public class MeshNodeContentEditorTest(ITestOutputHelper output) : GitHubSyncTes
     }
 
     [Fact(Timeout = 60000)]
-    public void EnsureConfigNode_creates_default_when_absent_and_is_idempotent()
+    public async Task EnsureConfigNode_creates_default_when_absent_and_is_idempotent()
     {
-        var space = NewSpace();
+        var space = await NewSpace();
         var cfgPath = GitHubSyncService.ConfigPath(space);
 
-        Assert.True(IsAbsent(cfgPath));
+        Assert.True(await IsAbsent(cfgPath));
 
-        var created = Sync.EnsureConfigNode(space).Timeout(30.Seconds()).Wait();
+        var created = await Sync.EnsureConfigNode(space).Timeout(30.Seconds()).ToTask();
         Assert.Equal(cfgPath, created.Path);
         Assert.Equal(GitHubSyncService.ConfigNodeType, created.NodeType);
 
         // Second call must NOT create a duplicate — it returns the existing node.
-        var again = Sync.EnsureConfigNode(space).Timeout(30.Seconds()).Wait();
+        var again = await Sync.EnsureConfigNode(space).Timeout(30.Seconds()).ToTask();
         Assert.Equal(cfgPath, again.Path);
-        var node = WaitForNode(cfgPath);
+        var node = await WaitForNode(cfgPath);
         Assert.NotNull(node);
     }
 
     [Fact(Timeout = 60000)]
-    public void Editing_a_field_via_the_node_stream_persists_and_reads_back_typed()
+    public async Task Editing_a_field_via_the_node_stream_persists_and_reads_back_typed()
     {
-        var space = NewSpace();
+        var space = await NewSpace();
         var cfgPath = GitHubSyncService.ConfigPath(space);
-        Sync.EnsureConfigNode(space).Timeout(30.Seconds()).Wait();
-        var node = WaitForNode(cfgPath);
+        await Sync.EnsureConfigNode(space).Timeout(30.Seconds()).ToTask();
+        var node = await WaitForNode(cfgPath);
 
         // Reproduce EXACTLY what MeshNodeContentEditorView writes: a per-field JSON patch on the
         // node content using the camelCase key, persisted via GetMeshNodeStream(path).Update.
         const string repo = "https://github.com/acme/widgets";
-        Mesh.GetMeshNodeStream(cfgPath)
+        await Mesh.GetMeshNodeStream(cfgPath)
             .Update(n => n with { Content = PatchField(n.Content, "repositoryUrl", JsonValue.Create(repo)) })
-            .Timeout(30.Seconds()).Wait();
+            .Timeout(30.Seconds()).ToTask();
 
         // The camelCase JSON key round-trips to the typed GitHubSyncConfig property.
-        var cfg = WaitForConfig(space, c => c.RepositoryUrl == repo);
+        var cfg = await WaitForConfig(space, c => c.RepositoryUrl == repo);
         Assert.Equal(repo, cfg.RepositoryUrl);
         Assert.Equal("main", cfg.Branch); // untouched default preserved
     }
 
     [Fact(Timeout = 60000)]
-    public void Sync_records_commit_without_clobbering_edited_repo_field()
+    public async Task Sync_records_commit_without_clobbering_edited_repo_field()
     {
-        var space = NewSpace();
-        CreateMarkdown($"{space}/Page", "Page", "# hello");
+        var space = await NewSpace();
+        await CreateMarkdown($"{space}/Page", "Page", "# hello");
         var cfgPath = GitHubSyncService.ConfigPath(space);
-        Sync.EnsureConfigNode(space).Timeout(30.Seconds()).Wait();
-        Connect();
+        await Sync.EnsureConfigNode(space).Timeout(30.Seconds()).ToTask();
+        await Connect();
 
         // Edit the repo URL the GUI way (JSON patch via the node stream), then sync.
         const string repo = "https://github.com/acme/preserved";
-        Mesh.GetMeshNodeStream(cfgPath)
+        await Mesh.GetMeshNodeStream(cfgPath)
             .Update(n => n with { Content = PatchField(n.Content, "repositoryUrl", JsonValue.Create(repo)) })
-            .Timeout(30.Seconds()).Wait();
-        WaitForConfig(space, c => c.RepositoryUrl == repo);
+            .Timeout(30.Seconds()).ToTask();
+        await WaitForConfig(space, c => c.RepositoryUrl == repo);
 
-        Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).Wait();
+        await Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).ToTask();
 
         // RecordLastSync merges only the last-sync fields: the edited repo URL survives.
-        var cfg = WaitForConfig(space, c => !string.IsNullOrEmpty(c.LastSyncCommitSha));
+        var cfg = await WaitForConfig(space, c => !string.IsNullOrEmpty(c.LastSyncCommitSha));
         Assert.Equal(repo, cfg.RepositoryUrl);
         Assert.False(string.IsNullOrEmpty(cfg.LastSyncCommitSha));
     }
 
     [Fact(Timeout = 60000)]
-    public void Credential_GetStream_emits_live_after_save()
+    public async Task Credential_GetStream_emits_live_after_save()
     {
         // The connect-state binding uses GetStream (live), not a one-shot Get().Take(1) that grabbed
         // the synced query's empty pre-sync snapshot and showed "Not connected" right after connecting.
-        Connect(token: "ghp_live", login: "live-octocat");
-        var cred = Credentials.GetStream(UserId)
+        await Connect(token: "ghp_live", login: "live-octocat");
+        var cred = await Credentials.GetStream(UserId)
             .Where(c => c is { AccessToken.Length: > 0 })
-            .FirstAsync().Timeout(30.Seconds()).Wait();
+            .FirstAsync().Timeout(30.Seconds()).ToTask();
         Assert.NotNull(cred);
         Assert.Equal("ghp_live", cred!.AccessToken); // decrypted by GetStream
         Assert.Equal("live-octocat", cred.GitHubLogin);
     }
 
-    private string NewSpace()
+    private async Task<string> NewSpace()
     {
         var id = "GhEd" + Guid.NewGuid().ToString("N")[..8];
-        CreateSpace(id, "Editor Space");
+        await CreateSpace(id, "Editor Space");
         return id;
     }
 

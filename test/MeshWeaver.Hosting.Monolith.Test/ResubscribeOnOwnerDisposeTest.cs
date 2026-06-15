@@ -39,11 +39,11 @@ public class ResubscribeOnOwnerDisposeTest(ITestOutputHelper output) : MonolithM
             });
 
     [Fact(Timeout = 60000)]
-    public void SubscriberResubscribes_AfterOwnerDispose()
+    public async Task SubscriberResubscribes_AfterOwnerDispose()
     {
         // Arrange — create a node with an initial name; activates the owner hub on first read.
         var path = $"{TestPartition}/resub-target";
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode("resub-target", TestPartition) { Name = "Original", NodeType = "Markdown" })
             .Should().Within(30.Seconds()).Emit();
 
@@ -56,9 +56,9 @@ public class ResubscribeOnOwnerDisposeTest(ITestOutputHelper output) : MonolithM
         // Wait for the initial snapshot — proves the subscription is wired up.
         // The live stream IS the authoritative source here, so we read `current`
         // off it rather than re-activating the owner via ReadNode.
-        var firstSnapshot = names.Should().Within(15.Seconds()).Match(n => n == "Original");
+        var firstSnapshot = await names.Should().Within(15.Seconds()).Match(n => n == "Original");
         firstSnapshot.Should().Be("Original", "subscriber should receive the initial snapshot");
-        var current = stream.Should().Within(15.Seconds()) .Match(ci => ci is { Name: "Original" });
+        var current = await stream.Should().Within(15.Seconds()) .Match(ci => ci is { Name: "Original" });
 
         // Act — kill the owner grain, then update the node. The update flows through
         // the freshly-reactivated owner; the OLD subscriber is silent until its
@@ -69,7 +69,7 @@ public class ResubscribeOnOwnerDisposeTest(ITestOutputHelper output) : MonolithM
         // owner is mid-teardown is dropped / never completes. Rather than a fixed
         // settle delay, retry the write on a short cadence until the freshly
         // reactivated owner accepts it — the reactive "wait for owner ready" shape.
-        Observable.Interval(TimeSpan.FromMilliseconds(250)).StartWith(0L)
+        await Observable.Interval(TimeSpan.FromMilliseconds(250)).StartWith(0L)
             .SelectMany(_ => NodeFactory.UpdateNode(current with { Name = "Updated" })
                 .Select(n => (MeshNode?)n)
                 .Catch((Exception _) => Observable.Return<MeshNode?>(null)))
@@ -78,7 +78,7 @@ public class ResubscribeOnOwnerDisposeTest(ITestOutputHelper output) : MonolithM
         // Assert — within a few heartbeat cycles, the subscriber must see the new value.
         // Without auto-resubscribe, the stream stays at "Original" forever; with it,
         // a fresh Initial arrives carrying the updated name.
-        names.Should().Within(20.Seconds()).Match(n => n == "Updated",
+        await names.Should().Within(20.Seconds()).Match(n => n == "Updated",
             "subscriber must auto-resubscribe to the new owner grain and pick up post-dispose updates");
     }
 }

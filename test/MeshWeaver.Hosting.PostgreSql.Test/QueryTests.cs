@@ -20,33 +20,33 @@ public class QueryTests
         _fixture = fixture;
     }
 
-    private void SeedTestData()
+    private async Task SeedTestData()
     {
         var ct = TestContext.Current.CancellationToken;
-        _fixture.CleanData().Should().Within(60.Seconds()).Emit();
+        await _fixture.CleanData().Should().Within(60.Seconds()).Emit();
         var adapter = _fixture.StorageAdapter;
 
-        adapter.Write(new MeshNode("Story1", "ACME/Project")
+        await adapter.Write(new MeshNode("Story1", "ACME/Project")
         {
             Name = "Story One",
             NodeType = "Story",
             Content = JsonSerializer.Deserialize<object>("""{"status":"Open","priority":"High"}""", _options)
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        adapter.Write(new MeshNode("Story2", "ACME/Project")
+        await adapter.Write(new MeshNode("Story2", "ACME/Project")
         {
             Name = "Story Two",
             NodeType = "Story",
             Content = JsonSerializer.Deserialize<object>("""{"status":"Closed","priority":"Low"}""", _options)
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        adapter.Write(new MeshNode("Alice", "ACME/Team")
+        await adapter.Write(new MeshNode("Alice", "ACME/Team")
         {
             Name = "Alice",
             NodeType = "Person"
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        adapter.Write(new MeshNode("Project", "Contoso")
+        await adapter.Write(new MeshNode("Project", "Contoso")
         {
             Name = "Contoso Project",
             NodeType = "Project"
@@ -54,18 +54,18 @@ public class QueryTests
 
         // Grant Anonymous Read access so query tests work without explicit userId
         var ac = _fixture.AccessControl;
-        ac.Grant("ACME", "Anonymous", "Read", isAllow: true, ct).Should().Within(30.Seconds()).Emit();
-        ac.Grant("Contoso", "Anonymous", "Read", isAllow: true, ct).Should().Within(30.Seconds()).Emit();
+        await ac.Grant("ACME", "Anonymous", "Read", isAllow: true, ct).Should().Within(30.Seconds()).Emit();
+        await ac.Grant("Contoso", "Anonymous", "Read", isAllow: true, ct).Should().Within(30.Seconds()).Emit();
     }
 
     [Fact]
-    public void QueryByNodeType()
+    public async Task QueryByNodeType()
     {
-        SeedTestData();
+        await SeedTestData();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
         var request = MeshQueryRequest.FromQuery("nodeType:Story");
 
-        var results = query.QueryList(request, _options, TestContext.Current.CancellationToken)
+        var results = await query.QueryList(request, _options, TestContext.Current.CancellationToken)
             .Should().Within(30.Seconds()).Emit();
 
         results.Should().HaveCount(2);
@@ -73,13 +73,13 @@ public class QueryTests
     }
 
     [Fact]
-    public void QueryWithPathScope_Children()
+    public async Task QueryWithPathScope_Children()
     {
-        SeedTestData();
+        await SeedTestData();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
         var request = MeshQueryRequest.FromQuery("namespace:ACME/Project");
 
-        var results = query.QueryList(request, _options, TestContext.Current.CancellationToken)
+        var results = await query.QueryList(request, _options, TestContext.Current.CancellationToken)
             .Should().Within(30.Seconds()).Emit();
 
         results.Should().HaveCount(2);
@@ -87,13 +87,13 @@ public class QueryTests
     }
 
     [Fact]
-    public void QueryWithPathScope_Descendants()
+    public async Task QueryWithPathScope_Descendants()
     {
-        SeedTestData();
+        await SeedTestData();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
         var request = MeshQueryRequest.FromQuery("path:ACME scope:descendants");
 
-        var results = query.QueryList(request, _options, TestContext.Current.CancellationToken)
+        var results = await query.QueryList(request, _options, TestContext.Current.CancellationToken)
             .Should().Within(30.Seconds()).Emit();
 
         // ACME/Project/Story1, ACME/Project/Story2, ACME/Team/Alice
@@ -101,13 +101,13 @@ public class QueryTests
     }
 
     [Fact]
-    public void QueryWithPathScope_Exact()
+    public async Task QueryWithPathScope_Exact()
     {
-        SeedTestData();
+        await SeedTestData();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
         var request = MeshQueryRequest.FromQuery("path:ACME/Project/Story1");
 
-        var results = query.QueryList(request, _options, TestContext.Current.CancellationToken)
+        var results = await query.QueryList(request, _options, TestContext.Current.CancellationToken)
             .Should().Within(30.Seconds()).Emit();
 
         results.Should().HaveCount(1);
@@ -115,13 +115,13 @@ public class QueryTests
     }
 
     [Fact]
-    public void QueryWithPathScope_Subtree()
+    public async Task QueryWithPathScope_Subtree()
     {
-        SeedTestData();
+        await SeedTestData();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
         // First add a node at ACME itself
-        _fixture.StorageAdapter.Write(new MeshNode("ACME")
+        await _fixture.StorageAdapter.Write(new MeshNode("ACME")
         {
             Name = "ACME Corp",
             NodeType = "Space"
@@ -129,7 +129,7 @@ public class QueryTests
 
         var request = MeshQueryRequest.FromQuery("path:ACME scope:subtree");
 
-        var results = query.QueryList(request, _options, TestContext.Current.CancellationToken)
+        var results = await query.QueryList(request, _options, TestContext.Current.CancellationToken)
             .Should().Within(30.Seconds()).Emit();
 
         // ACME + ACME/Project/Story1, ACME/Project/Story2, ACME/Team/Alice
@@ -137,18 +137,18 @@ public class QueryTests
     }
 
     [Fact]
-    public void QueryWithPathScope_Ancestors()
+    public async Task QueryWithPathScope_Ancestors()
     {
-        SeedTestData();
+        await SeedTestData();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
         // Add ancestor nodes for ACME/Project/Story1
-        _fixture.StorageAdapter.Write(new MeshNode("ACME")
+        await _fixture.StorageAdapter.Write(new MeshNode("ACME")
         {
             Name = "ACME Corp",
             NodeType = "Space"
         }, _options).Should().Within(30.Seconds()).Emit();
-        _fixture.StorageAdapter.Write(new MeshNode("Project", "ACME")
+        await _fixture.StorageAdapter.Write(new MeshNode("Project", "ACME")
         {
             Name = "ACME Project",
             NodeType = "Project"
@@ -156,7 +156,7 @@ public class QueryTests
 
         var request = MeshQueryRequest.FromQuery("path:ACME/Project/Story1 scope:ancestors");
 
-        var results = query.QueryList(request, _options, TestContext.Current.CancellationToken)
+        var results = await query.QueryList(request, _options, TestContext.Current.CancellationToken)
             .Should().Within(30.Seconds()).Emit();
 
         // Ancestors: ACME, ACME/Project (NOT Story1 itself)
@@ -166,22 +166,22 @@ public class QueryTests
     }
 
     [Fact]
-    public void QueryWithLimit()
+    public async Task QueryWithLimit()
     {
-        SeedTestData();
+        await SeedTestData();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
         var request = new MeshQueryRequest { Query = "nodeType:Story", Limit = 1 };
 
-        var results = query.QueryList(request, _options, TestContext.Current.CancellationToken)
+        var results = await query.QueryList(request, _options, TestContext.Current.CancellationToken)
             .Should().Within(30.Seconds()).Emit();
 
         results.Should().HaveCount(1);
     }
 
     [Fact]
-    public void QueryWithSkip()
+    public async Task QueryWithSkip()
     {
-        SeedTestData();
+        await SeedTestData();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
         var request = new MeshQueryRequest
         {
@@ -190,7 +190,7 @@ public class QueryTests
             Limit = 10
         };
 
-        var results = query.QueryList(request, _options, TestContext.Current.CancellationToken)
+        var results = await query.QueryList(request, _options, TestContext.Current.CancellationToken)
             .Should().Within(30.Seconds()).Emit();
 
         results.Should().HaveCount(1);
@@ -198,13 +198,13 @@ public class QueryTests
     }
 
     [Fact]
-    public void QueryWithSort()
+    public async Task QueryWithSort()
     {
-        SeedTestData();
+        await SeedTestData();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
         var request = MeshQueryRequest.FromQuery("nodeType:Story sort:name");
 
-        var results = query.QueryList(request, _options, TestContext.Current.CancellationToken)
+        var results = await query.QueryList(request, _options, TestContext.Current.CancellationToken)
             .Should().Within(30.Seconds()).Emit();
 
         results.Should().HaveCount(2);
@@ -213,13 +213,13 @@ public class QueryTests
     }
 
     [Fact]
-    public void QueryWithSortDescending()
+    public async Task QueryWithSortDescending()
     {
-        SeedTestData();
+        await SeedTestData();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
         var request = MeshQueryRequest.FromQuery("nodeType:Story sort:name-desc");
 
-        var results = query.QueryList(request, _options, TestContext.Current.CancellationToken)
+        var results = await query.QueryList(request, _options, TestContext.Current.CancellationToken)
             .Should().Within(30.Seconds()).Emit();
 
         results.Should().HaveCount(2);
@@ -228,9 +228,9 @@ public class QueryTests
     }
 
     [Fact]
-    public void QueryWithDefaultPathFallsBackToChildren()
+    public async Task QueryWithDefaultPathFallsBackToChildren()
     {
-        SeedTestData();
+        await SeedTestData();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
         var request = new MeshQueryRequest
         {
@@ -238,7 +238,7 @@ public class QueryTests
             DefaultPath = "ACME/Project"
         };
 
-        var results = query.QueryList(request, _options, TestContext.Current.CancellationToken)
+        var results = await query.QueryList(request, _options, TestContext.Current.CancellationToken)
             .Should().Within(30.Seconds()).Emit();
 
         results.Should().HaveCount(2);

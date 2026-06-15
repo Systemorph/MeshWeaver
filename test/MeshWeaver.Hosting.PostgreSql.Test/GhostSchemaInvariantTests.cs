@@ -41,7 +41,7 @@ public class GhostSchemaInvariantTests
             new[] { ("s", (object)schema) }, ct);
 
     [Fact(Timeout = 60000)]
-    public void WriteToUnprovisionedPartition_CreatesNoSchema_AndDoesNotPersist()
+    public async Task WriteToUnprovisionedPartition_CreatesNoSchema_AndDoesNotPersist()
     {
         var ct = TestContext.Current.CancellationToken;
         var provider = NewProvider();
@@ -54,21 +54,21 @@ public class GhostSchemaInvariantTests
         // The write either faults with 42P01 (the "no partition, no write" refusal) or no-ops;
         // either way is fine — what must NOT happen is a CREATE SCHEMA. Catch so the expected
         // fault doesn't fail the test; the assertions below pin the real invariant.
-        provider.Adapter.Write(node, JsonSerializerOptions.Default)
+        await provider.Adapter.Write(node, JsonSerializerOptions.Default)
             .Catch((Exception _) => Observable.Return<MeshNode?>(null))
             .Should().Within(30.Seconds()).Emit();
 
         // 🚨 The invariant: no ghost schema was conjured.
-        SchemaCount(ghost, ct).Should().Within(30.Seconds()).Be(0L);
+        await SchemaCount(ghost, ct).Should().Within(30.Seconds()).Be(0L);
 
         // And nothing persisted: a read tolerates the absent schema and finds nothing.
-        var read = provider.Adapter.Read($"{ghost}/Foo", JsonSerializerOptions.Default)
+        var read = await provider.Adapter.Read($"{ghost}/Foo", JsonSerializerOptions.Default)
             .Should().Within(30.Seconds()).Emit();
         Assert.Null(read);
     }
 
     [Fact(Timeout = 60000)]
-    public void EnsurePartitionProvisioned_IsTheOneSchemaCreationPath_AndIsIdempotent()
+    public async Task EnsurePartitionProvisioned_IsTheOneSchemaCreationPath_AndIsIdempotent()
     {
         var ct = TestContext.Current.CancellationToken;
         var provider = NewProvider();
@@ -76,26 +76,26 @@ public class GhostSchemaInvariantTests
         try
         {
             // Before provisioning: the schema does not exist.
-            SchemaCount(part, ct).Should().Within(30.Seconds()).Be(0L);
+            await SchemaCount(part, ct).Should().Within(30.Seconds()).Be(0L);
 
             // The ONE schema-creation path (what OwnsPartitionProvisioningValidator calls).
-            provider.EnsurePartitionProvisioned(part).Should().Within(60.Seconds()).Emit();
-            SchemaCount(part, ct).Should().Within(30.Seconds()).Be(1L);
+            await provider.EnsurePartitionProvisioned(part).Should().Within(60.Seconds()).Emit();
+            await SchemaCount(part, ct).Should().Within(30.Seconds()).Be(1L);
 
             // Idempotent: the promise-cache replays; no second CREATE SCHEMA, no error.
-            provider.EnsurePartitionProvisioned(part).Should().Within(30.Seconds()).Emit();
-            SchemaCount(part, ct).Should().Within(30.Seconds()).Be(1L);
+            await provider.EnsurePartitionProvisioned(part).Should().Within(30.Seconds()).Emit();
+            await SchemaCount(part, ct).Should().Within(30.Seconds()).Be(1L);
 
             // Now a write routes into the provisioned schema and persists.
             var node = new MeshNode("Foo", part) { Name = "Foo", NodeType = "Markdown" };
-            provider.Adapter.Write(node, JsonSerializerOptions.Default)
+            await provider.Adapter.Write(node, JsonSerializerOptions.Default)
                 .Should().Within(30.Seconds()).Emit();
-            _fixture.DataSource.ScalarLong($"SELECT COUNT(*) FROM \"{part}\".mesh_nodes", ct)
+            await _fixture.DataSource.ScalarLong($"SELECT COUNT(*) FROM \"{part}\".mesh_nodes", ct)
                 .Should().Within(30.Seconds()).Be(1L);
         }
         finally
         {
-            _fixture.DataSource.ExecuteNonQuery($"DROP SCHEMA IF EXISTS \"{part}\" CASCADE", ct)
+            await _fixture.DataSource.ExecuteNonQuery($"DROP SCHEMA IF EXISTS \"{part}\" CASCADE", ct)
                 .Should().Within(30.Seconds()).Emit();
         }
     }

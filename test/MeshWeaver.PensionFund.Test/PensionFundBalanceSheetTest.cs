@@ -122,7 +122,7 @@ public class PensionFundBalanceSheetTest(ITestOutputHelper output) : MonolithMes
     /// <summary>Watchdog headroom for the cold dynamic compile (sources + scope generator).</summary>
     protected override TimeSpan TestHardDeadline => TimeSpan.FromSeconds(150);
 
-    private UiControl RenderArea(string area, Func<UiControl, bool>? predicate = null)
+    private async Task<UiControl> RenderArea(string area, Func<UiControl, bool>? predicate = null)
     {
         var reference = new LayoutAreaReference(area);
         var stream = GetClient().GetWorkspace()
@@ -135,7 +135,7 @@ public class PensionFundBalanceSheetTest(ITestOutputHelper output) : MonolithMes
         // a "no data" markdown or an error control fails with its content, not
         // with an opaque timeout. 100 s budget covers the first-activation
         // dynamic compile (sources + scope generator).
-        var first = controls
+        var first = await controls
             .Should().Within(100.Seconds()).Emit($"area '{area}' must render a control");
         Output.WriteLine($"--- {area} first control: {first!.GetType().Name}: " +
             (first is MarkdownControl md ? md.Markdown?.ToString() : first.ToString()));
@@ -143,10 +143,10 @@ public class PensionFundBalanceSheetTest(ITestOutputHelper output) : MonolithMes
         if (predicate is null || predicate((UiControl)first))
             return (UiControl)first;
 
-        return (UiControl)controls
+        return (UiControl)(await controls
             .Should().Within(30.Seconds())
             .Match(c => predicate((UiControl)c!),
-                $"area '{area}' first emitted {first.GetType().Name} — waiting for the full render")!;
+                $"area '{area}' first emitted {first.GetType().Name} — waiting for the full render"))!;
     }
 
     private static string MarkdownOf(UiControl control)
@@ -160,9 +160,9 @@ public class PensionFundBalanceSheetTest(ITestOutputHelper output) : MonolithMes
     /// asserts the dynamically compiled scopes fold them correctly.
     /// </summary>
     [Fact(Timeout = 120_000)]
-    public void BalanceSheetStatement_RendersScopeComputedNumbers()
+    public async Task BalanceSheetStatement_RendersScopeComputedNumbers()
     {
-        var control = RenderArea("BalanceSheetStatement",
+        var control = await RenderArea("BalanceSheetStatement",
             c => c is MarkdownControl m && (m.Markdown?.ToString() ?? "").Contains("FundingRatio"));
 
         var markdown = MarkdownOf(control);
@@ -182,9 +182,9 @@ public class PensionFundBalanceSheetTest(ITestOutputHelper output) : MonolithMes
     /// year plus the balance check (assets = liabilities for both years).
     /// </summary>
     [Fact(Timeout = 120_000)]
-    public void KeyFigures_BalanceCheckPasses()
+    public async Task KeyFigures_BalanceCheckPasses()
     {
-        var control = RenderArea("KeyFigures",
+        var control = await RenderArea("KeyFigures",
             c => c is MarkdownControl m && (m.Markdown?.ToString() ?? "").Contains("Funding Ratio"));
 
         var markdown = MarkdownOf(control);
@@ -197,17 +197,17 @@ public class PensionFundBalanceSheetTest(ITestOutputHelper output) : MonolithMes
 
     /// <summary>The asset-allocation pie chart renders from the atomic asset scopes.</summary>
     [Fact(Timeout = 120_000)]
-    public void AssetAllocation_RendersPieChart()
+    public async Task AssetAllocation_RendersPieChart()
     {
-        var control = RenderArea("AssetAllocation", c => c is ChartControl);
+        var control = await RenderArea("AssetAllocation", c => c is ChartControl);
         control.Should().BeOfType<ChartControl>();
     }
 
     /// <summary>The new-entry dialog opener (MeshNodePicker form) renders.</summary>
     [Fact(Timeout = 120_000)]
-    public void NewEntryDialog_RendersButton()
+    public async Task NewEntryDialog_RendersButton()
     {
-        var control = RenderArea("NewEntryDialog", c => c is ButtonControl);
+        var control = await RenderArea("NewEntryDialog", c => c is ButtonControl);
         control.Should().BeOfType<ButtonControl>()
             .Subject.Data?.ToString().Should().Contain("New balance sheet entry");
     }

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
@@ -50,13 +50,13 @@ public class IsExecutingLifecycleTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     [Fact]
-    public void SingleMessage_IsExecuting_FlipsTrueThenFalse_WithRealResponse()
+    public async Task SingleMessage_IsExecuting_FlipsTrueThenFalse_WithRealResponse()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
 
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, "hello", "TestUser");
-        var createDelivery = client.Observe(new CreateNodeRequest(threadNode),
+        var createDelivery = await client.Observe(new CreateNodeRequest(threadNode),
             o => o.WithTarget(Mesh.Address)).Should().Within(60.Seconds()).Emit();
         createDelivery.Message.Success.Should().BeTrue(createDelivery.Message.Error ?? "");
         var threadPath = createDelivery.Message.Node!.Path!;
@@ -64,7 +64,7 @@ public class IsExecutingLifecycleTest(ITestOutputHelper output) : MonolithMeshTe
         // Warm up the remote stream subscription BEFORE submit so the
         // IsExecuting=trueâ†’false transition is captured. Same pattern
         // ThreadFlow.SubmitAndWait uses.
-        var baselineThread = workspace.GetMeshNodeStream(threadPath)
+        var baselineThread = await workspace.GetMeshNodeStream(threadPath)
             .Select(n => n.Content as MeshThread)
             .Should().Within(10.Seconds()).Match(t => t != null);
         baselineThread!.IsExecuting.Should().BeFalse("thread should not be executing yet");
@@ -80,7 +80,7 @@ public class IsExecutingLifecycleTest(ITestOutputHelper output) : MonolithMeshTe
         // claim window where `ActiveMessageId` is still null (the responseMsgId
         // is generated downstream by DispatchAfterClaim's commit, which flips
         // Status â†’ Executing AND stamps ActiveMessageId in one update).
-        var executingState = workspace.GetMeshNodeStream(threadPath)
+        var executingState = await workspace.GetMeshNodeStream(threadPath)
             .Select(n => n.Content as MeshThread)
             .Should().Within(10.Seconds()).Match(t => t is { Status: ThreadExecutionStatus.Executing });
         executingState!.IsExecuting.Should().BeTrue();
@@ -88,7 +88,7 @@ public class IsExecutingLifecycleTest(ITestOutputHelper output) : MonolithMeshTe
             "ActiveMessageId must point at the response cell during streaming");
 
         // 2) IsExecuting must flip BACK to false within 30s.
-        var doneState = workspace.GetMeshNodeStream(threadPath)
+        var doneState = await workspace.GetMeshNodeStream(threadPath)
             .Select(n => n.Content as MeshThread)
             .Should().Within(30.Seconds()).Match(t => t is { IsExecuting: false } && t.Messages.Count >= 2);
         doneState!.IsExecuting.Should().BeFalse(
@@ -97,7 +97,7 @@ public class IsExecutingLifecycleTest(ITestOutputHelper output) : MonolithMeshTe
 
         // 3) Final ThreadMessage.CompletedAt must be set AND text non-empty.
         var lastMsgId = doneState.Messages[^1];
-        var finalMessage = ThreadFlow.ReadMessage(client, threadPath, lastMsgId,
+        var finalMessage = await ThreadFlow.ReadMessage(client, threadPath, lastMsgId,
             m => m.CompletedAt != null && !string.IsNullOrEmpty(m.Text),
             timeout: 15.Seconds()).Should().Within(15.Seconds()).Emit();
 

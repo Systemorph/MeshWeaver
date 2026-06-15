@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Reactive.Linq;
+using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
@@ -25,7 +26,7 @@ public class CreateNodeFailClosedTest(ITestOutputHelper output) : HubTestBase(ou
             .WithNodeOperationHandlers();
 
     [Fact]
-    public void Create_WithoutStorageAdapter_FailsClosed()
+    public async Task Create_WithoutStorageAdapter_FailsClosed()
     {
         var host = GetHost();
         var node = new MeshNode("Phantom", "Test")
@@ -34,7 +35,7 @@ public class CreateNodeFailClosedTest(ITestOutputHelper output) : HubTestBase(ou
             NodeType = "Markdown",
         };
 
-        var response = host
+        var response = await host
             .Observe(new CreateNodeRequest(node), o => o.WithTarget(CreateHostAddress()))
             .Should().Within(10.Seconds()).Emit("the handler must answer even when it refuses");
 

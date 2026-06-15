@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
+using System.Threading.Tasks;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -66,7 +68,7 @@ public class PersistenceClaimPriorityTest
     }
 
     [Fact]
-    public void DurableProvider_ClaimsWrites_AheadOfEarlierRegisteredInMemoryWildcard()
+    public async Task DurableProvider_ClaimsWrites_AheadOfEarlierRegisteredInMemoryWildcard()
     {
         // Registration order reproduces the Orleans-portal wiring: the in-memory
         // catch-all FIRST (AddOrleansMeshServices baseline), the durable backend
@@ -76,7 +78,7 @@ public class PersistenceClaimPriorityTest
         var service = new PersistenceService([inMemory, durable]);
 
         var node = new MeshNode("Probe", "SomeSpace") { Name = "Probe", NodeType = "Markdown" };
-        var saved = service.Write(node, new JsonSerializerOptions())
+        var saved = await service.Write(node, new JsonSerializerOptions())
             .Should().Within(10.Seconds()).Emit();
 
         saved.Should().NotBeNull();
@@ -85,8 +87,8 @@ public class PersistenceClaimPriorityTest
             "regardless of registration order — otherwise every write on an Orleans portal lands in RAM");
 
         // And the in-memory store must NOT hold the node (it never got asked).
-        inMemory.Adapter.Read(node.Path, new JsonSerializerOptions())
-            .Should().Within(10.Seconds()).Emit()
+        (await inMemory.Adapter.Read(node.Path, new JsonSerializerOptions())
+            .Should().Within(10.Seconds()).Emit())
             .Should().BeNull("the write must not have been claimed by the in-memory wildcard");
     }
 }

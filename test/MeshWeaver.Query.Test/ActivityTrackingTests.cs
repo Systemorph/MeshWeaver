@@ -20,22 +20,22 @@ public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBa
         => base.ConfigureMesh(builder);
 
     [Fact(Timeout = 10000)]
-    public void Catalog_NoActivity_FallsBackToActualNodes()
+    public async Task Catalog_NoActivity_FallsBackToActualNodes()
     {
         // Arrange - create nodes but no activity
-        NodeFactory.CreateNode(MeshNode.FromPath("org/acme") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("org/acme") with
         {
             Name = "Acme",
             NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("org/contoso") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("org/contoso") with
         {
             Name = "Contoso",
             NodeType = "Markdown"
         }).Should().Emit();
 
         // Act - query for organizations using standard query (simulating fallback)
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("path:org nodeType:Markdown scope:descendants limit:20")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("path:org nodeType:Markdown scope:descendants limit:20")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Assert - should return actual nodes when no activity
         results.Should().HaveCount(2);
@@ -43,15 +43,15 @@ public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact(Timeout = 10000)]
-    public void SourceActivity_ReturnsMainNodesOnly()
+    public async Task SourceActivity_ReturnsMainNodesOnly()
     {
         // Arrange - Create main content node and Activity satellite
-        NodeFactory.CreateNode(MeshNode.FromPath("org/alpha") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("org/alpha") with
         {
             Name = "Alpha",
             NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("org/alpha/_activity/log1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("org/alpha/_activity/log1") with
         {
             Name = "Activity Log 1",
             NodeType = "Activity",
@@ -60,7 +60,7 @@ public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBa
         }).Should().Emit();
 
         // Act - source:activity returns main content nodes (not satellites)
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("source:activity namespace:org scope:descendants")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("source:activity namespace:org scope:descendants")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Assert - returns the main node, not the Activity satellite
         results.Should().ContainSingle();
@@ -75,27 +75,27 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
         => base.ConfigureMesh(builder);
 
     [Fact(Timeout = 10000)]
-    public void Catalog_SearchWithQuery_FiltersResults()
+    public async Task Catalog_SearchWithQuery_FiltersResults()
     {
         // Arrange
-        NodeFactory.CreateNode(MeshNode.FromPath("org/acme") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("org/acme") with
         {
             Name = "Acme Corporation",
             NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("org/contoso") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("org/contoso") with
         {
             Name = "Contoso Ltd",
             NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("org/fabrikam") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("org/fabrikam") with
         {
             Name = "Fabrikam Inc",
             NodeType = "Markdown"
         }).Should().Emit();
 
         // Act - query with filter for name containing "Corp" using wildcard operator
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("path:org nodeType:Markdown name:*Corp* scope:descendants limit:20")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("path:org nodeType:Markdown name:*Corp* scope:descendants limit:20")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Assert - should only return Acme Corporation
         results.Should().ContainSingle();
@@ -103,22 +103,22 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
     }
 
     [Fact(Timeout = 10000)]
-    public void Catalog_TextSearch_FiltersResults()
+    public async Task Catalog_TextSearch_FiltersResults()
     {
         // Arrange
-        NodeFactory.CreateNode(MeshNode.FromPath("doc/report1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("doc/report1") with
         {
             Name = "Annual Financial Report 2024",
             NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("doc/memo1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("doc/memo1") with
         {
             Name = "Team Meeting Notes",
             NodeType = "Markdown"
         }).Should().Emit();
 
         // Act - text search for "financial" with descendants scope
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("path:doc nodeType:Markdown financial scope:descendants limit:20")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("path:doc nodeType:Markdown financial scope:descendants limit:20")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Assert
         results.Should().ContainSingle();
@@ -126,12 +126,12 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
     }
 
     [Fact(Timeout = 10000)]
-    public void Catalog_Pagination_LoadsMoreItems()
+    public async Task Catalog_Pagination_LoadsMoreItems()
     {
         // Arrange - create 10 items
         for (int i = 0; i < 10; i++)
         {
-            NodeFactory.CreateNode(MeshNode.FromPath($"item/item{i:D2}") with
+            await NodeFactory.CreateNode(MeshNode.FromPath($"item/item{i:D2}") with
             {
                 Name = $"Item {i:D2}",
                 NodeType = "Markdown"
@@ -139,13 +139,13 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
         }
 
         // Act - first page (3 items) with descendants scope
-        var firstPage = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("path:item nodeType:Markdown scope:descendants limit:3")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var firstPage = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("path:item nodeType:Markdown scope:descendants limit:3")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Load more (6 items total)
-        var secondPage = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("path:item nodeType:Markdown scope:descendants limit:6")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var secondPage = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("path:item nodeType:Markdown scope:descendants limit:6")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Load all (10 items)
-        var allItems = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("path:item nodeType:Markdown scope:descendants limit:100")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var allItems = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("path:item nodeType:Markdown scope:descendants limit:100")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Assert
         firstPage.Should().HaveCount(3);
@@ -154,12 +154,12 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
     }
 
     [Fact(Timeout = 10000)]
-    public void Catalog_HasMore_DetectedCorrectly()
+    public async Task Catalog_HasMore_DetectedCorrectly()
     {
         // Arrange - create 5 items
         for (int i = 0; i < 5; i++)
         {
-            NodeFactory.CreateNode(MeshNode.FromPath($"test/node{i}") with
+            await NodeFactory.CreateNode(MeshNode.FromPath($"test/node{i}") with
             {
                 Name = $"Node {i}",
                 NodeType = "Markdown"
@@ -169,7 +169,7 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
         // Act - request limit+1 to detect if there are more
         var limit = 3;
         var queryLimit = limit + 1;
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:test nodeType:Markdown scope:descendants limit:{queryLimit}")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:test nodeType:Markdown scope:descendants limit:{queryLimit}")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         var hasMore = results.Count > limit;
         if (hasMore)
@@ -183,27 +183,27 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
     }
 
     [Fact(Timeout = 10000)]
-    public void Catalog_NodeTypeFilter_FiltersCorrectly()
+    public async Task Catalog_NodeTypeFilter_FiltersCorrectly()
     {
         // Arrange - Create nodes with different types
-        NodeFactory.CreateNode(MeshNode.FromPath("data/project1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("data/project1") with
         {
             Name = "Project Alpha",
             NodeType = "Code"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("data/doc1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("data/doc1") with
         {
             Name = "Document One",
             NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("data/project2") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("data/project2") with
         {
             Name = "Project Beta",
             NodeType = "Code"
         }).Should().Emit();
 
         // Act - query for Code nodes only
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("path:data nodeType:Code scope:descendants limit:20")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("path:data nodeType:Code scope:descendants limit:20")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Assert - should return only Code nodes, not the Markdown
         results.Should().HaveCount(2);
@@ -222,22 +222,22 @@ public class SourceActivityQueryTests(ITestOutputHelper output) : MonolithMeshTe
         => base.ConfigureMesh(builder);
 
     [Fact(Timeout = 10000)]
-    public void SourceActivity_ReturnsMainNodesOnly()
+    public async Task SourceActivity_ReturnsMainNodesOnly()
     {
         // Arrange - create main content nodes and Activity satellites
-        NodeFactory.CreateNode(MeshNode.FromPath("org/alpha") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("org/alpha") with
         {
             Name = "Alpha",
             NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("org/alpha/_activity/log1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("org/alpha/_activity/log1") with
         {
             Name = "Activity Log 1",
             NodeType = "Activity",
             MainNode = "org/alpha",
             Content = new ActivityLog("DataUpdate") { HubPath = "org/alpha" }
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("org/alpha/_activity/log2") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("org/alpha/_activity/log2") with
         {
             Name = "Activity Log 2",
             NodeType = "Activity",
@@ -246,7 +246,7 @@ public class SourceActivityQueryTests(ITestOutputHelper output) : MonolithMeshTe
         }).Should().Emit();
 
         // Act
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("source:activity scope:descendants")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("source:activity scope:descendants")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Assert - returns main content node, not Activity satellites
         results.Should().ContainSingle();
@@ -255,17 +255,17 @@ public class SourceActivityQueryTests(ITestOutputHelper output) : MonolithMeshTe
     }
 
     [Fact(Timeout = 10000)]
-    public void SourceActivity_ExcludesSatelliteNodes()
+    public async Task SourceActivity_ExcludesSatelliteNodes()
     {
         // Arrange - create main nodes and satellites
         for (var i = 0; i < 5; i++)
         {
-            NodeFactory.CreateNode(MeshNode.FromPath($"org/node{i}") with
+            await NodeFactory.CreateNode(MeshNode.FromPath($"org/node{i}") with
             {
                 Name = $"Node {i}",
                 NodeType = "Markdown"
             }).Should().Emit();
-            NodeFactory.CreateNode(MeshNode.FromPath($"org/node{i}/_activity/log{i}") with
+            await NodeFactory.CreateNode(MeshNode.FromPath($"org/node{i}/_activity/log{i}") with
             {
                 Name = $"Activity {i}",
                 NodeType = "Activity",
@@ -275,7 +275,7 @@ public class SourceActivityQueryTests(ITestOutputHelper output) : MonolithMeshTe
         }
 
         // Act
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("source:activity scope:descendants limit:3")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("source:activity scope:descendants limit:3")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Assert - only main nodes returned, respects limit
         results.Should().HaveCount(3);
@@ -283,27 +283,27 @@ public class SourceActivityQueryTests(ITestOutputHelper output) : MonolithMeshTe
     }
 
     [Fact(Timeout = 10000)]
-    public void SourceActivity_WithNamespaceFilter()
+    public async Task SourceActivity_WithNamespaceFilter()
     {
         // Arrange - create main nodes with Activity satellites in different namespaces
-        NodeFactory.CreateNode(MeshNode.FromPath("projA/doc1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("projA/doc1") with
         {
             Name = "Doc 1",
             NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("projA/doc1/_activity/log1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("projA/doc1/_activity/log1") with
         {
             Name = "Doc1 Activity",
             NodeType = "Activity",
             MainNode = "projA/doc1",
             Content = new ActivityLog("DataUpdate") { HubPath = "projA/doc1" }
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("projB/doc2") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("projB/doc2") with
         {
             Name = "Doc 2",
             NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("projB/doc2/_activity/log1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("projB/doc2/_activity/log1") with
         {
             Name = "Doc2 Activity",
             NodeType = "Activity",
@@ -312,7 +312,7 @@ public class SourceActivityQueryTests(ITestOutputHelper output) : MonolithMeshTe
         }).Should().Emit();
 
         // Act - filter by namespace
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("source:activity namespace:projA scope:descendants")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("source:activity namespace:projA scope:descendants")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Assert - returns only the main node under projA
         results.Should().ContainSingle();

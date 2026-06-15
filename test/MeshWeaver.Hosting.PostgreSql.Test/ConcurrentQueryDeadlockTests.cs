@@ -55,20 +55,20 @@ public class ConcurrentQueryDeadlockTests
     // actually starve rather than be masked by spare threads.
     private const int Concurrency = 48;
 
-    private void Seed()
+    private async Task Seed()
     {
         var ct = TestContext.Current.CancellationToken;
-        _fixture.CleanData().Should().Within(60.Seconds()).Emit();
+        await _fixture.CleanData().Should().Within(60.Seconds()).Emit();
         var adapter = _fixture.StorageAdapter;
         for (var i = 0; i < NodeCount; i++)
         {
-            adapter.Write(new MeshNode($"Node{i}", Partition)
+            await adapter.Write(new MeshNode($"Node{i}", Partition)
             {
                 Name = $"Node {i}",
                 NodeType = "Story"
             }, _options).Should().Within(30.Seconds()).Emit();
         }
-        _fixture.AccessControl.Grant(Partition, "Anonymous", "Read", isAllow: true, ct)
+        await _fixture.AccessControl.Grant(Partition, "Anonymous", "Read", isAllow: true, ct)
             .Should().Within(30.Seconds()).Emit();
     }
 
@@ -76,9 +76,9 @@ public class ConcurrentQueryDeadlockTests
         Skip = "Heavy 48-way concurrent PG blocking-subscriber deadlock repro — skipped by request. "
              + "Un-skip to guard the bare-Observable.FromAsync → IIoPool.Invoke migration in "
              + "PostgreSqlMeshQuery against regressions (a wedge here = the deadlock returning).")]
-    public void Query_ManyConcurrentBlockingSubscribers_AllComplete_NoDeadlock()
+    public async Task Query_ManyConcurrentBlockingSubscribers_AllComplete_NoDeadlock()
     {
-        Seed();
+        await Seed();
 
         // Capture the token on the TEST thread — TestContext.Current is not valid
         // on a ThreadPool worker, so reading it inside Task.Run throws
@@ -91,14 +91,14 @@ public class ConcurrentQueryDeadlockTests
         var faults = new System.Collections.Concurrent.ConcurrentBag<Exception>();
         var completed = 0;
 
-        var tasks = Enumerable.Range(0, Concurrency).Select(_ => Task.Run(() =>
+        var tasks = Enumerable.Range(0, Concurrency).Select(_ => Task.Run(async () =>
         {
             try
             {
                 var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
                 var request = MeshQueryRequest.FromQuery($"path:{Partition} scope:descendants");
                 // BLOCKING subscriber — the shape that wedges a bare FromAsync.
-                var results = query.QueryList(request, _options, ct)
+                var results = await query.QueryList(request, _options, ct)
                     .Should().Within(30.Seconds()).Emit();
                 results.Should().NotBeNull();
                 results.Should().HaveCount(NodeCount);

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive;
@@ -35,7 +35,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
     }
 
     [Fact]
-    public void ResponseMessage_ToolCalls_VisibleViaRemoteStream()
+    public async Task ResponseMessage_ToolCalls_VisibleViaRemoteStream()
     {
         var threadPath = "User/Roland/_Thread/toolcalls-visible-test";
         var responseMsgId = "resp-vis";
@@ -60,7 +60,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
                 Timestamp = DateTime.UtcNow
             });
 
-        NodeFactory.CreateNode(new MeshNode(responseMsgId, threadPath)
+        await NodeFactory.CreateNode(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
             MainNode = "User/Roland",
@@ -74,7 +74,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
             }
         }).Should().Emit();
 
-        NodeFactory.CreateNode(new MeshNode("toolcalls-visible-test", "User/Roland/_Thread")
+        await NodeFactory.CreateNode(new MeshNode("toolcalls-visible-test", "User/Roland/_Thread")
         {
             NodeType = ThreadNodeType.NodeType,
             MainNode = "User/Roland",
@@ -89,7 +89,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         Output.WriteLine("Created thread with response message containing tool calls");
 
         var client = GetClient();
-        var msg = ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
+        var msg = await ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
             m => m.ToolCalls.Count >= 2, timeout: 10.Seconds()).Should().Within(10.Seconds()).Emit();
 
         msg.ToolCalls.Should().HaveCount(2);
@@ -100,13 +100,13 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
     }
 
     [Fact]
-    public void ResponseMessage_ToolCallsUpdate_PropagatesViaStream()
+    public async Task ResponseMessage_ToolCallsUpdate_PropagatesViaStream()
     {
         var threadPath = "User/Roland/_Thread/toolcalls-update-test";
         var responseMsgId = "resp-upd";
         var responsePath = $"{threadPath}/{responseMsgId}";
 
-        NodeFactory.CreateNode(new MeshNode(responseMsgId, threadPath)
+        await NodeFactory.CreateNode(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
             MainNode = "User/Roland",
@@ -119,7 +119,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
             }
         }).Should().Emit();
 
-        NodeFactory.CreateNode(new MeshNode("toolcalls-update-test", "User/Roland/_Thread")
+        await NodeFactory.CreateNode(new MeshNode("toolcalls-update-test", "User/Roland/_Thread")
         {
             NodeType = ThreadNodeType.NodeType,
             MainNode = "User/Roland",
@@ -135,13 +135,13 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         var workspace = client.GetWorkspace();
         var responseStream = workspace.GetMeshNodeStream(responsePath);
 
-        var initial = responseStream
+        var initial = await responseStream
             .Select(n => n.Content as ThreadMessage)
             .Should().Within(10.Seconds()).Match(m => m != null);
         initial!.ToolCalls.Should().BeEmpty("initially no tool calls");
         Output.WriteLine("Initial: 0 tool calls");
 
-        responseStream.Update(current =>
+        await responseStream.Update(current =>
         {
             var msg = current.Content as ThreadMessage ?? new ThreadMessage { Role = "assistant", Text = "" };
             return current with
@@ -159,7 +159,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
             };
         }).Should().Emit();
 
-        var afterUpdate = responseStream
+        var afterUpdate = await responseStream
             .Select(n => n.Content as ThreadMessage)
             .Should().Within(10.Seconds()).Match(m => m?.ToolCalls.Count > 0);
         afterUpdate!.ToolCalls.Should().HaveCount(1);
@@ -168,21 +168,21 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
     }
 
     [Fact]
-    public void Delegation_AppearsOnResponseMessage_ThenThreadGoesIdle()
+    public async Task Delegation_AppearsOnResponseMessage_ThenThreadGoesIdle()
     {
         var threadPath = "User/Roland/_Thread/toolcalls-lifecycle-test";
         var responseMsgId = "resp-life";
         var responsePath = $"{threadPath}/{responseMsgId}";
         var subThreadPath = $"{responsePath}/sub-worker";
 
-        NodeFactory.CreateNode(new MeshNode("sub-worker", responsePath)
+        await NodeFactory.CreateNode(new MeshNode("sub-worker", responsePath)
         {
             NodeType = ThreadNodeType.NodeType,
             MainNode = "User/Roland",
             Content = new MeshThread { Status = ThreadExecutionStatus.Executing, ActiveMessageId = "sub-resp" }
         }).Should().Emit();
 
-        NodeFactory.CreateNode(new MeshNode(responseMsgId, threadPath)
+        await NodeFactory.CreateNode(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
             MainNode = "User/Roland",
@@ -193,7 +193,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
             }
         }).Should().Emit();
 
-        NodeFactory.CreateNode(new MeshNode("toolcalls-lifecycle-test", "User/Roland/_Thread")
+        await NodeFactory.CreateNode(new MeshNode("toolcalls-lifecycle-test", "User/Roland/_Thread")
         {
             NodeType = ThreadNodeType.NodeType,
             MainNode = "User/Roland",
@@ -207,13 +207,13 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         var workspace = client.GetWorkspace();
         var responseStream = workspace.GetMeshNodeStream(responsePath);
 
-        var initial = responseStream
+        var initial = await responseStream
             .Select(n => n.Content as ThreadMessage)
             .Should().Within(10.Seconds()).Match(m => m != null);
         initial!.ToolCalls.Where(c => !string.IsNullOrEmpty(c.DelegationPath)).Should().BeEmpty();
         Output.WriteLine("Phase 1: 0 delegations");
 
-        responseStream.Update(current =>
+        await responseStream.Update(current =>
         {
             var msg = current.Content as ThreadMessage ?? new ThreadMessage { Role = "assistant", Text = "" };
             return current with
@@ -229,7 +229,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
             };
         }).Should().Emit();
 
-        var delegations = responseStream
+        var delegations = await responseStream
             .Select(n => (n.Content as ThreadMessage)?.ToolCalls
                 .Where(c => !string.IsNullOrEmpty(c.DelegationPath)).ToList())
             .Should().Within(10.Seconds()).Match(d => d?.Count > 0);
@@ -238,13 +238,13 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         Output.WriteLine($"Phase 2: delegation appeared â€” {delegations[0].DisplayName}");
 
         var threadStream = workspace.GetMeshNodeStream(threadPath);
-        threadStream.Update(current =>
+        await threadStream.Update(current =>
         {
             var t = current.Content as MeshThread ?? new MeshThread();
             return current with { Content = t with { Status = ThreadExecutionStatus.Idle, ActiveMessageId = null } };
         }).Should().Emit();
 
-        var idle = threadStream
+        var idle = await threadStream
             .Select(n => n.Content as MeshThread)
             .Should().Within(10.Seconds()).Match(t => t is { IsExecuting: false });
 
@@ -259,13 +259,13 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
     /// version increments (host.UpdateData re-triggering the stream).
     /// </summary>
     [Fact]
-    public void ToolCallsUpdate_WithLayoutArea_NoFeedbackLoop()
+    public async Task ToolCallsUpdate_WithLayoutArea_NoFeedbackLoop()
     {
         var threadPath = "User/Roland/_Thread/feedback-loop-test";
         var responseMsgId = "resp-loop";
         var responsePath = $"{threadPath}/{responseMsgId}";
 
-        NodeFactory.CreateNode(new MeshNode(responseMsgId, threadPath)
+        await NodeFactory.CreateNode(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
             MainNode = "User/Roland",
@@ -278,7 +278,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
             }
         }).Should().Emit();
 
-        NodeFactory.CreateNode(new MeshNode("feedback-loop-test", "User/Roland/_Thread")
+        await NodeFactory.CreateNode(new MeshNode("feedback-loop-test", "User/Roland/_Thread")
         {
             NodeType = ThreadNodeType.NodeType,
             MainNode = "User/Roland",
@@ -299,7 +299,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
             new Address(responsePath),
             new LayoutAreaReference(ThreadMessageNodeType.OverviewArea));
 
-        layoutStream!
+        await layoutStream!
             .Where(ci => ci.Value.ValueKind != JsonValueKind.Null)
             .Should().Within(10.Seconds()).Emit();
         Output.WriteLine("Layout area rendered");
@@ -312,11 +312,11 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         using var emissionCounter = responseStream.Subscribe(
             _ => System.Threading.Interlocked.Increment(ref emissionCount));
         // Let the initial snapshot settle so the baseline excludes it.
-        Observable.Empty<Unit>().Should().NotEmit(200.Milliseconds());
+        await Observable.Empty<Unit>().Should().NotEmit(200.Milliseconds());
         var countBefore = System.Threading.Volatile.Read(ref emissionCount);
         Output.WriteLine($"Emissions before update: {countBefore}");
 
-        responseStream.Update(current =>
+        await responseStream.Update(current =>
         {
             var msg = current.Content as ThreadMessage ?? new ThreadMessage { Role = "assistant", Text = "" };
             return current with
@@ -337,7 +337,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         // Settle window: let any feedback-loop emissions accumulate, then
         // measure the version delta. A guaranteed-empty stream waited on for a
         // fixed span is the void-safe equivalent of the old Task.Delay(500).
-        Observable.Empty<Unit>().Should().NotEmit(500.Milliseconds());
+        await Observable.Empty<Unit>().Should().NotEmit(500.Milliseconds());
 
         var countAfter = System.Threading.Volatile.Read(ref emissionCount);
         Output.WriteLine($"Emissions after update + 500ms: {countAfter}");
@@ -348,7 +348,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
             $"Delta was {emissionDelta} â€” indicates a feedback loop in layout area subscriptions");
         Output.WriteLine($"Version delta: {emissionDelta} (no feedback loop)");
 
-        responseStream.Update(current =>
+        await responseStream.Update(current =>
         {
             var msg = current.Content as ThreadMessage ?? new ThreadMessage { Role = "assistant", Text = "" };
             return current with
@@ -369,7 +369,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
             };
         }).Should().Emit();
 
-        Observable.Empty<Unit>().Should().NotEmit(500.Milliseconds());
+        await Observable.Empty<Unit>().Should().NotEmit(500.Milliseconds());
 
         var countFinal = System.Threading.Volatile.Read(ref emissionCount);
         var totalDelta = countFinal - countBefore;

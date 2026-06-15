@@ -163,13 +163,13 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
     /// Test that the inline edit view renders with readonly values initially.
     /// </summary>
     [Fact]
-    public void InlineEdit_InitialRender_ShowsReadonlyValues()
+    public async Task InlineEdit_InitialRender_ShowsReadonlyValues()
     {
         var host = GetHost();
         var workspace = host.GetWorkspace();
         var area = workspace.GetStream(new LayoutAreaReference(InlineEditView));
 
-        var control = area
+        var control = await area
             .GetControlStream(InlineEditView)
             .Should().Within(10.Seconds()).Match(x => x is not null);
 
@@ -185,7 +185,7 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
     /// Test that clicking on an editable field switches to edit mode.
     /// </summary>
     [Fact]
-    public void InlineEdit_ClickToEdit_ShouldSwitchToEditMode()
+    public async Task InlineEdit_ClickToEdit_ShouldSwitchToEditMode()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -194,7 +194,7 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
             new LayoutAreaReference(InlineEditView));
 
         // Wait for initial render
-        var control = stream
+        var control = await stream
             .GetControlStream(InlineEditView)
             .Should().Within(10.Seconds()).Match(x => x is not null);
 
@@ -204,7 +204,7 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
         var titleValueArea = grid.Areas.Skip(1).First().Area.ToString()!;
 
         // Get the body control that should have a click action
-        var titleControl = stream
+        var titleControl = await stream
             .GetControlStream(titleValueArea)
             .Should().Within(5.Seconds()).Match(x => x is not null);
 
@@ -219,7 +219,7 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
         client.Post(new ClickedEvent(titleValueArea, stream.StreamId), o => o.WithTarget(CreateHostAddress()));
 
         // Wait for the control to switch to TextField
-        var editControl = editControlStream.Should().Within(5.Seconds()).Emit();
+        var editControl = await editControlStream.Should().Within(5.Seconds()).Emit();
 
         // Should now be a TextFieldControl
         var textField = editControl.Should().BeOfType<TextFieldControl>().Subject;
@@ -230,7 +230,7 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
     /// Test that data binding works correctly for the edit control.
     /// </summary>
     [Fact]
-    public void InlineEdit_DataBinding_ShouldUpdateDataStream()
+    public async Task InlineEdit_DataBinding_ShouldUpdateDataStream()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -239,12 +239,12 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
             new LayoutAreaReference(InlineEditView));
 
         // Wait for initial render
-        stream
+        await stream
             .GetControlStream(InlineEditView)
             .Should().Within(10.Seconds()).Match(x => x is not null);
 
         // Read initial data from stream
-        var initialData = stream
+        var initialData = await stream
             .GetDataStream<TestContent>(new JsonPointerReference("/data/\"test_content\""))
             .Should().Within(5.Seconds()).Match(x => x is not null);
 
@@ -255,7 +255,7 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
         stream.UpdatePointer("Updated Title", "/data/\"test_content\"", new JsonPointerReference("title"));
 
         // Read updated data (the predicate waits for the update to propagate)
-        var updatedData = stream
+        var updatedData = await stream
             .GetDataStream<TestContent>(new JsonPointerReference("/data/\"test_content\""))
             .Should().Within(5.Seconds()).Match(x => x?.Title == "Updated Title");
 
@@ -268,7 +268,7 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
     /// This verifies the auto-save pattern works: client updates -> server subscription fires.
     /// </summary>
     [Fact]
-    public void InlineEdit_ServerSideSubscription_ReceivesClientUpdates()
+    public async Task InlineEdit_ServerSideSubscription_ReceivesClientUpdates()
     {
         ServerSideUpdates.Clear();
 
@@ -279,7 +279,7 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
             new LayoutAreaReference(AutoSaveTestView));
 
         // Wait for initial render
-        stream
+        await stream
             .GetControlStream(AutoSaveTestView)
             .Should().Within(10.Seconds()).Match(x => x is not null);
 
@@ -288,7 +288,7 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
 
         // The server-side subscription debounces and appends to the shared list (not an observable),
         // so probe the list until it reflects the update rather than sleeping for a fixed window.
-        Observable.Interval(50.Milliseconds())
+        await Observable.Interval(50.Milliseconds())
             .StartWith(0L)
             .Select(_ => ServerSideUpdates.ToArray())
             .Where(updates => updates.Any(u => u.Contains("Server Should See This")))
@@ -329,7 +329,7 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
     /// Test that readonly properties (with [Key] or [Editable(false)]) don't have click actions.
     /// </summary>
     [Fact]
-    public void InlineEdit_ReadonlyProperty_ShouldNotBeEditable()
+    public async Task InlineEdit_ReadonlyProperty_ShouldNotBeEditable()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -337,7 +337,7 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
             CreateHostAddress(),
             new LayoutAreaReference(InlineEditView));
 
-        var control = stream
+        var control = await stream
             .GetControlStream(InlineEditView)
             .Should().Within(10.Seconds()).Match(x => x is not null);
 
@@ -346,7 +346,7 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
         // Get the fourth area (second value area - Id value which has [Key])
         var idValueArea = grid.Areas.Skip(3).First().Area.ToString()!;
 
-        var idControl = stream
+        var idControl = await stream
             .GetControlStream(idValueArea)
             .Should().Within(5.Seconds()).Match(x => x is not null);
 
@@ -359,7 +359,7 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
 
         // Negative assertion: a [Key] (readonly) property must never switch to a TextField.
         // There is no positive signal to await, so confirm no TextField emission within a short window.
-        stream
+        await stream
             .GetControlStream(idValueArea)
             .Where(x => x is TextFieldControl)
             .Should().NotEmit(200.Milliseconds());
@@ -482,7 +482,7 @@ public class InlineEditingPersistenceTest(ITestOutputHelper output) : HubTestBas
     /// and GetDataRequest returns the updated value.
     /// </summary>
     [Fact]
-    public void UpdatePointer_TriggersAutoSave_AndPersistsViaDataChangeRequest()
+    public async Task UpdatePointer_TriggersAutoSave_AndPersistsViaDataChangeRequest()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -494,14 +494,14 @@ public class InlineEditingPersistenceTest(ITestOutputHelper output) : HubTestBas
             new LayoutAreaReference(PersistenceTestView));
 
         // Wait for initial render
-        var control = layoutStream
+        var control = await layoutStream
             .GetControlStream(PersistenceTestView)
             .Should().Within(10.Seconds()).Match(x => x is StackControl);
 
         Output.WriteLine($"Initial control rendered: {control?.GetType().Name}");
 
         // Verify initial data via workspace stream
-        var initialItems = workspace
+        var initialItems = await workspace
             .GetRemoteStream<PersistedContent>(hostAddress)!
             .Should().Within(5.Seconds()).Emit();
 
@@ -517,7 +517,7 @@ public class InlineEditingPersistenceTest(ITestOutputHelper output) : HubTestBas
 
         // Verify the data was persisted via workspace stream (backed by AddData).
         // The predicate waits for auto-save debounce + DataChangeRequest processing.
-        var updatedItems = workspace
+        var updatedItems = await workspace
             .GetRemoteStream<PersistedContent>(hostAddress)!
             .Should().Within(5.Seconds()).Match(items => items.Any(i => i.Id == "item-1" && i.Title == newTitle));
 
@@ -531,7 +531,7 @@ public class InlineEditingPersistenceTest(ITestOutputHelper output) : HubTestBas
     /// Test that multiple rapid updates are debounced and only the final value is persisted.
     /// </summary>
     [Fact]
-    public void MultipleRapidUpdates_AreDebounced_AndFinalValuePersisted()
+    public async Task MultipleRapidUpdates_AreDebounced_AndFinalValuePersisted()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -542,7 +542,7 @@ public class InlineEditingPersistenceTest(ITestOutputHelper output) : HubTestBas
             new LayoutAreaReference(PersistenceTestView));
 
         // Wait for initial render
-        layoutStream
+        await layoutStream
             .GetControlStream(PersistenceTestView)
             .Should().Within(10.Seconds()).Match(x => x is StackControl);
 
@@ -560,7 +560,7 @@ public class InlineEditingPersistenceTest(ITestOutputHelper output) : HubTestBas
 
         // Verify only the final value was persisted — the stream predicate
         // is the canonical wait-for-condition shape (no Task.Delay).
-        var items = workspace
+        var items = await workspace
             .GetRemoteStream<PersistedContent>(hostAddress)!
             .Should().Within(10.Seconds()).Match(items => items.Any(i => i.Id == "item-1" && i.Title == finalTitle));
 
@@ -572,7 +572,7 @@ public class InlineEditingPersistenceTest(ITestOutputHelper output) : HubTestBas
     /// Test that the Count (int) property can be updated and persisted.
     /// </summary>
     [Fact]
-    public void UpdatePointer_NumberField_PersistsCorrectly()
+    public async Task UpdatePointer_NumberField_PersistsCorrectly()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -583,12 +583,12 @@ public class InlineEditingPersistenceTest(ITestOutputHelper output) : HubTestBas
             new LayoutAreaReference(PersistenceTestView));
 
         // Wait for initial render
-        layoutStream
+        await layoutStream
             .GetControlStream(PersistenceTestView)
             .Should().Within(10.Seconds()).Match(x => x is StackControl);
 
         // Verify initial count
-        var initialItems = workspace
+        var initialItems = await workspace
             .GetRemoteStream<PersistedContent>(hostAddress)!
             .Should().Within(5.Seconds()).Emit();
 
@@ -602,7 +602,7 @@ public class InlineEditingPersistenceTest(ITestOutputHelper output) : HubTestBas
         layoutStream.UpdatePointer(newCount, "/data/\"persisted_item\"", new JsonPointerReference("count"));
 
         // Verify persistence (the predicate waits for the auto-save to land)
-        var updatedItems = workspace
+        var updatedItems = await workspace
             .GetRemoteStream<PersistedContent>(hostAddress)!
             .Should().Within(5.Seconds()).Match(items => items.Any(i => i.Id == "item-1" && i.Count == newCount));
 
@@ -742,7 +742,7 @@ public class ObjectTypeAutoSaveTest(ITestOutputHelper output) : HubTestBase(outp
     /// Test that GetDataStream&lt;object&gt; receives updates from UpdatePointer.
     /// </summary>
     [Fact]
-    public void GetDataStreamObject_ReceivesUpdatePointerChanges()
+    public async Task GetDataStreamObject_ReceivesUpdatePointerChanges()
     {
         AutoSaveTriggered = false;
         AutoSavedName = null;
@@ -756,7 +756,7 @@ public class ObjectTypeAutoSaveTest(ITestOutputHelper output) : HubTestBase(outp
             new LayoutAreaReference(ObjectAutoSaveView));
 
         // Wait for initial render
-        layoutStream
+        await layoutStream
             .GetControlStream(ObjectAutoSaveView)
             .Should().Within(10.Seconds()).Match(x => x is StackControl);
 
@@ -769,7 +769,7 @@ public class ObjectTypeAutoSaveTest(ITestOutputHelper output) : HubTestBase(outp
         // The auto-save handler writes to static fields (not observables), so probe them until they
         // reflect the update rather than sleeping for a fixed window.
         Output.WriteLine("Waiting for auto-save debounce...");
-        Observable.Interval(50.Milliseconds())
+        await Observable.Interval(50.Milliseconds())
             .StartWith(0L)
             .Select(_ => (Triggered: AutoSaveTriggered, Name: AutoSavedName))
             .Where(s => s.Triggered && s.Name == newName)
@@ -781,7 +781,7 @@ public class ObjectTypeAutoSaveTest(ITestOutputHelper output) : HubTestBase(outp
         AutoSavedName.Should().Be(newName, "Auto-save should receive the correct updated value");
 
         // Verify the data was actually persisted
-        var items = workspace
+        var items = await workspace
             .GetRemoteStream<TestItem>(hostAddress)!
             .Should().Within(5.Seconds()).Match(items => items.Any(i => i.Id == "obj-1" && i.Name == newName));
 

@@ -4,6 +4,7 @@ using System;
 using System.Runtime.CompilerServices;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Threading.Tasks;
 using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
@@ -33,7 +34,7 @@ public class ThreadStartWedgeReproTest(ITestOutputHelper output) : OrleansShared
         => base.GetClient($"startwedge-{name}-{Guid.NewGuid():N}", "TestUser");
 
     [Fact(Timeout = 60000)]
-    public void StartThread_NewChat_ReachesTerminal_AndHubStaysResponsive()
+    public async Task StartThread_NewChat_ReachesTerminal_AndHubStaysResponsive()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -49,14 +50,14 @@ public class ThreadStartWedgeReproTest(ITestOutputHelper output) : OrleansShared
             onCreated: node => { threadCreated.OnNext(node); threadCreated.OnCompleted(); },
             onError: err => threadCreated.OnError(new InvalidOperationException(err)));
 
-        var created = threadCreated.Should().Within(35.Seconds()).Match(n => n is not null);
+        var created = await threadCreated.Should().Within(35.Seconds()).Match(n => n is not null);
         var threadPath = created!.Path!;
         Output.WriteLine($"Thread: {threadPath}");
 
         // (a) The thread hub stays RESPONSIVE while the round runs — a one-shot read on the SAME
         //     thread hub completes promptly. Under the wedge this queued behind the blocked
         //     DeliverMessage and aged out (the pending SubscribeRequest/CreateNodeRequest).
-        var liveRead = client.GetMeshNode(threadPath, TimeSpan.FromSeconds(15))
+        var liveRead = await client.GetMeshNode(threadPath, TimeSpan.FromSeconds(15))
             .Should().Within(20.Seconds()).Match(n => n is not null);
         liveRead.Should().NotBeNull(
             "the thread hub must answer reads while a round executes — not wedge in DeliverMessage");
@@ -64,7 +65,7 @@ public class ThreadStartWedgeReproTest(ITestOutputHelper output) : OrleansShared
         // (b) The round reaches terminal Idle — the submission watcher observed completion via the
         //     returned round observable (the fix). Under the fire-and-forget wedge it parked
         //     non-terminal forever.
-        var threadAtIdle = workspace.GetMeshNodeStream(threadPath)
+        var threadAtIdle = await workspace.GetMeshNodeStream(threadPath)
             .Select(node => node?.Content as MeshThread)
             .Should().Within(45.Seconds()).Match(t => t is { Status: ThreadExecutionStatus.Idle });
         threadAtIdle!.Status.Should().Be(ThreadExecutionStatus.Idle,

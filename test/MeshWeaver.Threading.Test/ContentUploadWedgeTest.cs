@@ -29,7 +29,7 @@ public class ContentUploadWedgeTest(ITestOutputHelper output) : MonolithMeshTest
         => base.ConfigureMesh(builder).AddAI();
 
     [Fact(Timeout = 60000)]
-    public void Upload_ToNodeWithoutAMappedCollection_ErrorsBounded_DoesNotWedge()
+    public async Task Upload_ToNodeWithoutAMappedCollection_ErrorsBounded_DoesNotWedge()
     {
         var nodePath = $"NoColl{Guid.NewGuid():N}"[..16];
         // Top-level node → seed under System (partition guard).
@@ -43,7 +43,7 @@ public class ContentUploadWedgeTest(ITestOutputHelper output) : MonolithMeshTest
         // for the harder case the unit harness can't stage deterministically — a busy/wedged owning
         // hub that never answers at all, where the un-timed Take(1) used to hang the upload forever
         // (and, through ops.Upload(...).FirstAsync().ToTask(), the calling MCP/REST request).
-        var result = new MeshOperations(GetClient())
+        var result = await new MeshOperations(GetClient())
             .Upload($"{nodePath}/content/logo.png", bytes)
             .Should().Within(45.Seconds()).Emit();
 

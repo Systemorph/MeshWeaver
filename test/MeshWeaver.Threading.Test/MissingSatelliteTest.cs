@@ -61,7 +61,7 @@ public class MissingSatelliteTest(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact]
-    public void ValidSatellite_Emits_MissingSatellite_StarvesUntilDeadline()
+    public async Task ValidSatellite_Emits_MissingSatellite_StarvesUntilDeadline()
     {
         // 1) Create a thread + a real satellite cell for one of its message ids.
         var threadId = Guid.NewGuid().AsString();
@@ -69,7 +69,7 @@ public class MissingSatelliteTest(ITestOutputHelper output) : MonolithMeshTestBa
         var validId = Guid.NewGuid().AsString();
         var missingId = Guid.NewGuid().AsString();
 
-        NodeFactory.CreateNode(MeshNode.FromPath(threadPath) with
+        await NodeFactory.CreateNode(MeshNode.FromPath(threadPath) with
         {
             Name = "Reproducer thread",
             NodeType = ThreadNodeType.NodeType,
@@ -84,7 +84,7 @@ public class MissingSatelliteTest(ITestOutputHelper output) : MonolithMeshTestBa
         }).Should().Emit();
 
         // Real satellite for `validId` only.
-        NodeFactory.CreateNode(new MeshNode(validId, threadPath)
+        await NodeFactory.CreateNode(new MeshNode(validId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
             MainNode = threadPath,
@@ -104,7 +104,7 @@ public class MissingSatelliteTest(ITestOutputHelper output) : MonolithMeshTestBa
         var validPath = $"{threadPath}/{validId}";
         using (accessService.ImpersonateAsSystem())
         {
-            var validEmission = cache.GetStream(validPath, Mesh.JsonSerializerOptions)
+            var validEmission = await cache.GetStream(validPath, Mesh.JsonSerializerOptions)
                 .Where(n => n?.Content is not null)
                 .Should().Within(TimeSpan.FromSeconds(5)).Emit(
                     "the existing satellite must emit via the cache within 5 s — happy path");
@@ -125,7 +125,7 @@ public class MissingSatelliteTest(ITestOutputHelper output) : MonolithMeshTestBa
         var missingPath = $"{threadPath}/{missingId}";
         using (accessService.ImpersonateAsSystem())
         {
-            var errorNotification = cache.GetStream(missingPath, Mesh.JsonSerializerOptions)
+            var errorNotification = await cache.GetStream(missingPath, Mesh.JsonSerializerOptions)
                 .Where(n => n?.Content is not null)
                 .Materialize()
                 .Should().Within(TimeSpan.FromSeconds(5)).Match(n => n.Kind == NotificationKind.OnError);
@@ -146,11 +146,11 @@ public class MissingSatelliteTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// read, so the path never hangs and the contract never degrades under a flood.
     /// </summary>
     [Fact]
-    public void MissingSatellite_ReReadInTightLoop_StaysResponsive_NoStorm()
+    public async Task MissingSatellite_ReReadInTightLoop_StaysResponsive_NoStorm()
     {
         var threadId = Guid.NewGuid().AsString();
         var threadPath = $"{TestPartition}/{ThreadNodeType.ThreadPartition}/{threadId}";
-        NodeFactory.CreateNode(MeshNode.FromPath(threadPath) with
+        await NodeFactory.CreateNode(MeshNode.FromPath(threadPath) with
         {
             Name = "Storm-breaker thread",
             NodeType = ThreadNodeType.NodeType,
@@ -170,7 +170,7 @@ public class MissingSatelliteTest(ITestOutputHelper output) : MonolithMeshTestBa
         {
             for (var i = 0; i < 10; i++)
             {
-                var note = cache.GetStream(missingPath, Mesh.JsonSerializerOptions)
+                var note = await cache.GetStream(missingPath, Mesh.JsonSerializerOptions)
                     .Where(n => n?.Content is not null)
                     .Materialize()
                     .Should().Within(TimeSpan.FromSeconds(5)).Match(

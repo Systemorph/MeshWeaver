@@ -113,25 +113,25 @@ public class CrossPartitionThreadQueryTests
         return partitions;
     }
 
-    private Dictionary<string, (NpgsqlDataSource Ds, PostgreSqlStorageAdapter Adapter)>
+    private Task<Dictionary<string, (NpgsqlDataSource Ds, PostgreSqlStorageAdapter Adapter)>>
         SetupPartitionsWithThreads(CancellationToken ct)
         => SetupPartitionsWithThreadsAsync(ct).Run().Should().Within(90.Seconds()).Emit();
 
-    private List<MeshNode> QueryAdapter(PostgreSqlStorageAdapter adapter, ParsedQuery query, CancellationToken ct)
+    private Task<List<MeshNode>> QueryAdapter(PostgreSqlStorageAdapter adapter, ParsedQuery query, CancellationToken ct)
         => adapter.QueryNodesAsync(query, _options, ct: ct)
             .Collect(ct).Should().Within(30.Seconds()).Emit();
 
     [Fact(Timeout = 60000)]
-    public void ContentCreatedBy_FindsThreadsInSinglePartition()
+    public async Task ContentCreatedBy_FindsThreadsInSinglePartition()
     {
         var ct = TestContext.Current.CancellationToken;
-        var partitions = SetupPartitionsWithThreads(ct);
+        var partitions = await SetupPartitionsWithThreads(ct);
 
         // Query ACME partition only for Roland's threads
         var parser = new QueryParser();
         var query = parser.Parse("nodeType:Thread content.createdBy:Roland scope:subtree sort:LastModified-desc");
 
-        var results = QueryAdapter(partitions["ACME"].Adapter, query, ct);
+        var results = await QueryAdapter(partitions["ACME"].Adapter, query, ct);
 
         results.Should().HaveCount(2, "ACME has 2 threads by Roland");
         results.Should().AllSatisfy(n => n.NodeType.Should().Be("Thread"));
@@ -140,26 +140,26 @@ public class CrossPartitionThreadQueryTests
     }
 
     [Fact(Timeout = 60000)]
-    public void ContentCreatedBy_FiltersOutOtherUsers()
+    public async Task ContentCreatedBy_FiltersOutOtherUsers()
     {
         var ct = TestContext.Current.CancellationToken;
-        var partitions = SetupPartitionsWithThreads(ct);
+        var partitions = await SetupPartitionsWithThreads(ct);
 
         // Query Northwind for Roland's threads — should exclude Alice's thread
         var parser = new QueryParser();
         var query = parser.Parse("nodeType:Thread content.createdBy:Roland scope:subtree sort:LastModified-desc");
 
-        var results = QueryAdapter(partitions["Northwind"].Adapter, query, ct);
+        var results = await QueryAdapter(partitions["Northwind"].Adapter, query, ct);
 
         results.Should().HaveCount(1, "only 1 of Northwind's 2 threads is by Roland");
         results[0].Name.Should().Be("Sales forecast discussion");
     }
 
     [Fact(Timeout = 60000)]
-    public void ContentCreatedBy_CrossPartitionFanOut_FindsAllUserThreads()
+    public async Task ContentCreatedBy_CrossPartitionFanOut_FindsAllUserThreads()
     {
         var ct = TestContext.Current.CancellationToken;
-        var partitions = SetupPartitionsWithThreads(ct);
+        var partitions = await SetupPartitionsWithThreads(ct);
 
         // Simulate cross-partition fan-out: query each partition and merge results
         // This is what RoutingMeshQueryProvider does when no namespace is specified
@@ -169,7 +169,7 @@ public class CrossPartitionThreadQueryTests
         foreach (var (org, (_, adapter)) in partitions)
         {
             var query = parser.Parse("nodeType:Thread content.createdBy:Roland scope:subtree sort:LastModified-desc");
-            allResults.AddRange(QueryAdapter(adapter, query, ct));
+            allResults.AddRange(await QueryAdapter(adapter, query, ct));
         }
 
         // Re-sort globally by LastModified desc (simulating merge)
@@ -188,22 +188,22 @@ public class CrossPartitionThreadQueryTests
     }
 
     [Fact(Timeout = 60000)]
-    public void ThreadWithoutCreatedBy_NotFoundByContentFilter()
+    public async Task ThreadWithoutCreatedBy_NotFoundByContentFilter()
     {
         var ct = TestContext.Current.CancellationToken;
-        _fixture.CleanData().Should().Within(60.Seconds()).Emit();
+        await _fixture.CleanData().Should().Within(60.Seconds()).Emit();
 
         var partitionDef = new PartitionDefinition
         {
             TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
         var schema = "cp_thread_nocreated";
-        var (ds, adapter) = _fixture.CreateSchemaAdapter(
+        var (ds, adapter) = await _fixture.CreateSchemaAdapter(
             schema, partitionDef with { Namespace = "TestOrg", Schema = schema }, ct)
             .Should().Within(60.Seconds()).Emit();
 
         // Create a thread WITHOUT CreatedBy (reproduces the original bug)
-        adapter.Write(new MeshNode("orphan-thread-1234", "TestOrg/_Thread")
+        await adapter.Write(new MeshNode("orphan-thread-1234", "TestOrg/_Thread")
         {
             Name = "Orphan thread",
             NodeType = "Thread",
@@ -215,13 +215,13 @@ public class CrossPartitionThreadQueryTests
         var parser = new QueryParser();
         var query = parser.Parse("nodeType:Thread content.createdBy:Roland scope:subtree sort:LastModified-desc");
 
-        var results = QueryAdapter(adapter, query, ct);
+        var results = await QueryAdapter(adapter, query, ct);
 
         results.Should().BeEmpty("thread with null CreatedBy should not match content.createdBy:Roland");
 
         // But a query without createdBy filter should find it
         var allThreadsQuery = parser.Parse("nodeType:Thread scope:subtree");
-        var allResults = QueryAdapter(adapter, allThreadsQuery, ct);
+        var allResults = await QueryAdapter(adapter, allThreadsQuery, ct);
 
         allResults.Should().HaveCount(1, "thread exists but has no createdBy");
 
@@ -229,22 +229,22 @@ public class CrossPartitionThreadQueryTests
     }
 
     [Fact(Timeout = 60000)]
-    public void CamelCaseJsonKey_MatchesQuerySelector()
+    public async Task CamelCaseJsonKey_MatchesQuerySelector()
     {
         var ct = TestContext.Current.CancellationToken;
-        _fixture.CleanData().Should().Within(60.Seconds()).Emit();
+        await _fixture.CleanData().Should().Within(60.Seconds()).Emit();
 
         var partitionDef = new PartitionDefinition
         {
             TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
         var schema = "cp_thread_case";
-        var (ds, adapter) = _fixture.CreateSchemaAdapter(
+        var (ds, adapter) = await _fixture.CreateSchemaAdapter(
             schema, partitionDef with { Namespace = "CaseTest", Schema = schema }, ct)
             .Should().Within(60.Seconds()).Emit();
 
         // Write with CamelCase options (production behavior)
-        adapter.Write(new MeshNode("case-thread-abcd", "CaseTest/_Thread")
+        await adapter.Write(new MeshNode("case-thread-abcd", "CaseTest/_Thread")
         {
             Name = "CamelCase thread",
             NodeType = "Thread",
@@ -254,7 +254,7 @@ public class CrossPartitionThreadQueryTests
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // Verify the JSONB content has camelCase keys
-        var storedValue = ds.Probe(
+        var storedValue = await ds.Probe(
             "SELECT content->>'createdBy' FROM threads WHERE id = 'case-thread-abcd'",
             System.Array.Empty<(string, object)>(),
             reader => reader.IsDBNull(0) ? null : reader.GetString(0), ct)
@@ -264,7 +264,7 @@ public class CrossPartitionThreadQueryTests
         // Query with lowercase selector should match
         var parser = new QueryParser();
         var query = parser.Parse("nodeType:Thread content.createdBy:Bob scope:subtree");
-        var results = QueryAdapter(adapter, query, ct);
+        var results = await QueryAdapter(adapter, query, ct);
 
         results.Should().HaveCount(1);
         results[0].Name.Should().Be("CamelCase thread");

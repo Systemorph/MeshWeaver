@@ -42,19 +42,19 @@ public class WorkspaceUpdateMeshNodePropagationTest(ITestOutputHelper output) : 
     protected override bool ShareMeshAcrossTests => true;
 
     [Fact(Timeout = 30_000)]
-    public void UpdateMeshNode_PropagatesToOwnSubscribers()
+    public async Task UpdateMeshNode_PropagatesToOwnSubscribers()
     {
         // 1. Create a Markdown node — same path pattern as ThreeNodePropagationTest
         //    so the shared TestPartition routing already works.
         var path = $"{TestPartition}/iso-node";
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode("iso-node", TestPartition) { Name = "initial", NodeType = "Markdown" }).Should().Emit();
         Output.WriteLine($"Created node: {path}");
 
         // 2. Activate the per-node hub by sending it any inbound message — Orleans
         //    grain activation is lazy. Monolith hubs activate eagerly via routing
         //    so this is a no-op there but keeps the test portable.
-        Mesh.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))
+        await Mesh.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))
             .Should().Emit();
 
         // 3. Reach into the per-node hub's own workspace.
@@ -72,7 +72,7 @@ public class WorkspaceUpdateMeshNodePropagationTest(ITestOutputHelper output) : 
         // Initial snapshot — stream-poll until the first emission lands.
         // Replaces a hand-rolled while + Task.Delay(50) loop with the same
         // 5 s budget but a deterministic Where + Match exit condition.
-        Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .Should().Within(5.Seconds()).Match(_ => emissions.Count > 0);
         emissions.Should().NotBeEmpty("subscriber must receive initial MeshNode snapshot");
         emissions[^1].Name.Should().Be("initial");
@@ -94,7 +94,7 @@ public class WorkspaceUpdateMeshNodePropagationTest(ITestOutputHelper output) : 
         //    initial snapshot but no update emission and this assertion timed out.
         // Stream-poll the accumulator on a 50 ms interval — replaces a
         // hand-rolled while + Task.Delay(50) loop.
-        Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .Should().Within(5.Seconds()).Match(_ => emissions.Any(n => n.Name == marker));
 
         Output.WriteLine($"After UpdateMeshNode: emissions={emissions.Count}, " +

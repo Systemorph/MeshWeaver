@@ -50,7 +50,7 @@ public class SatelliteTableTests : IAsyncLifetime
 
     // Reactive read of user_effective_permissions rows — the multi-row reader
     // (low-level PG op) stays async inside the IObservable wrapper.
-    private List<(string Permission, bool IsAllow)> GetEffectivePermissions(
+    private Task<List<(string Permission, bool IsAllow)>> GetEffectivePermissions(
         string userId, System.Threading.CancellationToken ct)
         => _schemaDs.Rows(
             "SELECT permission, is_allow FROM user_effective_permissions WHERE user_id = @uid",
@@ -61,7 +61,7 @@ public class SatelliteTableTests : IAsyncLifetime
     #region AccessAssignment trigger tests
 
     [Fact(Timeout = 30000)]
-    public void AccessAssignment_Triggers_EffectivePermissions_Rebuild()
+    public async Task AccessAssignment_Triggers_EffectivePermissions_Rebuild()
     {
         var ct = TestContext.Current.CancellationToken;
 
@@ -76,9 +76,9 @@ public class SatelliteTableTests : IAsyncLifetime
                 roles = new[] { new { role = "Admin" } }
             }
         };
-        _adapter.Write(accessNode, _options).Should().Within(30.Seconds()).Emit();
+        await _adapter.Write(accessNode, _options).Should().Within(30.Seconds()).Emit();
 
-        var permissions = GetEffectivePermissions("alice", ct);
+        var permissions = await GetEffectivePermissions("alice", ct);
         var allowed = permissions.FindAll(p => p.IsAllow).ConvertAll(p => p.Permission);
 
         allowed.Should().Contain("Read");
@@ -89,7 +89,7 @@ public class SatelliteTableTests : IAsyncLifetime
     }
 
     [Fact(Timeout = 30000)]
-    public void AccessAssignment_With_Denied_Role_Creates_Deny_Permissions()
+    public async Task AccessAssignment_With_Denied_Role_Creates_Deny_Permissions()
     {
         var ct = TestContext.Current.CancellationToken;
 
@@ -104,16 +104,16 @@ public class SatelliteTableTests : IAsyncLifetime
                 roles = new[] { new { role = "Viewer", denied = true } }
             }
         };
-        _adapter.Write(accessNode, _options).Should().Within(30.Seconds()).Emit();
+        await _adapter.Write(accessNode, _options).Should().Within(30.Seconds()).Emit();
 
-        var permissions = GetEffectivePermissions("bob", ct);
+        var permissions = await GetEffectivePermissions("bob", ct);
         permissions.Should().NotBeEmpty("denied Viewer role should create permission entries");
         permissions.Should().Contain(p => p.Permission == "Read" && p.IsAllow == false,
             "denied Viewer role should create Read permission with is_allow = false");
     }
 
     [Fact(Timeout = 30000)]
-    public void Deleting_AccessAssignment_Removes_Permissions()
+    public async Task Deleting_AccessAssignment_Removes_Permissions()
     {
         var ct = TestContext.Current.CancellationToken;
 
@@ -128,14 +128,14 @@ public class SatelliteTableTests : IAsyncLifetime
                 roles = new[] { new { role = "Editor" } }
             }
         };
-        _adapter.Write(accessNode, _options).Should().Within(30.Seconds()).Emit();
+        await _adapter.Write(accessNode, _options).Should().Within(30.Seconds()).Emit();
 
-        var before = GetEffectivePermissions("carol", ct);
+        var before = await GetEffectivePermissions("carol", ct);
         before.Should().NotBeEmpty("carol should have permissions after AccessAssignment insert");
 
-        _adapter.Delete("TestOrg/_Access/carol_Access").Should().Within(30.Seconds()).Emit();
+        await _adapter.Delete("TestOrg/_Access/carol_Access").Should().Within(30.Seconds()).Emit();
 
-        var after = GetEffectivePermissions("carol", ct);
+        var after = await GetEffectivePermissions("carol", ct);
         after.Should().BeEmpty("carol should have no permissions after AccessAssignment deletion");
     }
 
@@ -144,7 +144,7 @@ public class SatelliteTableTests : IAsyncLifetime
     #region Thread satellite table tests
 
     [Fact(Timeout = 30000)]
-    public void Thread_Written_To_Threads_Satellite_Table()
+    public async Task Thread_Written_To_Threads_Satellite_Table()
     {
         var ct = TestContext.Current.CancellationToken;
 
@@ -155,19 +155,19 @@ public class SatelliteTableTests : IAsyncLifetime
             MainNode = "TestOrg",
             Content = new { }
         };
-        _adapter.Write(thread, _options).Should().Within(30.Seconds()).Emit();
+        await _adapter.Write(thread, _options).Should().Within(30.Seconds()).Emit();
 
         // Verify it's in the threads table
-        _schemaDs.ScalarLong(
+        await _schemaDs.ScalarLong(
             "SELECT COUNT(*) FROM threads WHERE namespace = 'TestOrg/_Thread' AND id = 'thread1'", ct)
             .Should().Within(30.Seconds()).Be(1L, "Thread should be in the threads table");
 
         // Verify it is NOT in mesh_nodes
-        _schemaDs.ScalarLong(
+        await _schemaDs.ScalarLong(
             "SELECT COUNT(*) FROM mesh_nodes WHERE namespace = 'TestOrg/_Thread' AND id = 'thread1'", ct)
             .Should().Within(30.Seconds()).Be(0L, "Thread should NOT be in mesh_nodes");
 
-        var read = _adapter.Read("TestOrg/_Thread/thread1", _options).Should().Within(30.Seconds()).Emit();
+        var read = await _adapter.Read("TestOrg/_Thread/thread1", _options).Should().Within(30.Seconds()).Emit();
         read.Should().NotBeNull();
         read!.Name.Should().Be("Discussion Thread");
     }
@@ -177,7 +177,7 @@ public class SatelliteTableTests : IAsyncLifetime
     #region Comment satellite table tests
 
     [Fact(Timeout = 30000)]
-    public void Comment_Written_To_Annotations_Satellite_Table()
+    public async Task Comment_Written_To_Annotations_Satellite_Table()
     {
         var ct = TestContext.Current.CancellationToken;
 
@@ -188,17 +188,17 @@ public class SatelliteTableTests : IAsyncLifetime
             MainNode = "TestOrg/SomeDoc",
             Content = new { Author = "alice", Text = "Great document!" }
         };
-        _adapter.Write(comment, _options).Should().Within(30.Seconds()).Emit();
+        await _adapter.Write(comment, _options).Should().Within(30.Seconds()).Emit();
 
-        _schemaDs.ScalarLong(
+        await _schemaDs.ScalarLong(
             "SELECT COUNT(*) FROM annotations WHERE namespace = 'TestOrg/SomeDoc/_Comment' AND id = 'comment1'", ct)
             .Should().Within(30.Seconds()).Be(1L, "Comment should be in the annotations table");
 
-        _schemaDs.ScalarLong(
+        await _schemaDs.ScalarLong(
             "SELECT COUNT(*) FROM mesh_nodes WHERE namespace = 'TestOrg/SomeDoc/_Comment' AND id = 'comment1'", ct)
             .Should().Within(30.Seconds()).Be(0L, "Comment should NOT be in mesh_nodes");
 
-        var read = _adapter.Read("TestOrg/SomeDoc/_Comment/comment1", _options).Should().Within(30.Seconds()).Emit();
+        var read = await _adapter.Read("TestOrg/SomeDoc/_Comment/comment1", _options).Should().Within(30.Seconds()).Emit();
         read.Should().NotBeNull();
         read!.NodeType.Should().Be("Comment");
     }
@@ -208,7 +208,7 @@ public class SatelliteTableTests : IAsyncLifetime
     #region TrackedChange satellite table tests
 
     [Fact(Timeout = 30000)]
-    public void TrackedChange_Written_To_Annotations_Satellite_Table()
+    public async Task TrackedChange_Written_To_Annotations_Satellite_Table()
     {
         var ct = TestContext.Current.CancellationToken;
 
@@ -219,17 +219,17 @@ public class SatelliteTableTests : IAsyncLifetime
             MainNode = "TestOrg/SomeDoc",
             Content = new { Author = "bob", ChangeType = "Edit" }
         };
-        _adapter.Write(change, _options).Should().Within(30.Seconds()).Emit();
+        await _adapter.Write(change, _options).Should().Within(30.Seconds()).Emit();
 
-        _schemaDs.ScalarLong(
+        await _schemaDs.ScalarLong(
             "SELECT COUNT(*) FROM annotations WHERE namespace = 'TestOrg/SomeDoc/_Tracking' AND id = 'change1'", ct)
             .Should().Within(30.Seconds()).Be(1L, "TrackedChange should be in the annotations table");
 
-        _schemaDs.ScalarLong(
+        await _schemaDs.ScalarLong(
             "SELECT COUNT(*) FROM mesh_nodes WHERE namespace = 'TestOrg/SomeDoc/_Tracking' AND id = 'change1'", ct)
             .Should().Within(30.Seconds()).Be(0L, "TrackedChange should NOT be in mesh_nodes");
 
-        var read = _adapter.Read("TestOrg/SomeDoc/_Tracking/change1", _options).Should().Within(30.Seconds()).Emit();
+        var read = await _adapter.Read("TestOrg/SomeDoc/_Tracking/change1", _options).Should().Within(30.Seconds()).Emit();
         read.Should().NotBeNull();
         read!.NodeType.Should().Be("TrackedChange");
     }

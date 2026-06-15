@@ -78,7 +78,7 @@ public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output
     }
 
     [Fact]
-    public void SimpleValidationAttributeTest()
+    public async Task SimpleValidationAttributeTest()
     {
         const string content =
             @"@@Contract
@@ -88,7 +88,7 @@ SystemName,FoundationYear,ContractType
 
         var client = GetClient();
         var importRequest = new ImportRequest(content);
-        var importResponse = client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
             .Should().Within(10.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
         importResponse
@@ -110,7 +110,7 @@ SystemName,FoundationYear,ContractType
     }
 
     [Fact]
-    public void ImportWithSimpleValidationRuleTest()
+    public async Task ImportWithSimpleValidationRuleTest()
     {
         const string Content =
             @"@@Country
@@ -120,7 +120,7 @@ FR,France";
 
         var client = GetClient();
         var importRequest = new ImportRequest(Content) { Format = "Test1", SaveLog = true };
-        var importResponse = client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
             .Should().Within(1000.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
 
@@ -135,7 +135,7 @@ FR,France";
     }
 
     [Fact]
-    public void ImportOfPercentageTest()
+    public async Task ImportOfPercentageTest()
     {
         const string content =
             @"@@Discount
@@ -144,7 +144,7 @@ DoubleValue,Country
 
         var client = GetClient();
         var importRequest = new ImportRequest(content);
-        var importResponse = client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
             .Should().Within(10.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
         importResponse
@@ -167,7 +167,7 @@ DoubleValue,Country
     }
 
     [Fact]
-    public void ImportWithSaveLogTest()
+    public async Task ImportWithSaveLogTest()
     {
         const string content =
             @"@@Country
@@ -176,7 +176,7 @@ A,B";
 
         var client = GetClient();
         var importRequest = new ImportRequest(content) { Format = "Test1", SaveLog = true };
-        var importResponse = client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
             .Should().Within(10.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
 

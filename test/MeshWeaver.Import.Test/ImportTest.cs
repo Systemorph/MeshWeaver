@@ -39,7 +39,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [Fact]
-    public void DistributedImportTest()
+    public async Task DistributedImportTest()
     {
         // arrange
         var client = GetClient();
@@ -55,7 +55,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         Logger.LogInformation("DistributedImportTest {TestId}: Sending import request with {Timeout}s timeout", testId, importRequest.Timeout?.TotalSeconds);
-        var importResponse = client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024)))
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024)))
             .Should().Within(10.Seconds()).Emit();
         Logger.LogInformation("DistributedImportTest {TestId}: Import response received with status {Status}", testId, importResponse.Message.Log.Status);
 
@@ -66,13 +66,13 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
         var workspace = GetWorkspace(
             Mesh.GetHostedHub(TransactionalDataAddress.Create(2024, "1"))
         );
-        var transactionalItems1 = workspace
+        var transactionalItems1 = await workspace
             .GetObservable<TransactionalData>()
             .Should().Within(5.Seconds()).Match(x => x.Count > 1);
         Logger.LogInformation("DistributedImportTest {TestId}: Got {Count} transactional items", testId, transactionalItems1.Count);
 
         Logger.LogInformation("DistributedImportTest {TestId}: Getting computed workspace", testId);
-        var computedItems1 = GetWorkspace(
+        var computedItems1 = await GetWorkspace(
                 Mesh.GetHostedHub(ComputedDataAddress.Create(2024, "1"))
             )
             .GetObservable<ComputedData>()
@@ -108,17 +108,17 @@ Id,Year,LoB,BusinessUnit,Value
 ";
 
     [Fact]
-    public void TestVanilla()
+    public async Task TestVanilla()
     {
         var client = GetClient();
         var importRequest = new ImportRequest(VanillaCsv); // Add timeout for bulk test scenarios
-        var importResponse = client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024)))
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024)))
             .Should().Within(10.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         var workspace = GetWorkspace(
             Mesh.GetHostedHub(ReferenceDataAddress.Create(), null!)
         );
-        var items = workspace
+        var items = await workspace
             .GetObservable<LineOfBusiness>()
             .Should().Within(10.Seconds()).Match(x => x.FirstOrDefault()?.DisplayName.StartsWith("LoB") ?? false);
         var expectedLoBs = new[]
@@ -138,20 +138,20 @@ SystemName,DisplayName
 ";
 
     [Fact]
-    public void MultipleTypes()
+    public async Task MultipleTypes()
     {
         var client = GetClient();
         var importRequest = new ImportRequest(MultipleTypesCsv)
             .WithTimeout(15.Seconds()); // Add timeout for bulk test scenarios
-        var importResponse = client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024)))
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024)))
             .Should().Within(15.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         var workspace = GetWorkspace(
             Mesh.GetHostedHub(ReferenceDataAddress.Create(), null!)
         );
-        var actualLoBs = workspace.GetObservable<LineOfBusiness>()
+        var actualLoBs = await workspace.GetObservable<LineOfBusiness>()
             .Should().Match(x => x.Count > 0 && x.First().DisplayName.StartsWith("LoB"));
-        var actualBUs = workspace.GetObservable<BusinessUnit>()
+        var actualBUs = await workspace.GetObservable<BusinessUnit>()
             .Should().Match(x => x.Count > 2);
         var expectedLoBs = new[]
         {

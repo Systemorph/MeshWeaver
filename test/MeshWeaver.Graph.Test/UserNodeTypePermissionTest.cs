@@ -64,7 +64,7 @@ public class UserNodeTypePermissionTest
     #region Node Access Rules (via NodeAccessRuleSet)
 
     [Fact]
-    public void AuthenticatedUser_CanReadDirectUserNode()
+    public async Task AuthenticatedUser_CanReadDirectUserNode()
     {
         var config = BuildUserHubConfig();
         var ruleSet = config.Get<NodeAccessRuleSet>();
@@ -74,12 +74,12 @@ public class UserNodeTypePermissionTest
         // Path = "User/Alice" (derived from ns/id)
         var context = ReadContext("Alice", "User");
 
-        accessRule.HasAccess(context, "bob")
+        await accessRule.HasAccess(context, "bob")
             .Should().Be(true, "any authenticated user can read a direct User node");
     }
 
     [Fact]
-    public void UnauthenticatedUser_CannotReadDirectUserNode()
+    public async Task UnauthenticatedUser_CannotReadDirectUserNode()
     {
         var config = BuildUserHubConfig();
         var ruleSet = config.Get<NodeAccessRuleSet>();
@@ -87,15 +87,15 @@ public class UserNodeTypePermissionTest
 
         var context = ReadContext("Alice", "User");
 
-        accessRule.HasAccess(context, null)
+        await accessRule.HasAccess(context, null)
             .Should().Be(false, "unauthenticated user (null) should be denied");
 
-        accessRule.HasAccess(context, "")
+        await accessRule.HasAccess(context, "")
             .Should().Be(false, "unauthenticated user (empty) should be denied");
     }
 
     [Fact]
-    public void AuthenticatedUser_CannotReadChildNode()
+    public async Task AuthenticatedUser_CannotReadChildNode()
     {
         var config = BuildUserHubConfig();
         var ruleSet = config.Get<NodeAccessRuleSet>();
@@ -104,12 +104,12 @@ public class UserNodeTypePermissionTest
         // Path = "User/Alice/thread1" (child node)
         var context = ReadContext("thread1", "User/Alice");
 
-        accessRule.HasAccess(context, "bob")
+        await accessRule.HasAccess(context, "bob")
             .Should().Be(false, "child nodes (threads, activities) should not be publicly readable");
     }
 
     [Fact]
-    public void UserCanEditOwnNode()
+    public async Task UserCanEditOwnNode()
     {
         var config = BuildUserHubConfig();
         var ruleSet = config.Get<NodeAccessRuleSet>();
@@ -117,12 +117,12 @@ public class UserNodeTypePermissionTest
 
         var context = UpdateContext("Alice", "User");
 
-        accessRule.HasAccess(context, "Alice")
+        await accessRule.HasAccess(context, "Alice")
             .Should().Be(true, "users should be able to edit their own node");
     }
 
     [Fact]
-    public void UserCannotEditOtherUserNode()
+    public async Task UserCannotEditOtherUserNode()
     {
         var config = BuildUserHubConfig();
         var ruleSet = config.Get<NodeAccessRuleSet>();
@@ -130,7 +130,7 @@ public class UserNodeTypePermissionTest
 
         var context = UpdateContext("Alice", "User");
 
-        accessRule.HasAccess(context, "Bob")
+        await accessRule.HasAccess(context, "Bob")
             .Should().Be(false, "users should not be able to edit other users' nodes");
     }
 

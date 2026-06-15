@@ -92,43 +92,43 @@ public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelpe
             .AddSpaceType();
     }
 
-    private IList<StaticRepoImportResult> Import() =>
+    private Task<IList<StaticRepoImportResult>> Import() =>
         StaticRepoImporter.ImportAll(Mesh).ToList().Should().Within(120.Seconds()).Emit();
 
-    private MeshNode? Read(string path) =>
+    private Task<MeshNode?> Read(string path) =>
         Mesh.GetMeshNodeStream(path).Where(n => n is not null).Should().Within(30.Seconds()).Emit();
 
     [Fact(Timeout = 120000)]
-    public void Import_CreatesSpaceRoot_AndChildContent_LowercaseSchemaOnly()
+    public async Task Import_CreatesSpaceRoot_AndChildContent_LowercaseSchemaOnly()
     {
         var ct = TestContext.Current.CancellationToken;
 
-        Import().Single(r => r.Partition == _partition).Outcome.Should().Be("Imported");
+        (await Import()).Single(r => r.Partition == _partition).Outcome.Should().Be("Imported");
 
         // Space root persisted, welcome reconstructed onto PreRenderedHtml (PG read mirror).
-        var root = Mesh.GetMeshNodeStream(_partition).Where(n => n is { NodeType: "Space" })
+        var root = await Mesh.GetMeshNodeStream(_partition).Where(n => n is { NodeType: "Space" })
             .Should().Within(30.Seconds()).Emit();
         root!.PreRenderedHtml.Should().Contain(WelcomeMarker);
 
         // Child page persisted WITH content + prerender (the thing /Doc needs).
-        var page = Read($"{_partition}/Page1");
+        var page = await Read($"{_partition}/Page1");
         page!.NodeType.Should().Be("Markdown");
         (page.Content as MarkdownContent)!.Content.Should().Contain("A page.");
         page.PreRenderedHtml.Should().NotBeNullOrWhiteSpace("markdown prerender must round-trip from PG");
 
         // Only the lowercased schema — never the verbatim capital one (atioz ghost).
-        SchemaCount(_partition.ToLowerInvariant(), ct).Should().Within(30.Seconds()).Be(1L);
-        SchemaCount(_partition, ct).Should().Within(30.Seconds()).Be(0L);
+        await SchemaCount(_partition.ToLowerInvariant(), ct).Should().Within(30.Seconds()).Be(1L);
+        await SchemaCount(_partition, ct).Should().Within(30.Seconds()).Be(0L);
 
         // Idempotent re-run = no re-import.
-        Import().Single(r => r.Partition == _partition).Outcome.Should().NotBe("Imported");
+        (await Import()).Single(r => r.Partition == _partition).Outcome.Should().NotBe("Imported");
     }
 
     [Fact(Timeout = 120000)]
-    public void Reimport_ChangedContent_Updates_AndIncrementsVersion()
+    public async Task Reimport_ChangedContent_Updates_AndIncrementsVersion()
     {
-        Import().Single(r => r.Partition == _partition).Outcome.Should().Be("Imported");
-        var v1 = Read($"{_partition}/Page1")!;
+        (await Import()).Single(r => r.Partition == _partition).Outcome.Should().Be("Imported");
+        var v1 = (await Read($"{_partition}/Page1"))!;
         v1.Version.Should().BeGreaterThan(0);
 
         // Change the source → new fingerprint → re-import → CreateOrUpdate UPDATE path.
@@ -140,9 +140,9 @@ public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelpe
                 Content = new MarkdownContent { Content = "# Page 1\n\nEDITED body." }
             }
         ];
-        Import().Single(r => r.Partition == _partition).Outcome.Should().Be("Imported");
+        (await Import()).Single(r => r.Partition == _partition).Outcome.Should().Be("Imported");
 
-        var v2 = Mesh.GetMeshNodeStream($"{_partition}/Page1")
+        var v2 = await Mesh.GetMeshNodeStream($"{_partition}/Page1")
             .Where(n => n?.Content is MarkdownContent mc && mc.Content.Contains("EDITED"))
             .Should().Within(30.Seconds()).Emit();
         v2!.Version.Should().BeGreaterThan(v1.Version,
@@ -151,15 +151,15 @@ public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelpe
     }
 
     [Fact(Timeout = 120000)]
-    public void Import_FillsContent_OverPreExistingContentNullRow()
+    public async Task Import_FillsContent_OverPreExistingContentNullRow()
     {
         // First import creates Page1 with content; then blank its content directly in PG to simulate
         // the migration backfill's content-NULL shadow row, and re-import: the upsert must REFILL it.
-        Import();
-        Read($"{_partition}/Page1").Should().NotBeNull();
+        await Import();
+        (await Read($"{_partition}/Page1")).Should().NotBeNull();
 
         var schema = _partition.ToLowerInvariant();
-        _fixture.DataSource.ExecuteNonQuery(
+        await _fixture.DataSource.ExecuteNonQuery(
             $"UPDATE \"{schema}\".mesh_nodes SET content = NULL WHERE id = 'Page1'",
             TestContext.Current.CancellationToken).Should().Within(30.Seconds()).Emit();
 
@@ -172,7 +172,7 @@ public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelpe
                 Content = new MarkdownContent { Content = "# Page 1\n\nRefilled body." }
             }
         ];
-        Import().Single(r => r.Partition == _partition).Outcome.Should().Be("Imported");
+        (await Import()).Single(r => r.Partition == _partition).Outcome.Should().Be("Imported");
 
         // Wait for the SPECIFIC refilled content, not just any MarkdownContent. The raw
         // `UPDATE content = NULL` above bypassed the workspace cache (psql writes don't
@@ -181,14 +181,14 @@ public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelpe
         // re-import propagates. Filtering on "Refilled body." makes the wait deterministic
         // (and still surfaces a genuine refill failure as a 30s timeout). Mirrors
         // Reimport_ChangedContent_Updates_AndIncrementsVersion.
-        var refilled = Mesh.GetMeshNodeStream($"{_partition}/Page1")
+        var refilled = await Mesh.GetMeshNodeStream($"{_partition}/Page1")
             .Where(n => n?.Content is MarkdownContent mc && mc.Content.Contains("Refilled body."))
             .Should().Within(30.Seconds()).Emit();
         (refilled!.Content as MarkdownContent)!.Content.Should().Contain("Refilled body.");
     }
 
     [Fact(Timeout = 120000)]
-    public void Reimport_WithoutNode_PrunesIt()
+    public async Task Reimport_WithoutNode_PrunesIt()
     {
         _source.Nodes =
         [
@@ -197,8 +197,8 @@ public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelpe
             new MeshNode("Page2", _partition) { NodeType = "Markdown", Name = "Page 2", State = MeshNodeState.Active,
                 Content = new MarkdownContent { Content = "two" } }
         ];
-        Import();
-        Read($"{_partition}/Page2").Should().NotBeNull();
+        await Import();
+        (await Read($"{_partition}/Page2")).Should().NotBeNull();
 
         // Drop Page2 from the source and re-import — full-replace must prune it.
         _source.Nodes =
@@ -206,10 +206,10 @@ public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelpe
             new MeshNode("Page1", _partition) { NodeType = "Markdown", Name = "Page 1", State = MeshNodeState.Active,
                 Content = new MarkdownContent { Content = "one-still" } }
         ];
-        Import().Single(r => r.Partition == _partition).Outcome.Should().Be("Imported");
+        (await Import()).Single(r => r.Partition == _partition).Outcome.Should().Be("Imported");
 
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var remaining = meshService.Query<MeshNode>(
+        var remaining = await meshService.Query<MeshNode>(
                 MeshQueryRequest.FromQuery($"path:{_partition} scope:descendants"))
             .Take(1).Should().Within(30.Seconds()).Emit();
         remaining.Items.Should().NotContain(n => n.Id == "Page2", "Page2 was removed from the source → pruned");

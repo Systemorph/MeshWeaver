@@ -1,3 +1,4 @@
+using System.Threading.Tasks;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Mesh;
@@ -42,9 +43,9 @@ public class SatelliteMainNodeAccessTest(ITestOutputHelper output) : MonolithMes
     [InlineData("alice/_Thread/hello-2a76")]                       // thread (3 segments)
     [InlineData("alice/_Thread/hello-2a76/278c379f")]             // message (4 segments)
     [InlineData("alice/_Thread/hello-2a76/sub-c0de/278c379f")]    // sub-thread message (5 segments)
-    public void Owner_HasReadOnSatelliteSubPath_ViaMainNode(string satellitePath)
+    public async Task Owner_HasReadOnSatelliteSubPath_ViaMainNode(string satellitePath)
     {
-        var perms = Mesh.GetEffectivePermissions(satellitePath, "alice")
+        var perms = await Mesh.GetEffectivePermissions(satellitePath, "alice")
             .Should().Within(20.Seconds()).Emit();
         perms.HasFlag(Permission.Read).Should().BeTrue(
             "the partition owner reads every satellite under their main node " +
@@ -58,9 +59,9 @@ public class SatelliteMainNodeAccessTest(ITestOutputHelper output) : MonolithMes
     /// main node's grants, not a blanket allow.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void NonOwner_HasNoReadOnSatelliteSubPath()
+    public async Task NonOwner_HasNoReadOnSatelliteSubPath()
     {
-        var perms = Mesh.GetEffectivePermissions("alice/_Thread/hello-2a76/278c379f", "bob")
+        var perms = await Mesh.GetEffectivePermissions("alice/_Thread/hello-2a76/278c379f", "bob")
             .Should().Within(20.Seconds()).Emit();
         perms.HasFlag(Permission.Read).Should().BeFalse(
             "bob has no grant on alice's partition (the main node), so he inherits " +

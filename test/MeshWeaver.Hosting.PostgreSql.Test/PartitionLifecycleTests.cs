@@ -53,24 +53,22 @@ public class PartitionLifecycleTests(PostgreSqlFixture fixture, ITestOutputHelpe
     /// <c>ensure_partition_schema</c> DDL). This is the schema-creation a Space/User performs
     /// on create. Tests may block on the composed observable (§2a).
     /// </summary>
-    private void ProvisionPartition(string ns) =>
+    private Task ProvisionPartition(string ns) =>
         Mesh.ServiceProvider.GetServices<IPartitionStorageProvider>()
             .Select(p => p.EnsurePartitionProvisioned(ns))
             .Concat()
             .DefaultIfEmpty(Unit.Default)
-            .ToTask()
-            .GetAwaiter()
-            .GetResult();
+            .ToTask();
 
     [Fact(Timeout = 60000)]
-    public void ProvisionedPartition_Write_EnablesSubsequentReads()
+    public async Task ProvisionedPartition_Write_EnablesSubsequentReads()
     {
         var ns = $"pg9c_prov_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
-        ProvisionPartition(ns);   // the one schema-creation path (what a Space/User create does)
+        await ProvisionPartition(ns);   // the one schema-creation path (what a Space/User create does)
 
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var path = $"{ns}/seed";
-        var saved = meshService.CreateNode(new MeshNode("seed", ns)
+        var saved = await meshService.CreateNode(new MeshNode("seed", ns)
         {
             NodeType = "Markdown",
             Name = "seed",
@@ -79,7 +77,7 @@ public class PartitionLifecycleTests(PostgreSqlFixture fixture, ITestOutputHelpe
         saved.Should().NotBeNull();
 
         var workspace = Mesh.GetWorkspace();
-        var readBack = workspace.GetMeshNodeStream(path)
+        var readBack = await workspace.GetMeshNodeStream(path)
             .Where(n => n is not null).Take(1).Timeout(15.Seconds())
             .Catch<MeshNode?, TimeoutException>(_ => Observable.Return<MeshNode?>(null))
             .Should().Within(30.Seconds()).Emit();
@@ -87,14 +85,14 @@ public class PartitionLifecycleTests(PostgreSqlFixture fixture, ITestOutputHelpe
     }
 
     [Fact(Timeout = 60000)]
-    public void UnprovisionedPartition_Write_IsRefused_NoGhostSchema()
+    public async Task UnprovisionedPartition_Write_IsRefused_NoGhostSchema()
     {
         // No lazy create: writing into a partition that was never provisioned must NOT
         // conjure a schema — the write faults ("no partition, no write").
         var ns = $"pg9c_unprov_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        var notification = meshService
+        var notification = await meshService
             .CreateNode(new MeshNode("orphan", ns)
             {
                 NodeType = "Markdown",
@@ -107,14 +105,14 @@ public class PartitionLifecycleTests(PostgreSqlFixture fixture, ITestOutputHelpe
         notification.Exception.Should().NotBeNull();
 
         // 🚨 The invariant: no ghost schema was conjured for the unprovisioned namespace.
-        _fixture.DataSource.ScalarLong(
+        await _fixture.DataSource.ScalarLong(
             "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = @s",
             new[] { ("s", (object)ns) })
             .Should().Within(30.Seconds()).Be(0L);
     }
 
     [Fact(Timeout = 60000)]
-    public void DeleteNode_ThatDoesNotExist_Errors()
+    public async Task DeleteNode_ThatDoesNotExist_Errors()
     {
         var nonexistent = $"pg9c_nope_{Guid.NewGuid():N}".ToLowerInvariant()[..18] + "/missing";
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -122,7 +120,7 @@ public class PartitionLifecycleTests(PostgreSqlFixture fixture, ITestOutputHelpe
         // delete-something-that-doesn't-exist must surface an error to the
         // caller. Materialize folds the OnError into a value so we assert it
         // reactively — no await, no ThrowAsync.
-        var notification = meshService
+        var notification = await meshService
             .DeleteNode(nonexistent)
             .Take(1)
             .Materialize()
@@ -131,17 +129,17 @@ public class PartitionLifecycleTests(PostgreSqlFixture fixture, ITestOutputHelpe
     }
 
     [Fact(Timeout = 60000)]
-    public void Write_ReadBack_Delete_ReadAgain_Empty()
+    public async Task Write_ReadBack_Delete_ReadAgain_Empty()
     {
         var ns = $"pg9c_rd_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
-        ProvisionPartition(ns);
+        await ProvisionPartition(ns);
 
         var path = $"{ns}/item";
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var workspace = Mesh.GetWorkspace();
 
         // 1. Write
-        var saved = meshService.CreateNode(new MeshNode("item", ns)
+        var saved = await meshService.CreateNode(new MeshNode("item", ns)
         {
             NodeType = "Markdown",
             Name = "item",
@@ -150,14 +148,14 @@ public class PartitionLifecycleTests(PostgreSqlFixture fixture, ITestOutputHelpe
         saved.Path.Should().Be(path);
 
         // 2. Read-back
-        var first = workspace.GetMeshNodeStream(path)
+        var first = await workspace.GetMeshNodeStream(path)
             .Where(n => n is not null).Take(1).Timeout(15.Seconds())
             .Catch<MeshNode?, TimeoutException>(_ => Observable.Return<MeshNode?>(null))
             .Should().Within(30.Seconds()).Emit();
         first.Should().NotBeNull();
 
         // 3. Delete
-        var deleted = meshService.DeleteNode(path)
+        var deleted = await meshService.DeleteNode(path)
             .Should().Within(30.Seconds()).Emit();
         deleted.Should().BeTrue();
     }
@@ -173,7 +171,7 @@ public class PartitionLifecycleTests(PostgreSqlFixture fixture, ITestOutputHelpe
     /// at validation (the index read short-circuits to null).
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void ApiTokenIndexPartition_IsDeclaredEagerly_AndPersistsIndexWrites()
+    public async Task ApiTokenIndexPartition_IsDeclaredEagerly_AndPersistsIndexWrites()
     {
         // 1. The framework DECLARES ApiToken → apitoken as a framework partition. This is what
         //    boot-time provisioning seeds; its absence from DefaultPartitionProvider was the bug.
@@ -189,15 +187,15 @@ public class PartitionLifecycleTests(PostgreSqlFixture fixture, ITestOutputHelpe
         // 2. Provisioning it (what boot does from that definition) creates the schema, and a write
         //    to ApiToken/{hashPrefix} — the exact path ApiTokenService reads on every bearer
         //    request — persists and reads back.
-        ProvisionPartition("ApiToken");
-        _fixture.DataSource.ScalarLong(
+        await ProvisionPartition("ApiToken");
+        await _fixture.DataSource.ScalarLong(
                 "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = 'apitoken'")
             .Should().Within(30.Seconds()).Be(1L);
 
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var hashPrefix = $"{Guid.NewGuid():N}"[..12];
         var path = $"ApiToken/{hashPrefix}";
-        var saved = meshService.CreateNode(new MeshNode(hashPrefix, "ApiToken")
+        var saved = await meshService.CreateNode(new MeshNode(hashPrefix, "ApiToken")
         {
             NodeType = "Markdown",
             Name = "token-index",
@@ -205,7 +203,7 @@ public class PartitionLifecycleTests(PostgreSqlFixture fixture, ITestOutputHelpe
         }).Should().Within(30.Seconds()).Emit();
         saved.Path.Should().Be(path);
 
-        var readBack = Mesh.GetWorkspace().GetMeshNodeStream(path)
+        var readBack = await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Where(n => n is not null).Take(1).Timeout(15.Seconds())
             .Catch<MeshNode?, TimeoutException>(_ => Observable.Return<MeshNode?>(null))
             .Should().Within(30.Seconds()).Emit();

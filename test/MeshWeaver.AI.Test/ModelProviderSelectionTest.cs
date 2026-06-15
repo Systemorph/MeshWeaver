@@ -31,34 +31,34 @@ public class ModelProviderSelectionTest : AITestBase
             .ConfigureServices(services => { services.AddSingleton<ModelProviderService>(); return services; });
 
     [Fact]
-    public void SetSelection_PersistsAndGetSelection_ReadsBack()
+    public async Task SetSelection_PersistsAndGetSelection_ReadsBack()
     {
         var owner = $"user-{Guid.NewGuid():N}";
         var service = Mesh.ServiceProvider.GetRequiredService<ModelProviderService>();
 
         var paths = ImmutableArray.Create($"{owner}/_Provider/Anthropic", "acme/_Provider/OpenAI");
-        service.SetSelection(owner, paths).Should().Within(20.Seconds()).Match(ok => ok);
+        await service.SetSelection(owner, paths).Should().Within(20.Seconds()).Match(ok => ok);
 
-        var selected = service.GetSelection(owner)
+        var selected = await service.GetSelection(owner)
             .Should().Within(15.Seconds()).Match(s => s.Length == 2);
         selected.Should().Contain($"{owner}/_Provider/Anthropic");
         selected.Should().Contain("acme/_Provider/OpenAI");
     }
 
     [Fact]
-    public void SetSelection_Overwrites_PreviousSelection()
+    public async Task SetSelection_Overwrites_PreviousSelection()
     {
         var owner = $"user-{Guid.NewGuid():N}";
         var service = Mesh.ServiceProvider.GetRequiredService<ModelProviderService>();
 
-        service.SetSelection(owner, ImmutableArray.Create("a/_Provider/X"))
+        await service.SetSelection(owner, ImmutableArray.Create("a/_Provider/X"))
             .Should().Within(20.Seconds()).Match(ok => ok);
-        service.GetSelection(owner).Should().Within(15.Seconds()).Match(s => s.Length == 1);
+        await service.GetSelection(owner).Should().Within(15.Seconds()).Match(s => s.Length == 1);
 
-        service.SetSelection(owner, ImmutableArray.Create("b/_Provider/Y", "c/_Provider/Z"))
+        await service.SetSelection(owner, ImmutableArray.Create("b/_Provider/Y", "c/_Provider/Z"))
             .Should().Within(20.Seconds()).Match(ok => ok);
 
-        var selected = service.GetSelection(owner)
+        var selected = await service.GetSelection(owner)
             .Should().Within(15.Seconds()).Match(s => s.Length == 2 && s.Contains("b/_Provider/Y"));
         selected.Should().NotContain("a/_Provider/X");
     }

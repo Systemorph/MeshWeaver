@@ -73,7 +73,7 @@ public class LocalAspirePathResolutionTests : MonolithMeshTestBase
     /// test verifies the routing layer SEES it, not that the data exists.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void ResolvePath_ExistingUserPartition_FromLiveSubscription()
+    public async Task ResolvePath_ExistingUserPartition_FromLiveSubscription()
     {
         var connectionString = Environment.GetEnvironmentVariable(ConnectionStringEnvVar);
         if (string.IsNullOrEmpty(connectionString))
@@ -92,7 +92,7 @@ public class LocalAspirePathResolutionTests : MonolithMeshTestBase
         // open the Admin/Partition stream and emit Initial. Without this
         // wait, ResolvePath races the subscription startup — exactly the
         // prod-startup race we're trying to surface.
-        var resolution = pathResolver.ResolvePath(username)
+        var resolution = await pathResolver.ResolvePath(username)
             .Where(r => r is not null)
             .Take(1)
             .Timeout(30.Seconds())

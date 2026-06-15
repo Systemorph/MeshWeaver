@@ -29,7 +29,7 @@ public class StringDeltaTransportTest(ITestOutputHelper output) : HubTestBase(ou
             .AddData(data => data.AddSource(ds => ds.WithType<BigDoc>(t => t.WithKey(d => d.Id))));
 
     [Fact]
-    public void ClientEditsBigString_OwnerReconstructsExactEntity()
+    public async Task ClientEditsBigString_OwnerReconstructsExactEntity()
     {
         var host = GetHost();
         var client = GetClient();
@@ -48,17 +48,17 @@ public class StringDeltaTransportTest(ITestOutputHelper output) : HubTestBase(ou
         var hostBodies = new ReplaySubject<string?>();
         using var sub = hostStream.Where(ci => ci.Value is not null).Subscribe(ci => hostBodies.OnNext(Body(ci.Value)));
 
-        clientStream.Should().Within(10.Seconds()).Emit(); // stream live
+        await clientStream.Should().Within(10.Seconds()).Emit(); // stream live
 
         // 1. Seed the big base (full entity — no OldValue).
         Write(clientStream, collectionName, new BigDoc("1", bigBody), oldValue: null);
-        hostBodies.Where(b => b == bigBody).Should().Within(10.Seconds()).Emit();
+        await hostBodies.Where(b => b == bigBody).Should().Within(10.Seconds()).Emit();
 
         // 2. Edit a small region — ships as a string-delta splice, not the whole 3.5 KB body.
         Write(clientStream, collectionName, new BigDoc("1", editedBody), oldValue: new BigDoc("1", bigBody));
 
         // 3. The owner reconstructs the EXACT edited entity from the splice.
-        hostBodies.Where(b => b == editedBody).Should().Within(10.Seconds()).Emit();
+        await hostBodies.Where(b => b == editedBody).Should().Within(10.Seconds()).Emit();
     }
 
     private static void Write(ISynchronizationStream<EntityStore> stream, string collection, BigDoc doc, BigDoc? oldValue)

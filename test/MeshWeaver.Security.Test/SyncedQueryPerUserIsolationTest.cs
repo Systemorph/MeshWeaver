@@ -46,7 +46,7 @@ public class SyncedQueryPerUserIsolationTest(ITestOutputHelper output) : Monolit
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder);
 
-    protected override Task SetupAccessRightsAsync()
+    protected override async Task SetupAccessRightsAsync()
     {
         // Grant the test runner Admin on TestPartition so the setup writes go
         // through; the actual assertions then switch identity to Alice/Bob.
@@ -65,12 +65,11 @@ public class SyncedQueryPerUserIsolationTest(ITestOutputHelper output) : Monolit
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         using (accessService.ImpersonateAsSystem())
         {
-            meshService.CreateNode(
+            await meshService.CreateNode(
                 AssignmentNodeFactory.UserRole(
                     Mesh.Address.ToFullString(), "Admin", TestPartition))
                 .Should().Emit();
         }
-        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -84,7 +83,7 @@ public class SyncedQueryPerUserIsolationTest(ITestOutputHelper output) : Monolit
     /// node. This test fails loudly.</para>
     /// </summary>
     [Fact(Timeout = 30_000)]
-    public void SyncedQuery_TwoUsersWithDifferentGrants_DoNotShareSnapshot()
+    public async Task SyncedQuery_TwoUsersWithDifferentGrants_DoNotShareSnapshot()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -95,17 +94,17 @@ public class SyncedQueryPerUserIsolationTest(ITestOutputHelper output) : Monolit
         var nodePath = $"{TestPartition}/{nodeId}";
         using (accessService.ImpersonateAsSystem())
         {
-            meshService.CreateNode(new MeshNode(nodeId, TestPartition)
+            await meshService.CreateNode(new MeshNode(nodeId, TestPartition)
             {
                 Name = "Alice's private doc",
                 NodeType = "Markdown"
             }).Should().Emit();
             // Grant Editor (includes Read) explicitly to alice; Bob has no grant.
-            meshService.CreateNode(
+            await meshService.CreateNode(
                 AssignmentNodeFactory.UserRole("alice", "Editor", nodePath))
                 .Should().Emit();
         }
-        Mesh.GetEffectivePermissions(nodePath, "alice")
+        await Mesh.GetEffectivePermissions(nodePath, "alice")
             .Should().Match(p => p.HasFlag(Permission.Read));
 
         const string queryId = "shared-query-id";
@@ -113,7 +112,7 @@ public class SyncedQueryPerUserIsolationTest(ITestOutputHelper output) : Monolit
 
         // Alice subscribes — sees her node.
         accessService.SetContext(new AccessContext { ObjectId = "alice", Name = "Alice" });
-        var aliceSnapshot = workspace
+        var aliceSnapshot = await workspace
             .GetQuery(queryId, query)
             .Should().Within(10.Seconds()).Match(items => items.Any(n => n.Path == nodePath));
 
@@ -128,7 +127,7 @@ public class SyncedQueryPerUserIsolationTest(ITestOutputHelper output) : Monolit
         // his identity and the secured provider surface filters out the
         // Alice-only node.
         accessService.SetContext(new AccessContext { ObjectId = "bob", Name = "Bob" });
-        var bobSnapshot = workspace
+        var bobSnapshot = await workspace
             .GetQuery(queryId, query)
             .Should().Within(10.Seconds()).Emit();
 
@@ -220,7 +219,7 @@ public class SyncedQueryPerUserIsolationTest(ITestOutputHelper output) : Monolit
     /// emission is filtered to Bob's grants.
     /// </summary>
     [Fact(Timeout = 30_000)]
-    public void SyncedQuery_NonSystemUser_HitsSecuredProviderSurface()
+    public async Task SyncedQuery_NonSystemUser_HitsSecuredProviderSurface()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -235,26 +234,26 @@ public class SyncedQueryPerUserIsolationTest(ITestOutputHelper output) : Monolit
 
         using (accessService.ImpersonateAsSystem())
         {
-            meshService.CreateNode(new MeshNode(publicId, TestPartition)
+            await meshService.CreateNode(new MeshNode(publicId, TestPartition)
             { Name = "Public doc", NodeType = "Markdown" }).Should().Emit();
-            meshService.CreateNode(new MeshNode(bobOnlyId, TestPartition)
+            await meshService.CreateNode(new MeshNode(bobOnlyId, TestPartition)
             { Name = "Bob-only doc", NodeType = "Markdown" }).Should().Emit();
             // Bob has Editor on both nodes; Eve has Editor only on the public.
-            meshService.CreateNode(
+            await meshService.CreateNode(
                 AssignmentNodeFactory.UserRole("bob", "Editor", publicPath))
                 .Should().Emit();
-            meshService.CreateNode(
+            await meshService.CreateNode(
                 AssignmentNodeFactory.UserRole("bob", "Editor", bobOnlyPath))
                 .Should().Emit();
-            meshService.CreateNode(
+            await meshService.CreateNode(
                 AssignmentNodeFactory.UserRole("eve", "Editor", publicPath))
                 .Should().Emit();
         }
-        Mesh.GetEffectivePermissions(publicPath, "bob")
+        await Mesh.GetEffectivePermissions(publicPath, "bob")
             .Should().Match(p => p.HasFlag(Permission.Read));
-        Mesh.GetEffectivePermissions(bobOnlyPath, "bob")
+        await Mesh.GetEffectivePermissions(bobOnlyPath, "bob")
             .Should().Match(p => p.HasFlag(Permission.Read));
-        Mesh.GetEffectivePermissions(publicPath, "eve")
+        await Mesh.GetEffectivePermissions(publicPath, "eve")
             .Should().Match(p => p.HasFlag(Permission.Read));
 
         const string queryId = "secured-surface-probe";
@@ -262,7 +261,7 @@ public class SyncedQueryPerUserIsolationTest(ITestOutputHelper output) : Monolit
 
         // Bob sees both nodes.
         accessService.SetContext(new AccessContext { ObjectId = "bob", Name = "Bob" });
-        var bobSnapshot = workspace
+        var bobSnapshot = await workspace
             .GetQuery(queryId, query)
             .Should().Within(10.Seconds()).Match(items =>
                 items.Any(n => n.Path == publicPath) &&
@@ -273,7 +272,7 @@ public class SyncedQueryPerUserIsolationTest(ITestOutputHelper output) : Monolit
 
         // Eve sees only the public node.
         accessService.SetContext(new AccessContext { ObjectId = "eve", Name = "Eve" });
-        var eveSnapshot = workspace
+        var eveSnapshot = await workspace
             .GetQuery(queryId, query)
             .Should().Within(10.Seconds()).Match(items => items.Any(n => n.Path == publicPath));
 

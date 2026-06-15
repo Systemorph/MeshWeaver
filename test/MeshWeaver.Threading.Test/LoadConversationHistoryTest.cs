@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -53,19 +53,19 @@ public class LoadConversationHistoryTest(ITestOutputHelper output) : MonolithMes
         return base.ConfigureClient(configuration).AddData();
     }
 
-    private string CreateThread(IMessageHub client, string text)
+    private async Task<string> CreateThread(IMessageHub client, string text)
     {
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, text, "TestUser");
-        var resp = client.Observe(new CreateNodeRequest(threadNode),
+        var resp = await client.Observe(new CreateNodeRequest(threadNode),
             o => o.WithTarget(Mesh.Address)).Should().Within(60.Seconds()).Emit();
         resp.Message.Success.Should().BeTrue(resp.Message.Error ?? "");
         return resp.Message.Node!.Path!;
     }
 
-    private void SubmitAndWaitForResponse(
+    private async Task SubmitAndWaitForResponse(
         IMessageHub client, string threadPath, string text)
     {
-        var responseMsgId = ThreadFlow.SubmitAndWait(client, threadPath, text,
+        var responseMsgId = await ThreadFlow.SubmitAndWait(client, threadPath, text,
             contextPath: ContextPath).Should().Within(60.Seconds()).Emit();
         // Wait for the response cell to reach a TERMINAL status. Earlier we
         // gated on `!IsNullOrEmpty(m.Text)`, but ThreadExecution stamps the
@@ -73,7 +73,7 @@ public class LoadConversationHistoryTest(ITestOutputHelper output) : MonolithMes
         // in the streaming loop â€” that text passes the non-empty check while
         // the real response is still mid-stream, so the history assertion
         // later read the placeholder instead of the FakeResponse.
-        ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
+        await ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
             m => m.Status is ThreadMessageStatus.Completed
                           or ThreadMessageStatus.Cancelled
                           or ThreadMessageStatus.Error).Should().Within(60.Seconds()).Emit();
@@ -83,25 +83,25 @@ public class LoadConversationHistoryTest(ITestOutputHelper output) : MonolithMes
     // waits â€” local runs ~3s, CI cold-start runs ~30s. Default 30s methodTimeout
     // tripped on CI (31.85s in run 26376715753).
     [Fact]
-    public void AllCells_HaveText_ReturnsFullHistory()
+    public async Task AllCells_HaveText_ReturnsFullHistory()
     {
         var client = GetClient();
-        var threadPath = CreateThread(client, "Loader history happy path");
+        var threadPath = await CreateThread(client, "Loader history happy path");
 
-        SubmitAndWaitForResponse(client, threadPath, "first question");
-        SubmitAndWaitForResponse(client, threadPath, "second question");
+        await SubmitAndWaitForResponse(client, threadPath, "first question");
+        await SubmitAndWaitForResponse(client, threadPath, "second question");
 
         // After two real rounds the thread has 4 cells (user+assistant per round).
         // Wait until the thread node sees IsExecuting=false AND Messages.Count >= 4
         // so the loader sees the fully-settled state.
-        var thread = ThreadFlow.ReadThread(client, threadPath,
+        var thread = await ThreadFlow.ReadThread(client, threadPath,
             t => t is { IsExecuting: false } && t.Messages.Count >= 4)
             .Should().Within(60.Seconds()).Emit();
         thread.Messages.Should().HaveCount(4);
 
         // The thread hub is the per-node hub for threadPath â€” that's the workspace
         // the loader queries via IMeshNodeStreamCache.
-        var history = ThreadExecution.LoadFullConversationHistoryFromMesh(
+        var history = await ThreadExecution.LoadFullConversationHistoryFromMesh(
                 Mesh, threadPath,
                 excludeUserMessageId: null, excludeResponseMessageId: null,
                 NullLogger.Instance,
@@ -116,14 +116,14 @@ public class LoadConversationHistoryTest(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact]
-    public void SomeCellsMissing_ReturnsPartialHistory_AndWarns()
+    public async Task SomeCellsMissing_ReturnsPartialHistory_AndWarns()
     {
         var client = GetClient();
-        var threadPath = CreateThread(client, "Loader partial-history test");
+        var threadPath = await CreateThread(client, "Loader partial-history test");
 
         // Round 1: real submit â†’ user+assistant cell, both with text.
-        SubmitAndWaitForResponse(client, threadPath, "real question");
-        var threadAfterRound1 = ThreadFlow.ReadThread(client, threadPath,
+        await SubmitAndWaitForResponse(client, threadPath, "real question");
+        var threadAfterRound1 = await ThreadFlow.ReadThread(client, threadPath,
             t => t is { IsExecuting: false } && t.Messages.Count >= 2)
             .Should().Within(60.Seconds()).Emit();
         threadAfterRound1.Messages.Should().HaveCount(2);
@@ -132,13 +132,13 @@ public class LoadConversationHistoryTest(ITestOutputHelper output) : MonolithMes
         // content at threadPath/{phantom-id}, so the per-cell Timeout fires and
         // the cell is omitted from the result with a warning.
         var phantomCellId = "phantom-" + Guid.NewGuid().ToString("N")[..8];
-        Mesh.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
+        await Mesh.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
         {
             if (node.Content is not MeshThread t) return node;
             return node with { Content = t with { Messages = t.Messages.Add(phantomCellId) } };
         }).Should().Emit();
 
-        var history = ThreadExecution.LoadFullConversationHistoryFromMesh(
+        var history = await ThreadExecution.LoadFullConversationHistoryFromMesh(
                 Mesh, threadPath,
                 excludeUserMessageId: null, excludeResponseMessageId: null,
                 NullLogger.Instance,
@@ -150,13 +150,13 @@ public class LoadConversationHistoryTest(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact]
-    public void AllCellsMissing_ThrowsTimeoutException()
+    public async Task AllCellsMissing_ThrowsTimeoutException()
     {
         var client = GetClient();
         // This test stays async (verifies the loader observable errors with a
         // specific TimeoutException via ThrowAsync), so it must NOT use blocking
         // reactive .Should() assertions â€” inline the thread create with await.
-        var createResp = client.Observe(
+        var createResp = await client.Observe(
             new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Loader all-fail test", "TestUser")),
             o => o.WithTarget(Mesh.Address)).Should().Within(60.Seconds()).Emit();
         createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
@@ -166,13 +166,13 @@ public class LoadConversationHistoryTest(ITestOutputHelper output) : MonolithMes
         // typed MeshThread (not JsonElement) â€” otherwise the workspace.Update
         // lambda below treats `node.Content is not MeshThread` as true and
         // short-circuits to a no-op, leaving Messages empty.
-        ThreadFlow.ReadThread(client, threadPath, _ => true)
+        await ThreadFlow.ReadThread(client, threadPath, _ => true)
             .Should().Within(60.Seconds()).Emit();
 
         // Stamp two phantom cell IDs into Messages â€” no per-node hub will ever
         // emit content at those paths, so every per-cell read times out and the
         // loader's guard must refuse to return empty history.
-        Mesh.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
+        await Mesh.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
         {
             if (node.Content is not MeshThread t) return node;
             return node with { Content = t with { Messages = ImmutableList.Create("phantom-1", "phantom-2") } };
@@ -181,7 +181,7 @@ public class LoadConversationHistoryTest(ITestOutputHelper output) : MonolithMes
         // Confirm the thread's Messages list actually carries the phantoms before
         // we kick off the loader â€” otherwise a stale cache snapshot would let the
         // loader sail through "cellIds.Count == 0" and miss the guard entirely.
-        var settled = ThreadFlow.ReadThread(client, threadPath,
+        var settled = await ThreadFlow.ReadThread(client, threadPath,
             t => t.Messages.Contains("phantom-1") && t.Messages.Contains("phantom-2"))
             .Should().Within(60.Seconds()).Emit();
         settled.Messages.Should().HaveCount(2);
@@ -190,7 +190,7 @@ public class LoadConversationHistoryTest(ITestOutputHelper output) : MonolithMes
         // Materialize folds the OnError into a value so we assert it reactively — no
         // await, no ThrowAsync. Within() must exceed the loader's own cellTimeout so
         // the loader's TimeoutException fires first.
-        var loadResult = ThreadExecution.LoadFullConversationHistoryFromMesh(
+        var loadResult = await ThreadExecution.LoadFullConversationHistoryFromMesh(
                 Mesh, threadPath,
                 excludeUserMessageId: null, excludeResponseMessageId: null,
                 NullLogger.Instance,

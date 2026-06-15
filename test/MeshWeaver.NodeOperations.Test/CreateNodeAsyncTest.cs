@@ -72,7 +72,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
     }
 
     [Fact(Timeout = 60000)]
-    public void CreateNodeAsync_ShouldPersistCommentNode()
+    public async Task CreateNodeAsync_ShouldPersistCommentNode()
     {
         // Arrange
         var parentPath = "Doc/DataMesh/CollaborativeEditing";
@@ -99,7 +99,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         };
 
         // Act
-        var createdNode = NodeFactory.CreateNode(node).Should().Emit();
+        var createdNode = await NodeFactory.CreateNode(node).Should().Emit();
 
         // Assert
         createdNode.Should().NotBeNull();
@@ -115,18 +115,18 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         createdComment.Status.Should().Be(CommentStatus.Active);
 
         // Verify round-trip via stream
-        var retrievedNode = ReadNode(commentPath).Should().Emit();
+        var retrievedNode = await ReadNode(commentPath).Should().Emit();
         retrievedNode.Should().NotBeNull();
         retrievedNode!.Path.Should().Be(commentPath);
         var retrievedComment = retrievedNode.Content.Should().BeOfType<Comment>().Subject;
         retrievedComment.Text.Should().Be("This is a test comment");
 
         // Cleanup
-        NodeFactory.DeleteNode(commentPath).Should().Emit();
+        await NodeFactory.DeleteNode(commentPath).Should().Emit();
     }
 
     [Fact(Timeout = 60000)]
-    public void CreateNodeAsync_ReplyNode_ShouldLinkToParent()
+    public async Task CreateNodeAsync_ReplyNode_ShouldLinkToParent()
     {
         // Arrange
         var parentPath = "Doc/DataMesh/CollaborativeEditing";
@@ -149,7 +149,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
             NodeType = CommentNodeType.NodeType,
             Content = parentComment
         };
-        NodeFactory.CreateNode(parentNode).Should().Emit();
+        await NodeFactory.CreateNode(parentNode).Should().Emit();
 
         // Create reply as child of parent comment node (nested path)
         var replyId = Guid.NewGuid().AsString();
@@ -171,7 +171,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         };
 
         // Act
-        var createdReply = NodeFactory.CreateNode(replyNode).Should().Emit();
+        var createdReply = await NodeFactory.CreateNode(replyNode).Should().Emit();
 
         // Assert
         createdReply.Should().NotBeNull();
@@ -180,12 +180,12 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         replyContent.Text.Should().Be("This is a reply");
 
         // Verify reply round-trips via stream
-        var retrievedReply = ReadNode(replyPath).Should().Emit();
+        var retrievedReply = await ReadNode(replyPath).Should().Emit();
         retrievedReply.Should().NotBeNull("Reply should be retrievable by path");
         retrievedReply!.Path.Should().StartWith(parentCommentPath);
 
         // Cleanup: delete reply first, then parent
-        NodeFactory.DeleteNode(replyPath).Should().Emit();
-        NodeFactory.DeleteNode(parentCommentPath).Should().Emit();
+        await NodeFactory.DeleteNode(replyPath).Should().Emit();
+        await NodeFactory.DeleteNode(parentCommentPath).Should().Emit();
     }
 }

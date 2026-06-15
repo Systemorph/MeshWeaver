@@ -168,14 +168,15 @@ public class AssertionTests
     }
 
     [Fact]
-    public void ObservableAsserts()
+    public async Task ObservableAsserts()
     {
-        Observable.Return(42).Should().Be(42);
-        Observable.Range(1, 5).Should().Match(x => x == 3);
-        Assert.Equal(1, Observable.Return(1).Should().Emit());
-        Observable.Never<int>().Should().NotEmit(50.Milliseconds());
+        await Observable.Return(42).Should().Be(42);
+        await Observable.Range(1, 5).Should().Match(x => x == 3);
+        Assert.Equal(1, await Observable.Return(1).Should().Emit());
+        await Observable.Never<int>().Should().NotEmit(50.Milliseconds());
 
         var subject = new Subject<int>();
-        Fails(() => subject.Should().Within(50.Milliseconds()).Emit());
+        await Assert.ThrowsAnyAsync<AssertionException>(
+            async () => await subject.Should().Within(50.Milliseconds()).Emit());
     }
 }

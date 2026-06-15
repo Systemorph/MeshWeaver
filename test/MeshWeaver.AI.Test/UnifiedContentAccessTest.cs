@@ -30,7 +30,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     #region GetDataRequest with UnifiedReference Tests
 
     [Fact]
-    public void GetDataRequest_UnifiedReference_Collection_ReturnsAllEntities()
+    public async Task GetDataRequest_UnifiedReference_Collection_ReturnsAllEntities()
     {
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
@@ -38,7 +38,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var path = "data:TestPricing";
 
         // act - send from client to host
-        var response = client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var response = await client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
         // assert
         var dataResponse = response.Message;
@@ -50,7 +50,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void GetDataRequest_UnifiedReference_Entity_ReturnsSingleEntity()
+    public async Task GetDataRequest_UnifiedReference_Entity_ReturnsSingleEntity()
     {
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
@@ -58,7 +58,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var path = $"data:TestPricing/{TestPricingId}";
 
         // act - send from client to host
-        var response = client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var response = await client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
         // assert
         var dataResponse = response.Message;
@@ -70,7 +70,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void GetDataRequest_UnifiedReference_DefaultReference_ReturnsDefaultEntity()
+    public async Task GetDataRequest_UnifiedReference_DefaultReference_ReturnsDefaultEntity()
     {
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
@@ -78,7 +78,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var path = "data:";
 
         // act - send from client to host
-        var response = client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var response = await client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
         // assert
         var dataResponse = response.Message;
@@ -90,7 +90,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void GetDataRequest_UnifiedReference_AreaPath_ReturnsLayoutAreaEntityStore()
+    public async Task GetDataRequest_UnifiedReference_AreaPath_ReturnsLayoutAreaEntityStore()
     {
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
@@ -98,7 +98,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var path = "area:TestArea"; // area is default, no keyword needed
 
         // act - send from client to host
-        var response = client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var response = await client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
         // assert
         var dataResponse = response.Message;
@@ -110,7 +110,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void GetDataRequest_UnifiedReference_AreaPath_WithId_ReturnsLayoutAreaJson()
+    public async Task GetDataRequest_UnifiedReference_AreaPath_WithId_ReturnsLayoutAreaJson()
     {
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
@@ -118,7 +118,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var path = $"area:TestArea/{TestPricingId}"; // area is default, no keyword needed
 
         // act - send from client to host
-        var response = client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var response = await client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
         // assert
         var dataResponse = response.Message;
@@ -127,7 +127,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void GetDataRequest_UnifiedReference_InvalidPath_ReturnsError()
+    public async Task GetDataRequest_UnifiedReference_InvalidPath_ReturnsError()
     {
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
@@ -135,7 +135,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var path = "invalid"; // Single segment is invalid
 
         // act - send from client to host
-        var response = client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var response = await client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
         // assert
         var dataResponse = response.Message;
@@ -143,14 +143,14 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void GetDataRequest_UnifiedReference_EmptyPath_ReturnsDefaultData()
+    public async Task GetDataRequest_UnifiedReference_EmptyPath_ReturnsDefaultData()
     {
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
         var client = GetClient();
 
         // act - send from client to host (empty path defaults to "data:" which returns default data)
-        var response = client.Observe(new GetDataRequest(new UnifiedReference("")), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var response = await client.Observe(new GetDataRequest(new UnifiedReference("")), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
         // assert - empty path should return default data (same as "data:")
         var dataResponse = response.Message;
@@ -162,7 +162,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void GetDataRequest_UnifiedReference_ContentPath_ReturnsFileContent()
+    public async Task GetDataRequest_UnifiedReference_ContentPath_ReturnsFileContent()
     {
         // arrange - create test file and configure content provider
         var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_" + Guid.NewGuid().ToString("N"));
@@ -177,7 +177,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             var path = "content:TestFiles/content-test.txt";
 
             // act - send from client to host
-            var response = client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+            var response = await client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
             // assert
             var dataResponse = response.Message;
@@ -199,7 +199,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     #region File Content Tests
 
     [Fact]
-    public void GetDataRequest_UnifiedReference_FileContent_ReturnsFileContent()
+    public async Task GetDataRequest_UnifiedReference_FileContent_ReturnsFileContent()
     {
         // arrange - create test file and configure content provider
         var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_" + Guid.NewGuid().ToString("N"));
@@ -215,7 +215,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             var path = "content:TestFiles/test.txt";
 
             // act - send from client to host
-            var response = client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+            var response = await client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
             // assert
             var dataResponse = response.Message;
@@ -235,7 +235,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void GetDataRequest_UnifiedReference_FileContent_WithNumberOfRows_ReturnsLimitedContent()
+    public async Task GetDataRequest_UnifiedReference_FileContent_WithNumberOfRows_ReturnsLimitedContent()
     {
         // arrange - create test file
         var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_" + Guid.NewGuid().ToString("N"));
@@ -250,7 +250,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             var path = "content:TestFiles/multiline.txt";
 
             // act - request only 2 rows
-            var response = client.Observe(new GetDataRequest(new UnifiedReference(path) { NumberOfRows = 2 }), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+            var response = await client.Observe(new GetDataRequest(new UnifiedReference(path) { NumberOfRows = 2 }), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
             // assert
             var dataResponse = response.Message;
@@ -269,7 +269,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void GetDataRequest_UnifiedReference_FileContent_NotFound_ReturnsError()
+    public async Task GetDataRequest_UnifiedReference_FileContent_NotFound_ReturnsError()
     {
         // arrange
         var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_" + Guid.NewGuid().ToString("N"));
@@ -282,7 +282,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             var path = "content:TestFiles/nonexistent.txt";
 
             // act
-            var response = client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+            var response = await client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
             // assert
             var dataResponse = response.Message;
@@ -296,7 +296,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void GetDataRequest_UnifiedReference_FileContent_SubFolder_ReturnsFileContent()
+    public async Task GetDataRequest_UnifiedReference_FileContent_SubFolder_ReturnsFileContent()
     {
         // arrange - create test file in subfolder
         var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_" + Guid.NewGuid().ToString("N"));
@@ -312,7 +312,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             var path = "content:TestFiles/subfolder/nested.txt";
 
             // act
-            var response = client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+            var response = await client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
             // assert
             var dataResponse = response.Message;
@@ -369,7 +369,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void GetDataRequest_UnifiedReference_LayoutAreas_ReturnsAreaDefinitions()
+    public async Task GetDataRequest_UnifiedReference_LayoutAreas_ReturnsAreaDefinitions()
     {
         // arrange
         GetHost();
@@ -377,7 +377,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var path = "layoutAreas:";
 
         // act
-        var response = client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var response = await client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
         // assert
         var dataResponse = response.Message;
@@ -403,7 +403,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     // all for the slash-format default-collection lookup, with and without spaces.
 
     [Fact]
-    public void GetDataRequest_ContentSlashFormat_FileInDefaultCollection_Responds()
+    public async Task GetDataRequest_ContentSlashFormat_FileInDefaultCollection_Responds()
     {
         var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_SlashDefault_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(testDir);
@@ -415,7 +415,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             var client = GetClient();
 
             // Slash format with NO collection segment â€” what the agent actually emits.
-            var response = client.Observe(new GetDataRequest(new UnifiedReference("content/report.txt")), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+            var response = await client.Observe(new GetDataRequest(new UnifiedReference("content/report.txt")), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
             response.Message.Error.Should().BeNull();
             (response.Message.Data as string).Should().Contain("default-collection slash format");
@@ -427,7 +427,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void GetDataRequest_ContentSlashFormat_SpacedFilename_Responds()
+    public async Task GetDataRequest_ContentSlashFormat_SpacedFilename_Responds()
     {
         var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_SlashSpaces_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(testDir);
@@ -439,7 +439,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             var host = GetHostWithFileProvider(testDir, defaultCollection: true);
             var client = GetClient();
 
-            var response = client.Observe(new GetDataRequest(new UnifiedReference($"content/{Spaced}")), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+            var response = await client.Observe(new GetDataRequest(new UnifiedReference($"content/{Spaced}")), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
             response.Message.Error.Should().BeNull();
             (response.Message.Data as string).Should().Contain("spaced default-collection content");
@@ -451,7 +451,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void GetDataRequest_ContentSlashFormat_NamedCollection_SpacedFilename_Responds()
+    public async Task GetDataRequest_ContentSlashFormat_NamedCollection_SpacedFilename_Responds()
     {
         var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_SlashNamedSpaces_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(testDir);
@@ -464,7 +464,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             var client = GetClient();
 
             // Slash format WITH collection segment + spaces.
-            var response = client.Observe(new GetDataRequest(new UnifiedReference($"content/TestFiles/{Spaced}")), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+            var response = await client.Observe(new GetDataRequest(new UnifiedReference($"content/TestFiles/{Spaced}")), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
             response.Message.Error.Should().BeNull();
             (response.Message.Data as string).Should().Contain("named-collection spaced content");
@@ -476,7 +476,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void GetDataRequest_ContentSlashFormat_MissingDefaultCollection_ReturnsErrorNotTimeout()
+    public async Task GetDataRequest_ContentSlashFormat_MissingDefaultCollection_ReturnsErrorNotTimeout()
     {
         // The prod hub for /PartnerRe/AIConsulting may not have AddContentCollections() registered
         // under the default "content" name. The handler must return a clear error response â€” not
@@ -485,7 +485,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var client = GetClient();
 
         // Bound the wait so a hang fails fast (as opposed to the test running forever).
-        var response = client.Observe(new GetDataRequest(new UnifiedReference("content/Some File.docx")), o => o.WithTarget(CreateHostAddress()))
+        var response = await client.Observe(new GetDataRequest(new UnifiedReference("content/Some File.docx")), o => o.WithTarget(CreateHostAddress()))
             .Should().Within(5.Seconds()).Emit();
         response.Message.Error.Should().NotBeNullOrEmpty(
             "the handler must respond with an error rather than letting AwaitResponse time out");
@@ -552,7 +552,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     #region Update Tests
 
     [Fact]
-    public void UpdateUnifiedReferenceRequest_DataEntity_UpdatesEntity()
+    public async Task UpdateUnifiedReferenceRequest_DataEntity_UpdatesEntity()
     {
         // arrange
         GetHost();
@@ -560,12 +560,12 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var path = $"data:TestPricing/{TestPricingId}";
 
         // First, verify the entity exists
-        var getResponse = client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var getResponse = await client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
         getResponse.Message.Error.Should().BeNull();
 
         // act - update the entity
         var updatedPricing = new TestPricing { Id = TestPricingId, Name = "Updated Pricing", Status = "Draft" };
-        var updateResponse = client.Observe(new UpdateUnifiedReferenceRequest(path, updatedPricing), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var updateResponse = await client.Observe(new UpdateUnifiedReferenceRequest(path, updatedPricing), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
         // assert
         updateResponse.Message.Success.Should().BeTrue();
@@ -573,21 +573,21 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         updateResponse.Message.Version.Should().BeGreaterThan(0);
 
         // Verify the update took effect
-        var verifyResponse = client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var verifyResponse = await client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
         var updatedEntity = verifyResponse.Message.Data.Should().BeOfType<TestPricing>().Subject;
         updatedEntity.Name.Should().Be("Updated Pricing");
         updatedEntity.Status.Should().Be("Draft");
     }
 
     [Fact]
-    public void UpdateUnifiedReferenceRequest_EmptyPath_ReturnsError()
+    public async Task UpdateUnifiedReferenceRequest_EmptyPath_ReturnsError()
     {
         // arrange
         GetHost();
         var client = GetClient();
 
         // act
-        var response = client.Observe(new UpdateUnifiedReferenceRequest("", new { }), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var response = await client.Observe(new UpdateUnifiedReferenceRequest("", new { }), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
         // assert
         response.Message.Success.Should().BeFalse();
@@ -595,14 +595,14 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void UpdateUnifiedReferenceRequest_InvalidPath_ReturnsError()
+    public async Task UpdateUnifiedReferenceRequest_InvalidPath_ReturnsError()
     {
         // arrange
         GetHost();
         var client = GetClient();
 
         // act
-        var response = client.Observe(new UpdateUnifiedReferenceRequest("invalid", new { }), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var response = await client.Observe(new UpdateUnifiedReferenceRequest("invalid", new { }), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
         // assert
         response.Message.Success.Should().BeFalse();
@@ -610,7 +610,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void UpdateUnifiedReferenceRequest_DefaultReference_ReturnsError()
+    public async Task UpdateUnifiedReferenceRequest_DefaultReference_ReturnsError()
     {
         // arrange
         GetHost();
@@ -618,7 +618,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var path = "data:";
 
         // act
-        var response = client.Observe(new UpdateUnifiedReferenceRequest(path, new { }), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var response = await client.Observe(new UpdateUnifiedReferenceRequest(path, new { }), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
         // assert
         response.Message.Success.Should().BeFalse();
@@ -626,7 +626,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void UpdateUnifiedReferenceRequest_FileContent_UpdatesFile()
+    public async Task UpdateUnifiedReferenceRequest_FileContent_UpdatesFile()
     {
         // arrange - create test file
         var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_Update_" + Guid.NewGuid().ToString("N"));
@@ -641,7 +641,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             var path = "content:TestFiles/update-test.txt";
 
             // act
-            var response = client.Observe(new UpdateUnifiedReferenceRequest(path, "Updated content"), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+            var response = await client.Observe(new UpdateUnifiedReferenceRequest(path, "Updated content"), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
             // assert
             response.Message.Success.Should().BeTrue();
@@ -659,7 +659,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void UpdateUnifiedReferenceRequest_LayoutArea_ReturnsError()
+    public async Task UpdateUnifiedReferenceRequest_LayoutArea_ReturnsError()
     {
         // arrange
         GetHost();
@@ -667,7 +667,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var path = "area:TestArea"; // area is default
 
         // act
-        var response = client.Observe(new UpdateUnifiedReferenceRequest(path, new { }), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var response = await client.Observe(new UpdateUnifiedReferenceRequest(path, new { }), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
         // assert
         response.Message.Success.Should().BeFalse();
@@ -679,7 +679,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     #region Delete Tests
 
     [Fact]
-    public void DeleteUnifiedReferenceRequest_DataEntity_DeletesEntity()
+    public async Task DeleteUnifiedReferenceRequest_DataEntity_DeletesEntity()
     {
         // arrange - first create an entity to delete
         GetHost();
@@ -692,34 +692,34 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             Creations = [new TestPricing { Id = newEntityId, Name = "To Delete", Status = "Active" }],
             ChangedBy = "test"
         };
-        client.Observe(createRequest, o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        await client.Observe(createRequest, o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
         // Verify it exists
         var path = $"data:TestPricing/{newEntityId}";
-        var getResponse = client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var getResponse = await client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
         getResponse.Message.Data.Should().NotBeNull();
 
         // act - delete the entity
-        var deleteResponse = client.Observe(new DeleteUnifiedReferenceRequest(path), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var deleteResponse = await client.Observe(new DeleteUnifiedReferenceRequest(path), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
         // assert
         deleteResponse.Message.Success.Should().BeTrue();
         deleteResponse.Message.Error.Should().BeNull();
 
         // Verify it was deleted
-        var verifyResponse = client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var verifyResponse = await client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
         verifyResponse.Message.Data.Should().BeNull();
     }
 
     [Fact]
-    public void DeleteUnifiedReferenceRequest_EmptyPath_ReturnsError()
+    public async Task DeleteUnifiedReferenceRequest_EmptyPath_ReturnsError()
     {
         // arrange
         GetHost();
         var client = GetClient();
 
         // act
-        var response = client.Observe(new DeleteUnifiedReferenceRequest(""), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var response = await client.Observe(new DeleteUnifiedReferenceRequest(""), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
         // assert
         response.Message.Success.Should().BeFalse();
@@ -727,7 +727,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void DeleteUnifiedReferenceRequest_DefaultReference_ReturnsError()
+    public async Task DeleteUnifiedReferenceRequest_DefaultReference_ReturnsError()
     {
         // arrange
         GetHost();
@@ -735,7 +735,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var path = "data:";
 
         // act
-        var response = client.Observe(new DeleteUnifiedReferenceRequest(path), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var response = await client.Observe(new DeleteUnifiedReferenceRequest(path), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
         // assert
         response.Message.Success.Should().BeFalse();
@@ -743,7 +743,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void DeleteUnifiedReferenceRequest_CollectionPath_ReturnsError()
+    public async Task DeleteUnifiedReferenceRequest_CollectionPath_ReturnsError()
     {
         // arrange
         GetHost();
@@ -751,7 +751,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var path = "data:TestPricing";
 
         // act
-        var response = client.Observe(new DeleteUnifiedReferenceRequest(path), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var response = await client.Observe(new DeleteUnifiedReferenceRequest(path), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
         // assert
         response.Message.Success.Should().BeFalse();
@@ -759,7 +759,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void DeleteUnifiedReferenceRequest_FileContent_DeletesFile()
+    public async Task DeleteUnifiedReferenceRequest_FileContent_DeletesFile()
     {
         // arrange - create test file
         var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_Delete_" + Guid.NewGuid().ToString("N"));
@@ -777,7 +777,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             File.Exists(testFilePath).Should().BeTrue();
 
             // act
-            var response = client.Observe(new DeleteUnifiedReferenceRequest(path), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+            var response = await client.Observe(new DeleteUnifiedReferenceRequest(path), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
             // assert
             response.Message.Success.Should().BeTrue();
@@ -794,7 +794,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void DeleteUnifiedReferenceRequest_LayoutArea_ReturnsError()
+    public async Task DeleteUnifiedReferenceRequest_LayoutArea_ReturnsError()
     {
         // arrange
         GetHost();
@@ -802,7 +802,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var path = "area:TestArea"; // area is default
 
         // act
-        var response = client.Observe(new DeleteUnifiedReferenceRequest(path), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var response = await client.Observe(new DeleteUnifiedReferenceRequest(path), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
         // assert
         response.Message.Success.Should().BeFalse();
@@ -810,7 +810,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void DeleteUnifiedReferenceRequest_NonExistentEntity_ReturnsError()
+    public async Task DeleteUnifiedReferenceRequest_NonExistentEntity_ReturnsError()
     {
         // arrange
         GetHost();
@@ -818,7 +818,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var path = "data:TestPricing/nonexistent-entity-id";
 
         // act
-        var response = client.Observe(new DeleteUnifiedReferenceRequest(path), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var response = await client.Observe(new DeleteUnifiedReferenceRequest(path), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
         // assert
         response.Message.Success.Should().BeFalse();
@@ -830,7 +830,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     #region UnifiedReference Workspace Stream Tests
 
     [Fact]
-    public void UnifiedReference_DataKeyword_Collection_ViaGetDataRequest()
+    public async Task UnifiedReference_DataKeyword_Collection_ViaGetDataRequest()
     {
         // arrange
         GetHost();
@@ -838,7 +838,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var path = "data:TestPricing";
 
         // act - use GetDataRequest which correctly handles the UnifiedReference
-        var response = client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var response = await client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
         // assert
         response.Message.Error.Should().BeNull();
@@ -849,7 +849,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void UnifiedReference_DataKeyword_Entity_ViaGetDataRequest()
+    public async Task UnifiedReference_DataKeyword_Entity_ViaGetDataRequest()
     {
         // arrange
         GetHost();
@@ -857,7 +857,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var path = $"data:TestPricing/{TestPricingId}";
 
         // act - use GetDataRequest which correctly handles the UnifiedReference
-        var response = client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var response = await client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
         // assert
         response.Message.Error.Should().BeNull();
@@ -867,7 +867,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void UnifiedReference_AreaDefault_ViaGetDataRequest()
+    public async Task UnifiedReference_AreaDefault_ViaGetDataRequest()
     {
         // arrange
         GetHost();
@@ -875,7 +875,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var path = "area:TestArea"; // area is default, no keyword needed
 
         // act - use GetDataRequest which correctly handles the UnifiedReference
-        var response = client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var response = await client.Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
         // assert
         response.Message.Error.Should().BeNull();
@@ -889,14 +889,14 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     #region Custom DataPath and Global Registry Tests
 
     [Fact]
-    public void DataPathReference_LocalResolution_ReturnsCollection()
+    public async Task DataPathReference_LocalResolution_ReturnsCollection()
     {
         // arrange
         GetHost();
         var client = GetClient();
 
         // act - use DataPathReference for local path resolution
-        var response = client.Observe(new GetDataRequest(new DataPathReference("TestPricing")), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var response = await client.Observe(new GetDataRequest(new DataPathReference("TestPricing")), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
         // assert
         response.Message.Error.Should().BeNull();
@@ -905,14 +905,14 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void DataPathReference_LocalResolution_ReturnsEntity()
+    public async Task DataPathReference_LocalResolution_ReturnsEntity()
     {
         // arrange
         GetHost();
         var client = GetClient();
 
         // act - use DataPathReference for local path resolution
-        var response = client.Observe(new GetDataRequest(new DataPathReference($"TestPricing/{TestPricingId}")), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var response = await client.Observe(new GetDataRequest(new DataPathReference($"TestPricing/{TestPricingId}")), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
         // assert
         response.Message.Error.Should().BeNull();
@@ -934,7 +934,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void ContentWorkspaceReference_GetData_ReturnsFileContent()
+    public async Task ContentWorkspaceReference_GetData_ReturnsFileContent()
     {
         // arrange - create test file
         var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_ContentRef_" + Guid.NewGuid().ToString("N"));
@@ -948,7 +948,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             var client = GetClient();
 
             // act - use ContentWorkspaceReference directly
-            var response = client.Observe(new GetDataRequest(new ContentWorkspaceReference("TestFiles", "ref-test.txt")), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+            var response = await client.Observe(new GetDataRequest(new ContentWorkspaceReference("TestFiles", "ref-test.txt")), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
             // assert
             response.Message.Error.Should().BeNull();
@@ -964,7 +964,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void FileReference_GetData_ReturnsFileContent()
+    public async Task FileReference_GetData_ReturnsFileContent()
     {
         // arrange - create test file
         var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_FileRef_" + Guid.NewGuid().ToString("N"));
@@ -978,7 +978,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             var client = GetClient();
 
             // act - use FileReference directly
-            var response = client.Observe(new GetDataRequest(new FileReference("TestFiles", "fileref-test.txt")), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+            var response = await client.Observe(new GetDataRequest(new FileReference("TestFiles", "fileref-test.txt")), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
             // assert
             response.Message.Error.Should().BeNull();
@@ -998,7 +998,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     #region Content Collection Listing Tests
 
     [Fact]
-    public void GetDataRequest_UnifiedReference_ContentListRoot_ReturnsFilesAndFolders()
+    public async Task GetDataRequest_UnifiedReference_ContentListRoot_ReturnsFilesAndFolders()
     {
         // arrange - create test files with subfolder
         var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_List_" + Guid.NewGuid().ToString("N"));
@@ -1015,7 +1015,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             var client = GetClient();
 
             // act - content:TestFiles lists the named collection (folder, not a file)
-            var response = client.Observe(new GetDataRequest(new UnifiedReference("content:TestFiles")), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+            var response = await client.Observe(new GetDataRequest(new UnifiedReference("content:TestFiles")), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
             // assert
             var dataResponse = response.Message;
@@ -1036,7 +1036,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void GetDataRequest_UnifiedReference_ContentListSubfolder_ReturnsSubfolderFiles()
+    public async Task GetDataRequest_UnifiedReference_ContentListSubfolder_ReturnsSubfolderFiles()
     {
         // arrange - create test files with subfolder
         var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_SubList_" + Guid.NewGuid().ToString("N"));
@@ -1052,7 +1052,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             var client = GetClient();
 
             // act - content:TestFiles/images resolves to a folder, lists its contents
-            var response = client.Observe(new GetDataRequest(new UnifiedReference("content:TestFiles/images")), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+            var response = await client.Observe(new GetDataRequest(new UnifiedReference("content:TestFiles/images")), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
             // assert
             var dataResponse = response.Message;

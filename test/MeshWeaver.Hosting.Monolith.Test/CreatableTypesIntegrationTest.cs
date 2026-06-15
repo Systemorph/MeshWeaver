@@ -38,18 +38,18 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     private ICreatableTypesProvider CreatableTypesProvider
         => Mesh.ServiceProvider.GetRequiredService<ICreatableTypesProvider>();
 
-    private IReadOnlyList<CreatableTypeInfo> GetCreatableTypesAt(string nodePath)
+    private async Task<IReadOnlyList<CreatableTypeInfo>> GetCreatableTypesAt(string nodePath)
     {
         var workspace = Mesh.GetWorkspace();
         MeshNode? parent = null;
         if (!string.IsNullOrEmpty(nodePath))
         {
-            parent = workspace.GetMeshNodeStream(nodePath)
+            parent = await workspace.GetMeshNodeStream(nodePath)
                 .Take(1)
                 .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
                 .Should().Within(TimeSpan.FromSeconds(5)).Emit();
         }
-        return CreatableTypesProvider.GetCreatableTypes(nodePath, parent)
+        return await CreatableTypesProvider.GetCreatableTypes(nodePath, parent)
             .Should().Within(20.Seconds()).Emit();
     }
 
@@ -191,10 +191,10 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 20000)]
-    public void ACME_CreatableTypes_IncludesProjectAndGlobalTypes()
+    public async Task ACME_CreatableTypes_IncludesProjectAndGlobalTypes()
     {
         // Act - ACME is an Space, should be able to create ACME/Project
-        var creatableTypes = GetCreatableTypesAt("ACME");
+        var creatableTypes = await GetCreatableTypesAt("ACME");
 
         // Assert - Should include ACME/Project (defined under ACME)
         creatableTypes.Should().Contain(t => t.NodeTypePath == "ACME/Project");
@@ -210,7 +210,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     /// When at "ACME" (NodeType=Space), should return Space, Software/Project, and global types.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void CreateForm_TypePicker_Queries_ReturnCorrectTypes()
+    public async Task CreateForm_TypePicker_Queries_ReturnCorrectTypes()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var meshConfiguration = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
@@ -223,7 +223,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         MeshNode? parentNode = null;
         if (!string.IsNullOrEmpty(parentPath))
         {
-            parentNode = ReadNode(parentPath).Should().Within(ReadNodeTimeout).Emit();
+            parentNode = await ReadNode(parentPath).Should().Within(ReadNodeTimeout).Emit();
             currentNodeType = parentNode?.NodeType;
         }
         currentNodeType.Should().Be("Space", "Software should be of NodeType Space");
@@ -271,7 +271,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Output.WriteLine($"  [{i}] {typeQueries[i]}");
 
         // Execute each query (same as MeshNodePickerView.LoadResultsAsync)
-        var deduped = ExecuteTypePickerQueries(typeQueries, meshQuery);
+        var deduped = await ExecuteTypePickerQueries(typeQueries, meshQuery);
 
         // Assert: Space itself should be in results (parent's own type)
         deduped.Should().Contain(n => n.Path == "Space",
@@ -291,10 +291,10 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     /// not Markdown, when the parent has a specific type.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void CreateForm_DefaultType_ShouldBeParentNodeType()
+    public async Task CreateForm_DefaultType_ShouldBeParentNodeType()
     {
         // At "ACME" (an Space), the default type should be "Space"
-        var node = ReadNode("ACME").Should().Within(ReadNodeTimeout).Emit();
+        var node = await ReadNode("ACME").Should().Within(ReadNodeTimeout).Emit();
         var currentNodeType = node?.NodeType;
 
         currentNodeType.Should().Be("Space");
@@ -340,7 +340,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     /// and default type to the type itself.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void CreateForm_OnNodeTypeDefinitionPage_DefaultsToTypeParentNamespace()
+    public async Task CreateForm_OnNodeTypeDefinitionPage_DefaultsToTypeParentNamespace()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var meshConfiguration = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
@@ -348,7 +348,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         // Simulate: user is on the "Space" NodeType definition page and opens Create
         var parentPath = "Space";
 
-        var parentNode = ReadNode(parentPath).Should().Within(ReadNodeTimeout).Emit();
+        var parentNode = await ReadNode(parentPath).Should().Within(ReadNodeTimeout).Emit();
         var currentNodeType = parentNode?.NodeType;
 
         parentNode.Should().NotBeNull("Space node should exist");
@@ -373,7 +373,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         foreach (var globalType in meshConfiguration.GlobalCreatableTypes)
             typeQueries.Add($"path:{globalType} nodeType:NodeType context:create");
 
-        var deduped = ExecuteTypePickerQueries(typeQueries, meshQuery);
+        var deduped = await ExecuteTypePickerQueries(typeQueries, meshQuery);
 
         // Space should be in the type list
         deduped.Should().Contain(n => n.Path == "Space",
@@ -406,19 +406,19 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     /// Test that ProductLaunch type picker queries include Software/Project/Todo and Software/Project (own type).
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void CreateForm_TypePicker_ForProductLaunch_IncludesTodoAndProject()
+    public async Task CreateForm_TypePicker_ForProductLaunch_IncludesTodoAndProject()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var meshConfiguration = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
 
         var parentPath = "ACME/ProductLaunch";
 
-        var parentNode = ReadNode(parentPath).Should().Within(ReadNodeTimeout).Emit();
+        var parentNode = await ReadNode(parentPath).Should().Within(ReadNodeTimeout).Emit();
         var currentNodeType = parentNode?.NodeType;
         currentNodeType.Should().Be("ACME/Project");
 
         var typeQueries = BuildTypePickerQueries(parentPath, currentNodeType, meshConfiguration);
-        var deduped = ExecuteTypePickerQueries(typeQueries, meshQuery);
+        var deduped = await ExecuteTypePickerQueries(typeQueries, meshQuery);
 
         // Software/Project/Todo should be found (child type of Software/Project)
         deduped.Should().Contain(n => n.Path == "ACME/Project/Todo",
@@ -466,15 +466,15 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     /// Executes type picker queries the same way MeshNodePickerView.LoadResultsAsync does.
     /// Each query's Initial snapshot off Query is the legacy QueryAsync result.
     /// </summary>
-    private List<MeshNode> ExecuteTypePickerQueries(
+    private async Task<List<MeshNode>> ExecuteTypePickerQueries(
         List<string> typeQueries, IMeshService meshQuery)
     {
         var allResults = new List<MeshNode>();
         foreach (var query in typeQueries)
         {
-            var results = meshQuery.Query<MeshNode>(query)
+            var results = (await meshQuery.Query<MeshNode>(query)
                 .Should().Within(20.Seconds())
-                .Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+                .Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
             Output.WriteLine($"Query '{query}' => {results.Count} results: [{string.Join(", ", results.Select(r => r.Path))}]");
             allResults.AddRange(results);
         }
@@ -492,10 +492,10 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 20000)]
-    public void ProductLaunch_CreatableTypes_IncludesTodo()
+    public async Task ProductLaunch_CreatableTypes_IncludesTodo()
     {
         // Act - ProductLaunch is an instance of ACME/Project, should be able to create ACME/Project/Todo
-        var creatableTypes = GetCreatableTypesAt("ACME/ProductLaunch");
+        var creatableTypes = await GetCreatableTypesAt("ACME/ProductLaunch");
 
         // Assert
         creatableTypes.Should().Contain(t => t.NodeTypePath == "ACME/Project/Todo");
@@ -511,23 +511,23 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     /// when viewing a Project (like ProductLaunch).
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void ProductLaunch_CreatableTypes_VerifyFullAlgorithm()
+    public async Task ProductLaunch_CreatableTypes_VerifyFullAlgorithm()
     {
         // Arrange - Verify the data setup is correct
-        var productLaunchNode = ReadNode("ACME/ProductLaunch").Should().Within(ReadNodeTimeout).Emit();
+        var productLaunchNode = await ReadNode("ACME/ProductLaunch").Should().Within(ReadNodeTimeout).Emit();
         productLaunchNode.Should().NotBeNull("ProductLaunch node should exist");
         productLaunchNode!.NodeType.Should().Be("ACME/Project", "ProductLaunch should be of NodeType ACME/Project");
 
-        var projectTypeNode = ReadNode("ACME/Project").Should().Within(ReadNodeTimeout).Emit();
+        var projectTypeNode = await ReadNode("ACME/Project").Should().Within(ReadNodeTimeout).Emit();
         projectTypeNode.Should().NotBeNull("ACME/Project NodeType should exist");
         projectTypeNode!.NodeType.Should().Be("NodeType", "ACME/Project should be a NodeType");
 
-        var todoTypeNode = ReadNode("ACME/Project/Todo").Should().Within(ReadNodeTimeout).Emit();
+        var todoTypeNode = await ReadNode("ACME/Project/Todo").Should().Within(ReadNodeTimeout).Emit();
         todoTypeNode.Should().NotBeNull("ACME/Project/Todo NodeType should exist");
         todoTypeNode!.NodeType.Should().Be("NodeType", "ACME/Project/Todo should be a NodeType");
 
         // Act - Get creatable types for ProductLaunch
-        var creatableTypes = GetCreatableTypesAt("ACME/ProductLaunch");
+        var creatableTypes = await GetCreatableTypesAt("ACME/ProductLaunch");
 
         // Assert - Should include Todo (from ACME/Project's children) and global types
         Output.WriteLine($"Found {creatableTypes.Count} creatable types for ACME/ProductLaunch:");
@@ -543,7 +543,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 20000)]
-    public void CreateNode_ViaRequest_Succeeds()
+    public async Task CreateNode_ViaRequest_Succeeds()
     {
         // Arrange - Create a new Todo node under ProductLaunch
         var newTodoNode = MeshNode.FromPath("ACME/ProductLaunch/my-todo") with
@@ -553,10 +553,10 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         };
 
         // Act
-        NodeFactory.CreateNode(newTodoNode).Should().Within(20.Seconds()).Emit();
+        await NodeFactory.CreateNode(newTodoNode).Should().Within(20.Seconds()).Emit();
 
         // Assert - Verify the node was created
-        var createdNode = ReadNode("ACME/ProductLaunch/my-todo")
+        var createdNode = await ReadNode("ACME/ProductLaunch/my-todo")
             .Should().Within(ReadNodeTimeout).Emit();
         createdNode.Should().NotBeNull();
         createdNode!.Name.Should().Be("My Todo");
@@ -564,7 +564,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 20000)]
-    public void CreatableTypes_WithExplicitConfig_OverridesAuto()
+    public async Task CreatableTypes_WithExplicitConfig_OverridesAuto()
     {
         // Arrange - Create a type with explicit CreatableTypes configuration
         var restrictedTypeDef = new NodeTypeDefinition
@@ -579,7 +579,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             NodeType = "NodeType",
             Content = restrictedTypeDef
         };
-        NodeFactory.CreateNode(restrictedTypeNode).Should().Within(20.Seconds()).Emit();
+        await NodeFactory.CreateNode(restrictedTypeNode).Should().Within(20.Seconds()).Emit();
 
         // Create an instance of the restricted type
         var restrictedInstance = MeshNode.FromPath("ACME/MyRestrictedProject") with
@@ -587,10 +587,10 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Name = "My Restricted Project",
             NodeType = "ACME/RestrictedProject"
         };
-        NodeFactory.CreateNode(restrictedInstance).Should().Within(20.Seconds()).Emit();
+        await NodeFactory.CreateNode(restrictedInstance).Should().Within(20.Seconds()).Emit();
 
         // Act
-        var creatableTypes = GetCreatableTypesAt("ACME/MyRestrictedProject");
+        var creatableTypes = await GetCreatableTypesAt("ACME/MyRestrictedProject");
 
         // Assert - Should only include explicitly configured types
         creatableTypes.Should().HaveCount(1);
@@ -600,10 +600,10 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 20000)]
-    public void CreatableTypes_SortedByOrder()
+    public async Task CreatableTypes_SortedByOrder()
     {
         // Act
-        var creatableTypes = GetCreatableTypesAt("ACME");
+        var creatableTypes = await GetCreatableTypesAt("ACME");
 
         // Assert - Global types should be at the end (display order 1000 and 1001)
         var lastTwo = creatableTypes.TakeLast(2).ToList();
@@ -619,7 +619,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     /// 4. Edit view should load without timeout
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void CreateNode_ViaCatalog_ThenRequestEditView_Succeeds()
+    public async Task CreateNode_ViaCatalog_ThenRequestEditView_Succeeds()
     {
         // Arrange - Create a unique node path to avoid conflicts
         var uniqueId = Guid.NewGuid().ToString("N")[..8];
@@ -639,18 +639,18 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 
         Output.WriteLine($"Step 1: Calling Catalog.CreateNodeAsync for {nodePath}");
 
-        var createdNode = NodeFactory.CreateNode(node).Should().Within(20.Seconds()).Emit();
+        var createdNode = await NodeFactory.CreateNode(node).Should().Within(20.Seconds()).Emit();
         Output.WriteLine($"CreateNodeAsync completed: Path={createdNode.Path}, Name={createdNode.Name}");
 
         // Step 2: Verify node exists via stream (CQRS-correct — no catalog lag)
         Output.WriteLine($"Step 2: Verifying node exists via per-node stream");
-        var persistedNode = ReadNode(nodePath).Should().Within(ReadNodeTimeout).Emit();
+        var persistedNode = await ReadNode(nodePath).Should().Within(ReadNodeTimeout).Emit();
         persistedNode.Should().NotBeNull($"Node {nodePath} should exist after CreateNodeAsync");
         Output.WriteLine($"Node exists: Name={persistedNode!.Name}, NodeType={persistedNode.NodeType}");
 
         // Step 3: Verify node can be resolved via catalog
         Output.WriteLine($"Step 3: Verifying ResolvePathAsync for {nodePath}");
-        var resolution = PathResolver.ResolvePath(nodePath).Should().Within(20.Seconds()).Emit();
+        var resolution = await PathResolver.ResolvePath(nodePath).Should().Within(20.Seconds()).Emit();
         resolution.Should().NotBeNull($"Path {nodePath} should resolve via catalog");
         Output.WriteLine($"Path resolved: Prefix={resolution!.Prefix}, Remainder={resolution.Remainder}");
 
@@ -667,7 +667,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         Output.WriteLine($"Requesting Edit layout for {nodeAddress}...");
         var editStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, editReference);
 
-        var editLayout = editStream.Should().Within(30.Seconds()).Emit();
+        var editLayout = await editStream.Should().Within(30.Seconds()).Emit();
         Output.WriteLine($"Edit layout received: ValueKind={editLayout.Value.ValueKind}");
 
         if (editLayout.Value.ValueKind != JsonValueKind.Undefined && editLayout.Value.ValueKind != JsonValueKind.Null)
@@ -682,14 +682,14 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 
         // Cleanup
         Output.WriteLine($"Cleanup: Deleting test node {nodePath}");
-        NodeFactory.DeleteNode(nodePath).Should().Within(20.Seconds()).Emit();
+        await NodeFactory.DeleteNode(nodePath).Should().Within(20.Seconds()).Emit();
     }
 
     /// <summary>
     /// Test that creating a Markdown node via IMeshCatalog and getting the default (Read) view works.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void CreateNode_ViaCatalog_ThenRequestDefaultView_Succeeds()
+    public async Task CreateNode_ViaCatalog_ThenRequestDefaultView_Succeeds()
     {
         // Arrange
         var uniqueId = Guid.NewGuid().ToString("N")[..8];
@@ -707,7 +707,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         };
 
         Output.WriteLine($"Step 1: Calling Catalog.CreateNodeAsync");
-        var createdNode = NodeFactory.CreateNode(node).Should().Within(20.Seconds()).Emit();
+        var createdNode = await NodeFactory.CreateNode(node).Should().Within(20.Seconds()).Emit();
         Output.WriteLine($"Node created: Path={createdNode.Path}");
 
         // Step 2: Request the default (Read) view
@@ -723,14 +723,14 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         Output.WriteLine($"Requesting Read layout for {nodeAddress}...");
         var readStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, readReference);
 
-        var readLayout = readStream.Should().Within(30.Seconds()).Emit();
+        var readLayout = await readStream.Should().Within(30.Seconds()).Emit();
         Output.WriteLine($"Read layout received: ValueKind={readLayout.Value.ValueKind}");
         readLayout.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined);
 
         Output.WriteLine("SUCCESS: CreateNode -> Read flow completed");
 
         // Cleanup
-        NodeFactory.DeleteNode(nodePath).Should().Within(20.Seconds()).Emit();
+        await NodeFactory.DeleteNode(nodePath).Should().Within(20.Seconds()).Emit();
     }
 
     /// <summary>
@@ -742,7 +742,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     /// 4. Edit view should load and show "Draft" badge
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void CreateTransientNode_ThenRequestEditView_Succeeds()
+    public async Task CreateTransientNode_ThenRequestEditView_Succeeds()
     {
         // Arrange - Create a unique node path
         var uniqueId = Guid.NewGuid().ToString("N")[..8];
@@ -762,13 +762,13 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 
         Output.WriteLine($"Step 1: Calling NodeFactory.CreateTransientAsync for {nodePath}");
 
-        var createdNode = NodeFactory.CreateTransient(node).Should().Within(20.Seconds()).Emit();
+        var createdNode = await NodeFactory.CreateTransient(node).Should().Within(20.Seconds()).Emit();
         Output.WriteLine($"CreateTransientAsync completed: Path={createdNode.Path}, State={createdNode.State}");
         createdNode.State.Should().Be(MeshNodeState.Transient, "Node should be in Transient state");
 
         // Step 2: Verify node exists with Transient state via stream
         Output.WriteLine($"Step 2: Verifying transient node exists");
-        var persistedNode = ReadNode(nodePath).Should().Within(ReadNodeTimeout).Emit();
+        var persistedNode = await ReadNode(nodePath).Should().Within(ReadNodeTimeout).Emit();
         persistedNode.Should().NotBeNull($"Transient node {nodePath} should exist");
         persistedNode!.State.Should().Be(MeshNodeState.Transient, "Persisted node should be Transient");
         Output.WriteLine($"Node found: State={persistedNode.State}, Name={persistedNode.Name}");
@@ -803,7 +803,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 
         // Step 3: Verify via stream (CQRS-correct)
         Output.WriteLine($"Step 3: Getting node via per-node stream");
-        var catalogNode = ReadNode(nodePath).Should().Within(ReadNodeTimeout).Emit();
+        var catalogNode = await ReadNode(nodePath).Should().Within(ReadNodeTimeout).Emit();
         catalogNode.Should().NotBeNull($"Stream should return the transient node");
 
         // Step 4: Request Edit view (simulates redirect)
@@ -819,7 +819,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         Output.WriteLine($"Requesting Edit layout for {nodeAddress}...");
         var editStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, editReference);
 
-        var editLayout = editStream.Should().Within(10.Seconds()).Emit();
+        var editLayout = await editStream.Should().Within(10.Seconds()).Emit();
         Output.WriteLine($"Edit layout received: ValueKind={editLayout.Value.ValueKind}");
 
         if (editLayout.Value.ValueKind != JsonValueKind.Undefined && editLayout.Value.ValueKind != JsonValueKind.Null)
@@ -834,7 +834,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 
         // Cleanup
         Output.WriteLine($"Cleanup: Deleting test node {nodePath}");
-        NodeFactory.DeleteNode(nodePath).Should().Within(20.Seconds()).Emit();
+        await NodeFactory.DeleteNode(nodePath).Should().Within(20.Seconds()).Emit();
     }
 
     /// <summary>
@@ -844,11 +844,11 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     /// 3. Request Edit view (simulates redirect)
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void CompleteCreateFlow_GetTypes_Create_Edit_Succeeds()
+    public async Task CompleteCreateFlow_GetTypes_Create_Edit_Succeeds()
     {
         // Step 1: Get creatable types (like the create page does)
         Output.WriteLine("Step 1: Getting creatable types for root");
-        var creatableTypes = GetCreatableTypesAt("");
+        var creatableTypes = await GetCreatableTypesAt("");
 
         creatableTypes.Should().NotBeEmpty("Should have creatable types");
         Output.WriteLine($"Found {creatableTypes.Count} creatable types");
@@ -877,7 +877,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Content = MarkdownContent.Parse($"# {nodeName}\n\nCreated via test.", nodePath)
         };
 
-        var createdNode = NodeFactory.CreateNode(node).Should().Within(20.Seconds()).Emit();
+        var createdNode = await NodeFactory.CreateNode(node).Should().Within(20.Seconds()).Emit();
         Output.WriteLine($"Node created: {createdNode.Path}");
 
         // Step 3: Request Edit view (simulates redirect to /{nodePath}/Edit)
@@ -893,14 +893,14 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 
         var editStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, editReference);
 
-        var editLayout = editStream.Should().Within(30.Seconds()).Emit();
+        var editLayout = await editStream.Should().Within(30.Seconds()).Emit();
         Output.WriteLine($"Edit layout received: ValueKind={editLayout.Value.ValueKind}");
         editLayout.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined);
 
         Output.WriteLine("SUCCESS: Complete create flow works");
 
         // Cleanup
-        NodeFactory.DeleteNode(nodePath).Should().Within(20.Seconds()).Emit();
+        await NodeFactory.DeleteNode(nodePath).Should().Within(20.Seconds()).Emit();
     }
 
     public override async ValueTask DisposeAsync()
@@ -943,18 +943,18 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
     private ICreatableTypesProvider CreatableTypesProvider
         => Mesh.ServiceProvider.GetRequiredService<ICreatableTypesProvider>();
 
-    private IReadOnlyList<CreatableTypeInfo> GetCreatableTypesAt(string nodePath)
+    private async Task<IReadOnlyList<CreatableTypeInfo>> GetCreatableTypesAt(string nodePath)
     {
         var workspace = Mesh.GetWorkspace();
         MeshNode? parent = null;
         if (!string.IsNullOrEmpty(nodePath))
         {
-            parent = workspace.GetMeshNodeStream(nodePath)
+            parent = await workspace.GetMeshNodeStream(nodePath)
                 .Take(1)
                 .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
                 .Should().Within(TimeSpan.FromSeconds(5)).Emit();
         }
-        return CreatableTypesProvider.GetCreatableTypes(nodePath, parent)
+        return await CreatableTypesProvider.GetCreatableTypes(nodePath, parent)
             .Should().Within(60.Seconds()).Emit();
     }
 
@@ -973,31 +973,31 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
             .AddGraph();
 
     [Fact(Timeout = 20000)]
-    public void FileSystem_VerifyDataStructure()
+    public async Task FileSystem_VerifyDataStructure()
     {
         // No InitializeAsync needed - FileSystemPersistenceService uses lazy loading.
         // Query is the live fan-out feed; match the first snapshot that
         // surfaces each path.
-        MeshQuery.Query<MeshNode>("path:ACME/Project")
+        await MeshQuery.Query<MeshNode>("path:ACME/Project")
             .Should().Within(20.Seconds()).Match(c => c.Items.Any(n => n.Path == "ACME/Project"),
                 "ACME/Project should exist in sample data");
 
-        MeshQuery.Query<MeshNode>("path:ACME/Project/Todo")
+        await MeshQuery.Query<MeshNode>("path:ACME/Project/Todo")
             .Should().Within(20.Seconds()).Match(c => c.Items.Any(n => n.Path == "ACME/Project/Todo"),
                 "ACME/Project/Todo should exist in sample data");
 
-        MeshQuery.Query<MeshNode>("path:ACME/ProductLaunch")
+        await MeshQuery.Query<MeshNode>("path:ACME/ProductLaunch")
             .Should().Within(20.Seconds()).Match(c => c.Items.Any(n => n.Path == "ACME/ProductLaunch"),
                 "ACME/ProductLaunch should exist in sample data");
     }
 
     [Fact(Timeout = 20000)]
-    public void FileSystem_GetChildrenOfACMEProject_ShouldIncludeTodo()
+    public async Task FileSystem_GetChildrenOfACMEProject_ShouldIncludeTodo()
     {
         // Get children of ACME/Project - uses lazy loading
-        var children = MeshQuery.Query<MeshNode>("namespace:ACME/Project")
+        var children = (await MeshQuery.Query<MeshNode>("namespace:ACME/Project")
             .Should().Within(20.Seconds())
-            .Match(c => c.Items.Any(n => n.Path == "ACME/Project/Todo")).Items;
+            .Match(c => c.Items.Any(n => n.Path == "ACME/Project/Todo"))).Items;
 
         Output.WriteLine($"Children of ACME/Project ({children.Count} total):");
         foreach (var child in children)
@@ -1011,13 +1011,13 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 20000)]
-    public void FileSystem_QueryChildNodeTypes_ShouldFindTodo()
+    public async Task FileSystem_QueryChildNodeTypes_ShouldFindTodo()
     {
         // This is the exact query used by GetCreatableTypesAsync
         var query = "namespace:ACME/Project nodeType:NodeType";
-        var results = MeshQuery.Query<MeshNode>(query)
+        var results = (await MeshQuery.Query<MeshNode>(query)
             .Should().Within(20.Seconds())
-            .Match(c => c.Items.Any(n => n.Path == "ACME/Project/Todo")).Items;
+            .Match(c => c.Items.Any(n => n.Path == "ACME/Project/Todo"))).Items;
 
         Output.WriteLine($"Query '{query}' returned {results.Count} results:");
         foreach (var result in results)
@@ -1038,10 +1038,10 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
     // happy path the same finish time it has locally (~14 s) while
     // covering the slow path.
     [Fact(Timeout = 60000)]
-    public void FileSystem_ProductLaunch_CreatableTypes_ShouldIncludeTodo()
+    public async Task FileSystem_ProductLaunch_CreatableTypes_ShouldIncludeTodo()
     {
         // Use the synced-query provider to enumerate creatable types.
-        var creatableTypes = GetCreatableTypesAt("ACME/ProductLaunch");
+        var creatableTypes = await GetCreatableTypesAt("ACME/ProductLaunch");
 
         Output.WriteLine($"Creatable types for ACME/ProductLaunch ({creatableTypes.Count} total):");
         foreach (var ct in creatableTypes)

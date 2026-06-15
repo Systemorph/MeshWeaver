@@ -31,12 +31,12 @@ public class MeshPluginAccessContextTest(ITestOutputHelper output) : MonolithMes
             .AddSampleUsers();
 
     [Fact]
-    public void MeshPlugin_Get_RestoresAccessContext()
+    public async Task MeshPlugin_Get_RestoresAccessContext()
     {
         // Create a node in the DevLogin user's own partition. "Roland" is the auto-admin's
         // ObjectId, so it's the caller's own space — PartitionWriteGuardValidator exempts it.
         // (A bare User/{user}/test-doc write would now be rejected as a system-mirror write.)
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode("test-doc", "Roland") { Name = "Test Doc", NodeType = "Markdown" })
             .Should().Within(10.Seconds()).Emit();
 
@@ -62,20 +62,20 @@ public class MeshPluginAccessContextTest(ITestOutputHelper output) : MonolithMes
 
         // 4. Call Get — should succeed because MeshPlugin restores context.
         //    plugin.Get is a genuine Task<string> SDK boundary → bridge to an
-        //    observable so the assertion stays blocking-reactive.
-        var result = plugin.Get("Roland/test-doc").ToObservable()
+        //    observable so the assertion stays awaited-reactive.
+        var result = await plugin.Get("Roland/test-doc").ToObservable()
             .Should().Within(10.Seconds()).Emit();
         result.Should().Contain("Test Doc", "MeshPlugin.Get should restore user context and return the node");
         Output.WriteLine($"Get result: {result[..System.Math.Min(200, result.Length)]}");
     }
 
     [Fact]
-    public void MeshPlugin_Update_RestoresAccessContext()
+    public async Task MeshPlugin_Update_RestoresAccessContext()
     {
         // Create a node in the DevLogin user's own partition ("Roland" = the auto-admin's
         // ObjectId). The mirror partition (User/…) now rejects both the create AND the later
         // plugin.Update, so the doc must live in a real partition the user owns.
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode("update-test", "Roland")
             {
                 Name = "Original",
@@ -120,8 +120,8 @@ public class MeshPluginAccessContextTest(ITestOutputHelper output) : MonolithMes
         };
         var updateJson = JsonSerializer.Serialize(new[] { existingNode }, Mesh.JsonSerializerOptions);
         // plugin.Update is a genuine Task<string> SDK boundary → bridge to an
-        // observable so the assertion stays blocking-reactive.
-        var result = plugin.Update(updateJson).ToObservable()
+        // observable so the assertion stays awaited-reactive.
+        var result = await plugin.Update(updateJson).ToObservable()
             .Should().Within(10.Seconds()).Emit();
         result.Should().Contain("Updated", "MeshPlugin.Update should restore user context and update");
         Output.WriteLine($"Update result: {result}");

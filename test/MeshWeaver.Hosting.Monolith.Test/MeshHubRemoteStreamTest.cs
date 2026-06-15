@@ -49,11 +49,11 @@ public class MeshHubRemoteStreamTest(ITestOutputHelper output) : MonolithMeshTes
     /// inner sync stream — not be delivered locally on the node hub.
     /// </summary>
     [Fact(Timeout = 60_000)]
-    public void MeshHub_RemoteStream_ReceivesInitialSnapshot()
+    public async Task MeshHub_RemoteStream_ReceivesInitialSnapshot()
     {
         var path = $"{Namespace}/snap1";
 
-        NodeFactory.CreateNode(new MeshNode("snap1", Namespace)
+        await NodeFactory.CreateNode(new MeshNode("snap1", Namespace)
         {
             Name = "Snapshot",
             NodeType = "Markdown",
@@ -65,7 +65,7 @@ public class MeshHubRemoteStreamTest(ITestOutputHelper output) : MonolithMeshTes
         // to the node hub's own inner sync hub instead of the mesh hub's.
         var stream = Mesh.GetWorkspace().GetMeshNodeStream(path);
 
-        var received = stream
+        var received = await stream
             .Should().Match(ci => ci?.Name == "Snapshot");
 
         received.Should().NotBeNull();
@@ -77,11 +77,11 @@ public class MeshHubRemoteStreamTest(ITestOutputHelper output) : MonolithMeshTes
     /// through the mesh hub's stream (verifies the ongoing DataChangedEvent path).
     /// </summary>
     [Fact(Timeout = 60_000)]
-    public void MeshHub_RemoteStream_ReceivesNodeUpdate()
+    public async Task MeshHub_RemoteStream_ReceivesNodeUpdate()
     {
         var path = $"{Namespace}/upd1";
 
-        NodeFactory.CreateNode(new MeshNode("upd1", Namespace)
+        await NodeFactory.CreateNode(new MeshNode("upd1", Namespace)
         {
             Name = "V1",
             NodeType = "Markdown",
@@ -104,19 +104,19 @@ public class MeshHubRemoteStreamTest(ITestOutputHelper output) : MonolithMeshTes
             .Subscribe(ci => { if (ci?.Name is { } n) lock (names) names.Add(n); });
 
         // Wait for the initial snapshot — proves subscription routing works.
-        var initial = stream
+        var initial = await stream
             .Should().Match(ci => ci?.Name == "V1");
 
         // Now update the node and expect the change to arrive on the same stream.
-        NodeFactory.UpdateNode(initial! with { Name = "V2" }).Should().Emit();
+        await NodeFactory.UpdateNode(initial! with { Name = "V2" }).Should().Emit();
 
-        stream.Should().Match(ci => ci?.Name == "V2");
+        await stream.Should().Match(ci => ci?.Name == "V2");
 
         // Poll until BOTH names appear — the separate `sub` Subscribe handler
         // runs independently of the `stream.Where(...)` synchronisation above,
         // and per-change emissions can interleave such that the match resolves
         // before the sub handler has appended V2.
-        Observable.Interval(50.Milliseconds()).StartWith(0L)
+        await Observable.Interval(50.Milliseconds()).StartWith(0L)
             .Should().Within(5.Seconds())
             .Match(_ => { lock (names) return names.Contains("V1") && names.Contains("V2"); });
 
@@ -130,17 +130,17 @@ public class MeshHubRemoteStreamTest(ITestOutputHelper output) : MonolithMeshTes
     /// receive their own DataChangedEvents independently (no cross-stream pollution).
     /// </summary>
     [Fact(Timeout = 60_000)]
-    public void MeshHub_MultipleStreams_ReceiveIndependentUpdates()
+    public async Task MeshHub_MultipleStreams_ReceiveIndependentUpdates()
     {
         var pathA = $"{Namespace}/multi-a";
         var pathB = $"{Namespace}/multi-b";
 
-        NodeFactory.CreateNode(new MeshNode("multi-a", Namespace)
+        await NodeFactory.CreateNode(new MeshNode("multi-a", Namespace)
         {
             Name = "NodeA",
             NodeType = "Markdown",
         }).Should().Emit();
-        NodeFactory.CreateNode(new MeshNode("multi-b", Namespace)
+        await NodeFactory.CreateNode(new MeshNode("multi-b", Namespace)
         {
             Name = "NodeB",
             NodeType = "Markdown",
@@ -149,8 +149,8 @@ public class MeshHubRemoteStreamTest(ITestOutputHelper output) : MonolithMeshTes
         var streamA = Mesh.GetWorkspace().GetMeshNodeStream(pathA);
         var streamB = Mesh.GetWorkspace().GetMeshNodeStream(pathB);
 
-        var receivedA = streamA.Should().Match(ci => ci?.Name == "NodeA");
-        var receivedB = streamB.Should().Match(ci => ci?.Name == "NodeB");
+        var receivedA = await streamA.Should().Match(ci => ci?.Name == "NodeA");
+        var receivedB = await streamB.Should().Match(ci => ci?.Name == "NodeB");
 
         receivedA!.Name.Should().Be("NodeA");
         receivedB!.Name.Should().Be("NodeB");

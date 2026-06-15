@@ -353,7 +353,7 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
     // ─── /token (with PKCE) ──────────────────────────────────────────────────
 
     [Fact]
-    public void Token_FullFlowWithPkce_IssuesMwToken()
+    public async Task Token_FullFlowWithPkce_IssuesMwToken()
     {
         // End-to-end happy path the way Claude Desktop actually runs it:
         //   1. register → client_id
@@ -389,8 +389,8 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
 
         // Step 3: exchange code for token. ExchangeToken returns Task<IActionResult>
         // (genuine controller SDK boundary) — bridge it to the reactive assertion via
-        // .ToObservable() so the test body stays 100% reactive (no await).
-        var tokenResult = controller.ExchangeToken(new TokenRequest
+        // .ToObservable() and await the async ObservableAssertions terminal.
+        var tokenResult = await controller.ExchangeToken(new TokenRequest
         {
             grant_type = "authorization_code",
             code = code,
@@ -409,7 +409,7 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact]
-    public void Token_WithWrongPkceVerifier_Returns400InvalidGrant()
+    public async Task Token_WithWrongPkceVerifier_Returns400InvalidGrant()
     {
         var controller = CreateController(AuthenticatedUser());
         var verifier = "the-right-verifier-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
@@ -421,7 +421,7 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
         var code = Uri.UnescapeDataString(
             authRedirect.Url["https://claude.ai/cb?code=".Length..authRedirect.Url.IndexOf("&state=")]);
 
-        var result = controller.ExchangeToken(new TokenRequest
+        var result = await controller.ExchangeToken(new TokenRequest
         {
             grant_type = "authorization_code",
             code = code,
@@ -435,7 +435,7 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact]
-    public void Token_WithMismatchedClientId_Returns400InvalidGrant()
+    public async Task Token_WithMismatchedClientId_Returns400InvalidGrant()
     {
         // RFC 6749 §4.1.3: token endpoint MUST verify the code was issued to the same client.
         var controller = CreateController(AuthenticatedUser());
@@ -444,7 +444,7 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
             "code", "client-A", "https://claude.ai/cb", null, null, null, null)!;
         var code = authRedirect.Url["https://claude.ai/cb?code=".Length..];
 
-        var result = controller.ExchangeToken(new TokenRequest
+        var result = await controller.ExchangeToken(new TokenRequest
         {
             grant_type = "authorization_code",
             code = Uri.UnescapeDataString(code),
@@ -457,7 +457,7 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact]
-    public void Token_WithMismatchedRedirectUri_Returns400InvalidGrant()
+    public async Task Token_WithMismatchedRedirectUri_Returns400InvalidGrant()
     {
         var controller = CreateController(AuthenticatedUser());
 
@@ -465,7 +465,7 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
             "code", "c1", "https://claude.ai/cb", null, null, null, null)!;
         var code = authRedirect.Url["https://claude.ai/cb?code=".Length..];
 
-        var result = controller.ExchangeToken(new TokenRequest
+        var result = await controller.ExchangeToken(new TokenRequest
         {
             grant_type = "authorization_code",
             code = Uri.UnescapeDataString(code),
@@ -478,7 +478,7 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact]
-    public void Token_CodeReplay_Returns400InvalidGrant()
+    public async Task Token_CodeReplay_Returns400InvalidGrant()
     {
         // Codes are single-use. Second exchange of the same code must fail.
         var controller = CreateController(AuthenticatedUser());
@@ -487,14 +487,14 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
             "code", "c1", "https://claude.ai/cb", null, null, null, null)!;
         var code = Uri.UnescapeDataString(authRedirect.Url["https://claude.ai/cb?code=".Length..]);
 
-        var first = controller.ExchangeToken(new TokenRequest
+        var first = await controller.ExchangeToken(new TokenRequest
         {
             grant_type = "authorization_code", code = code,
             client_id = "c1", redirect_uri = "https://claude.ai/cb",
         }, TestContext.Current.CancellationToken).ToObservable().Should().Within(30.Seconds()).Emit();
         first.Should().BeOfType<OkObjectResult>();
 
-        var second = controller.ExchangeToken(new TokenRequest
+        var second = await controller.ExchangeToken(new TokenRequest
         {
             grant_type = "authorization_code", code = code,
             client_id = "c1", redirect_uri = "https://claude.ai/cb",
@@ -505,11 +505,11 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact]
-    public void Token_UnsupportedGrantType_Returns400()
+    public async Task Token_UnsupportedGrantType_Returns400()
     {
         var controller = CreateController();
 
-        var result = controller.ExchangeToken(
+        var result = await controller.ExchangeToken(
                 new TokenRequest { grant_type = "client_credentials" },
                 TestContext.Current.CancellationToken)
             .ToObservable().Should().Within(30.Seconds()).Emit()
@@ -520,11 +520,11 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact]
-    public void Token_MissingFields_Returns400InvalidRequest()
+    public async Task Token_MissingFields_Returns400InvalidRequest()
     {
         var controller = CreateController();
 
-        var result = controller.ExchangeToken(new TokenRequest
+        var result = await controller.ExchangeToken(new TokenRequest
         {
             grant_type = "authorization_code",
             code = "",
@@ -537,11 +537,11 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact]
-    public void Token_UnknownCode_Returns400InvalidGrant()
+    public async Task Token_UnknownCode_Returns400InvalidGrant()
     {
         var controller = CreateController();
 
-        var result = controller.ExchangeToken(new TokenRequest
+        var result = await controller.ExchangeToken(new TokenRequest
         {
             grant_type = "authorization_code",
             code = "this-code-was-never-issued",

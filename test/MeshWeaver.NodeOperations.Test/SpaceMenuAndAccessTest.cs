@@ -36,7 +36,7 @@ public class SpaceMenuAndAccessTest(ITestOutputHelper output) : MonolithMeshTest
             .AddSampleUsers();
 
     [Fact(Timeout = 60000)]
-    public void AdminCreator_HasFullPermissions()
+    public async Task AdminCreator_HasFullPermissions()
     {
         var spaceId = $"TestSpace_{Guid.NewGuid():N}"[..20];
 
@@ -46,10 +46,10 @@ public class SpaceMenuAndAccessTest(ITestOutputHelper output) : MonolithMeshTest
             NodeType = SpaceNodeType.NodeType,
             Content = new Space { Name = "Test Space" }
         };
-        var created = NodeFactory.CreateNode(spaceNode).Should().Emit();
+        var created = await NodeFactory.CreateNode(spaceNode).Should().Emit();
         created.Should().NotBeNull();
 
-        var permissions = Mesh.GetEffectivePermissions(spaceId, TestUsers.Admin.ObjectId)
+        var permissions = await Mesh.GetEffectivePermissions(spaceId, TestUsers.Admin.ObjectId)
             .Should().Within(90.Seconds()).Match(p => p.HasFlag(Permission.Read));
 
         Output.WriteLine($"Effective permissions on {spaceId}: {permissions}");
@@ -59,7 +59,7 @@ public class SpaceMenuAndAccessTest(ITestOutputHelper output) : MonolithMeshTest
         permissions.Should().HaveFlag(Permission.Update, "Admin should have Update permission");
         permissions.Should().HaveFlag(Permission.Delete, "Admin should have Delete permission");
 
-        NodeFactory.DeleteNode(spaceId).Should().Emit();
+        await NodeFactory.DeleteNode(spaceId).Should().Emit();
     }
 
     /// <summary>
@@ -67,7 +67,7 @@ public class SpaceMenuAndAccessTest(ITestOutputHelper output) : MonolithMeshTest
     /// granting the creator Admin permissions on the Space namespace.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void PostCreationHandler_GrantsAdminViaAccessAssignment()
+    public async Task PostCreationHandler_GrantsAdminViaAccessAssignment()
     {
         var spaceId = $"TestSpace_{Guid.NewGuid():N}"[..20];
         var creatorId = TestUsers.Admin.ObjectId;
@@ -78,29 +78,29 @@ public class SpaceMenuAndAccessTest(ITestOutputHelper output) : MonolithMeshTest
             NodeType = SpaceNodeType.NodeType,
             Content = new Space { Name = "Test Space" }
         };
-        NodeFactory.CreateNode(spaceNode).Should().Emit();
+        await NodeFactory.CreateNode(spaceNode).Should().Emit();
 
-        Mesh.GetEffectivePermissions(spaceId, creatorId)
+        await Mesh.GetEffectivePermissions(spaceId, creatorId)
             .Should().Within(90.Seconds()).Match(p => p.HasFlag(Permission.Update));
 
-        var otherPerms = Mesh.GetEffectivePermissions(spaceId, "SomeOtherUser").Should().Emit();
+        var otherPerms = await Mesh.GetEffectivePermissions(spaceId, "SomeOtherUser").Should().Emit();
 
         Output.WriteLine($"Other user permissions on {spaceId}: {otherPerms}");
         otherPerms.Should().NotHaveFlag(Permission.Create, "Non-assigned user should NOT have Create");
         otherPerms.Should().NotHaveFlag(Permission.Update, "Non-assigned user should NOT have Update");
 
-        var creatorPerms = Mesh.GetEffectivePermissions(spaceId, creatorId).Should().Emit();
+        var creatorPerms = await Mesh.GetEffectivePermissions(spaceId, creatorId).Should().Emit();
 
         Output.WriteLine($"Creator permissions on {spaceId}: {creatorPerms}");
         creatorPerms.Should().HaveFlag(Permission.Create, "Creator should have Create from Admin role assignment");
         creatorPerms.Should().HaveFlag(Permission.Update, "Creator should have Update from Admin role assignment");
         creatorPerms.Should().HaveFlag(Permission.Delete, "Creator should have Delete from Admin role assignment");
 
-        NodeFactory.DeleteNode(spaceId).Should().Emit();
+        await NodeFactory.DeleteNode(spaceId).Should().Emit();
     }
 
     [Fact(Timeout = 60000)]
-    public void Space_HasStandardCreatableTypes()
+    public async Task Space_HasStandardCreatableTypes()
     {
         var spaceId = $"TestSpace_{Guid.NewGuid():N}"[..20];
 
@@ -110,10 +110,10 @@ public class SpaceMenuAndAccessTest(ITestOutputHelper output) : MonolithMeshTest
             NodeType = SpaceNodeType.NodeType,
             Content = new Space { Name = "Test Space" }
         };
-        NodeFactory.CreateNode(spaceNode).Should().Emit();
+        await NodeFactory.CreateNode(spaceNode).Should().Emit();
 
         var provider = Mesh.ServiceProvider.GetRequiredService<ICreatableTypesProvider>();
-        var creatableTypes = provider.GetCreatableTypes(spaceId, spaceNode).Should().Emit();
+        var creatableTypes = await provider.GetCreatableTypes(spaceId, spaceNode).Should().Emit();
         var typeNames = creatableTypes.Select(t => t.NodeTypePath).ToList();
 
         Output.WriteLine($"Creatable types at {spaceId}: {string.Join(", ", typeNames)}");
@@ -122,11 +122,11 @@ public class SpaceMenuAndAccessTest(ITestOutputHelper output) : MonolithMeshTest
         typeNames.Should().Contain("Thread", "Thread should be creatable under Space");
         typeNames.Should().Contain("Agent", "Agent should be creatable under Space");
 
-        NodeFactory.DeleteNode(spaceId).Should().Emit();
+        await NodeFactory.DeleteNode(spaceId).Should().Emit();
     }
 
     [Fact(Timeout = 60000)]
-    public void Space_ChildrenAreQueryable()
+    public async Task Space_ChildrenAreQueryable()
     {
         var spaceId = $"TestSpace_{Guid.NewGuid():N}"[..20];
 
@@ -136,12 +136,12 @@ public class SpaceMenuAndAccessTest(ITestOutputHelper output) : MonolithMeshTest
             NodeType = SpaceNodeType.NodeType,
             Content = new Space { Name = "Test Space" }
         };
-        NodeFactory.CreateNode(spaceNode).Should().Emit();
+        await NodeFactory.CreateNode(spaceNode).Should().Emit();
 
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode("Overview", spaceId) { Name = "Overview", NodeType = "Markdown" }).Should().Emit();
 
-        var children = MeshQuery
+        var children = await MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{spaceId} is:main"))
             .Select(c => c.Items.ToList())
@@ -153,6 +153,6 @@ public class SpaceMenuAndAccessTest(ITestOutputHelper output) : MonolithMeshTest
         children.Should().Contain(c => c.NodeType == "Markdown" && c.Path == $"{spaceId}/Overview",
             "Overview markdown page should exist as child");
 
-        NodeFactory.DeleteNode(spaceId).Should().Emit();
+        await NodeFactory.DeleteNode(spaceId).Should().Emit();
     }
 }

@@ -61,7 +61,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
     /// Tests parallel updates to the synchronization stream with concurrent modifications
     /// </summary>
     [Fact]
-    public void ParallelUpdate()
+    public async Task ParallelUpdate()
     {
         var workspace = GetHost().GetWorkspace();
         var collectionName = workspace.DataContext.GetTypeSource(typeof(MyData))!.CollectionName;
@@ -96,7 +96,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
             return true;
         }).ToArray();
 
-        var tracker = tracked.Should().Within(5.Seconds()).Match(acc => acc.Count == 10);
+        var tracker = await tracked.Should().Within(5.Seconds()).Match(acc => acc.Count == 10);
 
         tracker.Should().HaveCount(10);
         tracker.Select(t => t.Text).Should().Equal(Enumerable.Range(0, 10).Select(exp => (exp + 1).ToString()));
@@ -106,7 +106,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
     /// Tests that Select projects ISynchronizationStream&lt;DerivedData&gt; to ISynchronizationStream&lt;IBaseData&gt;
     /// </summary>
     [Fact]
-    public void SelectProjectsDerivedToBaseType()
+    public async Task SelectProjectsDerivedToBaseType()
     {
         // Arrange: configure workspace with DerivedData
         var workspace = GetHost().GetWorkspace();
@@ -144,7 +144,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
         });
 
         // Assert: the Select stream should have received the projected IBaseData
-        var receivedBaseData = baseDataStream.Should().Match(acc => acc.Count == 1);
+        var receivedBaseData = await baseDataStream.Should().Match(acc => acc.Count == 1);
         receivedBaseData.Should().HaveCount(1);
         receivedBaseData[0].Should().BeOfType<DerivedData>();
         receivedBaseData[0].Id.Should().Be("1");
@@ -154,7 +154,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
     /// Tests that Select can transform stream values using a lambda expression
     /// </summary>
     [Fact]
-    public void SelectTransformsValues()
+    public async Task SelectTransformsValues()
     {
         // Arrange
         var workspace = GetHost().GetWorkspace();
@@ -196,7 +196,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
         });
 
         // Assert: should have received both text values, in order
-        var receivedTexts = textStream.Should().Match(acc => acc.Count == 2);
+        var receivedTexts = await textStream.Should().Match(acc => acc.Count == 2);
         receivedTexts.Should().HaveCount(2);
         receivedTexts.Should().ContainInOrder("Hello World", "Updated Text");
     }
@@ -205,7 +205,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
     /// When a server-side stream errors via OnError, the client stream should also fail.
     /// </summary>
     [Fact]
-    public void ServerStreamError_PropagatesTo_ClientStream()
+    public async Task ServerStreamError_PropagatesTo_ClientStream()
     {
         var host = GetHost();
         var client = GetClient();
@@ -223,7 +223,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
             CreateHostAddress(), new CollectionsReference(collectionName));
 
         // Wait for initial data to arrive
-        var initial = clientStream.Should().Within(3.Seconds()).Emit();
+        var initial = await clientStream.Should().Within(3.Seconds()).Emit();
         initial.Should().NotBeNull();
 
         // Track errors on client stream. ReplaySubject buffers the error so the
@@ -236,7 +236,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
         dataSourceStream!.OnError(new InvalidOperationException("Server stream failed"));
 
         // Client should receive the error
-        var error = errorReceived.Should().Within(1.Seconds()).Emit();
+        var error = await errorReceived.Should().Within(1.Seconds()).Emit();
 
         error.Should().NotBeNull();
         Output.WriteLine($"Client received error: {error.Message}");

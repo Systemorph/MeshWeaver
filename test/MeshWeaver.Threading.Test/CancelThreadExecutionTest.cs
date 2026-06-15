@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
@@ -49,13 +49,13 @@ public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshT
     }
 
     [Fact]
-    public void CancelStream_StopsExecutionAndMarksAsCancelled()
+    public async Task CancelStream_StopsExecutionAndMarksAsCancelled()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
 
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, "Cancel test", "Roland");
-        var createResp = client.Observe(new CreateNodeRequest(threadNode),
+        var createResp = await client.Observe(new CreateNodeRequest(threadNode),
             o => o.WithTarget(Mesh.Address)).Should().Within(30.Seconds()).Emit();
         createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
         var threadPath = createResp.Message.Node!.Path!;
@@ -66,7 +66,7 @@ public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshT
         // the first cache.GetStream call (opened by _Exec's round watcher)
         // against the submission watcher's claim emission, and the chain
         // can stall at Status=StartingExecution.
-        var baselineThread = workspace.GetMeshNodeStream(threadPath)
+        var baselineThread = await workspace.GetMeshNodeStream(threadPath)
             .Select(n => n.Content as MeshThread)
             .Should().Within(10.Seconds()).Match(t => t != null);
         baselineThread!.IsExecuting.Should().BeFalse("thread should not be executing yet");
@@ -78,7 +78,7 @@ public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshT
             contextPath: ContextPath);
 
         // Wait for ActiveMessageId so we know which response cell to watch.
-        var executing = workspace.GetMeshNodeStream(threadPath)
+        var executing = await workspace.GetMeshNodeStream(threadPath)
             .Select(n => n.Content as MeshThread)
             .Should().Within(15.Seconds()).Match(t => t is { IsExecuting: true, ActiveMessageId: { Length: > 0 } });
         var responseMsgId = executing!.ActiveMessageId!;
@@ -93,7 +93,7 @@ public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshT
         // CreateNode and hit a routing NotFound. RetryWhen with a short delay
         // covers that gap (same pattern the per-node hub's UpdateRemote uses
         // internally â€” wait for the cell to materialise).
-        Observable.Defer(() => workspace.GetMeshNodeStream($"{threadPath}/{responseMsgId}"))
+        await Observable.Defer(() => workspace.GetMeshNodeStream($"{threadPath}/{responseMsgId}"))
             .Select(n => (n.Content as ThreadMessage)?.Text ?? "")
             .Where(t => t.StartsWith("Generating response", StringComparison.Ordinal))
             .Take(1)
@@ -109,7 +109,7 @@ public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshT
         // RequestViaStreamUpdate.md). Set RequestedStatus = Cancelled; the
         // owning hub's cancel watcher reacts. Awaiting the post-update emission
         // asserts the write actually landed on the per-thread hub.
-        var cancelled = workspace.GetMeshNodeStream(threadPath)
+        var cancelled = await workspace.GetMeshNodeStream(threadPath)
             .Update(curr => curr?.Content is MeshThread t
                 ? curr with { Content = t with { RequestedStatus = ThreadExecutionStatus.Cancelled } }
                 : curr!)
@@ -119,7 +119,7 @@ public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshT
 
         // Wait for execution to settle. Cancel drives the thread to the terminal
         // Cancelled status (IsExecuting=false).
-        var settled = workspace.GetMeshNodeStream(threadPath)
+        var settled = await workspace.GetMeshNodeStream(threadPath)
             .Select(n => n.Content as MeshThread)
             .Should().Within(15.Seconds()).Match(t => t is { IsExecuting: false });
         settled.Should().NotBeNull();
@@ -134,7 +134,7 @@ public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshT
         // tolerate missing partial text â€” the core cancel guarantee is the
         // Settled check above. If we DO see partial text, confirm it didn't
         // emit the FULL Long response (cancel must have stopped streaming).
-        var partial = responseStream
+        var partial = await responseStream
             .Select(n => n.Content as ThreadMessage)
             .Where(m => m?.Text is { Length: > 0 } txt
                 && !txt.StartsWith("Allocating agent", StringComparison.Ordinal)

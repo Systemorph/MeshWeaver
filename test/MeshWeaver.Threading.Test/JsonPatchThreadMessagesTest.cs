@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -38,10 +38,10 @@ public class JsonPatchThreadMessagesTest(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact]
-    public void CreateThread_ThenUpdateMessages_ProducesValidMeshNode()
+    public async Task CreateThread_ThenUpdateMessages_ProducesValidMeshNode()
     {
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, "patch test", "Roland");
-        var created = NodeFactory.CreateNode(threadNode).Should().Emit();
+        var created = await NodeFactory.CreateNode(threadNode).Should().Emit();
         var threadPath = created.Path;
         Output.WriteLine($"Thread created: {threadPath}");
 
@@ -49,7 +49,7 @@ public class JsonPatchThreadMessagesTest(ITestOutputHelper output) : MonolithMes
         var workspace = client.GetWorkspace();
         var threadStream = workspace.GetMeshNodeStream(threadPath);
 
-        var initial = threadStream.Should().Within(5.Seconds()).Emit();
+        var initial = await threadStream.Should().Within(5.Seconds()).Emit();
         var initialContent = initial.Content as MeshThread;
         initialContent.Should().NotBeNull();
         initialContent!.Messages.Should().BeEmpty();
@@ -62,7 +62,7 @@ public class JsonPatchThreadMessagesTest(ITestOutputHelper output) : MonolithMes
         client.Post(new DataChangeRequest { Updates = [updatedNode] },
             o => o.WithTarget(new Address(threadPath)));
 
-        var resultNode = threadStream.Should().Within(5.Seconds())
+        var resultNode = await threadStream.Should().Within(5.Seconds())
             .Match(n => (n.Content as MeshThread)?.Messages.Count >= 2);
 
         resultNode.Id.Should().Be(initial.Id, "Id should be preserved after patch");

@@ -60,7 +60,7 @@ public class SpaceMainTableChildCreateTests(PostgreSqlFixture fixture, ITestOutp
     }
 
     [Fact(Timeout = 90000)]
-    public void CreateMainTableChild_UnderExistingSpace_PersistsAndReadsBack()
+    public async Task CreateMainTableChild_UnderExistingSpace_PersistsAndReadsBack()
     {
         var spaceId = $"pgmt_space_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -68,7 +68,7 @@ public class SpaceMainTableChildCreateTests(PostgreSqlFixture fixture, ITestOutp
         var ct = TestContext.Current.CancellationToken;
 
         // 1. Create the Space (provisions the partition; same as AgenticPension on atioz).
-        var space = meshService.CreateNode(new MeshNode(spaceId)
+        var space = await meshService.CreateNode(new MeshNode(spaceId)
         {
             NodeType = SpaceNodeType.NodeType,
             Name = spaceId,
@@ -80,7 +80,7 @@ public class SpaceMainTableChildCreateTests(PostgreSqlFixture fixture, ITestOutp
         // 2. The MCP-create shape that vanished on atioz: a PLAIN (main-table)
         //    child — nodeType Markdown, no satellite segment, no Content needed.
         var childPath = $"{spaceId}/ProbeCreate";
-        var child = meshService.CreateNode(new MeshNode("ProbeCreate", spaceId)
+        var child = await meshService.CreateNode(new MeshNode("ProbeCreate", spaceId)
         {
             NodeType = "Markdown",
             Name = "Probe Create",
@@ -90,7 +90,7 @@ public class SpaceMainTableChildCreateTests(PostgreSqlFixture fixture, ITestOutp
         child.Path.Should().Be(childPath);
 
         // 3. The ack must mean something: the node reads back by exact path …
-        var readBack = workspace.GetMeshNodeStream(childPath)
+        var readBack = await workspace.GetMeshNodeStream(childPath)
             .Where(n => n is not null).Take(1).Timeout(15.Seconds())
             .Catch<MeshNode?, TimeoutException>(_ => Observable.Return<MeshNode?>(null))
             .Should().Within(30.Seconds()).Emit();
@@ -99,7 +99,7 @@ public class SpaceMainTableChildCreateTests(PostgreSqlFixture fixture, ITestOutp
 
         // 4. … and has a PHYSICAL row in the partition's main table (the atioz
         //    failure left zero rows while still acking Success).
-        var rows = CountRowsAsync(spaceId, "ProbeCreate", ct).ToObservable()
+        var rows = await CountRowsAsync(spaceId, "ProbeCreate", ct).ToObservable()
             .Should().Within(20.Seconds()).Emit();
         rows.Should().Be(1,
             $"the create must have committed a row to {spaceId}.mesh_nodes — an ack without a row is silent data loss");

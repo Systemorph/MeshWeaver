@@ -46,7 +46,7 @@ public class ExportDocumentScriptRelayTest(ITestOutputHelper output) : MonolithM
             .AddMarkdownExport();
 
     [Fact]
-    public void ExportRequest_StartsScriptActivity_AndReturnsBytesOnTerminal()
+    public async Task ExportRequest_StartsScriptActivity_AndReturnsBytesOnTerminal()
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         // ExportNs is a top-level container (empty namespace) = a partition root; the
@@ -58,7 +58,7 @@ public class ExportDocumentScriptRelayTest(ITestOutputHelper output) : MonolithM
             Name = "Test Export Root",
             NodeType = MarkdownNodeType.NodeType
         });
-        meshService.CreateNode(MeshNode.FromPath(SourcePath) with
+        await meshService.CreateNode(MeshNode.FromPath(SourcePath) with
         {
             Name = "Sample Document",
             NodeType = MarkdownNodeType.NodeType,
@@ -78,7 +78,7 @@ public class ExportDocumentScriptRelayTest(ITestOutputHelper output) : MonolithM
         // Step 1 — dispatch the request, observe the start-ack. The handler
         // returns immediately with the activity path; it does NOT wait for
         // the script to finish.
-        var dispatch = Mesh
+        var dispatch = await Mesh
             .Observe<ExportDocumentResponse>(request, o => o.WithTarget(new Address(SourcePath)))
             .Should().Within(30.Seconds()).Emit();
 
@@ -96,7 +96,7 @@ public class ExportDocumentScriptRelayTest(ITestOutputHelper output) : MonolithM
         // ActivityLog state; GetMeshNodeStream activates that hub and emits
         // every UpdateMeshNode the script writes.
         var workspace = GetClient(c => c.AddData()).GetWorkspace();
-        var terminal = workspace
+        var terminal = await workspace
             .GetMeshNodeStream(dispatch.Message.ActivityPath)
             .Select(node => node?.Content as ActivityLog)
             .Should().Within(2.Minutes())

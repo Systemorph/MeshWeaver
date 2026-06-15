@@ -58,7 +58,7 @@ public class ProviderKeyEncryptionTest : AITestBase
     }
 
     [Fact]
-    public void ApiKey_IsCiphertextAtRest_AndDecryptedOnResolve()
+    public async Task ApiKey_IsCiphertextAtRest_AndDecryptedOnResolve()
     {
         var owner = $"user-{Guid.NewGuid():N}";
         const string secret = "sk-ant-PLAINTEXT-SECRET-9999";
@@ -66,13 +66,13 @@ public class ProviderKeyEncryptionTest : AITestBase
         var service = Mesh.ServiceProvider.GetRequiredService<ModelProviderService>();
         var workspace = Mesh.GetWorkspace();
 
-        var result = service.CreateProvider(owner, "Anthropic", secret)
+        var result = await service.CreateProvider(owner, "Anthropic", secret)
             .Should().Within(20.Seconds()).Emit();
         var providerPath = result.ProviderNode.Path!;
         var modelId = result.ModelNodes.First().Id;
 
         // 1. AT REST: the stored ApiKey is enc:-tagged ciphertext, not the plaintext.
-        var node = workspace.GetMeshNodeStream(providerPath)
+        var node = await workspace.GetMeshNodeStream(providerPath)
             .Should().Within(10.Seconds())
             .Match(n => (n.Content as ModelProviderConfiguration)?.ApiKey?.StartsWith("enc:") == true);
         var storedKey = ((ModelProviderConfiguration)node.Content!).ApiKey!;
@@ -85,7 +85,7 @@ public class ProviderKeyEncryptionTest : AITestBase
         var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
         resolver.EnsureSubscription();
         resolver.WatchPartition(owner);
-        var resolution = Observable.Interval(TimeSpan.FromMilliseconds(50))
+        var resolution = await Observable.Interval(TimeSpan.FromMilliseconds(50))
             .Select(_ => resolver.Resolve(modelId))
             .Should().Within(15.Seconds()).Match(r => r.ApiKey != null);
         resolution.ApiKey.Should().Be(secret, "the resolver decrypts the stored ciphertext for the factory");

@@ -93,14 +93,14 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
     /// satellite tables; the second call must be a no-op (idempotent — no error).
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void EnsurePartitionSchema_StoredProc_Exists_AndIsIdempotent()
+    public async Task EnsurePartitionSchema_StoredProc_Exists_AndIsIdempotent()
     {
         var ct = TestContext.Current.CancellationToken;
         // Touch the mesh so the schema initializer has installed the proc on public.
         _ = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         // (1) The function exists in the public schema.
-        var procCount = ProcExistsCountAsync(ct).ToObservable()
+        var procCount = await ProcExistsCountAsync(ct).ToObservable()
             .Should().Within(20.Seconds()).Emit();
         procCount.Should().BeGreaterThan(0,
             "the public.ensure_partition_schema(text) stored proc must be installed by the schema initializer");
@@ -108,9 +108,9 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
         var partition = $"pg9d_proc_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
 
         // (2) First call provisions the schema + tables.
-        CallEnsurePartitionSchemaAsync(partition, ct).ToObservable()
+        await CallEnsurePartitionSchemaAsync(partition, ct).ToObservable()
             .Should().Within(30.Seconds()).Emit();
-        var afterFirst = GetTablesAsync(partition, ct).ToObservable()
+        var afterFirst = await GetTablesAsync(partition, ct).ToObservable()
             .Should().Within(20.Seconds()).Emit();
         afterFirst.Should().Contain("mesh_nodes",
             "the proc must create the partition's primary table");
@@ -122,9 +122,9 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
             "the proc must create the _Notification satellite table");
 
         // (3) Second call is a no-op — must not throw, tables unchanged.
-        CallEnsurePartitionSchemaAsync(partition, ct).ToObservable()
+        await CallEnsurePartitionSchemaAsync(partition, ct).ToObservable()
             .Should().Within(30.Seconds()).Emit();
-        var afterSecond = GetTablesAsync(partition, ct).ToObservable()
+        var afterSecond = await GetTablesAsync(partition, ct).ToObservable()
             .Should().Within(20.Seconds()).Emit();
         afterSecond.SetEquals(afterFirst).Should().BeTrue(
             "the second ensure_partition_schema call must be idempotent — the table set is unchanged");
@@ -166,7 +166,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
     /// namespace and everything downstream must just work.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void CreateSpace_TopLevel_ProvisionsPartitionAndGrantsCreatorAdmin()
+    public async Task CreateSpace_TopLevel_ProvisionsPartitionAndGrantsCreatorAdmin()
     {
         var spaceId = $"pg9d_space_{Guid.NewGuid():N}".ToLowerInvariant()[..20];
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -175,7 +175,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
 
         // 1. Create the top-level Space via the real CreateNodeRequest path.
         //    No Admin/Partition pre-write — the server must provision everything.
-        var created = meshService.CreateNode(new MeshNode(spaceId)
+        var created = await meshService.CreateNode(new MeshNode(spaceId)
         {
             NodeType = SpaceNodeType.NodeType,
             Name = spaceId,
@@ -188,7 +188,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
         created.Path.Should().Be(spaceId);
 
         // (a) The partition schema + mesh_nodes (+ satellite tables) must exist.
-        var tables = GetTablesAsync(spaceId, ct).ToObservable()
+        var tables = await GetTablesAsync(spaceId, ct).ToObservable()
             .Should().Within(30.Seconds()).Emit();
         tables.Should().Contain("mesh_nodes",
             $"creating Space '{spaceId}' must provision its partition schema with the primary table");
@@ -197,7 +197,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
 
         // (b) An AccessAssignment must exist at {id}/_Access granting the creator Admin.
         var grantPath = $"{spaceId}/_Access/{TestUsers.Admin.ObjectId}_Access";
-        var grant = workspace.GetMeshNodeStream(grantPath)
+        var grant = await workspace.GetMeshNodeStream(grantPath)
             .Where(n => n is not null).Take(1).Timeout(20.Seconds())
             .Catch<MeshNode?, TimeoutException>(_ => Observable.Return<MeshNode?>(null))
             .Should().Within(30.Seconds()).Emit();
@@ -213,7 +213,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
         //     the symptom of the regression is `42P01 relation "{id}.mesh_nodes"
         //     does not exist` here.
         var providerPath = $"{spaceId}/_Provider/SomeProvider";
-        var providerSaved = meshService.CreateNode(new MeshNode("SomeProvider", $"{spaceId}/_Provider")
+        var providerSaved = await meshService.CreateNode(new MeshNode("SomeProvider", $"{spaceId}/_Provider")
         {
             NodeType = "Markdown",
             Name = "SomeProvider",
@@ -221,7 +221,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
         }).Should().Within(30.Seconds()).Emit();
         providerSaved.Path.Should().Be(providerPath);
 
-        var providerReadBack = workspace.GetMeshNodeStream(providerPath)
+        var providerReadBack = await workspace.GetMeshNodeStream(providerPath)
             .Where(n => n is not null).Take(1).Timeout(15.Seconds())
             .Catch<MeshNode?, TimeoutException>(_ => Observable.Return<MeshNode?>(null))
             .Should().Within(30.Seconds()).Emit();
@@ -249,7 +249,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
     /// the creator Admin — exactly like the clean-slate case.</para>
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void CreateSpace_OverPreExistingBareSchema_HealsAndGrantsCreatorAdmin()
+    public async Task CreateSpace_OverPreExistingBareSchema_HealsAndGrantsCreatorAdmin()
     {
         var spaceId = $"pg9d_bare_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -258,15 +258,15 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
 
         // Arrange: reproduce the prod state — the partition schema exists but is bare
         // (no mesh_nodes table, no root node). A plain CREATE SCHEMA, no ensure_partition_schema.
-        CreateBareSchemaAsync(spaceId, ct).ToObservable()
+        await CreateBareSchemaAsync(spaceId, ct).ToObservable()
             .Should().Within(20.Seconds()).Emit();
-        var bareTables = GetTablesAsync(spaceId, ct).ToObservable()
+        var bareTables = await GetTablesAsync(spaceId, ct).ToObservable()
             .Should().Within(20.Seconds()).Emit();
         bareTables.Should().NotContain("mesh_nodes",
             "precondition: the schema must exist but be bare (no mesh_nodes) to reproduce the half-provisioned state");
 
         // Act: create the top-level Space via the real CreateNodeRequest path.
-        var created = meshService.CreateNode(new MeshNode(spaceId)
+        var created = await meshService.CreateNode(new MeshNode(spaceId)
         {
             NodeType = SpaceNodeType.NodeType,
             Name = spaceId,
@@ -277,7 +277,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
         created.Path.Should().Be(spaceId);
 
         // (a) The previously-bare schema must now carry mesh_nodes + the _Access satellite.
-        var tables = GetTablesAsync(spaceId, ct).ToObservable()
+        var tables = await GetTablesAsync(spaceId, ct).ToObservable()
             .Should().Within(30.Seconds()).Emit();
         tables.Should().Contain("mesh_nodes",
             "the create path must provision the primary table even when the schema pre-existed");
@@ -286,7 +286,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
 
         // (b) The creator must still be granted Admin at {id}/_Access.
         var grantPath = $"{spaceId}/_Access/{TestUsers.Admin.ObjectId}_Access";
-        var grant = workspace.GetMeshNodeStream(grantPath)
+        var grant = await workspace.GetMeshNodeStream(grantPath)
             .Where(n => n is not null).Take(1).Timeout(20.Seconds())
             .Catch<MeshNode?, TimeoutException>(_ => Observable.Return<MeshNode?>(null))
             .Should().Within(30.Seconds()).Emit();
@@ -321,7 +321,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
     /// so writing a <c>User</c> node replicates it into <c>auth.mesh_nodes</c>.</para>
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void AuthMirror_FunctionInstalledByInit_TriggerReplicatesUserIntoAuth()
+    public async Task AuthMirror_FunctionInstalledByInit_TriggerReplicatesUserIntoAuth()
     {
         var ct = TestContext.Current.CancellationToken;
         // Touch the mesh so schema-init (InitializeAsync on public) has definitely run.
@@ -329,24 +329,24 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
 
         // (1) The always-run init must have created the mirror function — without it the
         //     per-partition trigger guard silently no-ops on fresh DBs.
-        var funcExists = AuthMirrorFunctionExistsAsync(ct).ToObservable()
+        var funcExists = await AuthMirrorFunctionExistsAsync(ct).ToObservable()
             .Should().Within(20.Seconds()).Emit();
         funcExists.Should().BeTrue(
             "InitializeAsync must create public.mirror_access_object_to_auth_schema() so the " +
             "per-partition trigger guard passes on fresh DBs");
 
         // (2) Provision the auth mirror target + a content partition via the stored proc.
-        CallEnsurePartitionSchemaAsync("auth", ct).ToObservable().Should().Within(30.Seconds()).Emit();
+        await CallEnsurePartitionSchemaAsync("auth", ct).ToObservable().Should().Within(30.Seconds()).Emit();
         // NB: schema names must not start with the reserved 'pg_' prefix (42939).
         var part = $"authmir_{Guid.NewGuid():N}".ToLowerInvariant()[..20];
-        CallEnsurePartitionSchemaAsync(part, ct).ToObservable().Should().Within(30.Seconds()).Emit();
+        await CallEnsurePartitionSchemaAsync(part, ct).ToObservable().Should().Within(30.Seconds()).Emit();
 
         // (3) A User written into the partition must be mirrored into auth by the trigger.
         var userId = $"u_{Guid.NewGuid():N}"[..12];
-        InsertAccessObjectAsync(part, part, userId, "User", ct).ToObservable()
+        await InsertAccessObjectAsync(part, part, userId, "User", ct).ToObservable()
             .Should().Within(20.Seconds()).Emit();
 
-        var mirrored = CountAuthRowsAsync(part, userId, ct).ToObservable()
+        var mirrored = await CountAuthRowsAsync(part, userId, ct).ToObservable()
             .Should().Within(20.Seconds()).Emit();
         mirrored.Should().Be(1,
             "the mesh_node_mirror_access_objects trigger must replicate the User node into auth.mesh_nodes");
@@ -393,14 +393,14 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
     /// non-empty namespace must be rejected server-side with a clear error.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void CreateSpace_WithNonEmptyNamespace_IsRejected()
+    public async Task CreateSpace_WithNonEmptyNamespace_IsRejected()
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var spaceId = $"pg9d_nested_{Guid.NewGuid():N}".ToLowerInvariant()[..20];
 
         // A Space nested under another namespace is invalid — the create must
         // OnError rather than persist a non-root Space.
-        var notification = meshService.CreateNode(new MeshNode(spaceId, "SomeParent")
+        var notification = await meshService.CreateNode(new MeshNode(spaceId, "SomeParent")
             {
                 NodeType = SpaceNodeType.NodeType,
                 Name = spaceId,
@@ -416,12 +416,12 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
     }
 
     [Fact(Timeout = 60000)]
-    public void UserOnboarding_CreatesPerUserPartition()
+    public async Task UserOnboarding_CreatesPerUserPartition()
     {
         var username = $"pg9d_user_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var onboarding = Mesh.ServiceProvider.GetRequiredService<UserOnboardingService>();
 
-        var partitionRoot = onboarding.CreateUser(new UserOnboardingRequest(
+        var partitionRoot = await onboarding.CreateUser(new UserOnboardingRequest(
                 Username: username,
                 Email: $"{username}@example.com",
                 FullName: "Test User"))
@@ -431,7 +431,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
         partitionRoot.Path.Should().Be(username);
 
         var resolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
-        var resolution = resolver.ResolvePath(username)
+        var resolution = await resolver.ResolvePath(username)
             .Where(r => r is not null).Take(1).Timeout(20.Seconds())
             .Catch<AddressResolution?, TimeoutException>(_ => Observable.Return<AddressResolution?>(null))
             .Should().Within(30.Seconds()).Emit();
@@ -441,7 +441,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
     }
 
     [Fact(Timeout = 60000)]
-    public void CreateSpace_Routable_NoAdminPartitionPreWrite()
+    public async Task CreateSpace_Routable_NoAdminPartitionPreWrite()
     {
         // 🚨 Previously this test pre-wrote Admin/Partition/{id} to mask the
         // missing eager provisioning (the 77d9941ff regression). Dropped: the
@@ -451,7 +451,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
         var orgId = $"pg9d_org_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        var orgRoot = meshService.CreateNode(new MeshNode(orgId)
+        var orgRoot = await meshService.CreateNode(new MeshNode(orgId)
         {
             NodeType = "Space",
             Name = orgId,
@@ -461,7 +461,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
         orgRoot.Should().NotBeNull();
 
         var resolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
-        var resolution = resolver.ResolvePath(orgId)
+        var resolution = await resolver.ResolvePath(orgId)
             .Where(r => r is not null).Take(1).Timeout(20.Seconds())
             .Catch<AddressResolution?, TimeoutException>(_ => Observable.Return<AddressResolution?>(null))
             .Should().Within(30.Seconds()).Emit();
@@ -470,11 +470,11 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
     }
 
     [Fact(Timeout = 60000)]
-    public void OnboardedUser_CanWriteAndReadInOwnNamespace()
+    public async Task OnboardedUser_CanWriteAndReadInOwnNamespace()
     {
         var username = $"pg9d_owner_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var onboarding = Mesh.ServiceProvider.GetRequiredService<UserOnboardingService>();
-        onboarding.CreateUser(new UserOnboardingRequest(
+        await onboarding.CreateUser(new UserOnboardingRequest(
                 Username: username,
                 Email: $"{username}@example.com",
                 FullName: "Owner"))
@@ -482,7 +482,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
 
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var notePath = $"{username}/notebook/note1";
-        var saved = meshService.CreateNode(new MeshNode("note1", $"{username}/notebook")
+        var saved = await meshService.CreateNode(new MeshNode("note1", $"{username}/notebook")
         {
             NodeType = "Markdown",
             Name = "note1",
@@ -491,7 +491,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
         saved.Path.Should().Be(notePath);
 
         var workspace = Mesh.GetWorkspace();
-        var readBack = workspace.GetMeshNodeStream(notePath)
+        var readBack = await workspace.GetMeshNodeStream(notePath)
             .Where(n => n is not null).Take(1).Timeout(15.Seconds())
             .Catch<MeshNode?, TimeoutException>(_ => Observable.Return<MeshNode?>(null))
             .Should().Within(30.Seconds()).Emit();
@@ -505,7 +505,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
     /// its Admin. Impersonates a brand-new user with no global-admin grant.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void CreateSpace_ByNonGlobalAdmin_Succeeds_AndGrantsCreatorAdmin()
+    public async Task CreateSpace_ByNonGlobalAdmin_Succeeds_AndGrantsCreatorAdmin()
     {
         var creator = $"pg9d_anyone_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var spaceId = $"pg9d_sp_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
@@ -516,7 +516,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
         // Act AS a regular (non-global-admin) user.
         accessService.SetCircuitContext(new AccessContext { ObjectId = creator, Name = creator });
 
-        var created = meshService.CreateNode(new MeshNode(spaceId)
+        var created = await meshService.CreateNode(new MeshNode(spaceId)
         {
             NodeType = SpaceNodeType.NodeType,
             Name = spaceId,
@@ -528,7 +528,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
 
         // Creator auto-becomes Admin of the Space they created.
         var grantPath = $"{spaceId}/_Access/{creator}_Access";
-        var grant = workspace.GetMeshNodeStream(grantPath)
+        var grant = await workspace.GetMeshNodeStream(grantPath)
             .Where(n => n is not null).Take(1).Timeout(20.Seconds())
             .Catch<MeshNode?, TimeoutException>(_ => Observable.Return<MeshNode?>(null))
             .Should().Within(30.Seconds()).Emit();
@@ -544,13 +544,13 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
     /// can be removed. Enforced by <c>SpaceAdminInvariantValidator</c>.
     /// </summary>
     [Fact(Timeout = 90000)]
-    public void Space_CannotRemoveLastAdmin_AllowedAfterSecondAdmin()
+    public async Task Space_CannotRemoveLastAdmin_AllowedAfterSecondAdmin()
     {
         var spaceId = $"pg9d_lastadm_{Guid.NewGuid():N}".ToLowerInvariant()[..20];
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var workspace = Mesh.GetWorkspace();
 
-        meshService.CreateNode(new MeshNode(spaceId)
+        await meshService.CreateNode(new MeshNode(spaceId)
         {
             NodeType = SpaceNodeType.NodeType,
             Name = spaceId,
@@ -559,20 +559,20 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
         }).Should().Within(45.Seconds()).Emit();
 
         var firstAdminPath = $"{spaceId}/_Access/{TestUsers.Admin.ObjectId}_Access";
-        workspace.GetMeshNodeStream(firstAdminPath)
+        await workspace.GetMeshNodeStream(firstAdminPath)
             .Where(n => n is not null).Take(1).Timeout(20.Seconds())
             .Should().Within(30.Seconds()).Emit();
 
         // (1) Deleting the LAST admin must be blocked (DeleteNode emits false / OnError,
         //     never OnNext(true)).
-        var blocked = meshService.DeleteNode(firstAdminPath)
+        var blocked = await meshService.DeleteNode(firstAdminPath)
             .Take(1).Materialize().Should().Within(30.Seconds()).Emit();
         var deletedLast = blocked.Kind == System.Reactive.NotificationKind.OnNext && blocked.Value;
         deletedLast.Should().BeFalse("deleting the last admin of a Space must be rejected");
 
         // (2) Add a SECOND admin.
         const string secondAdmin = "pg9dsecondadmin";
-        meshService.CreateNode(new MeshNode($"{secondAdmin}_Access", $"{spaceId}/_Access")
+        await meshService.CreateNode(new MeshNode($"{secondAdmin}_Access", $"{spaceId}/_Access")
         {
             NodeType = "AccessAssignment",
             Name = $"{secondAdmin} Access",
@@ -587,7 +587,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
 
         // Wait until the read-side (what the validator reads) shows BOTH admins — accumulate
         // ids across Initial + delta emissions so we don't race eventual consistency.
-        MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
+        await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{spaceId}/_Access nodeType:AccessAssignment"))
             .Scan(ImmutableHashSet<string>.Empty, (acc, c) =>
                 c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset
@@ -598,7 +598,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
             .Should().Within(35.Seconds()).Emit();
 
         // (3) Now the first admin CAN be removed — a second admin remains.
-        var allowed = meshService.DeleteNode(firstAdminPath)
+        var allowed = await meshService.DeleteNode(firstAdminPath)
             .Take(1).Materialize().Should().Within(30.Seconds()).Emit();
         var deletedFirst = allowed.Kind == System.Reactive.NotificationKind.OnNext && allowed.Value;
         deletedFirst.Should().BeTrue("with a second admin present, the first admin can be removed");

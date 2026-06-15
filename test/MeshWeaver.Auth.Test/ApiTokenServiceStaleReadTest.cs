@@ -49,20 +49,20 @@ public class ApiTokenServiceStaleReadTest(ITestOutputHelper output) : MonolithMe
     /// token is always visible.
     /// </summary>
     [Fact]
-    public void RevokeToken_ImmediatelyAfterCreate_SeesTheNewToken()
+    public async Task RevokeToken_ImmediatelyAfterCreate_SeesTheNewToken()
     {
         var service = GetService();
 
         // Create the token via the reactive surface — emits once both the user-scoped
         // node and the index pointer commit.
-        var creation = service.CreateToken(
+        var creation = await service.CreateToken(
                 "user-stale", "Stale Reader", "stale@test.com", "Token A")
             .Should().Emit();
 
         // No flush, no sleep — straight to revoke. Under the old QueryAsync-based
         // path the read-side index can lag and RevokeToken returns false because it
         // can't find the node it just created.
-        var ok = service.RevokeToken(creation.Node.Path).Should().Emit();
+        var ok = await service.RevokeToken(creation.Node.Path).Should().Emit();
 
         ok.Should().BeTrue("RevokeToken must observe the just-created token (no stale lag)");
 
@@ -71,7 +71,7 @@ public class ApiTokenServiceStaleReadTest(ITestOutputHelper output) : MonolithMe
         // ValidateToken exercises the same authoritative read path used in production auth.
         // It reads via the live GetApiTokenByHash synced query, whose snapshot can lag the
         // just-applied revoke — re-issue on a 50 ms interval until the token reads as null.
-        var validated = Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+        var validated = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .SelectMany(_ => service.ValidateToken(creation.RawToken).Take(1))
             .Should().Match(v => v is null, "revoked tokens must not validate");
         validated.Should().BeNull("revoked tokens must not validate");
@@ -84,23 +84,23 @@ public class ApiTokenServiceStaleReadTest(ITestOutputHelper output) : MonolithMe
     /// the index entry, leaving an orphan that future ValidateToken calls might hit.
     /// </summary>
     [Fact]
-    public void DeleteToken_ImmediatelyAfterCreate_RemovesTheNewToken()
+    public async Task DeleteToken_ImmediatelyAfterCreate_RemovesTheNewToken()
     {
         var service = GetService();
 
-        var creation = service.CreateToken(
+        var creation = await service.CreateToken(
                 "user-stale-del", "Stale Deleter", "del@test.com", "Token to Delete")
             .Should().Emit();
 
         // No sleep — straight to delete. Stale-read returns null → DeleteToken
         // resolves to false silently.
-        var ok = service.DeleteToken(creation.Node.Path).Should().Emit();
+        var ok = await service.DeleteToken(creation.Node.Path).Should().Emit();
 
         ok.Should().BeTrue("DeleteToken must observe the just-created token (no stale lag)");
 
         // The token must no longer validate — ValidateToken returns null when the index
         // pointer is gone (which DeleteToken removed alongside the user-namespace node).
-        var validated = service.ValidateToken(creation.RawToken).Should().Emit();
+        var validated = await service.ValidateToken(creation.RawToken).Should().Emit();
         validated.Should().BeNull("DeleteToken should have removed the token's index pointer");
     }
 
@@ -110,17 +110,17 @@ public class ApiTokenServiceStaleReadTest(ITestOutputHelper output) : MonolithMe
     /// the case where the read-side index has barely caught up between iterations.
     /// </summary>
     [Fact]
-    public void RevokeToken_RepeatedCreateRevoke_AlwaysSeesEachToken()
+    public async Task RevokeToken_RepeatedCreateRevoke_AlwaysSeesEachToken()
     {
         var service = GetService();
 
         for (var i = 0; i < 5; i++)
         {
-            var creation = service.CreateToken(
+            var creation = await service.CreateToken(
                     $"user-rapid-{i}", "Rapid Tester", $"rapid{i}@test.com", $"Token {i}")
                 .Should().Emit();
 
-            var ok = service.RevokeToken(creation.Node.Path).Should().Emit();
+            var ok = await service.RevokeToken(creation.Node.Path).Should().Emit();
 
             ok.Should().BeTrue($"iteration {i}: RevokeToken must see the just-created token");
         }
@@ -133,11 +133,11 @@ public class ApiTokenServiceStaleReadTest(ITestOutputHelper output) : MonolithMe
     /// (or because the revoke itself never landed due to the stale-read bug).
     /// </summary>
     [Fact]
-    public void RevokeToken_AfterImmediateValidate_BlocksFutureValidation()
+    public async Task RevokeToken_AfterImmediateValidate_BlocksFutureValidation()
     {
         var service = GetService();
 
-        var creation = service.CreateToken(
+        var creation = await service.CreateToken(
                 "user-validate", "Validator", "v@test.com", "Validate")
             .Should().Emit();
 
@@ -146,16 +146,16 @@ public class ApiTokenServiceStaleReadTest(ITestOutputHelper output) : MonolithMe
         // ValidateToken reads the live GetApiTokenByHash synced query, whose
         // first snapshot can be empty right after the create — re-issue on a
         // 50 ms interval until the token becomes visible.
-        var beforeRevoke = Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+        var beforeRevoke = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .SelectMany(_ => service.ValidateToken(creation.RawToken).Take(1))
             .Should().Match(v => v is not null);
         beforeRevoke.Should().NotBeNull();
 
-        var ok = service.RevokeToken(creation.Node.Path).Should().Emit();
+        var ok = await service.RevokeToken(creation.Node.Path).Should().Emit();
         ok.Should().BeTrue();
 
         // Re-issue until the revoke propagates into the synced view (validates as null).
-        var afterRevoke = Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+        var afterRevoke = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .SelectMany(_ => service.ValidateToken(creation.RawToken).Take(1))
             .Should().Match(v => v is null, "revoked tokens must not validate");
         afterRevoke.Should().BeNull("revoked tokens must not validate");

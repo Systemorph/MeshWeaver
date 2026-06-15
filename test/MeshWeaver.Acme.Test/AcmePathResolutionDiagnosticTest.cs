@@ -85,13 +85,13 @@ public class AcmePathResolutionDiagnosticTest(ITestOutputHelper output) : Monoli
     /// (routing / catalog / per-hub data source).
     /// </summary>
     [Fact]
-    public void ReadNode_BothPaths_ReturnNonNull()
+    public async Task ReadNode_BothPaths_ReturnNonNull()
     {
-        var defNode = ReadNode("ACME/ProductLaunch/Todo/DefinePersona")
+        var defNode = await ReadNode("ACME/ProductLaunch/Todo/DefinePersona")
             .Should().Within(60.Seconds()).Match(n => n is not null,
                 "DefinePersona must resolve via the per-node hub's MeshNodeReference reducer");
         Output.WriteLine($"DefinePersona via ReadNode: {(defNode == null ? "<null>" : defNode.Path)}");
-        var launchNode = ReadNode("ACME/ProductLaunch/Todo/LaunchEvent")
+        var launchNode = await ReadNode("ACME/ProductLaunch/Todo/LaunchEvent")
             .Should().Within(60.Seconds()).Match(n => n is not null,
                 "LaunchEvent must resolve too — both .json files live in the same partition directory " +
                 "and have the same MeshNode shape");
@@ -109,13 +109,13 @@ public class AcmePathResolutionDiagnosticTest(ITestOutputHelper output) : Monoli
     /// mutated by the first lookup making the second one match a stale prefix).
     /// </summary>
     [Fact]
-    public void ReadNode_ReverseOrder_BothPathsReturnNonNull()
+    public async Task ReadNode_ReverseOrder_BothPathsReturnNonNull()
     {
-        var launchNode = ReadNode("ACME/ProductLaunch/Todo/LaunchEvent")
+        var launchNode = await ReadNode("ACME/ProductLaunch/Todo/LaunchEvent")
             .Should().Within(60.Seconds()).Match(n => n is not null,
                 "LaunchEvent must resolve regardless of access order");
         Output.WriteLine($"LaunchEvent via ReadNode: {(launchNode == null ? "<null>" : launchNode.Path)}");
-        var defNode = ReadNode("ACME/ProductLaunch/Todo/DefinePersona")
+        var defNode = await ReadNode("ACME/ProductLaunch/Todo/DefinePersona")
             .Should().Within(60.Seconds()).Match(n => n is not null,
                 "DefinePersona must resolve regardless of access order");
         Output.WriteLine($"DefinePersona via ReadNode: {(defNode == null ? "<null>" : defNode.Path)}");
@@ -132,12 +132,12 @@ public class AcmePathResolutionDiagnosticTest(ITestOutputHelper output) : Monoli
     /// returned null for some reason, even though the file exists.
     /// </summary>
     [Fact]
-    public void PathResolver_BothPaths_ResolveToExactNodeNoRemainder()
+    public async Task PathResolver_BothPaths_ResolveToExactNodeNoRemainder()
     {
-        var defResolution = PathResolver.ResolvePath("ACME/ProductLaunch/Todo/DefinePersona").Should().Emit();
+        var defResolution = await PathResolver.ResolvePath("ACME/ProductLaunch/Todo/DefinePersona").Should().Emit();
         Output.WriteLine($"DefinePersona resolution: prefix={defResolution?.Prefix} remainder={defResolution?.Remainder}");
 
-        var launchResolution = PathResolver.ResolvePath("ACME/ProductLaunch/Todo/LaunchEvent").Should().Emit();
+        var launchResolution = await PathResolver.ResolvePath("ACME/ProductLaunch/Todo/LaunchEvent").Should().Emit();
         Output.WriteLine($"LaunchEvent resolution: prefix={launchResolution?.Prefix} remainder={launchResolution?.Remainder}");
 
         defResolution!.Prefix.Should().Be("ACME/ProductLaunch/Todo/DefinePersona");

@@ -54,7 +54,7 @@ public class NodeTypeAssemblyLeakTest(ITestOutputHelper output) : MonolithMeshTe
     /// only the assembly-location string, not the context.
     /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private List<WeakReference> CompileNodeTypeAndWeakRefContexts(string nodeTypeId)
+    private async Task<List<WeakReference>> CompileNodeTypeAndWeakRefContexts(string nodeTypeId)
     {
         var before = AssemblyLoadContext.All
             .Where(a => a.Name?.StartsWith("DynamicNode_", StringComparison.Ordinal) == true)
@@ -82,7 +82,7 @@ public class NodeTypeAssemblyLeakTest(ITestOutputHelper output) : MonolithMeshTe
         // MeshNode via stream.Update, and we observe it through
         // hub.GetMeshNodeStream(nodeTypePath). See RequestViaStreamUpdate.md /
         // HubDisposalModel.md.
-        MeshService.CreateNode(typeNode)
+        await MeshService.CreateNode(typeNode)
             .SelectMany(_ => MeshService.CreateNode(new MeshNode("code", $"{nodeTypePath}/Source")
             {
                 NodeType = "Code",
@@ -106,7 +106,7 @@ public class NodeTypeAssemblyLeakTest(ITestOutputHelper output) : MonolithMeshTe
         // serialises the write and the node stream replays current state to late
         // subscribers.
         var stream = Mesh.GetMeshNodeStream(nodeTypePath);
-        var compiledNode = stream
+        var compiledNode = await stream
             .Should().Within(60.Seconds())
             .Match(n => n?.Content is NodeTypeDefinition def
                 && def.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error);
@@ -138,9 +138,9 @@ public class NodeTypeAssemblyLeakTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     [Fact]
-    public void NodeTypeAssemblyContext_IsCollected_AfterMeshDisposal()
+    public async Task NodeTypeAssemblyContext_IsCollected_AfterMeshDisposal()
     {
-        var weakRefs = CompileNodeTypeAndWeakRefContexts("LeakProbeStory");
+        var weakRefs = await CompileNodeTypeAndWeakRefContexts("LeakProbeStory");
         weakRefs.Should().NotBeEmpty(
             "the compile must have created at least one collectible DynamicNode_* context");
         weakRefs.Should().OnlyContain(w => w.IsAlive,
@@ -149,11 +149,11 @@ public class NodeTypeAssemblyLeakTest(ITestOutputHelper output) : MonolithMeshTe
         // Tear the mesh down: every hosted per-node hub disposes, firing the
         // SubscribeToOwnDeletion → UnloadNodeContexts hook that drops its ALC.
         Mesh.Dispose();
-        Mesh.DisposalCompleted
+        await Mesh.DisposalCompleted
             .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
             .FirstOrDefaultAsync()
-            .ToTask()
-            .Wait(TimeSpan.FromSeconds(30));
+            .Timeout(TimeSpan.FromSeconds(30))
+            .ToTask();
 
         ForceCollect(weakRefs);
 

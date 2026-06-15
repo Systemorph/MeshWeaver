@@ -72,20 +72,20 @@ public class ThreadMessageChatTests : IAsyncLifetime
         return ValueTask.CompletedTask;
     }
 
-    private long Count(string sql, (string Name, object Value)[] parameters, System.Threading.CancellationToken ct)
+    private Task<long> Count(string sql, (string Name, object Value)[] parameters, System.Threading.CancellationToken ct)
         => _schemaDs.ScalarLong(sql, parameters, ct).Should().Within(30.Seconds()).Emit();
 
-    private List<MeshNode> Query(PostgreSqlMeshQuery query, MeshQueryRequest request, System.Threading.CancellationToken ct)
-        => query.QueryList(request, _options, ct).Should().Within(30.Seconds()).Emit()
+    private async Task<List<MeshNode>> Query(PostgreSqlMeshQuery query, MeshQueryRequest request, System.Threading.CancellationToken ct)
+        => (await query.QueryList(request, _options, ct).Should().Within(30.Seconds()).Emit())
             .Cast<MeshNode>().ToList();
 
     [Fact(Timeout = 30000)]
-    public void CreateThread_WritesToThreadsTable()
+    public async Task CreateThread_WritesToThreadsTable()
     {
         var ct = TestContext.Current.CancellationToken;
 
         // Create a user node in mesh_nodes
-        _mainAdapter.Write(new MeshNode("alice", "User")
+        await _mainAdapter.Write(new MeshNode("alice", "User")
         {
             Name = "Alice",
             NodeType = "User",
@@ -99,27 +99,27 @@ public class ThreadMessageChatTests : IAsyncLifetime
             MainNode = "User/alice",
             Content = new MeshThread()
         };
-        _threadAdapter.Write(thread, _options).Should().Within(30.Seconds()).Emit();
+        await _threadAdapter.Write(thread, _options).Should().Within(30.Seconds()).Emit();
 
         // Verify it was written to the threads table (not mesh_nodes)
-        _schemaDs.ScalarLong(
+        await _schemaDs.ScalarLong(
             "SELECT COUNT(*) FROM threads WHERE namespace = 'User/alice/_Thread' AND id = 'chat-1'", ct)
             .Should().Within(30.Seconds()).Be(1L, "thread should be in the threads table");
 
         // Verify it's NOT in mesh_nodes
-        _schemaDs.ScalarLong(
+        await _schemaDs.ScalarLong(
             "SELECT COUNT(*) FROM mesh_nodes WHERE namespace = 'User/alice/_Thread' AND id = 'chat-1'", ct)
             .Should().Within(30.Seconds()).Be(0L, "thread should NOT be in mesh_nodes");
     }
 
     [Fact(Timeout = 30000)]
-    public void PostMessages_WritesToMessagesTable()
+    public async Task PostMessages_WritesToMessagesTable()
     {
         var ct = TestContext.Current.CancellationToken;
         var now = DateTime.UtcNow;
 
         // Create thread first
-        _threadAdapter.Write(new MeshNode("chat-msg", "User/alice/_Thread")
+        await _threadAdapter.Write(new MeshNode("chat-msg", "User/alice/_Thread")
         {
             Name = "Message Test Chat",
             NodeType = "Thread",
@@ -142,7 +142,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
                 Type = ThreadMessageType.ExecutedInput
             }
         };
-        _messageAdapter.Write(userMsg, _options).Should().Within(30.Seconds()).Emit();
+        await _messageAdapter.Write(userMsg, _options).Should().Within(30.Seconds()).Emit();
 
         // Post assistant response
         var assistantMsg = new MeshNode("msg-2", "User/alice/_Thread/chat-msg/_ThreadMessage")
@@ -160,16 +160,16 @@ public class ThreadMessageChatTests : IAsyncLifetime
                 ModelName = "claude-opus-4-6"
             }
         };
-        _messageAdapter.Write(assistantMsg, _options).Should().Within(30.Seconds()).Emit();
+        await _messageAdapter.Write(assistantMsg, _options).Should().Within(30.Seconds()).Emit();
 
         // Verify messages are in threads table
-        _schemaDs.ScalarLong(
+        await _schemaDs.ScalarLong(
             "SELECT COUNT(*) FROM threads WHERE namespace = 'User/alice/_Thread/chat-msg/_ThreadMessage'", ct)
             .Should().Within(30.Seconds()).Be(2L, "both messages should be in threads table");
     }
 
     [Fact(Timeout = 30000)]
-    public void ReadThread_RoundTripsContent()
+    public async Task ReadThread_RoundTripsContent()
     {
         var ct = TestContext.Current.CancellationToken;
 
@@ -183,9 +183,9 @@ public class ThreadMessageChatTests : IAsyncLifetime
                 ProviderType = "TestProvider"
             }
         };
-        _threadAdapter.Write(thread, _options).Should().Within(30.Seconds()).Emit();
+        await _threadAdapter.Write(thread, _options).Should().Within(30.Seconds()).Emit();
 
-        var read = _threadAdapter.Read("User/bob/_Thread/chat-rt", _options).Should().Within(30.Seconds()).Emit();
+        var read = await _threadAdapter.Read("User/bob/_Thread/chat-rt", _options).Should().Within(30.Seconds()).Emit();
         read.Should().NotBeNull();
         read!.Name.Should().Be("Round Trip Chat");
         read.NodeType.Should().Be("Thread");
@@ -193,7 +193,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
     }
 
     [Fact(Timeout = 30000)]
-    public void ReadMessage_RoundTripsContent()
+    public async Task ReadMessage_RoundTripsContent()
     {
         var ct = TestContext.Current.CancellationToken;
 
@@ -210,9 +210,9 @@ public class ThreadMessageChatTests : IAsyncLifetime
                 Type = ThreadMessageType.ExecutedInput
             }
         };
-        _messageAdapter.Write(msg, _options).Should().Within(30.Seconds()).Emit();
+        await _messageAdapter.Write(msg, _options).Should().Within(30.Seconds()).Emit();
 
-        var read = _messageAdapter.Read(
+        var read = await _messageAdapter.Read(
             "User/carol/_Thread/chat-1/_ThreadMessage/msg-rt", _options).Should().Within(30.Seconds()).Emit();
         read.Should().NotBeNull();
         read!.Name.Should().Be("Test message");
@@ -221,7 +221,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
     }
 
     [Fact(Timeout = 30000)]
-    public void ListMessages_ReturnsAllMessagesInThread()
+    public async Task ListMessages_ReturnsAllMessagesInThread()
     {
         var ct = TestContext.Current.CancellationToken;
         var now = DateTime.UtcNow;
@@ -231,7 +231,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         for (int i = 1; i <= 5; i++)
         {
             var role = i % 2 == 1 ? "user" : "assistant";
-            _messageAdapter.Write(new MeshNode($"m-{i}", threadNs)
+            await _messageAdapter.Write(new MeshNode($"m-{i}", threadNs)
             {
                 Name = $"Message {i}",
                 NodeType = "ThreadMessage",
@@ -247,7 +247,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         }
 
         // List all messages in the thread
-        var (nodePaths, _) = _messageAdapter.ListChildPaths(threadNs).Should().Within(30.Seconds()).Emit();
+        var (nodePaths, _) = await _messageAdapter.ListChildPaths(threadNs).Should().Within(30.Seconds()).Emit();
         var paths = nodePaths.ToList();
         paths.Should().HaveCount(5);
         paths.Should().Contain($"{threadNs}/m-1");
@@ -255,12 +255,12 @@ public class ThreadMessageChatTests : IAsyncLifetime
     }
 
     [Fact(Timeout = 30000)]
-    public void DeleteMessage_RemovesFromTable()
+    public async Task DeleteMessage_RemovesFromTable()
     {
         var ct = TestContext.Current.CancellationToken;
         var threadNs = "User/eve/_Thread/conv-del/_ThreadMessage";
 
-        _messageAdapter.Write(new MeshNode("del-msg", threadNs)
+        await _messageAdapter.Write(new MeshNode("del-msg", threadNs)
         {
             Name = "To be deleted",
             NodeType = "ThreadMessage",
@@ -272,23 +272,23 @@ public class ThreadMessageChatTests : IAsyncLifetime
             }
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        var exists = _messageAdapter.Exists($"{threadNs}/del-msg").Should().Within(30.Seconds()).Emit();
+        var exists = await _messageAdapter.Exists($"{threadNs}/del-msg").Should().Within(30.Seconds()).Emit();
         exists.Should().BeTrue();
 
-        _messageAdapter.Delete($"{threadNs}/del-msg").Should().Within(30.Seconds()).Emit();
+        await _messageAdapter.Delete($"{threadNs}/del-msg").Should().Within(30.Seconds()).Emit();
 
-        exists = _messageAdapter.Exists($"{threadNs}/del-msg").Should().Within(30.Seconds()).Emit();
+        exists = await _messageAdapter.Exists($"{threadNs}/del-msg").Should().Within(30.Seconds()).Emit();
         exists.Should().BeFalse();
     }
 
     [Fact(Timeout = 30000)]
-    public void MultipleThreads_IsolateMessages()
+    public async Task MultipleThreads_IsolateMessages()
     {
         var ct = TestContext.Current.CancellationToken;
 
         // Thread 1 messages
         var ns1 = "User/frank/_Thread/t1/_ThreadMessage";
-        _messageAdapter.Write(new MeshNode("msg-t1", ns1)
+        await _messageAdapter.Write(new MeshNode("msg-t1", ns1)
         {
             Name = "Thread 1 msg",
             NodeType = "ThreadMessage",
@@ -298,14 +298,14 @@ public class ThreadMessageChatTests : IAsyncLifetime
 
         // Thread 2 messages
         var ns2 = "User/frank/_Thread/t2/_ThreadMessage";
-        _messageAdapter.Write(new MeshNode("msg-t2a", ns2)
+        await _messageAdapter.Write(new MeshNode("msg-t2a", ns2)
         {
             Name = "Thread 2 msg A",
             NodeType = "ThreadMessage",
             MainNode = "User/frank",
             Content = new ThreadMessage { Role = "user", Text = "In thread 2 A" }
         }, _options).Should().Within(30.Seconds()).Emit();
-        _messageAdapter.Write(new MeshNode("msg-t2b", ns2)
+        await _messageAdapter.Write(new MeshNode("msg-t2b", ns2)
         {
             Name = "Thread 2 msg B",
             NodeType = "ThreadMessage",
@@ -314,22 +314,22 @@ public class ThreadMessageChatTests : IAsyncLifetime
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // List thread 1 messages
-        var (t1Paths, _) = _messageAdapter.ListChildPaths(ns1).Should().Within(30.Seconds()).Emit();
+        var (t1Paths, _) = await _messageAdapter.ListChildPaths(ns1).Should().Within(30.Seconds()).Emit();
         t1Paths.Should().HaveCount(1);
 
         // List thread 2 messages
-        var (t2Paths, _) = _messageAdapter.ListChildPaths(ns2).Should().Within(30.Seconds()).Emit();
+        var (t2Paths, _) = await _messageAdapter.ListChildPaths(ns2).Should().Within(30.Seconds()).Emit();
         t2Paths.Should().HaveCount(2);
     }
 
     [Fact(Timeout = 30000)]
-    public void UpdateMessage_OverwritesInPlace()
+    public async Task UpdateMessage_OverwritesInPlace()
     {
         var ct = TestContext.Current.CancellationToken;
         var ns = "User/grace/_Thread/upd/_ThreadMessage";
 
         // Write initial message
-        _messageAdapter.Write(new MeshNode("upd-msg", ns)
+        await _messageAdapter.Write(new MeshNode("upd-msg", ns)
         {
             Name = "Original",
             NodeType = "ThreadMessage",
@@ -342,7 +342,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // Update the message
-        _messageAdapter.Write(new MeshNode("upd-msg", ns)
+        await _messageAdapter.Write(new MeshNode("upd-msg", ns)
         {
             Name = "Updated",
             NodeType = "ThreadMessage",
@@ -354,12 +354,12 @@ public class ThreadMessageChatTests : IAsyncLifetime
             }
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        var read = _messageAdapter.Read($"{ns}/upd-msg", _options).Should().Within(30.Seconds()).Emit();
+        var read = await _messageAdapter.Read($"{ns}/upd-msg", _options).Should().Within(30.Seconds()).Emit();
         read.Should().NotBeNull();
         read!.Name.Should().Be("Updated");
 
         // Should still be just 1 row
-        _schemaDs.ScalarLong(
+        await _schemaDs.ScalarLong(
             $"SELECT COUNT(*) FROM threads WHERE namespace = '{ns}' AND id = 'upd-msg'", ct)
             .Should().Within(30.Seconds()).Be(1L);
     }
@@ -372,7 +372,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
     /// returns them from the threads satellite table.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void QueryThreads_ByNamespace_FindsThreadsInSatelliteTable()
+    public async Task QueryThreads_ByNamespace_FindsThreadsInSatelliteTable()
     {
         var ct = TestContext.Current.CancellationToken;
 
@@ -384,7 +384,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         var id1 = $"chat-q1-{Guid.NewGuid():N}"[..16];
         var id2 = $"chat-q2-{Guid.NewGuid():N}"[..16];
 
-        _threadAdapter.Write(new MeshNode(id1, "User/alice/_Thread")
+        await _threadAdapter.Write(new MeshNode(id1, "User/alice/_Thread")
         {
             Name = "First Chat",
             NodeType = "Thread",
@@ -392,7 +392,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Content = new MeshThread()
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        _threadAdapter.Write(new MeshNode(id2, "User/alice/_Thread")
+        await _threadAdapter.Write(new MeshNode(id2, "User/alice/_Thread")
         {
             Name = "Second Chat",
             NodeType = "Thread",
@@ -401,13 +401,13 @@ public class ThreadMessageChatTests : IAsyncLifetime
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // Grant alice access to her own scope
-        GrantUserScopeAsync("alice", ct).Run().Should().Within(30.Seconds()).Emit();
+        await GrantUserScopeAsync("alice", ct).Run().Should().Within(30.Seconds()).Emit();
 
         // Query via PostgreSqlMeshQuery (userId required for access control)
         var query = new PostgreSqlMeshQuery(_threadAdapter);
         var request = MeshQueryRequest.FromQuery("nodeType:Thread namespace:User/alice/_Thread", userId: "alice");
 
-        var results = Query(query, request, ct);
+        var results = await Query(query, request, ct);
 
         // Filter to the threads we just wrote, then assert specifics â€” the
         // assertion is now insensitive to other tests' leftover rows.
@@ -422,12 +422,12 @@ public class ThreadMessageChatTests : IAsyncLifetime
     /// the satellite table â€” each user sees their own threads only.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void QueryThreads_ByNodeTypeOnly_FindsOwnThreads()
+    public async Task QueryThreads_ByNodeTypeOnly_FindsOwnThreads()
     {
         var ct = TestContext.Current.CancellationToken;
 
         // Seed threads for two different users
-        _threadAdapter.Write(new MeshNode("chat-all1", "User/alice/_Thread")
+        await _threadAdapter.Write(new MeshNode("chat-all1", "User/alice/_Thread")
         {
             Name = "Alice Chat",
             NodeType = "Thread",
@@ -435,7 +435,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Content = new MeshThread()
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        _threadAdapter.Write(new MeshNode("chat-all2", "User/bob/_Thread")
+        await _threadAdapter.Write(new MeshNode("chat-all2", "User/bob/_Thread")
         {
             Name = "Bob Chat",
             NodeType = "Thread",
@@ -444,18 +444,18 @@ public class ThreadMessageChatTests : IAsyncLifetime
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // Grant both users access to their own scopes
-        GrantUserScopeAsync("alice", ct).Run().Should().Within(30.Seconds()).Emit();
-        GrantUserScopeAsync("bob", ct).Run().Should().Within(30.Seconds()).Emit();
+        await GrantUserScopeAsync("alice", ct).Run().Should().Within(30.Seconds()).Emit();
+        await GrantUserScopeAsync("bob", ct).Run().Should().Within(30.Seconds()).Emit();
 
         // Alice sees her own thread
         var query = new PostgreSqlMeshQuery(_threadAdapter);
-        var aliceResults = Query(query, MeshQueryRequest.FromQuery("nodeType:Thread", userId: "alice"), ct);
+        var aliceResults = await Query(query, MeshQueryRequest.FromQuery("nodeType:Thread", userId: "alice"), ct);
 
         aliceResults.Should().Contain(n => n.Name == "Alice Chat");
         aliceResults.Should().NotContain(n => n.Name == "Bob Chat");
 
         // Bob sees his own thread
-        var bobResults = Query(query, MeshQueryRequest.FromQuery("nodeType:Thread", userId: "bob"), ct);
+        var bobResults = await Query(query, MeshQueryRequest.FromQuery("nodeType:Thread", userId: "bob"), ct);
 
         bobResults.Should().Contain(n => n.Name == "Bob Chat");
         bobResults.Should().NotContain(n => n.Name == "Alice Chat");
@@ -466,13 +466,13 @@ public class ThreadMessageChatTests : IAsyncLifetime
     /// finds messages in the satellite table.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void QueryMessages_ByNamespace_FindsMessagesInSatelliteTable()
+    public async Task QueryMessages_ByNamespace_FindsMessagesInSatelliteTable()
     {
         var ct = TestContext.Current.CancellationToken;
         var now = DateTime.UtcNow;
 
         // Seed a thread and messages
-        _threadAdapter.Write(new MeshNode("conv-q", "User/alice/_Thread")
+        await _threadAdapter.Write(new MeshNode("conv-q", "User/alice/_Thread")
         {
             Name = "Query Test Conv",
             NodeType = "Thread",
@@ -480,7 +480,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Content = new MeshThread()
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        _messageAdapter.Write(new MeshNode("1", "User/alice/_Thread/conv-q")
+        await _messageAdapter.Write(new MeshNode("1", "User/alice/_Thread/conv-q")
         {
             Name = "Hello",
             NodeType = "ThreadMessage",
@@ -493,7 +493,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             }
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        _messageAdapter.Write(new MeshNode("2", "User/alice/_Thread/conv-q")
+        await _messageAdapter.Write(new MeshNode("2", "User/alice/_Thread/conv-q")
         {
             Name = "Hi there",
             NodeType = "ThreadMessage",
@@ -510,7 +510,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         var request = MeshQueryRequest.FromQuery(
             "nodeType:ThreadMessage namespace:User/alice/_Thread/conv-q sort:Order-asc", userId: "alice");
 
-        var results = Query(query, request, ct);
+        var results = await Query(query, request, ct);
 
         results.Should().HaveCount(2, "should find both messages in the thread");
         results[0].Order.Should().Be(1);
@@ -525,12 +525,12 @@ public class ThreadMessageChatTests : IAsyncLifetime
     /// Verifies sort:LastModified-desc returns newest threads first in PostgreSQL.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void QueryThreads_SortByLastModifiedDesc_NewestFirst()
+    public async Task QueryThreads_SortByLastModifiedDesc_NewestFirst()
     {
         var ct = TestContext.Current.CancellationToken;
-        GrantUserScopeAsync("alice", ct).Run().Should().Within(30.Seconds()).Emit();
+        await GrantUserScopeAsync("alice", ct).Run().Should().Within(30.Seconds()).Emit();
 
-        _threadAdapter.Write(new MeshNode("sort-old", "User/alice/_Thread")
+        await _threadAdapter.Write(new MeshNode("sort-old", "User/alice/_Thread")
         {
             Name = "Old Thread",
             NodeType = "Thread",
@@ -539,7 +539,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Content = new MeshThread()
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        _threadAdapter.Write(new MeshNode("sort-new", "User/alice/_Thread")
+        await _threadAdapter.Write(new MeshNode("sort-new", "User/alice/_Thread")
         {
             Name = "New Thread",
             NodeType = "Thread",
@@ -552,7 +552,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         var request = MeshQueryRequest.FromQuery(
             "nodeType:Thread sort:LastModified-desc namespace:User/alice/_Thread", userId: "alice");
 
-        var results = Query(query, request, ct);
+        var results = await Query(query, request, ct);
 
         // Filter to just the sort-test threads (shared fixture may have others)
         var sortTestResults = results.Where(n => n.Id is "sort-old" or "sort-new").ToList();
@@ -581,14 +581,14 @@ public class ThreadMessageChatTests : IAsyncLifetime
     /// Alice can see her own threads via the user scope access rule.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void UserScope_AliceSeesOwnThreads()
+    public async Task UserScope_AliceSeesOwnThreads()
     {
         var ct = TestContext.Current.CancellationToken;
 
         // Grant alice Read on her own scope (simulates UserScopeGrantHandler)
-        GrantUserScopeAsync("alice", ct).Run().Should().Within(30.Seconds()).Emit();
+        await GrantUserScopeAsync("alice", ct).Run().Should().Within(30.Seconds()).Emit();
 
-        _threadAdapter.Write(new MeshNode("alice-thread", "User/alice/_Thread")
+        await _threadAdapter.Write(new MeshNode("alice-thread", "User/alice/_Thread")
         {
             Name = "Alice Thread",
             NodeType = "Thread",
@@ -600,7 +600,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         var request = MeshQueryRequest.FromQuery(
             "nodeType:Thread namespace:User/alice/_Thread", userId: "alice");
 
-        var results = Query(query, request, ct);
+        var results = await Query(query, request, ct);
 
         results.Should().Contain(n => n.Name == "Alice Thread",
             "alice should see her own thread via user scope");
@@ -611,11 +611,11 @@ public class ThreadMessageChatTests : IAsyncLifetime
     /// to User/{userId}/... paths.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void UserScope_BobCannotSeeAlicesThreads()
+    public async Task UserScope_BobCannotSeeAlicesThreads()
     {
         var ct = TestContext.Current.CancellationToken;
 
-        _threadAdapter.Write(new MeshNode("alice-private", "User/alice/_Thread")
+        await _threadAdapter.Write(new MeshNode("alice-private", "User/alice/_Thread")
         {
             Name = "Alice Private Thread",
             NodeType = "Thread",
@@ -628,7 +628,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         var request = MeshQueryRequest.FromQuery(
             "nodeType:Thread namespace:User/alice/_Thread", userId: "bob");
 
-        var results = Query(query, request, ct);
+        var results = await Query(query, request, ct);
 
         results.Should().NotContain(n => n.Name == "Alice Private Thread",
             "bob should NOT see alice's thread");
@@ -639,14 +639,14 @@ public class ThreadMessageChatTests : IAsyncLifetime
     /// Uses the same query pattern as "Latest Threads".
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void UserScope_GlobalSearch_ShowsOnlyOwnThreads()
+    public async Task UserScope_GlobalSearch_ShowsOnlyOwnThreads()
     {
         var ct = TestContext.Current.CancellationToken;
 
         // Grant alice Read on her scope (bob gets no grant)
-        GrantUserScopeAsync("alice", ct).Run().Should().Within(30.Seconds()).Emit();
+        await GrantUserScopeAsync("alice", ct).Run().Should().Within(30.Seconds()).Emit();
 
-        _threadAdapter.Write(new MeshNode("alice-global", "User/alice/_Thread")
+        await _threadAdapter.Write(new MeshNode("alice-global", "User/alice/_Thread")
         {
             Name = "Alice Global",
             NodeType = "Thread",
@@ -654,7 +654,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Content = new MeshThread()
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        _threadAdapter.Write(new MeshNode("bob-global", "User/bob/_Thread")
+        await _threadAdapter.Write(new MeshNode("bob-global", "User/bob/_Thread")
         {
             Name = "Bob Global",
             NodeType = "Thread",
@@ -666,7 +666,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         var query = new PostgreSqlMeshQuery(_threadAdapter);
         var request = MeshQueryRequest.FromQuery("nodeType:Thread", userId: "alice");
 
-        var results = Query(query, request, ct);
+        var results = await Query(query, request, ct);
 
         results.Should().Contain(n => n.Name == "Alice Global",
             "alice should see her own thread in global search");
@@ -685,12 +685,12 @@ public class ThreadMessageChatTests : IAsyncLifetime
     /// created with ThreadMessage configuration, not Thread configuration.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void FindBestPrefixMatch_ThreadMessagePath_ResolvesToExactMessage()
+    public async Task FindBestPrefixMatch_ThreadMessagePath_ResolvesToExactMessage()
     {
         var ct = TestContext.Current.CancellationToken;
 
         // Create Thread
-        _threadAdapter.Write(new MeshNode("resolve-thread", "User/alice/_Thread")
+        await _threadAdapter.Write(new MeshNode("resolve-thread", "User/alice/_Thread")
         {
             Name = "Resolve Test",
             NodeType = "Thread",
@@ -699,7 +699,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // Create ThreadMessage child
-        _messageAdapter.Write(new MeshNode("r1", "User/alice/_Thread/resolve-thread")
+        await _messageAdapter.Write(new MeshNode("r1", "User/alice/_Thread/resolve-thread")
         {
             Name = "Message 1",
             NodeType = "ThreadMessage",
@@ -715,7 +715,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // FindBestPrefixMatchAsync for the full message path
-        var (node, segments) = _messageAdapter.FindBestPrefixMatch(
+        var (node, segments) = await _messageAdapter.FindBestPrefixMatch(
             "User/alice/_Thread/resolve-thread/r1", _options).Should().Within(30.Seconds()).Emit();
 
         node.Should().NotBeNull("ThreadMessage node should be found");
@@ -741,7 +741,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
     /// wrong table routing, or serialization problems.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void EndToEnd_ChatFlow_WritesAndReadsCorrectly()
+    public async Task EndToEnd_ChatFlow_WritesAndReadsCorrectly()
     {
         var ct = TestContext.Current.CancellationToken;
         var threadNs = "User/alice/_Thread";
@@ -750,10 +750,10 @@ public class ThreadMessageChatTests : IAsyncLifetime
         var userMsgId = "u1";
         var responseMsgId = "r1";
 
-        GrantUserScopeAsync("alice", ct).Run().Should().Within(30.Seconds()).Emit();
+        await GrantUserScopeAsync("alice", ct).Run().Should().Within(30.Seconds()).Emit();
 
         // 1. Create Thread node with empty messages
-        _threadAdapter.Write(new MeshNode(threadId, threadNs)
+        await _threadAdapter.Write(new MeshNode(threadId, threadNs)
         {
             Name = "E2E Chat",
             NodeType = "Thread",
@@ -762,7 +762,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // 2. Create user message node
-        _messageAdapter.Write(new MeshNode(userMsgId, threadPath)
+        await _messageAdapter.Write(new MeshNode(userMsgId, threadPath)
         {
             Name = "User msg",
             NodeType = "ThreadMessage",
@@ -776,7 +776,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // 3. Create empty response message node
-        _messageAdapter.Write(new MeshNode(responseMsgId, threadPath)
+        await _messageAdapter.Write(new MeshNode(responseMsgId, threadPath)
         {
             Name = "Response msg",
             NodeType = "ThreadMessage",
@@ -790,7 +790,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // 4. Update Thread.Messages (simulates DataChangeRequest in HandleSubmitMessage)
-        _threadAdapter.Write(new MeshNode(threadId, threadNs)
+        await _threadAdapter.Write(new MeshNode(threadId, threadNs)
         {
             Name = "E2E Chat",
             NodeType = "Thread",
@@ -802,7 +802,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // 5. Update response with streamed text (simulates PostResponseUpdate)
-        _messageAdapter.Write(new MeshNode(responseMsgId, threadPath)
+        await _messageAdapter.Write(new MeshNode(responseMsgId, threadPath)
         {
             Name = "Response msg",
             NodeType = "ThreadMessage",
@@ -817,30 +817,30 @@ public class ThreadMessageChatTests : IAsyncLifetime
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // 6. Verify Thread in threads table
-        Count("SELECT COUNT(*) FROM threads WHERE namespace = @ns AND id = @id",
-                new[] { ("ns", (object)threadNs), ("id", threadId) }, ct)
+        (await Count("SELECT COUNT(*) FROM threads WHERE namespace = @ns AND id = @id",
+                new[] { ("ns", (object)threadNs), ("id", threadId) }, ct))
             .Should().Be(1, "Thread should be in 'threads' table");
 
         // 7. Verify user message in threads table
-        Count("SELECT COUNT(*) FROM threads WHERE namespace = @ns AND id = @id",
-                new[] { ("ns", (object)threadPath), ("id", userMsgId) }, ct)
+        (await Count("SELECT COUNT(*) FROM threads WHERE namespace = @ns AND id = @id",
+                new[] { ("ns", (object)threadPath), ("id", userMsgId) }, ct))
             .Should().Be(1, "User ThreadMessage should be in 'threads' table");
 
         // 8. Verify response message in threads table
-        Count("SELECT COUNT(*) FROM threads WHERE namespace = @ns AND id = @id",
-                new[] { ("ns", (object)threadPath), ("id", responseMsgId) }, ct)
+        (await Count("SELECT COUNT(*) FROM threads WHERE namespace = @ns AND id = @id",
+                new[] { ("ns", (object)threadPath), ("id", responseMsgId) }, ct))
             .Should().Be(1, "Response ThreadMessage should be in 'threads' table");
 
         // 9. Verify NOT in mesh_nodes
-        Count("SELECT COUNT(*) FROM mesh_nodes WHERE path LIKE @prefix",
-                new[] { ("prefix", (object)$"{threadNs}/%") }, ct)
+        (await Count("SELECT COUNT(*) FROM mesh_nodes WHERE path LIKE @prefix",
+                new[] { ("prefix", (object)$"{threadNs}/%") }, ct))
             .Should().Be(0, "Thread and messages should NOT be in mesh_nodes");
 
         // 10. Read back and verify content via query
         var query = new PostgreSqlMeshQuery(_threadAdapter);
 
         // Thread content
-        var threadResults = Query(query, MeshQueryRequest.FromQuery($"path:{threadPath}", userId: "alice"), ct);
+        var threadResults = await Query(query, MeshQueryRequest.FromQuery($"path:{threadPath}", userId: "alice"), ct);
         threadResults.Should().HaveCount(1);
         var threadJson = threadResults[0].Content is JsonElement tje ? tje
             : JsonSerializer.SerializeToElement(threadResults[0].Content, _options);
@@ -849,7 +849,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         threadMsgs.GetArrayLength().Should().Be(2, "Thread should have 2 message IDs");
 
         // User message content
-        var userResults = Query(query, MeshQueryRequest.FromQuery($"path:{threadPath}/{userMsgId}", userId: "alice"), ct);
+        var userResults = await Query(query, MeshQueryRequest.FromQuery($"path:{threadPath}/{userMsgId}", userId: "alice"), ct);
         userResults.Should().HaveCount(1);
         var userJson = userResults[0].Content is JsonElement uje ? uje
             : JsonSerializer.SerializeToElement(userResults[0].Content, _options);
@@ -857,7 +857,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         GetJsonProp(userJson, "text").Should().Be("Hello from e2e");
 
         // Response message content â€” should have streamed text
-        var respResults = Query(query, MeshQueryRequest.FromQuery($"path:{threadPath}/{responseMsgId}", userId: "alice"), ct);
+        var respResults = await Query(query, MeshQueryRequest.FromQuery($"path:{threadPath}/{responseMsgId}", userId: "alice"), ct);
         respResults.Should().HaveCount(1);
         var respJson = respResults[0].Content is JsonElement rje ? rje
             : JsonSerializer.SerializeToElement(respResults[0].Content, _options);
@@ -885,7 +885,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
     /// ThreadMessage paths contain _Thread as a segment.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void ThreadAndMessages_WrittenToCorrectTable()
+    public async Task ThreadAndMessages_WrittenToCorrectTable()
     {
         var ct = TestContext.Current.CancellationToken;
         var threadNs = "User/alice/_Thread";
@@ -893,7 +893,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         var threadPath = $"{threadNs}/{threadId}";
 
         // Create Thread node
-        _threadAdapter.Write(new MeshNode(threadId, threadNs)
+        await _threadAdapter.Write(new MeshNode(threadId, threadNs)
         {
             Name = "Table Test Thread",
             NodeType = "Thread",
@@ -905,7 +905,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // Create ThreadMessage nodes
-        _messageAdapter.Write(new MeshNode("m1", threadPath)
+        await _messageAdapter.Write(new MeshNode("m1", threadPath)
         {
             Name = "User msg",
             NodeType = "ThreadMessage",
@@ -918,7 +918,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             }
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        _messageAdapter.Write(new MeshNode("m2", threadPath)
+        await _messageAdapter.Write(new MeshNode("m2", threadPath)
         {
             Name = "Assistant msg",
             NodeType = "ThreadMessage",
@@ -932,27 +932,27 @@ public class ThreadMessageChatTests : IAsyncLifetime
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // Verify Thread is in the "threads" table (not mesh_nodes)
-        Count("SELECT COUNT(*) FROM threads WHERE namespace = @ns AND id = @id",
-                new[] { ("ns", (object)threadNs), ("id", threadId) }, ct)
+        (await Count("SELECT COUNT(*) FROM threads WHERE namespace = @ns AND id = @id",
+                new[] { ("ns", (object)threadNs), ("id", threadId) }, ct))
             .Should().Be(1, "Thread should be in the 'threads' table");
 
         // Verify Messages are in the "threads" table too
-        Count("SELECT COUNT(*) FROM threads WHERE namespace = @ns AND id = @id",
-                new[] { ("ns", (object)threadPath), ("id", "m1") }, ct)
+        (await Count("SELECT COUNT(*) FROM threads WHERE namespace = @ns AND id = @id",
+                new[] { ("ns", (object)threadPath), ("id", "m1") }, ct))
             .Should().Be(1, "ThreadMessage m1 should be in the 'threads' table");
 
-        Count("SELECT COUNT(*) FROM threads WHERE namespace = @ns AND id = @id",
-                new[] { ("ns", (object)threadPath), ("id", "m2") }, ct)
+        (await Count("SELECT COUNT(*) FROM threads WHERE namespace = @ns AND id = @id",
+                new[] { ("ns", (object)threadPath), ("id", "m2") }, ct))
             .Should().Be(1, "ThreadMessage m2 should be in the 'threads' table");
 
         // Verify they are NOT in mesh_nodes
-        Count("SELECT COUNT(*) FROM mesh_nodes WHERE namespace = @ns AND id = @id",
-                new[] { ("ns", (object)threadNs), ("id", threadId) }, ct)
+        (await Count("SELECT COUNT(*) FROM mesh_nodes WHERE namespace = @ns AND id = @id",
+                new[] { ("ns", (object)threadNs), ("id", threadId) }, ct))
             .Should().Be(0, "Thread should NOT be in mesh_nodes");
 
         // Read back and verify content (Content arrives as JsonElement since _options
         // doesn't have the MeshWeaver type registry â€” extract properties directly)
-        var readThread = _threadAdapter.Read(
+        var readThread = await _threadAdapter.Read(
             $"{threadNs}/{threadId}", _options).Should().Within(30.Seconds()).Emit();
         readThread.Should().NotBeNull();
         readThread!.NodeType.Should().Be("Thread");
@@ -965,7 +965,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         hasMsgs.Should().BeTrue("Thread content should have threadMessages/Messages property");
         msgsEl.GetArrayLength().Should().Be(2);
 
-        var readMsg1 = _messageAdapter.Read(
+        var readMsg1 = await _messageAdapter.Read(
             $"{threadPath}/m1", _options).Should().Within(30.Seconds()).Emit();
         readMsg1.Should().NotBeNull();
         readMsg1!.NodeType.Should().Be("ThreadMessage");
@@ -974,7 +974,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         GetJsonProp(msg1Json, "role").Should().Be("user");
         GetJsonProp(msg1Json, "text").Should().Be("Hello");
 
-        var readMsg2 = _messageAdapter.Read(
+        var readMsg2 = await _messageAdapter.Read(
             $"{threadPath}/m2", _options).Should().Within(30.Seconds()).Emit();
         readMsg2.Should().NotBeNull();
         var msg2Json = readMsg2!.Content is JsonElement m2je

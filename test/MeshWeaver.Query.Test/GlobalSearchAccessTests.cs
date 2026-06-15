@@ -39,23 +39,23 @@ public class GlobalSearchAccessTests(ITestOutputHelper output) : MonolithMeshTes
     // ── Partition nodes excluded from search context ──────────────────────
 
     [Fact(Timeout = 30000)]
-    public void SearchContext_ExcludesPartitionNodes()
+    public async Task SearchContext_ExcludesPartitionNodes()
     {
         // Arrange: create a Partition node and a regular content node
-        NodeFactory.CreateNode(MeshNode.FromPath("Admin/Partition/TestPartition") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("Admin/Partition/TestPartition") with
         {
             Name = "Test Partition",
             NodeType = "Partition",
             Content = new PartitionDefinition { Namespace = "TestPartition", DataSource = "default" }
         }).Should().Emit();
 
-        NodeFactory.CreateNode(MeshNode.FromPath("TestPartition/doc1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("TestPartition/doc1") with
         {
             Name = "Test Document", NodeType = "Markdown"
         }).Should().Emit();
 
         // Act: search with context:search (like the top search bar)
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("scope:descendants context:search sort:LastModified-desc limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("scope:descendants context:search sort:LastModified-desc limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
         Output.WriteLine($"context:search returned {results.Count} results");
         foreach (var r in results.Take(20))
             Output.WriteLine($"  {r.Path} ({r.NodeType})");
@@ -71,16 +71,16 @@ public class GlobalSearchAccessTests(ITestOutputHelper output) : MonolithMeshTes
     // ── Search context excludes satellite types ────────────────────────────
 
     [Fact(Timeout = 30000)]
-    public void SearchContext_ExcludesSatelliteTypes()
+    public async Task SearchContext_ExcludesSatelliteTypes()
     {
         // Arrange: create main content + satellite nodes
-        NodeFactory.CreateNode(MeshNode.FromPath("satCtx/project") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("satCtx/project") with
         {
             Name = "My Project", NodeType = "Markdown"
         }).Should().Emit();
 
         // Activity satellite
-        NodeFactory.CreateNode(MeshNode.FromPath("satCtx/project/_activity/log1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("satCtx/project/_activity/log1") with
         {
             Name = "Activity Log", NodeType = "Activity",
             MainNode = "satCtx/project",
@@ -88,7 +88,7 @@ public class GlobalSearchAccessTests(ITestOutputHelper output) : MonolithMeshTes
         }).Should().Emit();
 
         // Thread satellite (created directly, not via request)
-        NodeFactory.CreateNode(MeshNode.FromPath("satCtx/_Thread/test-thread-1234") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("satCtx/_Thread/test-thread-1234") with
         {
             Name = "Test Thread", NodeType = "Thread",
             MainNode = "satCtx/_Thread",
@@ -96,7 +96,7 @@ public class GlobalSearchAccessTests(ITestOutputHelper output) : MonolithMeshTes
         }).Should().Emit();
 
         // Act: search with context:search (mimics the top search bar)
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:satCtx scope:descendants context:search sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:satCtx scope:descendants context:search sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
         Output.WriteLine($"context:search returned {results.Count} results");
         foreach (var r in results)
             Output.WriteLine($"  {r.Path} ({r.NodeType})");
@@ -114,20 +114,20 @@ public class GlobalSearchAccessTests(ITestOutputHelper output) : MonolithMeshTes
     // ── Autocomplete finds main nodes ──────────────────────────────────────
 
     [Fact(Timeout = 30000)]
-    public void Autocomplete_FindsMainContentNodes()
+    public async Task Autocomplete_FindsMainContentNodes()
     {
         // Arrange: create some content nodes
-        NodeFactory.CreateNode(MeshNode.FromPath("acSearch/report") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("acSearch/report") with
         {
             Name = "Annual Report", NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("acSearch/budget") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("acSearch/budget") with
         {
             Name = "Budget Plan", NodeType = "Markdown"
         }).Should().Emit();
 
         // Act: autocomplete with prefix "Annual" (like typing in search bar)
-        var suggestions = MeshQuery
+        var suggestions = await MeshQuery
             .Autocomplete("acSearch", "Annual", AutocompleteMode.RelevanceFirst, 10)
             .Should().Match(r => r.Any(s => s.Name == "Annual Report"));
         Output.WriteLine($"Autocomplete 'Annual': {suggestions.Count} suggestions");
@@ -140,14 +140,14 @@ public class GlobalSearchAccessTests(ITestOutputHelper output) : MonolithMeshTes
     }
 
     [Fact(Timeout = 30000)]
-    public void Autocomplete_WithSearchContext_ExcludesSatellites()
+    public async Task Autocomplete_WithSearchContext_ExcludesSatellites()
     {
         // Arrange: create content + satellite
-        NodeFactory.CreateNode(MeshNode.FromPath("acCtx/analysis") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("acCtx/analysis") with
         {
             Name = "Risk Analysis", NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("acCtx/analysis/_activity/log1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("acCtx/analysis/_activity/log1") with
         {
             Name = "Risk Activity", NodeType = "Activity",
             MainNode = "acCtx/analysis",
@@ -155,7 +155,7 @@ public class GlobalSearchAccessTests(ITestOutputHelper output) : MonolithMeshTes
         }).Should().Emit();
 
         // Act: autocomplete with context:search (like the search bar does)
-        var suggestions = MeshQuery
+        var suggestions = await MeshQuery
             .Autocomplete("acCtx", "Risk", AutocompleteMode.RelevanceFirst, 10, context: "search")
             .Should().Match(r => r.Any(s => s.Name == "Risk Analysis"));
         Output.WriteLine($"Autocomplete 'Risk' context:search: {suggestions.Count} suggestions");
@@ -171,27 +171,27 @@ public class GlobalSearchAccessTests(ITestOutputHelper output) : MonolithMeshTes
     // ── Global search returns main nodes only ──────────────────────────────
 
     [Fact(Timeout = 30000)]
-    public void GlobalSearch_IsMain_ExcludesSatelliteNodes()
+    public async Task GlobalSearch_IsMain_ExcludesSatelliteNodes()
     {
         // Arrange
-        NodeFactory.CreateNode(MeshNode.FromPath("gbl/item1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("gbl/item1") with
         {
             Name = "Content Item", NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("gbl/item1/_activity/log1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("gbl/item1/_activity/log1") with
         {
             Name = "Activity", NodeType = "Activity",
             MainNode = "gbl/item1",
             Content = new ActivityLog("DataUpdate") { HubPath = "gbl/item1" }
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("gbl/item1/_Comment/c1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("gbl/item1/_Comment/c1") with
         {
             Name = "Comment", NodeType = "Comment",
             MainNode = "gbl/item1"
         }).Should().Emit();
 
         // Act: global search with is:main (the default for fan-out)
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:gbl is:main scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:gbl is:main scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         // Assert: only main content nodes
         results.Should().ContainSingle();
@@ -202,24 +202,24 @@ public class GlobalSearchAccessTests(ITestOutputHelper output) : MonolithMeshTes
     // ── Search across multiple partitions ──────────────────────────────────
 
     [Fact(Timeout = 30000)]
-    public void GlobalSearch_FindsNodesAcrossMultipleNamespaces()
+    public async Task GlobalSearch_FindsNodesAcrossMultipleNamespaces()
     {
         // Arrange: create nodes in different namespaces
-        NodeFactory.CreateNode(MeshNode.FromPath("SearchNs1/doc1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("SearchNs1/doc1") with
         {
             Name = "Alpha Document", NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("SearchNs2/doc2") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("SearchNs2/doc2") with
         {
             Name = "Beta Document", NodeType = "Markdown"
         }).Should().Emit();
-        NodeFactory.CreateNode(MeshNode.FromPath("SearchNs3/doc3") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("SearchNs3/doc3") with
         {
             Name = "Gamma Document", NodeType = "Markdown"
         }).Should().Emit();
 
         // Act: text search for "Document" across all namespaces
-        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("Document is:main scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("Document is:main scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
         Output.WriteLine($"Global search 'Document': {results.Count} results");
 
         // Assert: should find nodes across namespaces

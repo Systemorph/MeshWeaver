@@ -101,24 +101,24 @@ public class UserActivityCrossPartitionTests
         return partitions;
     }
 
-    private Dictionary<string, (NpgsqlDataSource Ds, PostgreSqlStorageAdapter Adapter)>
+    private Task<Dictionary<string, (NpgsqlDataSource Ds, PostgreSqlStorageAdapter Adapter)>>
         SetupMultiOrgWithThreads(CancellationToken ct)
         => SetupMultiOrgWithThreadsAsync(ct).Run().Should().Within(90.Seconds()).Emit();
 
-    private List<MeshNode> QueryAdapter(PostgreSqlStorageAdapter adapter, ParsedQuery query, CancellationToken ct)
+    private Task<List<MeshNode>> QueryAdapter(PostgreSqlStorageAdapter adapter, ParsedQuery query, CancellationToken ct)
         => adapter.QueryNodesAsync(query, _options, ct: ct)
             .Collect(ct).Should().Within(30.Seconds()).Emit();
 
-    private List<MeshNode> CallSearchAcrossSchemas(
+    private Task<List<MeshNode>> CallSearchAcrossSchemas(
         string whereClause, string? userId, string orderBy, int limit, CancellationToken ct)
         => CallSearchAcrossSchemasAsync(whereClause, userId, orderBy, limit, ct)
             .Run().Should().Within(30.Seconds()).Emit();
 
     [Fact(Timeout = 60000)]
-    public void LatestThreads_FoundInEachPartition()
+    public async Task LatestThreads_FoundInEachPartition()
     {
         var ct = TestContext.Current.CancellationToken;
-        var partitions = SetupMultiOrgWithThreads(ct);
+        var partitions = await SetupMultiOrgWithThreads(ct);
 
         // The Latest Threads query: nodeType:Thread content.CreatedBy:testuser scope:descendants
         // This should find threads in satellite tables per partition
@@ -126,7 +126,7 @@ public class UserActivityCrossPartitionTests
         {
             var query = new QueryParser().Parse(
                 $"nodeType:Thread scope:descendants");
-            var results = QueryAdapter(adapter, query, ct);
+            var results = await QueryAdapter(adapter, query, ct);
 
             results.Should().NotBeEmpty($"{org} should have threads in satellite table");
             results.Should().Contain(n => n.NodeType == "Thread",
@@ -135,27 +135,27 @@ public class UserActivityCrossPartitionTests
     }
 
     [Fact(Timeout = 60000)]
-    public void LatestThreads_FilterByCreatedBy()
+    public async Task LatestThreads_FilterByCreatedBy()
     {
         var ct = TestContext.Current.CancellationToken;
-        var partitions = SetupMultiOrgWithThreads(ct);
+        var partitions = await SetupMultiOrgWithThreads(ct);
 
         // Verify content.CreatedBy filter works per partition
         foreach (var (org, (_, adapter)) in partitions)
         {
             var query = new QueryParser().Parse(
                 "nodeType:Thread content.createdBy:testuser scope:descendants");
-            var results = QueryAdapter(adapter, query, ct);
+            var results = await QueryAdapter(adapter, query, ct);
 
             results.Should().NotBeEmpty($"{org} should find threads by testuser");
         }
     }
 
     [Fact(Timeout = 60000)]
-    public void ActivityFeed_FoundInEachPartition()
+    public async Task ActivityFeed_FoundInEachPartition()
     {
         var ct = TestContext.Current.CancellationToken;
-        var partitions = SetupMultiOrgWithThreads(ct);
+        var partitions = await SetupMultiOrgWithThreads(ct);
 
         // The Activity Feed query: source:activity scope:subtree is:main
         // source:activity JOINs with activities satellite table
@@ -163,7 +163,7 @@ public class UserActivityCrossPartitionTests
         {
             var query = new QueryParser().Parse(
                 "source:activity scope:subtree is:main sort:LastModified-desc");
-            var results = QueryAdapter(adapter, query, ct);
+            var results = await QueryAdapter(adapter, query, ct);
 
             results.Should().NotBeEmpty($"{org} should have nodes with activity");
             results.Should().OnlyContain(n => n.MainNode == n.Path,
@@ -172,14 +172,14 @@ public class UserActivityCrossPartitionTests
     }
 
     [Fact(Timeout = 60000)]
-    public void Threads_NotInCrossSchemaStoredProc()
+    public async Task Threads_NotInCrossSchemaStoredProc()
     {
         var ct = TestContext.Current.CancellationToken;
-        var partitions = SetupMultiOrgWithThreads(ct);
+        var partitions = await SetupMultiOrgWithThreads(ct);
 
         // Cross-schema stored proc only searches mesh_nodes with main_node = path.
         // Threads are in satellite tables with main_node != path, so they should NOT appear.
-        var results = CallSearchAcrossSchemas(
+        var results = await CallSearchAcrossSchemas(
             "LOWER(n.node_type) = 'thread'", "testuser", "last_modified DESC", 50, ct);
 
         results.Should().BeEmpty(
@@ -187,10 +187,10 @@ public class UserActivityCrossPartitionTests
     }
 
     [Fact(Timeout = 60000)]
-    public void Threads_FoundViaCrossSchemaUnionOnSatelliteTable()
+    public async Task Threads_FoundViaCrossSchemaUnionOnSatelliteTable()
     {
         var ct = TestContext.Current.CancellationToken;
-        SetupMultiOrgWithThreads(ct);
+        await SetupMultiOrgWithThreads(ct);
 
         // First verify without access control (no userId) — confirms data is there
         var schemas = new List<string> { "orga", "orgb" };
@@ -199,7 +199,7 @@ public class UserActivityCrossPartitionTests
         var (sqlNoAc, paramsNoAc) = generator.GenerateCrossSchemaSelectQuery(
             query, schemas, userId: null, tableName: "threads");
 
-        var noAcResults = ReadMeshNodesAsync(sqlNoAc, paramsNoAc, ct)
+        var noAcResults = await ReadMeshNodesAsync(sqlNoAc, paramsNoAc, ct)
             .Run().Should().Within(30.Seconds()).Emit();
         noAcResults.Should().HaveCount(2, "data should exist in both schemas (no access control)");
 
@@ -208,7 +208,7 @@ public class UserActivityCrossPartitionTests
         var (sql, parameters) = generator2.GenerateCrossSchemaSelectQuery(
             query, schemas, userId: "testuser", tableName: "threads");
 
-        var results = ReadMeshNodesAsync(sql, parameters, ct)
+        var results = await ReadMeshNodesAsync(sql, parameters, ct)
             .Run().Should().Within(30.Seconds()).Emit();
 
         results.Should().HaveCount(2, "should find threads from both orgs via UNION ALL on threads table");
@@ -217,13 +217,13 @@ public class UserActivityCrossPartitionTests
     }
 
     [Fact(Timeout = 60000)]
-    public void MainNodes_VisibleInCrossSchemaStoredProc()
+    public async Task MainNodes_VisibleInCrossSchemaStoredProc()
     {
         var ct = TestContext.Current.CancellationToken;
-        var partitions = SetupMultiOrgWithThreads(ct);
+        var partitions = await SetupMultiOrgWithThreads(ct);
 
         // Main content nodes (Space, Markdown) should be found
-        var results = CallSearchAcrossSchemas(
+        var results = await CallSearchAcrossSchemas(
             "", "testuser", "last_modified DESC", 50, ct);
 
         results.Should().NotBeEmpty("Main nodes should be visible");

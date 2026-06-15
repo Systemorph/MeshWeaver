@@ -37,13 +37,13 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
     private const string SourceNamespace = "Systemorph/LinkedInProfile/Source";
 
     [Fact(Timeout = 60000)]
-    public void LinkedInPullActions_CompilesAndRendersNoCredentialBranch()
+    public async Task LinkedInPullActions_CompilesAndRendersNoCredentialBranch()
     {
         var workspace = Mesh.GetWorkspace();
 
         // Register the NodeType with the PullPastPosts layout area wired in â€”
         // this is the exact Configuration string that lives in prod.
-        NodeFactory.CreateNode(new MeshNode("LinkedInProfile", "Systemorph")
+        await NodeFactory.CreateNode(new MeshNode("LinkedInProfile", "Systemorph")
         {
             Name = "LinkedIn Profile",
             NodeType = MeshNode.NodeTypePath,
@@ -81,8 +81,8 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
         // initial-state wait is needed â€” just plant the sources and
         // trigger the watcher.
 
-        CreateCode("LinkedInProfile", LinkedInProfileSource).Should().Within(30.Seconds()).Emit();
-        CreateCode("LinkedInPullActions", LinkedInPullActionsSource).Should().Within(30.Seconds()).Emit();
+        await CreateCode("LinkedInProfile", LinkedInProfileSource).Should().Within(30.Seconds()).Emit();
+        await CreateCode("LinkedInPullActions", LinkedInPullActionsSource).Should().Within(30.Seconds()).Emit();
 
         // Trigger an explicit recompile AFTER kickoff settled AND both source
         // nodes exist. `RequestedReleaseAt > LastReleaseRequestHandledAt` is
@@ -90,7 +90,7 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
         // Ok/Error (not Compiling) the watcher flips Pending â†’ the compile
         // pipeline runs Roslyn against the now-visible Code sources.
         var triggerAt = DateTimeOffset.UtcNow;
-        workspace.GetMeshNodeStream(NodeTypePath).Update(curr =>
+        await workspace.GetMeshNodeStream(NodeTypePath).Update(curr =>
         {
             if (curr?.Content is not NodeTypeDefinition def) return curr!;
             return curr with
@@ -107,7 +107,7 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
         // a release path. The handled-at watermark + Ok status guarantees the
         // currently-active release was produced by THIS trigger â€” not the
         // kickoff release we explicitly invalidated by re-triggering.
-        workspace.GetMeshNodeStream(NodeTypePath)
+        await workspace.GetMeshNodeStream(NodeTypePath)
             .Should().Within(60.Seconds())
             .Match(n => n.Content is NodeTypeDefinition d
                 && d.LastReleaseRequestHandledAt is { } h && h >= triggerAt
@@ -115,7 +115,7 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
                 && !string.IsNullOrEmpty(d.LatestReleasePath));
 
         var instancePath = $"{NodeTypePath}/test-profile";
-        NodeFactory.CreateNode(new MeshNode("test-profile", NodeTypePath)
+        await NodeFactory.CreateNode(new MeshNode("test-profile", NodeTypePath)
         {
             Name = "Roland",
             NodeType = NodeTypePath,
@@ -132,7 +132,7 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
         // and returns a MarkdownControl describing the missing dependency.
         // That branch still exercises the full compile of the Code piece â€”
         // which is what we're guarding.
-        var control = RenderArea(instancePath, "PullPastPosts");
+        var control = await RenderArea(instancePath, "PullPastPosts");
 
         control.Should().NotBeNull();
         control.Should().BeOfType<MarkdownControl>(
@@ -148,7 +148,7 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
             Content = new CodeConfiguration { Code = source, Language = "csharp" }
         });
 
-    private UiControl RenderArea(string path, string area)
+    private async Task<UiControl> RenderArea(string path, string area)
     {
         var client = GetClient(c => c.AddData());
         var workspace = client.GetWorkspace();
@@ -158,7 +158,7 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
 
         // Match the LinkedInTelemetry / CompilationPending timeout budget â€”
         // 60s caps below the cold-cache compile + activation pipeline on CI.
-        var control = stream
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(60.Seconds())
             .Match(x => x is MarkdownControl or StackControl or HtmlControl);

@@ -84,7 +84,7 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
     };
 
     [Fact(Timeout = 30000)]
-    public void Import_Microsoft_File_WithConfiguration()
+    public async Task Import_Microsoft_File_WithConfiguration()
     {
         // Skip test if file doesn't exist
         var fullPath = Path.Combine(_testFilesPath, "Microsoft.xlsx");
@@ -99,7 +99,7 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
             Configuration = Config
         };
 
-        var importResponse = Mesh.Observe(
+        var importResponse = await Mesh.Observe(
                 importRequest,
                 o => o.WithTarget(Mesh.Address))
             .Should().Within(20.Seconds()).Emit();
@@ -111,7 +111,7 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
 
         // Verify data was imported by querying the workspace
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
-        var risks = workspace.GetObservable<PropertyRisk>()
+        var risks = await workspace.GetObservable<PropertyRisk>()
             .Should().Within(10.Seconds()).Match(x => x.Count > 0);
 
         risks.Should().NotBeEmpty("import should return at least one risk");
@@ -132,7 +132,7 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
     }
 
     [Fact(Timeout = 30000)]
-    public void Import_Microsoft_WithAllocation()
+    public async Task Import_Microsoft_WithAllocation()
     {
         // Skip test if file doesn't exist
         var fullPath = Path.Combine(_testFilesPath, "Microsoft.xlsx");
@@ -145,7 +145,7 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
             Configuration = Config
         };
 
-        var importResponse = Mesh.Observe(
+        var importResponse = await Mesh.Observe(
                 importRequest,
                 o => o.WithTarget(Mesh.Address))
             .Should().Within(20.Seconds()).Emit();
@@ -156,7 +156,7 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
 
         // Verify data was imported
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
-        var risks = workspace.GetObservable<PropertyRisk>()
+        var risks = await workspace.GetObservable<PropertyRisk>()
             .Should().Within(10.Seconds()).Match(x => x.Count > 0);
         risks.Should().NotBeEmpty();
 
@@ -183,7 +183,7 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
     }
 
     [Fact(Timeout = 30000)]
-    public void Import_Microsoft_UsingSumMapping()
+    public async Task Import_Microsoft_UsingSumMapping()
     {
         // Skip test if file doesn't exist
         var fullPath = Path.Combine(_testFilesPath, "Microsoft.xlsx");
@@ -198,7 +198,7 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
             Configuration = Config
         };
 
-        var importResponse = Mesh.Observe(
+        var importResponse = await Mesh.Observe(
                 importRequest,
                 o => o.WithTarget(Mesh.Address))
             .Should().Within(20.Seconds()).Emit();
@@ -209,7 +209,7 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
 
         // Verify data was imported
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
-        var risks = workspace.GetObservable<PropertyRisk>()
+        var risks = await workspace.GetObservable<PropertyRisk>()
             .Should().Within(10.Seconds()).Match(x => x.Count > 0);
         risks.Should().NotBeEmpty();
         Output.WriteLine($"Imported {risks.Count} risks using direct mapping");

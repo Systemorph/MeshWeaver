@@ -112,7 +112,7 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     /// <summary>
     /// Helper method to test that a node's default area loads without hanging.
     /// </summary>
-    private void AssertNodeLoadsWithoutHanging(string nodePath, int timeoutSeconds = DefaultTimeoutSeconds)
+    private async Task AssertNodeLoadsWithoutHanging(string nodePath, int timeoutSeconds = DefaultTimeoutSeconds)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var address = new Address(nodePath);
@@ -124,7 +124,7 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         Output.WriteLine($"[{sw.ElapsedMilliseconds}ms] Sending PingRequest to {nodePath}");
 
-        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
         Output.WriteLine($"[{sw.ElapsedMilliseconds}ms] Ping returned for {nodePath}");
 
         var workspace = client.GetWorkspace();
@@ -134,7 +134,7 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
         Output.WriteLine($"[{sw.ElapsedMilliseconds}ms] GetRemoteStream returned (subscribed below)");
 
-        var changeItem = stream.Should().Within(TimeSpan.FromSeconds(timeoutSeconds)).Emit();
+        var changeItem = await stream.Should().Within(TimeSpan.FromSeconds(timeoutSeconds)).Emit();
         Output.WriteLine($"[{sw.ElapsedMilliseconds}ms] stream emitted");
         var value = changeItem.Value;
 
@@ -147,7 +147,7 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     /// <summary>
     /// Helper method to test that a specific layout area loads without hanging.
     /// </summary>
-    private void AssertAreaLoadsWithoutHanging(string nodePath, string areaName, int timeoutSeconds = DefaultTimeoutSeconds)
+    private async Task AssertAreaLoadsWithoutHanging(string nodePath, string areaName, int timeoutSeconds = DefaultTimeoutSeconds)
     {
         var address = new Address(nodePath);
         var client = GetClient(c => c
@@ -156,7 +156,7 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         Output.WriteLine($"Testing {areaName} area loading for {nodePath}");
 
-        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
         Output.WriteLine($"Hub initialized for {nodePath}");
 
         var workspace = client.GetWorkspace();
@@ -164,7 +164,7 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
 
-        var changeItem = stream.Should().Within(TimeSpan.FromSeconds(timeoutSeconds)).Emit();
+        var changeItem = await stream.Should().Within(TimeSpan.FromSeconds(timeoutSeconds)).Emit();
         var value = changeItem.Value;
 
         var rawText = value.GetRawText();
@@ -186,9 +186,9 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Theory(Timeout = 120000)]
     [InlineData("ACME")]
     [InlineData("Systemorph")]
-    public void Space_LoadsWithoutHanging(string nodePath)
+    public async Task Space_LoadsWithoutHanging(string nodePath)
     {
-        AssertNodeLoadsWithoutHanging(nodePath);
+        await AssertNodeLoadsWithoutHanging(nodePath);
     }
 
     #endregion
@@ -201,9 +201,9 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Theory(Timeout = 120000)]
     [InlineData("Cornerstone/Microsoft")]
     [InlineData("Cornerstone/Tesla")]
-    public void Person_LoadsWithoutHanging(string nodePath)
+    public async Task Person_LoadsWithoutHanging(string nodePath)
     {
-        AssertNodeLoadsWithoutHanging(nodePath);
+        await AssertNodeLoadsWithoutHanging(nodePath);
     }
 
     /// <summary>
@@ -211,9 +211,9 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     /// This verifies UserActivityLayoutAreas is properly registered via UserNodeType.
     /// </summary>
     [Fact(Timeout = 120000)]
-    public void User_Activity_LoadsWithoutHanging()
+    public async Task User_Activity_LoadsWithoutHanging()
     {
-        AssertAreaLoadsWithoutHanging("Cornerstone/Microsoft", "Activity");
+        await AssertAreaLoadsWithoutHanging("Cornerstone/Microsoft", "Activity");
     }
 
     #endregion
@@ -228,9 +228,9 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [InlineData("Cornerstone/Microsoft")]
     [InlineData("Cornerstone/EuropeanLogistics")]
     [InlineData("Cornerstone/GlobalManufacturing")]
-    public void CornerstoneInsured_LoadsWithoutHanging(string nodePath)
+    public async Task CornerstoneInsured_LoadsWithoutHanging(string nodePath)
     {
-        AssertNodeLoadsWithoutHanging(nodePath);
+        await AssertNodeLoadsWithoutHanging(nodePath);
     }
 
     /// <summary>
@@ -238,9 +238,9 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     /// This directly tests the CombineLatest fix with StartWith.
     /// </summary>
     [Fact(Timeout = 120000)]
-    public void CornerstoneInsured_PricingCatalog_LoadsWithoutHanging()
+    public async Task CornerstoneInsured_PricingCatalog_LoadsWithoutHanging()
     {
-        AssertAreaLoadsWithoutHanging("Cornerstone/Microsoft", "PricingCatalog");
+        await AssertAreaLoadsWithoutHanging("Cornerstone/Microsoft", "PricingCatalog");
     }
 
     #endregion
@@ -252,9 +252,9 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     /// </summary>
     [Theory(Timeout = 120000)]
     [InlineData("MeshWeaver/Welcome")]
-    public void MarkdownNode_LoadsWithoutHanging(string nodePath)
+    public async Task MarkdownNode_LoadsWithoutHanging(string nodePath)
     {
-        AssertNodeLoadsWithoutHanging(nodePath);
+        await AssertNodeLoadsWithoutHanging(nodePath);
     }
 
     #endregion
@@ -266,9 +266,9 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     /// </summary>
     [Theory(Timeout = 120000)]
     [InlineData("Northwind")]
-    public void NorthwindNode_LoadsWithoutHanging(string nodePath)
+    public async Task NorthwindNode_LoadsWithoutHanging(string nodePath)
     {
-        AssertNodeLoadsWithoutHanging(nodePath);
+        await AssertNodeLoadsWithoutHanging(nodePath);
     }
 
     #endregion

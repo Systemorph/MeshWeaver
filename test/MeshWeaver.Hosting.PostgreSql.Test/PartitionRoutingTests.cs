@@ -50,7 +50,7 @@ public class PartitionRoutingTests
     /// a query-layer mismatch.</para>
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void SatellitePaths_RouteToCorrectTable()
+    public async Task SatellitePaths_RouteToCorrectTable()
     {
         var ct = TestContext.Current.CancellationToken;
         const string schema = "routingtest_b";
@@ -64,7 +64,7 @@ public class PartitionRoutingTests
             Versioned = true,
         };
 
-        var (schemaDs, adapter) = _fixture.CreateSchemaAdapter(schema, partitionDef, ct)
+        var (schemaDs, adapter) = await _fixture.CreateSchemaAdapter(schema, partitionDef, ct)
             .Should().Within(60.Seconds()).Emit();
 
         try
@@ -81,7 +81,7 @@ public class PartitionRoutingTests
                 Name = "Grant",
                 NodeType = "AccessAssignment",
             };
-            adapter.Write(accessNode, JsonSerializerOptions.Default)
+            await adapter.Write(accessNode, JsonSerializerOptions.Default)
                 .Should().Within(30.Seconds()).Emit();
 
             // 2. Write a Source-shaped node at {schema}/Source/{id}.
@@ -94,7 +94,7 @@ public class PartitionRoutingTests
                 Name = "file.cs",
                 NodeType = "Code",
             };
-            adapter.Write(sourceNode, JsonSerializerOptions.Default).Should().Within(30.Seconds()).Emit();
+            await adapter.Write(sourceNode, JsonSerializerOptions.Default).Should().Within(30.Seconds()).Emit();
 
             // 3. Write a non-satellite content node at {schema}/{id} — this
             //    one lands in the primary mesh_nodes table.
@@ -103,21 +103,21 @@ public class PartitionRoutingTests
                 Name = "doc",
                 NodeType = "Markdown",
             };
-            adapter.Write(primaryNode, JsonSerializerOptions.Default).Should().Within(30.Seconds()).Emit();
+            await adapter.Write(primaryNode, JsonSerializerOptions.Default).Should().Within(30.Seconds()).Emit();
 
             // 4. Verify with raw SQL: counts per table must match expectations.
             //    ScalarLong keeps the low-level PG query async inside; the body
             //    asserts reactively (§2a).
-            schemaDs.ScalarLong("SELECT COUNT(*) FROM \"access\"", ct)
+            await schemaDs.ScalarLong("SELECT COUNT(*) FROM \"access\"", ct)
                 .Should().Within(30.Seconds()).Be(1L);
-            schemaDs.ScalarLong("SELECT COUNT(*) FROM \"code\"", ct)
+            await schemaDs.ScalarLong("SELECT COUNT(*) FROM \"code\"", ct)
                 .Should().Within(30.Seconds()).Be(1L);
-            schemaDs.ScalarLong("SELECT COUNT(*) FROM \"mesh_nodes\"", ct)
+            await schemaDs.ScalarLong("SELECT COUNT(*) FROM \"mesh_nodes\"", ct)
                 .Should().Within(30.Seconds()).Be(1L);
         }
         finally
         {
-            schemaDs.DisposeReactive().Should().Within(30.Seconds()).Emit();
+            await schemaDs.DisposeReactive().Should().Within(30.Seconds()).Emit();
         }
     }
 }

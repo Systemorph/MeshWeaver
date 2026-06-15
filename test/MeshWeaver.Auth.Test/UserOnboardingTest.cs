@@ -54,7 +54,7 @@ public class UserOnboardingTest(ITestOutputHelper output) : MonolithMeshTestBase
             .SetCircuitContext(new AccessContext { ObjectId = userId, Name = userId });
 
     [Fact(Timeout = 15000)]
-    public void CreateUserNode_GrantsSelfAdminRole_OnOwnPartition()
+    public async Task CreateUserNode_GrantsSelfAdminRole_OnOwnPartition()
     {
         // Use a unique userId to avoid interference with other tests or seeded data.
         const string userId = "onboard-test-user-a";
@@ -69,12 +69,12 @@ public class UserOnboardingTest(ITestOutputHelper output) : MonolithMeshTestBase
             Name = "Onboard Test User A",
             State = MeshNodeState.Active,
         };
-        NodeFactory.CreateNode(userNode).Should().Emit();
+        await NodeFactory.CreateNode(userNode).Should().Emit();
 
         // Wait for the self-assignment to propagate through SecurityService's
         // synced query (100 ms debounce window). GetEffectivePermissions is a hot
         // observable; .Should().Match blocks for the first matching emission.
-        var perm = Mesh.GetEffectivePermissions(userId, userId)
+        var perm = await Mesh.GetEffectivePermissions(userId, userId)
             .Should().Match(p => p.HasFlag(Permission.Read));
 
         perm.HasFlag(Permission.Read).Should().BeTrue(
@@ -84,7 +84,7 @@ public class UserOnboardingTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 15000)]
-    public void CreateUserNode_OtherUserHasNoAccess_ToNewPartition()
+    public async Task CreateUserNode_OtherUserHasNoAccess_ToNewPartition()
     {
         const string userId = "onboard-test-user-b";
         const string otherUserId = "some-other-user";
@@ -97,14 +97,14 @@ public class UserOnboardingTest(ITestOutputHelper output) : MonolithMeshTestBase
             Name = "Onboard Test User B",
             State = MeshNodeState.Active,
         };
-        NodeFactory.CreateNode(userNode).Should().Emit();
+        await NodeFactory.CreateNode(userNode).Should().Emit();
 
         // Wait for the self-assignment so the partition is fully set up.
-        Mesh.GetEffectivePermissions(userId, userId)
+        await Mesh.GetEffectivePermissions(userId, userId)
             .Should().Match(p => p.HasFlag(Permission.Read));
 
         // Another user (no AccessAssignment) should have no access.
-        var otherPerm = Mesh.GetEffectivePermissions(userId, otherUserId).Should().Emit();
+        var otherPerm = await Mesh.GetEffectivePermissions(userId, otherUserId).Should().Emit();
         otherPerm.HasFlag(Permission.Read).Should().BeFalse(
             "Users without an explicit AccessAssignment should not be able to read another user's partition");
         otherPerm.HasFlag(Permission.Update).Should().BeFalse(
@@ -112,7 +112,7 @@ public class UserOnboardingTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 15000)]
-    public void CreateUserNode_SelfAssignmentNodeExists()
+    public async Task CreateUserNode_SelfAssignmentNodeExists()
     {
         const string userId = "onboard-test-user-c";
 
@@ -124,15 +124,15 @@ public class UserOnboardingTest(ITestOutputHelper output) : MonolithMeshTestBase
             Name = "Onboard Test User C",
             State = MeshNodeState.Active,
         };
-        NodeFactory.CreateNode(userNode).Should().Emit();
+        await NodeFactory.CreateNode(userNode).Should().Emit();
 
         // Wait for permissions so the assignment definitely exists.
-        Mesh.GetEffectivePermissions(userId, userId)
+        await Mesh.GetEffectivePermissions(userId, userId)
             .Should().Match(p => p.HasFlag(Permission.Read));
 
         // Verify the AccessAssignment node itself is readable via the mesh.
         var assignmentPath = $"{userId}/_Access/{userId}_Access";
-        var assignmentNode = ReadNode(assignmentPath).Should().Emit();
+        var assignmentNode = await ReadNode(assignmentPath).Should().Emit();
 
         assignmentNode.Should().NotBeNull(
             $"UserScopeGrantHandler should create an AccessAssignment node at {assignmentPath}");

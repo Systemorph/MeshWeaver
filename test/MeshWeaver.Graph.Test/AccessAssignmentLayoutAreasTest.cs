@@ -43,7 +43,7 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
 
     private string GetHubPath(string hostId = "1") => $"{HostType}/{hostId}";
 
-    private MeshNode SetupAssignmentNode(string hubPath, AccessAssignment assignment)
+    private async Task<MeshNode> SetupAssignmentNode(string hubPath, AccessAssignment assignment)
     {
         var node = MeshNode.FromPath(hubPath) with
         {
@@ -51,7 +51,7 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
             NodeType = "AccessAssignment",
             Content = assignment
         };
-        _persistence.SaveNode(node, JsonOptions).Should().Emit();
+        await _persistence.SaveNode(node, JsonOptions).Should().Emit();
         return node;
     }
 
@@ -60,7 +60,7 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
     // ============================================================
 
     [HubFact]
-    public void ToggleDenied_UpdatesNodeInStream()
+    public async Task ToggleDenied_UpdatesNodeInStream()
     {
         var hubPath = GetHubPath();
         var assignment = new AccessAssignment
@@ -69,15 +69,15 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
             DisplayName = "Alice",
             Roles = [new RoleAssignment { Role = "Editor", Denied = false }]
         };
-        SetupAssignmentNode(hubPath, assignment);
+        await SetupAssignmentNode(hubPath, assignment);
 
         var host = GetHost();
         var workspace = host.GetWorkspace();
 
         var nodeStream = workspace.GetStream<MeshNode>()!;
 
-        var initialNodes = nodeStream
-            .Should().Within(5.Seconds()).Match(items => items?.Any() == true)!;
+        var initialNodes = (await nodeStream
+            .Should().Within(5.Seconds()).Match(items => items?.Any() == true))!;
 
         var node = initialNodes!.First();
         var initial = AccessControlLayoutArea.DeserializeAssignment(node)!;
@@ -90,7 +90,7 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
         workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
 
         // Assert â€” stream should reflect the change
-        var updatedNodes = nodeStream!
+        var updatedNodes = await nodeStream!
             .Should().Within(5.Seconds()).Match(items =>
             {
                 var n = items?.FirstOrDefault();
@@ -105,7 +105,7 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
     }
 
     [HubFact]
-    public void ToggleDenied_TogglesBackToFalse()
+    public async Task ToggleDenied_TogglesBackToFalse()
     {
         var hubPath = GetHubPath("toggle-back");
         var assignment = new AccessAssignment
@@ -114,13 +114,13 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
             DisplayName = "Bob",
             Roles = [new RoleAssignment { Role = "Viewer", Denied = true }]
         };
-        SetupAssignmentNode(hubPath, assignment);
+        await SetupAssignmentNode(hubPath, assignment);
 
         var host = Mesh.GetHostedHub(new Address(HostType, "toggle-back"), ConfigureHost);
         var workspace = host.GetWorkspace();
 
         var nodeStream = workspace.GetStream<MeshNode>();
-        var initialNodes = nodeStream!
+        var initialNodes = await nodeStream!
             .Should().Within(5.Seconds()).Match(items => items?.Any() == true);
 
         var node = initialNodes!.First();
@@ -132,7 +132,7 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
         var updatedNode = node with { Content = initial with { Roles = roles } };
         workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
 
-        var updatedNodes = nodeStream!
+        var updatedNodes = await nodeStream!
             .Should().Within(5.Seconds()).Match(items =>
             {
                 var n = items?.FirstOrDefault();
@@ -146,7 +146,7 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
     }
 
     [HubFact]
-    public void RemoveRole_RemovesRoleFromAssignment()
+    public async Task RemoveRole_RemovesRoleFromAssignment()
     {
         var hubPath = GetHubPath("remove-role");
         var assignment = new AccessAssignment
@@ -159,13 +159,13 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
                 new RoleAssignment { Role = "Editor", Denied = false }
             ]
         };
-        SetupAssignmentNode(hubPath, assignment);
+        await SetupAssignmentNode(hubPath, assignment);
 
         var host = Mesh.GetHostedHub(new Address(HostType, "remove-role"), ConfigureHost);
         var workspace = host.GetWorkspace();
 
         var nodeStream = workspace.GetStream<MeshNode>();
-        var initialNodes = nodeStream!
+        var initialNodes = await nodeStream!
             .Should().Within(5.Seconds()).Match(items => items?.Any() == true);
 
         var node = initialNodes!.First();
@@ -177,7 +177,7 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
         var updatedNode = node with { Content = initial with { Roles = roles } };
         workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
 
-        var updatedNodes = nodeStream!
+        var updatedNodes = await nodeStream!
             .Should().Within(5.Seconds()).Match(items =>
             {
                 var n = items?.FirstOrDefault();
@@ -192,7 +192,7 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
     }
 
     [HubFact]
-    public void RemoveLastRole_DeletesNode()
+    public async Task RemoveLastRole_DeletesNode()
     {
         var hubPath = GetHubPath("delete-node");
         var assignment = new AccessAssignment
@@ -201,13 +201,13 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
             DisplayName = "Dave",
             Roles = [new RoleAssignment { Role = "Viewer", Denied = false }]
         };
-        SetupAssignmentNode(hubPath, assignment);
+        await SetupAssignmentNode(hubPath, assignment);
 
         var host = Mesh.GetHostedHub(new Address(HostType, "delete-node"), ConfigureHost);
         var workspace = host.GetWorkspace();
 
         var nodeStream = workspace.GetStream<MeshNode>();
-        var initialNodes = nodeStream!
+        var initialNodes = await nodeStream!
             .Should().Within(5.Seconds()).Match(items => items?.Any() == true);
 
         initialNodes.Should().HaveCount(1);
@@ -215,14 +215,14 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
 
         workspace.RequestChange(new DataChangeRequest().WithDeletions(node), null, null);
 
-        var updatedNodes = nodeStream!
+        var updatedNodes = await nodeStream!
             .Should().Within(5.Seconds()).Match(items => items == null || items.Length == 0);
 
         (updatedNodes?.Length ?? 0).Should().Be(0);
     }
 
     [HubFact]
-    public void AddRole_AddsRoleToAssignment()
+    public async Task AddRole_AddsRoleToAssignment()
     {
         var hubPath = GetHubPath("add-role");
         var assignment = new AccessAssignment
@@ -231,13 +231,13 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
             DisplayName = "Eve",
             Roles = [new RoleAssignment { Role = "Viewer", Denied = false }]
         };
-        SetupAssignmentNode(hubPath, assignment);
+        await SetupAssignmentNode(hubPath, assignment);
 
         var host = Mesh.GetHostedHub(new Address(HostType, "add-role"), ConfigureHost);
         var workspace = host.GetWorkspace();
 
         var nodeStream = workspace.GetStream<MeshNode>();
-        var initialNodes = nodeStream!
+        var initialNodes = await nodeStream!
             .Should().Within(5.Seconds()).Match(items => items?.Any() == true);
 
         var node = initialNodes!.First();
@@ -249,7 +249,7 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
         var updatedNode = node with { Content = initial with { Roles = roles } };
         workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
 
-        var updatedNodes = nodeStream!
+        var updatedNodes = await nodeStream!
             .Should().Within(5.Seconds()).Match(items =>
             {
                 var n = items?.FirstOrDefault();
@@ -265,7 +265,7 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
     }
 
     [HubFact]
-    public void ToggleDenied_WithMultipleRoles_OnlyTogglesSpecifiedRole()
+    public async Task ToggleDenied_WithMultipleRoles_OnlyTogglesSpecifiedRole()
     {
         var hubPath = GetHubPath("multi-toggle");
         var assignment = new AccessAssignment
@@ -279,13 +279,13 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
                 new RoleAssignment { Role = "Viewer", Denied = true }
             ]
         };
-        SetupAssignmentNode(hubPath, assignment);
+        await SetupAssignmentNode(hubPath, assignment);
 
         var host = Mesh.GetHostedHub(new Address(HostType, "multi-toggle"), ConfigureHost);
         var workspace = host.GetWorkspace();
 
         var nodeStream = workspace.GetStream<MeshNode>();
-        var initialNodes = nodeStream!
+        var initialNodes = await nodeStream!
             .Should().Within(5.Seconds()).Match(items => items?.Any() == true);
 
         var node = initialNodes!.First();
@@ -296,7 +296,7 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
         var updatedNode = node with { Content = initial with { Roles = roles } };
         workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
 
-        var updatedNodes = nodeStream!
+        var updatedNodes = await nodeStream!
             .Should().Within(5.Seconds()).Match(items =>
             {
                 var n = items?.FirstOrDefault();

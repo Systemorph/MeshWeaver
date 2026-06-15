@@ -83,7 +83,7 @@ public class NavigationProgressTest
     // -- Test #1: initial subscribers see a non-empty LookingUp message. ----------
 
     [Fact]
-    public void Status_AfterInitialize_EmitsNonEmptyLookingUpMessageWithPath()
+    public async Task Status_AfterInitialize_EmitsNonEmptyLookingUpMessageWithPath()
     {
         // After InitializeAsync runs, subscribers must see "Looking up <path>"
         // rather than a silent / generic spinner. The constructor deliberately
@@ -105,7 +105,7 @@ public class NavigationProgressTest
         // Stream-wait for the LookingUp emission carrying the path — replaces
         // a 50 ms propagation delay. The Status stream is a BehaviorSubject,
         // so the .Where filter is hot on first match.
-        var lookingUp = service.Status.Should().Within(WaitTimeout)
+        var lookingUp = await service.Status.Should().Within(WaitTimeout)
             .Match(s => s.Phase == NavigationPhase.LookingUp && s.Message.Contains("FutuRe"));
 
         lookingUp.Should().NotBeNull("after InitializeAsync the LookingUp emission must carry the path");
@@ -209,7 +209,7 @@ public class NavigationProgressTest
     // -- Test #6: THE core "no endless spinner" invariant --------------------------
 
     [Fact]
-    public void Status_AllEmissions_HaveNonEmptyMessage()
+    public async Task Status_AllEmissions_HaveNonEmptyMessage()
     {
         // Drive the service through a full lifecycle: init â†’ resolve ok â†’ navigate
         // to a path that will NOT resolve â†’ retries â†’ NotFound. Every emission
@@ -229,7 +229,7 @@ public class NavigationProgressTest
         // "wait > total FastRetryDelays" barrier. NotFound is the terminal
         // emission for the failed retry path (fired by the watchdog timer);
         // once we see it, the lifecycle is over and we can assert on `emissions`.
-        service.Status.Should().Within(WaitTimeout)
+        await service.Status.Should().Within(WaitTimeout)
             .Match(s => s.Phase == NavigationPhase.NotFound);
 
         emissions.Should().NotBeEmpty();
@@ -240,7 +240,7 @@ public class NavigationProgressTest
     // -- Test #7: retries in flight must NOT emit NotFound / null context --------
 
     [Fact]
-    public void Status_WhenResolutionFailsInitially_DoesNotEmitNotFoundUntilRetriesExhausted()
+    public async Task Status_WhenResolutionFailsInitially_DoesNotEmitNotFoundUntilRetriesExhausted()
     {
         // Initial attempt returns null and we schedule retries. The user should
         // keep seeing "Looking upâ€¦" during the retry window â€” not a flash of
@@ -259,10 +259,10 @@ public class NavigationProgressTest
         // fired, so neither a NotFound status nor a null navigation context may
         // surface. These are genuine "nothing happens" negatives — the one place
         // a fixed wait is correct (NotEmit).
-        service.Status.Where(s => s.Phase == NavigationPhase.NotFound).Should().NotEmit(
+        await service.Status.Where(s => s.Phase == NavigationPhase.NotFound).Should().NotEmit(
             TimeSpan.FromMilliseconds(200),
             "during the retry window we must not have declared the page not found");
-        service.NavigationContext.Where(ctx => ctx is null).Should().NotEmit(
+        await service.NavigationContext.Where(ctx => ctx is null).Should().NotEmit(
             TimeSpan.FromMilliseconds(200),
             "the page-not-found flash comes from firing a null context prematurely");
         emissions.Last().Phase.Should().Be(NavigationPhase.LookingUp,
@@ -302,7 +302,7 @@ public class NavigationProgressTest
     // -- Test #9: OnNavigationContextChanged is not invoked with null mid-retry --
 
     [Fact]
-    public void OnNavigationContextChanged_IsNotInvokedWithNull_BeforeRetriesExhausted()
+    public async Task OnNavigationContextChanged_IsNotInvokedWithNull_BeforeRetriesExhausted()
     {
         _navigationManager.SetUri("http://localhost/does/not/exist");
         _pathResolver.ResolvePath(Arg.Any<string>())
@@ -315,7 +315,7 @@ public class NavigationProgressTest
         // Firing OnNavigationContextChanged(null) prematurely is the root cause of
         // the 404 flash. Within the retry window (< first 500 ms retry) no null
         // context may surface — a genuine "nothing happens" negative.
-        service.NavigationContext.Where(ctx => ctx is null).Should().NotEmit(
+        await service.NavigationContext.Where(ctx => ctx is null).Should().NotEmit(
             TimeSpan.FromMilliseconds(200),
             "firing OnNavigationContextChanged(null) prematurely is the root cause of the 404 flash");
     }
@@ -323,7 +323,7 @@ public class NavigationProgressTest
     // -- Test #10: eventually NotFound is emitted after retries exhaust ----------
 
     [Fact]
-    public void Status_WhenAllRetriesExhaust_EmitsNotFoundAndFiresNullContext()
+    public async Task Status_WhenAllRetriesExhaust_EmitsNotFoundAndFiresNullContext()
     {
         _navigationManager.SetUri("http://localhost/does/not/exist");
         _pathResolver.ResolvePath(Arg.Any<string>())
@@ -343,7 +343,7 @@ public class NavigationProgressTest
         // then a null context as the terminal retry-exhausted action. Blocking on
         // the first null emission guarantees both Status and NavigationContext
         // have fired by the time the assertions run.
-        service.NavigationContext.Where(ctx => ctx is null).Should().Within(WaitTimeout).Emit();
+        await service.NavigationContext.Where(ctx => ctx is null).Should().Within(WaitTimeout).Emit();
 
         emissions.Should().Contain(s => s.Phase == NavigationPhase.NotFound
                                         && s.Message.Contains("does/not/exist"));
@@ -354,7 +354,7 @@ public class NavigationProgressTest
     // -- Test #11: Loading phase message mentions the address --------------------
 
     [Fact]
-    public void Status_Loading_IncludesAddress()
+    public async Task Status_Loading_IncludesAddress()
     {
         _navigationManager.SetUri("http://localhost/ACME/Project/Dashboard");
         _pathResolver.ResolvePath("ACME/Project/Dashboard")
@@ -367,7 +367,7 @@ public class NavigationProgressTest
         // Stream-wait for the Loading emission — replaces Task.Delay(50). Loading
         // is the terminal synchronous phase off the bootstrap (the node load is an
         // empty mesh query), so it is the current BehaviorSubject value.
-        service.Status.Should().Within(WaitTimeout)
+        await service.Status.Should().Within(WaitTimeout)
             .Match(s => s.Phase == NavigationPhase.Loading && s.Message.Contains("ACME/Project"));
 
         emissions.Should().Contain(s => s.Phase == NavigationPhase.Loading

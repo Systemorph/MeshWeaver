@@ -61,13 +61,13 @@ public class SatelliteNodeTests : IAsyncLifetime
         return ValueTask.CompletedTask;
     }
 
-    private long Count(string sql, System.Threading.CancellationToken ct)
+    private Task<long> Count(string sql, System.Threading.CancellationToken ct)
         => _schemaDs.ScalarLong(sql, ct).Should().Within(30.Seconds()).Emit();
 
     #region Activity satellite
 
     [Fact(Timeout = 30000)]
-    public void Activity_WriteAndRead_RoutesToActivitiesTable()
+    public async Task Activity_WriteAndRead_RoutesToActivitiesTable()
     {
         var ct = TestContext.Current.CancellationToken;
         var activityAdapter = AdapterFor("_Activity", "activities");
@@ -79,14 +79,14 @@ public class SatelliteNodeTests : IAsyncLifetime
             MainNode = "ACME/Projects/Alpha",
             Content = new { Action = "Created", UserId = "alice", Timestamp = DateTimeOffset.UtcNow }
         };
-        activityAdapter.Write(activity, _options).Should().Within(30.Seconds()).Emit();
+        await activityAdapter.Write(activity, _options).Should().Within(30.Seconds()).Emit();
 
         // Verify in activities table
-        Count("SELECT COUNT(*) FROM activities WHERE namespace = 'ACME/Projects/Alpha/_Activity' AND id = 'act-1'", ct)
+        (await Count("SELECT COUNT(*) FROM activities WHERE namespace = 'ACME/Projects/Alpha/_Activity' AND id = 'act-1'", ct))
             .Should().Be(1);
 
         // Read back
-        var read = activityAdapter.Read("ACME/Projects/Alpha/_Activity/act-1", _options)
+        var read = await activityAdapter.Read("ACME/Projects/Alpha/_Activity/act-1", _options)
             .Should().Within(30.Seconds()).Emit();
         read.Should().NotBeNull();
         read!.NodeType.Should().Be("Activity");
@@ -98,7 +98,7 @@ public class SatelliteNodeTests : IAsyncLifetime
     #region UserActivity satellite
 
     [Fact(Timeout = 30000)]
-    public void UserActivity_WriteAndRead_RoutesToUserActivitiesTable()
+    public async Task UserActivity_WriteAndRead_RoutesToUserActivitiesTable()
     {
         var ct = TestContext.Current.CancellationToken;
         var uaAdapter = AdapterFor("_UserActivity", "user_activities");
@@ -119,11 +119,11 @@ public class SatelliteNodeTests : IAsyncLifetime
                 AccessCount = 3
             }
         };
-        uaAdapter.Write(ua, _options).Should().Within(30.Seconds()).Emit();
+        await uaAdapter.Write(ua, _options).Should().Within(30.Seconds()).Emit();
 
-        Count("SELECT COUNT(*) FROM user_activities WHERE id = 'ACME_Projects_Alpha'", ct).Should().Be(1);
+        (await Count("SELECT COUNT(*) FROM user_activities WHERE id = 'ACME_Projects_Alpha'", ct)).Should().Be(1);
 
-        var read = uaAdapter.Read("User/alice/_UserActivity/ACME_Projects_Alpha", _options)
+        var read = await uaAdapter.Read("User/alice/_UserActivity/ACME_Projects_Alpha", _options)
             .Should().Within(30.Seconds()).Emit();
         read.Should().NotBeNull();
         read!.NodeType.Should().Be("UserActivity");
@@ -134,7 +134,7 @@ public class SatelliteNodeTests : IAsyncLifetime
     #region AccessAssignment satellite
 
     [Fact(Timeout = 30000)]
-    public void AccessAssignment_WriteAndRead_RoutesToAccessTable()
+    public async Task AccessAssignment_WriteAndRead_RoutesToAccessTable()
     {
         var ct = TestContext.Current.CancellationToken;
         var aaAdapter = AdapterFor("_Access", "access");
@@ -146,37 +146,37 @@ public class SatelliteNodeTests : IAsyncLifetime
             MainNode = "ACME/Projects/Alpha",
             Content = new { UserId = "bob", RoleId = "Admin", AssignedBy = "alice" }
         };
-        aaAdapter.Write(aa, _options).Should().Within(30.Seconds()).Emit();
+        await aaAdapter.Write(aa, _options).Should().Within(30.Seconds()).Emit();
 
-        Count("SELECT COUNT(*) FROM access WHERE id = 'aa-1'", ct).Should().Be(1);
+        (await Count("SELECT COUNT(*) FROM access WHERE id = 'aa-1'", ct)).Should().Be(1);
 
-        var read = aaAdapter.Read("ACME/Projects/Alpha/_Access/aa-1", _options)
+        var read = await aaAdapter.Read("ACME/Projects/Alpha/_Access/aa-1", _options)
             .Should().Within(30.Seconds()).Emit();
         read.Should().NotBeNull();
         read!.Name.Should().Be("Admin role for Bob");
     }
 
     [Fact(Timeout = 30000)]
-    public void AccessAssignment_MultipleAssignments_ListCorrectly()
+    public async Task AccessAssignment_MultipleAssignments_ListCorrectly()
     {
         var aaAdapter = AdapterFor("_Access", "access");
         var ns = "ACME/Projects/Beta/_Access";
 
-        aaAdapter.Write(new MeshNode("aa-b1", ns)
+        await aaAdapter.Write(new MeshNode("aa-b1", ns)
         {
             Name = "Viewer for carol",
             NodeType = "AccessAssignment",
             MainNode = "ACME/Projects/Beta",
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        aaAdapter.Write(new MeshNode("aa-b2", ns)
+        await aaAdapter.Write(new MeshNode("aa-b2", ns)
         {
             Name = "Editor for dave",
             NodeType = "AccessAssignment",
             MainNode = "ACME/Projects/Beta",
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        var (paths, _) = aaAdapter.ListChildPaths(ns).Should().Within(30.Seconds()).Emit();
+        var (paths, _) = await aaAdapter.ListChildPaths(ns).Should().Within(30.Seconds()).Emit();
         paths.Should().HaveCount(2);
     }
 
@@ -185,7 +185,7 @@ public class SatelliteNodeTests : IAsyncLifetime
     #region Comment satellite (→ annotations)
 
     [Fact(Timeout = 30000)]
-    public void Comment_WriteAndRead_RoutesToAnnotationsTable()
+    public async Task Comment_WriteAndRead_RoutesToAnnotationsTable()
     {
         var ct = TestContext.Current.CancellationToken;
         var commentAdapter = AdapterFor("_Comment", "annotations");
@@ -197,31 +197,31 @@ public class SatelliteNodeTests : IAsyncLifetime
             MainNode = "ACME/Docs/readme",
             Content = new { Author = "alice", Text = "This is really helpful!", CreatedAt = DateTimeOffset.UtcNow }
         };
-        commentAdapter.Write(comment, _options).Should().Within(30.Seconds()).Emit();
+        await commentAdapter.Write(comment, _options).Should().Within(30.Seconds()).Emit();
 
-        Count("SELECT COUNT(*) FROM annotations WHERE id = 'cmt-1'", ct).Should().Be(1);
+        (await Count("SELECT COUNT(*) FROM annotations WHERE id = 'cmt-1'", ct)).Should().Be(1);
 
         // Not in mesh_nodes
-        Count("SELECT COUNT(*) FROM mesh_nodes WHERE id = 'cmt-1' AND namespace = 'ACME/Docs/readme/_Comment'", ct)
+        (await Count("SELECT COUNT(*) FROM mesh_nodes WHERE id = 'cmt-1' AND namespace = 'ACME/Docs/readme/_Comment'", ct))
             .Should().Be(0);
     }
 
     [Fact(Timeout = 30000)]
-    public void Comment_Delete_RemovesFromTable()
+    public async Task Comment_Delete_RemovesFromTable()
     {
         var commentAdapter = AdapterFor("_Comment", "annotations");
         var path = "ACME/Docs/guide/_Comment/cmt-del";
 
-        commentAdapter.Write(new MeshNode("cmt-del", "ACME/Docs/guide/_Comment")
+        await commentAdapter.Write(new MeshNode("cmt-del", "ACME/Docs/guide/_Comment")
         {
             Name = "Temporary comment",
             NodeType = "Comment",
             MainNode = "ACME/Docs/guide",
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        commentAdapter.Exists(path).Should().Within(30.Seconds()).Be(true);
-        commentAdapter.Delete(path).Should().Within(30.Seconds()).Emit();
-        commentAdapter.Exists(path).Should().Within(30.Seconds()).Be(false);
+        await commentAdapter.Exists(path).Should().Within(30.Seconds()).Be(true);
+        await commentAdapter.Delete(path).Should().Within(30.Seconds()).Emit();
+        await commentAdapter.Exists(path).Should().Within(30.Seconds()).Be(false);
     }
 
     #endregion
@@ -229,7 +229,7 @@ public class SatelliteNodeTests : IAsyncLifetime
     #region TrackedChange satellite (→ annotations)
 
     [Fact(Timeout = 30000)]
-    public void TrackedChange_WriteAndRead_RoutesToAnnotationsTable()
+    public async Task TrackedChange_WriteAndRead_RoutesToAnnotationsTable()
     {
         var ct = TestContext.Current.CancellationToken;
         var tcAdapter = AdapterFor("_Tracking", "annotations");
@@ -241,11 +241,11 @@ public class SatelliteNodeTests : IAsyncLifetime
             MainNode = "ACME/Docs/report",
             Content = new { Author = "bob", ChangeType = "Edit", Section = "2" }
         };
-        tcAdapter.Write(tc, _options).Should().Within(30.Seconds()).Emit();
+        await tcAdapter.Write(tc, _options).Should().Within(30.Seconds()).Emit();
 
-        Count("SELECT COUNT(*) FROM annotations WHERE id = 'tc-1'", ct).Should().Be(1);
+        (await Count("SELECT COUNT(*) FROM annotations WHERE id = 'tc-1'", ct)).Should().Be(1);
 
-        var read = tcAdapter.Read("ACME/Docs/report/_Tracking/tc-1", _options)
+        var read = await tcAdapter.Read("ACME/Docs/report/_Tracking/tc-1", _options)
             .Should().Within(30.Seconds()).Emit();
         read.Should().NotBeNull();
         read!.Name.Should().Be("Section 2 updated");
@@ -256,7 +256,7 @@ public class SatelliteNodeTests : IAsyncLifetime
     #region Approval satellite (→ annotations)
 
     [Fact(Timeout = 30000)]
-    public void Approval_WriteAndRead_RoutesToAnnotationsTable()
+    public async Task Approval_WriteAndRead_RoutesToAnnotationsTable()
     {
         var ct = TestContext.Current.CancellationToken;
         var approvalAdapter = AdapterFor("_Approval", "annotations");
@@ -268,9 +268,9 @@ public class SatelliteNodeTests : IAsyncLifetime
             MainNode = "ACME/Docs/policy",
             Content = new { Approver = "carol", Status = "Approved", ApprovedAt = DateTimeOffset.UtcNow }
         };
-        approvalAdapter.Write(approval, _options).Should().Within(30.Seconds()).Emit();
+        await approvalAdapter.Write(approval, _options).Should().Within(30.Seconds()).Emit();
 
-        Count("SELECT COUNT(*) FROM annotations WHERE id = 'apr-1'", ct).Should().Be(1);
+        (await Count("SELECT COUNT(*) FROM annotations WHERE id = 'apr-1'", ct)).Should().Be(1);
     }
 
     #endregion
@@ -278,7 +278,7 @@ public class SatelliteNodeTests : IAsyncLifetime
     #region Notification satellite (→ notifications)
 
     [Fact(Timeout = 30000)]
-    public void Notification_WriteAndRead_RoutesToNotificationsTable()
+    public async Task Notification_WriteAndRead_RoutesToNotificationsTable()
     {
         var ct = TestContext.Current.CancellationToken;
         var notifAdapter = AdapterFor("_Notification", "notifications");
@@ -298,17 +298,17 @@ public class SatelliteNodeTests : IAsyncLifetime
                 TargetNodePath = "ACME/_Thread/chat-abc"
             }
         };
-        notifAdapter.Write(notification, _options).Should().Within(30.Seconds()).Emit();
+        await notifAdapter.Write(notification, _options).Should().Within(30.Seconds()).Emit();
 
         // Lands in the dedicated notifications table.
-        Count("SELECT COUNT(*) FROM notifications WHERE id = 'notif-1'", ct).Should().Be(1);
+        (await Count("SELECT COUNT(*) FROM notifications WHERE id = 'notif-1'", ct)).Should().Be(1);
 
         // NOT in mesh_nodes (would indicate a routing regression).
-        Count("SELECT COUNT(*) FROM mesh_nodes WHERE id = 'notif-1' AND namespace = 'ACME/_Thread/chat-abc/_Notification'", ct)
+        (await Count("SELECT COUNT(*) FROM mesh_nodes WHERE id = 'notif-1' AND namespace = 'ACME/_Thread/chat-abc/_Notification'", ct))
             .Should().Be(0);
 
         // Read back via the adapter.
-        var read = notifAdapter.Read("ACME/_Thread/chat-abc/_Notification/notif-1", _options)
+        var read = await notifAdapter.Read("ACME/_Thread/chat-abc/_Notification/notif-1", _options)
             .Should().Within(30.Seconds()).Emit();
         read.Should().NotBeNull();
         read!.NodeType.Should().Be("Notification");
@@ -316,7 +316,7 @@ public class SatelliteNodeTests : IAsyncLifetime
     }
 
     [Fact(Timeout = 30000)]
-    public void Notification_NotInAnnotationsTable_ProvesDedicatedRouting()
+    public async Task Notification_NotInAnnotationsTable_ProvesDedicatedRouting()
     {
         // Defensive: confirms a Notification doesn't accidentally land in the
         // annotations table (which Comment/Tracking/Approval share). If the
@@ -327,7 +327,7 @@ public class SatelliteNodeTests : IAsyncLifetime
         var ct = TestContext.Current.CancellationToken;
         var notifAdapter = AdapterFor("_Notification", "notifications");
 
-        notifAdapter.Write(new MeshNode("notif-isolated",
+        await notifAdapter.Write(new MeshNode("notif-isolated",
             "ACME/Docs/spec/_Notification")
         {
             Name = "Isolated check",
@@ -336,8 +336,8 @@ public class SatelliteNodeTests : IAsyncLifetime
             Content = new { Title = "Test", Message = "" }
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        Count("SELECT COUNT(*) FROM annotations WHERE id = 'notif-isolated'", ct).Should().Be(0);
-        Count("SELECT COUNT(*) FROM notifications WHERE id = 'notif-isolated'", ct).Should().Be(1);
+        (await Count("SELECT COUNT(*) FROM annotations WHERE id = 'notif-isolated'", ct)).Should().Be(0);
+        (await Count("SELECT COUNT(*) FROM notifications WHERE id = 'notif-isolated'", ct)).Should().Be(1);
     }
 
     #endregion
@@ -345,7 +345,7 @@ public class SatelliteNodeTests : IAsyncLifetime
     #region Code content (Source and Test → code table)
 
     [Fact(Timeout = 30000)]
-    public void CodeFile_WriteAndRead_RoutesToCodeTable()
+    public async Task CodeFile_WriteAndRead_RoutesToCodeTable()
     {
         var ct = TestContext.Current.CancellationToken;
         var codeAdapter = AdapterFor("Source", "code");
@@ -356,25 +356,25 @@ public class SatelliteNodeTests : IAsyncLifetime
             NodeType = "Code",
             Content = new { FileName = "MyClass.cs", Language = "csharp", Namespace = "ACME.Projects" }
         };
-        codeAdapter.Write(codeNode, _options).Should().Within(30.Seconds()).Emit();
+        await codeAdapter.Write(codeNode, _options).Should().Within(30.Seconds()).Emit();
 
         // Verify in code table
-        Count("SELECT COUNT(*) FROM code WHERE namespace = 'ACME/Projects/Alpha/Source' AND id = 'MyClass'", ct)
+        (await Count("SELECT COUNT(*) FROM code WHERE namespace = 'ACME/Projects/Alpha/Source' AND id = 'MyClass'", ct))
             .Should().Be(1);
 
         // Not in mesh_nodes
-        Count("SELECT COUNT(*) FROM mesh_nodes WHERE namespace = 'ACME/Projects/Alpha/Source' AND id = 'MyClass'", ct)
+        (await Count("SELECT COUNT(*) FROM mesh_nodes WHERE namespace = 'ACME/Projects/Alpha/Source' AND id = 'MyClass'", ct))
             .Should().Be(0);
 
         // Read back
-        var read = codeAdapter.Read("ACME/Projects/Alpha/Source/MyClass", _options)
+        var read = await codeAdapter.Read("ACME/Projects/Alpha/Source/MyClass", _options)
             .Should().Within(30.Seconds()).Emit();
         read.Should().NotBeNull();
         read!.NodeType.Should().Be("Code");
     }
 
     [Fact(Timeout = 30000)]
-    public void TestFile_WriteAndRead_AlsoRoutesToCodeTable()
+    public async Task TestFile_WriteAndRead_AlsoRoutesToCodeTable()
     {
         var ct = TestContext.Current.CancellationToken;
         var testAdapter = AdapterFor("Test", "code");
@@ -385,14 +385,14 @@ public class SatelliteNodeTests : IAsyncLifetime
             NodeType = "Code",
             Content = new { FileName = "MyClassTests.cs", Language = "csharp", Namespace = "ACME.Projects.Tests" }
         };
-        testAdapter.Write(testNode, _options).Should().Within(30.Seconds()).Emit();
+        await testAdapter.Write(testNode, _options).Should().Within(30.Seconds()).Emit();
 
         // Verify in code table (same table as Source)
-        Count("SELECT COUNT(*) FROM code WHERE namespace = 'ACME/Projects/Alpha/Test' AND id = 'MyClassTests'", ct)
+        (await Count("SELECT COUNT(*) FROM code WHERE namespace = 'ACME/Projects/Alpha/Test' AND id = 'MyClassTests'", ct))
             .Should().Be(1);
 
         // Read back
-        var read = testAdapter.Read("ACME/Projects/Alpha/Test/MyClassTests", _options)
+        var read = await testAdapter.Read("ACME/Projects/Alpha/Test/MyClassTests", _options)
             .Should().Within(30.Seconds()).Emit();
         read.Should().NotBeNull();
         read!.Name.Should().Be("MyClassTests.cs");
@@ -403,14 +403,14 @@ public class SatelliteNodeTests : IAsyncLifetime
     #region Cross-table isolation
 
     [Fact(Timeout = 30000)]
-    public void SatelliteNodes_DoNotLeakBetweenTables()
+    public async Task SatelliteNodes_DoNotLeakBetweenTables()
     {
         var ct = TestContext.Current.CancellationToken;
         var commentAdapter = AdapterFor("_Comment", "annotations");
         var activityAdapter = AdapterFor("_Activity", "activities");
 
         // Write to annotations (comment)
-        commentAdapter.Write(new MeshNode("iso-1", "ACME/X/_Comment")
+        await commentAdapter.Write(new MeshNode("iso-1", "ACME/X/_Comment")
         {
             Name = "A comment",
             NodeType = "Comment",
@@ -418,7 +418,7 @@ public class SatelliteNodeTests : IAsyncLifetime
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // Write to activities
-        activityAdapter.Write(new MeshNode("iso-2", "ACME/X/_Activity")
+        await activityAdapter.Write(new MeshNode("iso-2", "ACME/X/_Activity")
         {
             Name = "An activity",
             NodeType = "Activity",
@@ -426,29 +426,29 @@ public class SatelliteNodeTests : IAsyncLifetime
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // Comment should NOT be in activities table
-        Count("SELECT COUNT(*) FROM activities WHERE id = 'iso-1'", ct).Should().Be(0);
+        (await Count("SELECT COUNT(*) FROM activities WHERE id = 'iso-1'", ct)).Should().Be(0);
 
         // Activity should NOT be in annotations table
-        Count("SELECT COUNT(*) FROM annotations WHERE id = 'iso-2'", ct).Should().Be(0);
+        (await Count("SELECT COUNT(*) FROM annotations WHERE id = 'iso-2'", ct)).Should().Be(0);
 
         // Neither should be in mesh_nodes
-        Count("SELECT COUNT(*) FROM mesh_nodes WHERE id IN ('iso-1', 'iso-2')", ct).Should().Be(0);
+        (await Count("SELECT COUNT(*) FROM mesh_nodes WHERE id IN ('iso-1', 'iso-2')", ct)).Should().Be(0);
     }
 
     [Fact(Timeout = 30000)]
-    public void MainNode_StillWritesToMeshNodes()
+    public async Task MainNode_StillWritesToMeshNodes()
     {
         var ct = TestContext.Current.CancellationToken;
 
         // Write a regular (non-satellite) node via the main adapter
-        _mainAdapter.Write(new MeshNode("proj-1", "ACME/Projects")
+        await _mainAdapter.Write(new MeshNode("proj-1", "ACME/Projects")
         {
             Name = "Alpha Project",
             NodeType = "Project",
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // Should be in mesh_nodes since the path doesn't match any satellite suffix
-        Count("SELECT COUNT(*) FROM mesh_nodes WHERE namespace = 'ACME/Projects' AND id = 'proj-1'", ct)
+        (await Count("SELECT COUNT(*) FROM mesh_nodes WHERE namespace = 'ACME/Projects' AND id = 'proj-1'", ct))
             .Should().Be(1);
     }
 
@@ -457,12 +457,12 @@ public class SatelliteNodeTests : IAsyncLifetime
     #region MainNode column
 
     [Fact(Timeout = 30000)]
-    public void SatelliteNode_MainNode_IsPreserved()
+    public async Task SatelliteNode_MainNode_IsPreserved()
     {
         var ct = TestContext.Current.CancellationToken;
         var commentAdapter = AdapterFor("_Comment", "annotations");
 
-        commentAdapter.Write(new MeshNode("mn-cmt", "ACME/Reports/Q1/_Comment")
+        await commentAdapter.Write(new MeshNode("mn-cmt", "ACME/Reports/Q1/_Comment")
         {
             Name = "Review note",
             NodeType = "Comment",
@@ -470,7 +470,7 @@ public class SatelliteNodeTests : IAsyncLifetime
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // Verify main_node column value via raw SQL
-        var mainNode = _schemaDs.Probe(
+        var mainNode = await _schemaDs.Probe(
             "SELECT main_node FROM annotations WHERE id = 'mn-cmt'",
             System.Array.Empty<(string, object)>(),
             rdr => rdr.GetString(0), ct)
@@ -479,28 +479,28 @@ public class SatelliteNodeTests : IAsyncLifetime
     }
 
     [Fact(Timeout = 30000)]
-    public void SatelliteNode_QueryByMainNode()
+    public async Task SatelliteNode_QueryByMainNode()
     {
         var ct = TestContext.Current.CancellationToken;
         var activityAdapter = AdapterFor("_Activity", "activities");
 
         // Create activities for two different main nodes
-        activityAdapter.Write(new MeshNode("qa-1", "ACME/A/_Activity")
+        await activityAdapter.Write(new MeshNode("qa-1", "ACME/A/_Activity")
         {
             NodeType = "Activity", MainNode = "ACME/A",
         }, _options).Should().Within(30.Seconds()).Emit();
-        activityAdapter.Write(new MeshNode("qa-2", "ACME/A/_Activity")
+        await activityAdapter.Write(new MeshNode("qa-2", "ACME/A/_Activity")
         {
             NodeType = "Activity", MainNode = "ACME/A",
         }, _options).Should().Within(30.Seconds()).Emit();
-        activityAdapter.Write(new MeshNode("qa-3", "ACME/B/_Activity")
+        await activityAdapter.Write(new MeshNode("qa-3", "ACME/B/_Activity")
         {
             NodeType = "Activity", MainNode = "ACME/B",
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // Query by main_node via raw SQL (this is what the query engine would do)
-        Count("SELECT COUNT(*) FROM activities WHERE main_node = 'ACME/A'", ct).Should().Be(2);
-        Count("SELECT COUNT(*) FROM activities WHERE main_node = 'ACME/B'", ct).Should().Be(1);
+        (await Count("SELECT COUNT(*) FROM activities WHERE main_node = 'ACME/A'", ct)).Should().Be(2);
+        (await Count("SELECT COUNT(*) FROM activities WHERE main_node = 'ACME/B'", ct)).Should().Be(1);
     }
 
     #endregion
@@ -508,7 +508,7 @@ public class SatelliteNodeTests : IAsyncLifetime
     #region All satellite types route to correct table
 
     [Fact(Timeout = 30000)]
-    public void AllSatelliteTypes_RouteToCorrectTable()
+    public async Task AllSatelliteTypes_RouteToCorrectTable()
     {
         var ct = TestContext.Current.CancellationToken;
 
@@ -528,7 +528,7 @@ public class SatelliteNodeTests : IAsyncLifetime
 
         foreach (var (id, ns, nodeType, _) in nodes)
         {
-            _mainAdapter.Write(new MeshNode(id, ns)
+            await _mainAdapter.Write(new MeshNode(id, ns)
             {
                 Name = id,
                 NodeType = nodeType,
@@ -539,10 +539,10 @@ public class SatelliteNodeTests : IAsyncLifetime
         // Verify each node is in the expected table and NOT in mesh_nodes
         foreach (var (id, _, _, expectedTable) in nodes)
         {
-            Count($"SELECT COUNT(*) FROM \"{expectedTable}\" WHERE id = '{id}'", ct)
+            (await Count($"SELECT COUNT(*) FROM \"{expectedTable}\" WHERE id = '{id}'", ct))
                 .Should().Be(1, $"node '{id}' should be in table '{expectedTable}'");
 
-            Count($"SELECT COUNT(*) FROM mesh_nodes WHERE id = '{id}'", ct)
+            (await Count($"SELECT COUNT(*) FROM mesh_nodes WHERE id = '{id}'", ct))
                 .Should().Be(0, $"node '{id}' should NOT be in mesh_nodes");
         }
     }

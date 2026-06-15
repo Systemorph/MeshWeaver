@@ -52,29 +52,28 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder).AddRowLevelSecurity();
 
-    protected override Task SetupAccessRightsAsync()
+    protected override async Task SetupAccessRightsAsync()
     {
         // Grant Admin role on the probe namespaces so test setup (CreateNode)
         // succeeds. The tests then SWITCH the ambient identity to an unprivileged
         // user mid-test to assert that READS still work — that's the system-bypass
         // we're proving.
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        meshService.CreateNode(
+        await meshService.CreateNode(
             AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Admin", "SystemReadProbe"))
             .Should().Within(45.Seconds()).Emit();
-        meshService.CreateNode(
+        await meshService.CreateNode(
             AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Admin", "CacheReadProbe"))
             .Should().Within(45.Seconds()).Emit();
-        meshService.CreateNode(
+        await meshService.CreateNode(
             AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Admin", "QueryCacheProbe"))
             .Should().Within(45.Seconds()).Emit();
-        Mesh.GetEffectivePermissions("SystemReadProbe", TestUsers.Admin.ObjectId)
+        await Mesh.GetEffectivePermissions("SystemReadProbe", TestUsers.Admin.ObjectId)
             .Should().Within(90.Seconds()).Match(p => p.HasFlag(Permission.Create));
-        Mesh.GetEffectivePermissions("CacheReadProbe", TestUsers.Admin.ObjectId)
+        await Mesh.GetEffectivePermissions("CacheReadProbe", TestUsers.Admin.ObjectId)
             .Should().Within(90.Seconds()).Match(p => p.HasFlag(Permission.Create));
-        Mesh.GetEffectivePermissions("QueryCacheProbe", TestUsers.Admin.ObjectId)
+        await Mesh.GetEffectivePermissions("QueryCacheProbe", TestUsers.Admin.ObjectId)
             .Should().Within(90.Seconds()).Match(p => p.HasFlag(Permission.Create));
-        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -91,12 +90,12 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
     /// The architectural split is "upstream = System / gate = caller".</para>
     /// </summary>
     [Fact(Timeout = 30_000)]
-    public void GetMeshNodeStream_UnprivilegedUser_GetsUnauthorized()
+    public async Task GetMeshNodeStream_UnprivilegedUser_GetsUnauthorized()
     {
         var nodeId = $"Md_{Guid.NewGuid().AsString()}";
         var nodePath = $"SystemReadProbe/{nodeId}";
 
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode(nodeId, "SystemReadProbe")
             {
                 Name = "System-read probe node",
@@ -120,7 +119,7 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
             // layer enforces per-user Read via GetPermissionRequest before exposing the
             // stream. Materialize folds the OnError into a value so we assert it
             // reactively (no await, no ThrowAsync).
-            var notification = workspace.GetMeshNodeStream(nodePath)
+            var notification = await workspace.GetMeshNodeStream(nodePath)
                 .Take(1)
                 .Materialize()
                 .Should().Within(20.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
@@ -146,12 +145,12 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
     /// node. The upstream system-read is invisible to the consumer.</para>
     /// </summary>
     [Fact(Timeout = 30_000)]
-    public void CacheGetStream_WithReadPermission_EmitsNode()
+    public async Task CacheGetStream_WithReadPermission_EmitsNode()
     {
         var nodeId = $"Md_{Guid.NewGuid().AsString()}";
         var nodePath = $"CacheReadProbe/{nodeId}";
 
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode(nodeId, "CacheReadProbe")
             {
                 Name = "Cache-read probe",
@@ -160,7 +159,7 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
 
         var cache = Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
 
-        var node = cache.GetStream(nodePath, Mesh.JsonSerializerOptions)
+        var node = await cache.GetStream(nodePath, Mesh.JsonSerializerOptions)
             .Should().Within(28.Seconds()).Match(n => n is not null);
 
         node.Should().NotBeNull();
@@ -182,7 +181,7 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
     /// halves of that contract.</para>
     /// </summary>
     [Fact(Timeout = 30_000)]
-    public void WorkspaceGetQuery_AppliesPerUserRlsFilter()
+    public async Task WorkspaceGetQuery_AppliesPerUserRlsFilter()
     {
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
@@ -190,10 +189,10 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
         var nodeId1 = $"Md_{Guid.NewGuid().AsString()}";
         var nodeId2 = $"Md_{Guid.NewGuid().AsString()}";
 
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode(nodeId1, "QueryCacheProbe") { Name = "First", NodeType = "Markdown" })
             .Should().Within(20.Seconds()).Emit();
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode(nodeId2, "QueryCacheProbe") { Name = "Second", NodeType = "Markdown" })
             .Should().Within(20.Seconds()).Emit();
 
@@ -206,7 +205,7 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
             var collection = workspace.GetQuery(
                 queryId, "namespace:QueryCacheProbe nodeType:Markdown");
 
-            var snapshot = collection
+            var snapshot = await collection
                 .Should().Within(28.Seconds()).Match(items => items.Count() >= 2);
 
             snapshot.Should().Contain(n => n.Id == nodeId1);

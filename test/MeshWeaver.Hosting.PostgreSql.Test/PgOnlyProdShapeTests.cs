@@ -50,7 +50,7 @@ public class PgOnlyProdShapeTests(PostgreSqlFixture fixture, ITestOutputHelper o
     }
 
     [Fact(Timeout = 60000)]
-    public void Write_AccessAssignment_IntoProvisionedPartition()
+    public async Task Write_AccessAssignment_IntoProvisionedPartition()
     {
         var ns = $"pg9a_lazy_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var path = $"{ns}/_Access/grant1";
@@ -77,16 +77,16 @@ public class PgOnlyProdShapeTests(PostgreSqlFixture fixture, ITestOutputHelper o
         // runs the ensure_partition_schema DDL directly; it is NOT a node write, so there's no
         // identity to impersonate. Then the logged-in admin writes the grant with his OWN
         // rights — exactly the production flow once the space exists.
-        ProvisionPartition(ns);
+        await ProvisionPartition(ns);
 
-        var saved = meshService.CreateNode(node)
+        var saved = await meshService.CreateNode(node)
             .Should().Within(30.Seconds()).Emit();
 
         saved.Should().NotBeNull(
             "writing the _Access satellite into the provisioned partition must succeed as the user");
 
         var workspace = Mesh.GetWorkspace();
-        var readBack = workspace.GetMeshNodeStream(path)
+        var readBack = await workspace.GetMeshNodeStream(path)
             .Where(n => n is not null).Take(1).Timeout(15.Seconds())
             .Catch<MeshNode?, TimeoutException>(_ => Observable.Return<MeshNode?>(null))
             .Should().Within(30.Seconds()).Emit();
@@ -103,16 +103,14 @@ public class PgOnlyProdShapeTests(PostgreSqlFixture fixture, ITestOutputHelper o
     /// partition exists and ordinary user writes route into it without tripping the write guard.
     /// Reactive surface; the test blocks on the composed observable (tests may block — §2a).
     /// </summary>
-    private void ProvisionPartition(string ns) =>
+    private Task ProvisionPartition(string ns) =>
         Mesh.ServiceProvider.GetServices<IPartitionStorageProvider>()
             .Select(provider => provider.EnsurePartitionProvisioned(ns))
             .Concat()
-            .ToTask()
-            .GetAwaiter()
-            .GetResult();
+            .ToTask();
 
     [Fact(Timeout = 60000)]
-    public void Write_OrgPartition_RoutesByFirstSegment()
+    public async Task Write_OrgPartition_RoutesByFirstSegment()
     {
         var org = $"pg9a_org_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var path = $"{org}/Project/Todo/1";
@@ -128,14 +126,14 @@ public class PgOnlyProdShapeTests(PostgreSqlFixture fixture, ITestOutputHelper o
         // with his own rights — a user with access creating content needs no System
         // impersonation; the partition just has to exist (the guard only forbids implicit
         // partition creation, not authorized content writes). See ProvisionPartition.
-        ProvisionPartition(org);
+        await ProvisionPartition(org);
 
-        var saved = meshService.CreateNode(node).Should().Within(30.Seconds()).Emit();
+        var saved = await meshService.CreateNode(node).Should().Within(30.Seconds()).Emit();
         saved.Should().NotBeNull();
         saved.Path.Should().Be(path);
 
         var workspace = Mesh.GetWorkspace();
-        var readBack = workspace.GetMeshNodeStream(path)
+        var readBack = await workspace.GetMeshNodeStream(path)
             .Where(n => n is not null).Take(1).Timeout(15.Seconds())
             .Catch<MeshNode?, TimeoutException>(_ => Observable.Return<MeshNode?>(null))
             .Should().Within(30.Seconds()).Emit();
@@ -143,7 +141,7 @@ public class PgOnlyProdShapeTests(PostgreSqlFixture fixture, ITestOutputHelper o
     }
 
     [Fact(Timeout = 60000)]
-    public void Read_SatelliteUnion_AcrossPartitionTables()
+    public async Task Read_SatelliteUnion_AcrossPartitionTables()
     {
         var ns = $"pg9a_sat_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -155,7 +153,7 @@ public class PgOnlyProdShapeTests(PostgreSqlFixture fixture, ITestOutputHelper o
         // documented use case for ImpersonateAsSystem.
         using var _systemScope = accessService.ImpersonateAsSystem();
 
-        meshService.CreateNode(new MeshNode(ns)
+        await meshService.CreateNode(new MeshNode(ns)
         {
             NodeType = "User",
             Name = ns,
@@ -163,7 +161,7 @@ public class PgOnlyProdShapeTests(PostgreSqlFixture fixture, ITestOutputHelper o
         }).Should().Within(15.Seconds()).Emit();
 
         var satPath = $"{ns}/_Access/sat";
-        meshService.CreateNode(new MeshNode("sat", $"{ns}/_Access")
+        await meshService.CreateNode(new MeshNode("sat", $"{ns}/_Access")
         {
             NodeType = "AccessAssignment",
             Name = "sat",
@@ -177,7 +175,7 @@ public class PgOnlyProdShapeTests(PostgreSqlFixture fixture, ITestOutputHelper o
         }).Should().Within(15.Seconds()).Emit();
 
         var resolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
-        var resolution = resolver.ResolvePath(satPath)
+        var resolution = await resolver.ResolvePath(satPath)
             .Where(r => r is not null).Take(1).Timeout(15.Seconds())
             .Catch<AddressResolution?, TimeoutException>(_ => Observable.Return<AddressResolution?>(null))
             .Should().Within(30.Seconds()).Emit();
@@ -195,7 +193,7 @@ public class PgOnlyProdShapeTests(PostgreSqlFixture fixture, ITestOutputHelper o
     /// with "does not match any registered address pattern" even though the space exists.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void ResolvePath_AreaSuffixOnExistingPartition_FallsBackToMainNode()
+    public async Task ResolvePath_AreaSuffixOnExistingPartition_FallsBackToMainNode()
     {
         var ns = $"pg9a_area_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -204,7 +202,7 @@ public class PgOnlyProdShapeTests(PostgreSqlFixture fixture, ITestOutputHelper o
         // Brand-new top-level partition root (the "main node"). Created under System because
         // the auto-logged-in admin has no Create on a fresh top-level partition.
         using var _systemScope = accessService.ImpersonateAsSystem();
-        meshService.CreateNode(new MeshNode(ns)
+        await meshService.CreateNode(new MeshNode(ns)
         {
             NodeType = "User",
             Name = ns,
@@ -213,7 +211,7 @@ public class PgOnlyProdShapeTests(PostgreSqlFixture fixture, ITestOutputHelper o
 
         var resolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
         // No node exists at "{ns}/Files" — resolution must fall back to the partition root.
-        var resolution = resolver.ResolvePath($"{ns}/Files")
+        var resolution = await resolver.ResolvePath($"{ns}/Files")
             .Where(r => r is not null).Take(1).Timeout(15.Seconds())
             .Catch<AddressResolution?, TimeoutException>(_ => Observable.Return<AddressResolution?>(null))
             .Should().Within(30.Seconds()).Emit();

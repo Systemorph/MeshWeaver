@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -37,7 +37,7 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     }
 
     [Fact]
-    public void StorePlan_CreatesMarkdownNodeUnderThread()
+    public async Task StorePlan_CreatesMarkdownNodeUnderThread()
     {
         // 1. Create a context node
         var contextPath = "PlanTestOrg";
@@ -46,7 +46,7 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         // 2. Create a thread under the context
         var client = GetClient();
-        var threadResponse = client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Plan a project setup")), o => o.WithTarget(new Address(contextPath))).Should().Emit();
+        var threadResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Plan a project setup")), o => o.WithTarget(new Address(contextPath))).Should().Emit();
 
         threadResponse.Message.Success.Should().BeTrue(threadResponse.Message.Error ?? "");
         var threadPath = threadResponse.Message.Node!.Path;
@@ -70,13 +70,13 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             NodeType = "Markdown",
             Content = planContent
         };
-        NodeFactory.CreateNode(planNode).Should().Emit();
+        await NodeFactory.CreateNode(planNode).Should().Emit();
 
         // 4. Verify the plan node exists at {threadPath}/Plan
         var expectedPath = $"{threadPath}/Plan";
         Output.WriteLine($"Expected plan path: {expectedPath}");
 
-        var retrievedNode = ReadNode(expectedPath).Should().Emit();
+        var retrievedNode = await ReadNode(expectedPath).Should().Emit();
 
         retrievedNode.Should().NotBeNull("plan node should be retrievable at {threadPath}/Plan");
         retrievedNode!.Path.Should().Be(expectedPath);
@@ -90,7 +90,7 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     }
 
     [Fact]
-    public void StorePlan_PlanIsInThreadPartition()
+    public async Task StorePlan_PlanIsInThreadPartition()
     {
         // Create context + thread
         var contextPath = "PartitionTestOrg";
@@ -98,12 +98,12 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         SeedTopLevel(new MeshNode(contextPath) { Name = "Partition Test", NodeType = "Markdown" });
 
         var client = GetClient();
-        var threadResponse = client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Test partition storage")), o => o.WithTarget(new Address(contextPath))).Should().Emit();
+        var threadResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Test partition storage")), o => o.WithTarget(new Address(contextPath))).Should().Emit();
         threadResponse.Message.Success.Should().BeTrue(threadResponse.Message.Error ?? "");
         var threadPath = threadResponse.Message.Node!.Path;
 
         // Store plan
-        NodeFactory.CreateNode(new MeshNode("Plan", threadPath)
+        await NodeFactory.CreateNode(new MeshNode("Plan", threadPath)
         {
             Name = "Test Plan",
             NodeType = "Markdown",
@@ -116,16 +116,16 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             "the plan lives inside the thread partition since its parent is a thread node");
 
         // Verify it's queryable by namespace
-        var results = MeshQuery
+        var results = (await MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{threadPath} nodeType:Markdown"))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         results.Should().ContainSingle(n => n.Id == "Plan",
             "plan should appear as a child of the thread node");
     }
 
     [Fact]
-    public void StorePlan_CanUpdateExistingPlan()
+    public async Task StorePlan_CanUpdateExistingPlan()
     {
         // Create context + thread
         var contextPath = "UpdatePlanOrg";
@@ -133,12 +133,12 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         SeedTopLevel(new MeshNode(contextPath) { Name = "Update Plan Test", NodeType = "Markdown" });
 
         var client = GetClient();
-        var threadResponse = client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Update plan test")), o => o.WithTarget(new Address(contextPath))).Should().Emit();
+        var threadResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Update plan test")), o => o.WithTarget(new Address(contextPath))).Should().Emit();
         threadResponse.Message.Success.Should().BeTrue(threadResponse.Message.Error ?? "");
         var threadPath = threadResponse.Message.Node!.Path;
 
         // Create initial plan
-        NodeFactory.CreateNode(new MeshNode("Plan", threadPath)
+        await NodeFactory.CreateNode(new MeshNode("Plan", threadPath)
         {
             Name = "Execution Plan",
             NodeType = "Markdown",
@@ -146,7 +146,7 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         }).Should().Emit();
 
         // Update the plan
-        NodeFactory.UpdateNode(new MeshNode("Plan", threadPath)
+        await NodeFactory.UpdateNode(new MeshNode("Plan", threadPath)
         {
             Name = "Execution Plan (revised)",
             NodeType = "Markdown",
@@ -155,7 +155,7 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         // Verify updated content
         var planPath = $"{threadPath}/Plan";
-        var node = ReadNode(planPath).Should().Emit();
+        var node = await ReadNode(planPath).Should().Emit();
 
         node.Should().NotBeNull();
         node!.Name.Should().Be("Execution Plan (revised)");

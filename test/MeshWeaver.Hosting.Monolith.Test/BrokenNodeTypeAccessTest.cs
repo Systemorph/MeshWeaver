@@ -49,25 +49,25 @@ public class BrokenNodeTypeAccessTest(ITestOutputHelper output) : MonolithMeshTe
     private const string NodeTypePath = $"{Partition}/{NodeTypeId}";
 
     [Fact(Timeout = 120_000)]
-    public void AccessingInstance_OfNonCompilingNodeType_AnswersTerminalError_NotSilence()
+    public async Task AccessingInstance_OfNonCompilingNodeType_AnswersTerminalError_NotSilence()
     {
         var workspace = Mesh.GetWorkspace();
 
         // 1. NodeType whose Configuration string is not valid C# — the kickoff
         //    compile fails and CompilationStatus settles at Error.
-        NodeFactory.CreateNode(new MeshNode(NodeTypeId, Partition)
+        await NodeFactory.CreateNode(new MeshNode(NodeTypeId, Partition)
         {
             Name = "Broken Sample Type",
             NodeType = MeshNode.NodeTypePath,
             Content = new NodeTypeDefinition
             {
                 Description = "Deliberately non-compiling NodeType.",
-                Configuration = "config => this is not valid C# at all ((("
+                Configuration = "config => this is not valid C# at all ((await ("
             }
         }).Should().Emit();
 
         // Wait for the compile to settle at Error (cold Roslyn compile budget).
-        workspace.GetMeshNodeStream(NodeTypePath)
+        await workspace.GetMeshNodeStream(NodeTypePath)
             .Should().Within(90.Seconds())
             .Match(n => n.Content is NodeTypeDefinition d
                 && d.CompilationStatus == CompilationStatus.Error);
@@ -75,7 +75,7 @@ public class BrokenNodeTypeAccessTest(ITestOutputHelper output) : MonolithMeshTe
 
         // 2. An instance of the broken type.
         var instancePath = $"{Partition}/broken-instance";
-        NodeFactory.CreateNode(new MeshNode("broken-instance", Partition)
+        await NodeFactory.CreateNode(new MeshNode("broken-instance", Partition)
         {
             Name = "Broken Instance",
             NodeType = NodeTypePath,
@@ -93,7 +93,7 @@ public class BrokenNodeTypeAccessTest(ITestOutputHelper output) : MonolithMeshTe
         // 3a. LIVENESS: the overlay hub still answers what it CAN handle — Ping
         //     must succeed so the GUI can render the error Overview. Guards
         //     against over-NACKing handled framework messages.
-        client.Observe<PingResponse>(new PingRequest(), o => o.WithTarget(new Address(instancePath)))
+        await client.Observe<PingResponse>(new PingRequest(), o => o.WithTarget(new Address(instancePath)))
             .Should().Within(60.Seconds()).Emit();
         Output.WriteLine("Ping answered — overlay hub is alive.");
 
@@ -101,7 +101,7 @@ public class BrokenNodeTypeAccessTest(ITestOutputHelper output) : MonolithMeshTe
         //     answered with a TERMINAL ERROR within budget — never silence (the
         //     pre-fix behavior: RawJson → not IRequest → Ignored → caller parks),
         //     never a phantom success.
-        var notification = client
+        var notification = await client
             .Observe<BrokenTypeProbeResponse>(new BrokenTypeProbeRequest(),
                 o => o.WithTarget(new Address(instancePath)))
             .Materialize()

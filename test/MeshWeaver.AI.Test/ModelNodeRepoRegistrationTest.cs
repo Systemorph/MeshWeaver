@@ -68,9 +68,9 @@ public class ModelNodeRepoRegistrationTest : AITestBase
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
     [Fact]
-    public void StaticLanguageModel_AccessibleViaGetMeshNodeStream()
+    public async Task StaticLanguageModel_AccessibleViaGetMeshNodeStream()
     {
-        var node = Workspace.GetMeshNodeStream("_Provider/Anthropic/claude-opus-4-7")
+        var node = await Workspace.GetMeshNodeStream("_Provider/Anthropic/claude-opus-4-7")
             .Should().Within(10.Seconds()).Match(n => n?.Content is ModelDefinition);
 
         node.Should().NotBeNull("BuiltInLanguageModelProvider emits a LanguageModel child under _Provider/{name}/{modelId}");
@@ -83,12 +83,12 @@ public class ModelNodeRepoRegistrationTest : AITestBase
     }
 
     [Fact]
-    public void StaticModelProvider_AccessibleViaGetMeshNodeStream()
+    public async Task StaticModelProvider_AccessibleViaGetMeshNodeStream()
     {
         // This is the registration the test in this file primarily proves
         // is wired correctly: routing to the _Provider partition resolves
         // to the static node provider, NOT to a missing-partition error.
-        var node = Workspace.GetMeshNodeStream("_Provider/Anthropic")
+        var node = await Workspace.GetMeshNodeStream("_Provider/Anthropic")
             .Should().Within(10.Seconds()).Match(n => n?.Content is ModelProviderConfiguration);
 
         node.Should().NotBeNull("ModelProvider partition storage provider must serve namespace:_Provider reads");
@@ -99,9 +99,9 @@ public class ModelNodeRepoRegistrationTest : AITestBase
     }
 
     [Fact]
-    public void SyncedQuery_NamespaceProvider_ReturnsModelProviderNodes()
+    public async Task SyncedQuery_NamespaceProvider_ReturnsModelProviderNodes()
     {
-        var snapshot = Workspace.GetQuery(
+        var snapshot = await Workspace.GetQuery(
                 "test-providers",
                 $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{ModelProviderNodeType.NodeType}")
             .Should().Within(10.Seconds()).Match(s => s.Any());
@@ -112,19 +112,19 @@ public class ModelNodeRepoRegistrationTest : AITestBase
     }
 
     [Fact]
-    public void QueryAsync_NamespaceProvider_ReturnsCatalog()
+    public async Task QueryAsync_NamespaceProvider_ReturnsCatalog()
     {
-        var results = MeshService.Query<MeshNode>(
+        var results = (await MeshService.Query<MeshNode>(
                 new MeshQueryRequest { Query = $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{ModelProviderNodeType.NodeType} scope:descendants" })
-            .Should().Within(15.Seconds()).Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+            .Should().Within(15.Seconds()).Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         results.Should().Contain(n => n.Path == "_Provider/Anthropic");
     }
 
     [Fact]
-    public void PickerQueries_ReturnBothLanguageModelAndModelProviderNodes()
+    public async Task PickerQueries_ReturnBothLanguageModelAndModelProviderNodes()
     {
-        var snapshot = Workspace.GetQuery(
+        var snapshot = await Workspace.GetQuery(
                 "picker",
                 AgentPickerProjection.BuildModelQueries())
             .Should().Within(10.Seconds()).Match(s => s.Any(n => n.NodeType == LanguageModelNodeType.NodeType)

@@ -44,13 +44,13 @@ public class CollaborationPluginGrainFailureTest(ITestOutputHelper output) : Mon
     /// the plugin callback's <c>DeliveryFailure</c> branch depends on.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void SuggestedEditRequest_ToNonExistentGrain_ThrowsDeliveryFailure()
+    public async Task SuggestedEditRequest_ToNonExistentGrain_ThrowsDeliveryFailure()
     {
         var nonExistent = new Address("NonExistent", "Document/definitely-not-here");
 
         // The observable must ERROR (routing fails fast). Materialize folds the
         // OnError into a value so we assert it reactively — no await, no ThrowAsync.
-        var notification = Mesh.Observe(new CreateSuggestedEditRequest
+        var notification = await Mesh.Observe(new CreateSuggestedEditRequest
                 {
                     DocumentId = "NonExistent/Document/definitely-not-here",
                     Position = 0,
@@ -72,13 +72,13 @@ public class CollaborationPluginGrainFailureTest(ITestOutputHelper output) : Mon
     /// Same foundational contract for <see cref="CreateCommentRequest"/>.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void CommentRequest_ToNonExistentGrain_ThrowsDeliveryFailure()
+    public async Task CommentRequest_ToNonExistentGrain_ThrowsDeliveryFailure()
     {
         var nonExistent = new Address("NonExistent", "Document/definitely-not-here");
 
         // The observable must ERROR (routing fails fast). Materialize folds the
         // OnError into a value so we assert it reactively — no await, no ThrowAsync.
-        var notification = Mesh.Observe(new CreateCommentRequest
+        var notification = await Mesh.Observe(new CreateCommentRequest
                 {
                     DocumentId = "NonExistent/Document/definitely-not-here",
                     SelectedText = "foo",
@@ -102,12 +102,12 @@ public class CollaborationPluginGrainFailureTest(ITestOutputHelper output) : Mon
     /// rather than attempting a doomed <c>hub.Post</c>.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void SuggestEdit_NonResolvablePath_ReturnsDocumentNotFound()
+    public async Task SuggestEdit_NonResolvablePath_ReturnsDocumentNotFound()
     {
         var chat = new NoopChat();
         var plugin = new MeshWeaver.AI.Plugins.CollaborationPlugin(Mesh, chat);
 
-        var result = plugin.SuggestEdit(
+        var result = await plugin.SuggestEdit(
                 documentPath: "@/NonExistent/Document/definitely-not-here",
                 originalText: "old",
                 newText: "new",
@@ -123,12 +123,12 @@ public class CollaborationPluginGrainFailureTest(ITestOutputHelper output) : Mon
     /// <see cref="SuggestEdit_NonResolvablePath_ReturnsDocumentNotFound"/>.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void AddComment_NonResolvablePath_ReturnsDocumentNotFound()
+    public async Task AddComment_NonResolvablePath_ReturnsDocumentNotFound()
     {
         var chat = new NoopChat();
         var plugin = new MeshWeaver.AI.Plugins.CollaborationPlugin(Mesh, chat);
 
-        var result = plugin.AddComment(
+        var result = await plugin.AddComment(
                 documentPath: "@/NonExistent/Document/definitely-not-here",
                 selectedText: "foo",
                 commentText: "bar",

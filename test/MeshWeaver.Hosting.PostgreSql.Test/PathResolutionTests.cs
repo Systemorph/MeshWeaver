@@ -31,11 +31,11 @@ public class PathResolutionTests
     /// to that node in one query.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void ResolvePath_PrimaryTable_ReturnsNode()
+    public async Task ResolvePath_PrimaryTable_ReturnsNode()
     {
         var ct = TestContext.Current.CancellationToken;
         const string schema = "pathres_a";
-        var (ds, adapter) = CreateSchemaWithStandardMappings(schema, ct);
+        var (ds, adapter) = await CreateSchemaWithStandardMappings(schema, ct);
 
         try
         {
@@ -44,9 +44,9 @@ public class PathResolutionTests
                 Name = "doc",
                 NodeType = "Markdown",
             };
-            adapter.Write(node, JsonSerializerOptions.Default).Should().Within(30.Seconds()).Emit();
+            await adapter.Write(node, JsonSerializerOptions.Default).Should().Within(30.Seconds()).Emit();
 
-            var (resolved, segs) = adapter
+            var (resolved, segs) = await adapter
                 .ResolvePath($"{schema}/doc", JsonSerializerOptions.Default)
                 .Should().Within(30.Seconds()).Emit();
 
@@ -56,7 +56,7 @@ public class PathResolutionTests
         }
         finally
         {
-            ds.DisposeReactive().Should().Within(30.Seconds()).Emit();
+            await ds.DisposeReactive().Should().Within(30.Seconds()).Emit();
         }
     }
 
@@ -66,11 +66,11 @@ public class PathResolutionTests
     /// would resolve via mesh_nodes only and miss this.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void ResolvePath_SatelliteTable_ReturnsNode()
+    public async Task ResolvePath_SatelliteTable_ReturnsNode()
     {
         var ct = TestContext.Current.CancellationToken;
         const string schema = "pathres_b";
-        var (ds, adapter) = CreateSchemaWithStandardMappings(schema, ct);
+        var (ds, adapter) = await CreateSchemaWithStandardMappings(schema, ct);
 
         try
         {
@@ -79,9 +79,9 @@ public class PathResolutionTests
                 Name = "grant",
                 NodeType = "AccessAssignment",
             };
-            adapter.Write(node, JsonSerializerOptions.Default).Should().Within(30.Seconds()).Emit();
+            await adapter.Write(node, JsonSerializerOptions.Default).Should().Within(30.Seconds()).Emit();
 
-            var (resolved, segs) = adapter
+            var (resolved, segs) = await adapter
                 .ResolvePath($"{schema}/_Access/grant", JsonSerializerOptions.Default)
                 .Should().Within(30.Seconds()).Emit();
 
@@ -91,7 +91,7 @@ public class PathResolutionTests
         }
         finally
         {
-            ds.DisposeReactive().Should().Within(30.Seconds()).Emit();
+            await ds.DisposeReactive().Should().Within(30.Seconds()).Emit();
         }
     }
 
@@ -101,25 +101,25 @@ public class PathResolutionTests
     /// satellite tables — with MatchedSegments equal to the matched depth.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void ResolvePath_DeepRequest_ReturnsClosestAncestor()
+    public async Task ResolvePath_DeepRequest_ReturnsClosestAncestor()
     {
         var ct = TestContext.Current.CancellationToken;
         const string schema = "pathres_c";
-        var (ds, adapter) = CreateSchemaWithStandardMappings(schema, ct);
+        var (ds, adapter) = await CreateSchemaWithStandardMappings(schema, ct);
 
         try
         {
             // Primary: schema/Folder/doc
-            adapter.Write(new MeshNode("doc", $"{schema}/Folder") { Name = "doc", NodeType = "Markdown" },
+            await adapter.Write(new MeshNode("doc", $"{schema}/Folder") { Name = "doc", NodeType = "Markdown" },
                 JsonSerializerOptions.Default).Should().Within(30.Seconds()).Emit();
             // Satellite Source: schema/Source/file.cs
-            adapter.Write(new MeshNode("file.cs", $"{schema}/Source") { Name = "file.cs", NodeType = "Code" },
+            await adapter.Write(new MeshNode("file.cs", $"{schema}/Source") { Name = "file.cs", NodeType = "Code" },
                 JsonSerializerOptions.Default).Should().Within(30.Seconds()).Emit();
 
             // Request a deeper path under the Source/file.cs entry — the
             // deepest ancestor across all tables is schema/Source/file.cs,
             // not schema/Folder/doc.
-            var (resolved, segs) = adapter
+            var (resolved, segs) = await adapter
                 .ResolvePath($"{schema}/Source/file.cs/nested/extra", JsonSerializerOptions.Default)
                 .Should().Within(30.Seconds()).Emit();
 
@@ -130,7 +130,7 @@ public class PathResolutionTests
         }
         finally
         {
-            ds.DisposeReactive().Should().Within(30.Seconds()).Emit();
+            await ds.DisposeReactive().Should().Within(30.Seconds()).Emit();
         }
     }
 
@@ -143,15 +143,15 @@ public class PathResolutionTests
     /// virtual root — that policy lives one layer up.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void ResolvePath_NoMatchInAnyTable_ReturnsNull()
+    public async Task ResolvePath_NoMatchInAnyTable_ReturnsNull()
     {
         var ct = TestContext.Current.CancellationToken;
         const string schema = "pathres_d";
-        var (ds, adapter) = CreateSchemaWithStandardMappings(schema, ct);
+        var (ds, adapter) = await CreateSchemaWithStandardMappings(schema, ct);
 
         try
         {
-            var (resolved, segs) = adapter
+            var (resolved, segs) = await adapter
                 .ResolvePath($"{schema}/no-such-node", JsonSerializerOptions.Default)
                 .Should().Within(30.Seconds()).Emit();
 
@@ -160,7 +160,7 @@ public class PathResolutionTests
         }
         finally
         {
-            ds.DisposeReactive().Should().Within(30.Seconds()).Emit();
+            await ds.DisposeReactive().Should().Within(30.Seconds()).Emit();
         }
     }
 
@@ -173,23 +173,23 @@ public class PathResolutionTests
     /// back to satellites.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void ResolvePath_DeeperSatelliteBeats_ShallowerPrimary()
+    public async Task ResolvePath_DeeperSatelliteBeats_ShallowerPrimary()
     {
         var ct = TestContext.Current.CancellationToken;
         const string schema = "pathres_e";
-        var (ds, adapter) = CreateSchemaWithStandardMappings(schema, ct);
+        var (ds, adapter) = await CreateSchemaWithStandardMappings(schema, ct);
 
         try
         {
             // Primary at depth-1: schema/foo
-            adapter.Write(new MeshNode("foo", schema) { Name = "foo", NodeType = "Markdown" },
+            await adapter.Write(new MeshNode("foo", schema) { Name = "foo", NodeType = "Markdown" },
                 JsonSerializerOptions.Default).Should().Within(30.Seconds()).Emit();
             // Satellite at depth-3: schema/foo/Source/bar.cs
-            adapter.Write(new MeshNode("bar.cs", $"{schema}/foo/Source") { Name = "bar.cs", NodeType = "Code" },
+            await adapter.Write(new MeshNode("bar.cs", $"{schema}/foo/Source") { Name = "bar.cs", NodeType = "Code" },
                 JsonSerializerOptions.Default).Should().Within(30.Seconds()).Emit();
 
             // Request a depth-5 path under both — the deeper satellite ancestor wins.
-            var (resolved, segs) = adapter
+            var (resolved, segs) = await adapter
                 .ResolvePath($"{schema}/foo/Source/bar.cs/anchor/section", JsonSerializerOptions.Default)
                 .Should().Within(30.Seconds()).Emit();
 
@@ -200,7 +200,7 @@ public class PathResolutionTests
         }
         finally
         {
-            ds.DisposeReactive().Should().Within(30.Seconds()).Emit();
+            await ds.DisposeReactive().Should().Within(30.Seconds()).Emit();
         }
     }
 
@@ -228,11 +228,11 @@ public class PathResolutionTests
     /// file do.</para>
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void RoutingAdapter_ForwardsResolvePath_ToPerSchemaAdapter()
+    public async Task RoutingAdapter_ForwardsResolvePath_ToPerSchemaAdapter()
     {
         var ct = TestContext.Current.CancellationToken;
         const string schema = "pathres_routingfwd";
-        var (ds, _) = CreateSchemaWithStandardMappings(schema, ct);
+        var (ds, _) = await CreateSchemaWithStandardMappings(schema, ct);
 
         try
         {
@@ -267,12 +267,12 @@ public class PathResolutionTests
                 NodeType = "User",
                 State = MeshNodeState.Active,
             };
-            schemaAdapter.Write(userNode, JsonSerializerOptions.Default).Should().Within(30.Seconds()).Emit();
+            await schemaAdapter.Write(userNode, JsonSerializerOptions.Default).Should().Within(30.Seconds()).Emit();
 
             // Act: hit the ROUTING adapter (same surface PathResolutionService
             // sees as IStorageAdapter in DI), not the per-schema one.
             var routingAdapter = provider.Adapter;
-            var (resolved, segs) = routingAdapter
+            var (resolved, segs) = await routingAdapter
                 .ResolvePath(schema, JsonSerializerOptions.Default)
                 .Should().Within(30.Seconds()).Emit();
 
@@ -293,7 +293,7 @@ public class PathResolutionTests
         }
         finally
         {
-            ds.DisposeReactive().Should().Within(30.Seconds()).Emit();
+            await ds.DisposeReactive().Should().Within(30.Seconds()).Emit();
         }
     }
 
@@ -301,7 +301,7 @@ public class PathResolutionTests
     // Helpers
     // -------------------------------------------------------------------
 
-    private (NpgsqlDataSource Ds, PostgreSqlStorageAdapter Adapter)
+    private Task<(NpgsqlDataSource Ds, PostgreSqlStorageAdapter Adapter)>
         CreateSchemaWithStandardMappings(string schema, System.Threading.CancellationToken ct)
     {
         var partitionDef = new PartitionDefinition

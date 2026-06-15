@@ -32,7 +32,7 @@ public class CrossPartitionSatelliteFanOutTests
 
     public CrossPartitionSatelliteFanOutTests(PostgreSqlFixture fixture) => _fixture = fixture;
 
-    private Dictionary<string, (NpgsqlDataSource Ds, PostgreSqlStorageAdapter Adapter)>
+    private Task<Dictionary<string, (NpgsqlDataSource Ds, PostgreSqlStorageAdapter Adapter)>>
         SetupPartitions(CancellationToken ct)
         => SetupPartitionsAsync(ct).Run().Should().Within(90.Seconds()).Emit();
 
@@ -88,13 +88,13 @@ public class CrossPartitionSatelliteFanOutTests
     // â”€â”€ Thread fan-out â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 60000)]
-    public void NodeTypeThread_WithNamespace_QueriesThreadsTable()
+    public async Task NodeTypeThread_WithNamespace_QueriesThreadsTable()
     {
         var ct = TestContext.Current.CancellationToken;
-        var partitions = SetupPartitions(ct);
+        var partitions = await SetupPartitions(ct);
 
         // Insert threads in each partition
-        partitions["OrgAlpha"].Adapter.Write(new MeshNode("thread-a1", "OrgAlpha/_Thread")
+        await partitions["OrgAlpha"].Adapter.Write(new MeshNode("thread-a1", "OrgAlpha/_Thread")
         {
             Name = "Alpha Thread 1",
             NodeType = "Thread",
@@ -103,7 +103,7 @@ public class CrossPartitionSatelliteFanOutTests
             Content = new MeshThread { CreatedBy = "user1" },
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        partitions["OrgBeta"].Adapter.Write(new MeshNode("thread-b1", "OrgBeta/_Thread")
+        await partitions["OrgBeta"].Adapter.Write(new MeshNode("thread-b1", "OrgBeta/_Thread")
         {
             Name = "Beta Thread 1",
             NodeType = "Thread",
@@ -116,10 +116,10 @@ public class CrossPartitionSatelliteFanOutTests
         var parser = new QueryParser();
 
         var alphaQuery = parser.Parse("namespace:OrgAlpha nodeType:Thread sort:LastModified-desc");
-        var alphaResults = QueryAdapter(partitions["OrgAlpha"].Adapter, alphaQuery, ct);
+        var alphaResults = await QueryAdapter(partitions["OrgAlpha"].Adapter, alphaQuery, ct);
 
         var betaQuery = parser.Parse("namespace:OrgBeta nodeType:Thread sort:LastModified-desc");
-        var betaResults = QueryAdapter(partitions["OrgBeta"].Adapter, betaQuery, ct);
+        var betaResults = await QueryAdapter(partitions["OrgBeta"].Adapter, betaQuery, ct);
 
         alphaResults.Should().ContainSingle(n => n.Name == "Alpha Thread 1");
         betaResults.Should().ContainSingle(n => n.Name == "Beta Thread 1");
@@ -135,13 +135,13 @@ public class CrossPartitionSatelliteFanOutTests
     // â”€â”€ Comment fan-out â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 60000)]
-    public void NodeTypeComment_WithNamespace_QueriesAnnotationsTable()
+    public async Task NodeTypeComment_WithNamespace_QueriesAnnotationsTable()
     {
         var ct = TestContext.Current.CancellationToken;
-        var partitions = SetupPartitions(ct);
+        var partitions = await SetupPartitions(ct);
 
         // Insert comments in each partition's annotations table
-        partitions["OrgAlpha"].Adapter.Write(new MeshNode("cmt-a1", "OrgAlpha/doc1/_Comment")
+        await partitions["OrgAlpha"].Adapter.Write(new MeshNode("cmt-a1", "OrgAlpha/doc1/_Comment")
         {
             Name = "Comment on Alpha doc",
             NodeType = "Comment",
@@ -149,7 +149,7 @@ public class CrossPartitionSatelliteFanOutTests
             State = MeshNodeState.Active,
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        partitions["OrgBeta"].Adapter.Write(new MeshNode("cmt-b1", "OrgBeta/doc2/_Comment")
+        await partitions["OrgBeta"].Adapter.Write(new MeshNode("cmt-b1", "OrgBeta/doc2/_Comment")
         {
             Name = "Comment on Beta doc",
             NodeType = "Comment",
@@ -160,10 +160,10 @@ public class CrossPartitionSatelliteFanOutTests
         var parser = new QueryParser();
 
         var alphaQuery = parser.Parse("namespace:OrgAlpha nodeType:Comment sort:LastModified-desc");
-        var alphaResults = QueryAdapter(partitions["OrgAlpha"].Adapter, alphaQuery, ct);
+        var alphaResults = await QueryAdapter(partitions["OrgAlpha"].Adapter, alphaQuery, ct);
 
         var betaQuery = parser.Parse("namespace:OrgBeta nodeType:Comment sort:LastModified-desc");
-        var betaResults = QueryAdapter(partitions["OrgBeta"].Adapter, betaQuery, ct);
+        var betaResults = await QueryAdapter(partitions["OrgBeta"].Adapter, betaQuery, ct);
 
         alphaResults.Should().ContainSingle(n => n.Name == "Comment on Alpha doc");
         betaResults.Should().ContainSingle(n => n.Name == "Comment on Beta doc");
@@ -177,13 +177,13 @@ public class CrossPartitionSatelliteFanOutTests
     // â”€â”€ Activity fan-out â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 60000)]
-    public void NodeTypeActivity_WithNamespace_QueriesActivitiesTable()
+    public async Task NodeTypeActivity_WithNamespace_QueriesActivitiesTable()
     {
         var ct = TestContext.Current.CancellationToken;
-        var partitions = SetupPartitions(ct);
+        var partitions = await SetupPartitions(ct);
 
         // Insert activities
-        partitions["OrgAlpha"].Adapter.Write(new MeshNode("act-a1", "OrgAlpha/doc1/_Activity")
+        await partitions["OrgAlpha"].Adapter.Write(new MeshNode("act-a1", "OrgAlpha/doc1/_Activity")
         {
             Name = "Edit on Alpha doc",
             NodeType = "Activity",
@@ -192,7 +192,7 @@ public class CrossPartitionSatelliteFanOutTests
             Content = new ActivityLog("DataUpdate") { HubPath = "OrgAlpha/doc1" },
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        partitions["OrgBeta"].Adapter.Write(new MeshNode("act-b1", "OrgBeta/doc2/_Activity")
+        await partitions["OrgBeta"].Adapter.Write(new MeshNode("act-b1", "OrgBeta/doc2/_Activity")
         {
             Name = "Edit on Beta doc",
             NodeType = "Activity",
@@ -204,10 +204,10 @@ public class CrossPartitionSatelliteFanOutTests
         var parser = new QueryParser();
 
         var alphaQuery = parser.Parse("namespace:OrgAlpha nodeType:Activity sort:LastModified-desc");
-        var alphaResults = QueryAdapter(partitions["OrgAlpha"].Adapter, alphaQuery, ct);
+        var alphaResults = await QueryAdapter(partitions["OrgAlpha"].Adapter, alphaQuery, ct);
 
         var betaQuery = parser.Parse("namespace:OrgBeta nodeType:Activity sort:LastModified-desc");
-        var betaResults = QueryAdapter(partitions["OrgBeta"].Adapter, betaQuery, ct);
+        var betaResults = await QueryAdapter(partitions["OrgBeta"].Adapter, betaQuery, ct);
 
         alphaResults.Should().ContainSingle(n => n.Name == "Edit on Alpha doc");
         betaResults.Should().ContainSingle(n => n.Name == "Edit on Beta doc");
@@ -220,20 +220,20 @@ public class CrossPartitionSatelliteFanOutTests
     // â”€â”€ Mixed: nodeType without namespace fans out correctly â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 60000)]
-    public void NodeTypeOnly_WithoutNamespace_EachPartitionResolvesCorrectTable()
+    public async Task NodeTypeOnly_WithoutNamespace_EachPartitionResolvesCorrectTable()
     {
         var ct = TestContext.Current.CancellationToken;
-        var partitions = SetupPartitions(ct);
+        var partitions = await SetupPartitions(ct);
 
         // Insert threads
-        partitions["OrgAlpha"].Adapter.Write(new MeshNode("thr-noNs-a", "OrgAlpha/_Thread")
+        await partitions["OrgAlpha"].Adapter.Write(new MeshNode("thr-noNs-a", "OrgAlpha/_Thread")
         {
             Name = "Thread NoNs Alpha",
             NodeType = "Thread",
             MainNode = "OrgAlpha",
             State = MeshNodeState.Active,
         }, _options).Should().Within(30.Seconds()).Emit();
-        partitions["OrgBeta"].Adapter.Write(new MeshNode("thr-noNs-b", "OrgBeta/_Thread")
+        await partitions["OrgBeta"].Adapter.Write(new MeshNode("thr-noNs-b", "OrgBeta/_Thread")
         {
             Name = "Thread NoNs Beta",
             NodeType = "Thread",
@@ -242,7 +242,7 @@ public class CrossPartitionSatelliteFanOutTests
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // Also insert a main node to verify Thread query doesn't return main nodes
-        partitions["OrgAlpha"].Adapter.Write(new MeshNode("doc-main", "OrgAlpha")
+        await partitions["OrgAlpha"].Adapter.Write(new MeshNode("doc-main", "OrgAlpha")
         {
             Name = "Main Doc",
             NodeType = "Markdown",
@@ -253,8 +253,8 @@ public class CrossPartitionSatelliteFanOutTests
         var parser = new QueryParser();
         var query = parser.Parse("nodeType:Thread sort:LastModified-desc");
 
-        var alphaResults = QueryAdapter(partitions["OrgAlpha"].Adapter, query, ct);
-        var betaResults = QueryAdapter(partitions["OrgBeta"].Adapter, query, ct);
+        var alphaResults = await QueryAdapter(partitions["OrgAlpha"].Adapter, query, ct);
+        var betaResults = await QueryAdapter(partitions["OrgBeta"].Adapter, query, ct);
 
         // Each partition returns only threads (from threads table), not main nodes
         alphaResults.Should().ContainSingle(n => n.Name == "Thread NoNs Alpha");
@@ -269,7 +269,7 @@ public class CrossPartitionSatelliteFanOutTests
         merged.Should().OnlyContain(n => n.NodeType == "Thread");
     }
 
-    private static List<MeshNode> QueryAdapter(
+    private static Task<List<MeshNode>> QueryAdapter(
         PostgreSqlStorageAdapter adapter, ParsedQuery query, CancellationToken ct)
     {
         var options = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };

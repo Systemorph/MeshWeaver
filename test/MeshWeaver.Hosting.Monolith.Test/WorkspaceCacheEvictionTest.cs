@@ -32,10 +32,10 @@ public class WorkspaceCacheEvictionTest(ITestOutputHelper output) : MonolithMesh
     protected override bool ShareMeshAcrossTests => true;
 
     [Fact(Timeout = 30000)]
-    public void NewSubscriber_AfterUpdate_GetsFreshSnapshot()
+    public async Task NewSubscriber_AfterUpdate_GetsFreshSnapshot()
     {
         var path = $"{TestPartition}/cache-evict";
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode("cache-evict", TestPartition) { Name = "Original", NodeType = "Markdown" }).Should().Emit();
 
         // First subscription warms up the singleton workspace's _remoteStreamCache.
@@ -43,7 +43,7 @@ public class WorkspaceCacheEvictionTest(ITestOutputHelper output) : MonolithMesh
         var workspace1 = client1.GetWorkspace();
         var stream1 = workspace1.GetMeshNodeStream(path);
 
-        stream1
+        await stream1
             .Select(ci => ci?.Name)
             .Should().Match(n => n == "Original");
 
@@ -60,14 +60,14 @@ public class WorkspaceCacheEvictionTest(ITestOutputHelper output) : MonolithMesh
         });
 
         // Update the node — handler publishes MeshChangeEvent.Updated to IMeshChangeFeed.
-        var current = ReadNode(path).Should().Match(n => n is not null);
-        NodeFactory.UpdateNode(current! with { Name = "Updated" }).Should().Emit();
+        var current = await ReadNode(path).Should().Match(n => n is not null);
+        await NodeFactory.UpdateNode(current! with { Name = "Updated" }).Should().Emit();
 
         // Stream-wait for the eviction to have happened — replaces a fixed
         // Task.Delay(150). The feed handler runs synchronously off Publish,
         // so by the time the ReplaySubject emits, Workspace's subscriber has also
         // run and evicted the cache.
-        updateObserved.Should().Within(5.Seconds()).Emit();
+        await updateObserved.Should().Within(5.Seconds()).Emit();
 
         // A SECOND, completely fresh subscription must observe "Updated" as its first
         // emission. If the cache wasn't evicted, GetRemoteStream returns the previously
@@ -76,7 +76,7 @@ public class WorkspaceCacheEvictionTest(ITestOutputHelper output) : MonolithMesh
         var workspace2 = client2.GetWorkspace();
         var stream2 = workspace2.GetMeshNodeStream(path);
 
-        var freshFirst = stream2
+        var freshFirst = await stream2
             .Select(ci => ci?.Name)
             .Where(n => n != null)
             .Should().Emit();
@@ -85,16 +85,16 @@ public class WorkspaceCacheEvictionTest(ITestOutputHelper output) : MonolithMesh
     }
 
     [Fact(Timeout = 30000)]
-    public void NewSubscriber_AfterRecreate_GetsFreshSnapshot()
+    public async Task NewSubscriber_AfterRecreate_GetsFreshSnapshot()
     {
         var path = $"{TestPartition}/cache-recreate";
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode("cache-recreate", TestPartition) { Name = "First", NodeType = "Markdown" }).Should().Emit();
 
         // Warm cache with a subscription.
         var client1 = GetClient(c => c.AddData());
         var stream1 = client1.GetWorkspace().GetMeshNodeStream(path);
-        stream1
+        await stream1
             .Select(ci => ci?.Name)
             .Should().Match(n => n == "First");
 
@@ -113,20 +113,20 @@ public class WorkspaceCacheEvictionTest(ITestOutputHelper output) : MonolithMesh
         });
 
         // Delete + recreate — emits Deleted then Created on the change feed.
-        NodeFactory.DeleteNode(path).Should().Emit();
+        await NodeFactory.DeleteNode(path).Should().Emit();
         // Stream-wait for the Deleted event to have fanned out (workspace's
         // cache evicted) — replaces a fixed Task.Delay(50).
-        deleteObserved.Should().Within(5.Seconds()).Emit();
+        await deleteObserved.Should().Within(5.Seconds()).Emit();
 
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode("cache-recreate", TestPartition) { Name = "Second", NodeType = "Markdown" }).Should().Emit();
         // Stream-wait for the Created event — replaces a fixed Task.Delay(150).
-        createObserved.Should().Within(5.Seconds()).Emit();
+        await createObserved.Should().Within(5.Seconds()).Emit();
 
         var client2 = GetClient(c => c.AddData());
         var stream2 = client2.GetWorkspace().GetMeshNodeStream(path);
 
-        var freshFirst = stream2
+        var freshFirst = await stream2
             .Select(ci => ci?.Name)
             .Where(n => n != null)
             .Should().Emit();

@@ -109,16 +109,16 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// from a Person instance hub (Alice).
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void GetDataRequest_WithContentCollectionReference_ReturnsConfig()
+    public async Task GetDataRequest_WithContentCollectionReference_ReturnsConfig()
     {
         var aliceAddress = new Address("Cornerstone/Microsoft");
         var client = GetClient(c => c.AddContentCollections());
 
         // Initialize Alice hub
-        client.Observe(new PingRequest(), o => o.WithTarget(aliceAddress)).Should().Within(19.Seconds()).Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(aliceAddress)).Should().Within(19.Seconds()).Emit();
 
         // Request the "attachments" collection configuration
-        var response = client.Observe(new GetDataRequest(new ContentCollectionReference(["attachments"])), o => o.WithTarget(aliceAddress)).Should().Emit();
+        var response = await client.Observe(new GetDataRequest(new ContentCollectionReference(["attachments"])), o => o.WithTarget(aliceAddress)).Should().Emit();
 
         response.Should().NotBeNull();
         response.Message.Should().NotBeNull();
@@ -138,14 +138,14 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// Tests that GetDataRequest with empty ContentCollectionReference returns all collections.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void GetDataRequest_WithEmptyContentCollectionReference_ReturnsAllCollections()
+    public async Task GetDataRequest_WithEmptyContentCollectionReference_ReturnsAllCollections()
     {
         var aliceAddress = new Address("Cornerstone/Microsoft");
         var client = GetClient(c => c.AddContentCollections());
 
-        client.Observe(new PingRequest(), o => o.WithTarget(aliceAddress)).Should().Within(19.Seconds()).Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(aliceAddress)).Should().Within(19.Seconds()).Emit();
 
-        var response = client.Observe(new GetDataRequest(new ContentCollectionReference()), o => o.WithTarget(aliceAddress)).Should().Emit();
+        var response = await client.Observe(new GetDataRequest(new ContentCollectionReference()), o => o.WithTarget(aliceAddress)).Should().Emit();
 
         response.Should().NotBeNull();
         response.Message.Data.Should().NotBeNull();
@@ -159,14 +159,14 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// Tests that Organization instance hub's (ACME) collection is accessible via ContentCollectionReference.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void GetDataRequest_WithContentCollectionReference_ForOrganization_ReturnsConfig()
+    public async Task GetDataRequest_WithContentCollectionReference_ForOrganization_ReturnsConfig()
     {
         var acmeAddress = new Address("ACME");
         var client = GetClient(c => c.AddContentCollections());
 
-        client.Observe(new PingRequest(), o => o.WithTarget(acmeAddress)).Should().Within(19.Seconds()).Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(acmeAddress)).Should().Within(19.Seconds()).Emit();
 
-        var response = client.Observe(new GetDataRequest(new ContentCollectionReference(["attachments"])), o => o.WithTarget(acmeAddress)).Should().Emit();
+        var response = await client.Observe(new GetDataRequest(new ContentCollectionReference(["attachments"])), o => o.WithTarget(acmeAddress)).Should().Emit();
 
         response.Should().NotBeNull();
         response.Message.Data.Should().NotBeNull();
@@ -185,15 +185,15 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// Tests that UnifiedReference with "collection:attachments" prefix resolves collection config from ACME.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void UnifiedReference_CollectionPrefix_ReturnsConfig()
+    public async Task UnifiedReference_CollectionPrefix_ReturnsConfig()
     {
         var acmeAddress = new Address("ACME");
         var client = GetClient(c => c.AddContentCollections());
 
-        client.Observe(new PingRequest(), o => o.WithTarget(acmeAddress)).Should().Within(19.Seconds()).Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(acmeAddress)).Should().Within(19.Seconds()).Emit();
 
         // Request collection:attachments from ACME hub using prefix:path format
-        var response = client.Observe(new GetDataRequest(new UnifiedReference("collection:attachments")), o => o.WithTarget(acmeAddress)).Should().Emit();
+        var response = await client.Observe(new GetDataRequest(new UnifiedReference("collection:attachments")), o => o.WithTarget(acmeAddress)).Should().Emit();
 
         response.Should().NotBeNull();
         response.Message.Data.Should().NotBeNull();
@@ -207,15 +207,15 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// Tests that UnifiedReference with "content:attachments/test.txt" prefix resolves file content from ACME.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void UnifiedReference_ContentPrefix_ReturnsFileContent()
+    public async Task UnifiedReference_ContentPrefix_ReturnsFileContent()
     {
         var acmeAddress = new Address("ACME");
         var client = GetClient(c => c.AddContentCollections());
 
-        client.Observe(new PingRequest(), o => o.WithTarget(acmeAddress)).Should().Within(19.Seconds()).Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(acmeAddress)).Should().Within(19.Seconds()).Emit();
 
         // Request content:attachments/test.txt from ACME hub using prefix:path format
-        var response = client.Observe(new GetDataRequest(new UnifiedReference("content:attachments/test.txt")), o => o.WithTarget(acmeAddress)).Should().Emit();
+        var response = await client.Observe(new GetDataRequest(new UnifiedReference("content:attachments/test.txt")), o => o.WithTarget(acmeAddress)).Should().Emit();
 
         response.Should().NotBeNull();
         response.Message.Data.Should().NotBeNull();
@@ -229,15 +229,15 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// Tests that UnifiedReference with "data:" prefix resolves to DataPathReference behavior.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void UnifiedReference_DataPrefix_ReturnsData()
+    public async Task UnifiedReference_DataPrefix_ReturnsData()
     {
         var acmeAddress = new Address("ACME");
         var client = GetClient(c => c.AddContentCollections());
 
-        client.Observe(new PingRequest(), o => o.WithTarget(acmeAddress)).Should().Within(19.Seconds()).Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(acmeAddress)).Should().Within(19.Seconds()).Emit();
 
         // Request data without prefix (defaults to data:) from ACME hub
-        var response = client.Observe(new GetDataRequest(new UnifiedReference("data:")), o => o.WithTarget(acmeAddress)).Should().Emit();
+        var response = await client.Observe(new GetDataRequest(new UnifiedReference("data:")), o => o.WithTarget(acmeAddress)).Should().Emit();
 
         // Should return default data (may be null or empty store)
         response.Should().NotBeNull();
@@ -250,7 +250,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// Both ACME and Systemorph are Organizations which have the "attachments" collection.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void ConcurrentCollectionRequests_WithUnifiedReference_AllSucceed()
+    public async Task ConcurrentCollectionRequests_WithUnifiedReference_AllSucceed()
     {
         var acmeAddress = new Address("ACME");
         var systemorphAddress = new Address("Systemorph");
@@ -271,7 +271,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         }
 
         // Wait for all requests to complete
-        var responses = Observable.Merge(observables).Take(10).ToList().Should().Within(15.Seconds()).Emit();
+        var responses = await Observable.Merge(observables).Take(10).ToList().Should().Within(15.Seconds()).Emit();
 
         // Verify all requests succeeded
         responses.Should().HaveCount(10, "all 10 concurrent requests should respond");
@@ -291,7 +291,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// Tests concurrent content file requests to verify thread-safe file resolution.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void ConcurrentContentRequests_ToSameOrganization_AllSucceed()
+    public async Task ConcurrentContentRequests_ToSameOrganization_AllSucceed()
     {
         var acmeAddress = new Address("ACME");
         var client = GetClient(c => c.AddContentCollections());
@@ -306,7 +306,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         }
 
         // Wait for all requests to complete
-        var responses = Observable.Merge(observables).Take(10).ToList().Should().Within(15.Seconds()).Emit();
+        var responses = await Observable.Merge(observables).Take(10).ToList().Should().Within(15.Seconds()).Emit();
 
         // Verify all requests succeeded with test content
         responses.Should().HaveCount(10, "all 10 concurrent requests should respond");
@@ -332,19 +332,19 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// and don't overwrite each other when added to the portal's content service.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void StaticContentFlow_MultipleOrganizations_ReturnsCorrectContent()
+    public async Task StaticContentFlow_MultipleOrganizations_ReturnsCorrectContent()
     {
         var acmeAddress = new Address("ACME");
         var systemorphAddress = new Address("Systemorph");
         var client = GetClient(c => c.AddContentCollections());
 
         // Initialize both hubs
-        client.Observe(new PingRequest(), o => o.WithTarget(acmeAddress)).Should().Within(19.Seconds()).Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(acmeAddress)).Should().Within(19.Seconds()).Emit();
 
-        client.Observe(new PingRequest(), o => o.WithTarget(systemorphAddress)).Should().Within(19.Seconds()).Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(systemorphAddress)).Should().Within(19.Seconds()).Emit();
 
         // Step 1: Get collection config from ACME (like BlazorHostingExtensions does)
-        var acmeConfigResponse = client.Observe(new GetDataRequest(new ContentCollectionReference(["attachments"])), o => o.WithTarget(acmeAddress)).Should().Emit();
+        var acmeConfigResponse = await client.Observe(new GetDataRequest(new ContentCollectionReference(["attachments"])), o => o.WithTarget(acmeAddress)).Should().Emit();
 
         var acmeConfigs = ParseCollectionConfigs(acmeConfigResponse.Message.Data);
         acmeConfigs.Should().NotBeNull();
@@ -352,7 +352,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         Output.WriteLine($"ACME attachments config: Name={acmeLogosConfig.Name}, BasePath={acmeLogosConfig.BasePath}");
 
         // Step 2: Get collection config from Systemorph
-        var systemorphConfigResponse = client.Observe(new GetDataRequest(new ContentCollectionReference(["attachments"])), o => o.WithTarget(systemorphAddress)).Should().Emit();
+        var systemorphConfigResponse = await client.Observe(new GetDataRequest(new ContentCollectionReference(["attachments"])), o => o.WithTarget(systemorphAddress)).Should().Emit();
 
         var systemorphConfigs = ParseCollectionConfigs(systemorphConfigResponse.Message.Data);
         systemorphConfigs.Should().NotBeNull();
@@ -387,11 +387,11 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         Output.WriteLine($"Added Systemorph config with qualified name: {systemorphQualifiedConfig.Name}");
 
         // Verify we can get both collections separately
-        var acmeCollection = MeshWeaver.Mesh.Threading.IoPool.Unbounded.Invoke(ct => contentService.GetCollectionAsync($"{acmeAddress}/attachments", ct)).Should().Emit();
+        var acmeCollection = await MeshWeaver.Mesh.Threading.IoPool.Unbounded.Invoke(ct => contentService.GetCollectionAsync($"{acmeAddress}/attachments", ct)).Should().Emit();
         acmeCollection.Should().NotBeNull("ACME attachments collection should be retrievable");
         Output.WriteLine($"ACME collection retrieved: {acmeCollection?.Collection}");
 
-        var systemorphCollection = MeshWeaver.Mesh.Threading.IoPool.Unbounded.Invoke(ct => contentService.GetCollectionAsync($"{systemorphAddress}/attachments", ct)).Should().Emit();
+        var systemorphCollection = await MeshWeaver.Mesh.Threading.IoPool.Unbounded.Invoke(ct => contentService.GetCollectionAsync($"{systemorphAddress}/attachments", ct)).Should().Emit();
         systemorphCollection.Should().NotBeNull("Systemorph attachments collection should be retrievable");
         Output.WriteLine($"Systemorph collection retrieved: {systemorphCollection?.Collection}");
 
@@ -405,16 +405,16 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// The content files at samples/Graph/content/{nodePath}/ should be accessible.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void ContentCollection_ForMarkdownNode_ResolvesCorrectly()
+    public async Task ContentCollection_ForMarkdownNode_ResolvesCorrectly()
     {
         var ucrAddress = new Address("Doc/DataMesh/UnifiedPath");
         var client = GetClient(c => c.AddContentCollections());
 
         // Initialize the UCR node hub
-        client.Observe(new PingRequest(), o => o.WithTarget(ucrAddress)).Should().Within(19.Seconds()).Emit();
+        await client.Observe(new PingRequest(), o => o.WithTarget(ucrAddress)).Should().Within(19.Seconds()).Emit();
 
         // Request the "content" collection configuration
-        var response = client.Observe(new GetDataRequest(new ContentCollectionReference(["content"])), o => o.WithTarget(ucrAddress)).Should().Emit();
+        var response = await client.Observe(new GetDataRequest(new ContentCollectionReference(["content"])), o => o.WithTarget(ucrAddress)).Should().Emit();
 
         response.Should().NotBeNull();
         response.Message.Should().NotBeNull();
@@ -437,7 +437,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// This simulates what happens when @@Doc/DataMesh/UnifiedPath/content:icon.svg is rendered.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void ContentLayoutArea_IconSvg_ReturnsWithoutHanging()
+    public async Task ContentLayoutArea_IconSvg_ReturnsWithoutHanging()
     {
         var ucrAddress = new Address("Doc/DataMesh/UnifiedPath");
         var client = GetClient(c => c
@@ -458,7 +458,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         // Wait for the stream to emit a value - this is where eternal spinner would occur
         Output.WriteLine("Waiting for stream value...");
-        var changeItem = stream.Should().Within(60.Seconds()).Emit();
+        var changeItem = await stream.Should().Within(60.Seconds()).Emit();
         var value = changeItem.Value;
 
         var rawText = value.GetRawText();
@@ -473,7 +473,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// This simulates what happens when @@Doc/DataMesh/UnifiedPath/content:sample.md is rendered.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void ContentLayoutArea_SampleMd_ReturnsWithoutHanging()
+    public async Task ContentLayoutArea_SampleMd_ReturnsWithoutHanging()
     {
         var ucrAddress = new Address("Doc/DataMesh/UnifiedPath");
         var client = GetClient(c => c
@@ -493,7 +493,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         // Wait for the stream to emit a value
         Output.WriteLine("Waiting for stream value...");
-        var changeItem = stream.Should().Within(60.Seconds()).Emit();
+        var changeItem = await stream.Should().Within(60.Seconds()).Emit();
         var value = changeItem.Value;
 
         var rawText = value.GetRawText();
@@ -507,7 +507,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// Tests that $Content layout area for non-existent file returns error message, not eternal spinner.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void ContentLayoutArea_NonExistentFile_ReturnsErrorMessage()
+    public async Task ContentLayoutArea_NonExistentFile_ReturnsErrorMessage()
     {
         var ucrAddress = new Address("Doc/DataMesh/UnifiedPath");
         var client = GetClient(c => c
@@ -527,7 +527,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         // Wait for the stream to emit a value - should return error message, not hang
         Output.WriteLine("Waiting for stream value...");
-        var changeItem = stream.Should().Within(60.Seconds()).Emit();
+        var changeItem = await stream.Should().Within(60.Seconds()).Emit();
         var value = changeItem.Value;
 
         var rawText = value.GetRawText();
@@ -542,7 +542,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// This simulates what happens when @@Doc/DataMesh/UnifiedPath/schema: is rendered.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void SchemaLayoutArea_SelfReference_ReturnsWithoutHanging()
+    public async Task SchemaLayoutArea_SelfReference_ReturnsWithoutHanging()
     {
         var ucrAddress = new Address("Doc/DataMesh/UnifiedPath");
         var client = GetClient(c => c
@@ -562,7 +562,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         // Wait for the stream to emit a value
         Output.WriteLine("Waiting for stream value...");
-        var changeItem = stream.Should().Within(60.Seconds()).Emit();
+        var changeItem = await stream.Should().Within(60.Seconds()).Emit();
         var value = changeItem.Value;
 
         var rawText = value.GetRawText();
@@ -577,7 +577,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// This simulates what happens when @@Doc/DataMesh/UnifiedPath/data: is rendered.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void DataLayoutArea_SelfReference_ReturnsWithoutHanging()
+    public async Task DataLayoutArea_SelfReference_ReturnsWithoutHanging()
     {
         var ucrAddress = new Address("Doc/DataMesh/UnifiedPath");
         var client = GetClient(c => c
@@ -597,7 +597,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         // Wait for the stream to emit a value
         Output.WriteLine("Waiting for stream value...");
-        var changeItem = stream.Should().Within(60.Seconds()).Emit();
+        var changeItem = await stream.Should().Within(60.Seconds()).Emit();
         var value = changeItem.Value;
 
         var rawText = value.GetRawText();
@@ -613,7 +613,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// When requesting the default area (empty area), it should resolve to $Content for Markdown nodes.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void MarkdownNode_DefaultArea_IsContentNotCatalog()
+    public async Task MarkdownNode_DefaultArea_IsContentNotCatalog()
     {
         var ucrAddress = new Address("Doc/DataMesh/UnifiedPath");
         var client = GetClient(c => c
@@ -635,7 +635,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         // The nodeType config (Markdown) should be compiled before hub creation,
         // so the first emission should already have $Content as default area
         Output.WriteLine("Waiting for stream value...");
-        var changeItem = stream.Should().Within(60.Seconds()).Emit();
+        var changeItem = await stream.Should().Within(60.Seconds()).Emit();
         var value = changeItem.Value;
 
         var rawText = value.GetRawText();

@@ -55,9 +55,9 @@ public class FilePersistedAccessRecursionTest(ITestOutputHelper output) : Monoli
     /// Baseline: a user with NO assignment anywhere gets <c>Permission.None</c>.
     /// </summary>
     [Fact(Timeout = 15_000)]
-    public void UnknownUser_OnDeepScope_HasNoPermission()
+    public async Task UnknownUser_OnDeepScope_HasNoPermission()
     {
-        Mesh.GetEffectivePermissions("tenant/team/project", "unknown-user")
+        await Mesh.GetEffectivePermissions("tenant/team/project", "unknown-user")
             .Should().Match(p => p == Permission.None);
     }
 
@@ -70,9 +70,9 @@ public class FilePersistedAccessRecursionTest(ITestOutputHelper output) : Monoli
     /// statics and miss this grant.
     /// </summary>
     [Fact(Timeout = 15_000)]
-    public void ScopedAssignment_AtCurrentPath_ResolvesViewerRole()
+    public async Task ScopedAssignment_AtCurrentPath_ResolvesViewerRole()
     {
-        var perms = Mesh.GetEffectivePermissions("tenant/team/project", "DataReader")
+        var perms = await Mesh.GetEffectivePermissions("tenant/team/project", "DataReader")
             .Should().Match(p => p.HasFlag(Permission.Read));
         perms.Should().HaveFlag(Permission.Read,
             "Viewer assignment at the SAME scope as the check must grant Read — " +
@@ -89,9 +89,9 @@ public class FilePersistedAccessRecursionTest(ITestOutputHelper output) : Monoli
     /// recursive parent chain.
     /// </summary>
     [Fact(Timeout = 15_000)]
-    public void ScopedAssignment_AtAncestorPath_InheritsToDescendant()
+    public async Task ScopedAssignment_AtAncestorPath_InheritsToDescendant()
     {
-        Mesh.GetEffectivePermissions("tenant/team/project/child", "DataReader")
+        await Mesh.GetEffectivePermissions("tenant/team/project/child", "DataReader")
             .Should().Match(p => p.HasFlag(Permission.Read),
                 "ancestor's Viewer assignment must flow down through the recursive " +
                 "ObserveScopeAssignments chain — the descendant's SELF scope has no " +

@@ -137,7 +137,7 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
     /// </summary>
     [Theory(Timeout = 60000)]
     [MemberData(nameof(SatelliteCases))]
-    public void ResolvePath_SatelliteByFullPath_ReturnsSatelliteNode(
+    public async Task ResolvePath_SatelliteByFullPath_ReturnsSatelliteNode(
         string segment, string nodeType, bool contentNeeded)
     {
         var user = $"pg9b_sat_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
@@ -149,7 +149,7 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         using var _systemScope = accessService.ImpersonateAsSystem();
 
-        meshService.CreateNode(new MeshNode(user)
+        await meshService.CreateNode(new MeshNode(user)
         {
             NodeType = "User",
             Name = user,
@@ -164,10 +164,10 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
             State = MeshNodeState.Active,
             Content = contentNeeded ? new MeshThread { CreatedBy = user } : null,
         };
-        meshService.CreateNode(satellite).Should().Within(30.Seconds()).Emit();
+        await meshService.CreateNode(satellite).Should().Within(30.Seconds()).Emit();
 
         var resolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
-        var resolution = resolver.ResolvePath(fullPath)
+        var resolution = await resolver.ResolvePath(fullPath)
             .Where(r => r is not null)
             .Take(1)
             .Timeout(15.Seconds())
@@ -196,7 +196,7 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
     /// </summary>
     [Theory(Timeout = 60000)]
     [MemberData(nameof(SatelliteCases))]
-    public void ResolvePath_MissingSatellite_DoesNotFallBackToWrongNodeType(
+    public async Task ResolvePath_MissingSatellite_DoesNotFallBackToWrongNodeType(
         string segment, string nodeType, bool _)
     {
         var user = $"pg9b_miss_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
@@ -206,7 +206,7 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         using var _systemScope = accessService.ImpersonateAsSystem();
 
-        meshService.CreateNode(new MeshNode(user)
+        await meshService.CreateNode(new MeshNode(user)
         {
             NodeType = "User",
             Name = user,
@@ -214,7 +214,7 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
         }).Should().Within(30.Seconds()).Emit();
 
         var resolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
-        var resolution = resolver.ResolvePath(missingPath)
+        var resolution = await resolver.ResolvePath(missingPath)
             .Take(1)
             .Timeout(15.Seconds())
             .Catch<AddressResolution?, TimeoutException>(_ => Observable.Return<AddressResolution?>(null))
@@ -245,7 +245,7 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
     /// is searchable by URL.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void ResolvePath_ProdShape_UserSlashUnderscoreThreadSlashId_Resolves()
+    public async Task ResolvePath_ProdShape_UserSlashUnderscoreThreadSlashId_Resolves()
     {
         var user = $"pg9b_prod_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var threadId = "hello-2a76";
@@ -255,14 +255,14 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         using var _systemScope = accessService.ImpersonateAsSystem();
 
-        meshService.CreateNode(new MeshNode(user)
+        await meshService.CreateNode(new MeshNode(user)
         {
             NodeType = "User",
             Name = user,
             State = MeshNodeState.Active,
         }).Should().Within(30.Seconds()).Emit();
 
-        meshService.CreateNode(new MeshNode(threadId, $"{user}/_Thread")
+        await meshService.CreateNode(new MeshNode(threadId, $"{user}/_Thread")
         {
             NodeType = ThreadNodeType.NodeType,
             Name = "hello?",
@@ -272,7 +272,7 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
         }).Should().Within(30.Seconds()).Emit();
 
         var resolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
-        var resolution = resolver.ResolvePath(threadPath)
+        var resolution = await resolver.ResolvePath(threadPath)
             .Where(r => r is not null).Take(1).Timeout(15.Seconds())
             .Catch<AddressResolution?, TimeoutException>(_ => Observable.Return<AddressResolution?>(null))
             .Should().Within(30.Seconds()).Emit();
@@ -294,7 +294,7 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
     /// explicitly demonstrates the contract still holds after the fix.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void ResolvePath_NestedThreadMessage_FourSegmentUrl_ReturnsMessageNode()
+    public async Task ResolvePath_NestedThreadMessage_FourSegmentUrl_ReturnsMessageNode()
     {
         var user = $"pg9b_msg_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var threadId = $"t{Guid.NewGuid():N}"[..10];
@@ -306,14 +306,14 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         using var _systemScope = accessService.ImpersonateAsSystem();
 
-        meshService.CreateNode(new MeshNode(user)
+        await meshService.CreateNode(new MeshNode(user)
         {
             NodeType = "User",
             Name = user,
             State = MeshNodeState.Active,
         }).Should().Within(30.Seconds()).Emit();
 
-        meshService.CreateNode(new MeshNode(threadId, $"{user}/_Thread")
+        await meshService.CreateNode(new MeshNode(threadId, $"{user}/_Thread")
         {
             NodeType = ThreadNodeType.NodeType,
             Name = "parent",
@@ -322,7 +322,7 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
             Content = new MeshThread { CreatedBy = user },
         }).Should().Within(30.Seconds()).Emit();
 
-        meshService.CreateNode(new MeshNode(msgId, threadPath)
+        await meshService.CreateNode(new MeshNode(msgId, threadPath)
         {
             NodeType = "ThreadMessage",
             Name = "hello msg",
@@ -332,7 +332,7 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
         }).Should().Within(30.Seconds()).Emit();
 
         var resolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
-        var resolution = resolver.ResolvePath(msgPath)
+        var resolution = await resolver.ResolvePath(msgPath)
             .Where(r => r is not null).Take(1).Timeout(15.Seconds())
             .Catch<AddressResolution?, TimeoutException>(_ => Observable.Return<AddressResolution?>(null))
             .Should().Within(30.Seconds()).Emit();

@@ -37,7 +37,7 @@ SystemName,DisplayName
     }
 
     [Fact]
-    public void ImportFromCollectionSource_ShouldResolveAndImportSuccessfully()
+    public async Task ImportFromCollectionSource_ShouldResolveAndImportSuccessfully()
     {
         // Arrange
         var client = GetClient();
@@ -46,7 +46,7 @@ SystemName,DisplayName
         var importRequest = new ImportRequest(new CollectionSource("TestCollection", "test-data.csv"));
 
         // Act
-        var importResponse = client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024)))
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024)))
             .Should().Emit();
 
         // Assert
@@ -56,7 +56,7 @@ SystemName,DisplayName
         var referenceDataHub = Mesh.GetHostedHub(ReferenceDataAddress.Create());
         var workspace = referenceDataHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
-        var allData = workspace.GetObservable<LineOfBusiness>()
+        var allData = await workspace.GetObservable<LineOfBusiness>()
             .Should().Within(10.Seconds()).Match(x => x.Count >= 3);
 
         allData.Should().HaveCount(3);
@@ -67,7 +67,7 @@ SystemName,DisplayName
     }
 
     [Fact]
-    public void ImportFromCollectionSource_WithSubfolder_ShouldResolveAndImportSuccessfully()
+    public async Task ImportFromCollectionSource_WithSubfolder_ShouldResolveAndImportSuccessfully()
     {
         // Arrange
         var client = GetClient();
@@ -76,7 +76,7 @@ SystemName,DisplayName
         var importRequest = new ImportRequest(new CollectionSource("TestCollection", "test-data.csv"));
 
         // Act
-        var importResponse = client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024)))
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024)))
             .Should().Emit();
 
         // Assert
@@ -86,14 +86,14 @@ SystemName,DisplayName
         var referenceDataHub = Mesh.GetHostedHub(ReferenceDataAddress.Create());
         var workspace = referenceDataHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
-        var allData = workspace.GetObservable<LineOfBusiness>()
+        var allData = await workspace.GetObservable<LineOfBusiness>()
             .Should().Within(10.Seconds()).Match(x => x.Count >= 3);
 
         allData.Should().HaveCount(3);
     }
 
     [Fact]
-    public void ImportFromCollectionSource_NonExistentFile_ShouldFail()
+    public async Task ImportFromCollectionSource_NonExistentFile_ShouldFail()
     {
         // Arrange
         var client = GetClient();
@@ -101,7 +101,7 @@ SystemName,DisplayName
         var importRequest = new ImportRequest(new CollectionSource("TestCollection", "non-existent.csv"));
 
         // Act
-        var importResponse = client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024)))
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024)))
             .Should().Emit();
 
         // Assert
@@ -111,7 +111,7 @@ SystemName,DisplayName
     }
 
     [Fact]
-    public void ImportFromCollectionSource_NonExistentCollection_ShouldFail()
+    public async Task ImportFromCollectionSource_NonExistentCollection_ShouldFail()
     {
         // Arrange
         var client = GetClient();
@@ -119,7 +119,7 @@ SystemName,DisplayName
         var importRequest = new ImportRequest(new CollectionSource("NonExistentCollection", "test-data.csv"));
 
         // Act
-        var importResponse = client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024)))
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024)))
             .Should().Emit();
 
         // Assert

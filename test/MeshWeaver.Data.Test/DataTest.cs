@@ -78,10 +78,10 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests basic data plugin initialization and data loading
     /// </summary>
     [Fact]
-    public void InitializeTest()
+    public async Task InitializeTest()
     {
         var workspace = GetHost().GetWorkspace();
-        var response = workspace
+        var response = await workspace
             .GetObservable<MyData>()
             .Should().Within(10.Seconds())
             .Emit();
@@ -93,43 +93,43 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests data update operations through the data plugin
     /// </summary>
     [Fact]
-    public void Update()
+    public async Task Update()
     {
         // arrange
         var client = GetClient();
         var updateItems = new object[] { new MyData("1", "AAA"), new MyData("3", "CCC"), };
 
         var clientWorkspace = client.GetWorkspace();
-        var data = clientWorkspace
+        var data = (await clientWorkspace
                 .GetObservable<MyData>()
                 .Should().Within(10.Seconds())
-                .Emit()!
+                .Emit())!
             .OrderBy(a => a.Id)
             .ToArray();
 
         data.Should().HaveCount(2);
 
         // act
-        var updateResponse = client.Observe(DataChangeRequest.Update(updateItems), o => o.WithTarget(CreateClientAddress()))
+        var updateResponse = await client.Observe(DataChangeRequest.Update(updateItems), o => o.WithTarget(CreateClientAddress()))
             .Should().Within(3.Seconds()).Emit();
 
         // asserts
         updateResponse.Message.Should().BeOfType<DataChangeResponse>();
         var expectedItems = new MyData[] { new("1", "AAA"), new("2", "B"), new("3", "CCC") };
 
-        data = clientWorkspace
+        data = (await clientWorkspace
                 .GetObservable<MyData>()
                 .Should().Within(10.Seconds())
-                .Match(x => x.Count == 3)!
+                .Match(x => x.Count == 3))!
             .OrderBy(a => a.Id)
             .ToArray();
 
         data.ToArray().Should().BeEquivalentTo(expectedItems, GetHost().JsonSerializerOptions);
-        data = GetHost()
+        data = (await GetHost()
                 .GetWorkspace()
                 .GetObservable<MyData>()
                 .Should().Within(10.Seconds())
-                .Match(x => x.Count == 3)!
+                .Match(x => x.Count == 3))!
             .OrderBy(a => a.Id)
             .ToArray();
 
@@ -143,12 +143,12 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests data deletion operations through the data plugin
     /// </summary>
     [Fact]
-    public void Delete()
+    public async Task Delete()
     {
         // arrange
         var client = GetClient();
 
-        var data = GetHost()
+        var data = await GetHost()
             .GetWorkspace()
             .GetObservable<MyData>()
             .Should().Within(10.Seconds())
@@ -158,12 +158,12 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var toBeDeleted = data.Take(1).ToArray();
         var expectedItems = data.Skip(1).ToArray();
         // act
-        var deleteResponse = client.Observe(DataChangeRequest.Delete(toBeDeleted, "TestUser"), o => o.WithTarget(CreateClientAddress()))
+        var deleteResponse = await client.Observe(DataChangeRequest.Delete(toBeDeleted, "TestUser"), o => o.WithTarget(CreateClientAddress()))
             .Should().Within(10.Seconds()).Emit();
         deleteResponse.Message.Status.Should().Be(DataChangeStatus.Committed);
 
         // asserts — verify through host workspace (client filters out own changes via echo prevention)
-        data = GetHost()
+        data = await GetHost()
             .GetWorkspace()
             .GetObservable<MyData>()
             .Should().Within(10.Seconds())
@@ -187,11 +187,11 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests workspace variable usage functionality
     /// </summary>
     [Fact]
-    public void CheckUsagesFromWorkspaceVariable()
+    public async Task CheckUsagesFromWorkspaceVariable()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
-        var myInstance = workspace
+        var myInstance = await workspace
             .GetObservable<MyData>("1")
             .Should().Within(10.Seconds())
             .Match(i => i is not null);
@@ -202,12 +202,12 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         {
             Text = TextChange
         };
-        client.Observe(DataChangeRequest.Update([myInstance]), o => o.WithTarget(CreateClientAddress()))
+        await client.Observe(DataChangeRequest.Update([myInstance]), o => o.WithTarget(CreateClientAddress()))
             .Should().Within(10.Seconds()).Emit();
 
         var hostWorkspace = GetHost().GetWorkspace();
 
-        var instance = hostWorkspace
+        var instance = await hostWorkspace
             .GetObservable<MyData>("1")
             .Should().Within(10.Seconds())
             .Match(i => i?.Text == TextChange);
@@ -246,14 +246,14 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests validation failure scenarios and error handling
     /// </summary>
     [Fact]
-    public void ValidationFailure()
+    public async Task ValidationFailure()
     {
         // arrange
         var client = GetClient();
         var updateItems = new object[] { new MyData("5", null!) };
 
         // act
-        var updateResponse = client.Observe(DataChangeRequest.Update(updateItems), o => o.WithTarget(CreateClientAddress()))
+        var updateResponse = await client.Observe(DataChangeRequest.Update(updateItems), o => o.WithTarget(CreateClientAddress()))
             .Should().Within(3.Seconds()).Emit();
 
         // asserts
@@ -274,10 +274,10 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests collection reference reduction operations
     /// </summary>
     [Fact]
-    public void ReduceCollectionReference()
+    public async Task ReduceCollectionReference()
     {
         var host = GetHost();
-        var collection = host.GetWorkspace().GetStream(new CollectionReference(nameof(MyData)))!
+        var collection = await host.GetWorkspace().GetStream(new CollectionReference(nameof(MyData)))!
             .Select(c => c.Value!.Instances.Values)
             .Should().Emit();
 
@@ -285,10 +285,10 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [Fact]
-    public void ReduceSchemaReference()
+    public async Task ReduceSchemaReference()
     {
         var host = GetHost();
-        var result = host.GetWorkspace()
+        var result = await host.GetWorkspace()
             .GetStream(new SchemaReference(nameof(MyData)))!
             .Select(c => c.Value)
             .Should().Within(10.Seconds())
@@ -304,10 +304,10 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [Fact]
-    public void ReduceSchemaReference_NullType_ReturnsDefaultSchema()
+    public async Task ReduceSchemaReference_NullType_ReturnsDefaultSchema()
     {
         var host = GetHost();
-        var result = host.GetWorkspace()
+        var result = await host.GetWorkspace()
             .GetStream(new SchemaReference(null))!
             .Select(c => c.Value)
             .Should().Within(10.Seconds())
@@ -320,10 +320,10 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [Fact]
-    public void ReduceSchemaReference_UnknownType_ReturnsEmptySchema()
+    public async Task ReduceSchemaReference_UnknownType_ReturnsEmptySchema()
     {
         var host = GetHost();
-        var result = host.GetWorkspace()
+        var result = await host.GetWorkspace()
             .GetStream(new SchemaReference("NonExistentType"))!
             .Select(c => c.Value)
             .Should().Within(10.Seconds())
@@ -335,10 +335,10 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [Fact]
-    public void ReduceDataModelReference()
+    public async Task ReduceDataModelReference()
     {
         var host = GetHost();
-        var result = host.GetWorkspace()
+        var result = await host.GetWorkspace()
             .GetStream(new DataModelReference())!
             .Select(c => c.Value)
             .Should().Within(10.Seconds())
@@ -363,14 +363,14 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests that GetSchemaRequest returns a valid JSON schema for MyData type
     /// </summary>
     [Fact]
-    public void GetSchemaRequest_ShouldReturnValidJsonSchema()
+    public async Task GetSchemaRequest_ShouldReturnValidJsonSchema()
     {
         // arrange
         var client = GetClient();
         var typeName = typeof(MyData).FullName!;
 
         // act
-        var response = client.Observe(new GetDataRequest(new SchemaReference(typeName)), o => o.WithTarget(CreateClientAddress()))
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName)), o => o.WithTarget(CreateClientAddress()))
             .Should().Within(10.Seconds()).Emit();
 
         // assert
@@ -395,14 +395,14 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests that SchemaReference returns empty schema for unknown types
     /// </summary>
     [Fact]
-    public void SchemaReference_ForUnknownType_ShouldReturnEmptySchema()
+    public async Task SchemaReference_ForUnknownType_ShouldReturnEmptySchema()
     {
         // arrange
         var client = GetClient();
         var unknownTypeName = "UnknownType";
 
         // act
-        var response = client.Observe(new GetDataRequest(new SchemaReference(unknownTypeName)), o => o.WithTarget(CreateClientAddress()))
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(unknownTypeName)), o => o.WithTarget(CreateClientAddress()))
             .Should().Within(10.Seconds()).Emit();
 
         // assert
@@ -416,13 +416,13 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests that GetDomainTypesRequest returns all available registered types
     /// </summary>
     [Fact]
-    public void GetDomainTypesRequest_ShouldReturnAvailableTypes()
+    public async Task GetDomainTypesRequest_ShouldReturnAvailableTypes()
     {
         // arrange
         var client = GetClient();
 
         // act
-        var response = client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress()))
+        var response = await client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress()))
             .Should().Within(10.Seconds()).Emit();
 
         // assert
@@ -440,13 +440,13 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests that GetDomainTypesRequest returns types in sorted order
     /// </summary>
     [Fact]
-    public void GetDomainTypesRequest_ShouldReturnSortedTypes()
+    public async Task GetDomainTypesRequest_ShouldReturnSortedTypes()
     {
         // arrange
         var client = GetClient();
 
         // act
-        var response = client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress()))
+        var response = await client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress()))
             .Should().Within(10.Seconds()).Emit();
         // assert
         var typesResponse = response.Message.Should().BeOfType<DomainTypesResponse>().Which;
@@ -461,7 +461,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests update operations with invalid data and validation error handling
     /// </summary>
     [Fact]
-    public void UpdateWithInvalidData_ShouldReturnValidationErrors()
+    public async Task UpdateWithInvalidData_ShouldReturnValidationErrors()
     {
         // arrange
         var client = GetClient();
@@ -472,7 +472,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         };
 
         // act
-        var updateResponse = client.Observe(DataChangeRequest.Update(invalidItems), o => o.WithTarget(CreateClientAddress()))
+        var updateResponse = await client.Observe(DataChangeRequest.Update(invalidItems), o => o.WithTarget(CreateClientAddress()))
             .Should().Within(10.Seconds()).Emit();
 
         // assert
@@ -486,14 +486,14 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests updating non-existent records creates new records
     /// </summary>
     [Fact]
-    public void UpdateNonExistentRecord_ShouldCreateNewRecord()
+    public async Task UpdateNonExistentRecord_ShouldCreateNewRecord()
     {
         // arrange
         var client = GetClient();
         var newItem = new MyData("999", "New Item");
 
         // Verify item doesn't exist initially
-        var initialData = GetHost()
+        var initialData = await GetHost()
             .GetWorkspace()
             .GetObservable<MyData>()
             .Should().Within(10.Seconds())
@@ -501,12 +501,12 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         initialData.Should().NotContain(x => x.Id == "999");
 
         // act
-        var updateResponse = client.Observe(DataChangeRequest.Update(new object[] { newItem }), o => o.WithTarget(CreateClientAddress()))
+        var updateResponse = await client.Observe(DataChangeRequest.Update(new object[] { newItem }), o => o.WithTarget(CreateClientAddress()))
             .Should().Within(10.Seconds()).Emit();
 
         // assert
         updateResponse.Message.Should().BeOfType<DataChangeResponse>();
-        var updatedData = GetHost()
+        var updatedData = await GetHost()
             .GetWorkspace()
             .GetObservable<MyData>()
             .Should().Within(10.Seconds())
@@ -518,7 +518,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests handling of multiple simultaneous update operations
     /// </summary>
     [Fact]
-    public void MultipleSimultaneousUpdates_ShouldHandleCorrectly()
+    public async Task MultipleSimultaneousUpdates_ShouldHandleCorrectly()
     {
         // arrange
         var client = GetClient();
@@ -528,7 +528,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act - send multiple updates simultaneously (merged so all three
         // subscriptions fire concurrently; buffer until all three responses land)
-        var responses = Observable.Merge(
+        var responses = await Observable.Merge(
                 client.Observe(DataChangeRequest.Update(updates1), o => o.WithTarget(CreateClientAddress())),
                 client.Observe(DataChangeRequest.Update(updates2), o => o.WithTarget(CreateClientAddress())),
                 client.Observe(DataChangeRequest.Update(updates3), o => o.WithTarget(CreateClientAddress())))
@@ -540,7 +540,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         responses.Should().AllSatisfy(response =>
             response.Message.Should().BeOfType<DataChangeResponse>());
 
-        var finalData = GetHost()
+        var finalData = await GetHost()
             .GetWorkspace()
             .GetObservable<MyData>()
             .Should().Within(10.Seconds())
@@ -555,13 +555,13 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests schema request behavior with null or empty type parameters - returns default type schema
     /// </summary>
     [Fact]
-    public void SchemaReference_WithNullOrEmptyType_ShouldReturnDefaultTypeSchema()
+    public async Task SchemaReference_WithNullOrEmptyType_ShouldReturnDefaultTypeSchema()
     {
         // arrange
         var client = GetClient();
 
         // act & assert for null - with new implementation, null type returns the first registered type's schema
-        var responseNull = client.Observe(new GetDataRequest(new SchemaReference(null)), o => o.WithTarget(CreateClientAddress()))
+        var responseNull = await client.Observe(new GetDataRequest(new SchemaReference(null)), o => o.WithTarget(CreateClientAddress()))
             .Should().Within(10.Seconds()).Emit();
 
         responseNull.Message.Should().BeOfType<GetDataResponse>();
@@ -569,7 +569,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         schemaInfoNull.Schema.Should().NotBeNullOrEmpty();
 
         // act & assert for empty string
-        var responseEmpty = client.Observe(new GetDataRequest(new SchemaReference("")), o => o.WithTarget(CreateClientAddress()))
+        var responseEmpty = await client.Observe(new GetDataRequest(new SchemaReference("")), o => o.WithTarget(CreateClientAddress()))
             .Should().Within(10.Seconds()).Emit();
 
         responseEmpty.Message.Should().BeOfType<GetDataResponse>();
@@ -581,7 +581,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests data synchronization consistency between client and host
     /// </summary>
     [Fact]
-    public void DataSynchronization_BetweenClientAndHost_ShouldStayConsistent()
+    public async Task DataSynchronization_BetweenClientAndHost_ShouldStayConsistent()
     {
         // arrange
         var client = GetClient();
@@ -589,13 +589,13 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var updateItem = new MyData("1", "Updated Text");
 
         // Get initial state
-        var initialClientData = client
+        var initialClientData = await client
             .GetWorkspace()
             .GetObservable<MyData>()
             .Should().Within(10.Seconds())
             .Emit();
 
-        var initialHostData = host
+        var initialHostData = await host
             .GetWorkspace()
             .GetObservable<MyData>()
             .Should().Within(10.Seconds())
@@ -604,17 +604,17 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         initialClientData.Should().BeEquivalentTo(initialHostData, GetHost().JsonSerializerOptions);
 
         // act - update from client
-        client.Observe(DataChangeRequest.Update([updateItem]), o => o.WithTarget(CreateClientAddress()))
+        await client.Observe(DataChangeRequest.Update([updateItem]), o => o.WithTarget(CreateClientAddress()))
             .Should().Within(10.Seconds()).Emit();
 
         // assert - both client and host should have the same updated data
-        var updatedClientData = client
+        var updatedClientData = await client
             .GetWorkspace()
             .GetObservable<MyData>()
             .Should().Within(10.Seconds())
             .Match(x => x.Any(item => item.Text == "Updated Text"));
 
-        var updatedHostData = host
+        var updatedHostData = await host
             .GetWorkspace()
             .GetObservable<MyData>()
             .Should().Within(10.Seconds())
@@ -628,7 +628,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests collection reference operations with specific data types
     /// </summary>
     [Fact]
-    public void CollectionReference_WithSpecificType_ShouldReturnCorrectData()
+    public async Task CollectionReference_WithSpecificType_ShouldReturnCorrectData()
     {
         // arrange
         var host = GetHost();
@@ -636,7 +636,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         var stream = host.GetWorkspace().GetStream(collectionRef);
-        var collection = stream!
+        var collection = await stream!
             .Select(c => c.Value!.Instances.Values.Cast<MyData>().ToArray())
             .Should().Within(10.Seconds())
             .Emit();
@@ -650,14 +650,14 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests GetDataRequest for retrieving collection data
     /// </summary>
     [Fact]
-    public void GetDataRequest_ForCollection_ShouldReturnData()
+    public async Task GetDataRequest_ForCollection_ShouldReturnData()
     {
         // arrange
         var client = GetClient();
         var collectionRef = new CollectionReference(nameof(MyData));
 
         // act
-        var response = client.Observe(new GetDataRequest(collectionRef), o => o.WithTarget(CreateHostAddress()))
+        var response = await client.Observe(new GetDataRequest(collectionRef), o => o.WithTarget(CreateHostAddress()))
             .Should().Within(10.Seconds()).Emit();
 
         // assert
@@ -672,14 +672,14 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests GetDataRequest for retrieving specific entity data
     /// </summary>
     [Fact]
-    public void GetDataRequest_ForEntity_ShouldReturnSpecificEntity()
+    public async Task GetDataRequest_ForEntity_ShouldReturnSpecificEntity()
     {
         // arrange
         var client = GetClient();
         var entityRef = new EntityReference(nameof(MyData), "1");
 
         // act
-        var response = client.Observe(new GetDataRequest(entityRef), o => o.WithTarget(CreateClientAddress()))
+        var response = await client.Observe(new GetDataRequest(entityRef), o => o.WithTarget(CreateClientAddress()))
             .Should().Within(10.Seconds()).Emit();
 
         // assert
@@ -693,7 +693,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests GetDataRequest for non-existent entity
     /// </summary>
     [Fact]
-    public void GetDataRequest_ForNonExistentEntity_ShouldHandleGracefully()
+    public async Task GetDataRequest_ForNonExistentEntity_ShouldHandleGracefully()
     {
         // arrange
         var client = GetClient();
@@ -701,7 +701,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act & assert - this might throw or return null/empty, depending on implementation
         // The exact behavior should be consistent with the stream-based approach
-        var response = client.Observe(new GetDataRequest(entityRef), o => o.WithTarget(CreateClientAddress()))
+        var response = await client.Observe(new GetDataRequest(entityRef), o => o.WithTarget(CreateClientAddress()))
             .Should().Within(10.Seconds()).Emit();
 
         var dataResponse = response.Message.Should().BeOfType<GetDataResponse>().Which;

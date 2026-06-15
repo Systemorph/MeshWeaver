@@ -74,11 +74,11 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
         message.Type.Should().Be(nameof(MyEvent));
     }
     [Fact]
-    public void BoomerangTest()
+    public async Task BoomerangTest()
     {
         var client = Mesh.GetHostedHub(CreateClientAddress(), ConfigureClient);
 
-        var response = client.Observe(new Boomerang(new MyEvent("Hello")), o => o.WithTarget(CreateHostAddress()))
+        var response = await client.Observe(new Boomerang(new MyEvent("Hello")), o => o.WithTarget(CreateHostAddress()))
             .Should().Within(5.Seconds()).Emit();
 
         response.Message.Object.Should().BeOfType<MyEvent>().Which.Text.Should().Be("Hello");
@@ -295,7 +295,7 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [Fact]
-    public void TestSerializationFailureHandling()
+    public async Task TestSerializationFailureHandling()
     {
         Output.WriteLine("Testing serialization failure handling...");
 
@@ -313,11 +313,11 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
 
         // hub.Observe(...) surfaces routing failures directly via OnError as
         // DeliveryFailureException — no AggregateException wrapping (the legacy
-        // RegisterCallback path used to wrap; hub.Observe doesn't). Driving the cold
-        // observable to its terminal notification rethrows that OnError synchronously.
-        Action act = () => client.Observe(unknownRequest, o => o.WithTarget(CreateHostAddress()))
-            .Timeout(5.Seconds()).Wait();
-        var exception = act.Should().Throw<DeliveryFailureException>().Which;
+        // RegisterCallback path used to wrap; hub.Observe doesn't). Awaiting the cold
+        // observable's first emission rethrows that OnError.
+        Func<Task> act = () => client.Observe(unknownRequest, o => o.WithTarget(CreateHostAddress()))
+            .FirstAsync().Timeout(5.Seconds()).ToTask();
+        var exception = (await act.Should().ThrowAsync<DeliveryFailureException>()).Which;
 
         exception.Should().NotBeNull();
         exception.Message.Should().NotBeNullOrEmpty();

@@ -25,27 +25,27 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
         );
 
     [Fact]
-    public void HelloWorld()
+    public async Task HelloWorld()
     {
         var host = GetHost();
-        var response = host.Observe(new SayHelloRequest(), o => o.WithTarget(CreateHostAddress())).Should().Within(10.Seconds()).Emit();
+        var response = await host.Observe(new SayHelloRequest(), o => o.WithTarget(CreateHostAddress())).Should().Within(10.Seconds()).Emit();
         response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
     }
 
     [Fact]
-    public void HelloWorldFromClient()
+    public async Task HelloWorldFromClient()
     {
         var client = GetClient();
-        var response = client.Observe(new SayHelloRequest(), o => o.WithTarget(CreateHostAddress())).Should().Within(5.Seconds()).Emit();
+        var response = await client.Observe(new SayHelloRequest(), o => o.WithTarget(CreateHostAddress())).Should().Within(5.Seconds()).Emit();
         response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
     }
 
     [Fact]
-    public void ClientToServerWithMessageTraffic()
+    public async Task ClientToServerWithMessageTraffic()
     {
         var client = GetClient();
 
-        var response = client.Observe(new SayHelloRequest(), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+        var response = await client.Observe(new SayHelloRequest(), o => o.WithTarget(CreateHostAddress())).Should().Emit();
         response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
     }
 
@@ -60,7 +60,7 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
     /// Before the fix this test hangs on the second round-trip (mesh dead → no routing).
     /// </summary>
     [Fact]
-    public void DisposeRequestToMeshRoot_IsRefused_MeshStaysAlive()
+    public async Task DisposeRequestToMeshRoot_IsRefused_MeshStaysAlive()
     {
         var host = GetHost();
         var client = GetClient();
@@ -71,7 +71,7 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
         mesh.IsDisposing.Should().BeFalse();
 
         // Baseline: a round-trip routed THROUGH the mesh works.
-        client.Observe(new SayHelloRequest(), o => o.WithTarget(host.Address))
+        await client.Observe(new SayHelloRequest(), o => o.WithTarget(host.Address))
             .Should().Within(10.Seconds()).Emit();
 
         // The incident: a DisposeRequest routed to the root mesh hub's own address.
@@ -80,7 +80,7 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
         // The mesh must survive. This second round-trip both proves the mesh is still
         // routing AND (FIFO) that the DisposeRequest was already drained by the time the
         // response returns — so the IsDisposing assertion below is observed post-handling.
-        var response = client.Observe(new SayHelloRequest(), o => o.WithTarget(host.Address))
+        var response = await client.Observe(new SayHelloRequest(), o => o.WithTarget(host.Address))
             .Should().Within(10.Seconds()).Emit();
         response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
 

@@ -28,14 +28,14 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
     /// Step 1: Set up data context with TodoItems - put test data as init
     /// </summary>
     [Fact]
-    public void Step1_SetupDataContext_WithTodoItems()
+    public async Task Step1_SetupDataContext_WithTodoItems()
     {
         // Test the mesh directly since it has the Todo application configured
         var workspace = GetClient().GetWorkspace();
 
-        var todoData = workspace
+        var todoData = (await workspace
             .GetRemoteStream<TodoItem>(TodoApplicationAttribute.Address)!
-            .Should().Within(10.Seconds()).Match(items => items != null)
+            .Should().Within(10.Seconds()).Match(items => items != null))
             .ToArray();
 
         todoData.Should().NotBeEmpty();
@@ -59,7 +59,7 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
     /// Step 6: Wait for data update
     /// </summary>
     [Fact]
-    public void Steps2to6_TodoViewsAndDataUpdate_ShouldWork()
+    public async Task Steps2to6_TodoViewsAndDataUpdate_ShouldWork()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -72,8 +72,8 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
         Output.WriteLine("✅ Step 3 PASSED: Created subscription on todo data stream");
 
         // Step 4: Wait for data to be available (simulating layout area rendering)
-        var initialTodos = dataStream!
-            .Should().Within(10.Seconds()).Match(items => items != null)
+        var initialTodos = (await dataStream!
+            .Should().Within(10.Seconds()).Match(items => items != null))
             .ToArray();
 
         Output.WriteLine("✅ Step 4 PASSED: Initial data available (simulating layout area rendered)");
@@ -104,7 +104,7 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
         var updatedDataStream = workspace.GetRemoteStream<TodoItem>(TodoApplicationAttribute.Address);
 
         // Wait for the todo status to change to InProgress
-        var changedTodo = updatedDataStream!
+        var changedTodo = await updatedDataStream!
             .Select(todos => todos?.ToArray())
             .Select(todos => todos?.FirstOrDefault(t => t.Id == pendingTodo.Id))
             .Should().Within(10.Seconds())
@@ -122,23 +122,23 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
     /// Additional diagnostic test to verify the Todo application setup
     /// </summary>
     [Fact]
-    public void Diagnostic_TodoApplication_IsProperlyConfigured()
+    public async Task Diagnostic_TodoApplication_IsProperlyConfigured()
     {
         var client = GetClient();
 
         // Verify mesh has the data
         var meshWorkspace = client.GetWorkspace();
-        var meshData = meshWorkspace
+        var meshData = (await meshWorkspace
             .GetRemoteStream<TodoItem>(TodoApplicationAttribute.Address)!
-            .Should().Match(items => items != null)
+            .Should().Match(items => items != null))
             .ToArray();
         Output.WriteLine($"✅ Mesh has {meshData.Length} todo items");
 
         // Verify client can access the data
         var clientWorkspace = client.GetWorkspace();
-        var clientData = clientWorkspace
+        var clientData = (await clientWorkspace
             .GetRemoteStream<TodoItem>(TodoApplicationAttribute.Address)!
-            .Should().Within(5.Seconds()).Match(items => items != null)
+            .Should().Within(5.Seconds()).Match(items => items != null))
             .ToList();
         Output.WriteLine($"✅ Client can access {clientData.Count} todo items");
 

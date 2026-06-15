@@ -75,9 +75,9 @@ public class SyncedQueryPgTest : IAsyncLifetime
             .Select(d => (IReadOnlyDictionary<string, MeshNode>)d);
     }
 
-    private void WriteNode(string id, string ns, string nodeType, string? name = null)
+    private async Task WriteNode(string id, string ns, string nodeType, string? name = null)
     {
-        _fixture.StorageAdapter.Write(new MeshNode(id, ns)
+        await _fixture.StorageAdapter.Write(new MeshNode(id, ns)
         {
             Name = name ?? id,
             NodeType = nodeType,
@@ -85,47 +85,47 @@ public class SyncedQueryPgTest : IAsyncLifetime
         }, _options).Should().Within(30.Seconds()).Emit();
     }
 
-    private void DeleteNode(string path)
+    private Task DeleteNode(string path)
         => _fixture.StorageAdapter.Delete(path).Should().Within(30.Seconds()).Emit();
 
     /// <summary>Initial empty result set emits an empty dictionary.</summary>
     [Fact(Timeout = 30000)]
-    public void EmptyQuery_EmitsEmptyDictionary()
+    public async Task EmptyQuery_EmitsEmptyDictionary()
     {
         var collection = BuildSyncedCollection("namespace:ACME/Project").Replay(1).RefCount();
         using var keepAlive = collection.Subscribe();
-        var initial = collection.Should().Within(15.Seconds()).Emit();
+        var initial = await collection.Should().Within(15.Seconds()).Emit();
         initial.Should().BeEmpty();
     }
 
     /// <summary>Adding a matching node grows the dictionary.</summary>
     [Fact(Timeout = 30000)]
-    public void Add_NewMatchingNode_GrowsDictionary()
+    public async Task Add_NewMatchingNode_GrowsDictionary()
     {
         var collection = BuildSyncedCollection("namespace:ACME/Project").Replay(1).RefCount();
         using var keepAlive = collection.Subscribe();
-        collection.Should().Within(15.Seconds()).Emit();
+        await collection.Should().Within(15.Seconds()).Emit();
 
-        WriteNode("Story1", "ACME/Project", "Story");
+        await WriteNode("Story1", "ACME/Project", "Story");
 
-        collection.Should().Within(15.Seconds()).Match(d => d.ContainsKey("ACME/Project/Story1"));
+        await collection.Should().Within(15.Seconds()).Match(d => d.ContainsKey("ACME/Project/Story1"));
     }
 
     /// <summary>Updating a node's content re-emits the dictionary with new value.</summary>
     [Fact(Timeout = 30000)]
-    public void Update_ExistingNode_ReEmitsWithNewValue()
+    public async Task Update_ExistingNode_ReEmitsWithNewValue()
     {
-        WriteNode("Story1", "ACME/Project", "Story", "Original");
+        await WriteNode("Story1", "ACME/Project", "Story", "Original");
 
         var collection = BuildSyncedCollection("namespace:ACME/Project").Replay(1).RefCount();
         using var keepAlive = collection.Subscribe();
 
-        collection.Should().Within(15.Seconds())
+        await collection.Should().Within(15.Seconds())
             .Match(d => d.TryGetValue("ACME/Project/Story1", out var n) && n.Name == "Original");
 
-        WriteNode("Story1", "ACME/Project", "Story", "Updated");
+        await WriteNode("Story1", "ACME/Project", "Story", "Updated");
 
-        collection.Should().Within(15.Seconds())
+        await collection.Should().Within(15.Seconds())
             .Match(d => d.TryGetValue("ACME/Project/Story1", out var n) && n.Name == "Updated");
     }
 
@@ -202,20 +202,20 @@ public class SyncedQueryPgTest : IAsyncLifetime
 
     /// <summary>Deleting a node removes it from the dictionary.</summary>
     [Fact(Timeout = 30000)]
-    public void Delete_RemovesFromDictionary()
+    public async Task Delete_RemovesFromDictionary()
     {
-        WriteNode("Story1", "ACME/Project", "Story");
-        WriteNode("Story2", "ACME/Project", "Story");
+        await WriteNode("Story1", "ACME/Project", "Story");
+        await WriteNode("Story2", "ACME/Project", "Story");
 
         var collection = BuildSyncedCollection("namespace:ACME/Project").Replay(1).RefCount();
         using var keepAlive = collection.Subscribe();
 
-        collection.Should().Within(15.Seconds())
+        await collection.Should().Within(15.Seconds())
             .Match(d => d.ContainsKey("ACME/Project/Story1") && d.ContainsKey("ACME/Project/Story2"));
 
-        DeleteNode("ACME/Project/Story1");
+        await DeleteNode("ACME/Project/Story1");
 
-        var afterDelete = collection.Should().Within(15.Seconds())
+        var afterDelete = await collection.Should().Within(15.Seconds())
             .Match(d => !d.ContainsKey("ACME/Project/Story1"));
         afterDelete.ContainsKey("ACME/Project/Story2").Should().BeTrue();
     }
@@ -226,11 +226,11 @@ public class SyncedQueryPgTest : IAsyncLifetime
     /// SyncedQueryMeshNodes uses for <c>workspace.GetQuery(name, q1, q2, ...)</c>.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void UnionOfTwoQueries_HoldsBoth()
+    public async Task UnionOfTwoQueries_HoldsBoth()
     {
         // Two queries that match disjoint partitions but contribute to the same union.
-        WriteNode("S1", "ACME/Project", "Story");
-        WriteNode("E1", "ACME/Epic", "Epic");
+        await WriteNode("S1", "ACME/Project", "Story");
+        await WriteNode("E1", "ACME/Epic", "Epic");
 
         var unioned = _query.Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:ACME/Project"), _options)
             .Merge(_query.Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:ACME/Epic"), _options))
@@ -251,7 +251,7 @@ public class SyncedQueryPgTest : IAsyncLifetime
 
         using var keepAlive = unioned.Subscribe();
 
-        unioned.Should().Within(15.Seconds())
+        await unioned.Should().Within(15.Seconds())
             .Match(d => d.ContainsKey("ACME/Project/S1") && d.ContainsKey("ACME/Epic/E1"));
     }
 }

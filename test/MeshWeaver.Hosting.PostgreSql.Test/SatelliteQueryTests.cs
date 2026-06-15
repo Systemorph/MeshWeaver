@@ -48,10 +48,10 @@ public class SatelliteQueryTests : IAsyncLifetime
         return ValueTask.CompletedTask;
     }
 
-    private void Write(MeshNode node)
+    private Task Write(MeshNode node)
         => _adapter.Write(node, _options).Should().Within(30.Seconds()).Emit();
 
-    private List<MeshNode> Query(string queryString, string? defaultPath = null)
+    private Task<List<MeshNode>> Query(string queryString, string? defaultPath = null)
     {
         // Use adapter.QueryNodesAsync directly (no access control) to test table resolution
         var parser = new QueryParser();
@@ -75,7 +75,7 @@ public class SatelliteQueryTests : IAsyncLifetime
     }
 
     /// <summary>Direct SQL query for debugging — bypasses the MeshQuery layer.</summary>
-    private List<MeshNode> RawQuery(string tableName, string? nodeType = null)
+    private Task<List<MeshNode>> RawQuery(string tableName, string? nodeType = null)
     {
         var ct = TestContext.Current.CancellationToken;
         var sql = $"SELECT id, namespace, name, node_type FROM \"{tableName}\"";
@@ -118,12 +118,12 @@ public class SatelliteQueryTests : IAsyncLifetime
     // ── Thread ───────────────────────────────────────────────────────────
 
     [Fact(Timeout = 30000)]
-    public void NodeType_Thread_FindsInThreadsTable()
+    public async Task NodeType_Thread_FindsInThreadsTable()
     {
         var ct = TestContext.Current.CancellationToken;
 
         // Seed a thread in the threads table
-        Write(new MeshNode("hello-world", "User/alice/_Thread")
+        await Write(new MeshNode("hello-world", "User/alice/_Thread")
         {
             Name = "Hello World Thread",
             NodeType = "Thread",
@@ -131,18 +131,18 @@ public class SatelliteQueryTests : IAsyncLifetime
         });
 
         // Verify data was written to the threads table
-        _schemaDs.ScalarLong("SELECT COUNT(*) FROM threads WHERE id = 'hello-world'", ct)
+        await _schemaDs.ScalarLong("SELECT COUNT(*) FROM threads WHERE id = 'hello-world'", ct)
             .Should().Within(30.Seconds()).Be(1L, "thread should exist in threads table");
 
         // Query by nodeType only (no path) — must resolve to threads table
-        var results = Query("nodeType:Thread sort:LastModified-desc");
+        var results = await Query("nodeType:Thread sort:LastModified-desc");
 
         // Raw SQL verification: data IS in threads table
-        var rawThreads = RawQuery("threads", "Thread");
+        var rawThreads = await RawQuery("threads", "Thread");
         rawThreads.Should().NotBeEmpty("raw SQL confirms threads exist in threads table");
 
         // Raw SQL: data is NOT in mesh_nodes
-        var rawMeshNodes = RawQuery("mesh_nodes", "Thread");
+        var rawMeshNodes = await RawQuery("mesh_nodes", "Thread");
 
         // PostgreSqlMeshQuery must find the data in threads table
         results.Should().NotBeEmpty(
@@ -151,9 +151,9 @@ public class SatelliteQueryTests : IAsyncLifetime
     }
 
     [Fact(Timeout = 30000)]
-    public void NodeType_Thread_WithDefaultPath_FindsInThreadsTable()
+    public async Task NodeType_Thread_WithDefaultPath_FindsInThreadsTable()
     {
-        Write(new MeshNode("help-me", "User/bob/_Thread")
+        await Write(new MeshNode("help-me", "User/bob/_Thread")
         {
             Name = "Help Me Thread",
             NodeType = "Thread",
@@ -161,7 +161,7 @@ public class SatelliteQueryTests : IAsyncLifetime
         });
 
         // Simulate routing fan-out: DefaultPath = "User", scope:descendants
-        var results = Query(
+        var results = await Query(
             "nodeType:Thread sort:LastModified-desc scope:descendants",
             defaultPath: "User");
 
@@ -170,9 +170,9 @@ public class SatelliteQueryTests : IAsyncLifetime
     }
 
     [Fact(Timeout = 30000)]
-    public void Namespace_Thread_FindsThreads()
+    public async Task Namespace_Thread_FindsThreads()
     {
-        Write(new MeshNode("ns-thread", "User/carol/_Thread")
+        await Write(new MeshNode("ns-thread", "User/carol/_Thread")
         {
             Name = "Namespace Thread",
             NodeType = "Thread",
@@ -180,7 +180,7 @@ public class SatelliteQueryTests : IAsyncLifetime
         });
 
         // Direct namespace query
-        var results = Query("namespace:User/carol/_Thread nodeType:Thread");
+        var results = await Query("namespace:User/carol/_Thread nodeType:Thread");
         results.Should().NotBeEmpty("namespace query to _Thread should find threads");
         results.Should().Contain(n => n.Name == "Namespace Thread");
     }
@@ -188,55 +188,55 @@ public class SatelliteQueryTests : IAsyncLifetime
     // ── ThreadMessage ────────────────────────────────────────────────────
 
     [Fact(Timeout = 30000)]
-    public void NodeType_ThreadMessage_FindsInThreadsTable()
+    public async Task NodeType_ThreadMessage_FindsInThreadsTable()
     {
-        Write(new MeshNode("msg-1", "User/alice/_Thread/hello-world")
+        await Write(new MeshNode("msg-1", "User/alice/_Thread/hello-world")
         {
             Name = "User message",
             NodeType = "ThreadMessage",
             MainNode = "User/alice/_Thread/hello-world",
         });
 
-        var results = Query("nodeType:ThreadMessage scope:descendants", defaultPath: "User");
+        var results = await Query("nodeType:ThreadMessage scope:descendants", defaultPath: "User");
         results.Should().NotBeEmpty("nodeType:ThreadMessage should find messages in threads table");
     }
 
     // ── Activity ─────────────────────────────────────────────────────────
 
     [Fact(Timeout = 30000)]
-    public void NodeType_Activity_FindsInActivitiesTable()
+    public async Task NodeType_Activity_FindsInActivitiesTable()
     {
         // Seed main node + activity satellite
-        Write(new MeshNode("doc1", "User/alice")
+        await Write(new MeshNode("doc1", "User/alice")
         {
             Name = "Alice Doc",
             NodeType = "Markdown",
         });
 
-        Write(new MeshNode("log1", "User/alice/doc1/_Activity")
+        await Write(new MeshNode("log1", "User/alice/doc1/_Activity")
         {
             Name = "Activity Log",
             NodeType = "Activity",
             MainNode = "User/alice/doc1",
         });
 
-        var results = Query("nodeType:Activity scope:descendants", defaultPath: "User");
+        var results = await Query("nodeType:Activity scope:descendants", defaultPath: "User");
         results.Should().NotBeEmpty("nodeType:Activity should find records in activities table");
         results.Should().Contain(n => n.NodeType == "Activity");
     }
 
     [Fact(Timeout = 30000)]
-    public void SourceActivity_FindsMainNodesWithActivitySatellites()
+    public async Task SourceActivity_FindsMainNodesWithActivitySatellites()
     {
         // Main node
-        Write(new MeshNode("project1", "User/alice")
+        await Write(new MeshNode("project1", "User/alice")
         {
             Name = "Alice Project",
             NodeType = "Markdown",
         });
 
         // Activity satellite
-        Write(new MeshNode("act1", "User/alice/project1/_Activity")
+        await Write(new MeshNode("act1", "User/alice/project1/_Activity")
         {
             Name = "Project Activity",
             NodeType = "Activity",
@@ -244,7 +244,7 @@ public class SatelliteQueryTests : IAsyncLifetime
         });
 
         // Dashboard query: source:activity
-        var results = Query(
+        var results = await Query(
             "source:activity scope:descendants sort:LastModified-desc",
             defaultPath: "User");
 
@@ -257,9 +257,9 @@ public class SatelliteQueryTests : IAsyncLifetime
     // ── UserActivity ─────────────────────────────────────────────────────
 
     [Fact(Timeout = 30000)]
-    public void NodeType_UserActivity_FindsInUserActivitiesTable()
+    public async Task NodeType_UserActivity_FindsInUserActivitiesTable()
     {
-        Write(new MeshNode("User_alice_doc1", "User/alice/_UserActivity")
+        await Write(new MeshNode("User_alice_doc1", "User/alice/_UserActivity")
         {
             Name = "Doc1 access",
             NodeType = "UserActivity",
@@ -276,80 +276,80 @@ public class SatelliteQueryTests : IAsyncLifetime
             }
         });
 
-        var results = Query("nodeType:UserActivity scope:descendants", defaultPath: "User");
+        var results = await Query("nodeType:UserActivity scope:descendants", defaultPath: "User");
         results.Should().NotBeEmpty("nodeType:UserActivity should find records in user_activities table");
     }
 
     // ── AccessAssignment ─────────────────────────────────────────────────
 
     [Fact(Timeout = 30000)]
-    public void NodeType_AccessAssignment_FindsInAccessTable()
+    public async Task NodeType_AccessAssignment_FindsInAccessTable()
     {
-        Write(new MeshNode("aa1", "User/alice/_Access")
+        await Write(new MeshNode("aa1", "User/alice/_Access")
         {
             Name = "Admin role",
             NodeType = "AccessAssignment",
             MainNode = "User/alice",
         });
 
-        var results = Query("nodeType:AccessAssignment scope:descendants", defaultPath: "User");
+        var results = await Query("nodeType:AccessAssignment scope:descendants", defaultPath: "User");
         results.Should().NotBeEmpty("nodeType:AccessAssignment should find records in access table");
     }
 
     // ── Comment ──────────────────────────────────────────────────────────
 
     [Fact(Timeout = 30000)]
-    public void NodeType_Comment_FindsInAnnotationsTable()
+    public async Task NodeType_Comment_FindsInAnnotationsTable()
     {
-        Write(new MeshNode("cmt1", "User/alice/doc1/_Comment")
+        await Write(new MeshNode("cmt1", "User/alice/doc1/_Comment")
         {
             Name = "Great doc!",
             NodeType = "Comment",
             MainNode = "User/alice/doc1",
         });
 
-        var results = Query("nodeType:Comment scope:descendants", defaultPath: "User");
+        var results = await Query("nodeType:Comment scope:descendants", defaultPath: "User");
         results.Should().NotBeEmpty("nodeType:Comment should find records in annotations table");
     }
 
     // ── TrackedChange ────────────────────────────────────────────────────
 
     [Fact(Timeout = 30000)]
-    public void NodeType_TrackedChange_FindsInAnnotationsTable()
+    public async Task NodeType_TrackedChange_FindsInAnnotationsTable()
     {
-        Write(new MeshNode("tc1", "User/alice/doc1/_Tracking")
+        await Write(new MeshNode("tc1", "User/alice/doc1/_Tracking")
         {
             Name = "Section updated",
             NodeType = "TrackedChange",
             MainNode = "User/alice/doc1",
         });
 
-        var results = Query("nodeType:TrackedChange scope:descendants", defaultPath: "User");
+        var results = await Query("nodeType:TrackedChange scope:descendants", defaultPath: "User");
         results.Should().NotBeEmpty("nodeType:TrackedChange should find records in annotations table");
     }
 
     // ── Approval ─────────────────────────────────────────────────────────
 
     [Fact(Timeout = 30000)]
-    public void NodeType_Approval_FindsInAnnotationsTable()
+    public async Task NodeType_Approval_FindsInAnnotationsTable()
     {
-        Write(new MeshNode("apr1", "User/alice/doc1/_Approval")
+        await Write(new MeshNode("apr1", "User/alice/doc1/_Approval")
         {
             Name = "Approved by Bob",
             NodeType = "Approval",
             MainNode = "User/alice/doc1",
         });
 
-        var results = Query("nodeType:Approval scope:descendants", defaultPath: "User");
+        var results = await Query("nodeType:Approval scope:descendants", defaultPath: "User");
         results.Should().NotBeEmpty("nodeType:Approval should find records in annotations table");
     }
 
     // ── Code ─────────────────────────────────────────────────────────────
 
     [Fact(Timeout = 30000)]
-    public void NodeType_Code_RequiresPathBasedResolution()
+    public async Task NodeType_Code_RequiresPathBasedResolution()
     {
-        Write(new MeshNode("MyClass", "User/alice/project/Source")
+        await Write(new MeshNode("MyClass", "User/alice/project/Source")
         {
             Name = "MyClass.cs",
             NodeType = "Code",
@@ -358,11 +358,11 @@ public class SatelliteQueryTests : IAsyncLifetime
 
         // Code uses Source/Test path-based resolution (no NodeTypeToSuffix entry).
         // Path-based query works:
-        var byPath = Query("namespace:User/alice/project/Source nodeType:Code");
+        var byPath = await Query("namespace:User/alice/project/Source nodeType:Code");
         byPath.Should().NotBeEmpty("path-based query to Source should find Code nodes");
 
         // nodeType-only query with DefaultPath falls back to mesh_nodes (Code has no NodeTypeToSuffix entry)
-        var byType = Query("nodeType:Code scope:descendants", defaultPath: "User");
+        var byType = await Query("nodeType:Code scope:descendants", defaultPath: "User");
         // This returns empty because Code isn't in NodeTypeToSuffix — expected limitation
     }
 }

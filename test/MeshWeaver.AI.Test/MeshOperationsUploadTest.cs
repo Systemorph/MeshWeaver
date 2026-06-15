@@ -91,14 +91,14 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
     /// <c>IContentService</c> from â€” same one tests use to issue requests.</summary>
     private MeshOperations Ops() => new(GetClient());
 
-    private string CreateTestNode(string suffix)
+    private async Task<string> CreateTestNode(string suffix)
     {
         var nodePath = $"Upload_{_testId}_{suffix}";
         // FileSystemStreamProvider.InitializeAsync enumerates the base directory; create it
         // upfront so the first SaveFileAsync doesn't fail with DirectoryNotFoundException.
         // Matches the pattern in MeshPluginContentAccessTest.
         Directory.CreateDirectory(Path.Combine(ContentBasePath, nodePath));
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode(nodePath) { Name = $"Upload test {suffix}", NodeType = "Markdown" }).Should().Emit();
         return nodePath;
     }
@@ -150,12 +150,12 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
     // ---- Picture uploads ------------------------------------------------
 
     [Fact]
-    public void Upload_Png_LandsInContentCollection()
+    public async Task Upload_Png_LandsInContentCollection()
     {
-        var nodePath = CreateTestNode("png");
+        var nodePath = await CreateTestNode("png");
         var bytes = MakePng();
 
-        var result = Ops().Upload($"{nodePath}/content/logo.png", bytes).Should().Emit();
+        var result = await Ops().Upload($"{nodePath}/content/logo.png", bytes).Should().Emit();
 
         Output.WriteLine(result);
 
@@ -171,12 +171,12 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
     }
 
     [Fact]
-    public void Upload_Svg_PreservesUtf8Markup()
+    public async Task Upload_Svg_PreservesUtf8Markup()
     {
-        var nodePath = CreateTestNode("svg");
+        var nodePath = await CreateTestNode("svg");
         var bytes = MakeSvg();
 
-        var result = Ops().Upload($"{nodePath}/content/icon.svg", bytes).Should().Emit();
+        var result = await Ops().Upload($"{nodePath}/content/icon.svg", bytes).Should().Emit();
 
         ParseStatus(result).GetProperty("status").GetString().Should().Be("Uploaded");
 
@@ -187,12 +187,12 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
     }
 
     [Fact]
-    public void Upload_Png_NestedSubfolderPath()
+    public async Task Upload_Png_NestedSubfolderPath()
     {
-        var nodePath = CreateTestNode("nested");
+        var nodePath = await CreateTestNode("nested");
         var bytes = MakePng();
 
-        var result = Ops().Upload($"{nodePath}/content/branding/logos/dark.png", bytes).Should().Emit();
+        var result = await Ops().Upload($"{nodePath}/content/branding/logos/dark.png", bytes).Should().Emit();
 
         ParseStatus(result).GetProperty("status").GetString().Should().Be("Uploaded");
 
@@ -204,14 +204,14 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
     // ---- Document uploads ----------------------------------------------
 
     [Fact]
-    public void Upload_Docx_RoundTripsBytes()
+    public async Task Upload_Docx_RoundTripsBytes()
     {
         // Random bytes with a .docx extension â€” the upload tool is content-agnostic;
         // we want to prove a "real-sized" document blob survives the round-trip exactly.
-        var nodePath = CreateTestNode("docx");
+        var nodePath = await CreateTestNode("docx");
         var bytes = MakeRandomBytes(64 * 1024); // 64 KB
 
-        var result = Ops().Upload($"{nodePath}/content/proposal.docx", bytes).Should().Emit();
+        var result = await Ops().Upload($"{nodePath}/content/proposal.docx", bytes).Should().Emit();
 
         var json = ParseStatus(result);
         json.GetProperty("status").GetString().Should().Be("Uploaded");
@@ -222,21 +222,21 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
     }
 
     [Fact]
-    public void Upload_Xlsx_RoundTripsBytes()
+    public async Task Upload_Xlsx_RoundTripsBytes()
     {
-        var nodePath = CreateTestNode("xlsx");
+        var nodePath = await CreateTestNode("xlsx");
         var bytes = MakeRandomBytes(32 * 1024);
 
-        var result = Ops().Upload($"{nodePath}/content/model.xlsx", bytes).Should().Emit();
+        var result = await Ops().Upload($"{nodePath}/content/model.xlsx", bytes).Should().Emit();
 
         ParseStatus(result).GetProperty("status").GetString().Should().Be("Uploaded");
         File.ReadAllBytes(DiskPath(nodePath, "model.xlsx")).Should().Equal(bytes);
     }
 
     [Fact]
-    public void Upload_Pdf_RoundTripsBytes()
+    public async Task Upload_Pdf_RoundTripsBytes()
     {
-        var nodePath = CreateTestNode("pdf");
+        var nodePath = await CreateTestNode("pdf");
         // Mix a real PDF magic header with random payload â€” exercises the binary path
         // and gives a sniffable signature.
         var pdf = new byte[8 * 1024];
@@ -244,7 +244,7 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
         var header = "%PDF-1.4\n"u8;
         header.CopyTo(pdf);
 
-        var result = Ops().Upload($"{nodePath}/content/spec.pdf", pdf).Should().Emit();
+        var result = await Ops().Upload($"{nodePath}/content/spec.pdf", pdf).Should().Emit();
 
         ParseStatus(result).GetProperty("status").GetString().Should().Be("Uploaded");
         File.ReadAllBytes(DiskPath(nodePath, "spec.pdf")).Should().Equal(pdf);
@@ -259,16 +259,16 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
     /// and the same response shape.
     /// </summary>
     [Fact]
-    public void Upload_Base64Path_MatchesRawBytesPath()
+    public async Task Upload_Base64Path_MatchesRawBytesPath()
     {
-        var nodePath = CreateTestNode("base64");
+        var nodePath = await CreateTestNode("base64");
         var bytes = MakePng();
         var base64 = Convert.ToBase64String(bytes);
 
         // Decode at the boundary (this is exactly what McpMeshPlugin.Upload does)
         // and hand off to the shared core.
         var decoded = Convert.FromBase64String(base64);
-        var result = Ops().Upload($"{nodePath}/content/logo-b64.png", decoded).Should().Emit();
+        var result = await Ops().Upload($"{nodePath}/content/logo-b64.png", decoded).Should().Emit();
 
         var json = ParseStatus(result);
         json.GetProperty("status").GetString().Should().Be("Uploaded");
@@ -280,36 +280,36 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
     // ---- Error paths ----------------------------------------------------
 
     [Fact]
-    public void Upload_EmptyPath_ReturnsError()
+    public async Task Upload_EmptyPath_ReturnsError()
     {
-        var result = Ops().Upload("", MakePng()).Should().Emit();
+        var result = await Ops().Upload("", MakePng()).Should().Emit();
         result.Should().StartWith("Error:");
         result.Should().Contain("path is required");
     }
 
     [Fact]
-    public void Upload_EmptyBytes_ReturnsError()
+    public async Task Upload_EmptyBytes_ReturnsError()
     {
-        var nodePath = CreateTestNode("nobytes");
-        var result = Ops().Upload($"{nodePath}/content/empty.bin", Array.Empty<byte>()).Should().Emit();
+        var nodePath = await CreateTestNode("nobytes");
+        var result = await Ops().Upload($"{nodePath}/content/empty.bin", Array.Empty<byte>()).Should().Emit();
         result.Should().StartWith("Error:");
         result.Should().Contain("content is required");
     }
 
     [Fact]
-    public void Upload_MissingFilename_ReturnsError()
+    public async Task Upload_MissingFilename_ReturnsError()
     {
-        var nodePath = CreateTestNode("nofile");
+        var nodePath = await CreateTestNode("nofile");
         // Path ends in collection only, no filename â€” Upload must reject early.
-        var result = Ops().Upload($"{nodePath}/content/", MakePng()).Should().Emit();
+        var result = await Ops().Upload($"{nodePath}/content/", MakePng()).Should().Emit();
         result.Should().StartWith("Error:");
     }
 
     [Fact]
-    public void Upload_UnknownCollection_ReturnsError()
+    public async Task Upload_UnknownCollection_ReturnsError()
     {
-        var nodePath = CreateTestNode("unknown");
-        var result = Ops().Upload($"{nodePath}/nonexistent/file.png", MakePng()).Should().Emit();
+        var nodePath = await CreateTestNode("unknown");
+        var result = await Ops().Upload($"{nodePath}/nonexistent/file.png", MakePng()).Should().Emit();
         result.Should().StartWith("Error:");
         result.Should().Contain("nonexistent");
     }
@@ -319,10 +319,10 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
     /// (the "frozen" fixture leaves IsEditable at its default false).
     /// </summary>
     [Fact]
-    public void Upload_ReadOnlyCollection_Refused()
+    public async Task Upload_ReadOnlyCollection_Refused()
     {
-        var nodePath = CreateTestNode("frozen");
-        var result = Ops().Upload($"{nodePath}/frozen/should-fail.png", MakePng()).Should().Emit();
+        var nodePath = await CreateTestNode("frozen");
+        var result = await Ops().Upload($"{nodePath}/frozen/should-fail.png", MakePng()).Should().Emit();
         result.Should().StartWith("Error:");
         result.Should().Contain("read-only");
         File.Exists(DiskPath(nodePath, "should-fail.png")).Should().BeFalse();
