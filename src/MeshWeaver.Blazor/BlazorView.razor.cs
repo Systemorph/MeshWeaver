@@ -23,6 +23,10 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     [Inject] protected ILogger<TView> Logger { get; set; } = null!;
     [Inject] protected PortalApplication PortalApplication { get; set; } = null!;
     [Inject] protected IJSRuntime JSRuntime { get; set; } = null!;
+    // The circuit's AccessService — CircuitAccessHandler sets the clicking user's identity on it. Used to
+    // stamp user-driven messages (ClickedEvent) so they don't lose identity crossing the sync-stream
+    // boundary (Stream.Hub is the sync hub, whose AccessService has no user context).
+    [Inject] protected AccessService AccessService { get; set; } = null!;
     protected IMessageHub Hub => PortalApplication.Hub;
     [Parameter] public required TViewModel ViewModel { get; set; } 
 
@@ -300,7 +304,17 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     {
         if(Stream is null)
             throw new InvalidOperationException("Stream must be set before sending click events.");
-        Stream.Hub.Post(new ClickedEvent(Area, Stream.StreamId), o => o.WithTarget(Stream.Owner));
+        // ClickedEvent is a USER-driven message — it must carry the clicking user's identity. Stream.Hub
+        // is the sync hub, whose AccessService has no user context (the circuit's AccessService holds it),
+        // so a bare Post lands context-less → PostPipeline fails closed → the click's downstream write is
+        // denied and the synced area blanks. Stamp the circuit user's AccessContext explicitly; it then
+        // travels with the delivery to the owning hub (Phase 2 rule 1 keeps an explicit context).
+        // See Doc/Architecture/AccessContextPropagation.md → "sync stream protocol vs user-data".
+        var userContext = AccessService?.Context ?? AccessService?.CircuitContext;
+        Stream.Hub.Post(new ClickedEvent(Area, Stream.StreamId), o =>
+            userContext is not null
+                ? o.WithTarget(Stream.Owner).WithAccessContext(userContext)
+                : o.WithTarget(Stream.Owner));
     }
 
 
