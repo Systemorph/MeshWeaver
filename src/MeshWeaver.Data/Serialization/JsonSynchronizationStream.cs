@@ -392,14 +392,32 @@ public static class JsonSynchronizationStream
             var heartbeatInterval = hub.ServiceProvider
                 .GetService<Microsoft.Extensions.Options.IOptions<SyncStreamOptions>>()
                 ?.Value?.HeartbeatInterval ?? TimeSpan.FromSeconds(45);
-            var sub = Observable.Interval(heartbeatInterval)
+            // 🚨 The heartbeat must NOT strongly pin `hub`. Observable.Interval's timer lives
+            // on the process-global Rx TimerQueue (a GC root); capturing `hub` in the tick
+            // closure keeps an ABANDONED hub alive forever — e.g. a RunLevel=1 partial
+            // activation that never reaches teardown, so `keepAlive` is never disposed. That is
+            // the recurring MeshHub_IsCollected leak whose GC chain reads
+            // ROOT→TimerQueue→ConcurrencyAbstractionLayerImpl+PeriodicTimer→hub. Hold the hub
+            // WEAKLY (same pattern as MessageHub.InstallStaleCallbackScanner): a live, in-use
+            // hub stays reachable via the mesh/cache so the heartbeat keeps firing normally;
+            // once the hub is unreferenced the next tick self-disposes the timer and releases it.
+            var weakHub = new WeakReference<IMessageHub>(hub);
+            var sub = new System.Reactive.Disposables.SingleAssignmentDisposable();
+            sub.Disposable = Observable.Interval(heartbeatInterval)
                 .Subscribe(_ =>
                 {
-                    if (hub.RunLevel > MessageHubRunLevel.Started) return;
+                    if (!weakHub.TryGetTarget(out var h)
+                        || h.RunLevel > MessageHubRunLevel.Started)
+                    {
+                        // Hub collected, or past Started (Quiescing/Disposed/abandoned) — stop
+                        // ticking so the TimerQueue no longer roots anything through this closure.
+                        sub.Dispose();
+                        return;
+                    }
                     // HeartBeatEvent is [SystemMessage] — PostPipeline accepts
                     // null AccessContext without warning. No identity stamp
                     // needed; receiver doesn't gate on principal.
-                    hub.Post(new HeartBeatEvent(), o => o.WithTarget(owner));
+                    h.Post(new HeartBeatEvent(), o => o.WithTarget(owner));
                 });
             // On keepAlive (not directly on reduced): a terminal NotFound from the initial
             // SubscribeRequest disposes keepAlive → stops this heartbeat. Normal teardown
