@@ -608,13 +608,31 @@ public static class MeshDataSourceExtensions
             // node to storage ~150 ms after a recursive parent delete removes it,
             // breaking Recursive_Delete_RemovesEntireSubtree (the sibling
             // children-check then fails with "has children").
-            var saveSub = ownStream
+            // 🚨 Hold the hub WEAKLY in the persistence-sampler callback. Observable.Sample
+            // arms a PERIODIC timer on the global DefaultScheduler (a process-wide TimerQueue
+            // root). For a hub abandoned at RunLevel=1 (a partial activation that never reaches
+            // teardown, so the RegisterForDisposal below never fires) that timer keeps the
+            // Subscribe closure — and through it the hub — alive forever: the recurring
+            // MeshHub_IsCollected leak whose GC chain reads TimerQueue → PeriodicTimer →
+            // Sample<MeshNode> → … → MessageHub. A weak capture lets an abandoned hub be
+            // collected; a live, in-use hub stays reachable via the mesh/cache so sampling
+            // persists normally. Self-dispose once the hub is collected or past Started (same
+            // pattern as MessageHub.InstallStaleCallbackScanner / the sync-stream heartbeat).
+            var weakSaveHub = new WeakReference<IMessageHub>(hub);
+            var saveSub = new System.Reactive.Disposables.SingleAssignmentDisposable();
+            saveSub.Disposable = ownStream
                 .Where(n => n != null && !cache.IsDeleted)
                 .DistinctUntilChanged()
                 .Sample(SaveSampleInterval)
                 .Subscribe(node =>
                 {
                     if (cache.IsDeleted) return;
+                    if (!weakSaveHub.TryGetTarget(out var saveHub)
+                        || saveHub.RunLevel > MessageHubRunLevel.Started)
+                    {
+                        saveSub.Dispose();
+                        return;
+                    }
                     // Persistence sampler is hub-internal infrastructure: the
                     // per-node hub auto-persists its OWN MeshNode on every
                     // change. SaveMeshNodeRequest is now [SystemMessage], so the
@@ -624,7 +642,7 @@ public static class MeshDataSourceExtensions
                     // hub address polluted CreatedBy on downstream writes via
                     // the AsyncLocal leak (fixed 2026-05-22). See
                     // AccessContextPropagation.md.
-                    hub.Post(new SaveMeshNodeRequest(node));
+                    saveHub.Post(new SaveMeshNodeRequest(node));
                 });
             hub.RegisterForDisposal(saveSub);
 
