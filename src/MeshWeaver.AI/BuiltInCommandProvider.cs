@@ -20,7 +20,7 @@ public class BuiltInCommandProvider : IStaticNodeProvider
         // the catalog index leads models/harnesses) so the picker's default-to-first selects it —
         // ordering lives in the QUERY (data), never replicated in the GUI picker.
         yield return Command("agent", "Switch the agent for subsequent messages",
-            "namespace:Agent nodeType:Agent sort:order", "agentName", "Choose an agent");
+            "namespace:Agent nodeType:Agent -content.modelTier:utility sort:order", "agentName", "Choose an agent");
         yield return Command("model", "Switch the AI model for subsequent messages",
             "namespace:_Provider nodeType:LanguageModel scope:descendants sort:order", "modelName", "Choose a model");
         yield return Command("harness", "Switch the harness (runtime) for subsequent messages",

@@ -8,6 +8,7 @@ using MeshWeaver.Layout.Catalog;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
 
 namespace MeshWeaver.Blazor.Components;
 
@@ -27,6 +28,10 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
     private IDisposable? _debounceSub;
     private int _inputKey;
     private const int DebounceMs = 200;
+
+    // Keyboard navigation: the index into _results currently highlighted (pre-selected for Enter).
+    // Reset to 0 (first row) whenever the dropdown opens or the result set changes.
+    private int _highlightedIndex;
 
     // Default-to-first: when [MeshNode(DefaultToFirst = true)] and no value is set, load once and
     // auto-select the first result. _defaultApplied guards it to at most once per component.
@@ -118,6 +123,7 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
     private void OpenSearch()
     {
         _isSearchOpen = true;
+        _highlightedIndex = 0;
         LoadResultsAsync();
         StateHasChanged();
     }
@@ -126,6 +132,39 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
     {
         _isSearchOpen = false;
         StateHasChanged();
+    }
+
+    /// <summary>
+    /// Keyboard navigation of the open dropdown: ↑/↓ move the highlight (wrapping at the ends), Enter
+    /// commits the highlighted row, Escape closes. The search box is single-line, so the arrow keys'
+    /// default cursor-move is harmless; markup-level stopPropagation keeps Enter from bubbling to the
+    /// chat composer's send. This is what makes the picker fully operable from the keyboard.
+    /// </summary>
+    private void OnKeyDown(KeyboardEventArgs e)
+    {
+        if (!_isSearchOpen)
+            return;
+
+        switch (e.Key)
+        {
+            case "ArrowDown":
+                if (_results.Count > 0)
+                    _highlightedIndex = (_highlightedIndex + 1) % _results.Count;
+                StateHasChanged();
+                break;
+            case "ArrowUp":
+                if (_results.Count > 0)
+                    _highlightedIndex = (_highlightedIndex - 1 + _results.Count) % _results.Count;
+                StateHasChanged();
+                break;
+            case "Enter":
+                if (_highlightedIndex >= 0 && _highlightedIndex < _results.Count)
+                    SelectNode(_results[_highlightedIndex]);
+                break;
+            case "Escape":
+                CloseSearch();
+                break;
+        }
     }
 
     /// <summary>
@@ -142,6 +181,7 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
         if (HasItems && _cachedResults != null)
         {
             _results = FilterCached(_searchText.Trim());
+            _highlightedIndex = 0;
             _ = InvokeAsync(StateHasChanged);
             return;
         }
@@ -162,6 +202,7 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
         if (HasItems && _cachedResults != null)
         {
             _results = FilterCached(_searchText.Trim());
+            _highlightedIndex = 0;
             _ = InvokeAsync(StateHasChanged);
             return;
         }
@@ -170,8 +211,15 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
         _loadCts?.Cancel();
         var cts = _loadCts = new CancellationTokenSource();
 
-        _isLoading = true;
-        _ = InvokeAsync(StateHasChanged);
+        // Only flash the spinner when there's nothing to show yet. Reopening a picker that already
+        // holds results (the composer pre-loads its small catalog via DefaultToFirst) keeps showing
+        // them and refreshes in the background — so the dropdown appears INSTANTLY instead of blanking
+        // to a progress ring on every open (the "popup doesn't come instantly" complaint).
+        if (_results.Count == 0)
+        {
+            _isLoading = true;
+            _ = InvokeAsync(StateHasChanged);
+        }
 
         var queries = GetQueries();
         if (queries.Length == 0)
@@ -231,6 +279,9 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
             {
                 _results = merged;
             }
+
+            // New result set → reset the keyboard highlight to the first (top) row.
+            _highlightedIndex = 0;
         }
         catch
         {

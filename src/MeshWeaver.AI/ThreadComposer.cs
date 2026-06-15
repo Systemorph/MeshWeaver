@@ -41,9 +41,13 @@ public record ThreadComposer
         Layout = MeshNodePickerLayout.Thin, Open = MeshNodePickerOpenDirection.Up, DefaultToFirst = true)]
     public string? Harness { get; init; }
 
-    /// <summary>Selected agent node path (a <c>nodeType:Agent</c> node).</summary>
+    /// <summary>Selected agent node path (a <c>nodeType:Agent</c> node). The picker lists only
+    /// conversational agents — utility agents (ThreadNamer/DescriptionWriter/NodeInitializer/…, marked
+    /// <c>modelTier: utility</c>) are excluded via <c>-content.modelTier:utility</c>; ordered by node
+    /// Order so the Assistant (Order -1) leads. The <c>content.</c> selector resolves identically on the
+    /// PG (<c>content-&gt;&gt;'modelTier'</c>) and in-memory (reflection into Content) query backends.</summary>
     [Description("Agent")]
-    [MeshNode("namespace:Agent nodeType:Agent sort:order",
+    [MeshNode("namespace:Agent nodeType:Agent -content.modelTier:utility sort:order",
         Layout = MeshNodePickerLayout.Thin, Open = MeshNodePickerOpenDirection.Up, DefaultToFirst = true)]
     public string? AgentName { get; init; }
 

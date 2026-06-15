@@ -169,6 +169,13 @@
     background: var(--neutral-layer-2);
 }
 
+/* Keyboard-highlighted row (↑/↓). A clear accent box so the Enter target is obvious — stronger than
+   hover, distinct from the persisted selection tint. */
+.mesh-node-picker-item-highlighted {
+    background: var(--accent-fill-subtle-rest, rgba(0, 120, 212, 0.12));
+    box-shadow: inset 0 0 0 1px var(--accent-fill-rest, #0078d4);
+}
+
 .mesh-node-picker-item-selected {
     background: var(--accent-fill-subtle-rest, rgba(0, 120, 212, 0.08));
 }

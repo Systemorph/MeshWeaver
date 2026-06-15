@@ -1436,11 +1436,13 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// </summary>
     private IObservable<IReadOnlyList<CompletionItem>> GetCommandCompletions(string query)
     {
-        var provider = Hub.ServiceProvider.GetServices<Data.Completion.IAutocompleteProvider>()
-            .OfType<MeshWeaver.AI.Completion.CommandAutocompleteProvider>()
-            .FirstOrDefault();
-        if (provider is null)
-            return Observable.Return<IReadOnlyList<CompletionItem>>(Array.Empty<CompletionItem>());
+        // Construct the provider directly against the chat hub's service provider — it self-resolves
+        // its deps (IWorkspace + IMessageHub for the nodeType:Command catalog, ChatCommandRegistry for
+        // the C# /help command). Resolving via GetServices<IAutocompleteProvider>() does NOT work here:
+        // CommandAutocompleteProvider is only registered in the Agents-application hub's container
+        // (ConfigureAgentsApplication), never on the chat hub — so the enumerable lookup returned null
+        // and typing "/" showed nothing. (This is exactly how CommandAutocompleteTest drives it.)
+        var provider = new MeshWeaver.AI.Completion.CommandAutocompleteProvider(Hub.ServiceProvider);
 
         return provider.GetItems(query, initialContext)
             .Select(items => (IReadOnlyList<CompletionItem>)items
