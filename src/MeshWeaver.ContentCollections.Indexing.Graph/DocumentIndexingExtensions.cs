@@ -1,8 +1,10 @@
+using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MeshWeaver.ContentCollections.Indexing.Graph;
 
@@ -62,5 +64,56 @@ public static class DocumentIndexingExtensions
             return services;
         });
         return builder;
+    }
+
+    /// <summary>
+    /// Registers the <see cref="ContentChunkAutocompleteProvider"/> so indexed chunk content is
+    /// searchable from <c>@</c>-autocomplete, each hit resolving to its <c>Document</c> node. Requires
+    /// an <see cref="IChunkedContentVectorStore"/> and an <see cref="IChunkEmbedder"/> already in DI
+    /// (the host wires the concrete store/embedder — e.g. the Postgres/pgvector adapter); registered via
+    /// <c>TryAddEnumerable</c>, the same pattern every other <see cref="IAutocompleteProvider"/> uses.
+    ///
+    /// <para>The collection scope is derived from the autocomplete <c>contextPath</c> (and its ancestor
+    /// prefixes) — a query typed inside a namespace searches that namespace's indexed collections and
+    /// the partitions above it. Over-supplied candidate paths are harmless: the store returns nothing
+    /// for a collection it holds no chunks for.</para>
+    /// </summary>
+    public static TBuilder AddContentSearch<TBuilder>(this TBuilder builder)
+        where TBuilder : MeshBuilder
+    {
+        builder.ConfigureServices(services =>
+        {
+            services.TryAddEnumerable(ServiceDescriptor.Scoped<IAutocompleteProvider>(sp =>
+                new ContentChunkAutocompleteProvider(
+                    sp.GetRequiredService<IChunkedContentVectorStore>(),
+                    sp.GetRequiredService<IChunkEmbedder>(),
+                    CollectionScopeFromContext)));
+            return services;
+        });
+        return builder;
+    }
+
+    /// <summary>
+    /// Default collection-scope resolver: the context path itself plus every ancestor prefix, so a
+    /// reference typed in <c>part/Space/Sub</c> searches collections keyed at <c>part/Space/Sub</c>,
+    /// <c>part/Space</c>, and <c>part</c>. Returns an empty scope when there is no context (a bare,
+    /// context-free query has no collection to anchor on).
+    /// </summary>
+    internal static IReadOnlyCollection<string> CollectionScopeFromContext(string? contextPath)
+    {
+        if (string.IsNullOrWhiteSpace(contextPath))
+            return [];
+
+        var scope = new List<string>();
+        var path = contextPath.Trim().Trim('/');
+        while (path.Length > 0)
+        {
+            scope.Add(path);
+            var lastSlash = path.LastIndexOf('/');
+            if (lastSlash <= 0)
+                break;
+            path = path[..lastSlash];
+        }
+        return scope;
     }
 }
