@@ -139,6 +139,52 @@ public class PartitionWriteGuardTest(ITestOutputHelper output) : MonolithMeshTes
         result.IsValid.Should().BeTrue("creating a Space is the sanctioned explicit way to make a partition");
     }
 
+    // ── Rule 3: a TOP-LEVEL node must be a partition-owning type (User/Space) ────────
+
+    [Fact(Timeout = 20000)]
+    public async Task Validate_TopLevelUntypedNode_IsRejected_WithSpaceAndSchemaGuidance()
+    {
+        // The memex.systemorph.com `BusinessModel` incident: a bare, UNTYPED node at the root ('')
+        // namespace. A top-level node IS a partition root, so it must be a partition-owning type
+        // (Space). An untyped node owns no partition — FindStaticNode("") → null → not OwnsPartition.
+        var node = new MeshNode("BusinessModel") { Name = "BusinessModel" }; // untyped, top-level (empty ns)
+
+        var result = await Guard().Validate(CreateContext(node, "rsalzmann")).Should().Emit();
+
+        result.IsValid.Should().BeFalse("a top-level untyped node is not a partition root");
+        result.Reason.Should().Be(NodeRejectionReason.InvalidPath);
+        result.ErrorMessage.Should().Contain("Space", "the message must tell the user it has to be a Space");
+        result.ErrorMessage.Should().Contain("schema", "the message must mention the partition schema");
+        result.ErrorMessage.Should().Contain("Space/schema", "the message points the user at the schema get-path");
+    }
+
+    [Fact(Timeout = 20000)]
+    public async Task Validate_TopLevelNonPartitionType_IsRejected()
+    {
+        // A TYPED-but-non-partition node (Markdown) at the root is equally illegal — only User/Space
+        // own a partition (the atioz `HelloWorld` Markdown incident).
+        var node = new MeshNode("HelloWorld") { NodeType = "Markdown", Name = "Hello World" };
+
+        var result = await Guard().Validate(CreateContext(node, "rsalzmann")).Should().Emit();
+
+        result.IsValid.Should().BeFalse("a top-level Markdown node does not own a partition");
+        result.Reason.Should().Be(NodeRejectionReason.InvalidPath);
+        result.ErrorMessage.Should().Contain("Space");
+    }
+
+    [Fact(Timeout = 20000)]
+    public async Task Validate_TopLevelNonPartition_AsGlobalAdmin_IsStillRejected()
+    {
+        // Admin is a data-management role, NOT a licence to drop content at the root — only System
+        // (partition provisioner / onboarding) may write a non-owning node top-level.
+        var node = new MeshNode("AdminHello") { NodeType = "Markdown", Name = "Admin Hello" };
+
+        var result = await Guard().Validate(CreateContext(node, "rbuergi")).Should().Emit();
+
+        result.IsValid.Should().BeFalse("top-level non-partition is rejected for every non-System caller, incl. admin");
+        result.Reason.Should().Be(NodeRejectionReason.InvalidPath);
+    }
+
     [Fact(Timeout = 20000)]
     public void SupportedOperations_AreCreateAndUpdate()
     {
