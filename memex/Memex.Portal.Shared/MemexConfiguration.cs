@@ -21,6 +21,9 @@ using MeshWeaver.Blazor.Portal.Chat;
 using MeshWeaver.Blazor.Portal.Components;
 using MeshWeaver.Blazor.Radzen;
 using MeshWeaver.ContentCollections;
+using MeshWeaver.ContentCollections.Indexing;
+using MeshWeaver.ContentCollections.Indexing.Graph;
+using MeshWeaver.ContentCollections.Indexing.PostgreSql;
 using MeshWeaver.Documentation;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Data;
@@ -32,9 +35,11 @@ using MeshWeaver.Hosting.Activity;
 using MeshWeaver.Hosting.AzureBlob;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Hosting.PostgreSql;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
@@ -487,6 +492,40 @@ public static class MemexConfiguration
             if (features.Ai.Providers.OpenAI) mb = mb.AddOpenAI();
             if (features.Ai.Clis.ClaudeCode) mb = mb.AddClaudeCode();   // catalog source (factory + config via services.AddClaudeCode)
             if (features.Ai.Clis.Copilot) mb = mb.AddCopilot();         // catalog source (factory + config via services.AddCopilot)
+
+            // Content → vector index (core tech). When a SEPARATE-Postgres vector store is configured
+            // (ConnectionStrings:contentindex — a separate database on the SAME Postgres server) AND
+            // embeddings are on, wire the upload→Activity indexing pipeline (extract→chunk→embed→store
+            // on that vector DB), per-file Document nodes (extractive summary by default — swap in a
+            // chat client for AI summaries), and chunk-search @-autocomplete. Inert otherwise: the
+            // monolith (no contentindex connection) compiles it but never activates it. The store
+            // self-provisions its database + schema, so this works the moment the connection is set.
+            var vectorConnectionString = configuration.GetConnectionString("contentindex");
+            if (string.IsNullOrWhiteSpace(vectorConnectionString))
+            {
+                // No dedicated connection set: derive a SEPARATE database on the SAME server from the
+                // primary mesh connection (swap Database → contentindex). So content indexing activates
+                // anywhere the mesh's own Postgres connection exists (incl. AKS) with zero extra plumbing.
+                var primaryConnectionString = configuration.GetConnectionString("memex");
+                if (!string.IsNullOrWhiteSpace(primaryConnectionString))
+                    vectorConnectionString = PostgreSqlContentIndexingExtensions.DeriveVectorConnectionString(primaryConnectionString);
+            }
+            var embeddingsConfigured = !string.IsNullOrWhiteSpace(configuration["Embedding:Endpoint"])
+                && !string.IsNullOrWhiteSpace(configuration["Embedding:ApiKey"]);
+            if (!string.IsNullOrWhiteSpace(vectorConnectionString) && embeddingsConfigured)
+            {
+                mb = mb
+                    .AddContentIndexingPipeline(
+                        storeFactory: sp => new PostgreSqlChunkedContentVectorStore(
+                            vectorConnectionString,
+                            sp.GetService<IoPoolRegistry>(),
+                            sp.GetRequiredService<IEmbeddingProvider>().Dimensions),
+                        embedderFactory: sp => new EmbeddingProviderChunkEmbedder(
+                            sp.GetRequiredService<IEmbeddingProvider>(),
+                            sp.GetService<IoPoolRegistry>()),
+                        summarizerFactory: _ => new ExtractiveSummarizer())
+                    .AddContentSearch();
+            }
 
             return (TBuilder)mb
                 .AddSelfRegistry()

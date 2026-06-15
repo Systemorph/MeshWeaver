@@ -23,6 +23,10 @@ resource memex_portal 'Microsoft.App/containerApps@2025-07-01' = {
           value: 'Host=memex-postgres;Port=5432;Username=postgres;Password=${memex_postgres_password_value};Database=memex'
         }
         {
+          name: 'connectionstrings--contentindex'
+          value: 'Host=memex-postgres;Port=5432;Username=postgres;Password=${memex_postgres_password_value};Database=contentindex'
+        }
+        {
           name: 'memex-password'
           value: memex_postgres_password_value
         }
@@ -48,6 +52,10 @@ resource memex_portal 'Microsoft.App/containerApps@2025-07-01' = {
             {
               name: 'ConnectionStrings__memex'
               secretRef: 'connectionstrings--memex'
+            }
+            {
+              name: 'ConnectionStrings__contentindex'
+              secretRef: 'connectionstrings--contentindex'
             }
             {
               name: 'MEMEX_HOST'

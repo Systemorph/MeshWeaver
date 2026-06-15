@@ -61,6 +61,7 @@ services:
       Storage__BasePath: "/data/content"
       Graph__Storage__Type: "PostgreSql"
       Graph__Storage__BasePath: "/data/graph"
+      ConnectionStrings__contentindex: "Host=memex-postgres;Port=5432;Username=postgres;Password=${MEMEX_POSTGRES_PASSWORD};Database=contentindex"
       Mcp__BaseUrl: "http://memex-portal:8080"
     ports:
       - "8080"

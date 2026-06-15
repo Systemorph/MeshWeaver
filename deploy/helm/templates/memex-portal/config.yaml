@@ -23,6 +23,13 @@ data:
   Graph__Storage__Type: "{{ .Values.config.memex_portal.Graph__Storage__Type }}"
   Graph__Storage__BasePath: "{{ .Values.config.memex_portal.Graph__Storage__BasePath }}"
   Mcp__BaseUrl: "{{ .Values.config.memex_portal.Mcp__BaseUrl }}"
+  # ---- Embeddings (vector search + content indexing) — optional -------------
+  # With Endpoint + ApiKey (secret, in secrets.yaml) set, the portal registers the embedding
+  # provider: search-bar queries hit the HNSW vector index AND the content-indexing pipeline
+  # activates (chunk→embed→store in the SEPARATE `contentindex` database on the same Postgres
+  # server). Empty = full-text search only, content indexing inert. See PostgreSqlExtensions.
+  Embedding__Endpoint: "{{ .Values.config.memex_portal.Embedding__Endpoint | default "" }}"
+  Embedding__Model: "{{ .Values.config.memex_portal.Embedding__Model | default "" }}"
   # ---- AI model providers (non-secret: endpoints + model catalog) ----------
   # BuiltInLanguageModelProvider scans {Section}:Models / :Endpoint and emits the
   # nodeType:LanguageModel mesh nodes the chat picker shows. Section names are the
