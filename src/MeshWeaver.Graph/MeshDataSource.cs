@@ -608,42 +608,49 @@ public static class MeshDataSourceExtensions
             // node to storage ~150 ms after a recursive parent delete removes it,
             // breaking Recursive_Delete_RemovesEntireSubtree (the sibling
             // children-check then fails with "has children").
-            // 🚨 Hold the hub WEAKLY in the persistence-sampler callback. Observable.Sample
-            // arms a PERIODIC timer on the global DefaultScheduler (a process-wide TimerQueue
-            // root). For a hub abandoned at RunLevel=1 (a partial activation that never reaches
-            // teardown, so the RegisterForDisposal below never fires) that timer keeps the
-            // Subscribe closure — and through it the hub — alive forever: the recurring
-            // MeshHub_IsCollected leak whose GC chain reads TimerQueue → PeriodicTimer →
-            // Sample<MeshNode> → … → MessageHub. A weak capture lets an abandoned hub be
-            // collected; a live, in-use hub stays reachable via the mesh/cache so sampling
-            // persists normally. Self-dispose once the hub is collected or past Started (same
-            // pattern as MessageHub.InstallStaleCallbackScanner / the sync-stream heartbeat).
-            var weakSaveHub = new WeakReference<IMessageHub>(hub);
-            var saveSub = new System.Reactive.Disposables.SingleAssignmentDisposable();
-            saveSub.Disposable = ownStream
-                .Where(n => n != null && !cache.IsDeleted)
-                .DistinctUntilChanged()
-                .Sample(SaveSampleInterval)
-                .Subscribe(node =>
-                {
-                    if (cache.IsDeleted) return;
-                    if (!weakSaveHub.TryGetTarget(out var saveHub)
-                        || saveHub.RunLevel > MessageHubRunLevel.Started)
+            // 🚨 Install the persistence sampler via a STATIC local function so its Subscribe closure
+            // captures ONLY its parameters — never this method's `hub`. Observable.Sample arms a
+            // PERIODIC timer on the global DefaultScheduler (a process-wide TimerQueue root); for a hub
+            // abandoned at RunLevel=1 (a partial activation that never reaches teardown, so the
+            // RegisterForDisposal below never fires) that timer keeps the closure — and through it the
+            // hub — alive forever (the recurring MeshHub_IsCollected leak: TimerQueue → PeriodicTimer →
+            // Sample<MeshNode> → … → MessageHub). Holding `hub` weakly INSIDE a non-static lambda is NOT
+            // enough: the lambda also captures the method's OUTER closure (which holds `hub` for the
+            // RegisterForDisposal / compile-watcher uses below), transitively pinning the hub. A
+            // `static` local function cannot capture the enclosing scope, so the hub is referenced
+            // solely by the WeakReference and an abandoned hub stays collectable; a live hub is kept
+            // reachable via the mesh/cache so sampling persists normally, and the sampler self-disposes
+            // once the hub is collected or past Started.
+            static IDisposable InstallPersistenceSampler(
+                IObservable<MeshNode> own, OwnNodeCache nodeCache,
+                WeakReference<IMessageHub> weakHub, TimeSpan interval)
+            {
+                var sub = new System.Reactive.Disposables.SingleAssignmentDisposable();
+                sub.Disposable = own
+                    .Where(n => n != null && !nodeCache.IsDeleted)
+                    .DistinctUntilChanged()
+                    .Sample(interval)
+                    .Subscribe(node =>
                     {
-                        saveSub.Dispose();
-                        return;
-                    }
-                    // Persistence sampler is hub-internal infrastructure: the
-                    // per-node hub auto-persists its OWN MeshNode on every
-                    // change. SaveMeshNodeRequest is now [SystemMessage], so the
-                    // PostPipeline accepts a null AccessContext without warning
-                    // and the message bypasses AccessControl on the receiver
-                    // (per-node hub self-write). No ImpersonateAsHub stamping —
-                    // hub address polluted CreatedBy on downstream writes via
-                    // the AsyncLocal leak (fixed 2026-05-22). See
-                    // AccessContextPropagation.md.
-                    saveHub.Post(new SaveMeshNodeRequest(node));
-                });
+                        if (nodeCache.IsDeleted) return;
+                        if (!weakHub.TryGetTarget(out var saveHub)
+                            || saveHub.RunLevel > MessageHubRunLevel.Started)
+                        {
+                            // Hub collected or past Started — stop sampling so the TimerQueue releases it.
+                            sub.Dispose();
+                            return;
+                        }
+                        // Per-node hub auto-persists its OWN MeshNode on every change. SaveMeshNodeRequest
+                        // is [SystemMessage] (PostPipeline accepts a null AccessContext — per-node hub
+                        // self-write); no ImpersonateAsHub stamping (the hub address polluted CreatedBy via
+                        // the AsyncLocal leak, fixed 2026-05-22). See AccessContextPropagation.md.
+                        saveHub.Post(new SaveMeshNodeRequest(node));
+                    });
+                return sub;
+            }
+
+            var saveSub = InstallPersistenceSampler(
+                ownStream, cache, new WeakReference<IMessageHub>(hub), SaveSampleInterval);
             hub.RegisterForDisposal(saveSub);
 
             // Per-NodeType compile auto-watcher: fires RunCompile whenever the own
