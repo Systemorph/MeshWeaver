@@ -1,5 +1,6 @@
 ﻿using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
@@ -153,5 +154,37 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
 
         finalLog.Status.Should().Be(ActivityStatus.Failed,
             "activity should be Failed when sub-activity had errors");
+    }
+
+    /// <summary>
+    /// Regression for the dispose-wedge: the activity-log bundler must NOT flush on dispose.
+    /// FlushOnDispose used to call the hub-routed onFlush callback (which reads the hub node —
+    /// <c>persistence.Read(hubPath).Take(1)</c>, NO Timeout — then writes a
+    /// <c>{hubPath}/_activity/{id}</c> node). During hub teardown that read never completes, so
+    /// the flush subscription wedges the hub's disposal; the hub's path then routes nowhere and
+    /// every subsequent read of it hangs forever ("ReadNode did not emit") — the bulk-run
+    /// CreateNode_TransientStateIsClearedOnRejection / DeleteTodo wedge. Dispose must stop the
+    /// debounce timers and DROP the pending audit bundle, never log to the activity log during
+    /// teardown. The underlying data changes are already persisted; only the audit SUMMARY is
+    /// dropped.
+    /// </summary>
+    [Fact]
+    public void ActivityLogBundler_Dispose_DoesNotLogActivityDuringTeardown()
+    {
+        var hub = GetClient();
+        var flushes = 0;
+        var bundler = new ActivityLogBundler(hub, _ => Interlocked.Increment(ref flushes));
+
+        // A recorded change opens a pending bundle on a 300 ms debounce timer.
+        bundler.RecordChange(new DataChangeRequest(), "DataUpdate");
+
+        // Dispose well within the debounce window: the pending bundle must be dropped,
+        // never flushed through the tearing-down hub. Before the fix this called onFlush
+        // (FlushAll → FlushBundle → onFlush) and would assert 1.
+        bundler.Dispose();
+
+        flushes.Should().Be(0,
+            "logging to the activity log during dispose round-trips through the tearing-down " +
+            "hub and wedges it — the pending audit summary must be dropped, not flushed");
     }
 }
