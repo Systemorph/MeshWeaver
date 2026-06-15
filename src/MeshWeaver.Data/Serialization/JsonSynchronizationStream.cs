@@ -270,48 +270,60 @@ public static class JsonSynchronizationStream
         // heartbeat setup below (or vice-versa).
         var keepAlive = new System.Reactive.Disposables.CompositeDisposable();
         reduced.RegisterForDisposal(keepAlive);
-        IDisposable observeSubscription;
-        var impersonationScope = isRealUser ? null : accessService?.ImpersonateAsSystem();
-        try
-        {
-            observeSubscription = hub.Observe(
-                new SubscribeRequest(reduced.StreamId, reference) { Identity = identityForSubscribe },
-                o => impersonateAsHub ? o.WithTarget(owner).ImpersonateAsHub(hub.Address) : o.WithTarget(owner))
+        // Reactive bounded retry for the initial SubscribeRequest — NO 60s park, NO await.
+        // An owner that is not (yet) routable (the node is mid-creation, or a transient routing lag)
+        // is retried at a tight 20ms cadence up to 10× (~200ms), then treated as terminally absent.
+        // The OLD shape only terminated on a DeliveryFailure; a bare TimeoutException — the
+        // "undeliverable / target hub not found" case where routing returns NO DeliveryFailure — was
+        // IGNORED, so the hub callback sat for its full 60s default timeout and, under Blazor
+        // re-render fan-out, stacked into the [STALE-CALLBACK] pileup that starved portal/<user> and
+        // wedged the session (rsalzmann, 2026-06-15). Each attempt's .Timeout(20ms) disposes the
+        // Observe, which removes the pending callback (MessageHub.WrapWithCancelOnDispose) — so no
+        // dead 60s callback ever lingers. On exhaustion (or a non-retryable error) the stream faults
+        // its subscribers and the keep-alive is torn down so nothing heartbeats/resubscribes a
+        // non-existent owner.
+        const int maxSubscribeAttempts = 10;
+        var subscribeAttemptTimeout = TimeSpan.FromMilliseconds(20);
+        var observeSubscription = Observable
+            .Using(
+                // Per-attempt impersonation: a System (non-user) subscribe re-applies the scope on
+                // every retry so each re-post carries the right identity (the scope is live during
+                // the inner Observe's post). A real user carries identity on the SubscribeRequest
+                // itself, so no impersonation is needed. Observable.Using disposes the scope when the
+                // attempt terminates.
+                () => (isRealUser ? null : accessService?.ImpersonateAsSystem())
+                      ?? (IDisposable)System.Reactive.Disposables.Disposable.Empty,
+                _ => hub.Observe(
+                        new SubscribeRequest(reduced.StreamId, reference) { Identity = identityForSubscribe },
+                        o => impersonateAsHub ? o.WithTarget(owner).ImpersonateAsHub(hub.Address) : o.WithTarget(owner))
+                    .Take(1)
+                    .Timeout(subscribeAttemptTimeout))
+            .RetryWhen(errors => errors
+                .Select((ex, attempt) => (ex, attempt))
+                .SelectMany(t =>
+                    // Retry only the "owner not (yet) reachable" classes (NotFound / no response);
+                    // any other error is terminal immediately. Cap at maxSubscribeAttempts.
+                    (t.ex is DeliveryFailureException or TimeoutException) && t.attempt < maxSubscribeAttempts - 1
+                        ? Observable.Timer(subscribeAttemptTimeout).Select(_ => 0L)
+                        : Observable.Throw<long>(t.ex)))
             .Subscribe(
                 _ =>
-                {
                     // The owner sends the first DataChangedEvent as the response; it is already
-                    // forwarded to the inner sync hub by RouteStreamMessage before HandleCallbacks
-                    // fires here. Nothing to do except acknowledge.
+                    // forwarded to the inner sync hub by RouteStreamMessage. Just acknowledge.
                     logger.LogDebug("SubscribeRequest for stream {StreamId} acknowledged by owner",
-                        reduced.StreamId);
-                },
+                        reduced.StreamId),
                 ex =>
                 {
-                    if (ex is DeliveryFailureException dfe)
-                    {
-                        logger.LogWarning("SubscribeRequest for stream {StreamId} failed: {Message}",
-                            reduced.StreamId, dfe.Message);
-                        reduced.OnError(dfe);
-                        // Terminal: the owner address does not exist (NotFound). Tear down the
-                        // keep-alive so we never heartbeat a non-existent owner — the zombie
-                        // subscription that storms the mesh. STOP, never auto-resubscribe.
-                        keepAlive.Dispose();
-                    }
-                    else if (ex is not TimeoutException)
-                    {
-                        logger.LogWarning(ex, "SubscribeRequest for stream {StreamId} failed",
-                            reduced.StreamId);
-                        reduced.OnError(ex);
-                        // Faulted stream — stop the heartbeat too (no point keeping a dead owner alive).
-                        keepAlive.Dispose();
-                    }
+                    // Bounded retry exhausted (or a non-retryable error): the owner address does not
+                    // exist / never responded. Terminal — fault subscribers + tear down the keep-alive
+                    // so we NEVER heartbeat or resubscribe a non-existent owner (the storm that wedges).
+                    logger.LogWarning(
+                        "SubscribeRequest for stream {StreamId} gave up after {Attempts} attempts (~{Ms}ms) — owner {Owner} unreachable: {Message}",
+                        reduced.StreamId, maxSubscribeAttempts,
+                        maxSubscribeAttempts * subscribeAttemptTimeout.TotalMilliseconds, owner, ex.Message);
+                    reduced.OnError(ex);
+                    keepAlive.Dispose();
                 });
-        }
-        finally
-        {
-            impersonationScope?.Dispose();
-        }
         reduced.RegisterForDisposal(observeSubscription);
         // Belt-and-suspenders: dispose the subscription when the HUB tears down too (idempotent).
         hub.RegisterForDisposal(observeSubscription);
