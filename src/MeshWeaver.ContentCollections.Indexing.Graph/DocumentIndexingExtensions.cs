@@ -83,11 +83,17 @@ public static class DocumentIndexingExtensions
     {
         builder.ConfigureServices(services =>
         {
-            services.TryAddEnumerable(ServiceDescriptor.Scoped<IAutocompleteProvider>(sp =>
+            // A FACTORY-based IAutocompleteProvider cannot go through TryAddEnumerable: that API dedupes
+            // by implementation type, and a factory descriptor's implementation type IS the service type
+            // (IAutocompleteProvider) — which .NET rejects as "indistinguishable from other services
+            // registered for IAutocompleteProvider". Since AddContentSearch is called exactly once per
+            // host, a plain AddScoped into the IAutocompleteProvider enumerable is correct (GetServices
+            // returns it alongside the concrete-typed providers).
+            services.AddScoped<IAutocompleteProvider>(sp =>
                 new ContentChunkAutocompleteProvider(
                     sp.GetRequiredService<IChunkedContentVectorStore>(),
                     sp.GetRequiredService<IChunkEmbedder>(),
-                    CollectionScopeFromContext)));
+                    CollectionScopeFromContext));
             return services;
         });
         return builder;
