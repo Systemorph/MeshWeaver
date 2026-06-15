@@ -268,6 +268,16 @@ internal static class ThreadSubmissionServer
                         threadPath, t.Status, t.PendingUserMessages.Count,
                         t.IngestedMessageIds.Count, t.UserMessageIds.Count);
                 }
+                // 🚨 Survive the rapid-submit storm. Each cross-mirror SubmitMessage patches
+                // the UserMessageIds ARRAY off its own (stale) base; RFC 7396 REPLACES arrays,
+                // so concurrent submits clobber each other's ids — the thread settles with
+                // UserMessageIds shorter than the work actually queued (the RapidSubmits /
+                // Cancel_WithMultiplePending reds). The dict-keyed PendingUserMessages and the
+                // IngestedMessageIds are merge-safe and authoritative, so the OWNER reconciles
+                // the derived list back to a superset via an OWN write (serialised, no clobber).
+                // Idempotent: once UserMessageIds ⊇ pending ∪ ingested the recomputed node is
+                // byte-identical and the stream's value-equality check dedupes it — no loop.
+                ReconcileUserMessageIds(threadHub, n, logger);
             })
             .Select(NeedsDispatch)
             .Where(needs => needs)
@@ -342,6 +352,49 @@ internal static class ThreadSubmissionServer
         // queued input → claim a fresh round.
         return t.Status is ThreadExecutionStatus.Idle or ThreadExecutionStatus.Cancelled
                && t.PendingUserMessages.Count > 0;
+    }
+
+    /// <summary>
+    /// Owner-side self-heal for the rapid-submit array-clobber: ensure
+    /// <see cref="MeshThread.UserMessageIds"/> is a superset of the merge-safe
+    /// authoritative id sources (<see cref="MeshThread.PendingUserMessages"/> keys and
+    /// <see cref="MeshThread.IngestedMessageIds"/>). Cross-mirror submits patch the
+    /// UserMessageIds array off a stale base and RFC 7396 array-replace drops concurrent
+    /// additions; the keyed dict survives, so the owner reconstructs the list. Runs as an
+    /// OWN write on the thread hub (serialised by the action block — no clobber). Missing
+    /// ids are appended (best-effort order; a storm already lost the original interleave).
+    /// Idempotent and self-terminating: when nothing is missing the write is skipped, and a
+    /// reconciled node is byte-identical to the next observation so the stream dedupes it.
+    /// </summary>
+    private static void ReconcileUserMessageIds(IMessageHub threadHub, MeshNode? node, ILogger? logger)
+    {
+        if (node?.Content is not MeshThread t) return;
+        var have = t.UserMessageIds.ToImmutableHashSet();
+        var missing = t.PendingUserMessages.Keys
+            .Concat(t.IngestedMessageIds)
+            .Where(id => !have.Contains(id))
+            .Distinct()
+            .ToImmutableList();
+        if (missing.IsEmpty) return;
+
+        threadHub.GetWorkspace().GetMeshNodeStream().Update(n =>
+        {
+            // Re-derive inside the lambda from the CURRENT node — never the stale snapshot
+            // captured above — so the write reflects the latest merged state.
+            if (n.Content is not MeshThread cur) return n;
+            var curHave = cur.UserMessageIds.ToImmutableHashSet();
+            var add = cur.PendingUserMessages.Keys
+                .Concat(cur.IngestedMessageIds)
+                .Where(id => !curHave.Contains(id))
+                .Distinct()
+                .ToImmutableList();
+            if (add.IsEmpty) return n; // raced to reconciled — byte-identical, dedupes
+            return n with { Content = cur with { UserMessageIds = cur.UserMessageIds.AddRange(add) } };
+        }).Subscribe(
+            _ => { },
+            ex => logger?.LogWarning(ex,
+                "[SubmissionWatcher] UserMessageIds reconcile failed for {ThreadPath}",
+                threadHub.Address.Path));
     }
 
 
