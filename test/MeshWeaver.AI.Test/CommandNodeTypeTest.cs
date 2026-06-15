@@ -28,7 +28,10 @@ public class CommandNodeTypeTest
         nodes.Select(n => n.Id).OrderBy(x => x).Should().Equal("agent", "harness", "model");
 
         var def = (CommandDefinition)nodes.Single(n => n.Id == "model").Content!;
-        def.Query.Should().Be("namespace:_Provider nodeType:LanguageModel scope:descendants");
+        // Ordering lives in the QUERY (sort:order), never replicated in the GUI picker — so the
+        // picker's default-to-first selects the catalog's intended head. Keep in lockstep with
+        // BuiltInCommandProvider.
+        def.Query.Should().Be("namespace:_Provider nodeType:LanguageModel scope:descendants sort:order");
         def.ComposerField.Should().Be("modelName");
         def.Title.Should().Be("Choose a model");
     }
