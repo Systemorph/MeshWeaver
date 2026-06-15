@@ -141,6 +141,7 @@ var migrations = new IMigration[]
     new V32_RepairAuthMirrorTriggerAndBackfill(),
     new V33_SeedThreadComposerForExistingUsers(),
     new V34_TypeOrphanPartitionRootsAsSpace(),
+    new V35_ReconcilePartitionAccessIndex(),
 };
 
 var ctx = new MigrationContext(dataSource, connectionString, options, logger, initResult.IsFreshDb);
