@@ -21,10 +21,50 @@ public static class MeshNodeImageHelper
 
     /// <summary>
     /// Resolves a node's icon for rendering, handling content: references relative to the node path.
-    /// E.g., "content:icon.svg" on node "Org/Project" → "/static/storage/content/Org/Project/icon.svg"
+    /// E.g., "content:icon.svg" on node "Org/Project" → "/static/storage/content/Org/Project/icon.svg".
+    /// When the node carries no icon of its own, falls back to a default icon for its
+    /// <see cref="MeshNode.NodeType"/> (<see cref="DefaultIconForNodeType"/>) so every node reads as
+    /// its type rather than a bare letter — Markdown → document, Code → code, Agent → bot, etc.
     /// </summary>
     public static string? ResolveNodeIcon(MeshNode? node) =>
-        node == null ? null : ResolveContentPath(node.Icon, node.Path);
+        node == null ? null
+            : ResolveContentPath(node.Icon, node.Path) ?? DefaultIconForNodeType(node.NodeType);
+
+    /// <summary>
+    /// A default icon for a node that carries none of its own, keyed by its NodeType (the type node's
+    /// path — the last segment is matched, so both <c>"Markdown"</c> and a fully-qualified type path
+    /// resolve). Returns a <c>/static/NodeTypeIcons/*.svg</c> path; unknown/typeless nodes fall back
+    /// to a neutral box. Mirrors the icons the built-in NodeType definitions declare, so an instance
+    /// reads the same as its type.
+    /// </summary>
+    public static string? DefaultIconForNodeType(string? nodeType)
+    {
+        if (string.IsNullOrWhiteSpace(nodeType))
+            return null;
+        var slash = nodeType.LastIndexOf('/');
+        var name = (slash < 0 ? nodeType : nodeType[(slash + 1)..]).ToLowerInvariant();
+        var icon = name switch
+        {
+            "markdown" or "document" => "document",
+            "code" => "code",
+            "agent" or "harness" => "bot",
+            "languagemodel" or "aisettings" or "command" or "threadcomposer" => "sparkle",
+            "modelprovider" => "key",
+            "thread" => "chat",
+            "threadmessage" => "message",
+            "comment" => "comment",
+            "notification" => "bell",
+            "approval" => "checkmark",
+            "group" or "groupmembership" => "people",
+            "user" or "vuser" or "person" => "person",
+            "role" or "accessassignment" or "partitionaccesspolicy" => "shield",
+            "email" => "mail",
+            "space" or "organization" => "organization",
+            "nodetype" => "box",
+            _ => "box", // unknown/custom type → a neutral node glyph (never a bare letter)
+        };
+        return $"/static/NodeTypeIcons/{icon}.svg";
+    }
 
     /// <summary>
     /// Resolves a user-entered image path to an absolute URL, interpreting bare
