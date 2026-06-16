@@ -67,16 +67,19 @@ public static class DocumentIndexingExtensions
     }
 
     /// <summary>
-    /// Registers the <see cref="ContentChunkAutocompleteProvider"/> so indexed chunk content is
-    /// searchable from <c>@</c>-autocomplete, each hit resolving to its <c>Document</c> node. Requires
-    /// an <see cref="IChunkedContentVectorStore"/> and an <see cref="IChunkEmbedder"/> already in DI
-    /// (the host wires the concrete store/embedder — e.g. the Postgres/pgvector adapter); registered via
-    /// <c>TryAddEnumerable</c>, the same pattern every other <see cref="IAutocompleteProvider"/> uses.
+    /// Wires the indexed-content <c>@document</c> UCR autocomplete (<see cref="ContentChunkAutocompleteProvider"/>,
+    /// an <see cref="IAutocompleteProvider"/>) — each suggestion resolving to its file's <c>Document</c>
+    /// node. Requires an <see cref="IChunkedContentVectorStore"/> and an <see cref="IChunkEmbedder"/>
+    /// already in DI (the host wires the concrete store/embedder — e.g. the Postgres/pgvector adapter).
     ///
-    /// <para>The collection scope is derived from the autocomplete <c>contextPath</c> (and its ancestor
-    /// prefixes) — a query typed inside a namespace searches that namespace's indexed collections and
-    /// the partitions above it. Over-supplied candidate paths are harmless: the store returns nothing
-    /// for a collection it holds no chunks for.</para>
+    /// <para>Autocomplete scope is the <c>contextPath</c> and its ancestor prefixes; over-/under-supplied
+    /// scope is harmless — the store returns nothing for a partition/collection it holds no chunks for.</para>
+    ///
+    /// <para>The MAIN mesh search folds the same chunks in WITHOUT a separate query provider: the Postgres
+    /// query layer UNIONs each partition's <c>content_chunks</c> directly into its mesh search (the scoped
+    /// vector path and the cross-partition lexical path), each content hit resolving to its file's
+    /// <c>Document</c> node. See <c>PostgreSqlSqlGenerator.GenerateVectorSearchQuery</c> /
+    /// <c>GenerateCrossSchemaSelectQuery</c>.</para>
     /// </summary>
     public static TBuilder AddContentSearch<TBuilder>(this TBuilder builder)
         where TBuilder : MeshBuilder

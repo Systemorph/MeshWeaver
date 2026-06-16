@@ -29,4 +29,21 @@ public interface IChunkedContentVectorStore
     /// similar to <paramref name="query"/> by cosine similarity, most-similar first.
     /// </summary>
     IObservable<IReadOnlyList<ContentChunk>> Search(string collectionPath, float[] query, int topK);
+
+    /// <summary>
+    /// Returns the single chunk at <paramref name="chunkIndex"/> (zero-based) of
+    /// <paramref name="filePath"/> within <paramref name="collectionPath"/>, or null if no chunk
+    /// exists at that index (out of range, or the file has never been indexed). This is the
+    /// read-by-index counterpart to <see cref="Search"/> — it resolves a known
+    /// <c>(collection, file, index)</c> position, which the chunk-navigation tools use to step
+    /// prev/next through a file's chunk sequence.
+    /// </summary>
+    IObservable<ContentChunk?> GetChunk(string collectionPath, string filePath, int chunkIndex);
+
+    /// <summary>
+    /// Returns the number of chunks recorded for <paramref name="filePath"/> within
+    /// <paramref name="collectionPath"/> (0 if the file has never been indexed). Callers use this
+    /// to bound an index and decide whether a next/prev step is valid.
+    /// </summary>
+    IObservable<int> GetChunkCount(string collectionPath, string filePath);
 }
