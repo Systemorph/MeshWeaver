@@ -284,5 +284,66 @@ public sealed class PostgreSqlChunkedContentVectorStore : IChunkedContentVectorS
     }
 
     /// <inheritdoc/>
+    public IObservable<ContentChunk?> GetChunk(string collectionPath, string filePath, int chunkIndex)
+    {
+        if (chunkIndex < 0)
+            return Observable.Return<ContentChunk?>(null);
+
+        var schema = SchemaFor(collectionPath);
+        return EnsureProvisioned(schema).SelectMany(_ => _pool.Invoke<ContentChunk?>(async ct =>
+        {
+            await using var cmd = _dataSource.CreateCommand($"""
+                SELECT collection_path, file_path, chunk_index, content_hash, chunk_text, metadata, embedding
+                FROM "{schema}".content_chunks
+                WHERE collection_path = $1 AND file_path = $2 AND chunk_index = $3
+                """);
+            cmd.Parameters.AddWithValue(collectionPath);
+            cmd.Parameters.AddWithValue(filePath);
+            cmd.Parameters.AddWithValue(chunkIndex);
+
+            await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            if (!await reader.ReadAsync(ct).ConfigureAwait(false))
+                return null;
+
+            ImmutableDictionary<string, string>? metadata = null;
+            if (!await reader.IsDBNullAsync(5, ct).ConfigureAwait(false))
+            {
+                var json = reader.GetString(5);
+                var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+                if (dict is { Count: > 0 })
+                    metadata = dict.ToImmutableDictionary(StringComparer.Ordinal);
+            }
+
+            float[]? embedding = null;
+            if (!await reader.IsDBNullAsync(6, ct).ConfigureAwait(false))
+                embedding = reader.GetFieldValue<Vector>(6).ToArray();
+
+            return new ContentChunk(
+                CollectionPath: reader.GetString(0),
+                FilePath: reader.GetString(1),
+                ChunkIndex: reader.GetInt32(2),
+                Text: await reader.IsDBNullAsync(4, ct).ConfigureAwait(false) ? string.Empty : reader.GetString(4),
+                ContentHash: await reader.IsDBNullAsync(3, ct).ConfigureAwait(false) ? string.Empty : reader.GetString(3),
+                Embedding: embedding,
+                Metadata: metadata);
+        }));
+    }
+
+    /// <inheritdoc/>
+    public IObservable<int> GetChunkCount(string collectionPath, string filePath)
+    {
+        var schema = SchemaFor(collectionPath);
+        return EnsureProvisioned(schema).SelectMany(_ => _pool.Invoke(async ct =>
+        {
+            await using var cmd = _dataSource.CreateCommand(
+                $"SELECT COUNT(*) FROM \"{schema}\".content_chunks WHERE collection_path = $1 AND file_path = $2");
+            cmd.Parameters.AddWithValue(collectionPath);
+            cmd.Parameters.AddWithValue(filePath);
+            var scalar = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+            return scalar is long count ? (int)count : 0;
+        }));
+    }
+
+    /// <inheritdoc/>
     public void Dispose() => _dataSource.Dispose();
 }

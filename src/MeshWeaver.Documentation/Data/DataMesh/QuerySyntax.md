@@ -171,6 +171,29 @@ Controls the traversal direction relative to `namespace` or `path`:
 | `hierarchy` | Ancestors + self + descendants |
 | `subtree` | Self + all descendants |
 | `ancestorsandself` | Self + all ancestors |
+| `nextLevel` | The **next populated level** below — the nearest real nodes, skipping empty intermediate namespace segments (alias: `populated`) |
+
+#### `scope:nextLevel` — the populated frontier
+
+`children` returns nodes whose namespace is *exactly* the base path. But a node can sit several
+segments deep with no real node in between — e.g. `a/b/node` where `a` and `a/b` are pure namespace
+groupings, not nodes. `children` of the root misses it entirely.
+
+`scope:nextLevel` returns the **frontier**: every node strictly below the base for which no *other*
+node sits between it and the base. Empty segments are skipped, so:
+
+```
+namespace:Org scope:nextLevel    # nearest real nodes below Org
+```
+
+- If only `Org/a/b/node` exists, `nextLevel` of `Org` returns `Org/a/b/node` (skips the empty `a`, `a/b`).
+- If `Org/a` is also a real node, `nextLevel` of `Org` returns `Org/a`, and `nextLevel` of `Org/a`
+  returns `Org/a/b/node`.
+
+This is the drill primitive for graph navigation (above = `scope:ancestors`, below =
+`scope:nextLevel`). On Postgres it is a **single** indexed anti-join — no per-child count probes.
+It is a *within-partition* scope: pin it to a namespace; an unscoped/cross-partition `nextLevel`
+degrades to `descendants`.
 
 ### `path`
 

@@ -61,6 +61,23 @@ public sealed class InMemoryChunkedContentVectorStore : IChunkedContentVectorSto
             return Observable.Return<IReadOnlyList<ContentChunk>>(ranked);
         });
 
+    public IObservable<ContentChunk?> GetChunk(string collectionPath, string filePath, int chunkIndex) =>
+        Observable.Defer(() =>
+        {
+            // The chunk set is stored ordered by ChunkIndex (it is built that way), but read it by
+            // ChunkIndex rather than by position so a non-contiguous set can never mis-resolve.
+            ContentChunk? chunk = null;
+            if (chunkIndex >= 0
+                && _chunks.TryGetValue((collectionPath, filePath), out var chunks))
+                chunk = chunks.FirstOrDefault(c => c.ChunkIndex == chunkIndex);
+            return Observable.Return(chunk);
+        });
+
+    public IObservable<int> GetChunkCount(string collectionPath, string filePath) =>
+        Observable.Defer(() =>
+            Observable.Return(
+                _chunks.TryGetValue((collectionPath, filePath), out var chunks) ? chunks.Length : 0));
+
     private static double CosineSimilarity(float[] a, float[] b)
     {
         if (a.Length != b.Length || a.Length == 0)

@@ -4,6 +4,7 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.AI;
+using MeshWeaver.AI.Plugins;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Services.LanguageServer;
 using MeshWeaver.Messaging;
@@ -150,6 +151,33 @@ Full reference: read the 'tools-reference' MCP resource.")]
         [Description("Base path to search from (e.g., @graph). Empty for all.")] string? basePath = null,
         [Description("Maximum number of results to return. Default 50, max 200.")] int limit = 50)
         => ops.Search(query, basePath, limit).FirstAsync().ToTask();
+
+    [McpServerTool(Title = "Search content chunks", ReadOnly = true, Idempotent = true, OpenWorld = false)]
+    [Description(@"Semantic search over INDEXED content chunks — the chunk-level companion to `Search`. Where node `Search` resolves a content hit up to its Document node and drops the chunk position, this returns the matching chunks WITH their (collectionPath, filePath, chunkIndex) so you can read the exact window or step through neighbours with `get_chunk`. Use it to FIND relevant passages and gather context; for whole-document reads (e.g. table extraction) use `Get` on the Document.
+
+Chunking model: each indexed file is split into 1000-char windows with 150-char overlap, numbered by a 0-based chunk_index per file.
+
+Returns `{count, results:[{documentPath, collectionPath, filePath, chunkIndex, rank, snippet}]}` — `rank` is the 0-based best-first relevance order. When content indexing isn't enabled in this host, returns a `{count:0, message:…}` envelope rather than erroring.")]
+    public Task<string> SearchChunks(
+        [Description("Free-text query, matched semantically against indexed chunk text.")] string query,
+        [Description("Node path to anchor the search at — this path AND each ancestor prefix are searched (e.g. '@ACME/Reports'). Required: with no scope there is no collection to search and an empty result with a hint is returned.")] string? scope = null,
+        [Description("Maximum number of chunk hits to return (1-200, default 20). Not deduped by file.")] int limit = 20)
+    {
+        var scopePath = string.IsNullOrWhiteSpace(scope) ? null : MeshOperations.ResolvePath(scope);
+        return ChunkNavigation.SearchChunks(sessionHub.ServiceProvider, query, scopePath, limit)
+            .FirstAsync().ToTask();
+    }
+
+    [McpServerTool(Title = "Read a content chunk by index", ReadOnly = true, Idempotent = true, OpenWorld = false)]
+    [Description(@"Reads ONE indexed content chunk by its 0-based index within a file, with prev/next links to step through the file's chunk sequence. Use after `search_chunks` (which gives the collectionPath/filePath/chunkIndex of a hit) to read the full 1000-char window and walk to adjacent chunks.
+
+Returns `{found, collectionPath, filePath, chunkIndex, text, prevIndex, nextIndex, totalChunks}` — `prevIndex` is null at index 0, `nextIndex` is null at the last chunk. A null chunk (out of range or file not indexed) returns `{found:false, totalChunks, message:…}` carrying the valid range.")]
+    public Task<string> GetChunk(
+        [Description("The content collection path the chunk belongs to (the 'collectionPath' from a search_chunks hit).")] string collectionPath,
+        [Description("The file path within the collection (the 'filePath' from a search_chunks hit).")] string filePath,
+        [Description("0-based chunk index within the file (the 'chunkIndex' from a hit, or a prevIndex/nextIndex to step).")] int chunkIndex)
+        => ChunkNavigation.GetChunk(sessionHub.ServiceProvider, MeshOperations.ResolvePath(collectionPath), filePath, chunkIndex)
+            .FirstAsync().ToTask();
 
     [McpServerTool(Title = "Create a node", Destructive = false, Idempotent = false, OpenWorld = false)]
     [Description(@"Creates a new node in the mesh. Pass a JSON MeshNode object. Required fields — validated up-front with a descriptive error before anything is written:

@@ -52,6 +52,36 @@ public class SqlGeneratorTests
     }
 
     [Fact]
+    public void GenerateScopeClause_NextLevel_WithTable_EmitsFrontierAntiJoin()
+    {
+        var gen = new PostgreSqlSqlGenerator();
+
+        var (clause, parameters) = gen.GenerateScopeClause(
+            "ACME", QueryScope.NextLevel, qualifiedTable: "\"acme\".\"mesh_nodes\"");
+
+        // Descendant predicate + anti-join that suppresses nodes with a nearer active ancestor.
+        clause.Should().Contain("n.path LIKE @scopePrefix || '%'");
+        clause.Should().Contain("NOT EXISTS");
+        clause.Should().Contain("\"acme\".\"mesh_nodes\" anc");
+        clause.Should().Contain("anc.state = 2");
+        clause.Should().Contain("n.path LIKE anc.path || '/%'");
+        parameters["@scopePrefix"].Should().Be("ACME/");
+    }
+
+    [Fact]
+    public void GenerateScopeClause_NextLevel_NullTable_DegradesToDescendants()
+    {
+        // No table to anti-join against (cross-schema / unscoped) → plain descendants, no NOT EXISTS.
+        var gen = new PostgreSqlSqlGenerator();
+
+        var (clause, parameters) = gen.GenerateScopeClause("ACME", QueryScope.NextLevel);
+
+        clause.Should().Be("n.path LIKE @scopePrefix || '%'");
+        clause.Should().NotContain("NOT EXISTS");
+        parameters["@scopePrefix"].Should().Be("ACME/");
+    }
+
+    [Fact]
     public void GenerateSelectQuery_SymbolicStateFilter_MapsToSmallint()
     {
         // `state:Active` must bind the MeshNodeState NUMERIC value — the state column
@@ -149,6 +179,105 @@ public class SqlGeneratorTests
         sql.Should().Contain("ORDER BY n.embedding <=> @queryVector");
         sql.Should().NotContain("CASE");
         parameters.Should().NotContainKey("@lexTerm");
+    }
+
+    [Fact]
+    public void GenerateVectorSearchQuery_IncludeContentChunks_UnionsDocumentBranch()
+    {
+        // When the schema carries a content index, the vector search UNIONs each file's best chunk
+        // in as a synthetic Document row (DocumentPaths.For/Slug), ranked alongside mesh nodes by
+        // cosine distance only.
+        var gen = new PostgreSqlSqlGenerator { SchemaName = "rbuergi" };
+        var (sql, _) = gen.GenerateVectorSearchQuery(
+            filterQuery: null, queryVector: new[] { 0.1f, 0.2f, 0.3f }, userId: null, topK: 7,
+            includeContentChunks: true);
+
+        sql.Should().Contain("UNION ALL");
+        sql.Should().Contain("content_chunks");
+        sql.Should().Contain("_Documents");
+        sql.Should().Contain("'Document'");
+        sql.Should().Contain("embedding <=> ");
+        // Outer wrapper ranks BOTH branches by the projected distance and keeps the closest.
+        sql.Should().Contain(") u ORDER BY u._distance ASC LIMIT 7");
+        // Each file contributes exactly one Document row (a file yields many chunks).
+        sql.Should().Contain("DISTINCT ON (cc.collection_path, cc.file_path)");
+    }
+
+    [Fact]
+    public void GenerateVectorSearchQuery_ExcludeContentChunks_IsOriginalSingleBranch()
+    {
+        // No content index → the original single-branch shape: cosine-only, no UNION, no content table.
+        var gen = new PostgreSqlSqlGenerator { SchemaName = "rbuergi" };
+        var (sql, _) = gen.GenerateVectorSearchQuery(
+            filterQuery: null, queryVector: new[] { 0.1f, 0.2f, 0.3f }, userId: null, topK: 5,
+            includeContentChunks: false);
+
+        sql.Should().NotContain("content_chunks");
+        sql.Should().NotContain("UNION ALL");
+        sql.Should().Contain("ORDER BY n.embedding <=> @queryVector");
+    }
+
+    [Fact]
+    public void GenerateVectorSearchQuery_WithNamespace_PredicateInGeneratedSql_NotPostReplace()
+    {
+        // The namespace-prefix predicate is now emitted INSIDE the generator (per branch), bound to
+        // @nsPrefix — NOT post-injected by a string Replace("WHERE", …) downstream (which would corrupt
+        // a UNION's two WHERE keywords). Asserted for both the single-branch and content-UNION shapes.
+        var gen = new PostgreSqlSqlGenerator { SchemaName = "rbuergi" };
+        var (sqlSingle, paramsSingle) = gen.GenerateVectorSearchQuery(
+            filterQuery: null, queryVector: new[] { 0.1f, 0.2f, 0.3f }, userId: null, topK: 5,
+            namespacePath: "rbuergi/Space");
+
+        sqlSingle.Should().Contain("n.path LIKE @nsPrefix || '%'");
+        paramsSingle.Should().ContainKey("@nsPrefix").WhoseValue.Should().Be("rbuergi/Space/");
+
+        var gen2 = new PostgreSqlSqlGenerator { SchemaName = "rbuergi" };
+        var (sqlUnion, paramsUnion) = gen2.GenerateVectorSearchQuery(
+            filterQuery: null, queryVector: new[] { 0.1f, 0.2f, 0.3f }, userId: null, topK: 5,
+            namespacePath: "rbuergi/Space", includeContentChunks: true);
+
+        // mesh branch keeps the path predicate; the content branch scopes by the Document path it builds.
+        sqlUnion.Should().Contain("n.path LIKE @nsPrefix || '%'");
+        sqlUnion.Should().Contain("'/_Documents/' ||");
+        sqlUnion.Should().Contain("LIKE @nsPrefix || '%'");
+        paramsUnion.Should().ContainKey("@nsPrefix").WhoseValue.Should().Be("rbuergi/Space/");
+    }
+
+    [Fact]
+    public void GenerateCrossSchemaSelectQuery_FreeTextWithContentSchemas_UnionsContentBranch()
+    {
+        // The cross-partition lexical omnibox folds indexed content into the SAME UNION: each
+        // content-bearing schema adds a content_chunks ILIKE branch projecting each file's best chunk
+        // to its synthetic Document row (DocumentPaths.For/Slug).
+        var parser = new QueryParser();
+        var parsed = parser.Parse("pension scope:descendants");
+        var gen = new PostgreSqlSqlGenerator();
+
+        var (sql, _) = gen.GenerateCrossSchemaSelectQuery(
+            parsed, new[] { "rbuergi", "acme" }, userId: null, tableName: "mesh_nodes",
+            contentSchemas: new[] { "rbuergi" });
+
+        sql.Should().Contain("content_chunks");
+        sql.Should().Contain("'Document'");
+        sql.Should().Contain("_Documents");
+        sql.Should().Contain("cc.chunk_text ILIKE '%pension%'");
+        sql.Should().Contain("DISTINCT ON (cc.collection_path, cc.file_path)");
+    }
+
+    [Fact]
+    public void GenerateCrossSchemaSelectQuery_StructuredOnly_NoContentBranch()
+    {
+        // A pure structured query (no free-text term) adds NO content branch even when content schemas
+        // are supplied — semantic/lexical content folding only makes sense for free text.
+        var parser = new QueryParser();
+        var parsed = parser.Parse("nodeType:Story namespace:rbuergi");
+        var gen = new PostgreSqlSqlGenerator();
+
+        var (sql, _) = gen.GenerateCrossSchemaSelectQuery(
+            parsed, new[] { "rbuergi" }, userId: null, tableName: "mesh_nodes",
+            contentSchemas: new[] { "rbuergi" });
+
+        sql.Should().NotContain("content_chunks");
     }
 
     [Fact]

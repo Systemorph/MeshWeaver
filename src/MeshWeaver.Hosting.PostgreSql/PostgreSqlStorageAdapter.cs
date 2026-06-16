@@ -39,6 +39,14 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     private readonly IIoPool _ioPool;
     private readonly Subject<DataChangeNotification> _changes = new();
 
+    // Per-adapter cache of "does {schema}.content_chunks exist?" — drives whether the vector search
+    // UNIONs the indexed-content branch (DocumentPaths-resolved Document rows). INSTANCE field (never
+    // static — the no-static-state rule): its lifetime is this adapter's. Only TRUE is cached
+    // (permanently — a content index is never dropped under us); a FALSE/missing schema is NOT cached
+    // so a partition that LATER gains content is picked up on the next search. The probe itself is a
+    // sub-millisecond to_regclass() catalog lookup run inside the pooled READ leaf.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _contentChunksExists = new(StringComparer.Ordinal);
+
     public NpgsqlDataSource DataSource => _dataSource;
 
     /// <inheritdoc />
@@ -794,8 +802,8 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
             // "longest-matching-prefix" lookups go through this path. Single-path
             // queries use the existing scope-clause generator unchanged.
             var (scopeClause, scopeParams) = query.Paths is { Count: > 1 }
-                ? generator.GenerateScopeClause(query.Paths, query.Scope, useMainNode: satelliteRedirect)
-                : generator.GenerateScopeClause(effectivePath, query.Scope, useMainNode: satelliteRedirect);
+                ? generator.GenerateScopeClause(query.Paths, query.Scope, useMainNode: satelliteRedirect, qualifiedTable: tableName)
+                : generator.GenerateScopeClause(effectivePath, query.Scope, useMainNode: satelliteRedirect, qualifiedTable: tableName);
 
             if (!string.IsNullOrEmpty(scopeClause))
             {
@@ -1022,8 +1030,8 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         if (!string.IsNullOrEmpty(effectivePath) || (query.Paths is { Count: > 1 }))
         {
             var (scopeClause, scopeParams) = query.Paths is { Count: > 1 }
-                ? generator.GenerateScopeClause(query.Paths, query.Scope, useMainNode: satelliteRedirect)
-                : generator.GenerateScopeClause(effectivePath, query.Scope, useMainNode: satelliteRedirect);
+                ? generator.GenerateScopeClause(query.Paths, query.Scope, useMainNode: satelliteRedirect, qualifiedTable: tableName)
+                : generator.GenerateScopeClause(effectivePath, query.Scope, useMainNode: satelliteRedirect, qualifiedTable: tableName);
 
             if (!string.IsNullOrEmpty(scopeClause))
             {
@@ -1069,20 +1077,16 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         string? lexicalTerm,
         [EnumeratorCancellation] CancellationToken ct)
     {
+        // Does this schema carry a content index? If so, the vector search UNIONs each file's best
+        // chunk in as a synthetic Document row. Probe + cache (instance, TRUE-only) so a partition that
+        // later gains content is picked up; the catalog lookup runs in THIS pooled READ leaf.
+        var includeContentChunks = await ContentChunksExistAsync(ct).ConfigureAwait(false);
+
         var generator = new PostgreSqlSqlGenerator { SchemaName = _schemaName };
         var (sql, parameters) = generator.GenerateVectorSearchQuery(
-            filter, queryVector, userId, topK, lexicalTerm);
-
-        if (!string.IsNullOrEmpty(namespacePath))
-        {
-            var normalizedPath = NormalizePath(namespacePath);
-            parameters["@nsPrefix"] = $"{normalizedPath}/";
-
-            if (sql.Contains("WHERE"))
-                sql = sql.Replace("WHERE", "WHERE n.path LIKE @nsPrefix || '%' AND");
-            else
-                sql = sql.Replace("ORDER BY", "WHERE n.path LIKE @nsPrefix || '%' ORDER BY");
-        }
+            filter, queryVector, userId, topK, lexicalTerm,
+            namespacePath: string.IsNullOrEmpty(namespacePath) ? null : NormalizePath(namespacePath),
+            includeContentChunks: includeContentChunks);
 
         await using var cmd = _dataSource.CreateCommand(sql);
         foreach (var (name, value) in parameters)
@@ -1111,6 +1115,40 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
                 yield return ReadMeshNode(reader, options);
             }
         }
+    }
+
+    /// <summary>
+    /// Whether <c>"{schema}".content_chunks</c> exists, so the vector search can UNION the indexed-content
+    /// branch in (each file's best chunk → its <c>Document</c> node, per <c>DocumentPaths.For/Slug</c>).
+    /// Cached in the instance <see cref="_contentChunksExists"/> map: a TRUE result is cached permanently
+    /// (a content index is not dropped under us); FALSE / absent is NOT cached, so a partition that later
+    /// gains content is picked up on the next search. The probe is a single sub-millisecond
+    /// <c>to_regclass()</c> catalog lookup; it runs inside the caller's pooled READ leaf. A schemaless
+    /// adapter (no per-partition schema) has no per-schema content table — returns false without a probe.
+    /// </summary>
+    private async Task<bool> ContentChunksExistAsync(CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(_schemaName))
+            return false;
+        if (_contentChunksExists.TryGetValue(_schemaName, out var cached))
+            return cached;
+
+        bool exists;
+        try
+        {
+            await using var cmd = _dataSource.CreateCommand(
+                $"SELECT to_regclass('\"{_schemaName}\".content_chunks') IS NOT NULL");
+            exists = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false) is true;
+        }
+        catch (Exception ex) when (IsUndefinedTable(ex))
+        {
+            exists = false;
+        }
+
+        // Only cache the positive — leave a negative uncached so a later content gain is seen.
+        if (exists)
+            _contentChunksExists[_schemaName] = true;
+        return exists;
     }
 
     /// <summary>

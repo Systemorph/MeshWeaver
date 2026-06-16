@@ -448,13 +448,22 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         if (schemas.Count == 0)
             yield break;
 
+        // For a FREE-TEXT main-search omnibox query, fold indexed content into the SAME UNION: each
+        // content-bearing schema contributes a content_chunks lexical branch projecting each file's best
+        // chunk to its Document node (the cross-partition counterpart of the scoped vector UNION). Only
+        // for the primary mesh_nodes projection (satellite/activity/accessed queries don't carry content)
+        // and only when there's a term to match — a pure structured query adds nothing.
+        IReadOnlyList<string>? contentSchemas = null;
+        if (tableName == "mesh_nodes" && !string.IsNullOrEmpty(query.TextSearch))
+            contentSchemas = await GetSchemasWithTableAsync("content_chunks", ct).ConfigureAwait(false);
+
         var generator = new PostgreSqlSqlGenerator();
         var (sql, parameters) = generator.GenerateCrossSchemaSelectQuery(
-            query, schemas, userId, tableName, activityUserId);
+            query, schemas, userId, tableName, activityUserId, contentSchemas);
 
         _logger?.LogInformation(
-            "[CrossSchema] Satellite query: table={Table}, schemas={Count}, userId={User}, source={Source}",
-            tableName, schemas.Count, userId, query.Source);
+            "[CrossSchema] Satellite query: table={Table}, schemas={Count}, contentSchemas={ContentCount}, userId={User}, source={Source}",
+            tableName, schemas.Count, contentSchemas?.Count ?? 0, userId, query.Source);
 
         await using var cmd = _dataSource.CreateCommand(sql);
         foreach (var (name, value) in parameters)

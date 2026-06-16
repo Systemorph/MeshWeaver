@@ -520,6 +520,20 @@ After uploading, reference the file with `@Doc/Architecture/content/diagram.svg`
 
 **Tip for icons:** Set a node's `icon` property to inline SVG (starting with `<svg`) and it renders directly — no upload needed.
 
+### Searching Indexed Content (Chunks)
+
+Indexed content files are split into overlapping **chunks** (1000-char windows, 150-char overlap, numbered 0-based per file). Two tools read those chunks directly — the chunk-level companion to node `Search`, which only resolves a content hit up to its Document node:
+
+- `search_chunks` — semantic search returning the matching chunks WITH their `(collectionPath, filePath, chunkIndex)`, so you get the exact passage, not just the file. Use it to find relevant passages and gather context. Returns `{count, results:[{documentPath, collectionPath, filePath, chunkIndex, rank, snippet}]}`.
+- `get_chunk` — reads ONE chunk by its 0-based index, with `prevIndex`/`nextIndex` so you can step through a file. Returns `{found, text, prevIndex, nextIndex, totalChunks, …}`.
+
+```
+search_chunks('accrued benefit obligation', '@ACME/Reports')
+get_chunk('ACME/Reports', 'pension/2025.txt', 4)   // → text + prevIndex 3 + nextIndex 5
+```
+
+`search_chunks` is scoped: the `scope` path AND each ancestor prefix are searched (e.g. `@ACME/Reports` also searches `@ACME`); with no scope an empty result with a hint is returned. **Chunks are for retrieval and context** — to extract a whole table or read a full document, use `Get` on the Document instead (a chunk window can start or end mid-table).
+
 ## Satellite Namespaces
 
 Nodes can have satellite data stored in dedicated sub-namespaces with underscore prefixes. These are persisted in separate database tables per partition.

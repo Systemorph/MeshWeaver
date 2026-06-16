@@ -553,7 +553,9 @@ way to use it. Iterate on the source files / `Sources` list until it compiles.
 # Tools
 
 Use the standard Mesh tools (Get, Search, Create, Update, Delete) to manage nodes.
-Use ContentCollection tools to upload CSV/data files.
+Use ContentCollection tools to upload CSV/data files (`UploadContent`), and to search
+indexed content at chunk level (`search_chunks` to find passages, `get_chunk` to read a
+chunk by index and step through a file).
 
 When creating `Source/` files, create them as MeshNodes with:
 - `nodeType: "Code"` (NOT `"Markdown"` — source code files are always Code nodes)

@@ -35,19 +35,36 @@ page link):
 
 | `?groupBy=` | Render mode | Result |
 |---|---|---|
-| `namespace` *(default)* · `ns` · `tree` | Namespace tree | Sub-namespaces become nested, collapsible folders with counts; levels load lazily on expand |
+| `graph` *(default)* · `nav` · `navigator` | Graph navigator | Re-rooting navigation along the graph's edges: ancestors **above** (clickable breadcrumb rail) + the next populated level **below** (nearest real nodes, skipping empty namespace hops) as a card grid. Clicking re-roots and recomputes |
+| `namespace` · `ns` · `tree` | Namespace tree | Sub-namespaces become nested, collapsible folders with counts; levels load lazily on expand |
 | `type` · `nodeType` | Grouped | One section per **NodeType** (Markdown, Code, Thread, …) |
 | `category` · `cat` | Grouped | One section per node **Category** (falls back to NodeType when a node has none) |
 | `flat` · `none` · `grid` | Flat | A single grid of thumbnail cards, no grouping |
 | `hierarchy` · `hierarchical` | Hierarchical | Parent → child indentation, each root subtree kept in one cell |
 
-Unknown or missing values fall back to the namespace tree (for a content catalog) or a hierarchical
-list (for a NodeType's instances).
+The **Search** area defaults to the graph navigator. (The Space **Children** catalog stays on the
+namespace tree.) Unknown or missing values fall back to the graph navigator (for a content catalog)
+or a hierarchical list (for a NodeType's instances).
+
+### Graph navigator
+
+The default Search experience navigates the mesh *along its edges*. For the current node it shows:
+
+- **Above** — the real ancestors as a clickable breadcrumb rail (`scope:ancestors`). Empty namespace
+  segments are never nodes, so they don't appear.
+- **Below** — the **next populated level**: the nearest real nodes, with empty intermediate namespace
+  segments skipped, via a single `scope:nextLevel` query (no per-child count probes). A node at
+  `a/b/node` (where `a`, `a/b` are not nodes) surfaces directly.
+
+Clicking a card or an ancestor **re-roots** the navigator there (`/{path}/Search`) and recomputes
+above + below — "navigate → visualize → navigate". A secondary "open ↗" affordance opens the node's
+own page. Both levels are live `hub.GetQuery(...)` collections (see
+[Synced Mesh Node Queries](/Doc/Architecture/SyncedMeshNodeQueries)).
 
 ```
-/ACME/Search                     → namespace tree of ACME's content
+/ACME/Search                     → graph navigator rooted at ACME
+/ACME/Search?groupBy=tree        → namespace tree of ACME's content
 /ACME/Search?groupBy=type        → ACME's content grouped by NodeType
-/ACME/Search?groupBy=category    → grouped by Category
 /ACME/Search?groupBy=flat        → a flat card grid
 ```
 
