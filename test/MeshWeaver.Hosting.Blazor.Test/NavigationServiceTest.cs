@@ -49,14 +49,18 @@ public class NavigationServiceTest
             .Returns(_creatableTypesProvider);
         _hubServiceProvider.GetService(typeof(IMeshQueryCore)).Returns(_meshQuery);
 
-        // NavigationService's anonymous read-gate (ProcessResolvedPath) resolves the
-        // visitor identity from AccessService. Default to an AUTHENTICATED user so the
-        // gate is skipped — authenticated visitors are never gated — preserving the
-        // pre-gate behaviour these tests assert. AnonymousVisitor_DeniedNode_RedirectsToLogin
-        // overrides this with a logged-out context to exercise the gate.
-        var accessService = new AccessService();
-        accessService.SetCircuitContext(new AccessContext { ObjectId = "test-user", Name = "Test User" });
-        _hubServiceProvider.GetService(typeof(AccessService)).Returns(accessService);
+        // NavigationService's anonymous read-gate (ProcessResolvedPath) runs for
+        // logged-out visitors (no AccessService on the circuit → Anonymous). Leave
+        // AccessService unstubbed (null): that keeps the gate active AND keeps
+        // TrackNavigationActivity skipping — it Posts a TrackActivityRequest only for
+        // a real user, and IMessageHub.Post on an NSubstitute hub auto-proxies the
+        // internal-membered IMessageDelivery, which throws TypeLoadException under
+        // Castle DynamicProxy in CI. The gate is satisfied with a real permissions
+        // delegate granting Read; AnonymousVisitor_DeniedNode overrides it with None
+        // to exercise the AccessDenied path.
+        _hub.Configuration.Returns(new MessageHubConfiguration(null, new Address("test", "nav"))
+            .Set<EffectivePermissionsDelegate>((_, _, _) =>
+                System.Reactive.Linq.Observable.Return(Permission.Read)));
 
         // Default stub for IMeshQueryCore.Query — NavigationService now
         // requires a non-null MeshNode to settle Context (commit 8a6f76b10:
@@ -138,24 +142,14 @@ public class NavigationServiceTest
     [Fact]
     public async Task AnonymousVisitor_DeniedNode_EmitsAccessDenied()
     {
-        // A logged-OUT visitor (virtual anonymous user) navigates to a node they
-        // cannot read. The anonymous read-gate must flip Status to AccessDenied so
-        // ApplicationPage's AuthorizeView redirects them to /login — rather than
-        // showing chrome over an "Access Denied" content panel.
-        var anonymous = new AccessService();
-        anonymous.SetCircuitContext(new AccessContext
-        {
-            ObjectId = WellKnownUsers.Anonymous,
-            Name = "Guest",
-            IsVirtual = true
-        });
-        _hubServiceProvider.GetService(typeof(AccessService)).Returns(anonymous);
-
+        // A logged-OUT visitor (no AccessService on the circuit → Anonymous)
+        // navigates to a node they cannot read. The anonymous read-gate must flip
+        // Status to AccessDenied so ApplicationPage's AuthorizeView redirects them to
+        // /login — rather than showing chrome over an "Access Denied" content panel.
         // RLS verdict for the Anonymous identity on this node: no Read.
-        var config = new MessageHubConfiguration(null, new Address("test", "nav"))
+        _hub.Configuration.Returns(new MessageHubConfiguration(null, new Address("test", "nav"))
             .Set<EffectivePermissionsDelegate>((_, _, _) =>
-                System.Reactive.Linq.Observable.Return(Permission.None));
-        _hub.Configuration.Returns(config);
+                System.Reactive.Linq.Observable.Return(Permission.None)));
 
         var service = CreateService();
         _pathResolver.ResolvePath(Arg.Any<string>())
@@ -173,22 +167,12 @@ public class NavigationServiceTest
     [Fact]
     public async Task AnonymousVisitor_PublicNode_ResolvesReady()
     {
-        // Same logged-out visitor, but the node grants Anonymous Read (a PublicRead
-        // page). The gate must let it through to a normal NavigationContext — the
-        // welcome page / public docs must never bounce an anonymous visitor to login.
-        var anonymous = new AccessService();
-        anonymous.SetCircuitContext(new AccessContext
-        {
-            ObjectId = WellKnownUsers.Anonymous,
-            Name = "Guest",
-            IsVirtual = true
-        });
-        _hubServiceProvider.GetService(typeof(AccessService)).Returns(anonymous);
-
-        var config = new MessageHubConfiguration(null, new Address("test", "nav"))
+        // Same logged-out visitor (Anonymous), but the node grants Anonymous Read (a
+        // PublicRead page). The gate must let it through to a normal NavigationContext —
+        // the welcome page / public docs must never bounce an anonymous visitor to login.
+        _hub.Configuration.Returns(new MessageHubConfiguration(null, new Address("test", "nav"))
             .Set<EffectivePermissionsDelegate>((_, _, _) =>
-                System.Reactive.Linq.Observable.Return(Permission.Read));
-        _hub.Configuration.Returns(config);
+                System.Reactive.Linq.Observable.Return(Permission.Read)));
 
         var service = CreateService();
         _pathResolver.ResolvePath(Arg.Any<string>())

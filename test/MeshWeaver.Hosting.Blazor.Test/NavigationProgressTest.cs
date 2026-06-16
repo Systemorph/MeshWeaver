@@ -56,11 +56,14 @@ public class NavigationProgressTest
         // injecting it into the constructor.
         _hubServiceProvider.GetService(typeof(IMeshQueryCore)).Returns(_meshQuery);
 
-        // Authenticated by default so NavigationService's anonymous read-gate is
-        // skipped (these progress tests assert phase transitions, not the gate).
-        var accessService = new AccessService();
-        accessService.SetCircuitContext(new AccessContext { ObjectId = "test-user", Name = "Test User" });
-        _hubServiceProvider.GetService(typeof(AccessService)).Returns(accessService);
+        // AccessService unstubbed (null → Anonymous) so the read-gate runs but
+        // TrackNavigationActivity skips (no IMessageHub.Post → no un-proxyable
+        // IMessageDelivery, which TypeLoad-faults under Castle DynamicProxy in CI).
+        // A real permissions delegate grants Read so the gate is transparent for
+        // these phase-transition tests.
+        _hub.Configuration.Returns(new MessageHubConfiguration(null, new Address("test", "nav"))
+            .Set<EffectivePermissionsDelegate>((_, _, _) =>
+                System.Reactive.Linq.Observable.Return(Permission.Read)));
 
         // Empty mesh query by default â€” node-loading path is best-effort.
         // Empty observable so the chain in LoadNodeWithPreRenderedHtml completes
