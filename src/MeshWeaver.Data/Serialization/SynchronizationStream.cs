@@ -123,7 +123,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             return;
         }
 
-        var valuesEqual = current is not null && Equals(current.Value, value.Value);
+        var valuesEqual = current is not null && ValuesEqual(current.Value, value.Value);
 
         // 🚨 Dedup PATCHES ONLY. A FULL push always applies — it is the owner re-asserting
         // its complete authoritative state (initial snapshot, SetFull overwrite, rollback /
@@ -150,6 +150,30 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         {
             logger.LogWarning(e, "[SYNC_STREAM] Exception setting current value for {Address}", Hub?.Address);
         }
+    }
+
+    /// <summary>
+    /// Value-EQUIVALENCE comparison for the patch-dedup gate — NOT reference/struct identity.
+    /// <para>🚨 <see cref="System.Text.Json.JsonElement"/> (the payload of EVERY layout-area
+    /// <c>SynchronizationStream&lt;JsonElement&gt;</c>) and <see cref="System.Text.Json.Nodes.JsonNode"/>
+    /// have NO value <c>Equals</c>: the struct/reference default is never equal for two
+    /// equal-CONTENT instances. Each reduce/render allocates a fresh instance, so
+    /// <c>object.Equals</c> returned false on every hop → the dedup at <see cref="SetCurrent"/>
+    /// never fired → an identical re-render re-posted <c>SetCurrentRequest</c> and fanned out
+    /// across every mirror hub (a ~4.5k-message/3s storm that saturated the single-threaded
+    /// action blocks and starved the real terminal transition past the consumer's timeout — the
+    /// "streaming cell never clears" wedge). Compare by content via <c>DeepEquals</c> instead.</para>
+    /// <para>Falls back to <c>object.Equals</c> for any other <c>TStream</c> so behaviour is
+    /// unchanged for non-JSON payloads — this can only ADD correct dedup, never suppress a genuine
+    /// change (DeepEquals is true only when the content is byte-for-byte equivalent).</para>
+    /// </summary>
+    private static bool ValuesEqual(TStream? a, TStream? b)
+    {
+        if (a is System.Text.Json.JsonElement ae && b is System.Text.Json.JsonElement be)
+            return System.Text.Json.JsonElement.DeepEquals(ae, be);
+        if (a is System.Text.Json.Nodes.JsonNode an && b is System.Text.Json.Nodes.JsonNode bn)
+            return System.Text.Json.Nodes.JsonNode.DeepEquals(an, bn);
+        return Equals(a, b);
     }
 
     private const string SynchronizationGate = nameof(SynchronizationGate);
