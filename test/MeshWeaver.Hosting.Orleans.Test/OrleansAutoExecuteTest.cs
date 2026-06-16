@@ -24,7 +24,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
 /// Orleans integration test: BuildThreadWithMessages + AutoExecutePendingMessage.
-/// Creates a thread with pre-populated Messages + PendingUserMessage in one shot.
+/// Creates a thread with a pre-populated queued message (PendingUserMessages) in one shot.
 /// Verifies that:
 /// 1. AutoExecutePendingMessage creates the child ThreadMessage nodes
 /// 2. UpdateThreadMessageContent routes to the response grain
@@ -94,7 +94,7 @@ public class OrleansAutoExecuteTest(ITestOutputHelper output) : OrleansSharedTes
             // (WatchForExecution → auto-execute dispatch). Wait for execution to settle.
             var thread = await GetHubContent<MeshThread>(client, threadPath)
                 .Should().Within(30.Seconds())
-                .Match(t => t is { IsExecuting: false, PendingUserMessage: null }
+                .Match(t => t is { IsExecuting: false }
                     && t.Messages.Count >= 2);
             Output.WriteLine("Thread execution complete");
 

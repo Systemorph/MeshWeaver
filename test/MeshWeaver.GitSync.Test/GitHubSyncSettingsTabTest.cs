@@ -10,8 +10,10 @@ using Xunit;
 namespace MeshWeaver.GitSync.Test;
 
 /// <summary>
-/// GUI test: the "GitHub Sync" settings tab renders on a Space's Settings page and is
-/// hidden on non-Space nodes (the provider self-filters on <c>NodeType == "Space"</c>).
+/// GUI test: the "GitHub Sync" settings tab renders on the Settings page of any node WITHIN a
+/// Space (the Space root and its descendants — always referring to the containing Space), and is
+/// hidden outside a Space (a top-level non-Space partition). The provider resolves the containing
+/// Space from the current node's path (first segment) and gates on it being a Space.
 /// </summary>
 public class GitHubSyncSettingsTabTest(ITestOutputHelper output) : GitHubSyncTestBase(output)
 {
@@ -33,10 +35,26 @@ public class GitHubSyncSettingsTabTest(ITestOutputHelper output) : GitHubSyncTes
     [Fact(Timeout = 60000)]
     public async Task GitHubSyncTab_HiddenOnNonSpace()
     {
-        // TestData is a Markdown node (seeded by the test base) — not a Space. Wait until
-        // the Settings page has settled (a default tab present), then assert our tab is absent.
+        // TestData is a top-level Markdown partition (seeded by the test base) — NOT a Space, and
+        // not inside one. Its containing partition root (itself) is not a Space, so the tab is
+        // hidden. Wait until the Settings page has settled (a default tab present), then assert absent.
         var json = await RenderSettings(new Address(TestPartition), j => j.GetRawText().Contains("Metadata"));
         Assert.DoesNotContain("GitHub Sync", json);
+    }
+
+    [Fact(Timeout = 60000)]
+    public async Task GitHubSyncTab_ShownOnChildNodeWithinSpace()
+    {
+        // A node INSIDE a Space (not the Space root) must also surface the tab — it acts on the
+        // containing Space. Create a Space, then a child node under it, and render the CHILD's
+        // Settings page: the GitHub Sync tab resolves the containing Space and shows there too.
+        var space = "GhChild" + Guid.NewGuid().ToString("N")[..8];
+        await CreateSpace(space, "Child Space");
+        var childPath = $"{space}/Docs/Readme";
+        await CreateMarkdown(childPath, "Readme", "# hi");
+
+        var json = await RenderSettings(new Address(childPath), j => j.GetRawText().Contains("GitHub Sync"));
+        Assert.Contains("GitHub Sync", json);
     }
 
     [Fact(Timeout = 60000)]

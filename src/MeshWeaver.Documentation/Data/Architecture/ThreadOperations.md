@@ -252,11 +252,16 @@ MeshWeaver reveals them so the user can choose among the MeshWeaver-group agents
 models. Routing to the concrete `IChatClientFactory` is unchanged — it still keys
 off the resolved agent's `PreferredModel`.
 
-Selection rides the **same path as everything else**: `StartThread` /
-`SubmitMessage` / `ResubmitMessage` take a `harness` argument →
-`Thread.PendingHarness` (via `ThreadInput.AppendUserInput`) → `RoundDispatch` →
-`RoundParams.Harness` → stamped onto the assistant cell as `ThreadMessage.Harness`,
-exactly mirroring `AgentName` / `ModelName`.
+Selection has **one home — the composer** (`Thread.Composer`, a `ThreadComposer`): the
+data-bound `Harness` / `AgentName` / `ModelName` fields the in-thread selectors bind to.
+`StartThread` / `SubmitMessage` keep that composer current (seeding it / folding the
+submitted message's selection back into it). When the submission watcher dispatches a round
+it reads the sticky selection straight off `Thread.Composer` — `PlanNextRound` →
+`RoundDispatch` → `RoundParams.Harness`/`.AgentName`/`.ModelName` — and `ThreadExecution`
+stamps the **assistant cell** with what actually ran (`ThreadMessage.Harness` etc., a display
+record, never the source). There is **no thread-level selection mirror** (`Pending*`,
+`SelectedAgentName`/`SelectedModelName`/`SelectedHarness`, `DraftText` were removed — they
+duplicated the composer and drifted).
 
 The **output cell records what actually ran**: `ThreadExecution` captures the
 harness, the real model id the harness reports (`ChatResponseUpdate.ModelId` — e.g.
@@ -273,19 +278,28 @@ server-side** on a single stable per-user node at `{userHome}/_ThreadTemplate`
 template node is the source of truth, so the draft and selection survive a reload /
 reboot and are shared across every space the user composes in.
 
+The composer state is a single record — `ThreadComposer` — with two homes (the
+out-of-thread template node, and `Thread.Composer` embedded on a real thread). It carries
+the draft `MessageContent`, the sticky `Harness`/`AgentName`/`ModelName` selection, and the
+per-message `Attachments`/`ContextPath`. There is **no separate `DraftText`/`Selected*`
+mirror on the thread** — the composer is the only selection/draft state.
+
 - **Load**: the composer one-shot-reads the template on init and applies the saved
   selection (always — the picker default) and, in the new-thread composer only, the
   draft text into the Monaco editor.
-- **Save**: selection changes write through immediately; the draft text is debounced
-  (`Throttle(600ms)`). In an *existing* thread the selection writes onto the thread
-  node instead (`SelectedHarness` etc.); the draft there stays transient.
-- **Submit**: `StartThread` clones the template's selection into the new thread (and
-  the typed text becomes the first message); the template's `DraftText` is then
-  cleared while the selection stays, so the next new thread inherits it.
+- **Save**: selection changes write through the composer immediately; the draft text is
+  debounced (`Throttle(600ms)`). In an *existing* thread the same `ThreadComposer` lives
+  embedded as `Thread.Composer`, so a `/agent` / `/model` / `/harness` pick updates it in
+  place — and is only *accepted* into a round when the thread is idle (the submission
+  watcher's `PlanNextRound` runs only on `Idle`/`Cancelled`, so a mid-round change stays
+  queued until the next round).
+- **Submit**: `StartThread` copies the template's composer (selection) onto the new thread
+  as `Thread.Composer` (the typed text becomes the first message; the draft + attachments
+  empty, the selection stays), so the next new thread inherits the selection.
 
-The template is **inert**: it carries `Thread.DraftText` but never any
-`PendingUserMessages`, so the submission watcher never fires on it. Its namespace is
-`{userHome}` (not `{userHome}/_Thread`), so the namespace-scoped resume-thread query
+The template is **inert**: it carries a composer draft but never any `PendingUserMessages`,
+so the submission watcher never fires on it. Its namespace is `{userHome}` (not
+`{userHome}/_Thread`), so the namespace-scoped resume-thread query
 (`namespace:{ns}/_Thread`) never lists it.
 
 ## Read-only threads (owner-only edit)

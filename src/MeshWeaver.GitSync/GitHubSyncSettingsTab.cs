@@ -14,8 +14,10 @@ using Microsoft.Extensions.DependencyInjection;
 namespace MeshWeaver.GitSync;
 
 /// <summary>
-/// The Space-settings "GitHub Sync" tab — the GUI for the whole feature. Shows only
-/// on Space nodes. Three sections:
+/// The "GitHub Sync" settings tab — the GUI for the whole feature. The feature acts on a
+/// whole Space, so the tab appears on the Settings page of EVERY node within a Space (always
+/// referring to the containing Space), not just on the Space root. It is hidden outside a Space
+/// (user/Admin partitions, etc.) and for users who lack Update on the Space. Three sections:
 /// <list type="number">
 ///   <item><b>Your GitHub account</b> — per-user OAuth Connect (device flow) / Disconnect.</item>
 ///   <item><b>Repository</b> — repo URL, branch (+ create-branch / create-repo toggles), subdirectory.</item>
@@ -38,7 +40,7 @@ public static class GitHubSyncSettingsTab
     // panel binds to it; Cancel flips RequestedStatus on it.
     private const string ActivityPathId = "ghActivityPath";
 
-    /// <summary>Registers the GitHub Sync settings tab provider (shown only on Space nodes).</summary>
+    /// <summary>Registers the GitHub Sync settings tab provider (shown on any node within a Space).</summary>
     public static MessageHubConfiguration AddGitHubSyncSettingsTab(this MessageHubConfiguration config)
         => config.AddSettingsMenuItems(new SettingsMenuItemProvider(GetTab));
 
@@ -54,16 +56,35 @@ public static class GitHubSyncSettingsTab
             Icon: FluentIcons.Document(),
             GroupIcon: FluentIcons.Document(),
             Order: 250,
-            RequiredPermission: Permission.Update);
+            // Visibility AND the Update check are gated on the CONTAINING SPACE below — not on the
+            // current node. The feature rewrites/exports the whole Space, so the right permission to
+            // require is Update on the Space, regardless of which node's Settings page we're on.
+            RequiredPermission: Permission.None);
 
-        return host.Workspace.GetMeshNodeStream()
-            .Select(node => string.Equals(node?.NodeType, GitHubSyncService.SpaceNodeType, StringComparison.Ordinal)
-                ? (IReadOnlyList<SettingsMenuItemDefinition>)new[] { tab }
-                : none)
+        // GitHub Sync acts on the whole Space, so the tab appears on the Settings page of EVERY node
+        // within a Space, always referring to the containing Space. Spaces are top-level (a Space's
+        // path IS its id — see SpaceNodeType), so the first segment of the current node's path is its
+        // containing partition root. Gate on (that root is a Space) AND (the user may Update it).
+        var spaceRoot = SpaceRootPath(host.Hub.Address.ToString());
+        if (string.IsNullOrEmpty(spaceRoot))
+            return Observable.Return(none);
+
+        return host.Workspace.GetMeshNodeStream(spaceRoot)
+            .Select(node => string.Equals(node?.NodeType, GitHubSyncService.SpaceNodeType, StringComparison.Ordinal))
+            .CombineLatest(
+                host.Hub.GetEffectivePermissions(spaceRoot),
+                (isSpace, perms) => isSpace && perms.HasFlag(Permission.Update))
             .DistinctUntilChanged()
+            .Select(show => show ? (IReadOnlyList<SettingsMenuItemDefinition>)new[] { tab } : none)
             .Catch<IReadOnlyList<SettingsMenuItemDefinition>, Exception>(_ => Observable.Return(none))
             .StartWith(none);
     }
+
+    /// <summary>The partition root for a node path — its first segment. Spaces are top-level (their
+    /// path IS their id), so the first segment of any node's path is its containing Space's path
+    /// (when that partition is a Space). Empty for a null/empty path.</summary>
+    private static string SpaceRootPath(string? path) =>
+        string.IsNullOrEmpty(path) ? "" : path.Split('/', 2)[0];
 
     internal static UiControl BuildContent(LayoutAreaHost host, StackControl stack, MeshNode? node)
     {
@@ -73,10 +94,15 @@ public static class GitHubSyncSettingsTab
         var creds = sp.GetRequiredService<GitHubCredentialService>();
         var prService = sp.GetRequiredService<PullRequestService>();
         var userId = sp.GetService<AccessService>()?.Context?.ObjectId ?? "";
-        var spacePath = node?.Path ?? "";
+        // The tab can render on ANY node within a Space (see GetTab); it always acts on the
+        // CONTAINING Space. spacePath = the partition root (first path segment, where the _GitSync
+        // config + all sync operations live); currentPath = the node whose Settings page we're on
+        // (used only for the OAuth "return here" redirect so Connect brings the user back to this tab).
+        var currentPath = node?.Path ?? "";
+        var spacePath = SpaceRootPath(currentPath);
 
-        if (!string.Equals(node?.NodeType, GitHubSyncService.SpaceNodeType, StringComparison.Ordinal))
-            return stack.WithView(Controls.Html("<p><em>GitHub Sync is available on Space nodes.</em></p>"));
+        if (string.IsNullOrEmpty(spacePath))
+            return stack.WithView(Controls.Html("<p><em>GitHub Sync is available inside a Space.</em></p>"));
 
         stack = stack.WithView(Controls.H2("GitHub Sync").WithStyle("margin: 0 0 8px 0;"));
         stack = stack.WithView(Controls.Html(
@@ -101,7 +127,7 @@ public static class GitHubSyncSettingsTab
             // the OAuth callback's saved credential syncs in. (A one-shot read grabbed the synced
             // query's empty pre-sync snapshot and showed "Not connected" right after connecting.)
             stack = stack.WithView((h, _) => creds.GetStream(userId)
-                .Select(c => (UiControl?)RenderConnect(creds, userId, spacePath, c, oauth.IsConfigured))
+                .Select(c => (UiControl?)RenderConnect(creds, userId, currentPath, c, oauth.IsConfigured))
                 .StartWith((UiControl?)Controls.Html(
                     "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);\">Checking GitHub connection…</p>")));
 
@@ -225,7 +251,7 @@ public static class GitHubSyncSettingsTab
     // ── Connect (OAuth authorization-code / callback flow) ─────────────────────
 
     private static UiControl RenderConnect(
-        GitHubCredentialService creds, string userId, string spacePath, GitHubCredential? cred, bool isConfigured)
+        GitHubCredentialService creds, string userId, string returnNodePath, GitHubCredential? cred, bool isConfigured)
     {
         if (cred is { AccessToken.Length: > 0 } || cred is { GitHubLogin.Length: > 0 })
         {
@@ -259,7 +285,7 @@ public static class GitHubSyncSettingsTab
         // as a mesh path ("page not found"). target="_top" opts the anchor out of Blazor's link
         // interception so the browser does a real navigation to the minimal-API endpoint (the same
         // intent as NavigateTo(forceLoad:true) used by the login button).
-        var returnPath = $"/{spacePath}/Settings/{TabId}";
+        var returnPath = $"/{returnNodePath}/Settings/{TabId}";
         var connectUrl = $"/connect/github?returnPath={Uri.EscapeDataString(returnPath)}";
         return Controls.Html(
             "<div style=\"font-size:0.85rem;display:flex;align-items:center;gap:8px;\">" +
