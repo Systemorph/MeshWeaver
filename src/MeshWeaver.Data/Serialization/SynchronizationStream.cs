@@ -169,11 +169,74 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     /// </summary>
     private static bool ValuesEqual(TStream? a, TStream? b)
     {
-        if (a is System.Text.Json.JsonElement ae && b is System.Text.Json.JsonElement be)
-            return System.Text.Json.JsonElement.DeepEquals(ae, be);
-        if (a is System.Text.Json.Nodes.JsonNode an && b is System.Text.Json.Nodes.JsonNode bn)
-            return System.Text.Json.Nodes.JsonNode.DeepEquals(an, bn);
-        return Equals(a, b);
+        if (a is null || b is null)
+            return ReferenceEquals(a, b);
+        try
+        {
+            // JsonElement is how MeshNode.Content AND every layout-area EntityStore ride — compare
+            // by structure, hand-rolled (NOT the .NET 9 JsonElement.DeepEquals intrinsic, absent on an
+            // older runtime → MissingMethodException). NEVER throw: a fault on this stream path failed
+            // grain activation in the distributed runtime, so any comparison error degrades to
+            // "changed" (emit), never an exception.
+            if (a is System.Text.Json.JsonElement ae && b is System.Text.Json.JsonElement be)
+                return JsonDeepEquals(ae, be);
+            if (a is System.Text.Json.Nodes.JsonNode an && b is System.Text.Json.Nodes.JsonNode bn)
+                return an.ToJsonString() == bn.ToJsonString();
+            return Equals(a, b);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Recursive structural equality over <see cref="System.Text.Json.JsonElement"/>:
+    /// objects (same keys, equal values), arrays (same length, element-wise, order-sensitive),
+    /// primitives by value. Independent of the .NET 9 <c>DeepEquals</c> intrinsic.</summary>
+    private static bool JsonDeepEquals(System.Text.Json.JsonElement a, System.Text.Json.JsonElement b)
+    {
+        if (a.ValueKind != b.ValueKind)
+            return false;
+        switch (a.ValueKind)
+        {
+            case System.Text.Json.JsonValueKind.Object:
+            {
+                var countA = 0;
+                foreach (var pa in a.EnumerateObject())
+                {
+                    countA++;
+                    if (!b.TryGetProperty(pa.Name, out var bv) || !JsonDeepEquals(pa.Value, bv))
+                        return false;
+                }
+                var countB = 0;
+                foreach (var _ in b.EnumerateObject())
+                    countB++;
+                return countA == countB;
+            }
+            case System.Text.Json.JsonValueKind.Array:
+            {
+                var ea = a.EnumerateArray();
+                var eb = b.EnumerateArray();
+                while (true)
+                {
+                    var na = ea.MoveNext();
+                    var nb = eb.MoveNext();
+                    if (na != nb)
+                        return false;
+                    if (!na)
+                        return true;
+                    if (!JsonDeepEquals(ea.Current, eb.Current))
+                        return false;
+                }
+            }
+            case System.Text.Json.JsonValueKind.String:
+                return a.GetString() == b.GetString();
+            case System.Text.Json.JsonValueKind.Number:
+                return a.GetRawText() == b.GetRawText();
+            default:
+                // True / False / Null / Undefined — the matched ValueKind alone determines equality.
+                return true;
+        }
     }
 
     private const string SynchronizationGate = nameof(SynchronizationGate);
