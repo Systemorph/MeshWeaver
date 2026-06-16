@@ -303,7 +303,12 @@ public static class JsonSynchronizationStream
                     // DeliveryFailure / NotFound — the owner address does not exist. Terminal: fault
                     // subscribers + tear down the keep-alive so we NEVER heartbeat or resubscribe a
                     // non-existent owner (the storm that wedges the session).
-                    logger.LogWarning(
+                    // Debug, NOT Warning: this is the recoverable "subscribed to an absent path" case
+                    // (the consumer re-asks if the node later appears), and it is exactly the path that
+                    // can fire frequently under Blazor re-render fan-out — a Warning here ships to App
+                    // Insights on every miss and bleeds ingest budget. The fault below already surfaces
+                    // the error to the subscriber (the GUI renders it); this line is only diagnostics.
+                    logger.LogDebug(
                         "SubscribeRequest for stream {StreamId} failed — owner {Owner} unreachable: {Message}",
                         reduced.StreamId, owner, ex.Message);
                     reduced.OnError(ex);
