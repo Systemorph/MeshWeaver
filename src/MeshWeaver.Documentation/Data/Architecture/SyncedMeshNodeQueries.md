@@ -147,7 +147,15 @@ workspace.GetQuery("agents-and-models",
 workspace.GetQuery($"agents:{contextPath}",
     "namespace:Agent nodeType:Agent",                                       // global
     $"namespace:{contextPath} scope:selfAndAncestors nodeType:Agent");      // path-local
+
+// Graph navigation — the next populated level below a node (drill), live.
+hub.GetQuery($"nav-below:{path}", $"namespace:{path} scope:nextLevel is:main context:search");
+hub.GetQuery($"nav-above:{path}", $"path:{path} scope:ancestors is:main");
 ```
+
+> `scope:nextLevel` is the drill primitive behind the Search area's graph navigator — the nearest
+> real nodes below a path, skipping empty namespace segments. See
+> [Query Syntax](/Doc/DataMesh/QuerySyntax) and [Mesh Search](/Doc/GUI/MeshSearch).
 
 ### Multi-query gating rule
 

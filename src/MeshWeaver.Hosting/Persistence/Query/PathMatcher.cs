@@ -32,6 +32,11 @@ public static class PathMatcher
             // All descendants recursively (excludes self)
             QueryScope.Descendants => IsDescendant(normalizedChanged, normalizedBase),
 
+            // Next populated level (frontier). The frontier can change on ANY subtree change —
+            // a new nearer node collapses it, a delete reopens it — so notify on the whole
+            // subtree and let the synced query re-run + recompute the frontier (cheap, correct).
+            QueryScope.NextLevel => IsDescendant(normalizedChanged, normalizedBase),
+
             // All ancestors (excludes self)
             QueryScope.Ancestors => IsAncestor(normalizedChanged, normalizedBase),
 

@@ -340,6 +340,21 @@ public class QueryParserTests
     }
 
     [Fact]
+    public void Parse_ScopeParameterNextLevel_SetsScope()
+    {
+        var result = _parser.Parse("namespace:ACME scope:nextLevel");
+
+        result.Scope.Should().Be(QueryScope.NextLevel);
+        result.Path.Should().Be("ACME");
+    }
+
+    [Fact]
+    public void Parse_ScopeParameterPopulated_AliasesNextLevel()
+    {
+        _parser.Parse("scope:populated").Scope.Should().Be(QueryScope.NextLevel);
+    }
+
+    [Fact]
     public void Parse_AllReservedParams_ExtractsAll()
     {
         var result = _parser.Parse("status:active laptop scope:descendants");

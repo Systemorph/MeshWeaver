@@ -937,7 +937,11 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // hub) so repeated GetQuery(id, options, …) calls reuse the same wrapper.
     private readonly ConcurrentDictionary<(object Id, JsonSerializerOptions Options), IObservable<IEnumerable<MeshNode>>> _optionsWrappedQueries = new();
 
-    public IObservable<IEnumerable<MeshNode>> GetQuery(object id, params string[] queries)
+    // Raw builder — PRIVATE. The public surface (hub/workspace.GetQuery → the
+    // internal options overload below) always injects the caller hub's
+    // JsonSerializerOptions, so no caller can build a synced query whose Content
+    // stays an untyped JsonElement. See IMeshNodeStreamCache.GetQuery doc.
+    private IObservable<IEnumerable<MeshNode>> GetQueryRaw(object id, params string[] queries)
     {
         if (queries is null || queries.Length == 0)
             throw new ArgumentException("At least one query string is required.", nameof(queries));
@@ -995,7 +999,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
 
     public IObservable<IEnumerable<MeshNode>> GetQuery(object id, JsonSerializerOptions options, params string[] queries)
     {
-        var raw = GetQuery(id, queries);
+        var raw = GetQueryRaw(id, queries);
         if (options is null) return raw;
         // Round-trip each emitted MeshNode's Content through the caller's
         // JsonSerializerOptions so consumers see typed domain instances

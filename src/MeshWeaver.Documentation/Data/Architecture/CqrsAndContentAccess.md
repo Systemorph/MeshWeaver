@@ -374,7 +374,7 @@ The handle's deserialisation wrap eliminates the `JsonElement` case at the bound
 
 ## Where scope walks live
 
-`scope:children / scope:descendants / scope:subtree / scope:hierarchy / scope:ancestorsAndSelf` are **per-provider** responsibilities. The mesh level never walks content; it only coordinates fan-out across providers and merges the results.
+`scope:children / scope:descendants / scope:subtree / scope:hierarchy / scope:ancestorsAndSelf / scope:nextLevel` are **per-provider** responsibilities. The mesh level never walks content; it only coordinates fan-out across providers and merges the results. (`scope:nextLevel` — the populated frontier — is a single Postgres anti-join in the PG provider and a frontier-filter over the descendant walk in the in-memory/static providers.)
 
 | Layer | Class | Walks? |
 |---|---|---|

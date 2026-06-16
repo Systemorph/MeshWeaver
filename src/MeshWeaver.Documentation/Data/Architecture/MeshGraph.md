@@ -68,6 +68,28 @@ Each level is itself a node with its own type, content, and access policy. The h
 | `Claims/CLM-2024-001` | `Claims` | `CLM-2024-001` |
 | `Finance/Close` | `Finance` | `Close` |
 
+## Navigating along the edges — the populated frontier
+
+A node's place in the graph is defined by its path, so its **edges** are its real ancestors (above)
+and the real nodes below it. But a path segment is not necessarily a node: `a/b/node` can exist with
+neither `a` nor `a/b` being a real node — they are pure namespace groupings. Navigation must *skip
+those empty segments*.
+
+The two query scopes that walk the graph's edges:
+
+| Direction | Scope | Returns |
+|---|---|---|
+| **Above** | `path:{p} scope:ancestors` | the real ancestor nodes (empty segments are absent — they are not nodes) |
+| **Below** | `namespace:{p} scope:nextLevel` | the **next populated level**: the nearest real nodes below `p`, skipping empty intermediate segments |
+
+`scope:nextLevel` (the *populated frontier*) returns each node strictly below `p` for which no other
+node sits between it and `p`. So at the root of the example above, `nextLevel` returns
+`Underwriting`, `Claims`, `Finance`, `Reserving`; but if only `Underwriting/Submissions/Q1` existed
+(with `Submissions` not a real node), `nextLevel` of `Underwriting` would surface
+`Underwriting/Submissions/Q1` directly. On Postgres this is one indexed anti-join — see
+[Query Syntax](/Doc/DataMesh/QuerySyntax) → `scope:nextLevel`. The Search area's **graph navigator**
+([Mesh Search](/Doc/GUI/MeshSearch)) renders exactly these two edges and re-roots on click.
+
 ---
 
 # Types as First-Class Data

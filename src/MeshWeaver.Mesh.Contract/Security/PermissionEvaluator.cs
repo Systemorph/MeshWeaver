@@ -514,7 +514,7 @@ internal static class PermissionEvaluator
         // scope's stream is cached PROCESS-WIDE under the key
         // "$security-access:{scope}" — every hub in the process shares one
         // upstream subscription per scope.
-        var self = cache.GetQuery($"$security-access:{key}", selfFilter);
+        var self = cache.GetQuery($"$security-access:{key}", hub.JsonSerializerOptions, selfFilter);
 
         // Parent: recursive reference to parent-scope cached observable.
         // Root scope folds in statics instead.
@@ -541,6 +541,7 @@ internal static class PermissionEvaluator
 
         var self = cache.GetQuery(
             $"$security-policy:{key}",
+            hub.JsonSerializerOptions,
             $"{nsFilter} nodeType:{SecurityCollections.PartitionAccessPolicyNodeType}");
 
         IObservable<ImmutableDictionary<string, PartitionAccessPolicy>> parentOrBase;
@@ -577,7 +578,7 @@ internal static class PermissionEvaluator
     private static IObservable<MeshNode[]> ObserveAllRoleNodes(IMessageHub hub)
     {
         var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-        return cache.GetQuery(RoleQueryId, $"nodeType:{RoleNodeType} scope:subtree")
+        return cache.GetQuery(RoleQueryId, hub.JsonSerializerOptions, $"nodeType:{RoleNodeType} scope:subtree")
             .Select(arr => arr.ToArray());
     }
 
