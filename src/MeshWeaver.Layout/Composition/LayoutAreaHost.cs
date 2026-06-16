@@ -768,7 +768,7 @@ public record LayoutAreaHost : IDisposable
     /// <summary>
     /// Reactive bridge for a Task-returning view-builder (orchestration, NOT an I/O leaf) —
     /// the replacement for <c>Observable.FromAsync</c> here. View generators must NOT run on an
-    /// <see cref="MeshWeaver.Mesh.Threading.IIoPool"/>: area renders nest (a parent render
+    /// <c>IIoPool</c>: area renders nest (a parent render
     /// subscribes child-area renders), so a shared pool would self-deadlock on a nested slot
     /// acquire. This composes reactively instead — cold (the builder starts on Subscribe), with a
     /// cancellation token that trips when the subscription is disposed (RegisterForDisposal).

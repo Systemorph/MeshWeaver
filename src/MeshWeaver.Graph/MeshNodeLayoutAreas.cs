@@ -927,7 +927,7 @@ public static class MeshNodeLayoutAreas
 
     /// <summary>
     /// Builds a breadcrumb trail for <paramref name="nodePath"/>: each ANCESTOR
-    /// segment is a <see cref="Controls.NavLink"/> to that ancestor's DEFAULT page
+    /// segment is a <c>Controls.NavLink</c> to that ancestor's DEFAULT page
     /// (<c>/{cumulative}</c> — empty area, never a hardcoded "Overview"), separated
     /// by a "/" glyph; the LAST segment (the current node) is plain bold text.
     /// Returns null when the path has no ancestors (single segment / empty) so the

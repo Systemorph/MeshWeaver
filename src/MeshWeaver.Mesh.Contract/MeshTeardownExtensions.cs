@@ -9,7 +9,7 @@ namespace MeshWeaver.Mesh;
 
 /// <summary>
 /// Deterministic teardown for a mesh root hub. Disposing a hub is reactive and
-/// returns immediately (<see cref="IMessageHub.Dispose"/> kicks off the disposal
+/// returns immediately (<c>IMessageHub.Dispose</c> kicks off the disposal
 /// state machine); callers that go on to tear down the hub's service scope —
 /// tests between <c>[Fact]</c>s, a silo on stop, a host on shutdown — must wait
 /// for ALL of the hub's activity to finish first, or a late continuation resolves

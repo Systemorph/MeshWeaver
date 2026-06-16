@@ -24,7 +24,7 @@ namespace MeshWeaver.Messaging;
 ///
 /// <para><b>The model: MessageHub sets, framework primitive preserves.</b>
 /// Every framework method that returns a cold <see cref="IObservable{T}"/>
-/// wraps its return with <see cref="CarryAccessContext{T}(System.IObservable{T},System.IServiceProvider)"/> internally. The
+/// wraps its return with <see cref="CarryAccessContext{T}(System.IObservable{T},System.IServiceProvider,System.Boolean)"/> internally. The
 /// helper captures <see cref="AccessService.Context"/> at the moment the
 /// primitive runs (the caller's thread, where AsyncLocal is correct) and
 /// re-stamps it on every emission of the returned pipeline via a per-callback

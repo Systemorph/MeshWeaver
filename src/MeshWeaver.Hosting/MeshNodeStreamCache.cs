@@ -695,7 +695,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
 
     /// <summary>
     /// Builds the per-path Concat pipeline that processes <see cref="UpdateRequest"/>s
-    /// serially. Each request applies its patch through the local <see cref="Handle"/>
+    /// serially. Each request applies its patch through the local <c>Handle</c>
     /// (LOCAL_EMIT) and completes immediately — it does NOT wait for the patch's echo
     /// from the owner. The owning node hub's single-threaded action block already
     /// serialises patches, so the next queued Update sees post-patch state via the

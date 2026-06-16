@@ -22,7 +22,7 @@ public static class AutocompleteSnapshots
 {
     /// <summary>
     /// The empty snapshot — the seed every provider/aggregator starts from. A provider must emit at
-    /// least this; it must NEVER return <see cref="Observable.Empty{TResult}"/>, which would stall the
+    /// least this; it must NEVER return <see cref="Observable.Empty{TResult}()"/>, which would stall the
     /// aggregator's <see cref="Observable.CombineLatest{TSource}(System.Collections.Generic.IEnumerable{IObservable{TSource}})"/>
     /// (CombineLatest only emits once EVERY source has produced at least one value).
     /// </summary>

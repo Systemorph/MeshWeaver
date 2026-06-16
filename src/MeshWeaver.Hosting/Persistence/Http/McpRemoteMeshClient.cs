@@ -32,7 +32,7 @@ namespace MeshWeaver.Hosting.Persistence.Http;
 /// <para>The <see cref="McpClient"/> connect/handshake runs <b>exactly once</b>
 /// via the <see cref="IIoPool"/> <i>promise-cache</i>: the first caller kicks the
 /// connect off on the pool, every later caller composes off the same cached
-/// <see cref="ReplaySubject{T}"/>-backed observable (<see cref="IoPoolExtensions.Run{T}"/>)
+/// <see cref="System.Reactive.Subjects.ReplaySubject{T}"/>-backed observable (<see cref="IoPoolExtensions.Run{T}"/>)
 /// and replays the one connected client — the textbook replacement for a
 /// <c>SemaphoreSlim(1,1)</c> connect gate. Disposed on <see cref="DisposeAsync"/>.
 /// Reusable for the lifetime of one mirror operation.</para>

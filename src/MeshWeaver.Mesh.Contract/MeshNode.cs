@@ -302,7 +302,7 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
 
     /// <summary>
     /// Content-aware value equality. <see cref="Content"/> is an <c>object?</c> that —
-    /// after a cross-hub sync round-trip, AND in the <see cref="IMeshNodeStreamCache"/>
+    /// after a cross-hub sync round-trip, AND in the <c>IMeshNodeStreamCache</c>
     /// whose hub does not know domain types — is a <see cref="JsonElement"/>. A
     /// <c>JsonElement</c> has NO structural equality: two elements with byte-identical
     /// JSON are never <c>.Equals</c>. The compiler-synthesized record equality therefore

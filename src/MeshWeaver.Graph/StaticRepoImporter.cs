@@ -43,7 +43,7 @@ public static class StaticRepoImporter
     /// the hub. No-op when none is registered (so a host that registers no source is untouched).
     /// Runs under <see cref="AccessService.ImpersonateAsSystem"/> so the import's overwrite / create /
     /// prune are authorized on partitions whose <c>_Policy</c> is read-only to ordinary users:
-    /// <see cref="RlsNodeValidator"/> short-circuits to Valid for the well-known System identity
+    /// <c>RlsNodeValidator</c> short-circuits to Valid for the well-known System identity
     /// (it bypasses RLS entirely — it does NOT rely on a <see cref="MeshWeaver.Mesh.Security.Permission.Sync"/>
     /// grant, which the read-only <c>_Policy</c> cap would strip anyway). System-based sync is the
     /// intended mechanism for built-in static-repo content.
