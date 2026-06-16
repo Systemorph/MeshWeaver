@@ -607,6 +607,23 @@ internal static class ThreadSubmissionServer
             ? pendingForRound[^1].Msg.Text
             : (thread.PendingUserMessage ?? "");
 
+        // 🚫 Never launch a round with nothing to send. A whitespace-only round — a slash command
+        // whose text was cut, or a stray empty submission — has no user content; running it reaches
+        // CreateChatClient with no input and storms "No model selected", and the empty round never
+        // settles (the wedge). The upstream StartThread/SubmitMessage guards already avoid SEEDING an
+        // empty round; this is the watcher-level backstop so a round NEVER launches on empty. Resumes
+        // legitimately carry no fresh pending text (their user cell is already in Messages), so guard
+        // FRESH dispatches only. Roll back any StartingExecution claim so the thread settles to Idle
+        // instead of parking at StartingExecution.
+        if (!isResume && string.IsNullOrWhiteSpace(roundUserText))
+        {
+            logger?.LogInformation(
+                "[ThreadSubmission] DispatchRound NOTHING_TO_RUN thread={ThreadPath} responseId={ResponseId} — skipping launch (no user content)",
+                threadPath, responseMsgId);
+            onFailure?.Invoke();
+            return;
+        }
+
         // Step 2 + 3: commit the round to the thread state (one atomic
         // UpdateMeshNode) and start agent streaming. Shared by the fresh-dispatch
         // path (after the response cell is created) and the resume path (cell

@@ -696,13 +696,18 @@ internal static class ThreadExecution
         RoundParams request,
         AccessContext? userAccessContext)
     {
-        // Selections may arrive as picked node PATHS ("Harness/MeshWeaver",
-        // "_Provider/Anthropic/claude-…", "Agent/Coder") — the composer flows them
-        // end-to-end un-resolved. Execution, factories, and the persisted cell stamps
-        // all match bare ids (the last path segment), so normalize ONCE at this boundary.
+        // Selections arrive as picked node PATHS ("Harness/MeshWeaver",
+        // "_Provider/Anthropic/claude-…", "Agent/Coder", "AgenticPension/Agent/Datenextraktion").
+        // Models and harnesses match bare REGISTERED ids (the last path segment), so they
+        // normalize at this boundary. The AGENT does NOT: a space-scoped agent
+        // ("AgenticPension/Agent/Datenextraktion") collides with a built-in of the same
+        // last segment when collapsed to the bare id, so it must resolve by FULL PATH.
+        // AgentChatClient.SetSelectedAgent / SelectAgent match the full path (with a
+        // bare-id fallback). The cell stamp's display name is normalized to the short
+        // name where it's written (PushToResponseMessage), so the persisted AgentName
+        // stays the friendly last segment, not the full path.
         request = request with
         {
-            AgentName = SelectionId.IdOf(request.AgentName),
             ModelName = SelectionId.IdOf(request.ModelName),
             Harness = SelectionId.IdOf(request.Harness)
         };
@@ -842,7 +847,9 @@ internal static class ThreadExecution
                     Text = nextText,
                     ToolCalls = mergedToolCalls,
                     UpdatedNodes = mergedNodes,
-                    AgentName = agentName ?? current.AgentName,
+                    // The agent is carried through as a full PATH for resolution; the
+                    // persisted/displayed cell author is the friendly short name (last segment).
+                    AgentName = SelectionId.IdOf(agentName) ?? current.AgentName,
                     ModelName = modelName ?? current.ModelName,
                     Harness = harness ?? current.Harness,
                     InputTokens = inputTokens ?? current.InputTokens,
@@ -1283,6 +1290,53 @@ internal static class ThreadExecution
                     : chatHistory.Add(new ChatMessage(ChatRole.User, request.UserMessageText));
                 logger.LogInformation("[ThreadExec] Sending {Count} messages to agent ({HistoryCount} history + 1 new): threadPath={ThreadPath}, agent={Agent}",
                     allMessages.Count, chatHistory.Count, threadPath, request.AgentName ?? "(default)");
+
+                // 🚫 Nothing to send: no current user turn AND no prior history. There is
+                // genuinely nothing for the agent to respond to — finish the round gracefully
+                // WITHOUT calling the LLM. Calling it here is exactly the storm path: the chat
+                // client's CreateChatClient throws ("No model selected") and AgentChatClient
+                // logs it once per agent. Write the terminal state deterministically (response
+                // cell → Completed, thread → Idle) and complete the round observable so the
+                // submission watcher sees a settled round.
+                if (allMessages.Count == 0)
+                {
+                    logger.LogInformation(
+                        "[ThreadExec] NOTHING_TO_SEND threadPath={ThreadPath} responseId={ResponseId} — finishing round with no LLM call",
+                        threadPath, responseMsgId);
+                    var nothingDone = new System.Reactive.Subjects.AsyncSubject<System.Reactive.Unit>();
+                    PushToResponseMessage(
+                        "*Nothing to send — no message content.*",
+                        ImmutableList<ToolCallEntry>.Empty, ImmutableList<NodeChangeEntry>.Empty,
+                        request.AgentName, request.ModelName,
+                        completedAt: DateTime.UtcNow,
+                        status: ThreadMessageStatus.Completed,
+                        summary: "Nothing to send.",
+                        harness: request.Harness).Subscribe(
+                        _ => { },
+                        ex => execLogger?.LogWarning(ex,
+                            "PushToResponseMessage(NothingToSend) failed for {ThreadPath}", threadPath));
+                    UpdateThreadExecution(t => t with
+                    {
+                        Status = ThreadExecutionStatus.Idle, ExecutionStatus = null, ActiveMessageId = null,
+                        ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null,
+                        PendingUserMessage = null, PendingAgentName = null, PendingModelName = null,
+                        PendingContextPath = null, PendingAttachments = null,
+                        Summary = "Nothing to send."
+                    }).Subscribe(
+                        _ => { },
+                        ex =>
+                        {
+                            execLogger?.LogWarning(ex,
+                                "UpdateThreadExecution(NothingToSend): stream.Update failed for {ThreadPath}", threadPath);
+                            nothingDone.OnError(ex);
+                        },
+                        () =>
+                        {
+                            nothingDone.OnNext(System.Reactive.Unit.Default);
+                            nothingDone.OnCompleted();
+                        });
+                    return nothingDone;
+                }
 
                 logger.LogInformation("[ThreadExec] STREAMING_START: threadPath={ThreadPath}, responsePath={ResponsePath}",
                     threadPath, responsePath);
@@ -2010,7 +2064,8 @@ internal static class ThreadExecution
             message: preview,
             type: NotificationType.General,
             targetNodePath: threadPath,
-            createdBy: agentName ?? "agent",
+            // agentName arrives as a full PATH (resolution form); store the friendly short name.
+            createdBy: SelectionId.IdOf(agentName) ?? "agent",
             icon: "/static/NodeTypeIcons/chat.svg")
             .Subscribe(
                 _ => { },

@@ -81,34 +81,47 @@ public static class HubThreadExtensions
         // so the agent's context is that node and consumers can navigate thread → source.
         if (!string.IsNullOrEmpty(mainNode))
             threadNode = threadNode with { MainNode = mainNode };
-        var firstMessageId = Guid.NewGuid().ToString("N")[..8];
-        var firstMessage = ThreadInput.CreateUserMessage(
-            userText,
-            createdBy: createdBy,
-            authorName: authorName,
-            agentName: agentName,
-            modelName: modelName,
-            contextPath: contextPath,
-            attachments: attachments,
-            harness: harness);
 
-        var seededThread = (threadNode.Content as MeshThread ?? new MeshThread()) with
+        // 🚫 Nothing-to-do: whitespace-only first message (e.g. the user ran a slash command —
+        // the command text is CUT and what remains is empty). Create the thread (the composer
+        // selection still carries onto it) but seed NO pending message — there is nothing to
+        // submit, so the submission watcher must NOT dispatch a round (which would reach
+        // CreateChatClient with no input and storm "No model selected"). The command's side
+        // effect (agent/model/harness pick) already happened on the composer.
+        var hasFirstMessage = !string.IsNullOrWhiteSpace(userText);
+        var firstMessageId = Guid.NewGuid().ToString("N")[..8];
+
+        var baseThread = (threadNode.Content as MeshThread ?? new MeshThread()) with
         {
-            Messages = ImmutableList.Create(firstMessageId),
-            UserMessageIds = ImmutableList.Create(firstMessageId),
-            PendingUserMessages = ImmutableDictionary<string, ThreadMessage>.Empty
-                .SetItem(firstMessageId, firstMessage),
-            PendingAgentName = agentName,
-            PendingModelName = modelName,
-            PendingHarness = harness,
-            PendingContextPath = contextPath,
-            PendingAttachments = attachments,
             // The thread's own composer: selection survives, draft is consumed by the
             // first message, the navigate-signal never carries over.
             Composer = composer is null
                 ? null
                 : composer with { MessageContent = null, Attachments = null, OpenThreadPath = null }
         };
+
+        var seededThread = hasFirstMessage
+            ? baseThread with
+            {
+                Messages = ImmutableList.Create(firstMessageId),
+                UserMessageIds = ImmutableList.Create(firstMessageId),
+                PendingUserMessages = ImmutableDictionary<string, ThreadMessage>.Empty
+                    .SetItem(firstMessageId, ThreadInput.CreateUserMessage(
+                        userText,
+                        createdBy: createdBy,
+                        authorName: authorName,
+                        agentName: agentName,
+                        modelName: modelName,
+                        contextPath: contextPath,
+                        attachments: attachments,
+                        harness: harness)),
+                PendingAgentName = agentName,
+                PendingModelName = modelName,
+                PendingHarness = harness,
+                PendingContextPath = contextPath,
+                PendingAttachments = attachments
+            }
+            : baseThread; // empty thread — no round
         threadNode = threadNode with { Content = seededThread };
 
         var delivery = hub.Post(
@@ -165,6 +178,13 @@ public static class HubThreadExtensions
             onError?.Invoke("SubmitMessage requires threadPath. Use StartThread for new threads.");
             return;
         }
+
+        // 🚫 Nothing-to-do: whitespace-only text (e.g. the user ran a slash command — the
+        // command text is CUT and what remains is empty). There is nothing to submit, so do
+        // NOT append a pending message: enqueuing an empty round would reach CreateChatClient
+        // with no input and storm "No model selected". The command's side effect already ran.
+        if (string.IsNullOrWhiteSpace(userText))
+            return;
 
         var userMessage = ThreadInput.CreateUserMessage(
             userText ?? string.Empty,

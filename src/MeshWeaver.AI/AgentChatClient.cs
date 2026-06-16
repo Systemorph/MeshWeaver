@@ -37,6 +37,11 @@ public class AgentChatClient : IAgentChat
     private string? lastLoadedNodeTypePath;
     private string currentThreadId = Guid.NewGuid().AsString();
     private string? currentAgentName;
+    // The user's explicit picker selection, kept as the FULL node PATH
+    // ("AgenticPension/Agent/Datenextraktion"). Resolution prefers an exact path
+    // match against loadedAgents so a space-scoped agent never collides with a
+    // built-in of the same last segment; SelectionId.IdOf gives the bare-id fallback.
+    private string? currentAgentPath;
     private AgentSession? sharedThread;
     private string? currentModelName;
     private string? persistentThreadId;
@@ -976,9 +981,30 @@ public class AgentChatClient : IAgentChat
                 return foundRef.Value;
         }
 
-        // 3. Use explicitly selected agent (from dropdown) if set
-        if (!string.IsNullOrEmpty(currentAgentName) && agents.TryGetValue(currentAgentName, out var selectedAgent))
-            return selectedAgent;
+        // 3. Use the explicitly selected agent (from the dropdown / composer) if set.
+        //    The picker stores the FULL node PATH, so resolve by path FIRST: a
+        //    space-scoped agent ("AgenticPension/Agent/Datenextraktion") must never be
+        //    confused with a built-in sharing its last segment. Bare-id is the fallback
+        //    (legacy bare-name selections + built-ins picked by id).
+        //    🚨 An EXPLICIT-but-unresolvable selection does NOT silently fall through to
+        //    a different agent (steps 4-6): that produced the wrong-agent / NotFound
+        //    confusion in prod. Surface a clear, named error instead — GetResponseAsync /
+        //    GetStreamingResponseAsync render lastAgentCreationError as the chat output.
+        if (!string.IsNullOrEmpty(currentAgentPath) || !string.IsNullOrEmpty(currentAgentName))
+        {
+            var explicitlySelected = ResolveSelectedAgent();
+            if (explicitlySelected != null)
+                return explicitlySelected;
+
+            var requested = currentAgentPath ?? currentAgentName;
+            lastAgentCreationError =
+                $"Selected agent '{requested}' was not found among the available agents "
+                + $"([{string.Join(", ", loadedAgents.Select(a => a.Path ?? a.Name))}]). "
+                + "It may have been moved, renamed, or is not available in this context — "
+                + "pick another agent from the list.";
+            logger.LogWarning("[AgentChatClient] {Error}", lastAgentCreationError);
+            return null;
+        }
 
         // 4. Prefer the configuration-marked default agent (IsDefault=true).
         //    🚨 Without this, the fallback below routes to loadedAgents[0]
@@ -1007,11 +1033,75 @@ public class AgentChatClient : IAgentChat
         // 6. Return first agent as fallback
         return agents.Values.FirstOrDefault();
     }
+
+    /// <summary>
+    /// Resolves the user's explicit picker selection (<see cref="currentAgentPath"/> /
+    /// <see cref="currentAgentName"/>) to a <see cref="ChatClientAgent"/>, or null when the
+    /// selection matches no loaded agent.
+    /// <para>Match order: exact FULL PATH against <see cref="loadedAgents"/> first (so a
+    /// space-scoped agent is never confused with a built-in sharing its last segment),
+    /// then bare id. The created-agents dictionary is keyed by the bare id
+    /// (<see cref="AgentConfiguration.Id"/>) because delegation/hand-off resolve by id —
+    /// so when two loaded agents share a last segment (a built-in and a space override),
+    /// the dictionary holds only one. When the dictionary entry is NOT the path-matched
+    /// config (a genuine collision), build the right agent on demand from the matched
+    /// config so the user gets the agent they actually picked.</para>
+    /// </summary>
+    private ChatClientAgent? ResolveSelectedAgent()
+    {
+        // a) Exact full-path match (the picker stores the node path).
+        var matched = !string.IsNullOrEmpty(currentAgentPath)
+            ? loadedAgents.FirstOrDefault(a =>
+                string.Equals(a.Path, currentAgentPath, StringComparison.OrdinalIgnoreCase))
+            : null;
+
+        // b) Bare-id match (legacy bare-name selection, or a built-in picked by id).
+        matched ??= !string.IsNullOrEmpty(currentAgentName)
+            ? loadedAgents.FirstOrDefault(a =>
+                string.Equals(a.Name, currentAgentName, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(a.AgentConfiguration?.Id, currentAgentName, StringComparison.OrdinalIgnoreCase))
+            : null;
+
+        if (matched?.AgentConfiguration is not { } config)
+            return null;
+
+        // The created-agents dict is keyed by bare id. The common (no-collision) case:
+        // the dict entry IS this config — return it.
+        if (agents.TryGetValue(config.Id, out var existing)
+            && string.Equals(existing.Instructions, config.Instructions, StringComparison.Ordinal))
+            return existing;
+
+        // Collision (or the agent was skipped during the batch build): construct the
+        // path-matched agent on demand so the selection resolves to the RIGHT one rather
+        // than whichever same-id agent won the dictionary slot.
+        var factory = GetFactoryForModel(currentModelName);
+        if (factory == null)
+            return existing; // no factory to build with — best effort
+
+        try
+        {
+            return factory.CreateAgent(config, this, agents,
+                loadedAgents.Select(a => a.AgentConfiguration).ToImmutableList(), currentModelName);
+        }
+        catch (Exception ex)
+        {
+            lastAgentCreationError =
+                $"Failed to create selected agent '{matched.Path ?? config.Id}' via factory "
+                + $"'{factory.Name}' for model '{currentModelName}': {ex.Message}";
+            logger.LogWarning(ex, "[AgentChatClient] {Error}", lastAgentCreationError);
+            return existing;
+        }
+    }
+
     /// <inheritdoc />
     public void SetSelectedAgent(string? agentName)
     {
-        // Accept the picked node PATH ("Agent/Coder") or the bare name — the agents
-        // dictionary is keyed by name, which is the last path segment.
+        // The picker stores the node PATH ("Agent/Coder",
+        // "AgenticPension/Agent/Datenextraktion"); a bare name is also accepted.
+        // Keep BOTH forms: the full path drives an exact-path match in SelectAgent
+        // (so a space-scoped agent isn't confused with a built-in sharing its last
+        // segment), and the bare id is the fallback / dictionary key.
+        currentAgentPath = string.IsNullOrEmpty(agentName) ? null : agentName;
         currentAgentName = SelectionId.IdOf(agentName);
     }
 
@@ -1261,8 +1351,11 @@ public class AgentChatClient : IAgentChat
     /// into <see cref="loadedAgents"/> and rebuild the <see cref="agents"/>
     /// dictionary. Models are populated independently in their own
     /// subscription — see <c>Initialize</c>.
+    /// <para>Internal so the selection/resolution tests can drive the exact
+    /// production code path (the synced-query Subscribe callback calls this)
+    /// without standing up a mesh + synced query.</para>
     /// </summary>
-    private void ApplyAgents(
+    internal void ApplyAgents(
         IReadOnlyList<AgentDisplayInfo> agentInfos,
         string? contextPath)
     {
@@ -1335,6 +1428,13 @@ public class AgentChatClient : IAgentChat
         var createdAgents = ImmutableDictionary<string, ChatClientAgent>.Empty;
         var orderedConfigs = OrderAgentsForCreation(configs);
 
+        // 🛑 Anti-storm: a GLOBAL build failure (e.g. "No model selected" — no model is
+        // configured) throws IDENTICALLY for every agent, so the per-agent catch below would
+        // log the same warning once per agent (≈22 lines in ~1ms = the log storm). De-dupe by
+        // message: log each distinct build error ONCE per build. lastAgentCreationError still
+        // carries the latest message to the GUI regardless.
+        var loggedBuildErrors = new HashSet<string>(StringComparer.Ordinal);
+
         // 🚨 Build the dict LOCALLY, then ATOMICALLY swap into `agents` at
         // the end. The previous shape mutated the shared `agents` field per
         // iteration (one-by-one SetItem) — every concurrent SelectAgent
@@ -1369,9 +1469,12 @@ public class AgentChatClient : IAgentChat
             {
                 lastAgentCreationError =
                     $"Failed to create agent '{agentConfig.Id}' via factory '{factory?.Name}' for model '{effectiveModel}': {ex.Message}";
-                logger.LogWarning(ex,
-                    "[AgentChatClient] Skipping agent {Agent} ({Factory}/{Model}): {Message}",
-                    agentConfig.Id, factory?.Name, effectiveModel, ex.Message);
+                // Only log a given underlying error message ONCE per build — a global
+                // failure (e.g. "No model selected") repeats per agent and would storm.
+                if (loggedBuildErrors.Add(ex.Message))
+                    logger.LogWarning(ex,
+                        "[AgentChatClient] Skipping agent {Agent} ({Factory}/{Model}): {Message}",
+                        agentConfig.Id, factory?.Name, effectiveModel, ex.Message);
             }
         }
 
@@ -1388,9 +1491,11 @@ public class AgentChatClient : IAgentChat
             }
             catch (Exception ex)
             {
-                logger.LogWarning(ex,
-                    "[AgentChatClient] Skipping cyclic agent {Agent}: {Message}",
-                    agentConfig.Id, ex.Message);
+                // Same per-build de-dupe as the main loop above.
+                if (loggedBuildErrors.Add(ex.Message))
+                    logger.LogWarning(ex,
+                        "[AgentChatClient] Skipping cyclic agent {Agent}: {Message}",
+                        agentConfig.Id, ex.Message);
             }
         }
 

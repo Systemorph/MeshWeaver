@@ -81,6 +81,32 @@
     color: var(--neutral-foreground-hint, #666);
 }
 
+/* Path shown small + muted beneath the name (the "nice mesh node display"). Truncates with
+   an ellipsis so a long space-scoped path (AgenticPension/Agent/Datenextraktion) never blows
+   out the picker width; the full path is available on hover via the title attribute. */
+.mesh-node-picker-path,
+.mesh-node-picker-item-path {
+    font-size: 11px;
+    color: var(--neutral-foreground-hint, #666);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Category/group chip, right-aligned in the row. */
+.mesh-node-picker-category,
+.mesh-node-picker-item-category {
+    margin-left: auto;
+    align-self: center;
+    flex-shrink: 0;
+    font-size: 10px;
+    line-height: 1;
+    color: var(--neutral-foreground-hint, #666);
+    background: var(--neutral-layer-3, #f0f0f0);
+    border-radius: 8px;
+    padding: 3px 8px;
+}
+
 .mesh-node-picker-clear {
     background: none;
     border: none;

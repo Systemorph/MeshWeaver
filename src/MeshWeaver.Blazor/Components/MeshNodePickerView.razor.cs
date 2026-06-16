@@ -366,17 +366,33 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
 
         // Reactive — Subscribe, never await (await on a hub round-trip is a 100%
         // deadlock; see Doc/Architecture/AsynchronousCalls.md).
+        // When the node can't be resolved (unknown / moved / mismatched path — e.g. a
+        // stale agent selection like "AgenticPension/Agent/Datenextraktion"), the combobox
+        // must still show the friendly SHORT name (the last path segment), never the raw
+        // full path. The Value retains the full path for resolution; only the DISPLAY is
+        // shortened.
         Hub.GetMeshNode(Value, TimeSpan.FromSeconds(10))
             .Subscribe(
                 node =>
                 {
-                    _selectedNode = node ?? new MeshNode(Value) { Name = Value };
+                    _selectedNode = node ?? PlaceholderNode(Value);
                     InvokeAsync(StateHasChanged);
                 },
                 _ =>
                 {
-                    _selectedNode = new MeshNode(Value) { Name = Value };
+                    _selectedNode = PlaceholderNode(Value);
                     InvokeAsync(StateHasChanged);
                 });
+    }
+
+    /// <summary>
+    /// A display-only stand-in for an unresolved selection: keeps the full path as the
+    /// node Path/Id but shows the SHORT name (last path segment) in the combobox so the
+    /// user sees "Datenextraktion", not "AgenticPension/Agent/Datenextraktion".
+    /// </summary>
+    private static MeshNode PlaceholderNode(string path)
+    {
+        var shortName = path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
+        return MeshNode.FromPath(path) with { Name = shortName };
     }
 }

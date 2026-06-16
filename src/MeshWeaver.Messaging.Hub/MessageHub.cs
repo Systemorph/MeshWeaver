@@ -144,6 +144,17 @@ public sealed class MessageHub : IMessageHub
     }
 
     public MessageHubRunLevel RunLevel { get; private set; }
+
+    /// <summary>
+    /// Non-null once a BuildupAction faulted during init. The hub stays <see cref="MessageHubRunLevel.Started"/>
+    /// (the init gate is open, so it still REACTS to messages and can be torn down) but is in a FAILED state:
+    /// every non-lifecycle request is refused with a typed <see cref="DeliveryFailure"/>
+    /// (<see cref="ErrorType.Failed"/>) carrying this error. This is the "status failed" marker — mirrors
+    /// <c>DataContext.InitializationError</c> (MeshWeaver.Data), lifted to the hub level. Set by
+    /// <see cref="EnterInitializationFailedState"/>.
+    /// </summary>
+    public Exception? InitializationError { get; private set; }
+
     private readonly IMessageService messageService;
     /// <summary>
     /// Parent hub address captured at construction. Used in disposal logging so we
@@ -350,9 +361,22 @@ public sealed class MessageHub : IMessageHub
     /// and opens the Initialize gate when the composed sequence completes — no <c>await</c>/<c>for</c>-await.
     /// Each action advances on its first emission (or <c>DefaultIfEmpty</c>) via <c>Take(1)</c>, matching the
     /// previous FirstAsync-per-action semantics; the gate opens exactly once after every action has signalled.
-    /// An action that faults propagates the error (the gate never opens, the hub never reaches Started) — as the
-    /// old await loop did. Bridged to the Task-based rule chain at the <c>Register</c> edge.
     /// </summary>
+    /// <remarks>
+    /// <para><b>Robustness — a faulting BuildupAction must NOT wedge the hub.</b> A throw in init used to
+    /// propagate out of the <c>Concat</c> so the <c>Select</c> that calls <see cref="OpenGate"/> never ran:
+    /// the Initialize gate stayed closed forever, so EVERY later message deferred until the 30s
+    /// deferral-timeout — which the user experiences as an unrecoverable hang (the atioz AgenticPension
+    /// agent-select wedge, 2026-06-16). The <c>.Catch</c> below mirrors
+    /// <c>DataContext</c> (MeshWeaver.Data)'s per-context guard, lifted to the hub level so EVERY
+    /// BuildupAction is covered: on a fault the hub enters a FAILED state (see
+    /// <see cref="EnterInitializationFailedState"/>) that answers every request with a typed
+    /// <see cref="DeliveryFailure"/> carrying the init error — FAST, not a 30s wedge — and ALWAYS opens the
+    /// gate so those rejections actually flow. The error is now observable end-to-end: callers get a
+    /// <c>DeliveryFailure</c> and the GUI's area binding renders it instead of spinning forever. See
+    /// <c>Doc/Architecture/HubInitializationFailure.md</c>.</para>
+    /// Bridged to the Task-based rule chain at the <c>Register</c> edge.
+    /// </remarks>
     private IObservable<IMessageDelivery> HandleInitialize(IMessageDelivery<InitializeHubRequest> request)
     {
         logger.LogDebug("Message hub {address} initializing via InitializeHubRequest", Address);
@@ -371,7 +395,50 @@ public sealed class MessageHub : IMessageHub
                 OpenGate(MessageHubConfiguration.InitializeGateName);
 
                 return request.Processed();
+            })
+            .Catch((Exception ex) =>
+            {
+                // A BuildupAction faulted. Do NOT leave the gate closed (→ 30s deferral-timeout wedge):
+                // enter a FAILED state that surfaces a clear DeliveryFailure for every later request, then
+                // ALWAYS open the gate so those rejections (and disposal) can flow.
+                logger.LogError(ex,
+                    "Hub {Address} initialization failed — a BuildupAction faulted. Hub is now in FAILED state.",
+                    Address);
+                EnterInitializationFailedState(ex);
+                OpenGate(MessageHubConfiguration.InitializeGateName);
+                return Observable.Return(request.Failed($"Hub '{Address}' initialization failed: {ex.Message}"));
             });
+    }
+
+    /// <summary>
+    /// Puts the hub in a FAILED state after an initialization fault. Registers a front-of-chain rule that
+    /// answers every subsequent request with a <see cref="DeliveryFailure"/> carrying the init error, so
+    /// callers — and the GUI's area binding — get a clear, FAST error instead of the 30s deferral-timeout
+    /// wedge a closed init gate produces. Lifecycle/control messages pass through unchanged so the hub can
+    /// still be torn down and the failure can't ping-pong (the same bypass set
+    /// <see cref="MessageService"/> applies at the gate). Mirrors
+    /// <c>DataContext</c> (MeshWeaver.Data)'s per-context guard, lifted to the hub level.
+    /// </summary>
+    private void EnterInitializationFailedState(Exception initException)
+    {
+        // Status = failed. RunLevel stays Started (the gate opens below) so the hub still reacts to and
+        // refuses messages; InitializationError is the queryable "failed" marker.
+        InitializationError = initException;
+        var errorMessage = $"Hub '{Address}' initialization failed: {initException.Message}";
+        Register(delivery =>
+        {
+            // Let lifecycle/control traffic through: disposal must still work, and a DeliveryFailure must
+            // never beget another DeliveryFailure (storm). Everything else is rejected with the init error.
+            if (delivery.Message is DeliveryFailure or ShutdownRequest or DisposeRequest
+                or InitializeHubRequest or HeartBeatEvent)
+                return delivery;
+
+            logger.LogWarning("Hub {Address} is in FAILED state. Rejecting {MessageType} from {Sender}: {Error}",
+                Address, delivery.Message.GetType().Name, delivery.Sender, errorMessage);
+            Post(new DeliveryFailure(delivery) { ErrorType = ErrorType.Failed, Message = errorMessage },
+                o => o.ResponseFor(delivery));
+            return delivery.Processed();
+        });
     }
 
     #region Message Types

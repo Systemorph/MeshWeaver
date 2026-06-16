@@ -16,8 +16,12 @@
                 @RenderAvatar(_selectedNode, selInitial)
                 <div class="mesh-node-picker-info">
                     <div class="mesh-node-picker-name">@(_selectedNode.Name ?? _selectedNode.Id)</div>
-                    <div class="mesh-node-picker-type">@(_selectedNode.NodeType ?? "")</div>
+                    <div class="mesh-node-picker-path" title="@_selectedNode.Path">@(_selectedNode.Path)</div>
                 </div>
+                @if (!string.IsNullOrEmpty(_selectedNode.Category))
+                {
+                    <span class="mesh-node-picker-category">@_selectedNode.Category</span>
+                }
             </div>
             <button type="button" class="mesh-node-picker-clear" @onclick="ClearSelection" @onclick:stopPropagation="true">
                 <FluentIcon Value="@(new Icons.Regular.Size16.Dismiss())" />
@@ -78,8 +82,12 @@
                         @RenderAvatar(node, initial)
                         <div class="mesh-node-picker-item-info">
                             <div class="mesh-node-picker-item-name">@(node.Name ?? node.Id)</div>
-                            <div class="mesh-node-picker-item-type">@(node.NodeType ?? "")</div>
+                            <div class="mesh-node-picker-item-path" title="@node.Path">@(node.Path)</div>
                         </div>
+                        @if (!string.IsNullOrEmpty(node.Category))
+                        {
+                            <span class="mesh-node-picker-item-category">@node.Category</span>
+                        }
                     </div>
                 }
             }
