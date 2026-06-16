@@ -401,6 +401,35 @@ public record Thread
     [JsonIgnore]
     public ImmutableList<ToolCallEntry>? StreamingToolCalls { get; init; }
 
+    /// <summary>
+    /// Brings the thread to REST — the single canonical reset of transient execution state. Sets
+    /// <c>Status = Idle</c> and clears the active-round handle, streaming buffers, the control-plane
+    /// request, and the per-round <c>Pending*</c> metadata, while PRESERVING the conversation
+    /// (<c>Messages</c>, <c>UserMessageIds</c>, <c>IngestedMessageIds</c>) and the inbox queue
+    /// (<c>PendingUserMessages</c> — a fresh round drains whatever is still queued).
+    /// <para>Call it at EVERY terminal point — round Completed/Cancelled/Error and inbox drain — so the
+    /// thread can never linger in a stale <c>Executing</c>/<c>StartingExecution</c> state. A stale state
+    /// is what lets the submission watcher try to RESUME a dead round, which re-blocks and wedges the
+    /// hub (the recurring chat-start wedge). Compose with <c>with { Summary = … }</c> at the call site
+    /// when a terminal summary is also being written.</para>
+    /// </summary>
+    public Thread ResetExecution() => this with
+    {
+        Status = ThreadExecutionStatus.Idle,
+        ExecutionStatus = null,
+        RequestedStatus = null,
+        ActiveMessageId = null,
+        ExecutionStartedAt = null,
+        StreamingText = null,
+        StreamingToolCalls = null,
+        PendingUserMessage = null,
+        PendingAgentName = null,
+        PendingModelName = null,
+        PendingContextPath = null,
+        PendingAttachments = null,
+        // Preserved: Messages / UserMessageIds / IngestedMessageIds (the conversation) and
+        // PendingUserMessages (the inbox queue — the next round drains anything still pending).
+    };
 }
 
 /// <summary>

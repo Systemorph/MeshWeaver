@@ -1315,14 +1315,7 @@ internal static class ThreadExecution
                         _ => { },
                         ex => execLogger?.LogWarning(ex,
                             "PushToResponseMessage(NothingToSend) failed for {ThreadPath}", threadPath));
-                    UpdateThreadExecution(t => t with
-                    {
-                        Status = ThreadExecutionStatus.Idle, ExecutionStatus = null, ActiveMessageId = null,
-                        ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null,
-                        PendingUserMessage = null, PendingAgentName = null, PendingModelName = null,
-                        PendingContextPath = null, PendingAttachments = null,
-                        Summary = "Nothing to send."
-                    }).Subscribe(
+                    UpdateThreadExecution(t => t.ResetExecution() with { Summary = "Nothing to send." }).Subscribe(
                         _ => { },
                         ex =>
                         {
