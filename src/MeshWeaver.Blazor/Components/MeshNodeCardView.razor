@@ -25,9 +25,24 @@ else
 
     private string Initial => !string.IsNullOrEmpty(Title) ? Title[0].ToString().ToUpper() : "?";
 
+    /// <summary>
+    /// Hard cap on the title so a very long name can never overflow the card (a backstop to the
+    /// CSS single-line ellipsis, which can't kick in when a parent doesn't constrain width).
+    /// </summary>
+    private string TruncatedTitle => Title?.Length > 64
+        ? Title[..63].TrimEnd() + "…"
+        : Title ?? "";
+
     private string TruncatedDescription => Description?.Length > 100
         ? Description[..97] + "..."
         : Description ?? "";
+
+    /// <summary>Default glyph for a node that carries no icon/avatar/logo — a generic document
+    /// outline, so an icon-less node still reads as a node rather than a bare letter.</summary>
+    private static readonly MarkupString DefaultNodeIcon = (MarkupString)(
+        "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\">" +
+        "<path d=\"M6 3h7l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linejoin=\"round\"/>" +
+        "<path d=\"M13 3v5h5M8 13h8M8 17h8M8 9h2\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>");
 
     private LayoutAreaControl GetLayoutArea() =>
         new LayoutAreaControl(NodePath, new LayoutAreaReference(ItemArea!))
@@ -60,10 +75,10 @@ else
                     }
                     else
                     {
-                        <div class="mesh-node-card-placeholder">@Initial</div>
+                        <div class="mesh-node-card-placeholder">@DefaultNodeIcon</div>
                     }
                     <div class="mesh-node-card-text">
-                        <div class="mesh-node-card-title">@Title</div>
+                        <div class="mesh-node-card-title" title="@Title">@TruncatedTitle</div>
                         @if (!string.IsNullOrEmpty(Description))
                         {
                             <div class="mesh-node-card-description">@TruncatedDescription</div>

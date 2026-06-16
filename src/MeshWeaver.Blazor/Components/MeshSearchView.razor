@@ -109,6 +109,10 @@
                 @RenderTreeLevel(TreeRootNamespace, 0)
             }
         }
+        else if (IsGraphNavigatorMode)
+        {
+            @RenderGraphNavigator()
+        }
         else if (_isLoading && !IsPrecomputedMode && BoundShowLoadingIndicator)
         {
             <div class="mesh-search-area-grid">
@@ -449,6 +453,98 @@
                     @DrillDownIcon
                 </a>
             }
+        </div>
+    };
+
+    // ----- Graph navigator rendering (MeshSearchRenderMode.GraphNavigator) -----
+
+    /// <summary>Small "open ↗" glyph for the secondary "open the node's page" affordance.</summary>
+    private static readonly MarkupString OpenIcon = (MarkupString)(
+        "<svg width=\"14\" height=\"14\" viewBox=\"0 0 16 16\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\">" +
+        "<path d=\"M6 3.5h6.5V10M12.5 3.5 4 12\" stroke=\"currentColor\" stroke-width=\"1.3\" " +
+        "stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>");
+
+    /// <summary>
+    /// Renders the re-rooting graph navigator: the ancestors ABOVE as a clickable breadcrumb rail
+    /// (root-most → current), then the next populated level BELOW as a card grid. Every crumb and
+    /// card re-roots the navigator at that node (/{path}/{NavArea}); a secondary "open" anchor goes
+    /// to the node's own page.
+    /// </summary>
+    private RenderFragment RenderGraphNavigator() => __builder =>
+    {
+        if (_navLoading && _navModel is null)
+        {
+            @RenderTreeLoading()
+            return;
+        }
+
+        var model = _navModel;
+        var navArea = NavArea;
+        var below = NavBelowFiltered;
+
+        <div class="mesh-nav">
+            <nav class="mesh-nav-rail" aria-label="Ancestors">
+                @if (model is not null)
+                {
+                    @foreach (var ancestor in model.Ancestors)
+                    {
+                        <a class="mesh-nav-crumb" href="/@ancestor.Path/@navArea"
+                           title="@(ancestor.Name ?? ancestor.Id)">@(ancestor.Name ?? ancestor.Id)</a>
+                        <span class="mesh-nav-sep" aria-hidden="true">/</span>
+                    }
+                }
+                <span class="mesh-nav-crumb mesh-nav-crumb-current">@NavCurrentName</span>
+                @if (!string.IsNullOrEmpty(NavRootPath))
+                {
+                    <a class="mesh-nav-open" href="/@NavRootPath" title="Open @NavCurrentName">@OpenIcon</a>
+                }
+            </nav>
+
+            <div class="mesh-nav-below">
+                @if (below.Count == 0)
+                {
+                    @if (BoundShowEmptyMessage)
+                    {
+                        <div class="mesh-nav-empty">
+                            <FluentLabel Typo="Microsoft.FluentUI.AspNetCore.Components.Typography.Body"
+                                         Style="color: var(--neutral-foreground-hint);">
+                                Nothing below this node.
+                            </FluentLabel>
+                        </div>
+                    }
+                }
+                else
+                {
+                    <div class="mesh-nav-below-label">Next level</div>
+                    <div class="mesh-search-area-grid" style="@CardGridStyle">
+                        @foreach (var node in below)
+                        {
+                            @RenderNavCard(node)
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    };
+
+    /// <summary>
+    /// One next-level card. The card body re-roots the navigator at the node (navigate along the
+    /// edge); a secondary "open" anchor opens the node's own page. <c>DisableNavigation</c> stops
+    /// the inner <see cref="MeshNodeCardView"/> from emitting its own /{path} anchor (no nesting).
+    /// </summary>
+    private RenderFragment RenderNavCard(MeshNode node) => __builder =>
+    {
+        var navArea = NavArea;
+        var cardControl = MeshNodeCardControl.FromNode(node, node.Path, BoundItemArea, true);
+        <div class="mesh-nav-card-wrap">
+            <a class="mesh-nav-card-link" href="/@node.Path/@navArea"
+               title="Navigate to @(node.Name ?? node.Id)">
+                <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"nav-{node.Path}")" />
+            </a>
+            <a class="mesh-search-drilldown mesh-nav-card-open" href="/@node.Path" title="Open"
+               @onclick:stopPropagation="true">
+                @OpenIcon
+            </a>
         </div>
     };
 }

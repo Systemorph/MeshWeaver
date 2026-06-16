@@ -61,7 +61,7 @@ public class MeshNodeStreamCacheConcurrencyTest(ITestOutputHelper output) : Mono
         // observable fan-out IS the concurrency.
         const int Concurrency = 64;
         var results = await Observable.Merge(Enumerable.Range(0, Concurrency)
-                .Select(_ => cache.GetQuery(id, query)
+                .Select(_ => cache.GetQuery(id, Mesh.JsonSerializerOptions, query)
                     .Take(1)
                     .Select(snapshot => snapshot.Select(n => n.Path).OrderBy(p => p).ToList())))
             .Take(Concurrency)
@@ -86,7 +86,7 @@ public class MeshNodeStreamCacheConcurrencyTest(ITestOutputHelper output) : Mono
         // First subscriber attaches BEFORE any writes — pins the AutoConnect(1)
         // upstream and starts buffering the synced-query change feed.
         var liveSnapshots = new List<int>();
-        using var sub = cache.GetQuery(id, query)
+        using var sub = cache.GetQuery(id, Mesh.JsonSerializerOptions, query)
             .Subscribe(snapshot => { lock (liveSnapshots) liveSnapshots.Add(snapshot.Count()); });
 
         // Seed two nodes.
@@ -102,7 +102,7 @@ public class MeshNodeStreamCacheConcurrencyTest(ITestOutputHelper output) : Mono
         // Subscribers attaching AFTER the writes must see at least 2 nodes —
         // the AutoConnect(1) Replay buffer should reflect the live state, not
         // the empty Initial.
-        var lateSubscriberCount = await cache.GetQuery(id, query)
+        var lateSubscriberCount = await cache.GetQuery(id, Mesh.JsonSerializerOptions, query)
             .Should().Within(10.Seconds()).Match(s => s.Count() >= 2);
         lateSubscriberCount.Count().Should().BeGreaterThanOrEqualTo(2);
 
@@ -130,7 +130,7 @@ public class MeshNodeStreamCacheConcurrencyTest(ITestOutputHelper output) : Mono
         var query = $"namespace:{Namespace} nodeType:Markdown";
 
         var results = await Observable.Merge(Enumerable.Range(0, Concurrency)
-                .Select(i => cache.GetQuery($"$independent-{i}", query)
+                .Select(i => cache.GetQuery($"$independent-{i}", Mesh.JsonSerializerOptions, query)
                     .Take(1)
                     .Select(snapshot => snapshot.Any(n => n.Path == $"{Namespace}/indep-seed"))))
             .Take(Concurrency)

@@ -501,6 +501,113 @@
     max-width: 480px;
 }
 
+/* ===== Graph navigator (MeshSearchRenderMode.GraphNavigator) ===== */
+.mesh-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: 100%;
+}
+
+/* Above: ancestor breadcrumb rail (root-most → current). */
+.mesh-nav-rail {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 8px 12px;
+    border-radius: 10px;
+    background: var(--neutral-layer-2, rgba(0, 0, 0, 0.03));
+    font-size: 0.9rem;
+}
+
+.mesh-nav-crumb {
+    color: var(--accent-foreground-rest, #0078d4);
+    text-decoration: none;
+    padding: 3px 8px;
+    border-radius: 6px;
+    white-space: nowrap;
+    transition: background 0.15s, color 0.15s;
+}
+
+.mesh-nav-crumb:hover {
+    background: var(--neutral-layer-1, #fff);
+}
+
+.mesh-nav-crumb-current {
+    font-weight: 600;
+    color: var(--neutral-foreground-rest);
+    cursor: default;
+}
+
+.mesh-nav-sep {
+    color: var(--neutral-foreground-hint, #999);
+    user-select: none;
+}
+
+.mesh-nav-open {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 2px;
+    color: var(--neutral-foreground-hint, #888);
+    text-decoration: none;
+    padding: 2px;
+    border-radius: 4px;
+    opacity: 0.6;
+    transition: opacity 0.15s, color 0.15s;
+}
+
+.mesh-nav-open:hover {
+    opacity: 1;
+    color: var(--accent-foreground-rest, #0078d4);
+}
+
+/* Below: the next populated level. */
+.mesh-nav-below {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+}
+
+.mesh-nav-below-label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--neutral-foreground-hint, #777);
+}
+
+.mesh-nav-empty {
+    padding: 24px 0;
+}
+
+/* Each next-level card: body re-roots the navigator; secondary anchor opens the node. */
+.mesh-nav-card-wrap {
+    position: relative;
+    width: 100%;
+}
+
+.mesh-nav-card-link {
+    display: block;
+    width: 100%;
+    text-decoration: none;
+    color: inherit;
+    border-radius: 10px;
+    transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.mesh-nav-card-link:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--elevation-shadow-card-active);
+}
+
+/* Secondary "open" anchor reuses .mesh-search-drilldown base; reveal on card hover. */
+.mesh-nav-card-wrap:hover .mesh-nav-card-open,
+.mesh-nav-card-open:focus-visible {
+    opacity: 1;
+}
+
 /* Skeleton loading placeholders */
 .mesh-search-skeleton-avatar {
     width: 48px;

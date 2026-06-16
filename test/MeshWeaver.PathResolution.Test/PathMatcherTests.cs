@@ -38,6 +38,41 @@ public class PathMatcherTests
 
     #endregion
 
+    #region NextLevel Scope Tests
+
+    // NextLevel re-queries the frontier, so any subtree change must notify (over-notify is correct:
+    // a new nearer node collapses the frontier, a delete reopens it — the re-query recomputes).
+    [Fact]
+    public void ShouldNotify_NextLevelScope_DirectChild_ReturnsTrue()
+    {
+        PathMatcher.ShouldNotify("ACME/Project", "ACME", QueryScope.NextLevel)
+            .Should().BeTrue();
+    }
+
+    [Fact]
+    public void ShouldNotify_NextLevelScope_DeepDescendant_ReturnsTrue()
+    {
+        // A deep node (a/b/node-style) changing must re-trigger — it could be the frontier itself.
+        PathMatcher.ShouldNotify("ACME/a/b/node", "ACME", QueryScope.NextLevel)
+            .Should().BeTrue();
+    }
+
+    [Fact]
+    public void ShouldNotify_NextLevelScope_Self_ReturnsFalse()
+    {
+        PathMatcher.ShouldNotify("ACME", "ACME", QueryScope.NextLevel)
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public void ShouldNotify_NextLevelScope_Unrelated_ReturnsFalse()
+    {
+        PathMatcher.ShouldNotify("OTHER/x", "ACME", QueryScope.NextLevel)
+            .Should().BeFalse();
+    }
+
+    #endregion
+
     #region Children Scope Tests
 
     [Fact]

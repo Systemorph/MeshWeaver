@@ -116,7 +116,7 @@ public static VirtualDataSource WithMeshQuery<T>(
 
 | Parameter | Description |
 |---|---|
-| `query` | Mesh query string in the standard syntax (see [Query Syntax](/Doc/DataMesh/QuerySyntax)). Common shapes: `namespace:X scope:subtree nodeType:Y`, `path:X`, `path:X scope:descendants`. |
+| `query` | Mesh query string in the standard syntax (see [Query Syntax](/Doc/DataMesh/QuerySyntax)). Common shapes: `namespace:X scope:subtree nodeType:Y`, `path:X`, `path:X scope:descendants`, `namespace:X scope:nextLevel` (the next populated level — graph navigation). |
 | `collectionName` | Workspace collection name. Defaults to `typeof(T).Name` (or `nameof(MeshNode)` on the non-generic overload). Required when the same `T` appears in multiple synced collections — for example, `Sources` and `Tests` both hold `MeshNode`. |
 
 The non-generic overload is the everyday case (a collection of `MeshNode`). The generic overload accepts a content type and projects via `OfType<T>` — useful when the query selects a single content shape.

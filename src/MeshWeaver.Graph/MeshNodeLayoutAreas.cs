@@ -773,12 +773,13 @@ public static class MeshNodeLayoutAreas
                 return (UiControl?)WithBreadcrumbs(typeSearch, hubPath);
             }
 
-            // Instance node catalog — this node's own content (its children, or the whole
-            // descendant subtree with ?subtree=true), organised per ?groupBy (default: the
-            // namespace tree with lazy per-level drilldown — the view that replaced the
-            // dedicated "Children" area).
+            // Instance node catalog — this node's own content. The Search area defaults to the
+            // re-rooting graph navigator: the next populated level below (skipping empty namespace
+            // segments) + the ancestors above, navigable along the graph's edges. Every knob is
+            // still ?param-overridable — ?groupBy=tree restores the lazy namespace tree, ?groupBy=flat
+            // the grid, etc. (The Space "Children" catalog stays on the namespace tree.)
             return WithBreadcrumbs(
-                BuildCatalog(hubPath, ReadCatalogOptions(host, MeshSearchRenderMode.NamespaceTree)),
+                BuildCatalog(hubPath, ReadCatalogOptions(host, MeshSearchRenderMode.GraphNavigator)),
                 hubPath);
         });
     }
@@ -806,6 +807,7 @@ public static class MeshNodeLayoutAreas
         => groupBy?.ToLowerInvariant() switch
         {
             "namespace" or "ns" or "tree" => (MeshSearchRenderMode.NamespaceTree, null),
+            "graph" or "nav" or "navigator" => (MeshSearchRenderMode.GraphNavigator, null),
             "type" or "nodetype" => (MeshSearchRenderMode.Grouped, "NodeType"),
             "category" or "cat" => (MeshSearchRenderMode.Grouped, "Category"),
             "flat" or "none" or "grid" => (MeshSearchRenderMode.Flat, null),

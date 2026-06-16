@@ -1,4 +1,12 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json;
+
+// The cache's GetQuery surface is internal — the public surface is hub/workspace.GetQuery, which
+// inject the caller hub's JsonSerializerOptions. Tests that exercise the cache contract directly
+// (or fake the interface) need to see these internal members.
+[assembly: InternalsVisibleTo("MeshWeaver.Graph.Test")]
+[assembly: InternalsVisibleTo("MeshWeaver.Query.Test")]
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Monolith.Test")]
 
 namespace MeshWeaver.Mesh.Services;
 
@@ -112,27 +120,23 @@ public interface IMeshNodeStreamCache
     /// captures the subscriber's <c>AccessService.Context</c> and applies
     /// <c>HasPermission</c> per emission.</para>
     ///
-    /// <para>Application code SHOULD prefer <c>hub.GetQuery(id, queries)</c>
-    /// or <c>workspace.GetQuery(id, queries)</c> — both delegate here.</para>
+    /// <para><b>Internal by design.</b> Application code MUST go through
+    /// <c>hub.GetQuery(id, queries)</c> / <c>workspace.GetQuery(id, queries)</c>
+    /// — those wrap this and inject the CALLER hub's
+    /// <see cref="JsonSerializerOptions"/> so each node's <c>Content</c> is typed
+    /// at the cache boundary. The process-wide cache hub knows only framework
+    /// types; building a synced query WITHOUT the caller's options silently hands
+    /// back <see cref="System.Text.Json.JsonElement"/> and drops the typed shape
+    /// (the "empty typed catalog" / "serialization error" bug class). That's why
+    /// there is no options-less build overload — options are mandatory.</para>
     /// </summary>
-    IObservable<IEnumerable<MeshNode>> GetQuery(object id, params string[] queries);
+    internal IObservable<IEnumerable<MeshNode>> GetQuery(object id, JsonSerializerOptions options, params string[] queries);
 
     /// <summary>
     /// Lookup-only overload: returns the cached observable for
     /// <paramref name="id"/>, or <c>null</c> if no synced query has been
-    /// registered with that id (no get-or-create).
+    /// registered with that id (no get-or-create, so no options needed).
+    /// Internal — reached via <c>workspace.GetQuery(id)</c>.
     /// </summary>
-    IObservable<IEnumerable<MeshNode>>? GetQuery(object id);
-
-    /// <summary>
-    /// Typed-content overload: each emitted <see cref="MeshNode"/>'s
-    /// <c>Content</c> is round-tripped through <paramref name="options"/>
-    /// at the cache boundary so the caller sees typed domain instances
-    /// (e.g. <c>AccessAssignment</c>, <c>PartitionAccessPolicy</c>)
-    /// rather than raw <see cref="System.Text.Json.JsonElement"/>. Decouples
-    /// the process-singleton cache (domain-type-agnostic by design) from
-    /// every domain type a tenant happens to register — same mechanism as
-    /// <see cref="GetStream(string, JsonSerializerOptions)"/>.
-    /// </summary>
-    IObservable<IEnumerable<MeshNode>> GetQuery(object id, JsonSerializerOptions options, params string[] queries);
+    internal IObservable<IEnumerable<MeshNode>>? GetQuery(object id);
 }

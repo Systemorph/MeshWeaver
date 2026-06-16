@@ -31,7 +31,17 @@ public enum MeshSearchRenderMode
     /// queried on folder expand. Typing in the search box switches to a
     /// subtree search whose results are grouped by relative namespace.
     /// </summary>
-    NamespaceTree
+    NamespaceTree,
+
+    /// <summary>
+    /// Re-rooting graph navigator — navigate the mesh along its edges. For the current node
+    /// it shows the ancestors <b>above</b> (a clickable breadcrumb rail) and the next populated
+    /// level <b>below</b> (the nearest real nodes, skipping empty intermediate namespace
+    /// segments) as a card grid. Both come from a single live query each
+    /// (<c>scope:ancestors</c> above, <c>scope:nextLevel</c> below). Clicking a card or an
+    /// ancestor re-roots the view there and recomputes both — "navigate → visualize → navigate".
+    /// </summary>
+    GraphNavigator
 }
 
 /// <summary>

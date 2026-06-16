@@ -431,6 +431,46 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 .Cast<object>();
         }
 
+        // NextLevel = the populated frontier (the in-memory mirror of the Postgres anti-join).
+        // Gather ALL descendant paths first — the suppressor universe. Empty namespace segments
+        // have no node, so they never suppress; a real node DOES, which is what skips the empties
+        // (e.g. a/b/node surfaces at the root). Then read + filter only the frontier nodes.
+        // Scoped adapters (PostgreSqlMeshQuery / Cosmos) compute the frontier in one query — the
+        // pedestrian walk would be duplicate work, so skip it.
+        if (effectiveScope == QueryScope.NextLevel)
+        {
+            if (persistence is IScopedQueryStorageAdapter)
+                return Observable.Empty<object>();
+
+            var emittedFrontier = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            return WalkAdapter(basePath, QueryScope.Descendants)
+                .Where(path => !string.IsNullOrEmpty(path))
+                .ToList()
+                .SelectMany(allPaths => NamespaceFrontier.Frontier(basePath, allPaths).ToObservable())
+                .Where(path => emittedFrontier.Add(path))
+                .SelectMany(path => persistence.Read(path, options)
+                    .Take(1)
+                    .Catch<MeshNode?, Exception>(ex =>
+                    {
+                        logger?.LogWarning(ex,
+                            "[NextLevel.Read] swallowed for path={Path}; returning null", path);
+                        return Observable.Return<MeshNode?>(null);
+                    }))
+                .Where(node => node != null)
+                .Select(node => node!)
+                .Where(node => _evaluator.Matches(node, parsedQuery)
+                    && !IsExcludedByContext(node, context)
+                    && !IsExcludedByIsMain(node, parsedQuery))
+                .Catch<MeshNode, Exception>(ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "[StorageAdapterMeshQueryProvider.NextLevel] pipeline threw query=[{Query}] basePath={BasePath}",
+                        string.Join(" | ", request.EffectiveQueries), basePath);
+                    return Observable.Empty<MeshNode>();
+                })
+                .Cast<object>();
+        }
+
         // Multi-value `path:a|b|c` — parsedQuery.Paths carries the full IN list.
         // For the path-resolution idiom (`path:a|b|c sort:length(path)-desc limit:1`)
         // this is "probe every candidate ancestor and take the deepest hit", so
@@ -912,7 +952,8 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         // Children and Descendants scopes do NOT include self
         // Children are fetched separately by GetChildrenAsync
         // Descendants are fetched separately by GetDescendantsAsync
-        if (scope == QueryScope.Children || scope == QueryScope.Descendants)
+        // NextLevel is discovered via a frontier walk (no exact-path probes).
+        if (scope == QueryScope.Children || scope == QueryScope.Descendants || scope == QueryScope.NextLevel)
         {
             return paths;
         }

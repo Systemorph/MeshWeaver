@@ -299,14 +299,28 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
             or QueryScope.Descendants
             or QueryScope.Subtree
             or QueryScope.Hierarchy
-            or QueryScope.AncestorsAndSelf;
+            or QueryScope.AncestorsAndSelf
+            or QueryScope.NextLevel;
         var hasQualifier = HasFieldFilter(parsed) || !string.IsNullOrEmpty(parsed.Path) || scopeWalks;
+
+        // NextLevel = the populated frontier. The suppressor universe is EVERY static node
+        // (a real node occupies its level even if it doesn't match the outer filter), so build
+        // the frontier path set once over _allNodes, then emit only nodes on it. Mirrors the
+        // Postgres anti-join + the pedestrian walk's frontier filter.
+        HashSet<string>? frontierPaths = parsed.Scope == QueryScope.NextLevel
+            ? NamespaceFrontier.Frontier(parsed.Path ?? "", _allNodes.Select(n => n.Path))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : null;
+
+        bool MatchesScope(MeshNode node) => frontierPaths != null
+            ? frontierPaths.Contains(node.Path)
+            : string.IsNullOrEmpty(parsed.Path) || MatchesAnyPath(node, parsed);
 
         if (hasQualifier)
         {
             foreach (var node in _providerNodes)
             {
-                if (!string.IsNullOrEmpty(parsed.Path) && !MatchesAnyPath(node, parsed)) continue;
+                if (!MatchesScope(node)) continue;
                 if (!_evaluator.Matches(node, parsed)) continue;
                 if (IsExcludedByContext(node, context)) continue;
                 if (parsed.IsMain == true && node.MainNode != node.Path) continue;
@@ -319,7 +333,7 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         {
             foreach (var node in _configNodes)
             {
-                if (!MatchesAnyPath(node, parsed)) continue;
+                if (!MatchesScope(node)) continue;
                 if (!_evaluator.Matches(node, parsed)) continue;
                 if (IsExcludedByContext(node, context)) continue;
                 if (parsed.IsMain == true && node.MainNode != node.Path) continue;

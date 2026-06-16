@@ -245,6 +245,8 @@ public partial class MeshSearchView : IDisposable
             {
                 if (IsNamespaceTreeMode)
                     LoadTreeSearch();
+                else if (IsGraphNavigatorMode)
+                    StateHasChanged(); // navigator filters the loaded level client-side
                 else
                     LoadResults();
             }
@@ -257,6 +259,8 @@ public partial class MeshSearchView : IDisposable
             {
                 if (IsNamespaceTreeMode)
                     ResetTree();
+                else if (IsGraphNavigatorMode)
+                    ResetGraphNavigator(); // re-rooted → recompute above + below
                 else
                     LoadResults();
             }
@@ -304,6 +308,13 @@ public partial class MeshSearchView : IDisposable
                 return;
             }
 
+            // Graph navigator: load the next level below + ancestors above.
+            if (IsGraphNavigatorMode)
+            {
+                InitializeGraphNavigator();
+                return;
+            }
+
             // Reactive mode: subscribe to Query for live updates
             if (BoundReactiveMode)
             {
@@ -324,6 +335,8 @@ public partial class MeshSearchView : IDisposable
         {
             if (IsNamespaceTreeMode)
                 LoadTreeSearch();
+            else if (IsGraphNavigatorMode)
+                StateHasChanged(); // re-filter the next level by the typed text (client-side)
             else
                 LoadResults();
         }
@@ -1208,6 +1221,118 @@ public partial class MeshSearchView : IDisposable
 
     #endregion
 
+    #region Graph navigator mode (MeshSearchRenderMode.GraphNavigator)
+
+    private GraphNavigatorModel? _navModel;
+    private bool _navLoading;
+    private IDisposable? _navSubscription;
+
+    private bool IsGraphNavigatorMode =>
+        BoundRenderMode == MeshSearchRenderMode.GraphNavigator && !IsPrecomputedMode;
+
+    /// <summary>The node the navigator is centered on — the hidden query's namespace: (fallback: Namespace).</summary>
+    private string NavRootPath => TreeRootNamespace;
+
+    /// <summary>Re-root target area on click — keeps the navigator. Falls back to the Search area.</summary>
+    private string NavArea => string.IsNullOrEmpty(BoundDrillDownArea)
+        ? MeshNodeLayoutAreas.SearchArea
+        : BoundDrillDownArea!;
+
+    /// <summary>Below = next populated level: the hidden query's filters, namespace pinned to the
+    /// root, scope forced to <c>nextLevel</c> (the single anti-join — skips empty namespace hops).</summary>
+    private string BuildNavBelowQuery(string root) =>
+        Regex.Replace($"{BuildTreeLevelQuery(root)} scope:nextLevel", @"\s+", " ").Trim();
+
+    /// <summary>Above = the ancestor chain INCLUDING self, so the builder can pull out the current node
+    /// and order the rail. Real ancestors only — empty namespace segments are never nodes.</summary>
+    private static string BuildNavAboveQuery(string root) =>
+        $"path:{root} scope:ancestorsandself is:main";
+
+    /// <summary>Below filtered by the search box text (client-side — the frontier is already computed;
+    /// typing just narrows what's shown without re-running the anti-join / tripping vector search).</summary>
+    private IReadOnlyList<MeshNode> NavBelowFiltered
+    {
+        get
+        {
+            var below = (IReadOnlyList<MeshNode>?)_navModel?.Below ?? Array.Empty<MeshNode>();
+            var text = _currentValue?.Trim();
+            if (string.IsNullOrEmpty(text)) return below;
+            return below.Where(n =>
+                (n.Name ?? "").Contains(text, StringComparison.OrdinalIgnoreCase)
+                || (n.Path ?? "").Contains(text, StringComparison.OrdinalIgnoreCase)).ToList();
+        }
+    }
+
+    private void InitializeGraphNavigator()
+    {
+        _navSubscription?.Dispose();
+        _navLoading = true;
+        StateHasChanged();
+
+        var root = NavRootPath;
+
+        // hub.GetQuery is the canonical synced-query surface (delegates to workspace → the shared
+        // IMeshNodeStreamCache): live, deduped, all-Initial gated, provider-fanned. See
+        // Doc/Architecture/SyncedMeshNodeQueries.md.
+        var below = Hub.GetQuery($"nav-below:{root}", BuildNavBelowQuery(root));
+        var above = string.IsNullOrEmpty(root)
+            ? Observable.Return<IEnumerable<MeshNode>>(Array.Empty<MeshNode>())
+            : Hub.GetQuery($"nav-above:{root}", BuildNavAboveQuery(root));
+
+        _navSubscription = below
+            .CombineLatest(above, (b, a) => (Below: b, Above: a))
+            .Subscribe(
+                t =>
+                {
+                    var aboveList = (t.Above ?? Enumerable.Empty<MeshNode>()).ToList();
+                    var belowList = (t.Below ?? Enumerable.Empty<MeshNode>()).ToList();
+                    var current = aboveList.FirstOrDefault(n =>
+                        string.Equals(n.Path?.Trim('/'), root, StringComparison.OrdinalIgnoreCase));
+                    var model = GraphNavigatorBuilder.Build(root, aboveList, belowList, current);
+                    InvokeAsync(() =>
+                    {
+                        _navModel = model;
+                        _navLoading = false;
+                        StateHasChanged();
+                    });
+                },
+                ex =>
+                {
+                    TreeLogger?.LogWarning(ex, "Graph navigator query failed for {Root}", root);
+                    InvokeAsync(() =>
+                    {
+                        _navModel = GraphNavigatorBuilder.Build(
+                            root, Array.Empty<MeshNode>(), Array.Empty<MeshNode>());
+                        _navLoading = false;
+                        StateHasChanged();
+                    });
+                });
+    }
+
+    private void ResetGraphNavigator()
+    {
+        _navSubscription?.Dispose();
+        _navSubscription = null;
+        _navModel = null;
+        InitializeGraphNavigator();
+    }
+
+    /// <summary>Current node display name — the node when present, else the last path segment.</summary>
+    private string NavCurrentName
+    {
+        get
+        {
+            var current = _navModel?.Current;
+            if (!string.IsNullOrEmpty(current?.Name)) return current!.Name!;
+            var root = NavRootPath;
+            if (string.IsNullOrEmpty(root)) return "Mesh";
+            var slash = root.LastIndexOf('/');
+            return slash < 0 ? root : root[(slash + 1)..];
+        }
+    }
+
+    #endregion
+
     private void ToggleSearchOptions()
     {
         _showSearchOptions = !_showSearchOptions;
@@ -1233,5 +1358,6 @@ public partial class MeshSearchView : IDisposable
     {
         _reactiveSubscription?.Dispose();
         DisposeTreeSubscriptions();
+        _navSubscription?.Dispose();
     }
 }

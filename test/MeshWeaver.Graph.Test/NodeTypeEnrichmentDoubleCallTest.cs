@@ -80,8 +80,6 @@ public class NodeTypeEnrichmentDoubleCallTest
         public IObservable<MeshNode> Overwrite(string path, MeshNode node, System.Text.Json.JsonSerializerOptions options)
             => Observable.Never<MeshNode>();
         public void Invalidate(string path) { }
-        public IObservable<IEnumerable<MeshNode>> GetQuery(object id, params string[] queries)
-            => Observable.Never<IEnumerable<MeshNode>>();
         public IObservable<IEnumerable<MeshNode>>? GetQuery(object id) => null;
         public IObservable<IEnumerable<MeshNode>> GetQuery(object id, System.Text.Json.JsonSerializerOptions options, params string[] queries)
             => Observable.Never<IEnumerable<MeshNode>>();
