@@ -201,6 +201,10 @@ public class SqlGeneratorTests
         sql.Should().Contain(") u ORDER BY u._distance ASC LIMIT 7");
         // Each file contributes exactly one Document row (a file yields many chunks).
         sql.Should().Contain("DISTINCT ON (cc.collection_path, cc.file_path)");
+        // The content arm MUST be parenthesized: DISTINCT ON requires a trailing ORDER BY, which —
+        // unparenthesized — binds to the whole UNION and puts `cc` out of scope (42P01, swallowed →
+        // 0 rows). A substring test can't execute SQL, but it CAN pin the paren that prevents it.
+        sql.Should().Contain("UNION ALL (SELECT DISTINCT ON");
     }
 
     [Fact]
@@ -262,6 +266,10 @@ public class SqlGeneratorTests
         sql.Should().Contain("_Documents");
         sql.Should().Contain("cc.chunk_text ILIKE '%pension%'");
         sql.Should().Contain("DISTINCT ON (cc.collection_path, cc.file_path)");
+        // Content arm parenthesized so its DISTINCT ON ORDER BY stays scoped to the arm, not the whole
+        // UNION (else 42P01 'missing FROM-clause entry for table cc', swallowed → 0 rows).
+        sql.Should().Contain("UNION ALL (SELECT DISTINCT ON");
+        sql.Should().Contain("ORDER BY cc.collection_path, cc.file_path)");
     }
 
     [Fact]

@@ -545,7 +545,10 @@ public class PostgreSqlSqlGenerator
             {
                 var contentTable = $"\"{schema}\".\"content_chunks\"";
                 parts.Add(
-                    "SELECT DISTINCT ON (cc.collection_path, cc.file_path) " +
+                    // Parenthesized so DISTINCT ON's required trailing ORDER BY stays scoped to THIS
+                    // arm — an unparenthesized ORDER BY binds to the whole UNION ALL and puts `cc` out
+                    // of scope (42P01 'missing FROM-clause entry for table cc'), silently swallowed.
+                    "(SELECT DISTINCT ON (cc.collection_path, cc.file_path) " +
                     $"{SlugSql} AS id, " +
                     "cc.collection_path || '/_Documents' AS namespace, " +
                     "regexp_replace(cc.file_path, '^.*[\\\\/]', '') AS name, " +
@@ -557,7 +560,7 @@ public class PostgreSqlSqlGenerator
                     $"cc.collection_path || '/_Documents/' || {SlugSql} AS main_node " +
                     $"FROM {contentTable} cc WHERE cc.chunk_text ILIKE '%{term}%' " +
                     // DISTINCT ON requires its keys lead the ORDER BY; keep one (best) row per file.
-                    "ORDER BY cc.collection_path, cc.file_path");
+                    "ORDER BY cc.collection_path, cc.file_path)");
             }
         }
 
@@ -749,8 +752,11 @@ public class PostgreSqlSqlGenerator
 
         // Unified ranking is cosine distance only (no lexical tier carried across the UNION) — the
         // wrapped outer ORDER BY ranks both branches by _distance ASC and the LIMIT keeps the closest.
+        // Parenthesize the content arm: its DISTINCT ON requires a trailing ORDER BY, which would
+        // otherwise bind to the inner (branch1 UNION ALL contentBranch) and put `cc` out of scope
+        // (42P01 'missing FROM-clause entry for table cc'), swallowed by the table-absent catch.
         var sql =
-            $"SELECT * FROM ({branch1} UNION ALL {contentBranch}) u ORDER BY u._distance ASC LIMIT {topK}";
+            $"SELECT * FROM ({branch1} UNION ALL ({contentBranch})) u ORDER BY u._distance ASC LIMIT {topK}";
         return (sql, parameters);
     }
 
