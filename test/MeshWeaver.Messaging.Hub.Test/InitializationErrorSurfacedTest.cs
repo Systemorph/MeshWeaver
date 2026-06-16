@@ -79,3 +79,50 @@ public class InitializationErrorSurfacedTest(ITestOutputHelper output) : HubTest
             "the hub must expose a FAILED status marker (InitializationError) after an init fault");
     }
 }
+
+/// <summary>
+/// Companion for the HANG case — the atioz recurring wedge. A BuildupAction that never emits/completes
+/// raises NO exception, so a plain try/catch can't catch it; without a bound the Initialize gate never
+/// opens and every message defers to the 30s deferral-timeout (the wedge). <c>HandleInitialize</c> now
+/// bounds the buildup with a Timeout (<c>Configuration.StartupTimeout</c>) → "never completes" becomes a
+/// TimeoutException the SAME <c>.Catch</c> handles → <see cref="MessageHub.InitializationError"/> set +
+/// gate opened + a clear "did not complete within Ns" failure.
+///
+/// <para>RED before the bound: a request to the hung-init hub never responds within budget →
+/// TimeoutException (wedge). GREEN after: a fast DeliveryFailureException, and InitializationError is set
+/// (proving the liveness bound → .Catch fired, not merely the startup-timer backlog drain).</para>
+/// </summary>
+public class InitializationHangSurfacedTest(ITestOutputHelper output) : HubTestBase(output)
+{
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
+        => configuration
+            // Short bound so the test is fast; prod uses HandleInitialize's generous default.
+            .WithStartupTimeout(TimeSpan.FromSeconds(2))
+            // A BuildupAction that HANGS forever — never emits, never completes, never throws.
+            .WithInitialization(_ => Observable.Never<Unit>());
+
+    [Fact(Timeout = 30000)]
+    public async Task HangingBuildupAction_TimesOut_FailsGracefully_NotAWedge()
+    {
+        var host = GetHost();
+        var client = GetClient();
+
+        // 15s budget: > the 2s liveness bound (so the graceful failure is observed) but < the 30s
+        // deferral-timeout (so a genuine wedge surfaces as a TimeoutException and fails the test).
+        var act = () => client
+            .Observe(new PingRequest(), o => o.WithTarget(host.Address))
+            .FirstAsync().Timeout(15.Seconds()).ToTask();
+
+        var ex = (await act.Should().ThrowAsync<Exception>(
+            "a hub whose init HUNG must answer requests with an error, not hang forever")).Which;
+
+        ex.Should().NotBeOfType<TimeoutException>(
+            "a hung init must fail FAST via the liveness bound (gate opens FAILED), not leave every "
+            + "message deferring to the 30s deferral-timeout — the wedge this guards against");
+        ex.ToString().Should().Contain("initiali", "the failure must be reported as an initialization failure");
+
+        // Proves the LIVENESS BOUND fired (Timeout → .Catch → EnterInitializationFailedState),
+        // not merely the startup-timer's backlog drain (which never sets this).
+        ((MessageHub)host).InitializationError.Should().NotBeNull("the hung hub records the FAILED status");
+    }
+}

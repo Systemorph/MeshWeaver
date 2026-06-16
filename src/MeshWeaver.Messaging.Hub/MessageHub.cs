@@ -155,6 +155,14 @@ public sealed class MessageHub : IMessageHub
     /// </summary>
     public Exception? InitializationError { get; private set; }
 
+    /// <summary>
+    /// Upper bound on how long a hub's BuildupActions may run before init is declared FAILED rather
+    /// than wedging forever behind a closed gate (see <see cref="HandleInitialize"/>). Generous on
+    /// purpose — every legitimate init, including a NodeType compile, completes well inside it; only a
+    /// genuine hang trips it. A hub can tighten it via <c>Configuration.StartupTimeout</c>.
+    /// </summary>
+    private static readonly TimeSpan DefaultInitializationTimeout = TimeSpan.FromSeconds(120);
+
     private readonly IMessageService messageService;
     /// <summary>
     /// Parent hub address captured at construction. Used in disposal logging so we
@@ -387,6 +395,15 @@ public sealed class MessageHub : IMessageHub
         return Observable
             .Concat(actions.Select(a => a(this).DefaultIfEmpty(Unit.Default).Take(1)))
             .ToList()
+            // 🚫 Liveness bound. A BuildupAction that HANGS — never emits and never completes (a
+            // dependency that never initialises, a stuck NodeType compile, a subscribe that never
+            // fires) — leaves the Concat incomplete, so the gate never opens and EVERY message defers
+            // to the 30s deferral-timeout: the hub wedges forever. A throw is caught below; a hang
+            // raises no exception, so convert "never completes within the budget" into a
+            // TimeoutException the SAME .Catch handles. Generous default (every legit init, incl. a
+            // NodeType compile, finishes well inside it); a hub may tighten it via
+            // Configuration.StartupTimeout.
+            .Timeout(Configuration.StartupTimeout ?? DefaultInitializationTimeout)
             .Select(_ =>
             {
                 logger.LogDebug("Message hub {address} BuildupActions complete, opening Initialize gate", Address);
@@ -398,15 +415,20 @@ public sealed class MessageHub : IMessageHub
             })
             .Catch((Exception ex) =>
             {
-                // A BuildupAction faulted. Do NOT leave the gate closed (→ 30s deferral-timeout wedge):
-                // enter a FAILED state that surfaces a clear DeliveryFailure for every later request, then
+                // Init failed — a BuildupAction faulted (threw) or HUNG (TimeoutException from the bound
+                // above). Do NOT leave the gate closed (→ the 30s-per-message deferral wedge): enter a
+                // FAILED state that surfaces a clear DeliveryFailure for every later request, then
                 // ALWAYS open the gate so those rejections (and disposal) can flow.
+                var reason = ex is TimeoutException
+                    ? $"a BuildupAction did not complete within "
+                      + $"{(Configuration.StartupTimeout ?? DefaultInitializationTimeout).TotalSeconds:F0}s "
+                      + "(a hung dependency or stuck compile)"
+                    : $"a BuildupAction faulted ({ex.GetType().Name}: {ex.Message})";
                 logger.LogError(ex,
-                    "Hub {Address} initialization failed — a BuildupAction faulted. Hub is now in FAILED state.",
-                    Address);
-                EnterInitializationFailedState(ex);
+                    "Hub {Address} initialization failed — {Reason}. Hub is now in FAILED state.", Address, reason);
+                EnterInitializationFailedState(new InvalidOperationException(reason, ex));
                 OpenGate(MessageHubConfiguration.InitializeGateName);
-                return Observable.Return(request.Failed($"Hub '{Address}' initialization failed: {ex.Message}"));
+                return Observable.Return(request.Failed($"Hub '{Address}' initialization failed — {reason}"));
             });
     }
 
