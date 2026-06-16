@@ -91,13 +91,24 @@ public static class HubThreadExtensions
         var hasFirstMessage = !string.IsNullOrWhiteSpace(userText);
         var firstMessageId = Guid.NewGuid().ToString("N")[..8];
 
+        // 🎯 The thread's COMPOSER is the single source of truth for the round's sticky
+        // selection (agent / model / harness / context). Seed it from the supplied composer
+        // snapshot when present, else from the explicit agent/model/harness/context params —
+        // either way the created thread ALWAYS carries a composer so the submission watcher's
+        // PlanNextRound can read the selection from Thread.Composer. The draft + attachments
+        // are consumed by the first message; the navigate-signal never carries over.
+        var seedComposer = (composer ?? new ThreadComposer
+            {
+                AgentName = agentName,
+                ModelName = modelName,
+                Harness = harness,
+                ContextPath = contextPath
+            })
+            with { MessageContent = null, Attachments = null, OpenThreadPath = null };
+
         var baseThread = (threadNode.Content as MeshThread ?? new MeshThread()) with
         {
-            // The thread's own composer: selection survives, draft is consumed by the
-            // first message, the navigate-signal never carries over.
-            Composer = composer is null
-                ? null
-                : composer with { MessageContent = null, Attachments = null, OpenThreadPath = null }
+            Composer = seedComposer
         };
 
         var seededThread = hasFirstMessage
@@ -105,6 +116,9 @@ public static class HubThreadExtensions
             {
                 Messages = ImmutableList.Create(firstMessageId),
                 UserMessageIds = ImmutableList.Create(firstMessageId),
+                // The pending ThreadMessage records the per-message context + attachments and a
+                // historical stamp of the agent/model/harness; the round's SELECTION is read from
+                // Thread.Composer (the single source), not from this message.
                 PendingUserMessages = ImmutableDictionary<string, ThreadMessage>.Empty
                     .SetItem(firstMessageId, ThreadInput.CreateUserMessage(
                         userText,
@@ -114,12 +128,7 @@ public static class HubThreadExtensions
                         modelName: modelName,
                         contextPath: contextPath,
                         attachments: attachments,
-                        harness: harness)),
-                PendingAgentName = agentName,
-                PendingModelName = modelName,
-                PendingHarness = harness,
-                PendingContextPath = contextPath,
-                PendingAttachments = attachments
+                        harness: harness))
             }
             : baseThread; // empty thread — no round
         threadNode = threadNode with { Content = seededThread };
@@ -357,13 +366,12 @@ public static class HubThreadExtensions
                     Messages = keep,
                     UserMessageIds = trimmedUserIds,
                     IngestedMessageIds = ingested,
+                    // The replay ThreadMessage carries the selection (agent/model/harness) —
+                    // no thread-level Pending* mirror.
                     PendingUserMessages = pending,
                     Status = ThreadExecutionStatus.Idle,
                     ActiveMessageId = null,
-                    ExecutionStartedAt = null,
-                    PendingAgentName = agentName ?? t.PendingAgentName,
-                    PendingModelName = modelName ?? t.PendingModelName,
-                    PendingHarness = harness ?? t.PendingHarness
+                    ExecutionStartedAt = null
                 }
             };
         }).Subscribe(

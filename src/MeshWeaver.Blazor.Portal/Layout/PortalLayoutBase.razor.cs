@@ -106,7 +106,9 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     protected override async Task OnInitializedAsync()
     {
         await base.OnInitializedAsync();
-        await NavigationService.InitializeAsync();
+        // Synchronous (no await): Initialize() only wires Rx subscriptions; a Task
+        // awaited in OnInitializedAsync would deadlock the circuit's sync-context.
+        NavigationService.Initialize();
 
         // Snapshot auth state. If the user signed out (or arrived anonymous) with a
         // previously-persisted IsVisible=true, force the panel closed before any

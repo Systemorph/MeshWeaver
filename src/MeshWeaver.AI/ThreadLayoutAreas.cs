@@ -171,7 +171,6 @@ public static class ThreadLayoutAreas
                 PendingMessageTexts = ExtractPendingTexts(threadContent),
                 TokensUsed = threadContent?.TokensUsed ?? 0,
                 ExecutionStartedAt = threadContent?.ExecutionStartedAt,
-                SelectedHarness = threadContent?.SelectedHarness,
                 CreatedBy = node?.CreatedBy,
             };
         });
@@ -327,7 +326,6 @@ public static class ThreadLayoutAreas
                 PendingMessageTexts = ExtractPendingTexts(threadContent),
                 TokensUsed = threadContent?.TokensUsed ?? 0,
                 ExecutionStartedAt = threadContent?.ExecutionStartedAt,
-                SelectedHarness = threadContent?.SelectedHarness,
                 CreatedBy = node?.CreatedBy,
             };
         });

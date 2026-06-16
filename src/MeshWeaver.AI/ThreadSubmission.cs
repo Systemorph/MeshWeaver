@@ -98,14 +98,30 @@ internal static class ThreadSubmission
         // identifies the round uniquely, so Count adds no distinguishing power — only
         // the churn that breaks idempotency.
         var responseMessageId = DeriveDeterministicResponseId(ids, thread.PendingUserMessages);
+        // 🎯 The round's sticky selection (agent / model / harness / context) comes from the
+        // thread's COMPOSER — the single, data-bound source of truth. There is NO thread-level
+        // Pending* mirror: the selectors area binds to Thread.Composer, and a /agent /model
+        // /harness command (or dropdown pick) updates it in place. Because PlanNextRound only
+        // runs when the thread is Idle/Cancelled (never Executing), a selection change made
+        // mid-round stays QUEUED and is read here when the next round is planned — accepted
+        // only when idle.
+        //
+        // Context + attachments are NOT sticky: they are per-message (the live nav context and
+        // attachment chips at Send time — the composer empties its Attachments each Send), so the
+        // round takes them from the LAST drained message (which captured contextPath ?? composer
+        // at submit), not the live composer.
+        var composer = thread.Composer;
+        var lastDrained = ids
+            .Select(id => thread.PendingUserMessages.TryGetValue(id, out var m) ? m : null)
+            .LastOrDefault(m => m is not null);
         return new RoundDispatch(
             ids,
             responseMessageId,
-            thread.PendingAgentName,
-            thread.PendingModelName,
-            thread.PendingHarness,
-            thread.PendingContextPath,
-            thread.PendingAttachments);
+            composer?.AgentName,
+            composer?.ModelName,
+            composer?.Harness,
+            lastDrained?.ContextPath ?? composer?.ContextPath,
+            lastDrained?.Attachments);
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -435,14 +451,17 @@ internal static class ThreadSubmissionServer
                 logger?.LogInformation(
                     "[DispatchAfterClaim] resuming interrupted round {ResponseId} for {Path}",
                     thread.ActiveMessageId, hub.Address.Path);
+                // No selection here: a resume has no pending message to read it from. The
+                // round's selection (agent/model/harness/context) is the persisted response
+                // cell's — ExecuteMessageAsync recovers it from the existing cell on resume.
                 var resumeDispatch = new RoundDispatch(
                     ImmutableList<string>.Empty,
                     thread.ActiveMessageId!,
-                    thread.PendingAgentName,
-                    thread.PendingModelName,
-                    thread.PendingHarness,
-                    thread.PendingContextPath,
-                    thread.PendingAttachments);
+                    AgentName: null,
+                    ModelName: null,
+                    Harness: null,
+                    ContextPath: null,
+                    Attachments: null);
                 DispatchRound(hub, threadNode, resumeDispatch, logger, onFailure, isResume: true);
                 return;
             }
@@ -507,14 +526,17 @@ internal static class ThreadSubmissionServer
             || string.IsNullOrEmpty(thread.ActiveMessageId))
             return;
 
+        // No selection here: a resume has no pending message to read it from. The round's
+        // selection (agent/model/harness/context) is the persisted response cell's —
+        // ExecuteMessageAsync recovers it from the existing cell on resume.
         var resumeDispatch = new RoundDispatch(
             ImmutableList<string>.Empty,
             thread.ActiveMessageId!,
-            thread.PendingAgentName,
-            thread.PendingModelName,
-            thread.PendingHarness,
-            thread.PendingContextPath,
-            thread.PendingAttachments);
+            AgentName: null,
+            ModelName: null,
+            Harness: null,
+            ContextPath: null,
+            Attachments: null);
         DispatchRound(threadHub, threadNode, resumeDispatch, logger, onFailure: null, isResume: true);
     }
 
@@ -602,10 +624,11 @@ internal static class ThreadSubmissionServer
         // load via LoadFullConversationHistory (with the last one excluded via
         // SubmitMessageRequest.UserMessageId). Multi-message round: agent sees
         // history's user cells consecutively, then this last one as the
-        // current turn.
+        // current turn. Empty on resume (no pending message) — the existing user
+        // cell is already in history and the !isResume guard below lets resume proceed.
         var roundUserText = pendingForRound.Count > 0
             ? pendingForRound[^1].Msg.Text
-            : (thread.PendingUserMessage ?? "");
+            : "";
 
         // 🚫 Never launch a round with nothing to send. A whitespace-only round — a slash command
         // whose text was cut, or a stray empty submission — has no user content; running it reaches
@@ -748,10 +771,9 @@ internal static class ThreadSubmissionServer
                         ExecutionStartedAt = DateTime.UtcNow,
                         TokensUsed = 0,
                         ExecutionStatus = null,
-                        PendingUserMessage = null,
-                        PendingUserMessages = pending,
-                        PendingContextPath = dispatch.ContextPath,
-                        PendingAttachments = dispatch.Attachments?.ToImmutableList()
+                        // The round's selection rides on RoundParams (from the drained
+                        // ThreadMessage) — no thread-level Pending* mirror to write.
+                        PendingUserMessages = pending
                     }
                 };
             }).Subscribe(

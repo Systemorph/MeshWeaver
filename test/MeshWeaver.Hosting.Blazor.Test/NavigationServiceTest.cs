@@ -9,6 +9,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
@@ -47,6 +48,15 @@ public class NavigationServiceTest
         _hubServiceProvider.GetService(typeof(ICreatableTypesProvider))
             .Returns(_creatableTypesProvider);
         _hubServiceProvider.GetService(typeof(IMeshQueryCore)).Returns(_meshQuery);
+
+        // NavigationService's anonymous read-gate (ProcessResolvedPath) resolves the
+        // visitor identity from AccessService. Default to an AUTHENTICATED user so the
+        // gate is skipped — authenticated visitors are never gated — preserving the
+        // pre-gate behaviour these tests assert. AnonymousVisitor_DeniedNode_RedirectsToLogin
+        // overrides this with a logged-out context to exercise the gate.
+        var accessService = new AccessService();
+        accessService.SetCircuitContext(new AccessContext { ObjectId = "test-user", Name = "Test User" });
+        _hubServiceProvider.GetService(typeof(AccessService)).Returns(accessService);
 
         // Default stub for IMeshQueryCore.Query — NavigationService now
         // requires a non-null MeshNode to settle Context (commit 8a6f76b10:
@@ -123,6 +133,78 @@ public class NavigationServiceTest
     // a stale Context assertion; the .Within(...) chains preserve that budget.
     private static readonly TimeSpan WaitTimeout = TimeSpan.FromSeconds(15);
 
+    #region Anonymous Read-Gate Tests
+
+    [Fact]
+    public async Task AnonymousVisitor_DeniedNode_EmitsAccessDenied()
+    {
+        // A logged-OUT visitor (virtual anonymous user) navigates to a node they
+        // cannot read. The anonymous read-gate must flip Status to AccessDenied so
+        // ApplicationPage's AuthorizeView redirects them to /login — rather than
+        // showing chrome over an "Access Denied" content panel.
+        var anonymous = new AccessService();
+        anonymous.SetCircuitContext(new AccessContext
+        {
+            ObjectId = WellKnownUsers.Anonymous,
+            Name = "Guest",
+            IsVirtual = true
+        });
+        _hubServiceProvider.GetService(typeof(AccessService)).Returns(anonymous);
+
+        // RLS verdict for the Anonymous identity on this node: no Read.
+        var config = new MessageHubConfiguration(null, new Address("test", "nav"))
+            .Set<EffectivePermissionsDelegate>((_, _, _) =>
+                System.Reactive.Linq.Observable.Return(Permission.None));
+        _hub.Configuration.Returns(config);
+
+        var service = CreateService();
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(
+                new AddressResolution("Private/Space", "Overview")));
+
+        service.Initialize();
+        _navigationManager.SimulateLocationChanged("http://localhost/Private/Space/Overview");
+
+        var status = await service.Status.Should().Within(WaitTimeout)
+            .Match(s => s.Phase == NavigationPhase.AccessDenied);
+        status.Phase.Should().Be(NavigationPhase.AccessDenied);
+    }
+
+    [Fact]
+    public async Task AnonymousVisitor_PublicNode_ResolvesReady()
+    {
+        // Same logged-out visitor, but the node grants Anonymous Read (a PublicRead
+        // page). The gate must let it through to a normal NavigationContext — the
+        // welcome page / public docs must never bounce an anonymous visitor to login.
+        var anonymous = new AccessService();
+        anonymous.SetCircuitContext(new AccessContext
+        {
+            ObjectId = WellKnownUsers.Anonymous,
+            Name = "Guest",
+            IsVirtual = true
+        });
+        _hubServiceProvider.GetService(typeof(AccessService)).Returns(anonymous);
+
+        var config = new MessageHubConfiguration(null, new Address("test", "nav"))
+            .Set<EffectivePermissionsDelegate>((_, _, _) =>
+                System.Reactive.Linq.Observable.Return(Permission.Read));
+        _hub.Configuration.Returns(config);
+
+        var service = CreateService();
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(
+                new AddressResolution("Public/Welcome", "Overview")));
+
+        service.Initialize();
+        _navigationManager.SimulateLocationChanged("http://localhost/Public/Welcome/Overview");
+
+        var ctx = await service.NavigationContext.Should().Within(WaitTimeout)
+            .Match(c => c?.Area == "Overview");
+        ctx.Should().NotBeNull();
+    }
+
+    #endregion
+
     #region InitializeAsync Tests
 
     [Fact]
@@ -134,7 +216,7 @@ public class NavigationServiceTest
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", null)));
 
         // Act
-        service.InitializeAsync();
+        service.Initialize();
 
         _pathResolver.ResolvePath("ACME/Project/Overview")
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", "Overview")));
@@ -165,8 +247,8 @@ public class NavigationServiceTest
         _navigationManager.SetUri("http://localhost/ACME");
 
         // Act
-        service.InitializeAsync();
-        service.InitializeAsync(); // Second call should be idempotent
+        service.Initialize();
+        service.Initialize(); // Second call should be idempotent
         // Stream-wait for the bootstrap navigation to materialise into a
         // NavigationContext for "ACME" — replaces a Task.Delay(100) barrier.
         await service.NavigationContext.Should().Within(WaitTimeout)
@@ -203,7 +285,7 @@ public class NavigationServiceTest
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", null)));
 
         // Act
-        service.InitializeAsync();
+        service.Initialize();
 
         // Assert
         service.Context.Should().NotBeNull();
@@ -221,7 +303,7 @@ public class NavigationServiceTest
         var service = CreateService();
         _pathResolver.ResolvePath(Arg.Any<string>())
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", null)));
-        service.InitializeAsync();
+        service.Initialize();
 
         _pathResolver.ResolvePath("ACME/Project/Dashboard/123")
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", "Dashboard/123")));
@@ -244,7 +326,7 @@ public class NavigationServiceTest
         var service = CreateService();
         _pathResolver.ResolvePath(Arg.Any<string>())
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME", null)));
-        service.InitializeAsync();
+        service.Initialize();
 
         _pathResolver.ResolvePath("ACME/Project")
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", null)));
@@ -277,7 +359,7 @@ public class NavigationServiceTest
         // Set URI so InitializeAsync's bootstrap actually triggers ProcessLocationChange
         // — empty paths short-circuit in production via PublishPath.
         _navigationManager.SetUri("http://localhost/ACME");
-        service.InitializeAsync();
+        service.Initialize();
         // Stream-wait for the bootstrap navigation to land — replaces a
         // Task.Delay(50) propagation barrier.
         await service.NavigationContext.Should().Within(WaitTimeout)
@@ -307,7 +389,7 @@ public class NavigationServiceTest
         var service = CreateService();
         _pathResolver.ResolvePath(Arg.Any<string>())
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME", null)));
-        service.InitializeAsync();
+        service.Initialize();
 
         _pathResolver.ResolvePath("ACME/Project/Dashboard/item-123")
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", "Dashboard/item-123")));
@@ -330,7 +412,7 @@ public class NavigationServiceTest
         var service = CreateService();
         _pathResolver.ResolvePath(Arg.Any<string>())
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME", null)));
-        service.InitializeAsync();
+        service.Initialize();
 
         _pathResolver.ResolvePath("ACME/Project")
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", null)));
@@ -353,7 +435,7 @@ public class NavigationServiceTest
         var service = CreateService();
         _pathResolver.ResolvePath(Arg.Any<string>())
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME", null)));
-        service.InitializeAsync();
+        service.Initialize();
 
         _pathResolver.ResolvePath("ACME/Project/Dashboard")
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", "Dashboard")));
@@ -376,7 +458,7 @@ public class NavigationServiceTest
         var service = CreateService();
         _pathResolver.ResolvePath(Arg.Any<string>())
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME", null)));
-        service.InitializeAsync();
+        service.Initialize();
 
         // Organization/Search: address is "Organization", remainder is "Search"
         _pathResolver.ResolvePath("Organization/Search")
@@ -401,7 +483,7 @@ public class NavigationServiceTest
         var service = CreateService();
         _pathResolver.ResolvePath(Arg.Any<string>())
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME", null)));
-        service.InitializeAsync();
+        service.Initialize();
 
         _pathResolver.ResolvePath("Organization/Settings/Metadata")
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("Organization", "Settings/Metadata")));
@@ -425,7 +507,7 @@ public class NavigationServiceTest
         var service = CreateService();
         _pathResolver.ResolvePath(Arg.Any<string>())
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME", null)));
-        service.InitializeAsync();
+        service.Initialize();
 
         _pathResolver.ResolvePath("User/Roland/Settings")
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("User/Roland", "Settings")));
@@ -464,7 +546,7 @@ public class NavigationServiceTest
         // stream-wait for the ACME creatable-types load to settle so the
         // subsequent navigation kicks off a CLEAN second load.
         _navigationManager.SetUri("http://localhost/ACME");
-        service.InitializeAsync();
+        service.Initialize();
         await service.CreatableTypes.Should().Within(WaitTimeout)
             .Match(s => !s.IsLoading && s.Items.Any(t => t.NodeTypePath == "ACME/Todo"));
 
@@ -514,7 +596,7 @@ public class NavigationServiceTest
         // creatable-types load (otherwise PublishPath("") short-circuits and
         // the first load doesn't happen until SimulateLocationChanged below).
         _navigationManager.SetUri("http://localhost/ACME/Project");
-        service.InitializeAsync();
+        service.Initialize();
         // Stream-wait for the first load to complete — replaces Task.Delay(100).
         await service.CreatableTypes.Should().Within(WaitTimeout)
             .Match(s => !s.IsLoading && s.Items.Any(t => t.NodeTypePath == "ACME/Project/Todo"));
@@ -558,7 +640,7 @@ public class NavigationServiceTest
         _navigationManager.SetUri("http://localhost/ACME/Project");
 
         // Act
-        service.InitializeAsync();
+        service.Initialize();
         // Stream-wait for the Done snapshot — replaces Task.Delay(300). The
         // Loading snapshot lands synchronously before this returns, so the
         // accumulator will have captured both states.
@@ -591,7 +673,7 @@ public class NavigationServiceTest
         _navigationManager.SetUri("http://localhost/ACME");
 
         // Act
-        service.InitializeAsync();
+        service.Initialize();
         // Stream-wait for the IsLoading=false transition with items present —
         // replaces a Task.Delay(200). The IsLoading=true emission lands
         // synchronously before this returns, so loadingStates has both.
@@ -614,7 +696,7 @@ public class NavigationServiceTest
         var service = CreateService();
         _pathResolver.ResolvePath(Arg.Any<string>())
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME", null)));
-        service.InitializeAsync();
+        service.Initialize();
 
         var eventFired = false;
         // .Skip(1) discards the cached value (ReplaySubject) so we only count NEW emissions.
@@ -658,7 +740,7 @@ public class NavigationServiceTest
         _meshQuery.Query<MeshNode>(Arg.Any<MeshQueryRequest>(), Arg.Any<JsonSerializerOptions>())
             .Returns(System.Reactive.Linq.Observable.Return(QueryChange(threadNode)));
 
-        service.InitializeAsync();
+        service.Initialize();
         // The MockNavigationManager initializes at "http://localhost/" (empty
         // relative path) and PublishPath("") returns early, so InitializeAsync's
         // bootstrap is a no-op. Trigger the navigation explicitly via
@@ -692,7 +774,7 @@ public class NavigationServiceTest
         _meshQuery.Query<MeshNode>(Arg.Any<MeshQueryRequest>(), Arg.Any<JsonSerializerOptions>())
             .Returns(System.Reactive.Linq.Observable.Return(QueryChange(mainNode)));
 
-        service.InitializeAsync();
+        service.Initialize();
         // The MockNavigationManager initializes at "http://localhost/" (empty
         // relative path) and PublishPath("") returns early, so InitializeAsync's
         // bootstrap is a no-op. Trigger the navigation explicitly — same shape
@@ -735,7 +817,7 @@ public class NavigationServiceTest
         // (PublishPath skips empty initial paths in production).
         _navigationManager.SetUri("http://localhost/PartnerRe/AIConsulting/_Thread/abc-123");
 
-        service.InitializeAsync();
+        service.Initialize();
         // Stream-wait for the creatable-types load for the main node to land
         // — replaces a Task.Delay(150).
         await service.CreatableTypes.Should().Within(WaitTimeout)

@@ -150,8 +150,11 @@ public partial class ApplicationPage : ComponentBase, IDisposable
         if (!_navigationServiceInitialized)
         {
             _navigationServiceInitialized = true;
-            await NavigationService.InitializeAsync();
-            // First init: safe to read state since InitializeAsync awaited resolution
+            // Synchronous: Initialize() only wires Rx subscriptions and pushes the
+            // current path — no await (a Task here would deadlock the circuit). The
+            // resolved IsResolving snapshot below is the initial reactive state;
+            // OnNavigationContextChanged keeps it live thereafter.
+            NavigationService.Initialize();
             IsLoading = NavigationService.IsResolving;
             UpdateFromContext();
         }

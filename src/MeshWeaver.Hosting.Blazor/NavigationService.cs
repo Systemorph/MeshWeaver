@@ -97,7 +97,7 @@ internal class NavigationService : INavigationService
         // tick — the previous TryReadCurrentPath swallowed the exception via
         // try/catch but the IDE still surfaced it as a first-chance
         // InvalidOperationException on every circuit start. The path arrives
-        // reactively via _pathSubject the moment InitializeAsync runs (called
+        // reactively via _pathSubject the moment Initialize() runs (called
         // from PortalLayoutBase.OnInitializedAsync, where NavigationManager IS
         // initialized), and Status.LookingUp gets re-emitted with the real
         // path at that point.
@@ -106,9 +106,22 @@ internal class NavigationService : INavigationService
         // Mirror Path emissions into _currentPathSnapshot for the watchdog's
         // stale-check (synchronous read site that can't plumb an Rx
         // subscription). Subscribe here so the mirror tracks every push,
-        // including the one InitializeAsync makes from the safe component
+        // including the one Initialize() makes from the safe component
         // lifecycle context.
         _pathSubscription = _pathSubject.Subscribe(p => _currentPathSnapshot = p);
+
+        // Wire the reactive navigation pipeline at CONSTRUCTION. These only set
+        // up subscriptions — no NavigationManager.Uri read — so they are safe
+        // before the circuit's first JS-interop tick: LocationChanged feeds the
+        // path subject (off e.Location, never Uri); ProcessLocationChange is a
+        // pure subscriber, and _pathSubject (ReplaySubject) emits nothing until
+        // the first PublishPath, so nothing runs until a path actually arrives.
+        // The ONE thing that cannot live here is the bootstrap Uri-read — that
+        // is all Initialize() does, deferred to the component lifecycle.
+        _navigationManager.LocationChanged += OnLocationChanged;
+        _navigationSubscription = _pathSubject
+            .DistinctUntilChanged()
+            .Subscribe(ProcessLocationChange);
     }
 
     private readonly IDisposable _pathSubscription;
@@ -157,35 +170,21 @@ internal class NavigationService : INavigationService
     }
 
     /// <inheritdoc />
-    public Task InitializeAsync()
+    public void Initialize()
     {
         if (_isInitialized)
-            return Task.CompletedTask;
-
+            return;
         _isInitialized = true;
-        _navigationManager.LocationChanged += OnLocationChanged;
 
-        // Drive ProcessLocationChange off the reactive Path stream — every push
-        // to _pathSubject (initial bootstrap below + every LocationChanged event)
-        // flows through the same subscription. DistinctUntilChanged collapses
-        // redundant emissions for the same path. This is the "fully reactive"
-        // shape the user asked for: the Path subject is the single source of
-        // truth for the current path; ProcessLocationChange is just a
-        // subscriber.
-        _navigationSubscription = _pathSubject
-            .DistinctUntilChanged()
-            .Subscribe(ProcessLocationChange);
-
-        // Bootstrap: push the current URI onto the subject. NavigationManager
-        // IS initialized by the time this runs (PortalLayoutBase.OnInitializedAsync
-        // — Blazor circuit's component lifecycle), so this read is safe and the
-        // first-chance "RemoteNavigationManager has not been initialized" that
-        // showed up in the IDE on every circuit start is gone. The
-        // ProcessLocationChange subscription above kicks in synchronously off
-        // this push.
+        // The reactive pipeline (LocationChanged + ProcessLocationChange) is
+        // already wired in the constructor. The ONLY thing deferred to here is
+        // the bootstrap Uri-read: NavigationManager.Uri throws if read at DI-
+        // construction time (before the circuit's first JS-interop tick), so the
+        // initial path push waits until a component calls Initialize() from its
+        // OnInitialized lifecycle, where NavigationManager IS initialized. The
+        // ProcessLocationChange subscription kicks in synchronously off this push.
         var initial = _navigationManager.ToBaseRelativePath(_navigationManager.Uri);
         PublishPath(initial);
-        return Task.CompletedTask;
     }
 
     private IDisposable? _navigationSubscription;
@@ -263,10 +262,37 @@ internal class NavigationService : INavigationService
     // resolution arrives in time or when the user navigates away.
     private IDisposable? _notFoundWatchdog;
 
+    /// <summary>
+    /// Resolves the current visitor's user id from the circuit identity, mirroring
+    /// <c>HubPermissionExtensions.ResolveUserId</c>: an empty or <see cref="AccessContext.IsVirtual"/>
+    /// context (a logged-out guest) maps to <see cref="WellKnownUsers.Anonymous"/>. Called
+    /// SYNCHRONOUSLY on the inbound-activity thread so the answer is trustworthy — see the
+    /// capture note in <see cref="ProcessLocationChange"/>.
+    /// </summary>
+    private string ResolveCurrentUserId()
+    {
+        var accessService = _hub.ServiceProvider.GetService<AccessService>();
+        var context = accessService?.Context ?? accessService?.CircuitContext;
+        var userId = context?.ObjectId;
+        if (string.IsNullOrEmpty(userId) || context?.IsVirtual == true)
+            return WellKnownUsers.Anonymous;
+        return userId;
+    }
+
     private void ProcessLocationChange(string path)
     {
         IsResolving = true;
         _status.OnNext(NavigationStatus.LookingUp(path));
+
+        // Capture the requesting identity SYNCHRONOUSLY, here on the inbound-
+        // activity thread where AccessService.CircuitContext is set. Reading it
+        // later (inside an Rx callback below) is unreliable: AsyncLocal does not
+        // flow through scheduler hops and CircuitAccessHandler clears the per-
+        // activity context in its finally. The anonymous read-gate in
+        // ProcessResolvedPath needs a trustworthy "is this visitor logged out?"
+        // answer so it never misreads an authenticated user as anonymous (the
+        // 2026-05-21 identity-loss false-denial).
+        var userId = ResolveCurrentUserId();
 
         // Cancel any prior resolution + watchdog. The user navigated; the
         // previous path's resolution stream is now stale.
@@ -285,7 +311,7 @@ internal class NavigationService : INavigationService
                 return; // wait for the catalog to learn about the path
             resolved = true;
             _notFoundWatchdog?.Dispose();
-            ProcessResolvedPath(path, resolution);
+            ProcessResolvedPath(path, resolution, userId);
         });
 
         // Watchdog: if no resolution arrives within the cumulative retry budget,
@@ -306,16 +332,42 @@ internal class NavigationService : INavigationService
             });
     }
 
-    private void ProcessResolvedPath(string path, AddressResolution resolution)
+    private void ProcessResolvedPath(string path, AddressResolution resolution, string userId)
     {
         var (area, id) = ParseRemainder(resolution.Remainder);
         _status.OnNext(NavigationStatus.Redirecting(resolution.Prefix, area));
         _status.OnNext(NavigationStatus.Loading(resolution.Prefix));
 
+        var isAnonymous = string.Equals(userId, WellKnownUsers.Anonymous, StringComparison.OrdinalIgnoreCase);
+
         // Reactive load â€” Subscribe, never await (every async bit through a hub
         // round-trip is a deadlock surface; see Doc/Architecture/AsynchronousCalls.md).
-        LoadNodeWithPreRenderedHtml(resolution).Subscribe(node =>
+        LoadNodeWithPreRenderedHtml(resolution)
+            // Anonymous read-gate: a logged-OUT visitor who resolves a node they
+            // cannot read is flipped to AccessDenied; ApplicationPage's
+            // AuthorizeView turns that into a redirect to /login (logging in may
+            // grant access). AUTHENTICATED visitors are never gated here — their
+            // identity is trusted and the content stream enforces RLS, so gating
+            // them would re-introduce the 2026-05-21 identity-loss false-denial.
+            // For the anonymous case the check runs for the EXPLICIT Anonymous id
+            // (immune to Rx-hop context loss): a PublicRead node returns Read on
+            // the fast static public-grant seed — no added latency; a private node
+            // returns None → redirect. Fail closed on timeout: an unresolved check
+            // sends the logged-out visitor to login (recoverable) rather than
+            // leaking a private node.
+            .SelectMany(node =>
+                node is null || !isAnonymous
+                    ? Observable.Return((Node: node, Allowed: true))
+                    : _hub.GetEffectivePermissions(resolution.Prefix, WellKnownUsers.Anonymous)
+                        .Select(p => p.HasFlag(Permission.Read))
+                        .Take(1)
+                        .Timeout(TimeSpan.FromSeconds(8))
+                        .Catch<bool, Exception>(_ => Observable.Return(false))
+                        .Select(allowed => (Node: node, Allowed: allowed)))
+            .Subscribe(result =>
         {
+            var node = result.Node;
+
             // Null node after the load completes means one of: (a) the path
             // genuinely doesn't exist, (b) the user's Read permission was
             // filtered out at the RLS layer, or (c) the 15s timeout above
@@ -334,6 +386,17 @@ internal class NavigationService : INavigationService
                 CurrentNamespace = null;
                 _navigationContext.OnNext(null);
                 _status.OnNext(NavigationStatus.NotFound(path));
+                return;
+            }
+
+            // Anonymous visitor, node not readable → AccessDenied (→ login).
+            if (!result.Allowed)
+            {
+                IsResolving = false;
+                Context = null;
+                CurrentNamespace = null;
+                _navigationContext.OnNext(null);
+                _status.OnNext(NavigationStatus.AccessDenied(path));
                 return;
             }
 
@@ -600,18 +663,16 @@ internal class NavigationService : INavigationService
         _creatableTypes.Dispose();
         _status.Dispose();
 
-        // Only unsubscribe if we actually subscribed (InitializeAsync was called)
-        // Wrap in try-catch because NavigationManager may not be initialized if circuit was never established
-        if (_isInitialized)
+        // LocationChanged is now wired in the constructor (not Initialize), so
+        // unsubscribe unconditionally. Wrap in try-catch because NavigationManager
+        // may not be initialized if the circuit was never established.
+        try
         {
-            try
-            {
-                _navigationManager.LocationChanged -= OnLocationChanged;
-            }
-            catch (InvalidOperationException)
-            {
-                // NavigationManager was not initialized - nothing to unsubscribe
-            }
+            _navigationManager.LocationChanged -= OnLocationChanged;
+        }
+        catch (InvalidOperationException)
+        {
+            // NavigationManager was not initialized - nothing to unsubscribe
         }
     }
 }

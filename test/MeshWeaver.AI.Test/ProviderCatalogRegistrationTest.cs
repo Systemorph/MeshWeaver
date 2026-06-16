@@ -69,7 +69,7 @@ public class ProviderCatalogRegistrationTest : AITestBase
     /// runs its own agent loop so the agent/model pickers are hidden) and neither is
     /// the default harness (MeshWeaver is). Also pins case-insensitive resolution via
     /// <see cref="HarnessNodeType.ResolveHarness"/> — the path ThreadExecution uses to
-    /// pick a thread's <c>SelectedHarness</c>.
+    /// pick a thread's composer harness (<c>ThreadComposer.Harness</c>).
     /// </summary>
     [Fact]
     public void ClaudeCodeAndCopilot_RegisterAsHarnesses_WithCliSemantics()

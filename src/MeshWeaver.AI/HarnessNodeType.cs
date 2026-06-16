@@ -61,7 +61,7 @@ public static class HarnessNodeType
 
     /// <summary>
     /// Resolves the registered <see cref="IHarness"/> for <paramref name="harnessId"/>
-    /// (the value stored in <see cref="Thread.SelectedHarness"/> — a bare id or a picked
+    /// (the value stored in <see cref="ThreadComposer.Harness"/> — a bare id or a picked
     /// node PATH like <c>Harness/MeshWeaver</c>, normalized via <see cref="SelectionId.IdOf"/>),
     /// or null when none matches — in which case execution uses the default MeshWeaver
     /// agent/model path.

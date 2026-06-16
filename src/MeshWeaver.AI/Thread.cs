@@ -328,72 +328,21 @@ public record Thread
     public ThreadExecutionStatus? RequestedStatus { get; init; }
 
     /// <summary>
-    /// Pending user message text — set at thread creation to auto-start execution.
-    /// When the thread grain activates and sees this, it immediately starts streaming.
-    /// Cleared after execution starts.
-    /// Legacy: still used by the auto-execute-on-creation path. New submissions
-    /// from the GUI populate <see cref="PendingUserMessages"/> instead.
-    /// </summary>
-    public string? PendingUserMessage { get; init; }
-
-    /// <summary>
     /// User messages submitted by the client but not yet ingested into a round.
     /// Keyed by user message id. The server-side submission watcher creates
     /// satellite ThreadMessage cells from these entries and clears them once
     /// the round is dispatched. Lets us do the entire submission as a single
     /// atomic <c>stream.Update</c> on this thread node — no separate
     /// CreateNodeRequest, no ThreadInput.AppendUserInput.
+    ///
+    /// <para>Each entry is a <see cref="ThreadMessage"/> carrying the per-message context +
+    /// attachments (and a historical stamp of the agent/model/harness that submitted it). The
+    /// round's STICKY selection (agent / model / harness) is NOT read from here — it lives on
+    /// <see cref="Composer"/>, the single data-bound source of truth. There is no thread-level
+    /// selection mirror to drift out of sync.</para>
     /// </summary>
     public ImmutableDictionary<string, ThreadMessage> PendingUserMessages { get; init; }
         = ImmutableDictionary<string, ThreadMessage>.Empty;
-
-    /// <summary>Agent name for pending execution.</summary>
-    public string? PendingAgentName { get; init; }
-
-    /// <summary>Model name for pending execution.</summary>
-    public string? PendingModelName { get; init; }
-
-    /// <summary>Harness (<see cref="Harnesses"/>) for pending execution.</summary>
-    public string? PendingHarness { get; init; }
-
-    /// <summary>
-    /// Agent name selected on this thread (sticky across reloads). The
-    /// chat picker reads this on resume so the user's choice survives a
-    /// page refresh / Aspire restart. Updated whenever the user picks a
-    /// different agent (dropdown or <c>/agent</c> command). Null on a new
-    /// thread → the chat falls back to the orchestrator default.
-    /// </summary>
-    public string? SelectedAgentName { get; init; }
-
-    /// <summary>
-    /// Model id selected on this thread (sticky across reloads). Same
-    /// resume semantics as <see cref="SelectedAgentName"/>. The model is
-    /// independent of the agent; null → first available model.
-    /// </summary>
-    public string? SelectedModelName { get; init; }
-
-    /// <summary>
-    /// Harness selected on this thread (sticky across reloads). One of
-    /// <see cref="Harnesses"/>. Same resume semantics as
-    /// <see cref="SelectedAgentName"/>. Null → the chat falls back to the
-    /// user's last-used harness (localStorage) then <see cref="Harnesses.MeshWeaver"/>.
-    /// </summary>
-    public string? SelectedHarness { get; init; }
-
-    /// <summary>
-    /// In-progress composer draft text. Used by the per-user chat template node
-    /// (<c>{userHome}/_ThreadTemplate</c>) so the text the user is typing survives
-    /// a reload/reboot without browser storage. Never set on a real conversation
-    /// thread — only the template carries it; submitting clones the template into a
-    /// new thread and clears this. Inert: it does not feed the submission watcher.
-    /// </summary>
-    public string? DraftText { get; init; }
-
-    /// <summary>Context path for pending execution.</summary>
-    public string? PendingContextPath { get; init; }
-
-    /// <summary>Attachments for pending execution.</summary>
-    public IReadOnlyList<string>? PendingAttachments { get; init; }
 
     [JsonIgnore]
     public string? StreamingText { get; init; }
@@ -403,10 +352,11 @@ public record Thread
 
     /// <summary>
     /// Brings the thread to REST — the single canonical reset of transient execution state. Sets
-    /// <c>Status = Idle</c> and clears the active-round handle, streaming buffers, the control-plane
-    /// request, and the per-round <c>Pending*</c> metadata, while PRESERVING the conversation
+    /// <c>Status = Idle</c> and clears the active-round handle, streaming buffers, and the
+    /// control-plane request, while PRESERVING the conversation
     /// (<c>Messages</c>, <c>UserMessageIds</c>, <c>IngestedMessageIds</c>) and the inbox queue
-    /// (<c>PendingUserMessages</c> — a fresh round drains whatever is still queued).
+    /// (<c>PendingUserMessages</c> — a fresh round drains whatever is still queued, each entry
+    /// carrying its own agent/model/harness/context/attachments selection).
     /// <para>Call it at EVERY terminal point — round Completed/Cancelled/Error and inbox drain — so the
     /// thread can never linger in a stale <c>Executing</c>/<c>StartingExecution</c> state. A stale state
     /// is what lets the submission watcher try to RESUME a dead round, which re-blocks and wedges the
@@ -422,13 +372,9 @@ public record Thread
         ExecutionStartedAt = null,
         StreamingText = null,
         StreamingToolCalls = null,
-        PendingUserMessage = null,
-        PendingAgentName = null,
-        PendingModelName = null,
-        PendingContextPath = null,
-        PendingAttachments = null,
         // Preserved: Messages / UserMessageIds / IngestedMessageIds (the conversation) and
-        // PendingUserMessages (the inbox queue — the next round drains anything still pending).
+        // PendingUserMessages (the inbox queue — the next round drains anything still pending,
+        // each entry carrying its own agent/model/harness/context/attachments selection).
     };
 }
 

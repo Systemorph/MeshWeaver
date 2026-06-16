@@ -19,7 +19,7 @@ namespace MeshWeaver.AI;
 /// </summary>
 public record Harness
 {
-    /// <summary>Stable id — matches <see cref="Thread.SelectedHarness"/> and the <see cref="Harnesses"/> constants.</summary>
+    /// <summary>Stable id — matches <see cref="ThreadComposer.Harness"/> and the <see cref="Harnesses"/> constants.</summary>
     [Key]
     public required string Id { get; init; }
 
@@ -51,7 +51,7 @@ public record Harness
 /// </summary>
 public interface IHarness
 {
-    /// <summary>Stable id, matches <see cref="Harness.Id"/> and <see cref="Thread.SelectedHarness"/>.</summary>
+    /// <summary>Stable id, matches <see cref="Harness.Id"/> and <see cref="ThreadComposer.Harness"/>.</summary>
     string Id { get; }
 
     /// <summary>The catalog definition surfaced as a node and in the picker.</summary>

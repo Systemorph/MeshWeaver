@@ -199,12 +199,10 @@ public static class ThreadNodeType
                 CreatedBy = createdBy,
                 Status = ThreadExecutionStatus.Idle,
                 UserMessageIds = ImmutableList.Create(userMsgId),
+                // The pending ThreadMessage carries the round's selection
+                // (agent/model/context/attachments) — no thread-level Pending* mirror.
                 PendingUserMessages = ImmutableDictionary<string, ThreadMessage>.Empty
-                    .Add(userMsgId, userMessage),
-                PendingAgentName = agentName,
-                PendingModelName = modelName,
-                PendingContextPath = contextPath,
-                PendingAttachments = attachments
+                    .Add(userMsgId, userMessage)
             }
         };
 

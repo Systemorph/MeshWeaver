@@ -60,25 +60,32 @@ public static class ThreadInput
     /// <summary>
     /// Pure: applies a user input to a thread's state — adds <paramref name="msgId"/> to
     /// <see cref="Thread.UserMessageIds"/> (preserving submission order), stashes the
-    /// message in <see cref="Thread.PendingUserMessages"/> (the queue the inbox drains),
-    /// and refreshes the <c>Pending*</c> dispatch hints. Shared by
-    /// <see cref="AppendUserInput"/> and <c>HubThreadExtensions.SubmitComposer</c> so both
-    /// submission paths produce byte-identical thread state.
+    /// message in <see cref="Thread.PendingUserMessages"/> (the queue the inbox drains), and
+    /// keeps the thread's <see cref="Thread.Composer"/> authoritative for the round's sticky
+    /// selection (agent / model / harness): when the message carries one, it is folded into
+    /// the composer. The round reads the selection from <see cref="Thread.Composer"/> (the
+    /// single source of truth), NOT from a thread-level <c>Pending*</c> mirror nor from the
+    /// per-message copy. Shared by <see cref="AppendUserInput"/> (the <c>SubmitMessage</c>
+    /// path, which carries explicit selection params) and <c>HubThreadExtensions.SubmitComposer</c>
+    /// (which already built the message FROM the composer) so both paths leave the composer
+    /// current.
     /// </summary>
     public static MeshThread ApplyUserInput(MeshThread thread, string msgId, ThreadMessage message)
     {
         var userIds = thread.UserMessageIds.Contains(msgId)
             ? thread.UserMessageIds
             : thread.UserMessageIds.Add(msgId);
+        var composer = (thread.Composer ?? new ThreadComposer()) with
+        {
+            AgentName = message.AgentName ?? thread.Composer?.AgentName,
+            ModelName = message.ModelName ?? thread.Composer?.ModelName,
+            Harness = message.Harness ?? thread.Composer?.Harness
+        };
         return thread with
         {
             UserMessageIds = userIds,
             PendingUserMessages = thread.PendingUserMessages.SetItem(msgId, message),
-            PendingAgentName = message.AgentName ?? thread.PendingAgentName,
-            PendingModelName = message.ModelName ?? thread.PendingModelName,
-            PendingHarness = message.Harness ?? thread.PendingHarness,
-            PendingContextPath = message.ContextPath ?? thread.PendingContextPath,
-            PendingAttachments = message.Attachments ?? thread.PendingAttachments
+            Composer = composer
         };
     }
 

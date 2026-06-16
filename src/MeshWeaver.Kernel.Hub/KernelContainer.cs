@@ -137,13 +137,25 @@ public class KernelContainer(IServiceProvider serviceProvider)
         // 🚨 One-shot timer (period = InfiniteTimeSpan), reset on every message for
         // the idle-disconnect. A PERIODIC timer kept re-firing hub.Dispose() on an
         // already-disposed hub.
-        var timer = new Timer(_ => hub.Dispose(), null, DisconnectTimeout, Timeout.InfiniteTimeSpan);
-        // 🚨 Dispose the timer WITH the hub. Without this the TimerQueue (a GC
-        // strong-handle root) keeps the timer — and its callback closure capturing
-        // `hub` — alive forever, pinning the DISPOSED MessageHub across test classes
-        // (ClrMD GC-root chain: StrongHandle → Timer → … → KernelContainer closure →
-        // MessageHub[RunLevel=6]). This was the process-wide memory leak behind the
-        // cross-class capacity flakes (MeshHubDisposalLeakTest et al.).
+        //
+        // 🚨 The callback must NOT capture `hub` strongly. The process-wide TimerQueue
+        // is a GC strong-handle root: TimerQueue → Timer → callback closure → hub. For
+        // a hub that completes activation we RegisterForDisposal the timer (disposed →
+        // removed from the queue → no pin). But a kernel hub abandoned mid-activation
+        // (RunLevel=1, Starting) is never disposed, so RegisterForDisposal never runs
+        // and a `_ => hub.Dispose()` closure would pin the abandoned hub forever
+        // (ClrMD chain: StrongHandle → Timer → KernelContainer.<>c__DisplayClass → hub
+        // [RunLevel=1] — the MeshHub_IsCollected leak). A WeakReference + static callback
+        // lets the GC reclaim an unreferenced hub: if it's already collectable the
+        // disconnect is moot; if it's still alive the weak ref resolves and disposes it.
+        var weakHub = new WeakReference<IMessageHub>(hub);
+        var timer = new Timer(static state =>
+        {
+            if (((WeakReference<IMessageHub>)state!).TryGetTarget(out var h))
+                h.Dispose();
+        }, weakHub, DisconnectTimeout, Timeout.InfiniteTimeSpan);
+        // Dispose the timer WITH the hub for the normal (activated → disposed) path so
+        // the queue drops it promptly rather than waiting on a GC.
         hub.RegisterForDisposal((IDisposable)timer);
         hub.Register<object>(d =>
         {

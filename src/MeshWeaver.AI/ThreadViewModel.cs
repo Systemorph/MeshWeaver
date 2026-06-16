@@ -58,25 +58,6 @@ public record ThreadViewModel
     public DateTime? ExecutionStartedAt { get; init; }
 
     /// <summary>
-    /// Sticky agent selection from <see cref="Thread.SelectedAgentName"/>.
-    /// On thread load the chat picker pre-selects this so the user's choice
-    /// survives a page reload. Null on a brand-new thread.
-    /// </summary>
-    public string? SelectedAgentName { get; init; }
-
-    /// <summary>
-    /// Sticky model selection from <see cref="Thread.SelectedModelName"/>.
-    /// Same persistence shape as <see cref="SelectedAgentName"/>.
-    /// </summary>
-    public string? SelectedModelName { get; init; }
-
-    /// <summary>
-    /// Sticky harness selection from <see cref="Thread.SelectedHarness"/>.
-    /// Same persistence shape as <see cref="SelectedAgentName"/>.
-    /// </summary>
-    public string? SelectedHarness { get; init; }
-
-    /// <summary>
     /// Identity (ObjectId / email) of the user who created the thread, from
     /// <see cref="MeshNode.CreatedBy"/>. The chat view shows the input + edit ops
     /// only when this matches the current user — other users' threads are read-only.
@@ -97,9 +78,6 @@ public record ThreadViewModel
                && StreamingText == other.StreamingText
                && TokensUsed == other.TokensUsed
                && ExecutionStartedAt == other.ExecutionStartedAt
-               && SelectedAgentName == other.SelectedAgentName
-               && SelectedModelName == other.SelectedModelName
-               && SelectedHarness == other.SelectedHarness
                && CreatedBy == other.CreatedBy
                && Messages.SequenceEqual(other.Messages)
                && (StreamingToolCalls ?? []).SequenceEqual(other.StreamingToolCalls ?? [])
@@ -119,9 +97,6 @@ public record ThreadViewModel
         hash.Add(StreamingText);
         hash.Add(TokensUsed);
         hash.Add(ExecutionStartedAt);
-        hash.Add(SelectedAgentName);
-        hash.Add(SelectedModelName);
-        hash.Add(SelectedHarness);
         hash.Add(CreatedBy);
         foreach (var msg in Messages)
             hash.Add(msg);

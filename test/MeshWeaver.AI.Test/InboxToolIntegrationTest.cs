@@ -528,7 +528,7 @@ public class InboxToolIntegrationTest : AITestBase
     /// <summary>
     /// Seeds a GENUINE mid-execution state in ONE atomic own-stream write and
     /// returns the queued ids. The write sets Status=Executing AND an
-    /// <see cref="MeshThread.ActiveMessageId"/> + <see cref="MeshThread.PendingUserMessage"/>
+    /// <see cref="MeshThread.ActiveMessageId"/>
     /// (the shape a real in-flight turn has) AND the queued
     /// <see cref="MeshThread.PendingUserMessages"/>.
     ///
@@ -537,7 +537,7 @@ public class InboxToolIntegrationTest : AITestBase
     ///   <item>ONE write → the submission watcher never observes a transient
     ///     <c>Idle+pending</c> (the two-write set-Executing-then-append shape let
     ///     the append's stale snapshot clobber Status back to Idle).</item>
-    ///   <item>ActiveMessageId + PendingUserMessage → <see cref="ThreadExecution"/>'s
+    ///   <item>ActiveMessageId → <see cref="ThreadExecution"/>'s
     ///     <c>RecoverStaleExecutingThread</c> SKIPS this thread (its guard treats it
     ///     as a live round). Otherwise its async init-read can race the write, see a
     ///     "stale" Executing thread with no active round, RESET Status→Idle, and the
@@ -569,7 +569,6 @@ public class InboxToolIntegrationTest : AITestBase
                 {
                     Status = ThreadExecutionStatus.Executing,
                     ActiveMessageId = activeMsgId,
-                    PendingUserMessage = texts[0],
                     UserMessageIds = userIds,
                     PendingUserMessages = pending
                 }

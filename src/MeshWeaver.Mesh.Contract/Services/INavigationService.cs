@@ -98,8 +98,14 @@ public interface INavigationService : IDisposable
     /// Initializes the service and subscribes to NavigationManager.LocationChanged.
     /// Should be called once during application startup or component initialization.
     /// Multiple calls are idempotent.
+    /// <para>Synchronous by design: it only wires Rx subscriptions and pushes the
+    /// current path onto a subject — there is NO async work. It must NOT return a
+    /// <see cref="Task"/>: a <c>Task</c>-returning method awaited from a Blazor view's
+    /// <c>OnInitializedAsync</c> is a deadlock surface (continuations captured on the
+    /// circuit's sync-context). Callers invoke it fire-and-forget; resolution flows
+    /// reactively through <see cref="NavigationContext"/>/<see cref="Status"/>.</para>
     /// </summary>
-    Task InitializeAsync();
+    void Initialize();
 
     /// <summary>
     /// Sets the current namespace from the resolved Address.

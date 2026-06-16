@@ -1,121 +1,109 @@
-﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
+using System.Collections.Immutable;
 using MeshWeaver.AI;
 using Xunit;
 
 namespace MeshWeaver.AI.Test;
 
 /// <summary>
-/// Tests for the sticky agent / model selection that lives on a
-/// <see cref="Thread"/> and surfaces through <see cref="ThreadViewModel"/>.
-///
-/// <para>The chat picker uses two distinct fields:</para>
-/// <list type="bullet">
-///   <item><b><see cref="Thread.PendingAgentName"/> /
-///         <see cref="Thread.PendingModelName"/></b> â€” transient. Stamped
-///         when the user submits a message; the server consumes them for
-///         that round and clears them. They describe <em>the next
-///         execution</em>.</item>
-///   <item><b><see cref="Thread.SelectedAgentName"/> /
-///         <see cref="Thread.SelectedModelName"/></b> â€” sticky. The user's
-///         dropdown choice on this thread; survives reloads. The picker
-///         reads these on mount, writes on every change.</item>
-/// </list>
-///
-/// <para>These tests pin those semantics so future refactors don't
-/// silently merge them.</para>
+/// Pins the post-refactor selection model: a thread has exactly ONE selection home —
+/// <see cref="Thread.Composer"/> (a <see cref="ThreadComposer"/>). The redundant
+/// thread-level mirrors (<c>Pending*</c>, <c>SelectedAgentName</c>/<c>SelectedModelName</c>/
+/// <c>SelectedHarness</c>, <c>DraftText</c>) were removed — they duplicated the composer
+/// and drifted. The chat picker reads + writes the composer's
+/// <see cref="ThreadComposer.AgentName"/> / <see cref="ThreadComposer.ModelName"/> /
+/// <see cref="ThreadComposer.Harness"/>; the round reads the same fields when it dispatches
+/// (see <c>ThreadSubmission.PlanNextRound</c>). These tests pin that single-source shape.
 /// </summary>
 public class ThreadSelectionPersistenceTest
 {
     [Fact]
-    public void Thread_DefaultSelections_AreNull()
+    public void Thread_DefaultComposer_IsNull_AndHasNoSelection()
     {
         var t = new Thread();
-
-        t.SelectedAgentName.Should().BeNull();
-        t.SelectedModelName.Should().BeNull();
-        t.PendingAgentName.Should().BeNull();
-        t.PendingModelName.Should().BeNull();
+        t.Composer.Should().BeNull("a brand-new thread carries no composer / selection yet");
     }
 
     [Fact]
-    public void Thread_PendingAndSelected_AreIndependent()
+    public void Composer_IsTheSingleSelectionHome_ForAgentModelHarness()
     {
-        // The picker writes to Selected; the submission stamps Pending.
-        // Setting one does not touch the other.
+        // Picking agent + model + harness writes all three onto the ONE composer.
         var t = new Thread
         {
-            SelectedAgentName = "Worker",
-            SelectedModelName = "claude-sonnet-4-6"
+            Composer = new ThreadComposer
+            {
+                AgentName = "Agent/Worker",
+                ModelName = "_Provider/Anthropic/claude-opus-4-6",
+                Harness = "Harness/MeshWeaver"
+            }
         };
 
-        t.PendingAgentName.Should().BeNull();
-        t.PendingModelName.Should().BeNull();
-        t.SelectedAgentName.Should().Be("Worker");
-        t.SelectedModelName.Should().Be("claude-sonnet-4-6");
+        t.Composer!.AgentName.Should().Be("Agent/Worker");
+        t.Composer.ModelName.Should().Be("_Provider/Anthropic/claude-opus-4-6");
+        t.Composer.Harness.Should().Be("Harness/MeshWeaver");
     }
 
     [Fact]
-    public void Thread_WithExpression_PreservesUnchangedFields()
+    public void Composer_PickingOne_PreservesTheOthers()
     {
-        // Picker change (Selected) must not zero the queued submission's
-        // Pending fields, nor vice versa.
+        // The picker writes a single field; the `with` keeps the other two selections intact.
         var t = new Thread
         {
-            PendingAgentName = "Orchestrator",
-            PendingModelName = "claude-opus-4-6",
-            SelectedAgentName = "Orchestrator",
-            SelectedModelName = "claude-opus-4-6"
+            Composer = new ThreadComposer
+            {
+                AgentName = "Agent/Orchestrator",
+                ModelName = "_Provider/Anthropic/claude-opus-4-6",
+                Harness = "Harness/MeshWeaver"
+            }
         };
 
-        // User picks a new agent â€” only Selected changes.
-        var afterPick = t with { SelectedAgentName = "Worker" };
+        // User picks a different agent — only AgentName changes.
+        var afterAgentPick = t with { Composer = t.Composer! with { AgentName = "Agent/Worker" } };
+        afterAgentPick.Composer!.AgentName.Should().Be("Agent/Worker");
+        afterAgentPick.Composer.ModelName.Should().Be("_Provider/Anthropic/claude-opus-4-6");
+        afterAgentPick.Composer.Harness.Should().Be("Harness/MeshWeaver");
 
-        afterPick.SelectedAgentName.Should().Be("Worker");
-        afterPick.SelectedModelName.Should().Be("claude-opus-4-6");
-        afterPick.PendingAgentName.Should().Be("Orchestrator");
-        afterPick.PendingModelName.Should().Be("claude-opus-4-6");
-    }
-
-    [Fact]
-    public void ThreadViewModel_CarriesSelectionFields()
-    {
-        var vm = new ThreadViewModel
+        // User picks a different model — only ModelName changes.
+        var afterModelPick = afterAgentPick with
         {
-            ThreadPath = "rbuergi/_Thread/hello-1066",
-            SelectedAgentName = "Worker",
-            SelectedModelName = "claude-sonnet-4-6"
+            Composer = afterAgentPick.Composer! with { ModelName = "_Provider/OpenAI/gpt-4o" }
+        };
+        afterModelPick.Composer!.AgentName.Should().Be("Agent/Worker");
+        afterModelPick.Composer.ModelName.Should().Be("_Provider/OpenAI/gpt-4o");
+        afterModelPick.Composer.Harness.Should().Be("Harness/MeshWeaver");
+
+        // User picks a different harness — only Harness changes.
+        var afterHarnessPick = afterModelPick with
+        {
+            Composer = afterModelPick.Composer! with { Harness = "Harness/ClaudeCode" }
+        };
+        afterHarnessPick.Composer!.AgentName.Should().Be("Agent/Worker");
+        afterHarnessPick.Composer.ModelName.Should().Be("_Provider/OpenAI/gpt-4o");
+        afterHarnessPick.Composer.Harness.Should().Be("Harness/ClaudeCode");
+    }
+
+    [Fact]
+    public void Composer_SelectionSurvivesSubmit_DraftAndAttachmentsAreConsumed()
+    {
+        // Submitting empties the draft + attachments but keeps the sticky agent/model/harness —
+        // the next round picks them up. This is the "selection survives, draft is consumed" shape
+        // SubmitComposer / StartThread produce.
+        var composer = new ThreadComposer
+        {
+            MessageContent = "hello",
+            Attachments = ImmutableList.Create("Some/Node"),
+            AgentName = "Agent/Worker",
+            ModelName = "_Provider/Anthropic/claude-opus-4-6",
+            Harness = "Harness/MeshWeaver"
         };
 
-        vm.SelectedAgentName.Should().Be("Worker");
-        vm.SelectedModelName.Should().Be("claude-sonnet-4-6");
-    }
+        var afterSubmit = composer with { MessageContent = null, Attachments = null };
 
-    [Fact]
-    public void ThreadViewModel_Equals_IncludesSelectionFields()
-    {
-        // Custom Equals override has to track these so the chat view's
-        // re-render gate fires when the picker changes.
-        var a = new ThreadViewModel { SelectedAgentName = "Worker" };
-        var b = new ThreadViewModel { SelectedAgentName = "Coder" };
-        var c = new ThreadViewModel { SelectedAgentName = "Worker" };
-
-        a.Equals(b).Should().BeFalse(
-            "different SelectedAgentName must produce inequality");
-        a.Equals(c).Should().BeTrue(
-            "same SelectedAgentName + everything else default = equal");
-        a.GetHashCode().Should().Be(c.GetHashCode());
-    }
-
-    [Fact]
-    public void ThreadViewModel_Equals_IncludesSelectedModel()
-    {
-        var a = new ThreadViewModel { SelectedModelName = "claude-sonnet-4-6" };
-        var b = new ThreadViewModel { SelectedModelName = "claude-opus-4-6" };
-        var c = new ThreadViewModel { SelectedModelName = "claude-sonnet-4-6" };
-
-        a.Equals(b).Should().BeFalse();
-        a.Equals(c).Should().BeTrue();
-        a.GetHashCode().Should().Be(c.GetHashCode());
+        afterSubmit.MessageContent.Should().BeNull("the draft became the submitted message");
+        afterSubmit.Attachments.Should().BeNull("attachments are per-message, consumed on submit");
+        afterSubmit.AgentName.Should().Be("Agent/Worker", "agent selection is sticky");
+        afterSubmit.ModelName.Should().Be("_Provider/Anthropic/claude-opus-4-6", "model selection is sticky");
+        afterSubmit.Harness.Should().Be("Harness/MeshWeaver", "harness selection is sticky");
     }
 }

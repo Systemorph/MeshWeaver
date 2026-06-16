@@ -106,13 +106,13 @@ public class ThreadSubmissionUnitTest
     [Fact]
     public void PlanNextRound_IdleWithOneQueued_ReturnsSingleItemDispatch()
     {
-        var u1 = new ThreadMessage { Role = "user", Text = "hello" };
+        // The round's selection comes from the pending ThreadMessage being drained —
+        // each message carries its own agent/model/harness (no thread-level Pending* mirror).
+        var u1 = new ThreadMessage { Role = "user", Text = "hello", AgentName = "Executor", ModelName = "gpt-4" };
         var thread = new MeshThread
         {
             UserMessageIds = ImmutableList.Create("u1"),
-            PendingUserMessages = ImmutableDictionary<string, ThreadMessage>.Empty.Add("u1", u1),
-            PendingAgentName = "Executor",
-            PendingModelName = "gpt-4"
+            PendingUserMessages = ImmutableDictionary<string, ThreadMessage>.Empty.Add("u1", u1)
         };
 
         var result = ThreadSubmission.PlanNextRound(thread);
@@ -122,6 +122,29 @@ public class ThreadSubmissionUnitTest
         result.ResponseMessageId.Should().NotBeNullOrEmpty();
         result.AgentName.Should().Be("Executor");
         result.ModelName.Should().Be("gpt-4");
+    }
+
+    [Fact]
+    public void PlanNextRound_SelectionComesFromLastDrainedMessage()
+    {
+        // Multiple queued messages with different selections: the round runs under the
+        // LAST drained message's selection (its Text is also the current turn's input).
+        var u1 = new ThreadMessage { Role = "user", Text = "one", AgentName = "Coder", ModelName = "gpt-4" };
+        var u2 = new ThreadMessage { Role = "user", Text = "two", AgentName = "Worker", ModelName = "claude-opus-4-6", Harness = "MeshWeaver" };
+        var thread = new MeshThread
+        {
+            UserMessageIds = ImmutableList.Create("u1", "u2"),
+            PendingUserMessages = ImmutableDictionary<string, ThreadMessage>.Empty
+                .Add("u1", u1).Add("u2", u2)
+        };
+
+        var result = ThreadSubmission.PlanNextRound(thread);
+
+        result.Should().NotBeNull();
+        result!.UserMessageIds.Should().ContainInOrder("u1", "u2");
+        result.AgentName.Should().Be("Worker");
+        result.ModelName.Should().Be("claude-opus-4-6");
+        result.Harness.Should().Be("MeshWeaver");
     }
 
     [Fact]
@@ -159,6 +182,42 @@ public class ThreadSubmissionUnitTest
         var result = ThreadSubmission.PlanNextRound(thread);
 
         result.Should().BeNull();
+    }
+
+    [Fact]
+    public void PlanNextRound_SelectionStaysQueuedWhileExecuting_AppliesWhenIdle()
+    {
+        // The agent/model/harness selection rides on the QUEUED ThreadMessage and is only
+        // ACCEPTED (drives a round) when the thread is Idle. While a round is Executing the
+        // selection stays queued — PlanNextRound returns null, so the running round is never
+        // re-targeted to the newly-picked agent/model/harness. The moment the thread goes
+        // Idle the queued message's selection drives the next round.
+        var queued = new ThreadMessage
+        {
+            Role = "user",
+            Text = "switch me",
+            AgentName = "Worker",
+            ModelName = "claude-opus-4-6",
+            Harness = "MeshWeaver"
+        };
+
+        // While Executing: the queued selection is NOT accepted — nothing dispatches.
+        var executing = new MeshThread
+        {
+            UserMessageIds = ImmutableList.Create("u1"),
+            PendingUserMessages = ImmutableDictionary<string, ThreadMessage>.Empty.Add("u1", queued),
+            Status = ThreadExecutionStatus.Executing
+        };
+        ThreadSubmission.PlanNextRound(executing).Should().BeNull(
+            "an agent/model/harness selection on a queued message stays queued while the thread executes");
+
+        // Same thread, now Idle: the queued message's selection drives the round.
+        var idle = executing with { Status = ThreadExecutionStatus.Idle };
+        var result = ThreadSubmission.PlanNextRound(idle);
+        result.Should().NotBeNull("a queued selection is accepted once the thread is idle");
+        result!.AgentName.Should().Be("Worker");
+        result.ModelName.Should().Be("claude-opus-4-6");
+        result.Harness.Should().Be("MeshWeaver");
     }
 
     [Fact]

@@ -8,6 +8,7 @@ using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
@@ -55,6 +56,12 @@ public class NavigationProgressTest
         // injecting it into the constructor.
         _hubServiceProvider.GetService(typeof(IMeshQueryCore)).Returns(_meshQuery);
 
+        // Authenticated by default so NavigationService's anonymous read-gate is
+        // skipped (these progress tests assert phase transitions, not the gate).
+        var accessService = new AccessService();
+        accessService.SetCircuitContext(new AccessContext { ObjectId = "test-user", Name = "Test User" });
+        _hubServiceProvider.GetService(typeof(AccessService)).Returns(accessService);
+
         // Empty mesh query by default â€” node-loading path is best-effort.
         // Empty observable so the chain in LoadNodeWithPreRenderedHtml completes
         // with node = null (Catch falls through to Observable.Return(null)).
@@ -101,7 +108,7 @@ public class NavigationProgressTest
 
         var service = CreateService();
 
-        service.InitializeAsync();
+        service.Initialize();
         // Stream-wait for the LookingUp emission carrying the path — replaces
         // a 50 ms propagation delay. The Status stream is a BehaviorSubject,
         // so the .Where filter is hot on first match.
@@ -129,7 +136,7 @@ public class NavigationProgressTest
         // InitializeAsync subscribes to ResolvePath synchronously, so the
         // LookingUp status is published before the call returns — no Task
         // coordination needed to observe it.
-        service.InitializeAsync();
+        service.Initialize();
 
         // Assert the user would see a "Looking up" message right now.
         emissions.Should().Contain(s => s.Phase == NavigationPhase.LookingUp
@@ -157,7 +164,7 @@ public class NavigationProgressTest
         // the bootstrap (ResolvePath returns Observable.Return), so by the time
         // InitializeAsync returns the `emissions` accumulator (subscribed before
         // the call) has already captured the Redirecting emission.
-        service.InitializeAsync();
+        service.Initialize();
 
         emissions.Should().Contain(s => s.Phase == NavigationPhase.Redirecting
                                         && s.Message.Contains("ACME/Project"),
@@ -178,7 +185,7 @@ public class NavigationProgressTest
 
         // Redirecting lands synchronously off the bootstrap; the `emissions`
         // accumulator captured it before InitializeAsync returned.
-        service.InitializeAsync();
+        service.Initialize();
 
         emissions.Should().Contain(s => s.Phase == NavigationPhase.Redirecting
                                         && s.Message.Contains("area Dashboard"));
@@ -198,7 +205,7 @@ public class NavigationProgressTest
 
         // Redirecting lands synchronously off the bootstrap; the `emissions`
         // accumulator captured it before InitializeAsync returned.
-        service.InitializeAsync();
+        service.Initialize();
 
         var redirecting = emissions.FirstOrDefault(s => s.Phase == NavigationPhase.Redirecting);
         redirecting.Should().NotBeNull();
@@ -223,7 +230,7 @@ public class NavigationProgressTest
         var service = CreateService();
         var emissions = CaptureStatus(service);
 
-        service.InitializeAsync();
+        service.Initialize();
         _navigationManager.SimulateLocationChanged("http://localhost/does/not/exist");
         // Stream-wait for the NotFound emission — replaces a Task.Delay(200)
         // "wait > total FastRetryDelays" barrier. NotFound is the terminal
@@ -253,7 +260,7 @@ public class NavigationProgressTest
         var service = CreateService(retryDelays: [500, 500, 500]);
         var emissions = CaptureStatus(service);
 
-        service.InitializeAsync();
+        service.Initialize();
 
         // During the retry window (< first 500 ms retry) the watchdog has not
         // fired, so neither a NotFound status nor a null navigation context may
@@ -290,7 +297,7 @@ public class NavigationProgressTest
         // InitializeAsync subscribes to the ReplaySubject synchronously; the
         // cached null replays and the pipeline stays at LookingUp (no Redirecting
         // yet). The `emissions` accumulator has LookingUp by the time it returns.
-        service.InitializeAsync();
+        service.Initialize();
         // Catalog "learned" about the path — re-emit synchronously into the live
         // subscription, driving Redirecting → Loading before the assertion.
         resolutionSubject.OnNext(new AddressResolution("eventually/exists", null));
@@ -310,7 +317,7 @@ public class NavigationProgressTest
 
         var service = CreateService(retryDelays: [500, 500, 500]);
 
-        service.InitializeAsync();
+        service.Initialize();
 
         // Firing OnNavigationContextChanged(null) prematurely is the root cause of
         // the 404 flash. Within the retry window (< first 500 ms retry) no null
@@ -338,7 +345,7 @@ public class NavigationProgressTest
         service.NavigationContext.Subscribe(ctx => { if (ctx is null) nullContextCount++; });
         var emissions = CaptureStatus(service);
 
-        service.InitializeAsync();
+        service.Initialize();
         // Stream-wait for the null NavigationContext — the watchdog emits NotFound
         // then a null context as the terminal retry-exhausted action. Blocking on
         // the first null emission guarantees both Status and NavigationContext
@@ -363,7 +370,7 @@ public class NavigationProgressTest
         var service = CreateService();
         var emissions = CaptureStatus(service);
 
-        service.InitializeAsync();
+        service.Initialize();
         // Stream-wait for the Loading emission — replaces Task.Delay(50). Loading
         // is the terminal synchronous phase off the bootstrap (the node load is an
         // empty mesh query), so it is the current BehaviorSubject value.

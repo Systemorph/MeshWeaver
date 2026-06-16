@@ -74,6 +74,32 @@ public class ChatCommandSubmissionTest : AITestBase
         parsed.ShouldSendToAI.Should().BeFalse("a picker command never submits a message round");
     }
 
+    /// <summary>
+    /// A standalone agent/model/harness command must NOT start a thread. The chat view's
+    /// <c>SubmitMessageCore</c> gates thread creation on <see cref="ParsedChatMessage.ShouldSendToAI"/>:
+    /// a command parses with <c>ShouldSendToAI == false</c> and empty <c>ProcessedText</c>, so the
+    /// view short-circuits BEFORE the <c>StartThread</c> / <c>SubmitComposer</c> call — the selection
+    /// is recorded on the composer and nothing is dispatched. This pins the "will also not start a
+    /// thread" contract the picker relies on.
+    /// </summary>
+    [Theory]
+    [InlineData("/agent")]
+    [InlineData("/agent Worker")]
+    [InlineData("/model claude-sonnet")]
+    [InlineData("/model")]
+    [InlineData("/harness MeshWeaver")]
+    [InlineData("/harness")]
+    public void SelectionCommand_DoesNotStartAThread(string text)
+    {
+        var parsed = new ChatPreParser().Parse(text);
+
+        parsed.Command.Should().NotBeNull("the input is a slash command");
+        parsed.ShouldSendToAI.Should().BeFalse(
+            "a selection command is fully handled in-thread — the chat view short-circuits and never calls StartThread/SubmitComposer");
+        parsed.ProcessedText.Should().BeEmpty(
+            "nothing remains after the command is cut, so there is no message to start a thread with");
+    }
+
     // ─── (D) Empty / whitespace submission → no round, finishes with nothing to do ───
 
     /// <summary>

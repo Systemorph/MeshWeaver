@@ -966,9 +966,49 @@ internal static class ThreadExecution
             clientObs = Observable.Return(c);
         }
 
+        // 🔁 Resume recovery: a crash-resume re-launches an interrupted round into its
+        // EXISTING response cell and carries NO fresh selection (PendingUserMessages was
+        // already drained before the interruption, so PlanNextRound had no message to read
+        // it from). The response cell IS the persisted single source of truth for what
+        // agent/model/harness that round used — recover the missing selection from it
+        // rather than from a thread-level Pending* mirror (which no longer exists). Only
+        // reads the cell when something is actually missing; the normal submit path carries
+        // the full selection on the drained message and skips this read entirely.
+        IObservable<RoundParams> requestObs;
+        if (string.IsNullOrEmpty(request.AgentName)
+            && string.IsNullOrEmpty(request.ModelName)
+            && string.IsNullOrEmpty(request.Harness))
+        {
+            requestObs = parentHub.GetMeshNodeStream(responsePath)
+                .Select(n => n?.ContentAs<ThreadMessage>(parentHub.JsonSerializerOptions, logger))
+                .Where(m => m is not null)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(5))
+                .Select(cell => request with
+                {
+                    AgentName = request.AgentName ?? cell!.AgentName,
+                    ModelName = request.ModelName ?? cell!.ModelName,
+                    Harness = SelectionId.IdOf(request.Harness ?? cell!.Harness)
+                })
+                .Catch<RoundParams, Exception>(ex =>
+                {
+                    logger.LogWarning(ex,
+                        "[ThreadExec] Resume: could not recover selection from response cell {ResponsePath}; proceeding with defaults",
+                        responsePath);
+                    return Observable.Return(request);
+                });
+        }
+        else
+        {
+            requestObs = Observable.Return(request);
+        }
+
         // Composed, returned round observable — completes when the round reaches a terminal
         // Status (Completed/Cancelled/Error) and surfaces real faults via OnError. The submission
         // watcher Subscribes to this (no fire-and-forget): it owns the subscription + disposal.
+        return requestObs.SelectMany(recovered =>
+        {
+        request = recovered;
         return clientObs.Take(1).SelectMany(chatClient =>
         {
             // Initialize is sync (binds the chat client to the workspace's shared
@@ -1752,12 +1792,8 @@ internal static class ThreadExecution
                     // flip. Single emission → the parent's reactive subscriber
                     // (DelegationTool) sees both Summary and Idle atomically,
                     // never reads a stale empty Summary in an interleaving.
-                    UpdateThreadExecution(t => t with
+                    UpdateThreadExecution(t => t.ResetExecution() with
                     {
-                        Status = ThreadExecutionStatus.Idle, ExecutionStatus = null, ActiveMessageId = null,
-                        ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null,
-                        PendingUserMessage = null, PendingAgentName = null, PendingModelName = null,
-                        PendingContextPath = null, PendingAttachments = null,
                         // Accumulate this round's token usage into the thread total so the
                         // data-bound thread status row can show "tokens used for this thread"
                         // (the field was previously only ever reset to 0, never summed).
@@ -2006,6 +2042,7 @@ internal static class ThreadExecution
                     return Observable.Empty<System.Reactive.Unit>();
                 });
         }); // end of clientObs.SelectMany
+        }); // end of requestObs.SelectMany (resume-selection recovery)
     }
 
     /// <summary>
