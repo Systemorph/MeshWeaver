@@ -115,7 +115,7 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
         // The emission should contain the LayoutAreaControl pointing to the response message
     }
 
-    [Fact(Skip = "Layout-area observation chain doesn't propagate the executingâ†’idle MeshNode transition within 10 s. Same threadStream.Update pattern works in ToolCallsVisibilityTest when read via threadStream directly â€” only the LayoutAreaReferenceâ†’StreamingViewâ†’GetMeshNodeStream chain is slow. Needs investigation of whether StreamingView's GetMeshNodeStream subscribes to the same reducer the Update writes to.")]
+    [Fact] // FIXED: RenderArea clears the area (RemoveViews) + emits on a control->null emission. Was: Layout-area observation chain doesn't propagate the executingâ†’idle MeshNode transition within 10 s. Same threadStream.Update pattern works in ToolCallsVisibilityTest when read via threadStream directly â€” only the LayoutAreaReferenceâ†’StreamingViewâ†’GetMeshNodeStream chain is slow. Needs investigation of whether StreamingView's GetMeshNodeStream subscribes to the same reducer the Update writes to.")]
     public async Task StreamingArea_WhenExecutionCompletes_ReturnsNull()
     {
         var threadPath = "User/Roland/_Thread/streaming-complete-test";
@@ -153,12 +153,16 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
             new Address(threadPath),
             new LayoutAreaReference(ThreadNodeType.StreamingArea));
 
-        // Wait for non-null emission first (executing)
+        // Wait until the streaming cell is PRESENT (thread executing). The area stream emits the
+        // WHOLE layout EntityStore (always a non-null JSON object); the streaming cell is the
+        // `areas["Streaming"]` KEY — not the whole value. (The old assertion waited for the whole
+        // value to be JsonValueKind.Null, which can NEVER happen — that mismatch is why this test
+        // "hung" for 10s and was skipped. The framework was never wedged.)
         await streamingArea!
-            .Where(ci => ci.Value.ValueKind != JsonValueKind.Null)
-            .Should().Within(10.Seconds()).Emit();
+            .Should().Within(10.Seconds())
+            .Match(ci => HasStreamingCell(ci.Value));
 
-        Output.WriteLine("Got executing emission, now completing...");
+        Output.WriteLine("Streaming cell present (executing); now completing...");
 
         // Mark execution as complete via the canonical MeshNode stream handle.
         var threadStream = workspace.GetMeshNodeStream(threadPath);
@@ -177,12 +181,23 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
             };
         }).Subscribe(_ => { }, ex => Output.WriteLine($"Update failed: {ex}"));
 
-        // Should get a null emission (idle)
+        // When execution completes the streaming cell must be REMOVED — the `areas["Streaming"]`
+        // key disappears (the whole store stays a non-null object).
         await streamingArea
             .Should().Within(10.Seconds())
-            .Match(ci => ci.Value.ValueKind == JsonValueKind.Null || ci.Value.ValueKind == JsonValueKind.Undefined);
+            .Match(ci => !HasStreamingCell(ci.Value));
 
-        Output.WriteLine("StreamingArea returned null after execution completed");
+        Output.WriteLine("Streaming cell cleared after execution completed");
     }
 
+    /// <summary>True if the rendered layout EntityStore JSON carries an <c>areas</c> entry for the
+    /// Streaming cell. The cell is a KEY inside <c>areas</c>, not the whole stream value.</summary>
+    private static bool HasStreamingCell(JsonElement store)
+    {
+        if (store.ValueKind != JsonValueKind.Object
+            || !store.TryGetProperty("areas", out var areas)
+            || areas.ValueKind != JsonValueKind.Object)
+            return false;
+        return areas.EnumerateObject().Any(p => p.Name.Contains("Streaming", StringComparison.Ordinal));
+    }
 }

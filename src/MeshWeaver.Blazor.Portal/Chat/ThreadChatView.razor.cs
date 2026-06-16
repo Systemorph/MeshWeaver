@@ -952,7 +952,25 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (workspace == null)
             return;
 
-        AgentPickerProjection.ObserveSnapshot(workspace, Hub, $"picker|{picker.Query}", picker.Query)
+        // Agent and model pickers must surface NOT ONLY the built-in catalog but also the ones declared
+        // in the CURRENT context's namespace (+ ancestors) AND the context node's NodeType namespace
+        // (+ ancestors) — the SAME context-scoped query union AgentChatClient resolves agents/models
+        // from at execution time. AgentPickerProjection.BuildAgentQueries / BuildModelQueries is the
+        // single source of truth for that union (built-in + namespace:{current} selfAndAncestors +
+        // namespace:{nodeType} selfAndAncestors); inlining the single global `namespace:Agent` query
+        // here is exactly why a Space's own agent/model never appeared in the picker. Other pickers
+        // (harness, custom Command nodes) keep their declared query.
+        var nodeTypePath = _currentNavContext?.Node?.NodeType;
+        var field = picker.ComposerField;
+        var queries =
+            string.Equals(field, nameof(MeshWeaver.AI.ThreadComposer.AgentName), StringComparison.OrdinalIgnoreCase)
+                ? AgentPickerProjection.BuildAgentQueries(initialContext, nodeTypePath)
+            : string.Equals(field, nameof(MeshWeaver.AI.ThreadComposer.ModelName), StringComparison.OrdinalIgnoreCase)
+                ? AgentPickerProjection.BuildModelQueries(initialContext, nodeTypePath, userPath: _userHome)
+            : new[] { picker.Query };
+        var cacheKey = $"picker|{field}|{initialContext}|{nodeTypePath}|{string.Join("|", queries)}";
+
+        AgentPickerProjection.ObserveSnapshot(workspace, Hub, cacheKey, queries)
             .Take(1)
             .Subscribe(snapshot => InvokeAsync(() =>
             {

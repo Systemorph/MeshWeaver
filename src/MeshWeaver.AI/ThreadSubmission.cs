@@ -98,18 +98,18 @@ internal static class ThreadSubmission
         // identifies the round uniquely, so Count adds no distinguishing power — only
         // the churn that breaks idempotency.
         var responseMessageId = DeriveDeterministicResponseId(ids, thread.PendingUserMessages);
-        // 🎯 The round's sticky selection (agent / model / harness / context) comes from the
-        // thread's COMPOSER — the single, data-bound source of truth. There is NO thread-level
-        // Pending* mirror: the selectors area binds to Thread.Composer, and a /agent /model
-        // /harness command (or dropdown pick) updates it in place. Because PlanNextRound only
-        // runs when the thread is Idle/Cancelled (never Executing), a selection change made
-        // mid-round stays QUEUED and is read here when the next round is planned — accepted
-        // only when idle.
+        // 🎯 The round's selection (agent / model / harness / context / attachments) comes from the
+        // LAST DRAINED MESSAGE. Each user message captures the composer's selection at the moment it
+        // was Sent, so the message is self-describing: a later /agent /model /harness pick (or a
+        // dropdown change) never rewrites the selection of an already-queued message, and a multi-
+        // message drain runs under the LAST message's selection (its Text is also this turn's input).
+        // There is NO thread-level Pending* mirror.
         //
-        // Context + attachments are NOT sticky: they are per-message (the live nav context and
-        // attachment chips at Send time — the composer empties its Attachments each Send), so the
-        // round takes them from the LAST drained message (which captured contextPath ?? composer
-        // at submit), not the live composer.
+        // The live composer (Thread.Composer — the data-bound selectors source of truth) is the
+        // FALLBACK only: used per field when the drained message carries no explicit value (e.g. a
+        // programmatic submit that didn't stamp the selection). Reading message-first keeps the
+        // delegation/sub-thread flow correct — a sub-thread message carries its OWN agent, not the
+        // parent composer's.
         var composer = thread.Composer;
         var lastDrained = ids
             .Select(id => thread.PendingUserMessages.TryGetValue(id, out var m) ? m : null)
@@ -117,9 +117,9 @@ internal static class ThreadSubmission
         return new RoundDispatch(
             ids,
             responseMessageId,
-            composer?.AgentName,
-            composer?.ModelName,
-            composer?.Harness,
+            lastDrained?.AgentName ?? composer?.AgentName,
+            lastDrained?.ModelName ?? composer?.ModelName,
+            lastDrained?.Harness ?? composer?.Harness,
             lastDrained?.ContextPath ?? composer?.ContextPath,
             lastDrained?.Attachments);
     }

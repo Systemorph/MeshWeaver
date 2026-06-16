@@ -108,11 +108,13 @@ public static class ThreadComposerView
                         .WithView(h.Hub.ServiceProvider.MapToToggleableControl(
                             messageProp, dataId, canEdit: true, h, isToggleable: false, boundDataContext: ctx));
 
+                    // No agent/model/harness picker row: those comboboxes eagerly resolved the
+                    // picked agent and threw when its model was not wired, tearing the composer down
+                    // ("choosing Assistant crashes"). Selection is via the /agent /model /harness
+                    // slash-commands, which write the composer node without building the agent.
                     var bottomRow = Controls.Stack
                         .WithOrientation(Orientation.Horizontal)
                         .WithStyle("gap: 8px; flex-wrap: nowrap; align-items: flex-end; width: 100%;")
-                        .WithView(Controls.Stack.WithStyle("flex: 1 1 auto; min-width: 0;")
-                            .WithView(BuildSelectorRow(h, dataId, ctx)))
                         .WithView(Controls.Stack.WithStyle("flex: 0 0 auto; margin-left: auto;")
                             .WithView(BuildSendButton()));
 
