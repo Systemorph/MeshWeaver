@@ -71,7 +71,7 @@ public partial class ApplicationPage : ComponentBase, IDisposable
     private string? _lastInitializedPath;
 
     /// <summary>
-    /// Tracks whether NavigationService.InitializeAsync() has been called.
+    /// Tracks whether NavigationService.Initialize() has been called.
     /// Subsequent navigations rely on OnNavigationContextChanged instead
     /// of reading potentially stale NavigationService state.
     /// </summary>
