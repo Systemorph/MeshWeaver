@@ -625,11 +625,13 @@
     opacity: 1;
 }
 
-/* BOTTOM: sub-namespaces as drill-down LINKS — deliberately NOT card-styled, to read as "navigate". */
+/* BOTTOM: sub-namespaces as drill-down LINKS — deliberately NOT card-styled, to read as "navigate".
+   Responsive grid that caps at 3 columns: 1 on narrow, 2 on medium, 3 on wide (each column ≥240px,
+   and ≥1/3 width so it never exceeds three). Same column-capping trick as the node card grid. */
 .mesh-nav-namespaces {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(max(33.333% - 6px, 240px), 1fr));
+    gap: 4px 8px;
     width: 100%;
 }
 
