@@ -110,15 +110,16 @@ internal class NavigationService : INavigationService
         // lifecycle context.
         _pathSubscription = _pathSubject.Subscribe(p => _currentPathSnapshot = p);
 
-        // Wire the reactive navigation pipeline at CONSTRUCTION. These only set
-        // up subscriptions — no NavigationManager.Uri read — so they are safe
-        // before the circuit's first JS-interop tick: LocationChanged feeds the
-        // path subject (off e.Location, never Uri); ProcessLocationChange is a
-        // pure subscriber, and _pathSubject (ReplaySubject) emits nothing until
-        // the first PublishPath, so nothing runs until a path actually arrives.
-        // The ONE thing that cannot live here is the bootstrap Uri-read — that
-        // is all Initialize() does, deferred to the component lifecycle.
-        _navigationManager.LocationChanged += OnLocationChanged;
+        // Wire ONLY the pure-Rx pipeline at construction — NO NavigationManager touch.
+        // ProcessLocationChange is a pure subscriber and _pathSubject (ReplaySubject(1))
+        // emits nothing until the first PublishPath, so nothing runs until a real path
+        // arrives; the current location, once pushed, is replayed to every later subscriber.
+        // BOTH NavigationManager interactions — the LocationChanged subscription AND the
+        // bootstrap .Uri read — are deferred to Initialize(): each requires an INITIALISED
+        // RemoteNavigationManager, which only exists inside a Blazor circuit. Touching it
+        // here threw "RemoteNavigationManager has not been initialized" when the service is
+        // constructed OUTSIDE a circuit — i.e. when UserContextMiddleware resolves
+        // PortalApplication on a plain HTTP request — and 500'd every page.
         _navigationSubscription = _pathSubject
             .DistinctUntilChanged()
             .Subscribe(ProcessLocationChange);
@@ -176,13 +177,16 @@ internal class NavigationService : INavigationService
             return;
         _isInitialized = true;
 
-        // The reactive pipeline (LocationChanged + ProcessLocationChange) is
-        // already wired in the constructor. The ONLY thing deferred to here is
-        // the bootstrap Uri-read: NavigationManager.Uri throws if read at DI-
-        // construction time (before the circuit's first JS-interop tick), so the
-        // initial path push waits until a component calls Initialize() from its
-        // OnInitialized lifecycle, where NavigationManager IS initialized. The
-        // ProcessLocationChange subscription kicks in synchronously off this push.
+        // BOTH NavigationManager interactions live HERE (circuit-side), never in the
+        // constructor: attaching LocationChanged AND reading .Uri each require an
+        // initialised RemoteNavigationManager, which only exists inside a Blazor circuit.
+        // Initialize() is called from PortalLayoutBase.OnInitializedAsync, where that
+        // holds; keeping the ctor NavigationManager-free lets the service also construct
+        // on the HTTP path (PortalApplication resolution in UserContextMiddleware) without
+        // throwing "RemoteNavigationManager has not been initialized" (which 500'd every
+        // page). The current location is published into _pathSubject (ReplaySubject(1)) and
+        // replayed to every later subscriber; LocationChanged keeps it current thereafter.
+        _navigationManager.LocationChanged += OnLocationChanged;
         var initial = _navigationManager.ToBaseRelativePath(_navigationManager.Uri);
         PublishPath(initial);
     }
@@ -663,9 +667,10 @@ internal class NavigationService : INavigationService
         _creatableTypes.Dispose();
         _status.Dispose();
 
-        // LocationChanged is now wired in the constructor (not Initialize), so
-        // unsubscribe unconditionally. Wrap in try-catch because NavigationManager
-        // may not be initialized if the circuit was never established.
+        // LocationChanged is wired in Initialize() (circuit-side), so on the HTTP path
+        // it was never attached and this is a no-op. Wrap in try-catch because touching
+        // LocationChanged on an uninitialised RemoteNavigationManager (circuit never
+        // established) throws "has not been initialized".
         try
         {
             _navigationManager.LocationChanged -= OnLocationChanged;
