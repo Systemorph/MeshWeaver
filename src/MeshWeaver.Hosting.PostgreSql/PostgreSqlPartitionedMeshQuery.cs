@@ -224,7 +224,7 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         if (!isTopLevel)
             // WITHIN-PARTITION → delegate to the per-schema provider for the context partition
             // (scoped, never fans out). This is the within-partition half the pedestrian served.
-            return GetDelegateForPath(basePath)?.Autocomplete(basePath, prefix, options, mode, limit, contextPath, context)
+            return GetDelegateForPath(basePath)?.Autocomplete(basePath, prefix ?? "", options, mode, limit, contextPath, context)
                 ?? Observable.Return((IReadOnlyCollection<QueryResult>)Array.Empty<QueryResult>());
 
         var effectivePrefix = (prefix ?? "").TrimStart('/');

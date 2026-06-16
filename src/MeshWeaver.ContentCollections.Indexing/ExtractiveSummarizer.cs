@@ -11,7 +11,7 @@ namespace MeshWeaver.ContentCollections.Indexing;
 ///
 /// <para>This is the sensible DEFAULT summary for a host that has not wired a chat model: the
 /// per-file <c>Document</c> node still gets a meaningful, human-readable summary. Swap in
-/// <see cref="ChatClientSummarizer"/> (via the chat-client overloads of the pipeline/document
+/// <c>ChatClientSummarizer</c> (via the chat-client overloads of the pipeline/document
 /// extensions) for AI-generated summaries — the rest of the pipeline is identical.</para>
 /// </summary>
 public sealed class ExtractiveSummarizer : ISummarizer

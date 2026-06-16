@@ -134,13 +134,12 @@ public sealed class ContentImportBuilder
             SourceCollection = _sourceCollection
         };
         var address = new Address(_nodePath);
-        return Observable.Defer(() =>
-        {
-            var delivery = _hub.Post(request, o => o.WithTarget(address));
-            return _hub.Observe(delivery)
-                .Select(d => d.Message)
-                .OfType<ImportContentResponse>()
-                .Take(1);
-        });
+        // Typed request-response: pre-registers the response callback by message-id BEFORE posting
+        // (canonical hub.Observe<TResponse> idiom) — no manual Post returning a nullable delivery.
+        // Wrapped in Defer so the post still happens on Subscribe (cold), as before.
+        return Observable.Defer(() => _hub
+            .Observe(request, o => o.WithTarget(address))
+            .Select(d => d.Message)
+            .Take(1));
     }
 }

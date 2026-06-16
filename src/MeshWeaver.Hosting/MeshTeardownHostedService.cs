@@ -16,7 +16,7 @@ namespace MeshWeaver.Hosting;
 /// <see cref="MeshTeardownExtensions"/>). If the host tears the scope down while any of that is
 /// still in flight, a late continuation resolves a service from the already-disposed scope and
 /// throws an unobserved <see cref="ObjectDisposedException"/> ("LifetimeScope … has already been
-/// disposed") — the "catastrophic" teardown class. <see cref="MonolithMeshTestBase"/>-style tests
+/// disposed") — the "catastrophic" teardown class. <c>MonolithMeshTestBase</c>-style tests
 /// already do this drain between <c>[Fact]</c>s; this hosted service brings the SAME ordered drain
 /// to the production hosts (Monolith + Orleans-distributed).</para>
 ///
