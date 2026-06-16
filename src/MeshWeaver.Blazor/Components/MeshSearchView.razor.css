@@ -562,15 +562,32 @@
     color: var(--accent-foreground-rest, #0078d4);
 }
 
-/* Below: the next populated level. */
-.mesh-nav-below {
+/* Include-documents toggle (node Search area only). */
+.mesh-nav-doctoggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85rem;
+    color: var(--neutral-foreground-hint, #777);
+    cursor: pointer;
+    user-select: none;
+    width: fit-content;
+}
+
+.mesh-nav-doctoggle input {
+    cursor: pointer;
+    margin: 0;
+}
+
+/* A section (Nodes on top, Namespaces at the bottom). */
+.mesh-nav-section {
     display: flex;
     flex-direction: column;
     gap: 8px;
     width: 100%;
 }
 
-.mesh-nav-below-label {
+.mesh-nav-section-label {
     font-size: 0.78rem;
     font-weight: 600;
     text-transform: uppercase;
@@ -582,7 +599,7 @@
     padding: 24px 0;
 }
 
-/* Each next-level card: body re-roots the navigator; secondary anchor opens the node. */
+/* TOP: a node card. The body opens the node; a drill symbol (containers only) re-roots here. */
 .mesh-nav-card-wrap {
     position: relative;
     width: 100%;
@@ -602,10 +619,69 @@
     box-shadow: var(--elevation-shadow-card-active);
 }
 
-/* Secondary "open" anchor reuses .mesh-search-drilldown base; reveal on card hover. */
-.mesh-nav-card-wrap:hover .mesh-nav-card-open,
-.mesh-nav-card-open:focus-visible {
+/* "Drill in" symbol on a node that also contains content — reuses .mesh-search-drilldown base. */
+.mesh-nav-card-wrap:hover .mesh-nav-card-drill,
+.mesh-nav-card-drill:focus-visible {
     opacity: 1;
+}
+
+/* BOTTOM: sub-namespaces as drill-down LINKS — deliberately NOT card-styled, to read as "navigate". */
+.mesh-nav-namespaces {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 100%;
+}
+
+.mesh-nav-namespace {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    text-decoration: none;
+    color: var(--neutral-foreground-rest);
+    border: 1px solid transparent;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.mesh-nav-namespace:hover {
+    background: var(--neutral-layer-2, rgba(0, 0, 0, 0.04));
+    border-color: var(--neutral-stroke-rest, #e0e0e0);
+}
+
+.mesh-nav-namespace-icon {
+    display: inline-flex;
+    align-items: center;
+    color: var(--accent-foreground-rest, #0078d4);
+    flex-shrink: 0;
+}
+
+.mesh-nav-namespace-name {
+    flex: 1;
+    min-width: 0;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mesh-nav-namespace-count {
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1;
+    padding: 3px 8px;
+    border-radius: 10px;
+    background: var(--neutral-fill-secondary-rest, #e8e8e8);
+    color: var(--neutral-foreground-hint, #666);
+    flex-shrink: 0;
+}
+
+.mesh-nav-namespace-chevron {
+    color: var(--neutral-foreground-hint, #999);
+    font-size: 1.1rem;
+    line-height: 1;
+    flex-shrink: 0;
 }
 
 /* Skeleton loading placeholders */

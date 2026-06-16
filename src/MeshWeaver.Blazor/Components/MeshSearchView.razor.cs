@@ -1225,6 +1225,7 @@ public partial class MeshSearchView : IDisposable
 
     private GraphNavigatorModel? _navModel;
     private bool _navLoading;
+    private bool _includeDocuments;
     private IDisposable? _navSubscription;
 
     private bool IsGraphNavigatorMode =>
@@ -1238,29 +1239,51 @@ public partial class MeshSearchView : IDisposable
         ? MeshNodeLayoutAreas.SearchArea
         : BoundDrillDownArea!;
 
-    /// <summary>Below = next populated level: the hidden query's filters, namespace pinned to the
-    /// root, scope forced to <c>nextLevel</c> (the single anti-join — skips empty namespace hops).</summary>
-    private string BuildNavBelowQuery(string root) =>
-        Regex.Replace($"{BuildTreeLevelQuery(root)} scope:nextLevel", @"\s+", " ").Trim();
+    /// <summary>
+    /// Below = the current node's whole subtree (one <c>scope:descendants</c> query — no N+1 probes).
+    /// The builder surfaces the immediate level from it: real nodes here (cards on top) + pure
+    /// sub-namespaces (drill links at the bottom). Documents (indexed content) are excluded unless
+    /// the user ticks "Include documents" — and ONLY here, in the node Search area; top-level/global
+    /// search keeps documents. When included, Document nodes (<c>{collection}/_Documents/{slug}</c>)
+    /// join the subtree, so content shows up as a navigable namespace too.
+    /// </summary>
+    private string BuildNavBelowQuery(string root)
+    {
+        var q = $"{BuildTreeLevelQuery(root)} scope:descendants";
+        if (!_includeDocuments)
+            q += " -nodeType:Document";
+        return Regex.Replace(q, @"\s+", " ").Trim();
+    }
 
     /// <summary>Above = the ancestor chain INCLUDING self, so the builder can pull out the current node
     /// and order the rail. Real ancestors only — empty namespace segments are never nodes.</summary>
     private static string BuildNavAboveQuery(string root) =>
         $"path:{root} scope:ancestorsandself is:main";
 
-    /// <summary>Below filtered by the search box text (client-side — the frontier is already computed;
-    /// typing just narrows what's shown without re-running the anti-join / tripping vector search).</summary>
-    private IReadOnlyList<MeshNode> NavBelowFiltered
+    /// <summary>Top-level nodes, narrowed by the search box text (client-side — the level is loaded).</summary>
+    private IReadOnlyList<GraphNavNode> NavNodes => FilterNav(
+        _navModel?.Nodes, n => n.Node.Name, n => n.Node.Path);
+
+    /// <summary>Sub-namespace drill links, narrowed by the search box text (client-side).</summary>
+    private IReadOnlyList<GraphNavNamespace> NavNamespaces => FilterNav(
+        _navModel?.Namespaces, n => n.Name, n => n.Path);
+
+    private IReadOnlyList<T> FilterNav<T>(IReadOnlyList<T>? items, Func<T, string?> name, Func<T, string?> path)
     {
-        get
-        {
-            var below = (IReadOnlyList<MeshNode>?)_navModel?.Below ?? Array.Empty<MeshNode>();
-            var text = _currentValue?.Trim();
-            if (string.IsNullOrEmpty(text)) return below;
-            return below.Where(n =>
-                (n.Name ?? "").Contains(text, StringComparison.OrdinalIgnoreCase)
-                || (n.Path ?? "").Contains(text, StringComparison.OrdinalIgnoreCase)).ToList();
-        }
+        items ??= Array.Empty<T>();
+        var text = _currentValue?.Trim();
+        if (string.IsNullOrEmpty(text)) return items;
+        return items.Where(i =>
+            (name(i) ?? "").Contains(text, StringComparison.OrdinalIgnoreCase)
+            || (path(i) ?? "").Contains(text, StringComparison.OrdinalIgnoreCase)).ToList();
+    }
+
+    private void ToggleIncludeDocuments(ChangeEventArgs e)
+    {
+        var include = e.Value is bool b ? b : bool.TryParse(e.Value?.ToString(), out var parsed) && parsed;
+        if (_includeDocuments == include) return;
+        _includeDocuments = include;
+        ResetGraphNavigator();
     }
 
     private void InitializeGraphNavigator()
@@ -1272,9 +1295,9 @@ public partial class MeshSearchView : IDisposable
         var root = NavRootPath;
 
         // hub.GetQuery is the canonical synced-query surface (delegates to workspace → the shared
-        // IMeshNodeStreamCache): live, deduped, all-Initial gated, provider-fanned. See
-        // Doc/Architecture/SyncedMeshNodeQueries.md.
-        var below = Hub.GetQuery($"nav-below:{root}", BuildNavBelowQuery(root));
+        // IMeshNodeStreamCache): live, deduped, all-Initial gated, provider-fanned, injects hub
+        // JsonSerializerOptions. The below id keys on the doc toggle so each variant caches separately.
+        var below = Hub.GetQuery($"nav-below:{root}:{_includeDocuments}", BuildNavBelowQuery(root));
         var above = string.IsNullOrEmpty(root)
             ? Observable.Return<IEnumerable<MeshNode>>(Array.Empty<MeshNode>())
             : Hub.GetQuery($"nav-above:{root}", BuildNavAboveQuery(root));
