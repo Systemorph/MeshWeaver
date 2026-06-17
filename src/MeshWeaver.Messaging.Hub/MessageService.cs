@@ -71,6 +71,20 @@ public class MessageService : IMessageService
         deferredDeliveries = new();
     private TaskScheduler turnScheduler = TaskScheduler.Default;
     private readonly HierarchicalRouting hierarchicalRouting;
+    /// <summary>
+    /// Universal storm circuit-breaker. Detects an unbounded retry/resubscribe/repost
+    /// loop (the SAME <c>(sender, target, type)</c> tuple at thousands/sec) at ingestion
+    /// and drops it before the single-threaded turn loop saturates — see
+    /// <see cref="MessageStormBreaker"/>. Instance field: dies with the hub, no static state.
+    /// </summary>
+    private readonly MessageStormBreaker stormBreaker;
+
+    /// <summary>
+    /// The hub's storm circuit-breaker. Exposed so the framework's tests can observe its
+    /// trip signal deterministically (<see cref="MessageStormBreaker.Trips"/>).
+    /// </summary>
+    public MessageStormBreaker StormBreaker => stormBreaker;
+
     private readonly SyncDelivery postPipeline;
     private readonly AsyncDelivery deliveryPipeline;
     private readonly CancellationTokenSource hangDetectionCts = new();
@@ -129,6 +143,7 @@ public class MessageService : IMessageService
         postPipeline = hub.Configuration.PostPipeline
             .Aggregate(new SyncPipelineConfig(hub, d => d), (p, c) => c.Invoke(p)).SyncDelivery;
         hierarchicalRouting = new HierarchicalRouting(hub, parentHub);
+        stormBreaker = new MessageStormBreaker(logger, address);
         // The pipeline LEAF now runs the handler INLINE on the single turn thread
         // (was: post to a second executionBlock). No deliveryAction->executionBlock
         // thread hop — that per-message hop was the under-load near-miss source.
@@ -315,6 +330,21 @@ public class MessageService : IMessageService
                     delivery.Message?.GetType().Name, delivery.Id, Address, hub.RunLevel);
             MessageTrace.Write($"hub={Address} msg={typeName} id={delivery.Id} DROPPED_SHUTTING_DOWN runLevel={hub.RunLevel}");
             return delivery.Failed("Hub is shutting down");
+        }
+
+        // STORM CIRCUIT-BREAKER. Detect an unbounded retry/resubscribe/repost loop —
+        // the SAME (sender, target, type) tuple at thousands/sec — and DROP it here,
+        // cheaply, BEFORE EnqueueTurn so the single-threaded turn loop never saturates.
+        // The breaker exempts lifecycle/control traffic (so teardown can't deadlock) and
+        // only ever trips on a per-key rate no legitimate single-key traffic can reach;
+        // diverse high-volume traffic passes untouched. It logs ONE Error per trip naming
+        // the culprit. We return Ignored() (NOT Failed) on a drop: a Failed delivery would
+        // post a DeliveryFailure back to the sender, which for the storm-prone non-
+        // [CanBeIgnored] path would FEED the very loop we are breaking.
+        if (stormBreaker.ShouldDrop(delivery))
+        {
+            MessageTrace.Write($"hub={Address} msg={typeName} id={delivery.Id} DROPPED_STORM");
+            return delivery.Ignored();
         }
 
         // Per-message; gate to skip GetType().Name + boxing when Debug is off.
@@ -1023,6 +1053,10 @@ public class MessageService : IMessageService
         {
             logger.LogWarning(ex, "Error completing startup tasks during disposal in {Address}", Address);
         }
+
+        // Tear down the storm breaker's instance state (counters + trips subject).
+        try { stormBreaker.Dispose(); }
+        catch (Exception ex) { logger.LogWarning(ex, "Error disposing storm breaker in {Address}", Address); }
 
         totalStopwatch.Stop();
         logger.LogDebug("Finished disposing message service in {Address} - total disposal time: {elapsed}ms",

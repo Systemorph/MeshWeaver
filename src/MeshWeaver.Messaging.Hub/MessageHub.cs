@@ -191,6 +191,14 @@ public sealed class MessageHub : IMessageHub
     }
 
     /// <summary>
+    /// The hub's message-storm circuit-breaker (when backed by the default
+    /// <see cref="MessageService"/>; <c>null</c> for an alternative message service).
+    /// Exposed so the framework's tests can observe its trip signal deterministically.
+    /// </summary>
+    public MessageStormBreaker? StormBreaker =>
+        messageService is MessageService ms ? ms.StormBreaker : null;
+
+    /// <summary>
     /// Starts message processing and posts the initialization request.
     /// Called from Build() after SyncBuildupActions complete.
     /// </summary>

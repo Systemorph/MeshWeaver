@@ -165,6 +165,70 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
             + "empty model dropdown in chat.");
         models.Select(m => m.Name).Should().Contain("claude-opus-4-6");
     }
+
+    /// <summary>
+    /// 🚨 The atioz "Space's own agent missing from /agent" regression, end-to-end.
+    /// Seeds an Agent at an ANCESTOR of the context path (found by query #2:
+    /// <c>path:{currentPath} nodeType:Agent scope:ancestors</c>) AND an Agent that is a
+    /// direct child of the context node's NodeType namespace (found by query #3:
+    /// <c>namespace:{nodeTypePath} nodeType:Agent scope:selfAndAncestors</c>), then drives the
+    /// EXACT projection the chat picker binds to with BOTH currentPath AND nodeTypePath set —
+    /// i.e. the resolved-context inputs <c>DerivePickerContext</c> hands <c>OpenPicker</c>.
+    ///
+    /// <para>Before the fix, <c>OpenPicker</c> frequently passed both as NULL (stale ambient
+    /// nav context), collapsing the union to the built-in query only — so neither seeded agent
+    /// surfaced. This pins that with both context tokens populated, the path-scoped agent, the
+    /// NodeType-scoped agent, AND a built-in all appear together.</para>
+    /// </summary>
+    [Fact]
+    public async Task ObserveAgents_ContextAndNodeTypeSet_SurfacesPathAgent_NodeTypeAgent_AndBuiltIn()
+    {
+        // Context node lives at ACME/ProductLaunch/Detail with NodeType "ACME/Project".
+        const string contextPath = "ACME/ProductLaunch/Detail";
+        const string nodeTypePath = "ACME/Project";
+
+        // Query #2 (path:{contextPath} scope:ancestors) probes ANCESTOR paths of the context —
+        // ACME/ProductLaunch is an ancestor, so an Agent placed exactly there is found.
+        const string pathAgentPath = "ACME/ProductLaunch";
+        // Query #3 (namespace:{nodeTypePath} scope:selfAndAncestors) walks the CHILDREN of the
+        // NodeType namespace (and its ancestors) — an Agent that is a direct child of ACME/Project
+        // is found. Mirrors the TodoAgent-at-ACME/Project/TodoAgent shape AgentChatClientTest uses.
+        const string nodeTypeAgentPath = "ACME/Project/SpaceAgent";
+
+        await SeedAgent(pathAgentPath, "Path Scoped Agent", "path-scoped-agent");
+        await SeedAgent(nodeTypeAgentPath, "Space Agent", "space-agent");
+
+        var agents = await AgentPickerProjection
+            .ObserveAgents(Workspace, Hub, currentPath: contextPath, nodeTypePath: nodeTypePath)
+            .Should().Within(15.Seconds())
+            .Match(a =>
+                a.Any(x => x.Path == pathAgentPath)
+                && a.Any(x => x.Path == nodeTypeAgentPath)
+                && a.Any(x => x.Name == "Assistant"));
+
+        agents.Select(a => a.Path).Should().Contain(pathAgentPath,
+            "the path-scoped agent (ancestor of the context path) is surfaced by query #2 "
+            + "(path:{currentPath} scope:ancestors) — proves the picker finds agents 'in path'.");
+        agents.Select(a => a.Path).Should().Contain(nodeTypeAgentPath,
+            "the NodeType-namespace agent is surfaced by query #3 "
+            + "(namespace:{nodeTypePath} scope:selfAndAncestors) — proves the picker finds agents "
+            + "'in nodepath'. This is the Space agent that was missing on atioz.");
+        agents.Select(a => a.Name).Should().Contain("Assistant",
+            "the built-in catalog (query #1, namespace:Agent) is ALWAYS unioned in.");
+    }
+
+    /// <summary>
+    /// Seeds an Agent MeshNode at <paramref name="path"/> as System (bypasses the partition
+    /// write guard for the ad-hoc ACME fixture partition — same shape as
+    /// <see cref="MonolithMeshTestBase.SeedTopLevel"/>, reused for nested fixtures here).
+    /// </summary>
+    private Task<MeshNode> SeedAgent(string path, string name, string id) =>
+        SeedTopLevel(MeshNode.FromPath(path) with
+        {
+            NodeType = AgentNodeType.NodeType,
+            Name = name,
+            Content = new AgentConfiguration { Id = id, Description = name },
+        });
 }
 
 /// <summary>
