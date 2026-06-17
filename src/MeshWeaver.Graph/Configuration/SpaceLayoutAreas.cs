@@ -1,9 +1,11 @@
 using System.Reactive.Linq;
 using System.Text.Json;
+using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 
 namespace MeshWeaver.Graph;
 
@@ -45,6 +47,94 @@ public static class SpaceLayoutAreas
             var space = ResolveSpace(node, options);
             return BuildSpaceView(host, space, node);
         });
+    }
+
+    /// <summary>
+    /// The Space's Edit area: a full-page markdown editor on the Space's <b>main markdown body</b>
+    /// (<see cref="Space.Body"/>) — NOT the generic property form over every Space field. It uses the
+    /// SAME <see cref="MarkdownEditorControl"/> the Markdown node's editor uses
+    /// (<c>MarkdownEditLayoutArea</c>), but bound to the <c>body</c> CONTENT field via a node-bound
+    /// <c>DataContext</c> (<see cref="LayoutAreaReference.GetMeshNodeDataContext"/>, <c>bindContent:true</c>).
+    /// Reads come straight off the node stream and edits write back per-field — editing the CONTENT
+    /// OBJECT (the Space), never replacing the node's content. The Markdown node's
+    /// <c>MarkdownEditorControl.WithAutoSave</c> path replaces the whole node content with a
+    /// <c>MarkdownContent</c>, which would destroy the structured Space; the node-bound field pointer
+    /// is the content-object-preserving variant of the same mechanism. See Doc/GUI/DataBinding.
+    /// </summary>
+    public static IObservable<UiControl?> Edit(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        // Compose with the permission stream — pure observable, no await (mirrors MeshNodeLayoutAreas.EditNode).
+        return host.Workspace.GetMeshNodeStream().CombineLatest(
+            host.Hub.GetEffectivePermissions(hubPath),
+            (node, permissions) => !permissions.HasFlag(Permission.Update)
+                ? (UiControl?)MeshNodeLayoutAreas.BuildAccessDenied(hubPath)
+                : (UiControl?)BuildBodyEditor(node, hubPath));
+    }
+
+    /// <summary>
+    /// Builds the body editor: a back link, an editable name, and the markdown editor — all bound to
+    /// the Space CONTENT object via a node-bound <c>DataContext</c> so each field reads/writes straight
+    /// to the node stream per-field (one source of truth, no <c>/data</c> replica, no whole-content clobber).
+    /// </summary>
+    private static UiControl BuildBodyEditor(MeshNode? node, string hubPath)
+    {
+        if (node is null)
+            return Controls.Markdown("*Space not found.*");
+
+        var spacePath = node.Path ?? hubPath;
+        // Field pointers resolve against the node's Content JSON (the Space). Every control's edit
+        // is a per-field read-modify-write straight to the node — see Doc/GUI/DataBinding "Node-bound DataContext".
+        var contentCtx = LayoutAreaReference.GetMeshNodeDataContext(spacePath, bindContent: true);
+
+        var container = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("height: calc(100vh - 100px); display: flex; flex-direction: column;");
+
+        // Header: back to the space's default page + editable name + autosave hint.
+        var headerRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithWidth("100%")
+            .WithVerticalAlignment(VerticalAlignment.Center)
+            .WithHorizontalGap(12)
+            .WithStyle("padding: 8px 0; border-bottom: 1px solid var(--neutral-stroke-rest); flex-shrink: 0;");
+
+        headerRow = headerRow.WithView(Controls.Button("")
+            .WithIconStart(FluentIcons.ArrowLeft())
+            .WithAppearance(Appearance.Stealth)
+            .WithNavigateToHref($"/{spacePath}"));
+
+        headerRow = headerRow.WithView(new TextFieldControl(new JsonPointerReference("name"))
+        {
+            Immediate = true,
+            Placeholder = "Space name",
+            DataContext = contentCtx
+        }.WithStyle("flex: 1; font-size: 1.25rem; font-weight: 600;"));
+
+        headerRow = headerRow.WithView(Controls.Html(
+            "<span style=\"color: var(--neutral-foreground-hint); font-size: 0.85rem;\">Changes are saved automatically</span>"));
+
+        container = container.WithView(headerRow);
+
+        // Main markdown body — the SAME MarkdownEditorControl the Markdown node uses, but its Value
+        // pointer + node-bound DataContext make it read/write the Space's `body` content field per-field
+        // (no WithAutoSave whole-content replace). The editor view routes node-bound reads/writes through
+        // MeshNodeBindingExtensions automatically (see Doc/GUI/DataBinding).
+        var editor = new MarkdownEditorControl
+        {
+            Value = new JsonPointerReference("body"),
+            DataContext = contentCtx,
+            Height = "100%",
+            MaxHeight = "none",
+            Placeholder = "Write your space's overview in markdown…"
+        };
+
+        container = container.WithView(Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("flex: 1; width: 100%; min-height: 0; overflow: hidden; margin-top: 8px;")
+            .WithView(editor));
+
+        return container;
     }
 
     /// <summary>

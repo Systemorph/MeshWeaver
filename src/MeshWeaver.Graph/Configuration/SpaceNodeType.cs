@@ -196,7 +196,9 @@ public static class SpaceNodeType
             .AddContentCollections()
             .AddDefaultLayoutAreas()
             .AddLayout(layout => layout
-                .WithView(MeshNodeLayoutAreas.OverviewArea, SpaceLayoutAreas.Overview))
+                .WithView(MeshNodeLayoutAreas.OverviewArea, SpaceLayoutAreas.Overview)
+                // Edit a Space = edit its main markdown body, not the generic property form.
+                .WithView(MeshNodeLayoutAreas.EditArea, SpaceLayoutAreas.Edit))
     };
 
     /// <summary>
