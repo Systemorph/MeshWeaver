@@ -34,8 +34,12 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
                 .RouteAddressToHostedHub(ClientType, ConfigureClient));
     }
 
+    // Plumbing fixture with no logged-in user → post as System (matches HubTestBase.GetHost), so
+    // the host's own + its sync sub-hubs' writes carry the system-security identity instead of
+    // failing closed under the never-null AccessContext guard.
     private IMessageHub GetHostWithHandler(string hostId, Func<MessageHubConfiguration, MessageHubConfiguration> config)
-        => Mesh.GetHostedHub(new Address(HostType, hostId), config);
+        => Mesh.GetHostedHub(new Address(HostType, hostId),
+            c => config(c).WithPostingIdentity(PostingIdentity.System));
 
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
