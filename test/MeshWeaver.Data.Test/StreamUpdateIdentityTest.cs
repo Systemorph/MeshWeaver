@@ -82,7 +82,10 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
     [HubFact]
     public async Task StreamUpdate_WithoutAsyncLocalIdentity_FailsClosed()
     {
-        var host = GetHost();
+        // Drive a USER-identity host (not the plumbing-default System) so the never-null guard
+        // actually engages. A System hub would stamp the well-known system-security identity and
+        // the write would run; this test is specifically about the no-identity fail-closed path.
+        var host = GetHost(c => ConfigureHost(c).WithPostingIdentity(PostingIdentity.User));
         var workspace = host.GetWorkspace();
         var accessService = host.ServiceProvider.GetRequiredService<AccessService>();
 
@@ -94,30 +97,24 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
         var collectionName = workspace.DataContext.GetTypeSource(typeof(MyData))!.CollectionName;
         var stream = workspace.GetStream(new CollectionsReference(collectionName))!;
 
-        // ReplaySubject buffers the emission so the reactive assertion below still
-        // observes it even if the delegate fires before the assertion subscribes.
-        var insideDelegate = new System.Reactive.Subjects.ReplaySubject<string?>(1);
+        var delegateRan = false;
         stream.Update(_ =>
         {
-            insideDelegate.OnNext(accessService.Context?.ObjectId);
+            delegateRan = true;
             return (ChangeItem<EntityStore>?)null;
         }, _ => { });
 
-        var seen = await insideDelegate.Should().Within(5.Seconds()).Emit();
-
-        // 🚨 2026-05-21 — single fail-closed branch in the PostPipeline. Per
-        // the directive "we should NEVER write something as hub", non-mesh
-        // hubs no longer fall back to stamping their own address as principal.
-        // Legitimate hub-internal flows (SyncStream SetCurrentRequest, etc.)
-        // MUST opt in explicitly via AccessService.ImpersonateAsHub /
-        // ImpersonateAsSystem at the callsite. With AsyncLocal cleared and no
-        // explicit impersonation scope, the delegate sees null Context —
-        // and any subsequent mesh write would be denied at the AccessControl
-        // pipeline. See AccessContextPropagation.md.
-        seen.Should().BeNull(
-            "with no AsyncLocal / CircuitContext and no explicit ImpersonateAsHub scope, " +
-            "the delegate must see null Context — the post-pipeline no longer fakes " +
-            "hub-self identity. Wrap intentional hub-internal writes with " +
+        // 🚨 NEVER-NULL INVARIANT (feedback_access_context_always_set). On a USER hub with no
+        // AsyncLocal / CircuitContext and no explicit ImpersonateAsHub/System scope, the
+        // post-pipeline does NOT fake a hub-self identity — it marks the UpdateStreamRequest
+        // delivery FAILED (logs the gap + posts a DeliveryFailure) and short-circuits, so the
+        // update delegate NEVER runs. Sanctioned fixed wait: a "confirm nothing happened" negative
+        // test — there is no positive signal to filter for.
+        await Task.Delay(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+        delegateRan.Should().BeFalse(
+            "with no AsyncLocal / CircuitContext and no explicit ImpersonateAsHub scope on a User " +
+            "hub, the never-null guard fails the delivery — the update delegate must not run with a " +
+            "faked hub-self identity. Wrap intentional hub-internal writes with " +
             "AccessService.ImpersonateAsHub() / ImpersonateAsSystem().");
     }
 
