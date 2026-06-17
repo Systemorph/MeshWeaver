@@ -22,7 +22,7 @@ namespace MeshWeaver.ContentCollections.Indexing.Graph;
 ///     (unchanged files are hash-skipped);</item>
 ///   <item>explains how to find the produced <c>Document</c> nodes (<c>@document</c> search).</item>
 /// </list>
-/// Mirrors <see cref="MeshWeaver.GitSync"/>'s settings tab: Space-filtered registration + the activity
+/// Mirrors <c>MeshWeaver.GitSync</c>'s settings tab: Space-filtered registration + the activity
 /// progress-panel pattern. No <c>IMeshService.Query</c> in render (status comes from DI + the live
 /// activity stream), per the no-query-in-render rule.
 /// </summary>

@@ -13,7 +13,7 @@ namespace MeshWeaver.ContentCollections.Indexing.Graph;
 /// One-call wiring for the full content-indexing pipeline (STEP 5): the post-upload observer + the
 /// indexing Activity + the indexing core (service + extractor + store + embedder + sink + summarizer).
 ///
-/// <para>A host opts in with a single <see cref="AddContentIndexingPipeline{TBuilder}"/> call, supplying
+/// <para>A host opts in with a single <c>AddContentIndexingPipeline</c> call, supplying
 /// the concrete vector store + embedder (e.g. the Postgres/pgvector adapter via
 /// <c>AddPostgreSqlContentIndex</c>) and — optionally — a chat client for the AI summarizer. The
 /// <c>Document</c> NodeType + <see cref="MeshDocumentSink"/> come from <see cref="DocumentIndexingExtensions.AddDocumentIndexing{TBuilder}(TBuilder)"/>.</para>
