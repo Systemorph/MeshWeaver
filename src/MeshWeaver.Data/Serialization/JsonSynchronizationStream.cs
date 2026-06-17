@@ -283,10 +283,18 @@ public static class JsonSynchronizationStream
         // heartbeats/resubscribes a non-existent owner. Reactive end-to-end: no await.
         var observeSubscription = Observable
             .Using(
-                // System (non-user) subscribe applies the impersonation scope for the post; a real
-                // user carries identity on the SubscribeRequest itself. Observable.Using disposes the
-                // scope when the subscribe terminates.
-                () => (isRealUser ? null : accessService?.ImpersonateAsSystem())
+                // Apply an explicit identity SCOPE for the post — do NOT rely on the ambient AsyncLocal
+                // still being set. Observable.Using's factory runs at SUBSCRIBE time, and a sync
+                // re-subscribe / keep-alive / Blazor re-render fan-out fires on a background Rx
+                // scheduler where AsyncLocal is WIPED. Previously a real user applied no scope and
+                // trusted AsyncLocal: when it was wiped the SubscribeRequest delivery got a NULL
+                // AccessContext → PostPipeline fail-closed → owner DENIES the subscribe → the consumer
+                // re-opens it → flood of denied SubscribeRequests that wedged the Space hub
+                // (AgenticPension). Re-apply the CAPTURED user (SwitchAccessContext(ambient)) so the
+                // post carries the right identity regardless of thread; non-user → System. Either way
+                // AccessContext is NEVER null, so the subscribe is authorised (RLS still gates the
+                // user's actual Read) instead of fail-closed-denied.
+                () => (isRealUser ? accessService?.SwitchAccessContext(ambient) : accessService?.ImpersonateAsSystem())
                       ?? (IDisposable)System.Reactive.Disposables.Disposable.Empty,
                 _ => hub.Observe(
                         new SubscribeRequest(reduced.StreamId, reference) { Identity = identityForSubscribe },

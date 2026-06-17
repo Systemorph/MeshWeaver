@@ -176,6 +176,68 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
             "disposal must handle only the phase ShutdownRequests, never a version-mismatch repost storm");
     }
 
+    record StormFloodEvent(int Seq);
+
+    /// <summary>
+    /// Integration proof that the storm circuit-breaker is wired into the hub's
+    /// ingestion point (<c>MessageService.ScheduleNotify</c>) and keeps the hub
+    /// responsive under an unbounded loop. A tight burst of one identical
+    /// <c>(sender, target, type)</c> tuple — the loop signature behind every wedge this
+    /// session (resubscribe / repost / DeliveryFailure ping-pong / denied-Subscribe
+    /// retry) — must (1) TRIP the breaker (logged once), (2) get DROPPED at ingestion so
+    /// the single-threaded turn loop is never saturated, and (3) leave the hub answering
+    /// other traffic. Without the breaker this burst floods the action block and the hub
+    /// (and in prod the whole portal) wedges.
+    /// </summary>
+    [Fact]
+    public async Task MessageStorm_IsTrippedAndDropped_HubStaysResponsive()
+    {
+        // Victim hub reachable as a concrete MessageHub so we can observe its breaker.
+        // It handles SayHelloRequest (round-trip responsiveness) and counts StormFloodEvents
+        // that actually reach a handler (everything dropped at ingestion never gets here).
+        var processed = 0;
+        var victim = (MessageHub)Mesh.GetHostedHub(new Address("victim", "1"), c => c
+            .WithHandler<SayHelloRequest>((hub, request) =>
+            {
+                hub.Post(new HelloEvent(), o => o.ResponseFor(request));
+                return request.Processed();
+            })
+            .WithHandler<StormFloodEvent>((_, d) =>
+            {
+                Interlocked.Increment(ref processed);
+                return d.Processed();
+            }));
+
+        victim.StormBreaker.Should().NotBeNull("the default MessageService wires a storm breaker");
+
+        // Subscribe to the trip signal BEFORE storming — the trip fires synchronously
+        // during the storming post on ScheduleNotify's thread.
+        var tripped = victim.StormBreaker!.Trips.Should().Within(10.Seconds()).Emit();
+
+        // Storm the SAME key well past the per-key threshold in a tight loop (microseconds
+        // per cheap self-post, so the whole burst lands inside one rate window).
+        const int burst = MessageStormBreaker.DefaultThreshold * 3;
+        for (var i = 0; i < burst && !victim.IsDisposing; i++)
+            victim.Post(new StormFloodEvent(i), o => o.WithTarget(victim.Address));
+
+        var trip = await tripped;
+        trip.TypeName.Should().Be(nameof(StormFloodEvent));
+        trip.ObservedCount.Should().BeGreaterThan(MessageStormBreaker.DefaultThreshold);
+        victim.StormBreaker.TripCount.Should().Be(1, "a storm trips and logs once, not once per dropped message");
+
+        // RESPONSIVENESS: a DIFFERENT message type round-trips while the storm key is
+        // tripped. If the storm had saturated the single-threaded turn loop this would
+        // time out — that's the wedge the breaker prevents.
+        var response = await victim.Observe(new SayHelloRequest(), o => o.WithTarget(victim.Address))
+            .Should().Within(10.Seconds()).Emit();
+        response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
+
+        // DROPPED AT INGESTION: far fewer floods reached a handler than were posted — the
+        // breaker stopped the cascade rather than enqueuing every looping message.
+        Volatile.Read(ref processed).Should().BeLessThan(burst,
+            "messages of the storming key must be dropped at ingestion, not all processed");
+    }
+
     [Fact]
     public void RoutingCycleDetection_ShouldDetectCycle()
     {

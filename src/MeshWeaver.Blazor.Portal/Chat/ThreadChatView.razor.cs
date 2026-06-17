@@ -952,28 +952,66 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (workspace == null)
             return;
 
+        var field = picker.ComposerField;
+        var isAgent = string.Equals(field, nameof(MeshWeaver.AI.ThreadComposer.AgentName), StringComparison.OrdinalIgnoreCase);
+        var isModel = string.Equals(field, nameof(MeshWeaver.AI.ThreadComposer.ModelName), StringComparison.OrdinalIgnoreCase);
+
+        // Harness / custom Command pickers carry no context-scoped union — run them
+        // straight off their declared query (no navigation read needed).
+        if (!isAgent && !isModel)
+        {
+            RunPicker(workspace, picker, new[] { picker.Query },
+                $"picker|{field}|{picker.Query}");
+            return;
+        }
+
         // Agent and model pickers must surface NOT ONLY the built-in catalog but also the ones declared
         // in the CURRENT context's namespace (+ ancestors) AND the context node's NodeType namespace
         // (+ ancestors) — the SAME context-scoped query union AgentChatClient resolves agents/models
         // from at execution time. AgentPickerProjection.BuildAgentQueries / BuildModelQueries is the
-        // single source of truth for that union (built-in + namespace:{current} selfAndAncestors +
+        // single source of truth for that union (built-in + path:{current} ancestors +
         // namespace:{nodeType} selfAndAncestors); inlining the single global `namespace:Agent` query
-        // here is exactly why a Space's own agent/model never appeared in the picker. Other pickers
-        // (harness, custom Command nodes) keep their declared query.
-        var nodeTypePath = _currentNavContext?.Node?.NodeType;
-        var field = picker.ComposerField;
-        var queries =
-            string.Equals(field, nameof(MeshWeaver.AI.ThreadComposer.AgentName), StringComparison.OrdinalIgnoreCase)
-                ? AgentPickerProjection.BuildAgentQueries(initialContext, nodeTypePath)
-            : string.Equals(field, nameof(MeshWeaver.AI.ThreadComposer.ModelName), StringComparison.OrdinalIgnoreCase)
-                ? AgentPickerProjection.BuildModelQueries(initialContext, nodeTypePath, userPath: _userHome)
-            : new[] { picker.Query };
-        var cacheKey = $"picker|{field}|{initialContext}|{nodeTypePath}|{string.Join("|", queries)}";
+        // here is exactly why a Space's own agent/model never appeared in the picker.
+        //
+        // 🚨 TIMING-SAFE: the navigation context resolves ASYNCHRONOUSLY, so the stale
+        // `_currentNavContext` field (and the seeded `initialContext`) are frequently NULL in the
+        // floating side-panel chat — collapsing the union to the built-in query only (the atioz
+        // "Space agent missing from /agent" bug). We instead read the LATEST RESOLVED context off
+        // NavigationService.NavigationContext (ReplaySubject(1) → the last value replays
+        // immediately). Take(1) after a short Timeout so a still-resolving context can't hang the
+        // picker; the timeout/error branch falls back to the seeded initialContext (never null →
+        // never block). AgentPickerProjection.DerivePickerContext is the single source of truth for
+        // turning that resolved context into (currentPath, nodeTypePath).
+        NavigationService.NavigationContext
+            .Select(ctx => AgentPickerProjection.DerivePickerContext(ctx, initialContext))
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(2))
+            .Catch<AgentPickerProjection.PickerContext, Exception>(_ =>
+                System.Reactive.Linq.Observable.Return(
+                    AgentPickerProjection.DerivePickerContext(null, initialContext)))
+            .Subscribe(pc => InvokeAsync(() =>
+            {
+                if (_isDisposed) return;
+                var queries = isAgent
+                    ? AgentPickerProjection.BuildAgentQueries(pc.ContextPath, pc.NodeTypePath)
+                    : AgentPickerProjection.BuildModelQueries(pc.ContextPath, pc.NodeTypePath, userPath: _userHome);
+                var cacheKey = $"picker|{field}|{pc.ContextPath}|{pc.NodeTypePath}|{string.Join("|", queries)}";
+                RunPicker(workspace, picker, queries, cacheKey);
+            }));
+    }
 
+    /// <summary>
+    /// Runs the resolved picker query union: snapshots the mesh once, orders by the node's
+    /// universal Order field (then Name), auto-selects an exact term match or shows the list.
+    /// Shared by the context-scoped agent/model branch and the declared-query harness/custom branch.
+    /// </summary>
+    private void RunPicker(IWorkspace workspace, NodePickerRequest picker, string[] queries, string cacheKey)
+    {
         AgentPickerProjection.ObserveSnapshot(workspace, Hub, cacheKey, queries)
             .Take(1)
             .Subscribe(snapshot => InvokeAsync(() =>
             {
+                if (_isDisposed) return;
                 // Order by the node's universal Order field (then Name) so the picker leads with the
                 // catalog head — Assistant (order:-1) for agents, the flagship model for models. This
                 // is NOT command-specific logic: it's the generic "order nodes by Order" every picker

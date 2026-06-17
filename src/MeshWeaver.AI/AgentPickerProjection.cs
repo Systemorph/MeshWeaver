@@ -62,6 +62,74 @@ public static class AgentPickerProjection
     public static string[] BuildAgentQueries(string? currentPath = null, string? nodeTypePath = null)
         => BuildQueries(AgentNodeType.NodeType, AgentRootNamespace, currentPath, nodeTypePath);
 
+    /// <summary>
+    /// The (contextPath, nodeTypePath) pair the chat picker MUST feed into
+    /// <see cref="BuildAgentQueries"/> / <see cref="BuildModelQueries"/> so that all three
+    /// context-scoped queries are issued (built-in + per-context-ancestors +
+    /// per-NodeType-namespace). Sourced from the SAME resolved navigation context that
+    /// <see cref="AgentChatClient"/> reads at execution time: the context PATH is the
+    /// resolved node's main path (<see cref="NavigationContext.PrimaryPath"/>, satellite
+    /// segments stripped) and <see cref="NodeTypePath"/> is that node's
+    /// <see cref="MeshNode.NodeType"/>. When both are populated the picker surfaces a
+    /// Space's own agents/models — the chat-side-panel bug where a frequently-NULL
+    /// ambient context collapsed the union to the built-in query only.
+    /// </summary>
+    public readonly record struct PickerContext(string? ContextPath, string? NodeTypePath);
+
+    /// <summary>
+    /// Derives the timing-safe <see cref="PickerContext"/> for the picker from the latest
+    /// RESOLVED navigation context (<paramref name="resolved"/>) — the value the chat view
+    /// reads off <c>INavigationService.NavigationContext</c> (a ReplaySubject(1), so the last
+    /// value replays). The <paramref name="fallbackContextPath"/> (the view's seeded
+    /// <c>initialContext</c>) is used only when the navigation context has not yet resolved to
+    /// a usable node (still loading, or the bare <c>chat</c> route). This is the single source
+    /// of truth for "where does the picker get currentPath + nodeTypePath": both the Blazor
+    /// view (<c>ThreadChatView.OpenPicker</c>) and its tests derive args through here, so the
+    /// "all 3 queries when context+nodeType resolve" contract can be pinned without a Blazor
+    /// harness.
+    /// </summary>
+    public static PickerContext DerivePickerContext(
+        NavigationContext? resolved, string? fallbackContextPath = null)
+    {
+        // Prefer the RESOLVED nav context. Skip it while it's still null (loading / not-found)
+        // or pointing at the bare chat route — those carry no real content node. In that case
+        // fall back to the view's already-seeded initialContext so we never collapse to the
+        // built-in-only query just because the async resolution hasn't landed yet.
+        var usable = resolved is not null
+                     && resolved.Path != "chat"
+                     && !string.IsNullOrEmpty(resolved.PrimaryPath)
+            ? resolved
+            : null;
+
+        var contextPath = NormalizeContextPath(usable?.PrimaryPath)
+                          ?? NormalizeContextPath(fallbackContextPath);
+        // NodeType only comes from a resolved node — the fallback path is just a string, it
+        // carries no NodeType. This mirrors AgentChatClient.Initialize: nodeTypePath ??= Context?.Node?.NodeType.
+        var nodeTypePath = usable?.Node?.NodeType;
+        return new PickerContext(contextPath, nodeTypePath);
+    }
+
+    /// <summary>
+    /// Strips any trailing satellite segments (segments starting with <c>_</c>, e.g.
+    /// <c>_Thread/&lt;slug&gt;</c>, <c>_Comment/&lt;id&gt;</c>) from a context path so the
+    /// picker queries reason about the main node, not the satellite. Returns the input
+    /// unchanged when null/empty or when no <c>_</c> segment is present. Mirrors the
+    /// view's / AgentChatClient's private NormalizeContextPath — kept here so the
+    /// picker-context derivation is self-contained and testable.
+    /// </summary>
+    public static string? NormalizeContextPath(string? path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return path;
+        var segments = path.Split('/');
+        for (var i = 0; i < segments.Length; i++)
+        {
+            if (segments[i].StartsWith('_'))
+                return string.Join('/', segments, 0, i);
+        }
+        return path;
+    }
+
     /// <inheritdoc cref="BuildAgentQueries" />
     /// <remarks>
     /// Follows the canonical picker-query shape (see

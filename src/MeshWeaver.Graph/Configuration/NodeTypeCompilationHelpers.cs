@@ -844,48 +844,103 @@ internal static class NodeTypeCompilationHelpers
 
         // Activity Control Plane — THE official progress mechanism. Create the
         // compile activity UP FRONT (canonical uppercase _Activity, satellite
-        // routing + Releases query) and stamp its path on the NodeType, so compile
-        // progress is observable via the activity node's stream
-        // (workspace.GetMeshNodeStream(activityPath)) — the GUI Releases pane and
-        // any diagnosis read it there, NOT logs. The compile runs on THIS hub;
-        // activity writes are best-effort + non-blocking — the compile never waits
-        // on them. Seed with the Running log so even a stalled compile leaves a
-        // "started / invoking compiler" trail to read.
+        // routing + Releases query) so compile progress is observable via the
+        // activity node's stream (workspace.GetMeshNodeStream(activityPath)) — the
+        // GUI Releases pane and any diagnosis read it there, NOT logs.
+        //
+        // 🚨 ROOT-CAUSE GUARD (the `_Activity/compile-*` resubscribe storm). The
+        // activity create is PROVISION-ORDERED and OBSERVED, and we stamp
+        // LastCompilationActivityPath on the NodeType ONLY when the create actually
+        // landed — never a phantom path. The old code created the activity
+        // fire-and-forget (swallowing the failure at Debug) with no
+        // EnsurePartitionProvisioned ordering, then stamped LastCompilationActivityPath
+        // UNCONDITIONALLY. On a not-yet-provisioned partition schema the create faulted
+        // (42P01) and was swallowed, yet the NodeType still advertised the never-created
+        // `compile-<ts>` path. Every reader of that NodeType — the per-NodeType hub's own
+        // activity-control-plane read (streamCache.GetStream IsOwn → routes a
+        // SubscribeRequest, BYPASSING the MeshNodeStreamCache negative-cache breaker), the
+        // GUI CompileProgressIndicator's in-flight SubscribeToActivity, the
+        // NodeTypeLayoutAreas.Progress embed — then subscribed to that phantom path, each
+        // routing a SubscribeRequest → RoutingGrain → endless `[ROUTE] NotFound` for a FEW
+        // specific compile-<ts> paths (the atioz storm). Reading/subscribing a node that
+        // does not exist is the defect — so we only ever advertise a path we created.
+        // Provision is reactive + pooled + promise-cached (no-op when already provisioned —
+        // EnsurePartitionProvisioned, the sanctioned pattern StaticRepoImporter uses); the
+        // create is bounded so a hung owner can never block the compile (we fall back to a
+        // null path — the compile still runs, just without an activity surface).
         var activityId = $"compile-{DateTime.UtcNow:yyyyMMddHHmmssfff}{Guid.NewGuid():N}";
         var activityNamespace = $"{hubPath}/_Activity";
         var activityPath = $"{activityNamespace}/{activityId}";
-        meshService?.CreateNode(new MeshNode(activityId, activityNamespace)
-        {
-            Name = $"Compile {hubPath}",
-            NodeType = ActivityNodeType.NodeType,
-            MainNode = hubPath,
-            State = MeshNodeState.Active,
-            Content = new ActivityLog(ActivityCategory.Compilation)
-            {
-                Id = activityId,
-                HubPath = hubPath,
-                Status = ActivityStatus.Running,
-                Messages = System.Collections.Immutable.ImmutableList.Create(
-                    new LogMessage($"Compile started for {hubPath}", LogLevel.Information),
-                    new LogMessage("Invoking compiler…", LogLevel.Information))
-            }
-        }).Subscribe(
-            _ => { },
-            ex => logger?.LogDebug(ex,
-                "Compile: activity create failed for {HubPath} (best-effort)", hubPath));
+        var partition = hubPath.Split('/', StringSplitOptions.RemoveEmptyEntries) is { Length: > 0 } segs
+            ? segs[0]
+            : hubPath;
+        var partitionProviders = hub.ServiceProvider.GetServices<IPartitionStorageProvider>().ToArray();
+        var provisioned = partitionProviders.Length == 0 || string.IsNullOrEmpty(partition)
+            ? Observable.Return(System.Reactive.Unit.Default)
+            : Observable.Merge(partitionProviders.Select(p => p.EnsurePartitionProvisioned(partition)))
+                .ToList().Select(_ => System.Reactive.Unit.Default);
 
-        workspace.GetMeshNodeStream().Update(curr =>
-            curr.Content is NodeTypeDefinition def
-                ? curr with
+        // Cold, SHARED observable resolving to the activity path on a confirmed create,
+        // or null when no IMeshService is present / the create fails / it doesn't land
+        // within the bound. Replay(1).AutoConnect(1): the create's side effect runs ONCE
+        // on the first subscribe and its result is buffered, so BOTH the Compiling-flip
+        // and the compile pipeline (which subscribes on the pool via SubscribeOn, possibly
+        // after the flip's Take(1) already completed) observe the SAME resolved value
+        // without re-running the create and without depending on an exact subscriber count.
+        var activityPathObservable = (meshService is null
+            ? Observable.Return<string?>(null)
+            : provisioned
+                .SelectMany(_ => meshService.CreateNode(new MeshNode(activityId, activityNamespace)
                 {
-                    Content = def with
+                    Name = $"Compile {hubPath}",
+                    NodeType = ActivityNodeType.NodeType,
+                    MainNode = hubPath,
+                    State = MeshNodeState.Active,
+                    Content = new ActivityLog(ActivityCategory.Compilation)
                     {
-                        CompilationStatus = CompilationStatus.Compiling,
-                        LastCompileStartedAt = DateTimeOffset.UtcNow,
-                        LastCompilationActivityPath = activityPath
+                        Id = activityId,
+                        HubPath = hubPath,
+                        Status = ActivityStatus.Running,
+                        Messages = System.Collections.Immutable.ImmutableList.Create(
+                            new LogMessage($"Compile started for {hubPath}", LogLevel.Information),
+                            new LogMessage("Invoking compiler…", LogLevel.Information))
                     }
-                }
-                : curr)
+                }))
+                .Take(1)
+                .Select(_ => (string?)activityPath)
+                // Bound: a hung owner must NEVER block the compile. On timeout/fault emit
+                // null — the compile proceeds with no activity surface (best-effort
+                // observability), and crucially the NodeType never advertises an
+                // un-created path that would storm the router.
+                .Timeout(TimeSpan.FromSeconds(10), Observable.Return<string?>(null))
+                .Catch<string?, Exception>(ex =>
+                {
+                    logger?.LogDebug(ex,
+                        "Compile: activity create failed for {HubPath} (best-effort) — " +
+                        "LastCompilationActivityPath stays null so no reader subscribes to a phantom node",
+                        hubPath);
+                    return Observable.Return<string?>(null);
+                }))
+            .Replay(1)
+            .AutoConnect(1);
+
+        // Flip the parent NodeType to Compiling, stamping the ACTUAL activity path (or
+        // null when the create didn't land). The stamp follows the create — it is never
+        // a path that does not exist.
+        activityPathObservable
+            .Take(1)
+            .SelectMany(resolvedActivityPath => workspace.GetMeshNodeStream().Update(curr =>
+                curr.Content is NodeTypeDefinition def
+                    ? curr with
+                    {
+                        Content = def with
+                        {
+                            CompilationStatus = CompilationStatus.Compiling,
+                            LastCompileStartedAt = DateTimeOffset.UtcNow,
+                            LastCompilationActivityPath = resolvedActivityPath
+                        }
+                    }
+                    : curr))
             .Subscribe(
                 _ => { },
                 ex => logger?.LogWarning(ex,
@@ -904,23 +959,34 @@ internal static class NodeTypeCompilationHelpers
         // the inline path. SubscribeOn moves the whole subscribe to the pool so the action
         // block stays free to service those synced handshakes. Order isn't a concern here
         // — this is a single self-contained compile, not cross-message FIFO.
-        var sub = compilationService.CompileAndGetConfigurations(pendingNode, sourcesOverride)
+        //
+        // 🚨 Resolve the activity path BEFORE Roslyn (SelectMany off the bounded
+        // activityPathObservable) so the terminal write stamps the SAME confirmed path
+        // (or null) the Compiling-flip used — never an un-created path.
+        var sub = activityPathObservable.Take(1)
+            .SelectMany(resolvedActivityPath => compilationService
+                .CompileAndGetConfigurations(pendingNode, sourcesOverride)
+                .Take(1)
+                .Select(result => new CompileOutcome(result, null, pendingNode, resolvedActivityPath))
+                .Catch<CompileOutcome, Exception>(ex =>
+                    Observable.Return(new CompileOutcome(null, ex, pendingNode, resolvedActivityPath))))
             .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default)
-            .Take(1)
-            .Select(result => new CompileOutcome(result, null, pendingNode))
-            .Catch<CompileOutcome, Exception>(ex =>
-                Observable.Return(new CompileOutcome(null, ex, pendingNode)))
             .Subscribe(
                 outcome =>
                 {
                     var ok = outcome.Error is null
                         && !string.IsNullOrEmpty(outcome.Result?.AssemblyLocation);
 
+                    // The CONFIRMED activity path (or null when the create didn't land).
+                    // Everything below stamps / writes against this — never an un-created
+                    // node, so no reader can subscribe to a phantom `compile-*` path.
+                    var resolvedActivityPath = outcome.ActivityPath;
+
                     string? newReleasePath = null;
                     if (ok)
                     {
                         newReleasePath = MeshDataSourceExtensions.TryCreateReleaseNode(
-                            hub, hubPath, outcome.Result!, outcome.PendingNode, activityPath, logger);
+                            hub, hubPath, outcome.Result!, outcome.PendingNode, resolvedActivityPath, logger);
                     }
 
                     // Write the FULL compile log + terminal status to the activity
@@ -943,7 +1009,7 @@ internal static class NodeTypeCompilationHelpers
                     if (newReleasePath is not null)
                         activityMessages.Add(new LogMessage(
                             $"Release created: {newReleasePath}", LogLevel.Information));
-                    NodeTypeCompilationActivity.Complete(hub, activityPath,
+                    NodeTypeCompilationActivity.Complete(hub, resolvedActivityPath,
                         ok ? ActivityStatus.Succeeded : ActivityStatus.Failed,
                         activityMessages.ToImmutable(), logger!);
 
@@ -972,7 +1038,7 @@ internal static class NodeTypeCompilationHelpers
                                     // activation falls back to default config without
                                     // AddMeshDataSource, IWorkspace fails to activate.
                                     LastCompiledVersion = outcome.Result.Version ?? curr.Version,
-                                    LastCompilationActivityPath = activityPath,
+                                    LastCompilationActivityPath = resolvedActivityPath,
                                     LatestReleasePath = newReleasePath ?? def.LatestReleasePath,
                                     ReleaseNotes = newReleasePath is not null ? null : def.ReleaseNotes,
                                     CompiledSources = outcome.Result.CompiledSources
@@ -1006,7 +1072,7 @@ internal static class NodeTypeCompilationHelpers
                             {
                                 CompilationStatus = CompilationStatus.Error,
                                 CompilationError = errorSummary,
-                                LastCompilationActivityPath = activityPath,
+                                LastCompilationActivityPath = resolvedActivityPath,
                                 CompiledSources = null
                             }
                         };
@@ -1036,6 +1102,9 @@ internal static class NodeTypeCompilationHelpers
         hub.RegisterForDisposal(sub);
     }
 
-    /// <summary>Per-NodeType compile outcome — either the compiler's result or the exception that aborted it.</summary>
-    private record CompileOutcome(NodeCompilationResult? Result, Exception? Error, MeshNode PendingNode);
+    /// <summary>Per-NodeType compile outcome — either the compiler's result or the exception that aborted it.
+    /// <paramref name="ActivityPath"/> is the CONFIRMED compile-activity node path (the create landed) or
+    /// <c>null</c> when no activity node was created — the terminal write stamps this so the NodeType never
+    /// advertises a never-created <c>_Activity/compile-*</c> path that readers would storm the router on.</summary>
+    private record CompileOutcome(NodeCompilationResult? Result, Exception? Error, MeshNode PendingNode, string? ActivityPath);
 }
