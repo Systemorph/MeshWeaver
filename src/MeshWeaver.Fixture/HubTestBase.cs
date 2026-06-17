@@ -39,11 +39,23 @@ public class HubTestBase : TestBase
 
     protected virtual MessageHubConfiguration ConfigureMesh(MessageHubConfiguration conf)
     {
-        return conf.WithRoutes(forward =>
-            forward
-                .RouteAddressToHostedHub(HostType, ConfigureHost)
-                .RouteAddressToHostedHub(ClientType, ConfigureClient)
-        );
+        // 🚨 Never-null AccessContext invariant (feedback_access_context_always_set):
+        // these are message-ROUTING/plumbing test fixtures with NO logged-in user — they
+        // exercise the courier, not access control. So they post as infrastructure
+        // (PostingIdentity.System), exactly like routing/persistence in production. The
+        // System mode is applied LAST (outermost wrap of ConfigureHost/ConfigureClient and
+        // the mesh itself) so it holds regardless of whether a subclass's ConfigureHost
+        // calls base. A test that specifically asserts user-identity / never-null behaviour
+        // creates the hub it drives with an explicit PostingIdentity.User config via
+        // GetHost/GetClient. (MonolithMeshTestBase, which auto-logs in a user, does NOT
+        // inherit this — its posts carry the real user.)
+        return conf
+            .WithRoutes(forward =>
+                forward
+                    .RouteAddressToHostedHub(HostType, c => ConfigureHost(c).WithPostingIdentity(PostingIdentity.System))
+                    .RouteAddressToHostedHub(ClientType, c => ConfigureClient(c).WithPostingIdentity(PostingIdentity.System))
+            )
+            .WithPostingIdentity(PostingIdentity.System);
     }
 
     protected virtual MessageHubConfiguration ConfigureHost(
@@ -56,12 +68,17 @@ public class HubTestBase : TestBase
 
     protected virtual IMessageHub GetHost(Func<MessageHubConfiguration, MessageHubConfiguration>? configuration = default)
     {
-        return Mesh.GetHostedHub(CreateHostAddress(), configuration ?? ConfigureHost);
+        // Default path: plumbing fixture → System posting identity (see ConfigureMesh).
+        // Explicit-config path: the caller's config wins (e.g. a test opting into
+        // PostingIdentity.User to assert the never-null behaviour).
+        return Mesh.GetHostedHub(CreateHostAddress(),
+            configuration ?? (c => ConfigureHost(c).WithPostingIdentity(PostingIdentity.System)));
     }
 
     protected virtual IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration>? configuration = default)
     {
-        return Mesh.GetHostedHub(CreateClientAddress(), configuration ?? ConfigureClient);
+        return Mesh.GetHostedHub(CreateClientAddress(),
+            configuration ?? (c => ConfigureClient(c).WithPostingIdentity(PostingIdentity.System)));
     }
     public override async ValueTask DisposeAsync()
     {

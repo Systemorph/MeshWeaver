@@ -197,6 +197,9 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
         // that actually reach a handler (everything dropped at ingestion never gets here).
         var processed = 0;
         var victim = (MessageHub)Mesh.GetHostedHub(new Address("victim", "1"), c => c
+            // Plumbing fixture with no user → posts as infrastructure (System), per the
+            // never-null AccessContext invariant (feedback_access_context_always_set).
+            .WithPostingIdentity(PostingIdentity.System)
             .WithHandler<SayHelloRequest>((hub, request) =>
             {
                 hub.Post(new HelloEvent(), o => o.ResponseFor(request));

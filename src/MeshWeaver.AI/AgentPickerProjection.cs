@@ -22,7 +22,7 @@ namespace MeshWeaver.AI;
 /// <c>OnSyncedAgentSnapshot</c>) calls these helpers directly. Tests in
 /// <c>AgentPickerProjectionTest</c> drive the same
 /// <see cref="MeshWeaver.Graph.SyncedQueryDataSourceExtensions.GetQuery(MeshWeaver.Data.IWorkspace, object, string[])"/>
-/// pipe with the strings <see cref="BuildQueries"/> returns and run the
+/// pipe with the strings <see cref="BuildAgentQueries"/> returns and run the
 /// snapshot through <see cref="ProjectAgents"/> /
 /// <see cref="ProjectModels"/>. If a regression silently empties the
 /// dropdowns at runtime, those tests fail too — no parallel

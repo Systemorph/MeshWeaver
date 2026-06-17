@@ -75,18 +75,41 @@ public class PortalApplication : IDisposable
                        ?? "anonymous";
         }
 
+        // The per-circuit user. The portal hub posts layout/agent/model SubscribeRequests on
+        // its OWN action-block thread, where the mesh-wide AccessService AsyncLocals are wiped
+        // and its persistent fallback is cleared per inbound activity — so without an explicit
+        // per-hub identity those posts carry a NULL AccessContext and RLS denies (the empty
+        // agent registry). Stamp the circuit user via a per-hub PostPipeline step so every post
+        // from this hub is attributed to the user regardless of thread. Read from the
+        // per-circuit accessor (written by CircuitAccessHandler) — NOT the mesh-wide
+        // persistentCircuitContext, which is shared across circuits and cleared per activity.
+        var circuitUser = circuitContextAccessor.UserContext;
+
         Hub = hub.GetHostedHub(AddressExtensions.CreatePortalAddress(portalId),
             c =>
                 hub.ServiceProvider.GetRequiredService<ILayoutClient>()
                     .Configuration
                     .PortalConfiguration
-                    .Aggregate(DefaultPortalConfig(c, routingService, navigationService),
+                    .Aggregate(DefaultPortalConfig(c, routingService, navigationService, circuitUser),
                         (cc, ccc) => ccc.Invoke(cc)))!;
     }
 
     public static MessageHubConfiguration DefaultPortalConfig(MessageHubConfiguration config,
-        IRoutingService routingService, INavigationService navigationService)
+        IRoutingService routingService, INavigationService navigationService,
+        AccessContext? circuitUser = null)
     {
+        // 🚨 SOURCE of the never-null AccessContext invariant for the portal hub.
+        // This PostPipeline step runs OUTERMOST (added after UserServicePostPipeline, and
+        // AddPipeline wraps outer-first) so it stamps the circuit user BEFORE
+        // UserServicePostPipeline's stamp/throw logic runs. When a post already carries an
+        // AccessContext (ImpersonateAsHub/AsSystem at the callsite, or a response inheriting
+        // the request's identity via ResponseFor) we leave it untouched. When it does not, we
+        // stamp the circuit user — so the portal hub's layout/agent/model subscribes are
+        // attributed to the logged-in user and RLS returns their data instead of denying.
+        if (circuitUser is not null)
+            config = config.AddPostPipeline(syncPipeline =>
+                syncPipeline.AddPipeline((d, next) =>
+                    next(d.AccessContext is null ? d.SetAccessContext(circuitUser) : d)));
         // Every polymorphic UiControl subtype the portal may receive from a remote layout stream
         // has to be visible to this hub's TypeRegistry so PolymorphicTypeInfoResolver can build
         // the JsonDerivedType mapping for UiControl deserialization. Without this the sub-hub's

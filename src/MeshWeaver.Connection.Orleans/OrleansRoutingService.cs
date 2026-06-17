@@ -214,16 +214,34 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             // Route the failure back to the sender so hub.Observe callers get an
             // exception. Use WithRequestIdFrom (NOT ResponseFor — that overrides
             // Target with the request's Sender, which we already set explicitly).
+            //
+            // 🚨 Identity: this is the ROUTING infrastructure's OWN post (the courier
+            // reporting that a delivery could not be routed). Attribute it to the
+            // original requester when the failed delivery carried an identity (so the
+            // matched hub.Observe callback sees a consistent principal); otherwise stamp
+            // System — routing is infrastructure and must never post with a null context
+            // (feedback_access_context_always_set). We never invent a user here; we either
+            // pass through the failed delivery's own AccessContext or use System.
             var meshHub = serviceProvider.GetService<IMessageHub>();
             if (meshHub != null)
             {
-                meshHub.Post(
-                    new DeliveryFailure(delivery)
-                    {
-                        ErrorType = ErrorType.Failed,
-                        Message = message
-                    },
-                    o => o.WithTarget(delivery.Sender).WithRequestIdFrom(delivery));
+                var failureAccess = serviceProvider.GetService<AccessService>();
+                using (delivery.AccessContext is null ? failureAccess?.ImpersonateAsSystem() : null)
+                {
+                    meshHub.Post(
+                        new DeliveryFailure(delivery)
+                        {
+                            ErrorType = ErrorType.Failed,
+                            Message = message
+                        },
+                        o =>
+                        {
+                            o = o.WithTarget(delivery.Sender).WithRequestIdFrom(delivery);
+                            return delivery.AccessContext is not null
+                                ? o.WithAccessContext(delivery.AccessContext)
+                                : o;
+                        });
+                }
             }
         }
         catch (Exception ex)

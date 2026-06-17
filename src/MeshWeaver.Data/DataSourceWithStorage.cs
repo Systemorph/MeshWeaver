@@ -21,7 +21,11 @@ public abstract record UnpartitionedDataSourceWithStorage<TDataSource, TTypeSour
 
     private readonly IMessageHub persistenceHub = Workspace.Hub.ServiceProvider.CreateMessageHub(
         AddressExtensions.CreatePersistenceAddress(),
-        c => c
+        // Persistence is framework infrastructure (the store) — it posts as System
+        // (feedback_access_context_always_set). Declared at hub startup so any post it
+        // makes carries system-security automatically, in addition to the explicit
+        // ImpersonateAsSystem around the DB write in Synchronize below.
+        c => c.WithPostingIdentity(PostingIdentity.System)
     );
 
     private readonly AccessService? accessService =

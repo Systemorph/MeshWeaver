@@ -985,7 +985,22 @@ public class MessageService : IMessageService
             return ((IMessageDelivery)delivery).Failed("Hub is shutting down");
 
         // TODO V10: Which cancellation token to pass here? (12.01.2025, Roland Bürgi)
-        ScheduleNotify(postPipeline.Invoke(delivery), default);
+        var posted = postPipeline.Invoke(delivery);
+
+        // 🚨 NO IDENTITY, NO DELIVERY. The post pipeline (UserServicePostPipeline)
+        // fails the delivery when an application post resolves no AccessContext —
+        // the never-null invariant (feedback_access_context_always_set). The
+        // freshly-constructed delivery is always Submitted, so a Failed result here
+        // means the pipeline rejected it. We must surface that to the sender NOW:
+        // ScheduleNotify → NotifyAsync EARLY-RETURNS on any non-Submitted state, so a
+        // Failed delivery would otherwise be silently dropped (never routed, never
+        // reported). ReportFailure posts a DeliveryFailure back to the sender's
+        // hub.Observe(...) so it gets a clean OnError instead of parking until timeout.
+        // DeliveryFailure is access-context-exempt, so this does not recurse.
+        if (posted.State == MessageDeliveryState.Failed)
+            return ReportFailure(posted);
+
+        ScheduleNotify(posted, default);
         return delivery;
     }
     private readonly Lock locker = new();

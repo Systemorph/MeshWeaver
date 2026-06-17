@@ -57,6 +57,11 @@ public class CircuitAccessHandler : CircuitHandler
     public void UpdateUserContext(AccessContext context)
     {
         _userContext = context;
+        // Carry the resolved user on the per-circuit accessor so the per-circuit portal
+        // hub stamps it on every post (the SOURCE of the never-null AccessContext invariant).
+        // Onboarding legitimately refines the identity here (anonymous/seed → username), so
+        // this overwrites the on-open value — SetUserContext is intentionally not write-once.
+        _circuitContextAccessor.SetUserContext(context);
         var accessService = _hub.ServiceProvider.GetService<AccessService>();
         accessService?.SetCircuitContext(context);
         _logger.LogDebug("Circuit context updated: user={UserId}", context.ObjectId);
@@ -71,6 +76,14 @@ public class CircuitAccessHandler : CircuitHandler
         _circuitContextAccessor.SetCircuitId(circuit.Id);
 
         _userContext = await ResolveUserContextAsync();
+
+        // Carry the resolved user on the per-circuit accessor. PortalApplication reads it
+        // when it builds the per-circuit portal hub so the hub stamps the circuit user on
+        // every post — independent of the mesh-wide AsyncLocal/persistent fallback, which is
+        // cleared per inbound activity (the root cause of the null-AccessContext subscribes
+        // that returned the empty agent registry). ResolveUserContextAsync never returns null
+        // for an open circuit (anonymous VUser at minimum), so the portal always has a user.
+        _circuitContextAccessor.SetUserContext(_userContext);
 
         if (_userContext != null)
         {
@@ -109,6 +122,7 @@ public class CircuitAccessHandler : CircuitHandler
         // Clear the persistent fallback to prevent stale context
         var accessService = _hub.ServiceProvider.GetService<AccessService>();
         accessService?.ClearPersistentCircuitContext();
+        _circuitContextAccessor.SetUserContext(null);
         _userContext = null;
         return Task.CompletedTask;
     }
