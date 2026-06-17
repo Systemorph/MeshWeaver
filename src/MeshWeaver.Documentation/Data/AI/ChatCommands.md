@@ -103,6 +103,15 @@ consults the in-memory static adapter, so without the import `namespace:Command`
 nothing and **the chat finds no commands**. The same applies to the harness catalog
 (`HarnessStaticRepoSource`). See [StaticRepoImport](/Doc/Architecture/StaticRepoImport).
 
+> **`/agent` and `/model` resolve a PARTITION-AWARE registry query, not their stored one.** The picker
+> host (`ThreadChatView.OpenPicker`) builds the agent list from the single canonical
+> `AgentPickerProjection.BuildAgentQuery` — `namespace:{user}/Agent|{space}/Agent|Agent nodeType:Agent`
+> — so a Space's or the user's own agents (placed in `{space}/Agent` / `{user}/Agent`) surface
+> alongside the platform catalog (see [Extensible Defaults](/Doc/Architecture/ExtensibleDefaults)). It
+> runs via `hub.GetQuery` on the portal hub, so per-user RLS hides another user's private agents. The
+> same single query backs the chat combobox and the engine's agent selection (`AgentChatClient`, under
+> the thread owner). The Command node's stored `query` is the declared fallback.
+
 ### Per-Space / per-NodeType / per-user commands
 
 A Space or NodeType can define its **own** Command nodes in its partition. They are discovered through

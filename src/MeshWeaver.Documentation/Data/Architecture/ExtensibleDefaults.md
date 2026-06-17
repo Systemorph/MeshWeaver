@@ -102,6 +102,8 @@ Apply Extensible Defaults whenever a feature has:
 
 The union is computed by `MeshQueryEngine` inside a single `IMeshQueryCore.Query` call — see [Synced Query Data Source](/Doc/DataMesh/SyncedQueryDataSource) for the delta protocol. Static-provider nodes participate via `StaticNodeQueryProvider`, so a query against `namespace:Agent` returns built-in Agents without touching persistence.
 
+> **Agents use a per-partition registry, ONE query.** `AgentPickerProjection.BuildAgentQuery` emits a single `namespace:{user}/Agent|{space}/Agent|Agent nodeType:Agent` search. Agents live in a dedicated `/Agent` sub-namespace **per partition** — platform defaults in the bare `Agent` namespace, a space's own under `{space}/Agent`, a user's own under `{user}/Agent`. The `namespace:A|B|C` alternation (see [Query Syntax](/Doc/DataMesh/QuerySyntax) → "Multi-value `namespace:`") is a single `namespace IN (...)` **exact-membership** filter — no graph/ancestor walk. Models mirror this with `/Model` (credentials stay in `_Provider`). Roles still use the multi-query form shown above.
+
 ---
 
 ## Why this shape

@@ -77,7 +77,7 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
     public async Task ObserveAgents_FromMeshHub_PopulatesCombobox()
     {
         var agents = await AgentPickerProjection
-            .ObserveAgents(Workspace, Hub, currentPath: null)
+            .ObserveAgents(Hub)
             .Should().Within(15.Seconds())
             .Match(a => a.Count > 0);
 
@@ -137,7 +137,7 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
         var workspace = portalHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
         var agents = await AgentPickerProjection
-            .ObserveAgents(workspace, portalHub, currentPath: null)
+            .ObserveAgents(portalHub)
             .Should().Within(15.Seconds())
             .Match(a => a.Count > 0);
 
@@ -168,53 +168,47 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
 
     /// <summary>
     /// 🚨 The atioz "Space's own agent missing from /agent" regression, end-to-end.
-    /// Seeds an Agent at an ANCESTOR of the context path (found by query #2:
-    /// <c>path:{currentPath} nodeType:Agent scope:ancestors</c>) AND an Agent that is a
-    /// direct child of the context node's NodeType namespace (found by query #3:
-    /// <c>namespace:{nodeTypePath} nodeType:Agent scope:selfAndAncestors</c>), then drives the
-    /// EXACT projection the chat picker binds to with BOTH currentPath AND nodeTypePath set —
-    /// i.e. the resolved-context inputs <c>DerivePickerContext</c> hands <c>OpenPicker</c>.
+    /// The picker issues the ONE canonical query
+    /// (<c>nodeType:Agent namespace:Agent|{currentPath}|{nodeTypePath} scope:selfAndAncestors</c> —
+    /// see <see cref="AgentPickerProjection.BuildAgentQuery"/>), which resolves to a
+    /// <c>namespace IN (self+ancestors of each)</c> membership filter. Seeds an Agent in an ANCESTOR
+    /// namespace of the context (namespace <c>ACME</c>) AND an Agent in the context node's NodeType
+    /// namespace (namespace <c>ACME/Project</c>), then drives the EXACT projection the chat picker
+    /// binds to with BOTH currentPath AND nodeTypePath set — the resolved-context inputs
+    /// <c>DerivePickerContext</c> hands <c>OpenPicker</c>.
     ///
-    /// <para>Before the fix, <c>OpenPicker</c> frequently passed both as NULL (stale ambient
-    /// nav context), collapsing the union to the built-in query only — so neither seeded agent
-    /// surfaced. This pins that with both context tokens populated, the path-scoped agent, the
-    /// NodeType-scoped agent, AND a built-in all appear together.</para>
+    /// <para>Before the fix, the picker failed to union the context/NodeType namespaces — so neither
+    /// seeded agent surfaced. This pins that with both context layers populated, the context-namespace
+    /// agent, the NodeType-namespace agent, AND a built-in all appear together from the single query.</para>
     /// </summary>
     [Fact]
-    public async Task ObserveAgents_ContextAndNodeTypeSet_SurfacesPathAgent_NodeTypeAgent_AndBuiltIn()
+    public async Task ObserveAgents_SpaceAndUserSet_SurfacesSpaceAgent_UserAgent_AndPlatform()
     {
-        // Context node lives at ACME/ProductLaunch/Detail with NodeType "ACME/Project".
-        const string contextPath = "ACME/ProductLaunch/Detail";
-        const string nodeTypePath = "ACME/Project";
+        // The chat runs in the ACME space, for user rbuergi. Agents live in each partition's /Agent.
+        const string spacePartition = "ACME";
+        const string userPartition = "rbuergi";
 
-        // Query #2 (path:{contextPath} scope:ancestors) probes ANCESTOR paths of the context —
-        // ACME/ProductLaunch is an ancestor, so an Agent placed exactly there is found.
-        const string pathAgentPath = "ACME/ProductLaunch";
-        // Query #3 (namespace:{nodeTypePath} scope:selfAndAncestors) walks the CHILDREN of the
-        // NodeType namespace (and its ancestors) — an Agent that is a direct child of ACME/Project
-        // is found. Mirrors the TodoAgent-at-ACME/Project/TodoAgent shape AgentChatClientTest uses.
-        const string nodeTypeAgentPath = "ACME/Project/SpaceAgent";
+        const string spaceAgentPath = "ACME/Agent/SpaceAgent";   // the space's own agent
+        const string userAgentPath = "rbuergi/Agent/UserAgent";  // the user's own agent
 
-        await SeedAgent(pathAgentPath, "Path Scoped Agent", "path-scoped-agent");
-        await SeedAgent(nodeTypeAgentPath, "Space Agent", "space-agent");
+        await SeedAgent(spaceAgentPath, "Space Agent", "space-agent");
+        await SeedAgent(userAgentPath, "User Agent", "user-agent");
 
         var agents = await AgentPickerProjection
-            .ObserveAgents(Workspace, Hub, currentPath: contextPath, nodeTypePath: nodeTypePath)
+            .ObserveAgents(Hub, userPath: userPartition, spacePath: spacePartition)
             .Should().Within(15.Seconds())
             .Match(a =>
-                a.Any(x => x.Path == pathAgentPath)
-                && a.Any(x => x.Path == nodeTypeAgentPath)
+                a.Any(x => x.Path == spaceAgentPath)
+                && a.Any(x => x.Path == userAgentPath)
                 && a.Any(x => x.Name == "Assistant"));
 
-        agents.Select(a => a.Path).Should().Contain(pathAgentPath,
-            "the path-scoped agent (ancestor of the context path) is surfaced by query #2 "
-            + "(path:{currentPath} scope:ancestors) — proves the picker finds agents 'in path'.");
-        agents.Select(a => a.Path).Should().Contain(nodeTypeAgentPath,
-            "the NodeType-namespace agent is surfaced by query #3 "
-            + "(namespace:{nodeTypePath} scope:selfAndAncestors) — proves the picker finds agents "
-            + "'in nodepath'. This is the Space agent that was missing on atioz.");
+        agents.Select(a => a.Path).Should().Contain(spaceAgentPath,
+            "the agent in the space's /Agent namespace (ACME/Agent) is listed directly — 'in space'. "
+            + "This is the Space agent that was missing on atioz.");
+        agents.Select(a => a.Path).Should().Contain(userAgentPath,
+            "the agent in the user's /Agent namespace (rbuergi/Agent) is listed directly — 'for the user'.");
         agents.Select(a => a.Name).Should().Contain("Assistant",
-            "the built-in catalog (query #1, namespace:Agent) is ALWAYS unioned in.");
+            "the platform catalog (namespace:Agent) is ALWAYS listed in the single registry query.");
     }
 
     /// <summary>
@@ -289,7 +283,7 @@ public class AgentPickerProjectionPartitionedTest : MonolithMeshTestBase
     public async Task PartitionedPath_ObserveAgents_PopulatesCombobox()
     {
         var agents = await AgentPickerProjection
-            .ObserveAgents(Workspace, Hub, currentPath: null)
+            .ObserveAgents(Hub)
             .Should().Within(15.Seconds())
             .Match(a => a.Count > 0);
 
@@ -310,7 +304,7 @@ public class AgentPickerProjectionPartitionedTest : MonolithMeshTestBase
         var workspace = portalHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
         var agents = await AgentPickerProjection
-            .ObserveAgents(workspace, portalHub, currentPath: null)
+            .ObserveAgents(portalHub)
             .Should().Within(15.Seconds())
             .Match(a => a.Count > 0);
 

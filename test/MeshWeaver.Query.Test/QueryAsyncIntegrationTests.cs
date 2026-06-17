@@ -119,6 +119,50 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
         results.Select(n => n.Name).Should().Contain(["Laptop", "Phone", "Chair"]);
     }
 
+    // ─── The canonical agent-registry query (AgentPickerProjection.BuildAgentQuery) ───
+    // Agents live in a dedicated /Agent sub-namespace PER PARTITION. ONE mesh-node search lists the
+    // user's, the space's and the platform /Agent namespaces directly (exact membership) — surfacing
+    // the space's and the user's own agents, plus the built-in catalog, while excluding others.
+
+    [Fact]
+    public async Task AgentRegistryQuery_ListsUserAndSpaceAndPlatformAgentNamespaces()
+    {
+        var p = P();
+        // The space's OWN agent — under {space}/Agent.
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}s/Agent/SpaceAgent")
+            with { Name = "Space Agent", NodeType = AgentNodeType.NodeType }).Should().Emit();
+        // The user's OWN agent — under {user}/Agent.
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}u/Agent/UserAgent")
+            with { Name = "User Agent", NodeType = AgentNodeType.NodeType }).Should().Emit();
+        // control: an agent in ANOTHER partition's /Agent must NOT surface.
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}other/Agent/OtherAgent")
+            with { Name = "Other Agent", NodeType = AgentNodeType.NodeType }).Should().Emit();
+        // control: an agent NOT in a /Agent namespace (legacy placement) must NOT surface.
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}s/LooseAgent")
+            with { Name = "Loose Agent", NodeType = AgentNodeType.NodeType }).Should().Emit();
+
+        // The ONE registry query: user {p}u + space {p}s + platform Agent.
+        var query = AgentPickerProjection.BuildAgentQuery(userPath: $"{p}u", spacePath: $"{p}s");
+
+        var names = (await QueryNodes(query)).Select(n => n.Name).ToList();
+
+        names.Should().Contain("Space Agent", "an agent in the space's /Agent namespace must surface");
+        names.Should().Contain("User Agent", "an agent in the user's /Agent namespace must surface");
+        names.Should().NotContain("Other Agent", "an agent in another partition's /Agent must NOT surface");
+        names.Should().NotContain("Loose Agent", "an agent OUTSIDE a /Agent namespace must NOT surface");
+    }
+
+    [Fact]
+    public async Task AgentRegistryQuery_NoContext_ReturnsPlatformCatalog()
+    {
+        // No partition context → namespace:Agent (Children) → the built-in platform agents.
+        var results = await QueryNodes(AgentPickerProjection.BuildAgentQuery());
+
+        results.Should().OnlyContain(n => n.NodeType == AgentNodeType.NodeType);
+        results.Should().NotBeEmpty(
+            "the platform Agent catalog (BuiltInAgentProvider via AddAI) must surface under namespace:Agent");
+    }
+
     [Fact]
     public async Task QueryAsync_LikeOperator_MatchesWildcard()
     {

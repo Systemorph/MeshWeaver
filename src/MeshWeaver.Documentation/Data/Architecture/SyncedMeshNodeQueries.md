@@ -143,10 +143,10 @@ workspace.GetQuery("agents-and-models",
     "namespace:Agent nodeType:Agent|LanguageModel",
     "namespace:Model nodeType:Agent|LanguageModel");
 
-// Path hierarchy + global scope
-workspace.GetQuery($"agents:{contextPath}",
-    "namespace:Agent nodeType:Agent",                                       // global
-    $"namespace:{contextPath} scope:selfAndAncestors nodeType:Agent");      // path-local
+// Per-partition registry in ONE query (the canonical agent shape): platform + space + user
+// /Agent namespaces, listed directly (exact membership, no graph walk).
+hub.GetQuery($"agents:{space}:{user}",
+    $"namespace:{user}/Agent|{space}/Agent|Agent nodeType:Agent");
 
 // Graph navigation — the next populated level below a node (drill), live.
 hub.GetQuery($"nav-below:{path}", $"namespace:{path} scope:nextLevel is:main context:search");
@@ -161,7 +161,7 @@ hub.GetQuery($"nav-above:{path}", $"path:{path} scope:ancestors is:main");
 
 > 🚨 **CRITICAL — Every query in a single `GetQuery` call MUST carry the same `nodeType:` filter.** Vary only namespace and scope. Mixing different `nodeType:` filters across queries in one call breaks the all-Initial gate — the synced collection never emits its first snapshot.
 >
-> The canonical shape is what `AgentPickerProjection.BuildAgentQueries` / `BuildModelQueries` produce: one nodeType filter, varying namespaces and scopes. See [ModelProviders.md](/Doc/Architecture/ModelProviders) for a worked example.
+> The canonical shape is what `AgentPickerProjection.BuildModelQueries` produces: one nodeType filter, varying namespaces and scopes. `BuildAgentQuery` collapses its whole union into a **single** query via the `namespace:A|B|C` exact-membership alternation (see [Query Syntax](/Doc/DataMesh/QuerySyntax)), so the gating rule is trivially satisfied. See [ModelProviders.md](/Doc/Architecture/ModelProviders) for a worked multi-query example.
 
 ---
 
