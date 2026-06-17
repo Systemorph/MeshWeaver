@@ -50,9 +50,14 @@ internal class NavigationService : INavigationService
     private readonly ILogger<NavigationService>? _logger;
     private readonly int[] _retryDelays;
 
-    // Production retry schedule â€” ~11.5 s total. Tests override via the internal
-    // ctor overload with short delays so the full retry-exhaustion path runs fast.
-    private static readonly int[] DefaultRetryDelays = [500, 1000, 2000, 3000, 5000];
+    // Production retry schedule — a few short windows, ~1 s total (the hard cap).
+    // The live ResolvePath stream re-emits whenever the catalog learns the path
+    // (that IS the retry); this budget is only the deadline after which an
+    // unresolved path is reported as NotFound. Capped at 1 s so a genuinely missing
+    // page surfaces the "not found" card promptly instead of leaving the stale page
+    // up for seconds. Tests override via the internal ctor overload to drive the
+    // exhaustion path fast.
+    private static readonly int[] DefaultRetryDelays = [100, 200, 300, 400];
 
     // ReplaySubject(1) — emits the last value to new subscribers; no initial value
     // required. NavigationContext starts unobserved until ProcessLocationChange fires.
@@ -367,7 +372,7 @@ internal class NavigationService : INavigationService
                         .Take(1)
                         .Timeout(TimeSpan.FromSeconds(8))
                         .Catch<bool, Exception>(_ => Observable.Return(false))
-                        .Select(allowed => (Node: node, Allowed: allowed)))
+                        .Select(allowed => (Node: (MeshNode?)node, Allowed: allowed)))
             .Subscribe(result =>
         {
             var node = result.Node;

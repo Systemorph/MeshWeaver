@@ -53,7 +53,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     /// <summary>
     /// The node-pick request the most recent command asked us to render (null hides the picker),
-    /// plus the mesh nodes it resolved. Driven by <see cref="CommandResult.Picker"/> via OpenPicker.
+    /// plus the mesh nodes it resolved. Driven by the command's <c>NodePickerRequest</c> via OpenPicker.
     /// </summary>
     private NodePickerRequest? pendingPicker;
     private IReadOnlyList<MeshNode> pickerNodes = [];
@@ -222,7 +222,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// Each holds the picked node's PATH and flows through submit/resubmit UN-resolved — the
     /// execution boundary normalizes paths to ids (SelectionId.IdOf). The data-bound pickers write
     /// the composer themselves; the /agent /model commands and @-agent references write it via
-    /// <see cref="WriteComposerSelection"/>.
+    /// <c>WriteComposerSelection</c>.
     /// </summary>
     private string? boundHarness;
     private string? boundAgentPath;

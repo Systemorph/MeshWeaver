@@ -199,7 +199,7 @@ public class CosmosMeshQuery : IMeshQueryProvider
     /// <summary>
     /// Native reactive autocomplete. The Cosmos execute-query (<c>_adapter.QueryNodesAsync</c> —
     /// the <c>await foreach</c> over the Cosmos feed iterator) is the I/O leaf: it runs inside
-    /// <see cref="_ioPool.Invoke{TResult}(Func{CancellationToken, Task{TResult}})"/> and is
+    /// <c>IIoPool.Invoke</c> and is
     /// pushed to <see cref="System.Reactive.Concurrency.TaskPoolScheduler"/> so the calling hub's
     /// action block is never blocked. No <c>Task.Run</c> bridge, no async-enumerable on the surface.
     /// </summary>

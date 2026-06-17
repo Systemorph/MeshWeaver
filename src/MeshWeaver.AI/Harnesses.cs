@@ -3,7 +3,8 @@ namespace MeshWeaver.AI;
 /// <summary>
 /// The execution harnesses a thread can run under. A "harness" is the
 /// top-level choice in the chat picker; it maps onto an agent's
-/// <see cref="AgentConfiguration.GroupName"/>. For Claude Code / GitHub Copilot
+/// <see cref="AgentDisplayInfo.GroupName"/> (projected from the agent node's Category).
+/// For Claude Code / GitHub Copilot
 /// the harness <i>is</i> the choice — each resolves to a single built-in agent.
 /// For MeshWeaver the user additionally picks an agent + model within the group.
 /// </summary>
