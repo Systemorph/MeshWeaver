@@ -4,6 +4,7 @@ using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -78,6 +79,7 @@ public static class ActivityRunner
         ArgumentNullException.ThrowIfNull(command);
 
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.GitSync.ActivityRunner");
         var workspace = hub.GetWorkspace();
@@ -99,73 +101,126 @@ public static class ActivityRunner
             },
         };
 
-        return meshService.CreateNode(node).SelectMany(_ =>
+        // STEP 1: create the activity node. CreateNode captures the caller's
+        // identity synchronously and stamps it as the node's CreatedBy — so the
+        // created node IS the owner record. This step completes on its own; the
+        // execution is a SEPARATE step (below), never nested in the create.
+        return meshService.CreateNode(node).SelectMany(created =>
         {
             onActivityCreated?.Invoke(activityPath);
 
-            var cts = new CancellationTokenSource();
-            // Cancel watcher: RequestedStatus = Cancelled trips the command's token (Activity
-            // Control Plane). Stays subscribed for the life of the run; disposed on completion.
-            var cancelWatch = workspace.GetMeshNodeStream(activityPath)
-                .Select(n => (n?.Content as ActivityLog)?.RequestedStatus)
-                .Where(s => s == ActivityStatus.Cancelled)
-                .Take(1)
-                .Subscribe(_ =>
+            // STEP 2 (separate): run the activity under its OWNER. The command and
+            // its Append/Finish writes fire on IIoPool / reactive scheduler hops
+            // where the originating AsyncLocal AccessContext has cleared — so we
+            // re-establish the activity owner (created.CreatedBy) AT THE SUBSCRIBE
+            // via Observable.Using(FromNode). Mirrors the thread-round owner model
+            // (ThreadExecution.InstallExecRoundWatcher) exactly. The owner snapshot
+            // is also threaded into Append/Finish so each cross-hub write re-stamps
+            // it at its own .Update() invocation (those fire from arbitrary command
+            // threads, past the outer scope). RLS: the activity satellite delegates
+            // Update to the partition MainNode, so only a principal who can Update
+            // the partition — the owner, by construction — may write it.
+            var owner = OwnerContextOf(created);
+            return Observable.Using(
+                () => AccessContextScope.FromNode(created, accessService, logger),
+                _ =>
                 {
-                    logger?.LogInformation("Activity {Path} cancel requested", activityPath);
-                    try { cts.Cancel(); } catch { /* already disposed */ }
+                    var cts = new CancellationTokenSource();
+                    // Cancel watcher: RequestedStatus = Cancelled trips the command's token
+                    // (Activity Control Plane). Subscribed for the life of the run; disposed on
+                    // completion.
+                    var cancelWatch = workspace.GetMeshNodeStream(activityPath)
+                        .Select(n => (n?.Content as ActivityLog)?.RequestedStatus)
+                        .Where(s => s == ActivityStatus.Cancelled)
+                        .Take(1)
+                        .Subscribe(_ =>
+                        {
+                            logger?.LogInformation("Activity {Path} cancel requested", activityPath);
+                            try { cts.Cancel(); } catch { /* already disposed */ }
+                        });
+
+                    var ctx = new ActivityContext(activityPath, cts.Token,
+                        (msg, level) => Append(workspace, accessService, owner, activityPath, msg, level, logger));
+
+                    // Run the command; on terminal, write the final Status + dispose watcher/cts.
+                    return command(ctx)
+                        .DefaultIfEmpty(Unit.Default)
+                        .TakeLast(1)
+                        .SelectMany(_ => Finish(workspace, accessService, owner, activityPath, ActivityStatus.Succeeded, null, logger))
+                        .Catch<Unit, Exception>(ex =>
+                        {
+                            var cancelled = ex is OperationCanceledException || cts.IsCancellationRequested;
+                            logger?.LogWarning(ex, "Activity {Path} {Outcome}", activityPath,
+                                cancelled ? "cancelled" : "failed");
+                            return Finish(workspace, accessService, owner, activityPath,
+                                cancelled ? ActivityStatus.Cancelled : ActivityStatus.Failed,
+                                cancelled ? "Cancelled." : ex.Message, logger);
+                        })
+                        .Finally(() =>
+                        {
+                            cancelWatch.Dispose();
+                            cts.Dispose();
+                        })
+                        .Select(_ => activityPath);
                 });
-
-            var ctx = new ActivityContext(activityPath, cts.Token,
-                (msg, level) => Append(workspace, activityPath, msg, level, logger));
-
-            // Run the command; on terminal, write the final Status + dispose the watcher/cts.
-            return command(ctx)
-                .DefaultIfEmpty(Unit.Default)
-                .TakeLast(1)
-                .SelectMany(_ => Finish(workspace, activityPath, ActivityStatus.Succeeded, null, logger))
-                .Catch<Unit, Exception>(ex =>
-                {
-                    var cancelled = ex is OperationCanceledException || cts.IsCancellationRequested;
-                    logger?.LogWarning(ex, "Activity {Path} {Outcome}", activityPath,
-                        cancelled ? "cancelled" : "failed");
-                    return Finish(workspace, activityPath,
-                        cancelled ? ActivityStatus.Cancelled : ActivityStatus.Failed,
-                        cancelled ? "Cancelled." : ex.Message, logger);
-                })
-                .Finally(() =>
-                {
-                    cancelWatch.Dispose();
-                    cts.Dispose();
-                })
-                .Select(_ => activityPath);
         });
     }
 
+    /// <summary>
+    /// The owner identity to re-stamp on every activity-execution write. Reads the
+    /// created node's <see cref="MeshNode.CreatedBy"/> (the principal who triggered
+    /// the activity). Null for framework-owned nodes with no CreatedBy — Append/Finish
+    /// then leave the ambient untouched (the outer <c>FromNode</c> already chose System
+    /// for that case).
+    /// </summary>
+    private static AccessContext? OwnerContextOf(MeshNode created) =>
+        string.IsNullOrEmpty(created.CreatedBy)
+            ? null
+            : new AccessContext { ObjectId = created.CreatedBy, Name = created.CreatedBy };
+
     private static void Append(
-        IWorkspace workspace, string activityPath, string message, LogLevel level, ILogger? logger)
+        IWorkspace workspace, AccessService? accessService, AccessContext? owner,
+        string activityPath, string message, LogLevel level, ILogger? logger)
     {
-        workspace.GetMeshNodeStream(activityPath).Update(node =>
+        // 🚨 Re-establish the owner identity AT THIS write's .Update() invocation.
+        // ctx.Log fires from the command's own threads (IIoPool body, reactive
+        // hops) where the ambient AccessContext has cleared; MeshNodeStreamHandle.Update
+        // captures Context ?? CircuitContext synchronously here, so without re-stamping
+        // the cross-hub patch posts context-null → the partition's RLS denies → the
+        // progress line never lands. The owner can Update the partition (the satellite
+        // rule delegates there), so the write succeeds under their identity.
+        using (owner is not null && accessService is not null ? accessService.SwitchAccessContext(owner) : null)
         {
-            if (node.Content is not ActivityLog log) return node;
-            return node with { Content = log with { Messages = log.Messages.Add(new LogMessage(message, level)) } };
-        }).Subscribe(_ => { }, ex => logger?.LogWarning(ex, "Activity log append failed for {Path}", activityPath));
+            workspace.GetMeshNodeStream(activityPath).Update(node =>
+            {
+                if (node.Content is not ActivityLog log) return node;
+                return node with { Content = log with { Messages = log.Messages.Add(new LogMessage(message, level)) } };
+            }).Subscribe(_ => { }, ex => logger?.LogWarning(ex, "Activity log append failed for {Path}", activityPath));
+        }
     }
 
     private static IObservable<Unit> Finish(
-        IWorkspace workspace, string activityPath, ActivityStatus status, string? finalMessage, ILogger? logger)
+        IWorkspace workspace, AccessService? accessService, AccessContext? owner,
+        string activityPath, ActivityStatus status, string? finalMessage, ILogger? logger)
     {
-        return workspace.GetMeshNodeStream(activityPath).Update(node =>
+        // 🚨 Same owner re-stamp as Append: the terminal Status write fires on the
+        // command's completion hop, past the originating scope. Re-establish the owner
+        // so the partition RLS lets the write land — otherwise the activity hangs
+        // Running forever.
+        using (owner is not null && accessService is not null ? accessService.SwitchAccessContext(owner) : null)
         {
-            if (node.Content is not ActivityLog log) return node;
-            var messages = string.IsNullOrEmpty(finalMessage)
-                ? log.Messages
-                : log.Messages.Add(new LogMessage(finalMessage,
-                    status == ActivityStatus.Failed ? LogLevel.Error : LogLevel.Information));
-            return node with
+            return workspace.GetMeshNodeStream(activityPath).Update(node =>
             {
-                Content = log with { Messages = messages, Status = status, End = DateTime.UtcNow, RequestedStatus = null }
-            };
-        }).Select(_ => Unit.Default);
+                if (node.Content is not ActivityLog log) return node;
+                var messages = string.IsNullOrEmpty(finalMessage)
+                    ? log.Messages
+                    : log.Messages.Add(new LogMessage(finalMessage,
+                        status == ActivityStatus.Failed ? LogLevel.Error : LogLevel.Information));
+                return node with
+                {
+                    Content = log with { Messages = messages, Status = status, End = DateTime.UtcNow, RequestedStatus = null }
+                };
+            }).Select(_ => Unit.Default);
+        }
     }
 }
