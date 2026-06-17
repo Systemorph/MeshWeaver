@@ -25,11 +25,17 @@ public class ContentReferenceIntegrityTest
         .UseYamlFrontMatter()
         .Build();
 
+    // Mirror of the embedded NodeTypeIcons collection (src/MeshWeaver.Graph/Icons/**.svg),
+    // served at /static/NodeTypeIcons/. Keep in sync when adding an icon file there — a
+    // reference to a name not present here (or not on disk) renders as a broken <img>.
     private static readonly HashSet<string> KnownNodeTypeIcons = new(StringComparer.OrdinalIgnoreCase)
     {
-        "bot.svg", "building.svg", "chat.svg", "code.svg", "comment.svg", "document.svg",
-        "message.svg", "people.svg", "person.svg", "rocket.svg", "shield.svg",
-        "shopping-bag.svg", "truck.svg"
+        "bell.svg", "bot.svg", "box.svg", "building.svg", "chart.svg", "chat.svg",
+        "checkmark.svg", "code.svg", "comment.svg", "database.svg", "document.svg",
+        "folder.svg", "key.svg", "mail.svg", "meshweaver-logo.svg", "message.svg",
+        "organization.svg", "people.svg", "person.svg", "rocket.svg", "satellite.svg",
+        "settings.svg", "shield.svg", "shopping-bag.svg", "sparkle.svg", "task-list.svg",
+        "truck.svg"
     };
 
     #region Markdown Thumbnails

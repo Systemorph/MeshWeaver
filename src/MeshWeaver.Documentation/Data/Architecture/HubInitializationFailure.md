@@ -87,6 +87,6 @@ the regression), and exposes the `InitializationError` status marker.
 
 ## Related
 
-- [AsynchronousCalls.md](AsynchronousCalls.md) — why init is reactive (`IObservable`, no `await`).
-- [InitializationGates.md](InitializationGates.md) — the gate model and the framework-bypassed messages.
-- [DebuggingMessageFlow.md](DebuggingMessageFlow.md) — diagnosing a hub that won't process messages.
+- [AsynchronousCalls](../AsynchronousCalls) — why init is reactive (`IObservable`, no `await`).
+- [InitializationGates](../InitializationGates) — the gate model and the framework-bypassed messages.
+- [DebuggingMessageFlow](../DebuggingMessageFlow) — diagnosing a hub that won't process messages.
