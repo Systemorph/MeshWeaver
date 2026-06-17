@@ -78,8 +78,11 @@ public record ParsedQuery(
     {
         switch (node)
         {
+            // Equal → single namespace; In → a `namespace:A|B|C` alternation (membership filter,
+            // produced by the parser for the agent/extensible-defaults union). Both forms carry the
+            // namespace candidates the aggregator routes on, so collect Values for either operator.
             case QueryComparison c when c.Condition.Selector.Equals("namespace", StringComparison.OrdinalIgnoreCase)
-                && c.Condition.Operator == QueryOperator.Equal:
+                && c.Condition.Operator is QueryOperator.Equal or QueryOperator.In:
                 collected.AddRange(c.Condition.Values);
                 break;
             case QueryAnd and:

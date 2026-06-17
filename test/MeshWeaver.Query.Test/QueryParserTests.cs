@@ -737,6 +737,69 @@ public class QueryParserTests
 
     #endregion
 
+    #region Namespace Alternation (A|B|C exact membership — the agent / model registry union)
+
+    private static QueryCondition? FindCondition(QueryNode? node, string selector) => node switch
+    {
+        QueryComparison c when c.Condition.Selector.Equals(selector, System.StringComparison.OrdinalIgnoreCase)
+            => c.Condition,
+        QueryAnd a => a.Children.Select(ch => FindCondition(ch, selector)).FirstOrDefault(x => x != null),
+        QueryOr o => o.Children.Select(ch => FindCondition(ch, selector)).FirstOrDefault(x => x != null),
+        _ => null,
+    };
+
+    [Fact]
+    public void Parse_NamespaceAlternation_IsExactMembershipFilter()
+    {
+        // The canonical agent registry query. `namespace:A|B|C` lists the platform + space + user
+        // namespaces DIRECTLY — exact membership (`namespace IN (...)`), no ancestor/graph walk.
+        var result = _parser.Parse("nodeType:Agent namespace:rbuergi/Agent|AgenticPension/Agent|Agent");
+
+        // No single base namespace/scope survives — it's purely a filter, so no path-based walk.
+        result.Path.Should().BeNull();
+        result.Scope.Should().Be(QueryScope.Exact);
+
+        var ns = FindCondition(result.Filter, "namespace");
+        ns.Should().NotBeNull();
+        ns!.Operator.Should().Be(QueryOperator.In);
+        ns.Values.Should().BeEquivalentTo(new[] { "rbuergi/Agent", "AgenticPension/Agent", "Agent" },
+            System.Text.Json.JsonSerializerOptions.Default);
+
+        // The nodeType filter is still ANDed in alongside the namespace membership.
+        FindCondition(result.Filter, "nodeType")!.Value.Should().Be("Agent");
+
+        // Partition routing sees the namespace candidates (so the user + space schemas are queried).
+        result.ExtractNamespaces().Should().BeEquivalentTo(
+            new[] { "rbuergi/Agent", "AgenticPension/Agent", "Agent" },
+            System.Text.Json.JsonSerializerOptions.Default);
+    }
+
+    [Fact]
+    public void Parse_NamespaceAlternation_DedupesAndTrims()
+    {
+        var result = _parser.Parse("namespace:Agent|Agent|/Model/ nodeType:Agent");
+
+        var ns = FindCondition(result.Filter, "namespace");
+        ns!.Operator.Should().Be(QueryOperator.In);
+        ns.Values.Should().BeEquivalentTo(new[] { "Agent", "Model" },
+            System.Text.Json.JsonSerializerOptions.Default);
+    }
+
+    [Fact]
+    public void Parse_SingleNamespace_Unchanged_StaysPathScoped()
+    {
+        // A SINGLE namespace (no alternation) is deliberately left untouched — still a base namespace
+        // + scope walk — so existing Role/Group/AccessAssignment callers keep their behaviour. Only
+        // the `|` alternation form becomes an exact-membership filter.
+        var result = _parser.Parse("namespace:ACME/Project nodeType:Role scope:selfAndAncestors");
+
+        result.Path.Should().Be("ACME/Project");
+        result.Scope.Should().Be(QueryScope.AncestorsAndSelf);
+        FindCondition(result.Filter, "namespace").Should().BeNull("single namespace is NOT a filter");
+    }
+
+    #endregion
+
     #region Children Scope
 
     [Fact]
