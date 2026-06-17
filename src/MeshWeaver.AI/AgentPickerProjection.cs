@@ -185,11 +185,21 @@ public static class AgentPickerProjection
     }
 
     /// <summary>
-    /// 🚨 The EXACT pipeline the chat agent combobox is bound to (via the PORTAL hub, so the
-    /// per-user RLS of <c>hub.GetQuery</c> applies the caller's identity). The view subscribes to
-    /// this; tests subscribe to this. No parallel reconstruction of queries / projection anywhere.
+    /// 🚨 The EXACT pipeline the chat agent combobox is bound to. The view subscribes to this; tests
+    /// subscribe to this. No parallel reconstruction of queries / projection anywhere.
     /// <paramref name="spacePath"/> is the current space partition; <paramref name="userPath"/> the
     /// user's home partition — their <c>/Agent</c> namespaces plus the platform default are listed.
+    ///
+    /// <para>🚨🚨 <b><paramref name="hub"/> MUST be a hub LOCAL TO THE CALLER'S CONTEXT — the
+    /// <b>portal hub</b> (the GUI / Blazor circuit, carrying the user's identity) or the <b>thread
+    /// hub</b> (thread execution, carrying the thread OWNER's identity).</b> The query reads the
+    /// per-partition <c>{user}/Agent</c> + <c>{space}/Agent</c> namespaces via <c>hub.GetQuery</c>,
+    /// whose per-user RLS keys off the hub's AccessContext. Pass a SERVER-SIDE layout-area hub (a
+    /// node's per-node hub) and you get the hub principal, NOT the user — RLS strips the
+    /// user/space namespaces (empty dropdown) AND the cross-partition subscribe STORMS the portal
+    /// (the 2026-06-17 atioz wedge: a server-side combobox in ThreadComposerView). GUI →
+    /// <c>BlazorView.Hub</c> (= <c>PortalApplication.Hub</c>); exec → <c>ThreadExecution</c>'s
+    /// <c>parentHub</c>. NEVER a <c>LayoutAreaHost.Hub</c> for the per-partition query.</para>
     /// </summary>
     public static IObservable<IReadOnlyList<AgentDisplayInfo>> ObserveAgents(
         IMessageHub hub, string? userPath = null, string? spacePath = null)

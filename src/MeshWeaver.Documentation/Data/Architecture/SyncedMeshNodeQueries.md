@@ -163,6 +163,17 @@ hub.GetQuery($"nav-above:{path}", $"path:{path} scope:ancestors is:main");
 >
 > The canonical shape is what `AgentPickerProjection.BuildModelQueries` produces: one nodeType filter, varying namespaces and scopes. `BuildAgentQuery` collapses its whole union into a **single** query via the `namespace:A|B|C` exact-membership alternation (see [Query Syntax](/Doc/DataMesh/QuerySyntax)), so the gating rule is trivially satisfied. See [ModelProviders.md](/Doc/Architecture/ModelProviders) for a worked multi-query example.
 
+### 🚨🚨 Run `GetQuery` on a hub LOCAL to the context — never a server-side layout hub
+
+`hub.GetQuery` / `workspace.GetQuery` apply **per-user RLS keyed off the hub's `AccessContext`** (the cache is keyed by `(id, userId)`; the secured upstream filters per-result under that identity — see [Access Control](/Doc/Architecture/AccessControl)). So **the hub you call it on decides whose data you see.** A query that touches **partition-scoped** namespaces (e.g. the agent registry's `{user}/Agent` + `{space}/Agent`) MUST run on a hub that carries the right identity:
+
+| Context | Hub to use | Identity it carries |
+|---|---|---|
+| GUI / Blazor circuit (combobox, `/agent` picker) | the **portal hub** — `BlazorView.Hub` (`= PortalApplication.Hub`) | the signed-in **user** |
+| Thread execution (engine agent/model selection) | the **thread hub** — `ThreadExecution`'s `parentHub` (`new AgentChatClient(parentHub.ServiceProvider)`) | the thread **owner** |
+
+> **NEVER issue a partition-scoped `GetQuery` from a server-side `LayoutAreaHost.Hub`** (a per-node layout hub). That hub's `AccessContext` is the **hub principal**, not the user, so per-user RLS strips the `{user}`/`{space}` namespaces (the combobox renders **empty**) AND the cross-partition subscribe under a denied identity **storms the portal into a wedge**. This was the 2026-06-17 atioz outage: a server-side agent combobox in `ThreadComposerView` injected `namespace:{user}/Agent|{space}/Agent|Agent` from the composer-node layout hub. The fix: drive selection from the GUI (`ThreadChatView.OpenPicker` on the portal hub) and from the engine (`AgentChatClient` on the thread hub) — both context-local. A **public** query (`namespace:Agent`, `namespace:Command`) is exempt — it has no partition-scoped namespace to gate, so it is safe from any hub.
+
 ---
 
 ## Caching by id
