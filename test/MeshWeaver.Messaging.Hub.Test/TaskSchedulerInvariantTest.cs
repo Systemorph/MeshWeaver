@@ -33,7 +33,9 @@ public class TaskSchedulerInvariantTest(ITestOutputHelper output) : HubTestBase(
     {
         var hub = Mesh.GetHostedHub(
             CreateHostAddress(),
-            cfg => cfg.WithHandler<WhereAmIRequest>((h, request) =>
+            // Scheduler-plumbing fixture with no user → posts as infrastructure (System),
+            // per the never-null AccessContext invariant (feedback_access_context_always_set).
+            cfg => cfg.WithPostingIdentity(PostingIdentity.System).WithHandler<WhereAmIRequest>((h, request) =>
             {
                 var current = TaskScheduler.Current;
                 h.Post(new WhereAmIResponse(current.Id, current.GetType().FullName ?? "?"),
@@ -64,6 +66,7 @@ public class TaskSchedulerInvariantTest(ITestOutputHelper output) : HubTestBase(
         var hub = Mesh.GetHostedHub(
             CreateHostAddress(),
             cfg => cfg.WithTaskScheduler(customScheduler)
+                .WithPostingIdentity(PostingIdentity.System) // plumbing fixture → System (see above)
                 .WithHandler<WhereAmIRequest>((h, request) =>
                 {
                     var current = TaskScheduler.Current;
@@ -98,13 +101,14 @@ public class TaskSchedulerInvariantTest(ITestOutputHelper output) : HubTestBase(
         var parent = Mesh.GetHostedHub(
             CreateHostAddress(),
             cfg => cfg.WithTaskScheduler(parentScheduler)
+                .WithPostingIdentity(PostingIdentity.System) // plumbing fixture → System (see above)
                 .WithHandler<WhereAmIRequest>((h, request) =>
                 {
                     // Create a hosted sub-hub from inside the parent's handler â€” TaskScheduler.Current
                     // is parentScheduler at this point. The sub-hub MUST NOT inherit it.
                     var subHub = h.GetHostedHub(
                         subAddress,
-                        subCfg => subCfg.WithHandler<WhereAmIRequest>((sh, subReq) =>
+                        subCfg => subCfg.WithPostingIdentity(PostingIdentity.System).WithHandler<WhereAmIRequest>((sh, subReq) =>
                         {
                             var subCurrent = TaskScheduler.Current;
                             var subResponse = new WhereAmIResponse(subCurrent.Id, subCurrent.GetType().FullName ?? "?");

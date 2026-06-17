@@ -30,9 +30,16 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// messages (Initialize/Heartbeat/Shutdown/Dispose/Subscribe) stay exempt
 /// from the warning because they carry no security-relevant payload.</para>
 ///
-/// <para>Four tests below pin the new behaviour: sub-hub fails closed, mesh
-/// hub fails closed (unchanged), explicit ImpersonateAsSystem propagates,
-/// explicit ImpersonateAsHub propagates.</para>
+/// <para><b>Update (2026-06-17) — the never-null tripwire.</b> The user's
+/// one-invariant mandate (<c>feedback_access_context_always_set</c>):
+/// <c>AccessContext must ALWAYS be set</c>. So the old "fail closed silently
+/// to null" is now a THROW for application posts. A post with no resolved
+/// context (and not exempt as <c>[SystemMessage]</c> / <c>[CanBeIgnored]</c> /
+/// <c>DeliveryFailure</c>) is a GAP — the post lost the user identity — so
+/// <see cref="MessageHub.Post{TMessage}"/> throws synchronously
+/// (<see cref="InvalidOperationException"/>) to surface it. The two tests below
+/// that used to assert "leaves null" now assert the throw fires; the two
+/// Impersonate tests are unchanged (explicit identity propagates).</para>
 /// </summary>
 public class PostPipelineAccessContextTest(ITestOutputHelper output) : HubTestBase(output)
 {
@@ -62,68 +69,67 @@ public class PostPipelineAccessContextTest(ITestOutputHelper output) : HubTestBa
             });
 
     /// <summary>
-    /// A non-mesh hub (the test client at <c>client/1</c>) posts WITHOUT
-    /// any user context set. After the 2026-05-21 cleanup, expectation:
-    /// PostPipeline fails closed — the receiver sees a NULL AccessContext.
+    /// VERIFICATION (b) of the never-null mandate: an APPLICATION post with no
+    /// resolved context is FAILED IMMEDIATELY (no identity, no delivery). A
+    /// non-mesh hub (the test client at <c>client/1</c>) posts an ordinary
+    /// <c>IRequest</c> WITHOUT any user context set — the post lost the user
+    /// identity, which under the never-null invariant is a gap. The PostPipeline
+    /// logs an ERROR and returns <c>delivery.Failed(...)</c>, which surfaces to
+    /// the awaiting <c>hub.Observe(...)</c> as a <c>DeliveryFailureException</c>
+    /// (OnError) — NOT a synchronous throw out of Post (Post is fire-and-forget
+    /// from countless callsites; a synchronous throw there would be unobserved
+    /// or crash an unrelated path).
     ///
-    /// <para>This inverts the previous assertion: hub-self-impersonation
-    /// was deleted because it silently masked the prod EventCalendar bug
-    /// (background activations writing as <c>sync/...</c> / <c>activity/...</c>
-    /// → denied because those addresses match no AccessAssignment). Legitimate
-    /// hub-internal flows now MUST opt in explicitly — see the two
-    /// <c>ImpersonateAs...</c> tests below.</para>
+    /// <para>This replaces the old "fail closed silently to null" assertion.
+    /// Silently leaving null still masked the bug class (the empty agent
+    /// registry, the prod EventCalendar bug). Failing the delivery + logging an
+    /// error is the tripwire the user asked for. Legitimate hub-internal flows
+    /// opt in explicitly (the two <c>ImpersonateAs...</c> tests below) or are
+    /// exempt (<c>[SystemMessage]</c> / <c>[CanBeIgnored]</c> /
+    /// <c>DeliveryFailure</c>).</para>
     /// </summary>
     [Fact]
-    public async Task SubHub_with_no_user_context_leaves_context_null_and_fails_closed()
+    public async Task Application_post_with_no_user_context_FAILS_the_delivery()
     {
-        var client = GetClient();
+        // A USER-mode hub (the default for user-facing hubs in production). HubTestBase
+        // declares its plumbing fixtures as System; opt this hub back into User to assert
+        // the user-identity never-null behaviour.
+        var client = GetClient(c => c.WithPostingIdentity(PostingIdentity.User));
 
-        var response = await client
+        var notification = await client
             .Observe(new CaptureContextRequest(), o => o.WithTarget(CreateHostAddress()))
-            .Should().Within(10.Seconds()).Emit();
+            .Materialize()
+            .Should().Within(10.Seconds()).Match(n => n.Kind == System.Reactive.NotificationKind.OnError);
 
-        response.Message.HasAccessContext.Should().BeFalse(
-            because: "after the 2026-05-21 cleanup the PostPipeline fails closed when no " +
-                     "ambient context is set — for ALL hub kinds, not just mesh. Legitimate " +
-                     "hub-internal flows must wrap with PostOptions.ImpersonateAsHub or " +
-                     "AccessService.ImpersonateAsSystem at the callsite. Silently stamping " +
-                     "the hub address was the silent-mask the prod EventCalendar bug " +
-                     "depended on.");
+        notification.Exception!.Message.Should().Contain("AccessContext must never be null",
+            because: "the never-null AccessContext invariant: an application post that resolves " +
+                     "no context is a gap — the post lost the user identity. The PostPipeline " +
+                     "fails the delivery (no identity, no delivery) so the awaiting Observe gets " +
+                     "OnError rather than a silent null-context delivery.");
     }
 
     /// <summary>
-    /// The mesh hub posts WITHOUT any user context set. Expectation:
-    /// PostPipeline does NOT fall back to mesh-self-impersonation
-    /// (would stamp <c>mesh/{guid}</c> as a fake principal, the bug
-    /// commit <c>08a9a27c1</c> set out to fix). The delivery arrives with
-    /// AccessContext null and downstream code is expected to fail-closed.
-    ///
-    /// In practice the mesh hub almost never posts on its own behalf —
-    /// callers wrap with <c>ImpersonateAsHub</c> / <c>ImpersonateAsSystem</c>.
-    /// This test is the negative pin: if anyone reintroduces the mesh-side
-    /// fallback, it will fail.
+    /// The mesh hub is framework infrastructure (declared <see cref="PostingIdentity.System"/>
+    /// by <c>HubTestBase</c>) — its own otherwise-unattributed posts run as
+    /// <c>system-security</c>, NOT a null and NOT a self-impersonated <c>mesh/{guid}</c>
+    /// (the bug commit <c>08a9a27c1</c> guarded against). So a no-context post from the
+    /// mesh hub is delivered AS SYSTEM.
     /// </summary>
     [Fact]
-    public async Task Mesh_hub_with_no_user_context_does_NOT_self_impersonate()
+    public async Task Mesh_hub_no_user_context_posts_as_system_not_as_mesh_address()
     {
-        var meshHub = Mesh; // injected by HubTestBase — Address = mesh/1
+        var meshHub = Mesh; // injected by HubTestBase — Address = mesh/1, PostingIdentity.System
 
         var response = await meshHub
             .Observe(new CaptureContextRequest(), o => o.WithTarget(CreateHostAddress()))
             .Should().Within(10.Seconds()).Emit();
 
-        // The response can come back with no AccessContext — that's the
-        // documented fail-closed behaviour for mesh-typed senders.
-        // We only require: NOT identified as `mesh/...`. If a mesh-fallback
-        // crept back in, ObjectId would start with "mesh/" and SecurityService
-        // would silently match no AAs → the original prod bug.
-        if (response.Message.HasAccessContext)
-        {
-            response.Message.ObjectId.Should().NotStartWith("mesh/",
-                because: "the mesh hub must never identify itself as `mesh/{guid}` " +
-                         "when posting — that's the exact silent-mismatch the fail-closed " +
-                         "branch was added to prevent (commit 08a9a27c1).");
-        }
+        response.Message.HasAccessContext.Should().BeTrue(
+            because: "an infrastructure (System) hub never posts with a null context");
+        response.Message.ObjectId.Should().Be("system-security");
+        response.Message.ObjectId.Should().NotStartWith("mesh/",
+            because: "the mesh hub must never identify itself as mesh/{guid} — System is the " +
+                     "sanctioned infrastructure identity (commit 08a9a27c1)");
     }
 
     /// <summary>

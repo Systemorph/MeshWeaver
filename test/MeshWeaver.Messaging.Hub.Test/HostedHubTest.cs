@@ -33,7 +33,10 @@ public class HostedHubTest(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
         var subHub =
             client.ServiceProvider.CreateMessageHub(new Address("new", "1"),
+                // Plumbing fixture with no user → posts as infrastructure (System), per the
+                // never-null AccessContext invariant (feedback_access_context_always_set).
                 conf => conf.WithTypes(typeof(Ping), typeof(Pong))
+                    .WithPostingIdentity(PostingIdentity.System)
                 );
         var response = await subHub
             .Observe(new Ping(), o => o.WithTarget(CreateHostAddress())).Should().Within(5.Seconds()).Emit();

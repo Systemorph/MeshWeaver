@@ -141,13 +141,22 @@ namespace MeshWeaver.Hosting
                 || delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>()
                 || Mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
                 return;
-            Mesh.Post(new DeliveryFailure(delivery)
-            {
-                Message = ex.Message,
-                ExceptionType = ex.GetType().Name,
-                StackTrace = ex.StackTrace!
-            },
-                o => o.ResponseFor(delivery));
+            // 🚨 Routing infrastructure's OWN post. ResponseFor carries the failed
+            // request's identity when it had one; when it didn't, run under System so
+            // the courier's NACK is never attributed to a null principal (the routing
+            // courier bypasses access control — feedback_access_context_always_set).
+            // ResponseFor's ImpersonateContext (the request's real user) takes precedence
+            // over the System AsyncLocal at delivery construction, so a known user is
+            // never overwritten by System.
+            var access = Mesh.ServiceProvider.GetService<AccessService>();
+            using (delivery.AccessContext is null ? access?.ImpersonateAsSystem() : null)
+                Mesh.Post(new DeliveryFailure(delivery)
+                {
+                    Message = ex.Message,
+                    ExceptionType = ex.GetType().Name,
+                    StackTrace = ex.StackTrace!
+                },
+                    o => o.ResponseFor(delivery));
         }
 
         /// <summary>
@@ -329,12 +338,16 @@ namespace MeshWeaver.Hosting
                 && !delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>()
                 && Mesh.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
             {
-                Mesh.Post(
-                    new DeliveryFailure(delivery)
-                    {
-                        ErrorType = ErrorType.NotFound,
-                        Message = failureMessage
-                    }, o => o.ResponseFor(delivery));
+                // 🚨 Routing infrastructure's OWN NotFound NACK. As in NackRouteFailure:
+                // ResponseFor carries the request's user when known; else System, never null.
+                var access = Mesh.ServiceProvider.GetService<AccessService>();
+                using (delivery.AccessContext is null ? access?.ImpersonateAsSystem() : null)
+                    Mesh.Post(
+                        new DeliveryFailure(delivery)
+                        {
+                            ErrorType = ErrorType.NotFound,
+                            Message = failureMessage
+                        }, o => o.ResponseFor(delivery));
             }
             return delivery.Failed(failureMessage);
         }

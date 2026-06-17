@@ -11,6 +11,54 @@ This document explains the model, the six propagation phases, the sanctioned exc
 
 ---
 
+## 🚨🚨🚨 THE INVARIANT: AccessContext must ALWAYS be set — never null
+
+**Every message a hub posts carries an `AccessContext`. There is no null, and there is no fourth source — exactly three:**
+
+| Source | Who | How |
+|---|---|---|
+| **User** | User-facing hubs — the per-circuit portal hub, HTTP-request hubs, per-node hubs handling a user's request | The user's `AccessContext` is live on the AsyncLocal (`AccessService.Context` / `CircuitContext`) when the hub posts. This is the **default** posting identity. |
+| **System** | Framework infrastructure — **routing** (the courier) and **persistence** (the store) | The hub is declared `WithPostingIdentity(PostingIdentity.System)`; its own otherwise-unattributed posts are stamped `system-security` automatically (bypasses RLS — the courier/store is not user-gated). |
+| **Owner** | Threads & activities | `AccessContextScope.FromNode(node)` → `node.CreatedBy` — the post runs under the thread/activity owner's credential. |
+
+### Posting identity is a per-hub CONFIGURATION decision, declared at hub startup
+
+It must be **unambiguous which identity a hub posts under** — this is a config property, not a per-callsite concern. Set it once when the hub is built:
+
+```csharp
+// DEFAULT — user-facing hub. Posts as the ambient user; UNHAPPY when no user context.
+config                                              // PostingIdentity.User (implicit)
+
+// Framework infrastructure (routing, persistence). Posts as system-security.
+config.WithPostingIdentity(PostingIdentity.System)
+```
+
+The three modes (`PostingIdentity` enum, consumed by `UserServicePostPipeline`):
+
+1. **`User` (default).** The hub posts as the user — it **wants the identity set on the AsyncLocal `AccessService.Context`**. When that AsyncLocal is **not set** and the message is not exempt, the post is **UNHAPPY**: the PostPipeline **logs an error** (the CI tripwire on the `MeshWeaver.AccessContext` channel) and **fails the delivery immediately** — *no identity, no delivery*. The awaiting `hub.Observe(...)` gets a clean `OnError`; the post is **never** thrown out of `Post` (Post is fire-and-forget from countless callsites — a synchronous throw would be unobserved or crash an unrelated path) and **never** silently left null (that masked the empty-agent-registry / prod EventCalendar bug).
+2. **`System`.** Routing and persistence. The hub's own otherwise-unattributed posts are stamped `system-security`. **Never overwrites** a user identity already on the delivery (a forwarded user delivery, or a response inheriting the request's identity via `ResponseFor`) — System is only the fallback for the hub's OWN posts.
+3. **Cannot post → fail the delivery.** The `User`-mode fallback above *is* this: a hub that can resolve no identity does not get to post a non-exempt application message.
+
+### Exempt traffic — the only messages that may carry a null context
+
+Genuinely identity-free framework traffic is exempt from the never-null rule and is delivered (not failed) even with no context:
+
+- **`[SystemMessage]`** — heartbeats, hub-lifecycle, subscription management, `SetCurrentRequest`, `Save/DeleteMeshNodeRequest`.
+- **`[CanBeIgnored]`** — fire-and-forget control (Shutdown / Dispose / HeartBeat) with no awaiting requester.
+- **`DeliveryFailure`** — the courier's own error channel (inherits the request's identity via `ResponseFor` when there is one; failing it would turn a NACK into a NACK-of-a-NACK).
+
+### 🚨 Cross-cutting: only hubs REGISTERED IN THE MESH may post
+
+This invariant only holds if **every posting hub is a real, registered participant in the mesh** — exactly how the portal hub is keyed and registered (`PortalApplication` → `hub.GetHostedHub(CreatePortalAddress(circuitId), …)`, one hub per circuit, addressable + routable). **A hub that is not registered in the mesh is not allowed to post** — *except a hosted hub*, which is registered with (and owned by) its parent via `GetHostedHub`. The rule:
+
+- **Posting hub ⇒ registered hub.** If something needs to originate messages, give it a proper mesh address and register it (a top-level hub in the mesh catalog, or a hosted sub-hub under a registered parent). Don't post from an ad-hoc, unaddressable object.
+- **Declare its posting identity at registration.** A registered user-facing hub defaults to `User` and must carry the user's context; a registered infrastructure hub is `WithPostingIdentity(System)`.
+- **The portal is the worked example.** It is per-circuit, keyed on the stable circuit id, carries the circuit user (via `ICircuitContextAccessor.UserContext` → a per-hub PostPipeline step that stamps the circuit user when a post has no ambient context), and is reachable through the mesh's stream-routed `portal/*` address type. Mirror that shape for any new posting hub.
+
+This is a **cross-cutting concern**: it touches hub construction (`MessageHubConfiguration.WithPostingIdentity`), the post pipeline (`UserServicePostPipeline`), the circuit/auth boundary (`CircuitAccessHandler` → `CircuitContextAccessor`), routing and persistence (declared `System`), and every hub-registration site. Reference: memory `feedback_access_context_always_set`; tests `AccessContextNeverNullTest`, `PostPipelineAccessContextTest`, `SubscribeRequestIdentityRoutingTest`.
+
+---
+
 ## Mental model — piecewise single-threaded flow
 
 Think of the system as a chain of short, synchronous pieces of work. At any moment, exactly one piece is running on one thread under one principal. That principal is the **identity baton**.

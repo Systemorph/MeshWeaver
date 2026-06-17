@@ -94,6 +94,26 @@ public record MessageHubConfiguration
     public MessageHubConfiguration WithTaskScheduler(TaskScheduler scheduler)
         => this with { TaskScheduler = scheduler };
 
+    /// <summary>
+    /// Declares UNDER WHICH IDENTITY this hub posts — the never-null AccessContext
+    /// invariant made an explicit, per-hub configuration decision rather than a
+    /// per-callsite concern (<c>feedback_access_context_always_set</c>). See
+    /// <see cref="PostingIdentity"/> for the three-source contract.
+    ///
+    /// <para>Default <see cref="PostingIdentity.User"/>: the hub posts as the user and
+    /// is UNHAPPY (logs an error + fails the delivery) when it posts a non-exempt
+    /// application message with no ambient user context. Set
+    /// <see cref="PostingIdentity.System"/> for framework infrastructure (routing,
+    /// persistence) whose own posts run as System automatically.</para>
+    /// </summary>
+    public PostingIdentity PostingIdentity { get; init; } = PostingIdentity.User;
+
+    /// <summary>
+    /// Declares this hub's posting identity. See <see cref="PostingIdentity"/>.
+    /// </summary>
+    public MessageHubConfiguration WithPostingIdentity(PostingIdentity identity)
+        => this with { PostingIdentity = identity };
+
     internal Func<IServiceCollection, IServiceCollection> Services { get; init; } = x => x;
 
     public IServiceProvider ServiceProvider { get; set; } = null!;
@@ -300,9 +320,22 @@ public record MessageHubConfiguration
     {
         var userService = syncPipeline.Hub.ServiceProvider.GetService<AccessService>();
         var logger = syncPipeline.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.AccessContext");
+        // The hub's declared posting identity (feedback_access_context_always_set):
+        //   User (default) → post as the ambient user; UNHAPPY (error + fail delivery)
+        //     when no user context is set for a non-exempt message.
+        //   System (routing, persistence) → the hub's own otherwise-unattributed posts
+        //     run as system-security automatically.
+        // 🚨 Read from the LIVE hub Configuration, NOT this instance's field: PostPipeline
+        // captured the UserServicePostPipeline method-group delegate against the
+        // configuration instance at constructor time, BEFORE any `with { PostingIdentity }`
+        // copy. syncPipeline.Hub.Configuration is the final, fully-`with`'d configuration,
+        // so it carries the declared value.
+        var postingIdentity = syncPipeline.Hub.Configuration.PostingIdentity;
         return syncPipeline.AddPipeline((d, next) =>
         {
-            // If AccessContext was pre-set by ImpersonateAsHub(), don't overwrite
+            // If AccessContext was pre-set by ImpersonateAsHub() / ImpersonateAsSystem()
+            // / WithAccessContext() / ResponseFor() / a forwarded user delivery, don't
+            // overwrite — that explicit identity wins over the hub's default mode.
             if (d.AccessContext is not null)
                 return next(d);
 
@@ -313,38 +346,69 @@ public record MessageHubConfiguration
             {
                 d = d.SetAccessContext(context);
             }
-            else
+            else if (postingIdentity == PostingIdentity.System && !IsAccessContextExempt(d.Message))
             {
-                // 🚨 2026-05-21 — single fail-closed branch for ALL hub kinds.
-                // Previously this had a two-tier fallback: mesh hubs failed
-                // closed, every other hub kind silently stamped its own address
-                // as principal. That fallback was the prod 2026-05-21 hot spot
-                // — background activations of dynamic NodeTypes posted
-                // CreateNode requests with no Context/CircuitContext, the
-                // pipeline stamped "sync/...", "activity/...", "node/..." as
-                // principal, AccessControl denied because those addresses match
-                // no AccessAssignment, App Insights filled with
-                //   "Access denied: user 'sync/...' lacks Create permission".
-                //
-                // User directive (verbatim): "we should NEVER write something
-                // as hub". Legitimate hub-internal flows (SyncStream's
-                // SetCurrentRequest, framework-lifecycle messages) MUST opt in
-                // explicitly via PostOptions.ImpersonateAsHub /
-                // AccessService.ImpersonateAsHub / ImpersonateAsSystem at the
-                // callsite — see JsonSynchronizationStream.cs for the proven
-                // pattern. Framework-lifecycle messages are still exempted
-                // from the warning since they carry no security-relevant
-                // payload and routinely have no principal.
-                if (!IsFrameworkLifecycleMessage(d.Message))
+                // 🚨 SYSTEM-IDENTITY HUB (routing / persistence — the courier and the
+                // store). Its own otherwise-unattributed posts run as System: stamp the
+                // well-known system-security identity (granted Permission.All) so the
+                // post is never null and never fail-closed. Declared once at hub startup
+                // via WithPostingIdentity(PostingIdentity.System) instead of every
+                // callsite remembering ImpersonateAsSystem. Exempt messages
+                // ([SystemMessage]/[CanBeIgnored]/DeliveryFailure) keep their null —
+                // they carry no security-relevant payload.
+                d = d.SetAccessContext(new AccessContext
                 {
-                    logger?.LogWarning(
-                        "PostPipeline: hub={Hub}, message={MessageType} posted with no AccessContext " +
-                        "(no Context, no CircuitContext) — leaving AccessContext null so downstream " +
-                        "fails closed. Wrap intentional hub-internal writes with " +
-                        "PostOptions.ImpersonateAsHub / AccessService.ImpersonateAsSystem.",
-                        syncPipeline.Hub.Address,
-                        d.Message?.GetType().Name ?? "(null)");
-                }
+                    ObjectId = SystemSecurityObjectId,
+                    Name = SystemSecurityObjectId
+                });
+            }
+            else if (!IsAccessContextExempt(d.Message))
+            {
+                // 🚨 NEVER-NULL INVARIANT (feedback_access_context_always_set):
+                // AccessContext must ALWAYS be set. Three sources, no fourth —
+                // infrastructure → System, user-contexts → the user,
+                // threads/activities → the owner. Once those sources are wired,
+                // there is no legitimate application post with a null resolved
+                // context — a null here is a GAP.
+                //
+                // NO IDENTITY, NO DELIVERY. We do NOT throw (this runs
+                // synchronously inside Post, called from countless fire-and-forget
+                // callsites where a synchronous throw would be unobserved or crash
+                // an unrelated path). Instead we LOG AN ERROR (naming the sending
+                // hub + target so the null source is identifiable) and FAIL THE
+                // DELIVERY immediately — return delivery.Failed(...) and short-
+                // circuit the rest of the pipeline. ScheduleNotify still enqueues
+                // the Failed delivery; NotifyAsync detects State == Failed and
+                // ReportFailure posts a DeliveryFailure back to the sender, so an
+                // awaiting hub.Observe(...) gets a clean OnError instead of a
+                // silent null-context delivery that fails closed deep in
+                // AccessControl. The error log is the tripwire — CI parses the
+                // `MeshWeaver.AccessContext` channel for `[Error]` lines, so every
+                // gap surfaces loudly and gets fixed at its source.
+                //
+                // Genuine identity-free framework traffic is EXEMPT (see
+                // IsAccessContextExempt): [SystemMessage] (heartbeats, hub-lifecycle,
+                // SetCurrentRequest, Save/DeleteMeshNodeRequest), [CanBeIgnored]
+                // (Shutdown/Dispose/HeartBeat), and DeliveryFailure (the courier's
+                // own error channel). Infrastructure that legitimately bypasses RLS
+                // opts in EXPLICITLY at the callsite via ImpersonateAsSystem /
+                // ImpersonateAsHub (routing's own posts, persistence, cache
+                // hydration) — that sets d.AccessContext before this pipeline runs,
+                // so it short-circuits above and never reaches here. The portal hub
+                // stamps the circuit user via its own PortalApplication PostPipeline
+                // step (the SOURCE fix), so its layout/agent/model subscribes carry
+                // the user and never trip this.
+                var failureReason =
+                    $"AccessContext must never be null for an application post — no identity, no delivery. " +
+                    $"hub={syncPipeline.Hub.Address}, message={d.Message?.GetType().Name ?? "(null)"}, " +
+                    $"target={d.Target?.ToString() ?? "(null)"} was posted with no AccessContext " +
+                    $"(no Context, no CircuitContext). The post lost the user identity. Wire its source: " +
+                    $"user-context from the circuit/HTTP user; infrastructure via " +
+                    $"AccessService.ImpersonateAsSystem / PostOptions.ImpersonateAsHub; threads/activities " +
+                    $"via AccessContextScope.FromNode. See AccessContextPropagation.md / " +
+                    $"feedback_access_context_always_set.";
+                logger?.LogError("PostPipeline: {FailureReason}", failureReason);
+                return d.Failed(failureReason);
             }
             // Per-message; gate on Debug so the 5 arg evaluations + boxing are
             // skipped when not enabled.
@@ -370,6 +434,13 @@ public record MessageHubConfiguration
     /// <see cref="PostOptions.ResponseFor"/>, so they get proper identity
     /// without needing an exemption.
     /// </summary>
+    // The well-known System identity. Must match
+    // AccessService.ImpersonateAsSystem's literal and
+    // MeshWeaver.Mesh.Security.WellKnownUsers.System; we don't reference that
+    // constant here because Messaging.Hub sits below Mesh.Contract in the project
+    // graph and adding the dep would invert it (same rationale as ImpersonateAsSystem).
+    private const string SystemSecurityObjectId = "system-security";
+
     private static bool IsFrameworkLifecycleMessage(object? message)
     {
         if (message is null) return false;
@@ -379,6 +450,36 @@ public record MessageHubConfiguration
     }
 
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, bool> _systemMessageCache = new();
+
+    /// <summary>
+    /// True when a null <c>AccessContext</c> is legitimate for this message and the
+    /// never-null tripwire (<see cref="UserServicePostPipeline"/>) must NOT throw.
+    /// The exempt set is exactly the genuinely identity-free framework traffic:
+    /// <list type="bullet">
+    /// <item><b><see cref="SystemMessageAttribute"/></b> — heartbeats, hub-lifecycle,
+    /// subscription management, <c>SetCurrentRequest</c>, <c>Save/DeleteMeshNodeRequest</c>
+    /// (per-node-hub self-writes). Carry no security-relevant payload.</item>
+    /// <item><b><see cref="CanBeIgnoredAttribute"/></b> — fire-and-forget control traffic
+    /// (Shutdown / Dispose / HeartBeat) with no awaiting requester.</item>
+    /// <item><b><see cref="DeliveryFailure"/></b> — the courier's OWN error channel. It
+    /// inherits the request's identity via <c>PostOptions.ResponseFor</c> when the request
+    /// had one; throwing here would turn a NACK into a NACK-of-a-NACK and break routing's
+    /// error reporting (it is already treated as non-NACKable in
+    /// <c>RoutingServiceBase</c> / <c>HierarchicalRouting</c>).</item>
+    /// </list>
+    /// Everything else is an application post and MUST carry an identity (user, System, or
+    /// owner) — a null is a real gap to fix at the source, surfaced by the throw.
+    /// </summary>
+    private static bool IsAccessContextExempt(object? message)
+    {
+        if (message is null) return true; // nothing to attribute
+        if (message is DeliveryFailure) return true;
+        if (IsFrameworkLifecycleMessage(message)) return true;
+        return _canBeIgnoredCache.GetOrAdd(message.GetType(),
+            static t => t.GetCustomAttributes(typeof(CanBeIgnoredAttribute), inherit: true).Length > 0);
+    }
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, bool> _canBeIgnoredCache = new();
 
     internal ImmutableList<Func<AsyncPipelineConfig, AsyncPipelineConfig>> DeliveryPipeline { get; set; }
     internal TimeSpan? StartupTimeout { get; init; } //= new(0, 0, 30); // Default 10 seconds
