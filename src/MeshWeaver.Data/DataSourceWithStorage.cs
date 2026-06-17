@@ -24,6 +24,9 @@ public abstract record UnpartitionedDataSourceWithStorage<TDataSource, TTypeSour
         c => c
     );
 
+    private readonly AccessService? accessService =
+        Workspace.Hub.ServiceProvider.GetService<AccessService>();
+
     private readonly ILogger logger = Workspace.Hub.ServiceProvider.GetRequiredService<
         ILogger<TDataSource>
     >();
@@ -35,7 +38,21 @@ public abstract record UnpartitionedDataSourceWithStorage<TDataSource, TTypeSour
 
     protected override void Synchronize(ChangeItem<EntityStore> item)
     {
-        persistenceHub.InvokeAsync(ct => UpdateAsync(item, ct), ex =>
+        persistenceHub.InvokeAsync(async ct =>
+        {
+            // 🚨 Persistence runs under SYSTEM. By the time a change reaches this
+            // persistence queue it is ALREADY AUTHORIZED — RLS was enforced at the
+            // user-facing write (app handler / stream.Update on the hub action block,
+            // where the user identity was live). The durable DB write just stores the
+            // approved change; it must not re-gate on RLS, and it must NEVER fail-closed
+            // on a null ambient AccessContext. Synchronize fires on the workspace
+            // emission scheduler, which has wiped the AsyncLocal identity — without this
+            // a persist could be denied and silently dropped (e.g. an _Activity node
+            // never lands → progress readers resubscribe-storm). See
+            // AccessContextPropagation.md → "Persistence runs as System".
+            using (accessService?.ImpersonateAsSystem())
+                await UpdateAsync(item, ct);
+        }, ex =>
         {
             logger.LogWarning(ex,"Updating {DataSource} failed", Id);
             return Task.CompletedTask;

@@ -322,6 +322,41 @@ The triple — define / grant / test — is the contract. Without all three, the
 
 ---
 
+## Persistence runs as System — the persistence queue
+
+Authorization is enforced **once, at the user-facing write** — the app handler / `stream.Update` on the owning hub's action block, where the user's identity is live and RLS gates the write. Once a change is accepted there it is **already authorized**. The durable DB write happens later, on the dedicated persistence hub (`CreatePersistenceAddress()`) inside `DataSourceWithStorage.Synchronize`, which fires on the **workspace emission scheduler** — a background thread that has **wiped** the AsyncLocal identity.
+
+So the persistence write **must run under System**:
+
+```csharp
+protected override void Synchronize(ChangeItem<EntityStore> item) =>
+    persistenceHub.InvokeAsync(async ct =>
+    {
+        using (accessService?.ImpersonateAsSystem())   // already authorized → durably store as System
+            await UpdateAsync(item, ct);
+    }, ex => { logger.LogWarning(ex, "Updating {DataSource} failed", Id); return Task.CompletedTask; });
+```
+
+If you instead let the persistence write inherit the (null) ambient context, it **fails closed** and the change is **silently dropped** — a write that "succeeded" upstream never lands. When the dropped write is an `_Activity` node, every progress reader then subscribes to a node that does not exist → a **`[ROUTE] NotFound` resubscribe storm** that wedges the partition (atioz 2026-06-17, compile + import activities). Persistence is the bottom of the stack: it stores what was already approved; it never re-gates and never fail-closes.
+
+## Posting/redirecting to a node: do it inside `Create().Subscribe()`
+
+A `SubscribeRequest` — or any post/redirect — to a node that **does not exist** is the root of the resubscribe-storm/wedge class. **Never advertise, subscribe, or redirect to a node path until you have proof it exists**, and the only proof is the create's own completion:
+
+```csharp
+// ✅ The node provably exists inside the Subscribe — only THEN advertise / redirect / let readers subscribe.
+meshService.CreateNode(activityNode).Subscribe(
+    created => { /* now stamp the path, point readers at it, redirect, … */ },
+    ex => logger.LogWarning(ex, "create failed — advertise NOTHING; no reader can storm a phantom"));
+
+// ❌ Stamp a `_Activity/compile-*` path BEFORE/without the create landing → readers subscribe
+//    to a phantom node → endless [ROUTE] NotFound → wedge.
+```
+
+`RunCompile` (`NodeTypeCompilationHelpers`) is the worked example: it provision-orders the create, observes it (bounded), and stamps `LastCompilationActivityPath` **only** on the confirmed create — `null` otherwise, so no reader ever subscribes to a path that was never written. Combined with "persistence runs as System" above (so the create actually lands), there is nothing to storm.
+
+---
+
 ## Anti-patterns (the baton drops)
 
 | Anti-pattern | Why it's wrong | Fix |
