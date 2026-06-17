@@ -143,6 +143,7 @@ var migrations = new IMigration[]
     new V34_TypeOrphanPartitionRootsAsSpace(),
     new V35_ReconcilePartitionAccessIndex(),
     new V36_MoveAgentsToPerPartitionAgentNamespace(),
+    new V37_MoveAgentsToAgentNamespaceBySchema(),
 };
 
 var ctx = new MigrationContext(dataSource, connectionString, options, logger, initResult.IsFreshDb);
