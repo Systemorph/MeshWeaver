@@ -45,6 +45,14 @@ public static class ActivityTrackingExtensions
 
                     var lf = hub.ServiceProvider.GetService<ILoggerFactory>();
                     var pathLogger = lf?.CreateLogger("ActivityLogBundler");
+                    // 🚨 User-activity tracking ALWAYS runs under System. The flush fires on the
+                    // ActivityLogBundler's TIMER thread, which never inherited the originating
+                    // user's AccessContext — and it's infrastructure logging, not a user write — so
+                    // the persistence Read+Write would post context-null and be RLS-denied. Wrap the
+                    // flush in Observable.Using(ImpersonateAsSystem): re-established at subscribe
+                    // (survives the timer thread's null ambient), Permission.All never denied. Same
+                    // rule as compile (#2). See AccessContextPropagation.md → "Persistence runs as System".
+                    var accessService = hub.ServiceProvider.GetService<MeshWeaver.Messaging.AccessService>();
 
                     // Reactive composition end-to-end — no await, no .ToTask. Bridge to the
                     // observable hubNode read via SelectMany, then SaveNode chained after.
@@ -54,21 +62,23 @@ public static class ActivityTrackingExtensions
                         ? persistence.Read(log.HubPath, hub.JsonSerializerOptions).Take(1)
                         : Observable.Return<MeshNode?>(null);
 
-                    hubNodeObs
-                        .SelectMany(hubNode =>
-                        {
-                            if (hubNode != null && hubNode.MainNode != hubNode.Path)
-                                return Observable.Empty<MeshNode>();
-                            var node = MeshNode.FromPath($"{log.HubPath}/_activity/{log.Id}") with
-                            {
-                                NodeType = ActivityNodeType.NodeType,
-                                Name = $"{log.Category}: {log.Messages.FirstOrDefault()?.Message ?? "Activity"}",
-                                MainNode = log.HubPath!,
-                                State = MeshNodeState.Active,
-                                Content = log
-                            };
-                            return persistence.Write(node, hub.JsonSerializerOptions);
-                        })
+                    Observable.Using(
+                            () => accessService?.ImpersonateAsSystem() ?? (IDisposable)System.Reactive.Disposables.Disposable.Empty,
+                            _ => hubNodeObs
+                                .SelectMany(hubNode =>
+                                {
+                                    if (hubNode != null && hubNode.MainNode != hubNode.Path)
+                                        return Observable.Empty<MeshNode>();
+                                    var node = MeshNode.FromPath($"{log.HubPath}/_activity/{log.Id}") with
+                                    {
+                                        NodeType = ActivityNodeType.NodeType,
+                                        Name = $"{log.Category}: {log.Messages.FirstOrDefault()?.Message ?? "Activity"}",
+                                        MainNode = log.HubPath!,
+                                        State = MeshNodeState.Active,
+                                        Content = log
+                                    };
+                                    return persistence.Write(node, hub.JsonSerializerOptions);
+                                }))
                         .Subscribe(
                             _ => { },
                             ex => pathLogger?.LogWarning(ex, "Failed to persist activity log for hub {Path}", log.HubPath));
