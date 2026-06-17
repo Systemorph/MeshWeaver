@@ -1404,6 +1404,26 @@ internal static class ThreadExecution
                     catch (ObjectDisposedException) { /* round already finished + CTS disposed — nothing to cancel */ }
                 });
 
+                // 🚦 Cancellation is driven by the DURABLE "cancellation requested" state, PER ROUND
+                // — not a timing-fragile external watcher. Subscribe to THIS thread's own node stream
+                // (which replays the current value) and cancel the round's CTS the instant
+                // RequestedStatus == Cancelled is seen. A cancel requested in the CTS-storage window,
+                // or re-asserted across a RESUME (where InstallCancellationWatcher's
+                // (ExecutionStartedAt, HasCts) dedup swallows it — the round stays Executing with
+                // RequestedStatus=Cancelled forever, the Cancel_WithPendingMessages stuck-round red),
+                // is honored immediately. Set up SYNCHRONOUSLY here (before the async pool launch) so
+                // there is no window; disposed with the round in the finally below. cts.Cancel() is
+                // idempotent, so this is a robust complement to the watcher's sub-thread propagation.
+                var cancelOnRequestSub = parentHub.GetWorkspace().GetMeshNodeStream()
+                    .Select(n => (n?.Content as MeshThread)?.RequestedStatus)
+                    .Where(rs => rs == ThreadExecutionStatus.Cancelled)
+                    .Take(1)
+                    .Subscribe(_ =>
+                    {
+                        try { executionCts.Cancel(); }
+                        catch (ObjectDisposedException) { /* round already finished */ }
+                    });
+
                 // The live response-text accumulator. Wired into the round's
                 // ActiveResponseSegment + capturedResponseText BEFORE the first
                 // push so InboxTool.CheckInbox can split the output cell the moment
@@ -1949,6 +1969,7 @@ internal static class ThreadExecution
                     finally
                     {
                         delegationStampSub?.Dispose();
+                        cancelOnRequestSub.Dispose();
                         // Dispose the per-round CLI harness client (Claude Code / Copilot).
                         // The cached AgentChatClient (MeshWeaver path) is never disposed
                         // here — it's reused across rounds.
