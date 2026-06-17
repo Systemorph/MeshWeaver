@@ -125,12 +125,14 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
         var valuesEqual = current is not null && ValuesEqual(current.Value, value.Value);
 
-        // 🚨 Dedup PATCHES ONLY. A FULL push always applies — it is the owner re-asserting
-        // its complete authoritative state (initial snapshot, SetFull overwrite, rollback /
-        // resync), so it must land even when value-equal to what THIS stream currently holds:
-        // a downstream mirror that optimistically diverged re-converges only if the Full is
-        // applied + re-emitted here. Suppressing a value-equal Full is what swallowed the
-        // rollback. Symmetric with the monotonicity guard in UpdateStream (Fulls bypass version).
+        // 🚨 VALUE-dedup PATCHES ONLY. A FULL that reaches here always applies — it is the owner
+        // re-asserting its complete authoritative state (initial snapshot, SetFull overwrite,
+        // rollback / resync), so it must land even when value-equal to what THIS stream currently
+        // holds: a downstream mirror that optimistically diverged re-converges only if the Full is
+        // applied + re-emitted here. Suppressing a value-equal Full is what swallowed the rollback.
+        // NOTE: this is VALUE dedup, distinct from the VERSION monotonicity guard in UpdateStream —
+        // that guard now drops STALE Fulls (version < Current) BEFORE they reach here, so any Full
+        // arriving at this point is already version-current/ahead and must be applied.
         if (current is not null && valuesEqual && value.ChangeType != ChangeType.Full)
         {
             logger.LogDebug("[SYNC_STREAM] Skipping SetCurrent for {StreamId} - same value (patch)", StreamId);
@@ -392,8 +394,10 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     /// fallback (type-registry collection + key) so the owner's write-back
     /// (<c>ToDataChangeRequest</c>, which keys off <c>Updates</c>) persists the overwrite — the
     /// ONLY difference from <see cref="BuildChangeItem"/> is that <c>ChangeType</c> is forced to
-    /// <see cref="ChangeType.Full"/>, which makes the change land on every mirror unconditionally
-    /// (the monotonicity guard bypasses version for Fulls). See
+    /// <see cref="ChangeType.Full"/> (a complete-state overwrite rather than a per-entity delta).
+    /// Like any change it carries the owner's monotonic <c>Hub.Version</c> and is subject to the
+    /// receive-side monotonicity guard, so a mirror already AHEAD (a newer applied version) is not
+    /// clobbered by an older Full. See
     /// <see cref="SetFull(System.Func{TStream,TStream},System.Action{System.Exception})"/>.
     /// </summary>
     private ChangeItem<TStream> BuildFullChangeItem(TStream? current, TStream updated)
@@ -889,21 +893,24 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             return;
         }
 
-        // 🚨 Monotonicity guard — PATCHES ONLY. A patch is a delta computed
-        // against a specific base version; a reordered OLDER patch would corrupt
-        // the mirror, so we drop it. A FULL is different: it is the owner's
-        // COMPLETE authoritative state and is ALWAYS applied, no matter the
-        // version. A Full is normally a ROLL-BACK — the owner re-asserting truth
-        // (e.g. after it REJECTED a client's optimistic change) — and it must
-        // land even though the client optimistically bumped its Current to a
-        // higher version. Letting Fulls through unconditionally is what makes the
-        // reject→rollback undo work.
-        if (delivery.Message.ChangeType != ChangeType.Full
-            && Current is not null && delivery.Message.Version < Current.Version)
+        // 🚨 Monotonicity guard — applies to PATCHES *and* FULLS. Version is ALWAYS the OWNER
+        // hub's Version (BuildChangeItem/BuildFullChangeItem: the owner stamps its monotonic
+        // Hub.Version — ++ per message, MessageHub.HandleMessageAsync — while a subscriber only
+        // ever CARRIES the base version it read; it NEVER bumps it). So Current.Version is the
+        // owner's clock and a change with version < it is STALE:
+        //   • a reordered OLDER patch (would corrupt the mirror), OR
+        //   • a resubscribe's point-in-time Full snapshotted BEFORE a write we have since applied
+        //     — without this guard that stale Full lands and overwrites the newer state, the
+        //     lost-message data-loss race.
+        // A reject→ROLLBACK Full is NOT stale: the owner re-asserts its CURRENT state, stamped with
+        // its current (higher-or-equal) Version, so it passes the guard and still lands. Because the
+        // subscriber never bumps ahead of the owner, a legitimate Full can never carry a version
+        // BELOW Current — only a genuinely older snapshot can, and that is exactly what we drop.
+        if (Current is not null && delivery.Message.Version < Current.Version)
         {
             logger.LogDebug(
-                "[SYNC_STREAM] Dropping stale patch for {StreamId}: incoming v{In} < current v{Cur}",
-                StreamId, delivery.Message.Version, Current.Version);
+                "[SYNC_STREAM] Dropping stale {ChangeType} for {StreamId}: incoming v{In} < current v{Cur}",
+                delivery.Message.ChangeType, StreamId, delivery.Message.Version, Current.Version);
             return;
         }
 
