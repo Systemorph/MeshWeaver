@@ -246,7 +246,7 @@ public partial class MeshSearchView : IDisposable
                 if (IsNamespaceTreeMode)
                     LoadTreeSearch();
                 else if (IsGraphNavigatorMode)
-                    StateHasChanged(); // navigator filters the loaded level client-side
+                    RunGraphNavigatorSearch(); // browse when empty, vector search when text typed
                 else
                     LoadResults();
             }
@@ -308,10 +308,14 @@ public partial class MeshSearchView : IDisposable
                 return;
             }
 
-            // Graph navigator: load the next level below + ancestors above.
+            // Graph navigator: load the next level below + ancestors above. When the
+            // box already carries search text (e.g. ?q=), also run the semantic query
+            // so the initial render shows results instead of the browse view.
             if (IsGraphNavigatorMode)
             {
                 InitializeGraphNavigator();
+                if (!string.IsNullOrWhiteSpace(_currentValue))
+                    LoadResults();
                 return;
             }
 
@@ -336,7 +340,7 @@ public partial class MeshSearchView : IDisposable
             if (IsNamespaceTreeMode)
                 LoadTreeSearch();
             else if (IsGraphNavigatorMode)
-                StateHasChanged(); // re-filter the next level by the typed text (client-side)
+                RunGraphNavigatorSearch();
             else
                 LoadResults();
         }
@@ -354,6 +358,8 @@ public partial class MeshSearchView : IDisposable
         {
             if (IsNamespaceTreeMode)
                 LoadTreeSearch();
+            else if (IsGraphNavigatorMode)
+                RunGraphNavigatorSearch();
             else
                 LoadResults();
         }
@@ -1240,6 +1246,17 @@ public partial class MeshSearchView : IDisposable
         : BoundDrillDownArea!;
 
     /// <summary>
+    /// A pure sub-namespace (<see cref="GraphNavNamespace"/>) has NO node of its own, so it cannot
+    /// host a node-page Search area: routing to <c>/{nsPath}/Search</c> would render a layout area on
+    /// a phantom node and NotFound-storm its hub. Instead, a namespace click redirects to the global
+    /// search control (<c>/search</c>) scoped to that namespace — carrying the navigator's own hidden
+    /// query (filters + the "Include documents" toggle state via <see cref="BuildNavBelowQuery"/>) so
+    /// the search shows exactly what the navigator would have if it could re-root there.
+    /// </summary>
+    private string BuildNamespaceSearchHref(string nsPath) =>
+        $"/search?ns={Uri.EscapeDataString(nsPath)}&hq={Uri.EscapeDataString(BuildNavBelowQuery(nsPath))}";
+
+    /// <summary>
     /// Below = the current node's whole subtree (one <c>scope:descendants</c> query — no N+1 probes).
     /// The builder surfaces the immediate level from it: real nodes here (cards on top) + pure
     /// sub-namespaces (drill links at the bottom). Documents (indexed content) are excluded unless
@@ -1260,22 +1277,42 @@ public partial class MeshSearchView : IDisposable
     private static string BuildNavAboveQuery(string root) =>
         $"path:{root} scope:ancestorsandself is:main";
 
-    /// <summary>Top-level nodes, narrowed by the search box text (client-side — the level is loaded).</summary>
-    private IReadOnlyList<GraphNavNode> NavNodes => FilterNav(
-        _navModel?.Nodes, n => n.Node.Name, n => n.Node.Path);
+    /// <summary>
+    /// The navigator browses the graph when the box is empty; a non-empty box switches to a
+    /// real subtree query (see <see cref="RunGraphNavigatorSearch"/>) so typed text flows
+    /// through the standard MeshQuery.Query surface and its bare-text tokens hit the Postgres
+    /// HNSW vector intercept. The navigator level is therefore always shown unfiltered — there
+    /// is no client-side narrowing here anymore.
+    /// </summary>
+    private bool NavBrowsing => IsGraphNavigatorMode && string.IsNullOrWhiteSpace(_currentValue);
 
-    /// <summary>Sub-namespace drill links, narrowed by the search box text (client-side).</summary>
-    private IReadOnlyList<GraphNavNamespace> NavNamespaces => FilterNav(
-        _navModel?.Namespaces, n => n.Name, n => n.Path);
+    /// <summary>Mesh nodes at the current level (rendered only in browse mode).</summary>
+    private IReadOnlyList<GraphNavNode> NavNodes => _navModel?.Nodes ?? ImmutableList<GraphNavNode>.Empty;
 
-    private IReadOnlyList<T> FilterNav<T>(IReadOnlyList<T>? items, Func<T, string?> name, Func<T, string?> path)
+    /// <summary>Sub-namespace drill links at the current level (rendered only in browse mode).</summary>
+    private IReadOnlyList<GraphNavNamespace> NavNamespaces => _navModel?.Namespaces ?? ImmutableList<GraphNavNamespace>.Empty;
+
+    /// <summary>
+    /// GraphNavigator search: browse the graph when the box is empty, run a real query when the
+    /// user types. Routing typed text through <see cref="LoadResults"/> (MeshQuery.Query) means a
+    /// query like <c>namespace:{node} scope:subtree … laptop</c> reaches
+    /// <c>PostgreSqlMeshQuery.QueryAsync</c>'s vector intercept — semantic HNSW cosine search over
+    /// the node's subtree — exactly like <see cref="LoadTreeSearch"/> does for NamespaceTree mode.
+    /// Clearing the box drops the query and returns to the (still-loaded) navigator browse view.
+    /// </summary>
+    private void RunGraphNavigatorSearch()
     {
-        items ??= Array.Empty<T>();
-        var text = _currentValue?.Trim();
-        if (string.IsNullOrEmpty(text)) return items;
-        return items.Where(i =>
-            (name(i) ?? "").Contains(text, StringComparison.OrdinalIgnoreCase)
-            || (path(i) ?? "").Contains(text, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (string.IsNullOrWhiteSpace(_currentValue))
+        {
+            _reactiveSubscription?.Dispose();
+            _reactiveSubscription = null;
+            _isLoading = false;
+            StateHasChanged();
+        }
+        else
+        {
+            LoadResults();
+        }
     }
 
     private void ToggleIncludeDocuments(ChangeEventArgs e)

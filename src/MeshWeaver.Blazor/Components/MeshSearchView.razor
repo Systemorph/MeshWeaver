@@ -109,8 +109,11 @@
                 @RenderTreeLevel(TreeRootNamespace, 0)
             }
         }
-        else if (IsGraphNavigatorMode)
+        else if (NavBrowsing)
         {
+            @* GraphNavigator browse view — shown only when the box is empty. A non-empty
+               box runs a real (vector-routed) subtree query and falls through to the
+               grouped results below. *@
             @RenderGraphNavigator()
         }
         else if (_isLoading && !IsPrecomputedMode && BoundShowLoadingIndicator)
@@ -535,7 +538,9 @@
                     <div class="mesh-nav-namespaces">
                         @foreach (var ns in namespaces)
                         {
-                            <a class="mesh-nav-namespace" href="/@ns.Path/@navArea" title="Drill into @ns.Name">
+                            @* A pure namespace has no node — redirect to the search control scoped to
+                               it, never to /{nsPath}/Search (a node area on a non-existent node). *@
+                            <a class="mesh-nav-namespace" href="@BuildNamespaceSearchHref(ns.Path)" title="Search @ns.Name">
                                 <span class="mesh-nav-namespace-icon">@FolderIcon</span>
                                 <span class="mesh-nav-namespace-name">@ns.Name</span>
                                 <span class="mesh-nav-namespace-count">@ns.Count</span>

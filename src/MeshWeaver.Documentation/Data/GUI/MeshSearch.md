@@ -52,13 +52,17 @@ The default Search experience navigates the mesh *along its edges*. For the curr
 
 - **Above** — the real ancestors as a clickable breadcrumb rail (`scope:ancestors`). Empty namespace
   segments are never nodes, so they don't appear.
-- **Below** — the **next populated level**: the nearest real nodes, with empty intermediate namespace
-  segments skipped, via a single `scope:nextLevel` query (no per-child count probes). A node at
-  `a/b/node` (where `a`, `a/b` are not nodes) surfaces directly.
+- **Below** — the current node's subtree (one `scope:descendants` query), split into two groups: the
+  real **nodes** at this level as a card grid (a node that *also* groups content gets a "drill in"
+  affordance), and the pure **sub-namespaces** below it — path segments that group content but have no
+  node of their own — as drill-down links. Empty intermediate namespace segments are skipped, so a
+  node at `a/b/node` (where `a`, `a/b` are not nodes) surfaces directly.
 
-Clicking a card or an ancestor **re-roots** the navigator there (`/{path}/Search`) and recomputes
-above + below — "navigate → visualize → navigate". A secondary "open ↗" affordance opens the node's
-own page. Both levels are live `hub.GetQuery(...)` collections (see
+Clicking a node card (or its drill affordance) or an ancestor **re-roots** the navigator there
+(`/{path}/Search`) and recomputes above + below — "navigate → visualize → navigate"; a secondary
+"open ↗" opens the node's own page. A pure sub-namespace has **no node** to open, so clicking it
+redirects to the **search control scoped to that namespace** (`/search?ns={namespace}`) instead of
+re-rooting into a non-existent node page. Both levels are live `hub.GetQuery(...)` collections (see
 [Synced Mesh Node Queries](/Doc/Architecture/SyncedMeshNodeQueries)).
 
 ```
