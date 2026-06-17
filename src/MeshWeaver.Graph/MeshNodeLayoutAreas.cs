@@ -184,7 +184,7 @@ public static class MeshNodeLayoutAreas
             });
     }
 
-    private static UiControl BuildAccessDenied(string nodePath)
+    internal static UiControl BuildAccessDenied(string nodePath)
     {
         var nodeName = nodePath.Split('/').LastOrDefault() ?? nodePath;
         return Controls.Stack.WithWidth("100%").WithStyle("padding: 48px 24px; align-items: center; text-align: center;")
