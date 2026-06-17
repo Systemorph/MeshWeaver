@@ -2342,9 +2342,11 @@ internal static class ThreadExecution
     /// = <c>Cancelled</c> on the thread node via
     /// <c>workspace.GetMeshNodeStream(threadPath).Update(...)</c>. The watcher
     /// below observes the OWN thread node, treats every transition to
-    /// "<c>RequestedStatus == Cancelled</c> while executing" as a cancel signal,
-    /// cancels the stored CTS, and propagates the same request onto every active
-    /// delegation sub-thread.
+    /// "<c>RequestedStatus == Cancelled</c> while executing" as a cancel signal, and
+    /// propagates that request onto every active delegation sub-thread. The round's OWN CTS
+    /// is cancelled by its per-round RequestedStatus self-cancel (see <c>ExecuteMessageAsync</c>),
+    /// not here; this watcher only handles sub-thread propagation and the claim-window No-CTS
+    /// fallback.
     ///
     /// <para>Dedup is by <see cref="MeshThread.ExecutionStartedAt"/>: each round
     /// has a distinct start timestamp, so <c>DistinctUntilChanged</c> on it acts
@@ -2367,27 +2369,14 @@ internal static class ThreadExecution
             .Where(n => n?.Content is MeshThread t
                 && t.RequestedStatus == ThreadExecutionStatus.Cancelled
                 && t.IsExecuting)
-            // 🚨 Dedup key = (round, CTS-availability), NOT ExecutionStartedAt alone.
-            // The plain per-round key swallowed cancels (trace-proven by the
-            // self-diagnosing assert in Cancel_NoPendingMessages: final
-            // Status=Executing, requested=Cancelled, pending=[]): the cancel lands
-            // during StartingExecution → the watcher fires once, the CTS is not yet
-            // stored AND the commit flips Executing concurrently → the No-CTS
-            // fallback's StartingExecution guard no-ops → nothing cancelled; the
-            // per-round key was already consumed, so the first streaming write
-            // AFTER the loop stores its CTS never re-triggered — the round ran to
-            // completion with the cancel request stuck on the node (the
-            // phantom-Executing CI failures; the with-pending siblings freeze
-            // their post-cancel drain behind the same lost cancel). Including the
-            // CTS phase in the key re-arms the watcher exactly once more when the
-            // CTS appears (closing the lost window) while still deduping the
-            // per-frame repeats of one phase (bare removal of the dedup let stale
-            // repeat frames re-cancel across phases).
-            .DistinctUntilChanged(n =>
-            {
-                var t = (MeshThread)n!.Content!;
-                return (t.ExecutionStartedAt, HasCts: hub.Get<CancellationTokenSource>() is not null);
-            })
+            // Dedup per round — distinct ExecutionStartedAt, so the cancel is handled at most
+            // once per round. The round's OWN cancellation is now driven by its per-round
+            // RequestedStatus self-cancel (ExecuteMessageAsync), which replays the current value
+            // and so is robust across the CTS-storage window AND a resume — so this watcher no
+            // longer needs to re-arm on CTS availability (the old (ExecutionStartedAt, HasCts)
+            // key). It only (a) propagates the cancel to sub-threads and (b) covers the pure
+            // claim-window case (Status stuck at StartingExecution) via the No-CTS fallback below.
+            .DistinctUntilChanged(n => ((MeshThread)n!.Content!).ExecutionStartedAt)
             .Subscribe(
                 node =>
                 {
@@ -2440,45 +2429,16 @@ internal static class ThreadExecution
                                 "[ThreadExec] Cancel propagation failed for {SubThread}", subPath));
                     }
 
-                    // Cancel own execution via CancellationTokenSource (streaming
-                    // runs on thread pool). The CTS was stored on the parent
-                    // thread hub via Set — the _Exec hub stored it on its parent
-                    // (= this hub).
-                    //
-                    // Defensive ObjectDisposedException catch: a race window
-                    // exists where the CTS may already be disposed by the time
-                    // we reach Cancel — the round's own finally block disposes
-                    // it after Set null, and an emission from the workspace
-                    // stream that crossed that boundary can land here with a
-                    // stale reference. Swallowing the exception keeps the sync
-                    // stream healthy (SetCurrent's warning would otherwise tear
-                    // down unrelated observers via ReplaySubject failure modes).
-                    // Repro:
-                    // InboxToolIntegrationTest.Cancel_WithPendingMessages_DispatchesNextRoundAfterCleanup.
-                    var cts = hub.Get<CancellationTokenSource>();
-                    if (cts != null)
+                    // The round's OWN CTS is cancelled by its per-round RequestedStatus
+                    // self-cancel (ExecuteMessageAsync) — robust across the CTS-storage window and
+                    // a resume — so no cts.Cancel() is needed here. The ONLY case the self-cancel
+                    // can't cover is a cancel that lands in the CLAIM window (StartingExecution,
+                    // before the round and its self-cancel exist): there is no streaming loop to
+                    // write the terminal status, so write it directly — guarded to fire only while
+                    // still StartingExecution with the cancel still requested, so we never clobber a
+                    // round that has since reached Executing (its loop owns the terminal write).
+                    if (hub.Get<CancellationTokenSource>() is null)
                     {
-                        try
-                        {
-                            logger?.LogDebug("[ThreadExec] Cancelling own execution for {ThreadPath}", threadPath);
-                            cts.Cancel();
-                        }
-                        catch (ObjectDisposedException)
-                        {
-                            logger?.LogDebug(
-                                "[ThreadExec] Cancel: CTS already disposed for {ThreadPath} — round already torn down",
-                                threadPath);
-                        }
-                    }
-                    else
-                    {
-                        // No-CTS fallback: the stop landed in the claim window
-                        // (StartingExecution, before the streaming loop stored its
-                        // CTS) so no catch will write the terminal status. Write it
-                        // here — guarded to fire only while still StartingExecution
-                        // with the cancel still requested, so we never clobber a
-                        // round that has since reached Executing (its loop owns the
-                        // terminal write).
                         logger?.LogDebug(
                             "[ThreadExec] Cancel: no CTS for {ThreadPath} (claim window) — writing terminal Cancelled directly",
                             threadPath);

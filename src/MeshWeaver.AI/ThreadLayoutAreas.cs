@@ -182,6 +182,19 @@ public static class ThreadLayoutAreas
             .DistinctUntilChanged();
         host.RegisterForDisposal(titleStream.Subscribe(title => host.UpdateData("title", title)));
 
+        // Push description to data section — read-only viewers see it under the title
+        // (users with Update permission get an inline auto-saving editor instead). Empty
+        // string when unset so the read-only Html view renders nothing.
+        host.RegisterForDisposal(host.Workspace.GetMeshNodeStream()
+            .Select(node => node?.Description ?? string.Empty)
+            .DistinctUntilChanged()
+            .Subscribe(desc => host.UpdateData("description",
+                string.IsNullOrWhiteSpace(desc)
+                    ? string.Empty
+                    : "<div style=\"font-size: 0.92rem; color: var(--neutral-foreground-hint); " +
+                      "margin-top: 2px; line-height: 1.4; white-space: pre-wrap;\">" +
+                      System.Web.HttpUtility.HtmlEncode(desc) + "</div>")));
+
         // Push context link HTML to data section — pill-shaped breadcrumb chip.
         host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm =>
         {
@@ -258,14 +271,15 @@ public static class ThreadLayoutAreas
                     "filter: brightness(0) invert(1) drop-shadow(0 1px 2px rgba(0,0,0,0.25));\" />" +
                     "</div>"))
                 .WithView(Controls.Stack
-                    .WithStyle("gap: 2px; min-width: 0; flex: 1;")
-                    .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("title")))
-                        .WithStyle("margin: 0; font-size: 1.85rem; font-weight: 600; " +
-                                   "letter-spacing: -0.01em; line-height: 1.15; " +
-                                   "background: linear-gradient(135deg, var(--neutral-foreground-rest), " +
-                                   "color-mix(in srgb, var(--accent-fill-rest) 80%, var(--neutral-foreground-rest))); " +
-                                   "-webkit-background-clip: text; background-clip: text; " +
-                                   "-webkit-text-fill-color: transparent; color: transparent;"))
+                    .WithStyle("gap: 4px; min-width: 0; flex: 1;")
+                    // Title + description: inline auto-saving editors for users with Update
+                    // permission; read-only display otherwise. Bound DIRECTLY to MeshNode.Name /
+                    // MeshNode.Description (fields-mode node-bound DataContext) — one source of
+                    // truth, no /data replica, no save subscription. See Doc/GUI/DataBinding.
+                    .WithView((h, _) => h.Hub.GetEffectivePermissions(hubPath)
+                        .Select(p => p.HasFlag(Permission.Update))
+                        .DistinctUntilChanged()
+                        .Select(canEdit => (UiControl?)BuildTitleEditor(hubPath, canEdit)))
                     .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("subtitle")))))
                 // Mark Done / Reopen toggle — reactive. Hidden while the
                 // thread is executing (MarkThreadDone's CAS guard would
@@ -560,6 +574,52 @@ public static class ThreadLayoutAreas
             .WithView(new NavLinkControl("", null, $"/{hubPath}/{ThreadNodeType.ThreadArea}"));
     }
 
+
+    /// <summary>
+    /// The title + description block in the thread hero header.
+    /// <para>For users with <see cref="Permission.Update"/> both render as inline,
+    /// auto-saving editors bound DIRECTLY to the thread node's <see cref="MeshNode.Name"/>
+    /// and <see cref="MeshNode.Description"/> (fields-mode node-bound DataContext) —
+    /// one source of truth, no <c>/data</c> replica, no save subscription. Editability
+    /// is gated, not just the write: read-only viewers get the gradient HTML title plus
+    /// the description (pushed to the data section), the description hidden when unset.</para>
+    /// </summary>
+    private static UiControl BuildTitleEditor(string nodePath, bool canEdit)
+    {
+        if (!canEdit)
+            return Controls.Stack
+                .WithStyle("gap: 4px; min-width: 0;")
+                .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("title")))
+                    .WithStyle("margin: 0; font-size: 1.85rem; font-weight: 600; " +
+                               "letter-spacing: -0.01em; line-height: 1.15; " +
+                               "background: linear-gradient(135deg, var(--neutral-foreground-rest), " +
+                               "color-mix(in srgb, var(--accent-fill-rest) 80%, var(--neutral-foreground-rest))); " +
+                               "-webkit-background-clip: text; background-clip: text; " +
+                               "-webkit-text-fill-color: transparent; color: transparent;"))
+                .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("description"))));
+
+        var fieldsContext = LayoutAreaReference.GetMeshNodeDataContext(nodePath, bindContent: false);
+
+        var titleField = new TextFieldControl(new JsonPointerReference(nameof(MeshNode.Name)))
+        {
+            Immediate = true,
+            Placeholder = "Untitled thread",
+            DataContext = fieldsContext
+        }.WithStyle("font-size: 1.5rem; font-weight: 600; letter-spacing: -0.01em;")
+         .WithClass("thread-title-field");
+
+        var descriptionField = new TextAreaControl(new JsonPointerReference(nameof(MeshNode.Description)))
+        {
+            Immediate = true,
+            Placeholder = "Add a description…",
+            DataContext = fieldsContext
+        }.WithRows(2).WithClass("thread-description-field");
+
+        return Controls.Stack
+            .WithStyle("gap: 6px; min-width: 0;")
+            .WithView(titleField)
+            .WithView(descriptionField);
+    }
 
     /// <summary>
     /// Gets the thread title from node name or falls back to default.
