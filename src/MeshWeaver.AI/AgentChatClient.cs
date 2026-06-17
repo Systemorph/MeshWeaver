@@ -1171,6 +1171,12 @@ public class AgentChatClient : IAgentChat
         // hub passed in via the ctor's service provider), not the _Exec child
         // — _Exec is blocked by the streaming Task.Run.
         var workspace = hub.GetWorkspace();
+        // The chatting user's home namespace — where a user drops their OWN agents, surfaced via the
+        // namespace:{userHome} alternation in AgentPickerProjection.BuildAgentQuery. Skips system/hub
+        // principals (they own no user namespace). Safe even for guests: it's a namespace MEMBERSHIP
+        // filter value, never a point-read, so a no-match is a silent no-op (unlike the model-selection
+        // point-read that would storm a guest partition).
+        var userHome = ResolveAgentUserHome(hub);
         agentsSubscription?.Dispose();
         modelsSubscription?.Dispose();
         selectionSubscription?.Dispose();
@@ -1192,7 +1198,8 @@ public class AgentChatClient : IAgentChat
         // The 5-min no-progress watchdog in ThreadExecution is the canonical
         // safety net for genuinely stuck pipelines.
         var readinessFired = false;
-        agentsSubscription = AgentPickerProjection.ObserveAgents(workspace, hub, contextPath, nodeTypePath)
+        agentsSubscription = AgentPickerProjection
+            .ObserveAgents(hub, userHome, AgentPickerProjection.PartitionOf(contextPath))
             .Subscribe(
                 agents =>
                 {
@@ -1609,6 +1616,24 @@ public class AgentChatClient : IAgentChat
     /// </summary>
     internal static bool ShouldWatchOwnProviderPartition(MeshWeaver.Messaging.AccessContext? context)
         => !string.IsNullOrEmpty(context?.ObjectId) && context.IsVirtual != true;
+
+    /// <summary>
+    /// The chatting user's home namespace — the namespace under which they place their OWN agents,
+    /// fed to <see cref="AgentPickerProjection.BuildAgentQuery"/> as the per-user alternation value.
+    /// Mirrors the chat view's <c>ResolveUserHome</c>: the AccessContext ObjectId, skipping the
+    /// system identity and hub principals (which own no user namespace).
+    /// </summary>
+    private static string? ResolveAgentUserHome(IMessageHub hub)
+    {
+        var accessSvc = hub.ServiceProvider.GetService<MeshWeaver.Messaging.AccessService>();
+        if (accessSvc is null) return null;
+        foreach (var candidate in new[] { accessSvc.Context?.ObjectId, accessSvc.CircuitContext?.ObjectId })
+            if (!string.IsNullOrEmpty(candidate)
+                && candidate != MeshWeaver.Mesh.Security.WellKnownUsers.System
+                && !MeshWeaver.Messaging.AccessService.LooksLikeHubPrincipal(candidate))
+                return candidate;
+        return null;
+    }
 
     /// <summary>
     /// Orders agents for creation: non-delegating first, delegating second, default last.

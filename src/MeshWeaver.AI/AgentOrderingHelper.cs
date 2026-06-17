@@ -22,12 +22,11 @@ public static class AgentOrderingHelper
     /// <c>IMeshService.Query</c> directly.
     /// </summary>
     public static IObservable<IReadOnlyList<AgentDisplayInfo>> ObserveAgents(
-        IWorkspace workspace,
         IMessageHub hub,
-        string? contextPath,
-        string? nodeTypePath)
-        => AgentPickerProjection.ObserveAgents(workspace, hub, contextPath, nodeTypePath)
-            .Select(agents => (IReadOnlyList<AgentDisplayInfo>)OrderByRelevance(agents, contextPath, nodeTypePath));
+        string? userPath,
+        string? spacePath)
+        => AgentPickerProjection.ObserveAgents(hub, userPath, spacePath)
+            .Select(agents => (IReadOnlyList<AgentDisplayInfo>)OrderByRelevance(agents, spacePath, null));
 
     /// <summary>
     /// Orders agents by Order then by display name (both sourced from the MeshNode

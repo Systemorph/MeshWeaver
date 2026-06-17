@@ -16,68 +16,72 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class AgentPickerQueriesTest
 {
-    // ─── BuildAgentQueries: the context-scoped union the /agent picker must issue ───
-    // The chat-side-panel bug (a Space's own agent missing from /agent) was the picker
-    // collapsing this union to query #1 only because currentPath + nodeTypePath were NULL.
-    // These pin that BOTH the path-ancestors AND the NodeType-namespace queries appear
-    // when the context resolves, and that each is omitted when its token is missing.
+    // ─── BuildAgentQuery: the SINGLE canonical agent-registry query ───
+    // Agents live in a dedicated /Agent sub-namespace PER PARTITION; the query lists the platform
+    // default + the current space's + the user's DIRECTLY (exact membership, no graph search).
 
     private const string BuiltInAgentQuery = "namespace:Agent nodeType:Agent";
 
     [Fact]
-    public void BuildAgentQueries_BothSet_IssuesAllThreeQueries()
+    public void BuildAgentQuery_UserAndSpace_ListsBothPartitionsPlusPlatform()
     {
-        var queries = AgentPickerProjection.BuildAgentQueries(
-            currentPath: "ACME/ProductLaunch", nodeTypePath: "ACME/Project");
+        var query = AgentPickerProjection.BuildAgentQuery(userPath: "rbuergi", spacePath: "AgenticPension");
 
-        queries.Should().Equal(
-            BuiltInAgentQuery,
-            "path:ACME/ProductLaunch nodeType:Agent scope:ancestors",
-            "namespace:ACME/Project nodeType:Agent scope:selfAndAncestors");
-        queries.Should().HaveCount(3,
-            "with BOTH currentPath and nodeTypePath the picker issues the full union — "
-            + "built-in + per-context ancestors + per-NodeType selfAndAncestors. Anything fewer "
-            + "is exactly the bug where a Space's own agent never surfaces in /agent.");
+        query.Should().Be(
+            "namespace:rbuergi/Agent|AgenticPension/Agent|Agent nodeType:Agent",
+            "ONE mesh-node search lists the user's, the space's and the platform /Agent namespaces "
+            + "directly — exact membership, no ancestor/graph walk.");
+        AgentPickerProjection.BuildAgentQueries("rbuergi", "AgenticPension")
+            .Should().ContainSingle().Which.Should().Be(query);
     }
 
     [Fact]
-    public void BuildAgentQueries_OnlyCurrentPath_OmitsNodeTypeQuery()
+    public void BuildAgentQuery_OnlyUser_ListsUserPlusPlatform()
     {
-        var queries = AgentPickerProjection.BuildAgentQueries(
-            currentPath: "ACME/ProductLaunch", nodeTypePath: null);
-
-        queries.Should().Equal(
-            BuiltInAgentQuery,
-            "path:ACME/ProductLaunch nodeType:Agent scope:ancestors");
-        queries.Should().NotContain(q => q.Contains("scope:selfAndAncestors"));
+        AgentPickerProjection.BuildAgentQuery(userPath: "rbuergi")
+            .Should().Be("namespace:rbuergi/Agent|Agent nodeType:Agent");
     }
 
     [Fact]
-    public void BuildAgentQueries_OnlyNodeTypePath_OmitsCurrentPathQuery()
+    public void BuildAgentQuery_OnlySpace_ListsSpacePlusPlatform()
     {
-        var queries = AgentPickerProjection.BuildAgentQueries(
-            currentPath: null, nodeTypePath: "ACME/Project");
-
-        queries.Should().Equal(
-            BuiltInAgentQuery,
-            "namespace:ACME/Project nodeType:Agent scope:selfAndAncestors");
-        queries.Should().NotContain(q => q.Contains("scope:ancestors") && !q.Contains("selfAndAncestors"));
+        AgentPickerProjection.BuildAgentQuery(spacePath: "AgenticPension")
+            .Should().Be("namespace:AgenticPension/Agent|Agent nodeType:Agent");
     }
 
     [Fact]
-    public void BuildAgentQueries_NeitherSet_BuiltInCatalogOnly()
+    public void BuildAgentQuery_NeitherSet_PlatformDefaultsOnly()
     {
-        var queries = AgentPickerProjection.BuildAgentQueries(currentPath: null, nodeTypePath: null);
-        queries.Should().ContainSingle().Which.Should().Be(BuiltInAgentQuery);
+        // No partition context → just the platform default namespace (Children → n.namespace = Agent).
+        AgentPickerProjection.BuildAgentQuery().Should().Be(BuiltInAgentQuery);
+        AgentPickerProjection.BuildAgentQueries()
+            .Should().ContainSingle().Which.Should().Be(BuiltInAgentQuery);
     }
 
     [Fact]
-    public void BuildAgentQueries_AllQueriesShareSameNodeTypeFilter()
+    public void BuildAgentQuery_UserEqualsSpace_DedupedInAlternation()
     {
-        // Same all-Initial gating constraint as the model queries: every query must carry
-        // the same nodeType filter or the synced collection never settles.
-        var queries = AgentPickerProjection.BuildAgentQueries("ctx", "nt");
-        queries.Should().OnlyContain(q => q.Contains("nodeType:Agent"));
+        // When the user IS the space partition (a user's own space), the /Agent namespace isn't doubled.
+        AgentPickerProjection.BuildAgentQuery(userPath: "rbuergi", spacePath: "rbuergi")
+            .Should().Be("namespace:rbuergi/Agent|Agent nodeType:Agent");
+    }
+
+    [Fact]
+    public void BuildAgentQuery_ExcludeUtility_AppendsUtilityFilter()
+    {
+        // The conversational combobox (bound directly to the query, no projection filter) drops
+        // generator/utility agents at the query level; the engine callers leave it false.
+        AgentPickerProjection.BuildAgentQuery(spacePath: "AgenticPension", excludeUtility: true)
+            .Should().Be("namespace:AgenticPension/Agent|Agent nodeType:Agent -content.modelTier:utility");
+    }
+
+    [Fact]
+    public void PartitionOf_ReturnsTopLevelSegment()
+    {
+        AgentPickerProjection.PartitionOf("AgenticPension/Foo/_Thread/x").Should().Be("AgenticPension");
+        AgentPickerProjection.PartitionOf("rbuergi").Should().Be("rbuergi");
+        AgentPickerProjection.PartitionOf(null).Should().BeNull();
+        AgentPickerProjection.PartitionOf("").Should().BeNull();
     }
 
     // ─── DerivePickerContext: the timing-safe (currentPath, nodeTypePath) derivation ───
@@ -103,9 +107,9 @@ public class AgentPickerQueriesTest
         pc.ContextPath.Should().Be("ACME/ProductLaunch");
         pc.NodeTypePath.Should().Be("ACME/Project");
 
-        // The whole point: that pair drives the FULL 3-query union.
-        AgentPickerProjection.BuildAgentQueries(pc.ContextPath, pc.NodeTypePath)
-            .Should().HaveCount(3);
+        // The space partition derived from the resolved context drives the per-partition /Agent query.
+        AgentPickerProjection.BuildAgentQuery(spacePath: AgentPickerProjection.PartitionOf(pc.ContextPath))
+            .Should().Be("namespace:ACME/Agent|Agent nodeType:Agent");
     }
 
     [Fact]
@@ -130,9 +134,9 @@ public class AgentPickerQueriesTest
         pc.ContextPath.Should().Be("ACME/ProductLaunch");
         pc.NodeTypePath.Should().BeNull();
 
-        // currentPath present, nodeTypePath absent ⇒ 2 queries (built-in + path-ancestors).
-        AgentPickerProjection.BuildAgentQueries(pc.ContextPath, pc.NodeTypePath)
-            .Should().HaveCount(2);
+        // Context present ⇒ the space's /Agent namespace + the platform default.
+        AgentPickerProjection.BuildAgentQuery(spacePath: AgentPickerProjection.PartitionOf(pc.ContextPath))
+            .Should().Be("namespace:ACME/Agent|Agent nodeType:Agent");
     }
 
     [Fact]
@@ -155,6 +159,8 @@ public class AgentPickerQueriesTest
         pc.NodeTypePath.Should().BeNull();
         AgentPickerProjection.BuildAgentQueries(pc.ContextPath, pc.NodeTypePath)
             .Should().ContainSingle().Which.Should().Be(BuiltInAgentQuery);
+        AgentPickerProjection.BuildAgentQuery(pc.ContextPath, pc.NodeTypePath)
+            .Should().Be(BuiltInAgentQuery);
     }
 
     [Fact]

@@ -27,10 +27,12 @@ public class AgentPickerQueryTest(ITestOutputHelper output) : MonolithMeshTestBa
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
         base.ConfigureMesh(builder).AddAI();
 
-    // The exact query the agent picker issues (kept in lock-step with ThreadComposer.AgentName and
-    // BuiltInCommandProvider's /agent command).
-    private const string AgentPickerQuery =
-        "namespace:Agent nodeType:Agent -content.modelTier:utility sort:order";
+    // The exact query the conversational agent combobox issues — derived from the SINGLE canonical
+    // builder (AgentPickerProjection.BuildAgentQuery) + the picker's sort, exactly as
+    // ThreadComposerView.BuildAgentPicker composes it. No-context form here exercises the built-in
+    // catalog with the utility exclusion + ordering.
+    private static readonly string AgentPickerQuery =
+        AgentPickerProjection.BuildAgentQuery(excludeUtility: true) + " sort:order";
 
     [Fact(Timeout = 60000)]
     public async Task AgentPickerQuery_KeepsConversational_ExcludesUtility_AssistantFirst()

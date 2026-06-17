@@ -160,6 +160,17 @@ Add `scope:descendants` to search recursively:
 namespace:Systemorph scope:descendants   # All items under Systemorph (recursive)
 ```
 
+#### Multi-value `namespace:` — membership across namespaces
+
+`namespace:A|B|C` matches nodes living in **any** of the listed namespaces — a single `n.namespace IN (...)` lookup, not N queries. It is **exact membership**: just the listed namespaces, with no ancestor/descendant graph walk.
+
+```
+namespace:rbuergi/Agent|AgenticPension/Agent|Agent nodeType:Agent
+# Agent nodes whose namespace ∈ { rbuergi/Agent, AgenticPension/Agent, Agent }
+```
+
+This is the canonical **agent-registry** query (`AgentPickerProjection.BuildAgentQuery`): agents live in a dedicated `/Agent` sub-namespace **per partition** — the platform defaults in the bare `Agent` namespace, a space's own under `{space}/Agent`, a user's own under `{user}/Agent` — and the registry simply **lists** the relevant ones directly (no graph search). Models mirror this with `/Model`. A **single** `namespace:X` (no `|`) keeps its usual single-namespace semantics; the membership form is triggered only by the `|` alternation.
+
 ### `scope`
 
 Controls the traversal direction relative to `namespace` or `path`:

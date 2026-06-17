@@ -25,9 +25,8 @@ public static class AgentDetailsArea
         // QueryAsync, those miss static-provider fan-out, dedup, and the Initial
         // gating that produces "empty Agent dropdown" bugs.
         // Fully reactive — composed Select, no await/ToTask (AsynchronousCalls.md).
-        var workspace = host.Hub.GetWorkspace();
         return AgentPickerProjection
-            .ObserveAgents(workspace, host.Hub, currentPath: null, nodeTypePath: null)
+            .ObserveAgents(host.Hub)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(10))
             .Select(agentDisplayInfos =>

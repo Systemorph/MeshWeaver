@@ -80,8 +80,9 @@ public static class AiSettingsNodeType
             EnabledHarnesses = harnesses,
             // Tokenized templates — BuildAgentQueries/BuildModelQueries are the single source of truth;
             // we pass the placeholder tokens as their context args and resolve them per render.
+            // Agents: per-partition /Agent registry — user + current space + platform default.
             AgentQueries = AgentPickerProjection
-                .BuildAgentQueries(CurrentPathToken, NodeTypePathToken)
+                .BuildAgentQueries(UserPathToken, CurrentPathToken)
                 .ToImmutableArray(),
             ModelQueries = AgentPickerProjection
                 .BuildModelQueries(CurrentPathToken, NodeTypePathToken, null, UserPathToken)

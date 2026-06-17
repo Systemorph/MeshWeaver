@@ -623,7 +623,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         // (OnCompletionItemAccepted decides whether an @-ref is an agent). The /agent,
         // /model and /harness commands no longer load lists here: they go through the
         // GENERIC node picker (OpenPicker), which queries the mesh on demand.
-        agentSubscription = AgentPickerProjection.ObserveAgents(workspace, Hub, initialContext)
+        agentSubscription = AgentPickerProjection
+            .ObserveAgents(Hub, _userHome, AgentPickerProjection.PartitionOf(initialContext))
             .Subscribe(agents => InvokeAsync(() => OnAgentList(agents)));
     }
 
@@ -993,7 +994,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             {
                 if (_isDisposed) return;
                 var queries = isAgent
-                    ? AgentPickerProjection.BuildAgentQueries(pc.ContextPath, pc.NodeTypePath)
+                    ? AgentPickerProjection.BuildAgentQueries(_userHome, AgentPickerProjection.PartitionOf(pc.ContextPath))
                     : AgentPickerProjection.BuildModelQueries(pc.ContextPath, pc.NodeTypePath, userPath: _userHome);
                 var cacheKey = $"picker|{field}|{pc.ContextPath}|{pc.NodeTypePath}|{string.Join("|", queries)}";
                 RunPicker(workspace, picker, queries, cacheKey);

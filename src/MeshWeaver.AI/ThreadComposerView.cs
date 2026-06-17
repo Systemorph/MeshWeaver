@@ -84,7 +84,7 @@ public static class ThreadComposerView
                 // control the composer already uses. Each is data-bound to its [MeshNode] property
                 // and auto-persists to the composer node.
                 .Select(node => (UiControl?)BuildSelectorRow(
-                    h, EditLayoutArea.GetDataId(h.Hub.Address.ToString()), ComposerContext(h, node))));
+                    h, EditLayoutArea.GetDataId(h.Hub.Address.ToString()), node, ComposerContext(h, node))));
 
     /// <summary>
     /// The composer node's default area: data-bound message editor + selector row + Send.
@@ -159,17 +159,81 @@ public static class ThreadComposerView
     /// ONE line (nowrap) and bottom-aligned so the chat footer fits pickers + chips + Send on a
     /// single bottom row. Each picker shrinks rather than wrapping; min-width keeps them usable.
     /// </summary>
-    private static UiControl BuildSelectorRow(LayoutAreaHost host, string dataId, string boundContext)
+    private static UiControl BuildSelectorRow(LayoutAreaHost host, string dataId, MeshNode? node, string boundContext)
     {
         var row = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 6px; flex-wrap: nowrap; align-items: flex-end; width: 100%;");
         foreach (var prop in SelectorProperties())
+        {
+            // The AGENT picker uses the SINGLE canonical context-aware query
+            // (AgentPickerProjection.BuildAgentQuery) so a Space's / NodeType's / user's own agents
+            // surface — the static [MeshNode] attribute only sees the built-in `namespace:Agent`
+            // catalog. Harness/model keep the generic attribute-driven control.
+            var control = string.Equals(prop.Name, nameof(ThreadComposer.AgentName), StringComparison.Ordinal)
+                ? BuildAgentPicker(host, node, boundContext)
+                : host.Hub.ServiceProvider.MapToToggleableControl(
+                    prop, dataId, canEdit: true, host, isToggleable: false, boundDataContext: boundContext);
             row = row.WithView(
                 Controls.Stack.WithStyle("flex: 1 1 0; min-width: 70px; max-width: 220px;")
-                    .WithView(host.Hub.ServiceProvider.MapToToggleableControl(
-                        prop, dataId, canEdit: true, host, isToggleable: false, boundDataContext: boundContext)));
+                    .WithView(control));
+        }
         return row;
+    }
+
+    /// <summary>
+    /// The agent <see cref="MeshNodePickerControl"/> — built from the ONE canonical, context-aware
+    /// agent query (<see cref="AgentPickerProjection.BuildAgentQuery"/>) rather than the static
+    /// <c>[MeshNode]</c> attribute, so the combobox unions the built-in catalog with the agents
+    /// declared in the current context's namespace (+ ancestors) and the user's own namespace.
+    /// Layout/open/default come from the property attribute (identical look to harness/model); the
+    /// conversational picker excludes utility/generator agents at the query level.
+    /// </summary>
+    private static UiControl BuildAgentPicker(LayoutAreaHost host, MeshNode? node, string boundContext)
+    {
+        var agentProp = typeof(ThreadComposer).GetProperty(nameof(ThreadComposer.AgentName))!;
+        var meshNodeAttr = agentProp.GetCustomAttribute<MeshNodeAttribute>()!;
+        var composer = ThreadComposerNodeType.ComposerOf(node, host.Hub.JsonSerializerOptions, Logger(host));
+        var contextPath = string.IsNullOrEmpty(composer?.ContextPath) ? null : composer!.ContextPath;
+        // sort:order so the combobox (bound DIRECTLY to the query, no projection re-sort) leads with
+        // the catalog head — Assistant's Order -1 — and DefaultToFirst lands on it (the harness/model
+        // [MeshNode] pickers do the same). The /agent picker + ObserveAgents re-sort downstream, so
+        // BuildAgentQuery itself stays sort-free.
+        var query = AgentPickerProjection.BuildAgentQuery(
+            ResolveComposerUserHome(host, node), AgentPickerProjection.PartitionOf(contextPath), excludeUtility: true)
+            + " sort:order";
+        return new MeshNodePickerControl(
+            new JsonPointerReference(nameof(ThreadComposer.AgentName).ToCamelCase()!))
+        {
+            Queries = new[] { query },
+            Layout = meshNodeAttr.Layout,
+            Open = meshNodeAttr.Open,
+            DefaultToFirst = meshNodeAttr.DefaultToFirst,
+            DataContext = boundContext
+        };
+    }
+
+    /// <summary>
+    /// The chatting user's home namespace, for the per-user layer of the agent query. The standalone
+    /// composer node lives at <c>{userHome}/_Thread/ThreadComposer</c> (so the home is the path prefix);
+    /// for a Thread node we fall back to the access context's user (system/hub principals skipped).
+    /// </summary>
+    private static string? ResolveComposerUserHome(LayoutAreaHost host, MeshNode? node)
+    {
+        if (node?.NodeType == ThreadComposerNodeType.NodeType)
+        {
+            var path = node.Path ?? host.Hub.Address.ToString();
+            var idx = path.IndexOf("/_Thread/", StringComparison.Ordinal);
+            if (idx > 0)
+                return path[..idx];
+        }
+        var accessSvc = host.Hub.ServiceProvider.GetService<AccessService>();
+        foreach (var candidate in new[] { accessSvc?.Context?.ObjectId, accessSvc?.CircuitContext?.ObjectId })
+            if (!string.IsNullOrEmpty(candidate)
+                && candidate != WellKnownUsers.System
+                && !AccessService.LooksLikeHubPrincipal(candidate))
+                return candidate;
+        return null;
     }
 
     private static IEnumerable<PropertyInfo> SelectorProperties() =>

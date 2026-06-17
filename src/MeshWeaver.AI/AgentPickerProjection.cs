@@ -40,27 +40,81 @@ public static class AgentPickerProjection
     public const string AgentRootNamespace = "Agent";
 
     /// <summary>
-    /// THE single source of truth for both agent and model picker query
-    /// strings. All queries carry the same <c>nodeType:</c> filter, varying
-    /// only on namespace/path + scope. For <see cref="BuildAgentQueries"/>:
-    /// <list type="number">
-    ///   <item>built-in: <c>namespace:Agent nodeType:Agent</c></item>
-    ///   <item>per-context inheritance: <c>path:{currentPath} nodeType:Agent scope:ancestors</c>
-    ///         — Agent nodes placed at any ancestor of the content path.</item>
-    ///   <item>per-NodeType inheritance: <c>path:{nodeTypePath} nodeType:Agent scope:ancestors</c>
-    ///         — Agent nodes inherited up the NodeType chain.</item>
-    /// </list>
-    ///
-    /// <para>Models use a different shape (<c>_Provider/</c> subtrees, scope:descendants)
-    /// because providers contain models — see <see cref="BuildModelQueries"/>.</para>
-    ///
-    /// <para>Every consumer (chat picker UI, AgentChatClient, AzureClaude
-    /// driver factory) calls <see cref="BuildAgentQueries"/> or
-    /// <see cref="BuildModelQueries"/> — never inline a query string. Drop
-    /// any localized definition you find.</para>
+    /// The dedicated sub-namespace each partition uses for its OWN agents — <c>{partition}/Agent</c>
+    /// (e.g. <c>rbuergi/Agent</c>, <c>AgenticPension/Agent</c>). Platform defaults live in the bare
+    /// <see cref="AgentRootNamespace"/> (<c>Agent</c>). One registry, three layers, listed directly.
     /// </summary>
-    public static string[] BuildAgentQueries(string? currentPath = null, string? nodeTypePath = null)
-        => BuildQueries(AgentNodeType.NodeType, AgentRootNamespace, currentPath, nodeTypePath);
+    public const string AgentSubNamespace = "Agent";
+
+    /// <summary>The dedicated sub-namespace each partition uses for its OWN models — <c>{partition}/Model</c>;
+    /// platform model defaults live in the bare <c>Model</c> namespace.</summary>
+    public const string ModelSubNamespace = "Model";
+
+    /// <summary>
+    /// Array form of <see cref="BuildAgentQuery"/> for the <c>hub.GetQuery(id, params string[])</c>
+    /// surface — a single-element array carrying THE one canonical agent-registry query.
+    /// </summary>
+    public static string[] BuildAgentQueries(string? userPath = null, string? spacePath = null)
+        => new[] { BuildAgentQuery(userPath, spacePath) };
+
+    /// <summary>
+    /// THE single canonical agent-registry query — the one place this string is defined. Agents live
+    /// in a dedicated <c>/Agent</c> sub-namespace PER PARTITION; the query lists the relevant ones
+    /// DIRECTLY (exact membership, NO graph/ancestor walk):
+    /// <list type="bullet">
+    ///   <item>platform defaults — namespace <c>Agent</c> (always);</item>
+    ///   <item>the current space's — <c>{spacePath}/Agent</c>;</item>
+    ///   <item>the chatting/owning user's — <c>{userPath}/Agent</c>.</item>
+    /// </list>
+    /// Produces e.g. <c>namespace:rbuergi/Agent|AgenticPension/Agent|Agent nodeType:Agent</c>. The
+    /// <c>namespace:A|B|C</c> alternation resolves (see <see cref="MeshWeaver.Mesh.QueryParser"/>) to a
+    /// single <c>namespace IN (...)</c> exact-membership filter — so the combobox, the <c>/agent</c>
+    /// picker and the engine's agent selection all issue exactly this ONE query via <c>hub.GetQuery</c>
+    /// (per-user RLS at the caller's portal hub naturally hides private agents from non-owners). Utility
+    /// (generator) agents are kept unless <paramref name="excludeUtility"/> — the conversational
+    /// surfaces drop them via <see cref="IsUtilityAgent"/>.
+    /// </summary>
+    public static string BuildAgentQuery(
+        string? userPath = null, string? spacePath = null, bool excludeUtility = false)
+        => BuildRegistryQuery(AgentNodeType.NodeType, AgentSubNamespace, userPath, spacePath,
+            excludeUtility ? $" -content.modelTier:{UtilityModelTier}" : "");
+
+    /// <summary>
+    /// Assembles a per-partition registry query: the platform default namespace (<paramref name="sub"/>)
+    /// plus the user's and space's own (<c>{partition}/{sub}</c>), listed directly as a
+    /// <c>namespace:A|B|C</c> exact-membership alternation. No scope — agents/models are placed in a
+    /// flat, well-known namespace per partition, so there is no graph search.
+    /// </summary>
+    private static string BuildRegistryQuery(
+        string nodeType, string sub, string? userPath, string? spacePath, string extra)
+    {
+        var namespaces = new List<string>();
+        void Add(string? partition)
+        {
+            if (string.IsNullOrEmpty(partition)) return;
+            var ns = $"{partition}/{sub}";
+            if (!namespaces.Contains(ns, StringComparer.OrdinalIgnoreCase))
+                namespaces.Add(ns);
+        }
+        Add(userPath);
+        Add(spacePath);
+        namespaces.Add(sub); // platform defaults — always present, last
+        var nsClause = namespaces.Count > 1
+            ? $"namespace:{string.Join("|", namespaces)}"
+            : $"namespace:{namespaces[0]}";
+        return $"{nsClause} nodeType:{nodeType}{extra}";
+    }
+
+    /// <summary>The partition (top-level path segment) a context path belongs to — the "space" whose
+    /// <c>/Agent</c> + <c>/Model</c> namespaces the registry surfaces. <c>AgenticPension/Foo/_Thread/x</c>
+    /// → <c>AgenticPension</c>; null/empty → null.</summary>
+    public static string? PartitionOf(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return null;
+        var trimmed = path.Trim('/');
+        var slash = trimmed.IndexOf('/');
+        return slash < 0 ? trimmed : trimmed[..slash];
+    }
 
     /// <summary>
     /// The (contextPath, nodeTypePath) pair the chat picker MUST feed into
@@ -130,23 +184,41 @@ public static class AgentPickerProjection
         return path;
     }
 
-    /// <inheritdoc cref="BuildAgentQueries" />
-    /// <remarks>
-    /// Follows the canonical picker-query shape (see
-    /// the <c>SyncedMeshNodeQueries</c> architecture doc):
-    /// every query carries the SAME <c>nodeType:</c> filter, varying
-    /// only on namespace + scope. Mixed-filter multi-query is what trips
-    /// the synced-collection's all-Initial gating.
-    /// <list type="number">
-    ///   <item>System catalog under <c>_Provider/</c> — both
-    ///         <c>nodeType:ModelProvider</c> (at <c>_Provider/{name}</c>)
-    ///         AND the LanguageModel children (at
-    ///         <c>_Provider/{name}/{modelId}</c>) surface via
-    ///         <c>scope:descendants</c>.</item>
-    ///   <item>Per-context: <c>{currentPath}/_Provider</c> subtree.</item>
-    ///   <item>Per-NodeType: <c>{nodeTypePath}/_Provider</c> subtree.</item>
-    /// </list>
-    /// </remarks>
+    /// <summary>
+    /// 🚨 The EXACT pipeline the chat agent combobox is bound to (via the PORTAL hub, so the
+    /// per-user RLS of <c>hub.GetQuery</c> applies the caller's identity). The view subscribes to
+    /// this; tests subscribe to this. No parallel reconstruction of queries / projection anywhere.
+    /// <paramref name="spacePath"/> is the current space partition; <paramref name="userPath"/> the
+    /// user's home partition — their <c>/Agent</c> namespaces plus the platform default are listed.
+    /// </summary>
+    public static IObservable<IReadOnlyList<AgentDisplayInfo>> ObserveAgents(
+        IMessageHub hub, string? userPath = null, string? spacePath = null)
+        => ObserveSnapshot(hub.GetWorkspace(), hub,
+                $"{AgentsQueryId}|u={userPath ?? ""}|s={spacePath ?? ""}",
+                BuildAgentQuery(userPath, spacePath))
+            .Select(snapshot => ProjectAgents(snapshot, hub.JsonSerializerOptions));
+
+    /// <summary>
+    /// 🚨 The EXACT pipeline the chat model combobox is bound to. The view subscribes to this; tests
+    /// subscribe to this. Models stay on the <c>_Provider</c> catalog shape (providers contain models
+    /// + credentials) — the per-partition <c>/Model</c> registry is the next increment.
+    /// </summary>
+    public static IObservable<IReadOnlyList<ModelInfo>> ObserveModels(
+        IWorkspace workspace, IMessageHub hub,
+        string? currentPath = null, string? nodeTypePath = null,
+        IReadOnlyList<string>? selectedProviderPaths = null,
+        string? userPath = null)
+        => ObserveSnapshot(workspace, hub,
+                BuildModelQueryId(ModelsQueryId, currentPath, nodeTypePath, selectedProviderPaths, userPath),
+                BuildModelQueries(currentPath, nodeTypePath, selectedProviderPaths, userPath))
+            .Select(snapshot => ProjectModels(snapshot, hub.JsonSerializerOptions));
+
+    /// <summary>
+    /// The model picker queries: the system <c>_Provider</c> catalog plus per-context / per-NodeType /
+    /// per-user subtrees and any user-selected provider subtree — all <c>nodeType:LanguageModel|ModelProvider</c>,
+    /// varying only namespace + scope (the synced-collection all-Initial gating constraint). The
+    /// per-partition flat <c>/Model</c> registry is the next increment; credentials live in <c>_Provider</c>.
+    /// </summary>
     public static string[] BuildModelQueries(
         string? currentPath = null,
         string? nodeTypePath = null,
@@ -162,110 +234,19 @@ public static class AgentPickerProjection
             queries.Add($"namespace:{currentPath}/{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants");
         if (!string.IsNullOrEmpty(nodeTypePath))
             queries.Add($"namespace:{nodeTypePath}/{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants");
-        // The chatting user's OWN providers + models live in their dotfile
-        // namespace ({user}/_Memex/{provider}/{model}), NOT a shared _Provider
-        // satellite — see ModelProviderNodeType.UserNamespace. One more query
-        // (the union is the synced-collection's job) surfaces them in the picker.
         if (!string.IsNullOrEmpty(userPath))
             queries.Add($"namespace:{ModelProviderNodeType.UserNamespacePath(userPath)} nodeType:{typeFilter} scope:descendants");
-        // User-selected provider subtrees (the provider-selection picker). Each
-        // selected path IS a ModelProvider node (e.g. acme/_Provider/Anthropic);
-        // scope:selfAndDescendants pulls the provider node AND its child
-        // LanguageModel nodes in one query. Same single nodeType filter as the
-        // rest, so the synced collection's all-Initial gating still holds.
         if (selectedProviderPaths != null)
-        {
             foreach (var path in selectedProviderPaths)
-            {
                 if (!string.IsNullOrEmpty(path))
                     queries.Add($"namespace:{path} nodeType:{typeFilter} scope:selfAndDescendants");
-            }
-        }
         return queries.ToArray();
     }
 
-    /// <summary>
-    /// Three queries, all <c>nodeType:{nodeType}</c>, varying on the second
-    /// filter (per <c>QuerySyntax.md</c>):
-    /// <list type="number">
-    ///   <item>system catalog: <c>namespace:{rootNamespace}</c></item>
-    ///   <item>per-context inheritance: <c>path:{currentPath} scope:ancestors</c>
-    ///         — Agent nodes whose path IS an ancestor of currentPath. Walks
-    ///         UP the content path collecting ancestor-placed agents.</item>
-    ///   <item>per-NodeType namespace inheritance:
-    ///         <c>namespace:{nodeTypePath} scope:selfAndAncestors</c> —
-    ///         agents declared in the NodeType's own namespace OR any
-    ///         ancestor namespace inherit DOWN to the NodeType. e.g. for
-    ///         NodeType <c>ACME/Project</c> this matches TodoAgent.md at
-    ///         <c>ACME/Project/TodoAgent</c> (namespace <c>ACME/Project</c> = self)
-    ///         AND any agent declared at namespace <c>ACME</c> or root.
-    ///         <c>selfAndAncestors</c> ≡ <c>AncestorsAndSelf</c> in
-    ///         <c>PathMatcher</c>.</item>
-    /// </list>
-    /// </summary>
-    private static string[] BuildQueries(string nodeType, string rootNamespace, string? currentPath, string? nodeTypePath)
-    {
-        var queries = new List<string>
-        {
-            $"namespace:{rootNamespace} nodeType:{nodeType}",
-        };
-        if (!string.IsNullOrEmpty(currentPath))
-            queries.Add($"path:{currentPath} nodeType:{nodeType} scope:ancestors");
-        if (!string.IsNullOrEmpty(nodeTypePath))
-            queries.Add($"namespace:{nodeTypePath} nodeType:{nodeType} scope:selfAndAncestors");
-        return queries.ToArray();
-    }
-
-    /// <summary>
-    /// 🚨 The EXACT pipeline the chat agent combobox is bound to. The view
-    /// subscribes to this; tests subscribe to this. No parallel
-    /// reconstruction of queries / projection in either place.
-    ///
-    /// <para>Every link in the chain logs into channel
-    /// <c>MeshWeaver.AI.AgentPickerProjection</c>: subscribe, raw-snapshot
-    /// count, projected count. If the dropdown is empty in production,
-    /// open Aspire dashboard → memex-portal-distributed → Logs and grep
-    /// for <c>[AgentPicker]</c>: that tells you whether the query
-    /// returned 0 nodes (provider/scope problem), or nodes were returned
-    /// but the projection dropped them (Content shape problem), or
-    /// subscription never fired (workspace null / circuit lifecycle).</para>
-    /// </summary>
-    public static IObservable<IReadOnlyList<AgentDisplayInfo>> ObserveAgents(
-        IWorkspace workspace, IMessageHub hub,
-        string? currentPath = null, string? nodeTypePath = null)
-        => ObserveSnapshot(workspace, hub,
-                BuildQueryId(AgentsQueryId, currentPath, nodeTypePath),
-                BuildAgentQueries(currentPath, nodeTypePath))
-            .Select(snapshot => ProjectAgents(snapshot, hub.JsonSerializerOptions));
-
-    /// <summary>
-    /// 🚨 The EXACT pipeline the chat model combobox is bound to. The view
-    /// subscribes to this; tests subscribe to this.
-    /// Same logging shape as <see cref="ObserveAgents"/>.
-    /// </summary>
-    public static IObservable<IReadOnlyList<ModelInfo>> ObserveModels(
-        IWorkspace workspace, IMessageHub hub,
-        string? currentPath = null, string? nodeTypePath = null,
-        IReadOnlyList<string>? selectedProviderPaths = null,
-        string? userPath = null)
-        => ObserveSnapshot(workspace, hub,
-                BuildQueryId(ModelsQueryId, currentPath, nodeTypePath, selectedProviderPaths, userPath),
-                BuildModelQueries(currentPath, nodeTypePath, selectedProviderPaths, userPath))
-            .Select(snapshot => ProjectModels(snapshot, hub.JsonSerializerOptions));
-
-    /// <summary>
-    /// The workspace.GetQuery registry caches by id — first call wins, every
-    /// subsequent call with the same id but different queries returns the cached
-    /// observable. So agent / model queries that vary by context (currentPath +
-    /// nodeTypePath + selected provider paths) MUST use a context-scoped id;
-    /// otherwise re-init after SetContext / a selection change returns the stale
-    /// snapshot from the first subscribe and NodeType-defined agents (or the
-    /// newly-selected providers' models) stay invisible.
-    /// </summary>
-    private static string BuildQueryId(
+    /// <summary>Context-scoped cache id for the model query (provider selection must be part of the id).</summary>
+    private static string BuildModelQueryId(
         string baseId, string? currentPath, string? nodeTypePath,
-        IReadOnlyList<string>? selectedProviderPaths = null,
-        string? userPath = null)
+        IReadOnlyList<string>? selectedProviderPaths, string? userPath)
     {
         var selected = selectedProviderPaths is { Count: > 0 }
             ? string.Join(",", selectedProviderPaths.OrderBy(x => x, StringComparer.Ordinal))
@@ -274,11 +255,10 @@ public static class AgentPickerProjection
     }
 
     /// <summary>
-    /// Live MeshNode snapshot for one of the named picker queries — single
-    /// <see cref="MeshWeaver.Graph.SyncedQueryDataSourceExtensions.GetQuery(MeshWeaver.Data.IWorkspace, object, string[])"/>
-    /// call so the workspace cache shares the same upstream subscription
-    /// across every consumer (chat view, AgentChatClient, AzureClaude
-    /// driver factory). The mesh query engine unions the queries internally.
+    /// Live MeshNode snapshot for a registry query via <c>hub.GetQuery</c> — the centralized,
+    /// per-user-RLS surface (one shared upstream subscription per id across the chat view,
+    /// AgentChatClient and the driver factory). "hub.GetQuery to be precise": reads run under the
+    /// caller hub's identity, so a thread's agents resolve under the thread OWNER.
     /// </summary>
     public static IObservable<IEnumerable<MeshNode>> ObserveSnapshot(
         IWorkspace workspace, IMessageHub hub, string queryId, params string[] queries)
@@ -286,10 +266,9 @@ public static class AgentPickerProjection
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.AgentPickerProjection");
         logger?.LogDebug(
-            "[AgentPicker] subscribe id={Id} hub={Hub} workspaceHub={WsHub} queries=[{Queries}]",
-            queryId, hub.Address, workspace.Hub.Address,
-            string.Join(" | ", queries));
-        return workspace.GetQuery(queryId, queries)
+            "[AgentPicker] subscribe id={Id} hub={Hub} queries=[{Queries}]",
+            queryId, hub.Address, string.Join(" | ", queries));
+        return hub.GetQuery(queryId, queries)
             .Do(snapshot =>
             {
                 var nodes = snapshot as IReadOnlyCollection<MeshNode> ?? snapshot.ToList();
