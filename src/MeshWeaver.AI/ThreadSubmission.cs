@@ -371,27 +371,56 @@ internal static class ThreadSubmissionServer
     }
 
     /// <summary>
-    /// Owner-side self-heal for the rapid-submit array-clobber: ensure
-    /// <see cref="MeshThread.UserMessageIds"/> is a superset of the merge-safe
-    /// authoritative id sources (<see cref="MeshThread.PendingUserMessages"/> keys and
-    /// <see cref="MeshThread.IngestedMessageIds"/>). Cross-mirror submits patch the
+    /// Owner-side self-heal for two derived-id invariants that an own-hub write can break
+    /// under load. Runs as an OWN write on the thread hub (serialised by the action block —
+    /// no clobber), idempotent and self-terminating (when nothing is missing the write is
+    /// skipped, and a reconciled node is byte-identical to the next observation so the stream
+    /// dedupes it). It NEVER touches <see cref="MeshThread.PendingUserMessages"/>, so it can
+    /// only ever ADD to the derived id arrays — it cannot re-queue work and therefore cannot
+    /// re-dispatch or storm.
+    ///
+    /// <para><b>(a) UserMessageIds ⊇ pending ∪ ingested.</b> Cross-mirror submits patch the
     /// UserMessageIds array off a stale base and RFC 7396 array-replace drops concurrent
-    /// additions; the keyed dict survives, so the owner reconstructs the list. Runs as an
-    /// OWN write on the thread hub (serialised by the action block — no clobber). Missing
-    /// ids are appended (best-effort order; a storm already lost the original interleave).
-    /// Idempotent and self-terminating: when nothing is missing the write is skipped, and a
-    /// reconciled node is byte-identical to the next observation so the stream dedupes it.
+    /// additions; the keyed dict survives, so the owner reconstructs the list.</para>
+    ///
+    /// <para><b>(b) IngestedMessageIds ⊇ (UserMessageIds ∩ Messages).</b>
+    /// <see cref="DispatchRound"/>'s <c>CommitRoundAndExecute</c> (and <see cref="InboxTool"/>'s
+    /// drain) add a user id to <c>Messages</c> AND <c>IngestedMessageIds</c> in ONE atomic own
+    /// write — so a user message whose satellite cell is in <c>Messages</c> yet is neither
+    /// pending nor ingested was materialised but lost its ingested mark to a non-atomic
+    /// own-hub write under 2-core load (the <c>Cancel_WithPendingMessages</c> / <c>RapidSubmits</c>
+    /// CI reds, where the thread settles with <c>pending=0, ingested=[u1]</c> but the cell exists).
+    /// The message WAS processed (its cell is rendered), so re-mark it ingested. <b>STOPGAP:</b>
+    /// the LogWarning below makes the next CI hit self-diagnosing so the non-atomic-write root
+    /// cause in the framework write path can be pinned and fixed; this restores the user-visible
+    /// invariant (no acknowledged message left un-ingested) in the meantime.</para>
     /// </summary>
     private static void ReconcileUserMessageIds(IMessageHub threadHub, MeshNode? node, ILogger? logger)
     {
         if (node?.Content is not MeshThread t) return;
         var have = t.UserMessageIds.ToImmutableHashSet();
-        var missing = t.PendingUserMessages.Keys
+        var userIdsMissing = t.PendingUserMessages.Keys
             .Concat(t.IngestedMessageIds)
             .Where(id => !have.Contains(id))
             .Distinct()
             .ToImmutableList();
-        if (missing.IsEmpty) return;
+
+        // (b) materialised-but-not-ingested user messages (see remarks).
+        var ingestedSet = t.IngestedMessageIds.ToImmutableHashSet();
+        var pendingKeys = t.PendingUserMessages.Keys.ToImmutableHashSet();
+        var messageSet = t.Messages.ToImmutableHashSet();
+        var ingestedMissing = t.UserMessageIds
+            .Where(id => messageSet.Contains(id) && !ingestedSet.Contains(id) && !pendingKeys.Contains(id))
+            .Distinct()
+            .ToImmutableList();
+
+        if (userIdsMissing.IsEmpty && ingestedMissing.IsEmpty) return;
+        if (!ingestedMissing.IsEmpty)
+            logger?.LogWarning(
+                "[SubmissionWatcher] lost-message invariant restored for {ThreadPath}: {Ids} were in "
+                + "Messages+UserMessageIds but neither ingested nor pending — re-marking ingested "
+                + "(non-atomic own-hub write under load; root cause under investigation)",
+                threadHub.Address.Path, string.Join(",", ingestedMissing));
 
         threadHub.GetWorkspace().GetMeshNodeStream().Update(n =>
         {
@@ -399,17 +428,31 @@ internal static class ThreadSubmissionServer
             // captured above — so the write reflects the latest merged state.
             if (n.Content is not MeshThread cur) return n;
             var curHave = cur.UserMessageIds.ToImmutableHashSet();
-            var add = cur.PendingUserMessages.Keys
+            var addUser = cur.PendingUserMessages.Keys
                 .Concat(cur.IngestedMessageIds)
                 .Where(id => !curHave.Contains(id))
                 .Distinct()
                 .ToImmutableList();
-            if (add.IsEmpty) return n; // raced to reconciled — byte-identical, dedupes
-            return n with { Content = cur with { UserMessageIds = cur.UserMessageIds.AddRange(add) } };
+            var curIngested = cur.IngestedMessageIds.ToImmutableHashSet();
+            var curPending = cur.PendingUserMessages.Keys.ToImmutableHashSet();
+            var curMessages = cur.Messages.ToImmutableHashSet();
+            var addIngested = cur.UserMessageIds
+                .Where(id => curMessages.Contains(id) && !curIngested.Contains(id) && !curPending.Contains(id))
+                .Distinct()
+                .ToImmutableList();
+            if (addUser.IsEmpty && addIngested.IsEmpty) return n; // raced to reconciled — byte-identical, dedupes
+            return n with
+            {
+                Content = cur with
+                {
+                    UserMessageIds = cur.UserMessageIds.AddRange(addUser),
+                    IngestedMessageIds = cur.IngestedMessageIds.AddRange(addIngested)
+                }
+            };
         }).Subscribe(
             _ => { },
             ex => logger?.LogWarning(ex,
-                "[SubmissionWatcher] UserMessageIds reconcile failed for {ThreadPath}",
+                "[SubmissionWatcher] derived-id reconcile failed for {ThreadPath}",
                 threadHub.Address.Path));
     }
 
