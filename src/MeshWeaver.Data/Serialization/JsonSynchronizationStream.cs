@@ -88,12 +88,16 @@ public static class JsonSynchronizationStream
             if (eventType is null) return null;
             var pathProp = eventType.GetProperty("Path");
             if (pathProp is null) return null;
+            // Kind discriminates a genuine RECREATE (Created/Deleted) from a routine content
+            // Updated — only the former warrants the single recovery resubscribe (see helper).
+            var kindProp = eventType.GetProperty("Kind");
+            if (kindProp is null) return null;
 
             var helper = typeof(JsonSynchronizationStream).GetMethod(
                 nameof(SubscribeOwnerPathChangeFeedHelper),
                 System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
                 .MakeGenericMethod(eventType);
-            return (IDisposable?)helper.Invoke(null, [feed, pathProp, ownerPath, onOwnerChanged]);
+            return (IDisposable?)helper.Invoke(null, [feed, pathProp, kindProp, ownerPath, onOwnerChanged]);
         }
         catch (Exception ex)
         {
@@ -105,15 +109,27 @@ public static class JsonSynchronizationStream
     }
 
     private static IDisposable? SubscribeOwnerPathChangeFeedHelper<TEvent>(
-        object feed, System.Reflection.PropertyInfo pathProperty, string ownerPath, Action onOwnerChanged)
+        object feed, System.Reflection.PropertyInfo pathProperty,
+        System.Reflection.PropertyInfo kindProperty, string ownerPath, Action onOwnerChanged)
         where TEvent : class
     {
         Action<TEvent> handler = evt =>
         {
             try
             {
+                // 🚨 ONE subscribe / ONE dispose: the cache owns the stream lifecycle (subscribe on
+                // create, dispose on evict). The ONLY sanctioned extra subscribe is recovery from a
+                // genuine owner RECREATE — a Created/Deleted of the owner node (a recycled grain
+                // whose live incremental stream is gone). A routine Updated is ALREADY carried by
+                // the live stream incrementally; re-subscribing on it (a) storms the owner's
+                // single-threaded action block with synchronous sync-hub creations (the cache-hub
+                // wedge) and (b) re-fetches a point-in-time Full that can be STALE relative to an
+                // in-flight write and overwrites it — the lost-message race. So fire the recovery
+                // resubscribe ONLY for Created/Deleted, never for Updated.
                 if (pathProperty.GetValue(evt) is string p
-                    && string.Equals(p, ownerPath, StringComparison.OrdinalIgnoreCase))
+                    && string.Equals(p, ownerPath, StringComparison.OrdinalIgnoreCase)
+                    && kindProperty.GetValue(evt)?.ToString() is string kind
+                    && !string.Equals(kind, "Updated", StringComparison.Ordinal))
                     onOwnerChanged();
             }
             catch { /* keep change-feed alive on handler faults */ }
