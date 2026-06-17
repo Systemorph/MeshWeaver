@@ -2,6 +2,7 @@
 
 <FluentTextField
     @bind-Value="Value"
+    TextFieldType="@(ViewModel.Password ? Microsoft.FluentUI.AspNetCore.Components.TextFieldType.Password : Microsoft.FluentUI.AspNetCore.Components.TextFieldType.Text)"
     Placeholder="@Placeholder"
     Label="@Label"
     Autofocus="@AutoFocus"
