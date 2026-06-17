@@ -482,9 +482,12 @@ public class InboxToolIntegrationTest : AITestBase
                 $"thread {threadPath} never emitted a MeshThread snapshot within {timeoutMs}ms");
             predicate(last!).Should().BeTrue(
                 $"condition not reached within {timeoutMs}ms for thread {threadPath}. " +
-                $"Last state: PendingUserMessages.Count={last!.PendingUserMessages.Count}, " +
-                $"IngestedMessageIds=[{string.Join(",", last.IngestedMessageIds)}], " +
-                $"IsExecuting={last.IsExecuting}");
+                $"Last state: Status={last!.Status}, RequestedStatus={last.RequestedStatus}, " +
+                $"ActiveMessageId={last.ActiveMessageId}, IsExecuting={last.IsExecuting}, " +
+                $"pending=[{string.Join(",", last.PendingUserMessages.Keys)}], " +
+                $"ingested=[{string.Join(",", last.IngestedMessageIds)}], " +
+                $"userIds=[{string.Join(",", last.UserMessageIds)}], " +
+                $"messages=[{string.Join(",", last.Messages)}]");
             return last!;
         }
     }
