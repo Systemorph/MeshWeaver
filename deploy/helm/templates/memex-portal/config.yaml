@@ -61,6 +61,11 @@ data:
   # the model picker and its Model/<id> nodes never seed. atioz sets this false
   # (Claude there is per-user Claude Code, NOT a wired API provider).
   Features__Ai__Providers__Anthropic: "{{ .Values.config.memex_portal.Features__Ai__Providers__Anthropic | default "true" }}"
+  # Same gate for the AzureFoundry (open-weight /models, e.g. DeepSeek) chat provider.
+  # Default "true" so existing envs keep DeepSeek; set "false" per-env to drop it from
+  # the picker (catalog source not registered). Does NOT affect embeddings, which are
+  # wired separately from Embedding__* — see MemexConfiguration.
+  Features__Ai__Providers__AzureFoundry: "{{ .Values.config.memex_portal.Features__Ai__Providers__AzureFoundry | default "true" }}"
   # ---- AI: extra non-secret knobs (optional; default empty) -----------------
   # Order is an int — empty string fails Int32 binding, so default to "0" (NOT "").
   Anthropic__Order: "{{ .Values.config.memex_portal.Anthropic__Order | default "0" }}"
