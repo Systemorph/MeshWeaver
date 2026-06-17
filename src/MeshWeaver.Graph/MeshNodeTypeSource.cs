@@ -476,22 +476,20 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     {
         var ownNode = rawNode != null ? ResolveJsonElementContent(rawNode) : null;
 
-        if (ownNode is { Version: > 0 })
-        {
-            // Restore the hub clock STRICTLY ABOVE the last persisted node version. node.Version is
-            // stamped = Hub.Version on every write (the owner ++s Hub.Version at the START of each
-            // message and assigns it to the node when the node changes). Restoring to exactly
-            // ownNode.Version (= V) would leave the clock AT V, so the next stamp before an
-            // intervening ++ would REUSE V for a DIFFERENT change — handed out under a version a
-            // subscriber already holds at V, which the monotonicity guard cannot distinguish from a
-            // stale duplicate (it would drop the real new write). Start at V+1 so every
-            // post-reactivation write is strictly newer than anything any subscriber saw before the
-            // recycle.
-            var restoreVersion = ownNode.Version + 1;
-            _logger?.LogDebug("MeshNodeTypeSource: Restoring hub {Address} to version {Version} (ownNode V={OwnVersion}+1)",
-                _workspace.Hub.Address, restoreVersion, ownNode.Version);
-            _workspace.Hub.SetInitialVersion(restoreVersion);
-        }
+        // 🚨 LEAVE Hub.Version ALONE — never set it backward. It is already strictly monotonic on its
+        // own (++ per message in MessageHub.HandleMessageAsync) and is the SHARED clock for this hub:
+        // it also stamps the hub's LAYOUT-AREA stream Fulls (Host.Version), which advance per render
+        // independently of node writes. BuildInstanceCollection runs on EVERY ownNode emission (not
+        // just first load), so the old SetInitialVersion(node.Version) re-stamped the clock BACKWARD to
+        // a low static/doc node version on every catalog push, dropping the live layout Fulls under the
+        // stale-Full monotonicity guard → "cannot find pinned doc" wedge (atioz 2026-06-18).
+        //
+        // Instead, just INCREASE the loaded node's own version by 1 so its emitted Full is strictly
+        // newer than the last one a subscriber saw (re-applies on reload/recycle instead of being
+        // dropped as a value-equal/stale duplicate). The node carries its OWN monotonic version;
+        // Hub.Version is never touched.
+        if (ownNode is not null)
+            ownNode = ownNode with { Version = ownNode.Version + 1 };
 
         _workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
 
