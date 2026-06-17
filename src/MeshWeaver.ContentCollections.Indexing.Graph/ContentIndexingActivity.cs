@@ -3,6 +3,7 @@ using System.Reactive;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -75,6 +76,7 @@ internal static class ContentIndexingActivity
         ArgumentNullException.ThrowIfNull(command);
 
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.ContentCollections.Indexing.Graph.ContentIndexingActivity");
         var workspace = hub.GetWorkspace();
@@ -96,83 +98,122 @@ internal static class ContentIndexingActivity
             },
         };
 
-        return meshService.CreateNode(node).SelectMany(_ =>
+        // STEP 1: create the activity node (captures the caller's identity → stamps
+        // CreatedBy = owner). Completes on its own; the execution is a SEPARATE step.
+        return meshService.CreateNode(node).SelectMany(created =>
         {
             onActivityCreated?.Invoke(activityPath);
 
-            var cts = new CancellationTokenSource();
-            // Cancel watcher: RequestedStatus = Cancelled trips the command's token (Activity Control
-            // Plane). Subscribed for the life of the run; disposed on completion.
-            var cancelWatch = workspace.GetMeshNodeStream(activityPath)
-                .Select(n => (n?.Content as ActivityLog)?.RequestedStatus)
-                .Where(s => s == ActivityStatus.Cancelled)
-                .Take(1)
-                .Subscribe(_ =>
+            // STEP 2 (separate): run under the activity OWNER. The indexing command +
+            // its Append/Finish writes fire on IIoPool / reactive hops where the
+            // originating AccessContext has cleared — re-establish the owner AT THE
+            // SUBSCRIBE via Observable.Using(FromNode), and re-stamp it on each
+            // cross-hub write (Append/Finish) at its own .Update() invocation. Mirrors
+            // the thread-round owner model + MeshWeaver.GitSync.ActivityRunner.
+            var owner = OwnerContextOf(created);
+            return Observable.Using(
+                () => AccessContextScope.FromNode(created, accessService, logger),
+                _ =>
                 {
-                    logger?.LogInformation("Indexing activity {Path} cancel requested", activityPath);
-                    try { cts.Cancel(); } catch { /* already disposed */ }
+                    var cts = new CancellationTokenSource();
+                    // Cancel watcher: RequestedStatus = Cancelled trips the command's token (Activity
+                    // Control Plane). Subscribed for the life of the run; disposed on completion.
+                    var cancelWatch = workspace.GetMeshNodeStream(activityPath)
+                        .Select(n => (n?.Content as ActivityLog)?.RequestedStatus)
+                        .Where(s => s == ActivityStatus.Cancelled)
+                        .Take(1)
+                        .Subscribe(_ =>
+                        {
+                            logger?.LogInformation("Indexing activity {Path} cancel requested", activityPath);
+                            try { cts.Cancel(); } catch { /* already disposed */ }
+                        });
+
+                    var ctx = new ContentIndexingActivityContext(activityPath, cts.Token,
+                        (msg, level) => Append(workspace, accessService, owner, activityPath, msg, level, logger));
+
+                    return command(ctx)
+                        .DefaultIfEmpty(Unit.Default)
+                        .TakeLast(1)
+                        .SelectMany(_ => Finish(workspace, accessService, owner, activityPath, ActivityStatus.Succeeded, null, logger))
+                        .Catch<Unit, Exception>(ex =>
+                        {
+                            var cancelled = ex is OperationCanceledException || cts.IsCancellationRequested;
+                            logger?.LogWarning(ex, "Indexing activity {Path} {Outcome}", activityPath,
+                                cancelled ? "cancelled" : "failed");
+                            return Finish(workspace, accessService, owner, activityPath,
+                                cancelled ? ActivityStatus.Cancelled : ActivityStatus.Failed,
+                                cancelled ? "Cancelled." : ex.Message, logger);
+                        })
+                        .Finally(() =>
+                        {
+                            cancelWatch.Dispose();
+                            cts.Dispose();
+                        })
+                        .Select(_ => activityPath);
                 });
-
-            var ctx = new ContentIndexingActivityContext(activityPath, cts.Token,
-                (msg, level) => Append(workspace, activityPath, msg, level, logger));
-
-            return command(ctx)
-                .DefaultIfEmpty(Unit.Default)
-                .TakeLast(1)
-                .SelectMany(_ => Finish(workspace, activityPath, ActivityStatus.Succeeded, null, logger))
-                .Catch<Unit, Exception>(ex =>
-                {
-                    var cancelled = ex is OperationCanceledException || cts.IsCancellationRequested;
-                    logger?.LogWarning(ex, "Indexing activity {Path} {Outcome}", activityPath,
-                        cancelled ? "cancelled" : "failed");
-                    return Finish(workspace, activityPath,
-                        cancelled ? ActivityStatus.Cancelled : ActivityStatus.Failed,
-                        cancelled ? "Cancelled." : ex.Message, logger);
-                })
-                .Finally(() =>
-                {
-                    cancelWatch.Dispose();
-                    cts.Dispose();
-                })
-                .Select(_ => activityPath);
         });
     }
 
+    /// <summary>
+    /// The owner identity to re-stamp on every activity-execution write — the created
+    /// node's <see cref="MeshNode.CreatedBy"/>. Null for framework-owned nodes with no
+    /// CreatedBy (the outer <c>FromNode</c> already chose System for that case).
+    /// </summary>
+    private static AccessContext? OwnerContextOf(MeshNode created) =>
+        string.IsNullOrEmpty(created.CreatedBy)
+            ? null
+            : new AccessContext { ObjectId = created.CreatedBy, Name = created.CreatedBy };
+
     private static void Append(
-        IWorkspace workspace, string activityPath, string message, LogLevel level, ILogger? logger)
+        IWorkspace workspace, AccessService? accessService, AccessContext? owner,
+        string activityPath, string message, LogLevel level, ILogger? logger)
     {
-        workspace.GetMeshNodeStream(activityPath).Update(node =>
+        // 🚨 Re-establish the owner identity at THIS write's .Update() invocation — ctx.Log
+        // fires from the command's own threads (IIoPool body / reactive hops) where the
+        // ambient AccessContext has cleared; without re-stamping, the cross-hub patch posts
+        // context-null → the partition RLS denies → the progress line never lands.
+        using (owner is not null && accessService is not null ? accessService.SwitchAccessContext(owner) : null)
         {
-            // ContentAs<T>, NOT `Content as ActivityLog`: the activity node is owned by the partition's
-            // _Activity hub, so this cross-hub Update lambda diffs against a LOCAL mirror whose Content
-            // can be a JsonElement (not strongly-typed). A plain cast would be null → the update no-ops →
-            // the RFC 7396 patch is never sent. ContentAs deserializes the JsonElement so the write lands.
-            // (project_baddata_contentas_pattern.)
-            var log = node.ContentAs<ActivityLog>(workspace.Hub.JsonSerializerOptions, logger);
-            if (log is null) return node;
-            return node with { Content = log with { Messages = log.Messages.Add(new LogMessage(message, level)) } };
-        }).Subscribe(_ => { }, ex => logger?.LogWarning(ex, "Indexing activity log append failed for {Path}", activityPath));
+            workspace.GetMeshNodeStream(activityPath).Update(node =>
+            {
+                // ContentAs<T>, NOT `Content as ActivityLog`: the activity node is owned by the partition's
+                // _Activity hub, so this cross-hub Update lambda diffs against a LOCAL mirror whose Content
+                // can be a JsonElement (not strongly-typed). A plain cast would be null → the update no-ops →
+                // the RFC 7396 patch is never sent. ContentAs deserializes the JsonElement so the write lands.
+                // (project_baddata_contentas_pattern.)
+                var log = node.ContentAs<ActivityLog>(workspace.Hub.JsonSerializerOptions, logger);
+                if (log is null) return node;
+                return node with { Content = log with { Messages = log.Messages.Add(new LogMessage(message, level)) } };
+            }).Subscribe(_ => { }, ex => logger?.LogWarning(ex, "Indexing activity log append failed for {Path}", activityPath));
+        }
     }
 
     private static IObservable<Unit> Finish(
-        IWorkspace workspace, string activityPath, ActivityStatus status, string? finalMessage, ILogger? logger)
+        IWorkspace workspace, AccessService? accessService, AccessContext? owner,
+        string activityPath, ActivityStatus status, string? finalMessage, ILogger? logger)
     {
-        return workspace.GetMeshNodeStream(activityPath).Update(node =>
+        // 🚨 Same owner re-stamp as Append: the terminal Status write fires on the command's
+        // completion hop, past the originating scope. Re-establish the owner so the partition
+        // RLS lets the write land — otherwise the activity hangs Running forever.
+        using (owner is not null && accessService is not null ? accessService.SwitchAccessContext(owner) : null)
         {
-            // ContentAs<T>, NOT `Content as ActivityLog`: the cross-hub Update lambda diffs against a
-            // local mirror whose Content may be a JsonElement; a plain cast would no-op and the terminal
-            // Status would never be written → the activity hangs Running forever (the ReindexAll / Upload
-            // indexing-activity timeout). See project_baddata_contentas_pattern.
-            var log = node.ContentAs<ActivityLog>(workspace.Hub.JsonSerializerOptions, logger);
-            if (log is null) return node;
-            var messages = string.IsNullOrEmpty(finalMessage)
-                ? log.Messages
-                : log.Messages.Add(new LogMessage(finalMessage,
-                    status == ActivityStatus.Failed ? LogLevel.Error : LogLevel.Information));
-            return node with
+            return workspace.GetMeshNodeStream(activityPath).Update(node =>
             {
-                Content = log with { Messages = messages, Status = status, End = DateTime.UtcNow, RequestedStatus = null }
-            };
-        }).Select(_ => Unit.Default);
+                // ContentAs<T>, NOT `Content as ActivityLog`: the cross-hub Update lambda diffs against a
+                // local mirror whose Content may be a JsonElement; a plain cast would no-op and the terminal
+                // Status would never be written → the activity hangs Running forever (the ReindexAll / Upload
+                // indexing-activity timeout). See project_baddata_contentas_pattern.
+                var log = node.ContentAs<ActivityLog>(workspace.Hub.JsonSerializerOptions, logger);
+                if (log is null) return node;
+                var messages = string.IsNullOrEmpty(finalMessage)
+                    ? log.Messages
+                    : log.Messages.Add(new LogMessage(finalMessage,
+                        status == ActivityStatus.Failed ? LogLevel.Error : LogLevel.Information));
+                return node with
+                {
+                    Content = log with { Messages = messages, Status = status, End = DateTime.UtcNow, RequestedStatus = null }
+                };
+            }).Select(_ => Unit.Default);
+        }
     }
 }
