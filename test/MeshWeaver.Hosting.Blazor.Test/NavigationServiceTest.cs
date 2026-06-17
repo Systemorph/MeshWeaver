@@ -334,9 +334,10 @@ public class NavigationServiceTest
         // stale while we retry, and only fire the null/NotFound transition once
         // retries are exhausted.
         //
-        // We can't easily override retry delays from this test class (it uses the
-        // public ctor), but the 500 ms first-retry window is enough headroom to
-        // assert that the null callback is NOT fired in the first ~100 ms.
+        // The not-found watchdog only fires after the whole retry budget (~1 s in
+        // production) is exhausted, so 100 ms is comfortably inside the window where
+        // the previous context must still be shown — long enough to assert the null
+        // callback is NOT fired early.
         var service = CreateService();
         _pathResolver.ResolvePath(Arg.Any<string>())
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME", null)));
@@ -364,6 +365,30 @@ public class NavigationServiceTest
         await service.NavigationContext.Where(ctx => ctx is null).Should().NotEmit(
             TimeSpan.FromMilliseconds(100),
             "the 404 flash bug was caused by firing a null context before retries had a chance");
+    }
+
+    [Fact]
+    public async Task OnLocationChanged_WhenPathNeverResolves_ReportsNotFoundAfterBudget()
+    {
+        // A genuinely missing page: the catalog never learns the path, so ResolvePath
+        // only ever emits null and no resolution arrives. Once the (short, ~1 s in
+        // production) retry budget is exhausted, the watchdog MUST flip Status to
+        // NotFound — the regression was that a missing page kept the stale page up and
+        // never surfaced the "not found" card. Tiny delays via the internal ctor drive
+        // the exhaustion path in a few ms.
+        var service = new NavigationService(
+            _navigationManager, _pathResolver, _hub, new[] { 5, 5, 5 });
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(null));
+        _navigationManager.SetUri("http://localhost/does/not/exist");
+
+        // Act — bootstrap navigation resolves to null, watchdog fires after ~15 ms.
+        service.Initialize();
+
+        // Assert — Status reaches NotFound (not stuck Loading / stale forever).
+        var status = await service.Status.Should().Within(WaitTimeout)
+            .Match(s => s.Phase == NavigationPhase.NotFound);
+        status.Phase.Should().Be(NavigationPhase.NotFound);
     }
 
     [Fact]
