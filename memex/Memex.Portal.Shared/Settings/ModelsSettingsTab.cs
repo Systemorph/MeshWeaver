@@ -202,6 +202,9 @@ public static class ModelsSettingsTab
         {
             Label = "API key",
             Placeholder = "paste key here",
+            // Masked ENTRY only — the key is never shown back; the Save action stores it and the
+            // configured-providers list shows just a fingerprint (never the key).
+            Password = true,
             DataContext = LayoutAreaReference.GetDataPointer(formDataId)
         }.WithWidth("320px"));
 
