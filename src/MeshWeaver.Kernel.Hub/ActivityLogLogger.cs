@@ -4,6 +4,7 @@ using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Kernel.Hub;
@@ -22,6 +23,12 @@ namespace MeshWeaver.Kernel.Hub;
 internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath) : ILogger
 {
     private readonly object _lock = new();
+    // 🚨 Kernel activity-log publishing is INFRASTRUCTURE observability and fires from a
+    // throttle TIMER thread (Observable.Timer below) that never inherited the script
+    // runner's AccessContext → the DataChangeRequest post would be context-null and
+    // RLS-denied on the activity's partition → the activity log never ticks. Publish
+    // under System (Permission.All) — same rule as compile (#2) / user-activity (#3).
+    private readonly AccessService? _accessService = hub.ServiceProvider.GetService<AccessService>();
     private ImmutableList<LogMessage> _messages = ImmutableList<LogMessage>.Empty;
     private int _completed;
 
@@ -157,9 +164,14 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
                 State = MeshNodeState.Active,
                 Content = log
             };
-            hub.Post(
-                DataChangeRequest.Update([node]),
-                o => o.WithTarget(new Address(activityLogPath)));
+            // Publish as System: this fires from the throttle timer thread (no inherited
+            // identity); the activity log is infrastructure observability, not a user write.
+            // ImpersonateAsSystem sets System unconditionally and the post reads the
+            // AccessContext synchronously at Post time, so the scope covers the stamp.
+            using (_accessService?.ImpersonateAsSystem())
+                hub.Post(
+                    DataChangeRequest.Update([node]),
+                    o => o.WithTarget(new Address(activityLogPath)));
         }
         catch { /* never let logging break the script */ }
     }

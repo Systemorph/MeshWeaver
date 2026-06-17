@@ -953,6 +953,21 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (workspace == null)
             return;
 
+        // 🚨 Capture the circuit USER NOW, on the circuit thread where CircuitContext is live.
+        // The picker query subscribes later (RunPicker → ObserveSnapshot), in the agent/model
+        // branch on the NavigationContext→InvokeAsync hop where the ambient AccessContext may be
+        // cleared or leaked. Running the synced query context-null makes WrapWithPerUserRls BYPASS
+        // → the combobox shows agents/models the user has no Read on (wrong access rights).
+        // RunPicker re-establishes THIS captured user at its subscribe so RLS filters correctly.
+        // Prefer the durable CircuitContext; reject a leaked system/hub principal (not a real user).
+        var accessService = Hub.ServiceProvider.GetService<AccessService>();
+        var ambientCtx = accessService?.CircuitContext ?? accessService?.Context;
+        var pickerUser = ambientCtx is not null
+            && !string.IsNullOrEmpty(ambientCtx.ObjectId)
+            && ambientCtx.ObjectId != WellKnownUsers.System
+            && !AccessService.LooksLikeHubPrincipal(ambientCtx.ObjectId)
+            ? ambientCtx : null;
+
         var field = picker.ComposerField;
         var isAgent = string.Equals(field, nameof(MeshWeaver.AI.ThreadComposer.AgentName), StringComparison.OrdinalIgnoreCase);
         var isModel = string.Equals(field, nameof(MeshWeaver.AI.ThreadComposer.ModelName), StringComparison.OrdinalIgnoreCase);
@@ -962,7 +977,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (!isAgent && !isModel)
         {
             RunPicker(workspace, picker, new[] { picker.Query },
-                $"picker|{field}|{picker.Query}");
+                $"picker|{field}|{picker.Query}", accessService, pickerUser);
             return;
         }
 
@@ -997,7 +1012,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     ? AgentPickerProjection.BuildAgentQueries(_userHome, AgentPickerProjection.PartitionOf(pc.ContextPath))
                     : AgentPickerProjection.BuildModelQueries(pc.ContextPath, pc.NodeTypePath, userPath: _userHome);
                 var cacheKey = $"picker|{field}|{pc.ContextPath}|{pc.NodeTypePath}|{string.Join("|", queries)}";
-                RunPicker(workspace, picker, queries, cacheKey);
+                RunPicker(workspace, picker, queries, cacheKey, accessService, pickerUser);
             }));
     }
 
@@ -1006,9 +1021,21 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// universal Order field (then Name), auto-selects an exact term match or shows the list.
     /// Shared by the context-scoped agent/model branch and the declared-query harness/custom branch.
     /// </summary>
-    private void RunPicker(IWorkspace workspace, NodePickerRequest picker, string[] queries, string cacheKey)
+    private void RunPicker(IWorkspace workspace, NodePickerRequest picker, string[] queries, string cacheKey,
+        AccessService? accessService, AccessContext? pickerUser)
     {
-        AgentPickerProjection.ObserveSnapshot(workspace, Hub, cacheKey, queries)
+        // 🚨 Run the picker query under the CAPTURED circuit user, re-established HERE at the
+        // subscribe via Observable.Using(SwitchAccessContext). ObserveSnapshot subscribes on the
+        // NavigationContext→InvokeAsync hop where the ambient AccessContext may be cleared/leaked;
+        // running the synced query context-null makes WrapWithPerUserRls BYPASS → the combobox
+        // surfaces agents/models the user has no Read on (wrong access rights). The scope flows
+        // through ObserveSnapshot's IIoPool hops (the pool carries the AsyncLocal), so RLS filters
+        // the picker to exactly what this user can read.
+        Observable.Using(
+                () => pickerUser is not null && accessService is not null
+                    ? accessService.SwitchAccessContext(pickerUser)
+                    : (IDisposable)System.Reactive.Disposables.Disposable.Empty,
+                _ => AgentPickerProjection.ObserveSnapshot(workspace, Hub, cacheKey, queries))
             .Take(1)
             .Subscribe(snapshot => InvokeAsync(() =>
             {
