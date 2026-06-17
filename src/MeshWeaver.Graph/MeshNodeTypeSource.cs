@@ -478,9 +478,19 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
 
         if (ownNode is { Version: > 0 })
         {
-            _logger?.LogDebug("MeshNodeTypeSource: Restoring hub {Address} to version {Version}",
-                _workspace.Hub.Address, ownNode.Version);
-            _workspace.Hub.SetInitialVersion(ownNode.Version);
+            // Restore the hub clock STRICTLY ABOVE the last persisted node version. node.Version is
+            // stamped = Hub.Version on every write (the owner ++s Hub.Version at the START of each
+            // message and assigns it to the node when the node changes). Restoring to exactly
+            // ownNode.Version (= V) would leave the clock AT V, so the next stamp before an
+            // intervening ++ would REUSE V for a DIFFERENT change — handed out under a version a
+            // subscriber already holds at V, which the monotonicity guard cannot distinguish from a
+            // stale duplicate (it would drop the real new write). Start at V+1 so every
+            // post-reactivation write is strictly newer than anything any subscriber saw before the
+            // recycle.
+            var restoreVersion = ownNode.Version + 1;
+            _logger?.LogDebug("MeshNodeTypeSource: Restoring hub {Address} to version {Version} (ownNode V={OwnVersion}+1)",
+                _workspace.Hub.Address, restoreVersion, ownNode.Version);
+            _workspace.Hub.SetInitialVersion(restoreVersion);
         }
 
         _workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
