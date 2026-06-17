@@ -148,11 +148,21 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
         // asserting UpdatedNodes on that captured snapshot races the propagation and
         // intermittently observes an empty list — so wait on the actual asserted
         // state (the doc change present) instead of a proxy.
+        //
+        // Same reasoning applies to the delegation's DelegationPath: it is stamped onto the
+        // delegate_to tool-call entry by the asynchronous Dispatched event (AgentChatClient
+        // delegation lifecycle) and re-persisted via PushToResponseMessage's MergeToolCallEntries,
+        // which can land in a LATER write than the doc-change propagation. Asserting it on the
+        // snapshot that merely satisfies UpdatedNodes races that stamp and intermittently reads a
+        // null path (the Delegation_NodeChanges_PropagateFromSubThread red). Wait on the actual
+        // asserted state — the delegate entry carrying its sub-thread path — not a proxy.
         var responseMsg = await GetContent<ThreadMessage>(client, responsePath)
             .Should().Within(45.Seconds()).Match(m =>
                 m?.ToolCalls is { Count: >= 2 }
                 && !string.IsNullOrEmpty(m.Text)
-                && m.UpdatedNodes.Any(e => e.Path.Contains("test-doc-nodechange")));
+                && m.UpdatedNodes.Any(e => e.Path.Contains("test-doc-nodechange"))
+                && m.ToolCalls.Any(t => t.Name?.Contains("delegate") == true
+                    && !string.IsNullOrEmpty(t.DelegationPath)));
         Output.WriteLine($"Response: text len={responseMsg!.Text?.Length ?? 0}, toolCalls={responseMsg.ToolCalls.Count}, updatedNodes={responseMsg.UpdatedNodes.Count}");
 
         // 6. Verify response message has tool calls
