@@ -841,6 +841,18 @@ internal static class NodeTypeCompilationHelpers
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.CompileWatcher");
         var meshService = hub.ServiceProvider.GetService<IMeshService>();
+        // 🚨 Compile ALWAYS runs under System. It reads source files across the mesh
+        // and writes the _Activity progress node + the NodeType's own status. The
+        // deferred pipelines below SUBSCRIBE after HandleDispatchCompile's delivery
+        // scope has cleared (the flip-Compiling Update callback fires post-Finally),
+        // so the ambient AccessContext is already gone — capturing it would carry
+        // null and the activity writes would be RLS-denied (the activity never lands →
+        // progress readers NotFound-storm). Each deferred pipeline RE-ESTABLISHES
+        // System at its own subscribe via Observable.Using(ImpersonateAsSystem):
+        // ImpersonateAsSystem sets System UNCONDITIONALLY (it doesn't read the ambient),
+        // so it survives the cleared scope, and System (Permission.All) can never be
+        // denied. This is the StaticRepoImporter pattern. See AccessContextPropagation.md.
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
 
         // Activity Control Plane — THE official progress mechanism. Create the
         // compile activity UP FRONT (canonical uppercase _Activity, satellite
@@ -927,20 +939,22 @@ internal static class NodeTypeCompilationHelpers
         // Flip the parent NodeType to Compiling, stamping the ACTUAL activity path (or
         // null when the create didn't land). The stamp follows the create — it is never
         // a path that does not exist.
-        activityPathObservable
-            .Take(1)
-            .SelectMany(resolvedActivityPath => workspace.GetMeshNodeStream().Update(curr =>
-                curr.Content is NodeTypeDefinition def
-                    ? curr with
-                    {
-                        Content = def with
-                        {
-                            CompilationStatus = CompilationStatus.Compiling,
-                            LastCompileStartedAt = DateTimeOffset.UtcNow,
-                            LastCompilationActivityPath = resolvedActivityPath
-                        }
-                    }
-                    : curr))
+        Observable.Using(
+                () => accessService?.ImpersonateAsSystem() ?? (IDisposable)System.Reactive.Disposables.Disposable.Empty,
+                _ => activityPathObservable
+                    .Take(1)
+                    .SelectMany(resolvedActivityPath => workspace.GetMeshNodeStream().Update(curr =>
+                        curr.Content is NodeTypeDefinition def
+                            ? curr with
+                            {
+                                Content = def with
+                                {
+                                    CompilationStatus = CompilationStatus.Compiling,
+                                    LastCompileStartedAt = DateTimeOffset.UtcNow,
+                                    LastCompilationActivityPath = resolvedActivityPath
+                                }
+                            }
+                            : curr)))
             .Subscribe(
                 _ => { },
                 ex => logger?.LogWarning(ex,
@@ -963,14 +977,16 @@ internal static class NodeTypeCompilationHelpers
         // 🚨 Resolve the activity path BEFORE Roslyn (SelectMany off the bounded
         // activityPathObservable) so the terminal write stamps the SAME confirmed path
         // (or null) the Compiling-flip used — never an un-created path.
-        var sub = activityPathObservable.Take(1)
-            .SelectMany(resolvedActivityPath => compilationService
-                .CompileAndGetConfigurations(pendingNode, sourcesOverride)
-                .Take(1)
-                .Select(result => new CompileOutcome(result, null, pendingNode, resolvedActivityPath))
-                .Catch<CompileOutcome, Exception>(ex =>
-                    Observable.Return(new CompileOutcome(null, ex, pendingNode, resolvedActivityPath))))
-            .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default)
+        var sub = Observable.Using(
+                () => accessService?.ImpersonateAsSystem() ?? (IDisposable)System.Reactive.Disposables.Disposable.Empty,
+                _ => activityPathObservable.Take(1)
+                    .SelectMany(resolvedActivityPath => compilationService
+                        .CompileAndGetConfigurations(pendingNode, sourcesOverride)
+                        .Take(1)
+                        .Select(result => new CompileOutcome(result, null, pendingNode, resolvedActivityPath))
+                        .Catch<CompileOutcome, Exception>(ex =>
+                            Observable.Return(new CompileOutcome(null, ex, pendingNode, resolvedActivityPath))))
+                    .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default))
             .Subscribe(
                 outcome =>
                 {
