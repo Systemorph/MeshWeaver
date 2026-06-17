@@ -694,6 +694,12 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     private MessageHubConfiguration ConfigureSynchronizationHub(MessageHubConfiguration config)
     {
         config = config
+            // Inherit the owning Host's posting identity (feedback_access_context_always_set). In
+            // prod the Host is a User hub (= the default) so this is a no-op; in plumbing tests the
+            // Host is a System hub and the sync hub must be System too, else its own
+            // UpdateStreamRequest posts carry no AccessContext and the never-null guard fails them
+            // closed ("hub=sync/… message=UpdateStreamRequest … no AccessContext").
+            .WithPostingIdentity(Host.Configuration.PostingIdentity)
             .WithTypes(
                 typeof(EntityStore),
                 typeof(JsonElement)

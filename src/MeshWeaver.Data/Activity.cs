@@ -19,7 +19,13 @@ public class Activity : ILogger, IDisposable
         ParentHub = parentHub ?? throw new ArgumentNullException(nameof(parentHub));
         Id = Guid.NewGuid().AsString();
         Address = AddressExtensions.CreateActivityAddress(Id);
-        Hub = parentHub.GetHostedHub(Address, conf => conf);
+        // Inherit the parent hub's posting identity so the activity hub's own otherwise-
+        // unattributed posts resolve the same way (feedback_access_context_always_set). In prod the
+        // parent is a User hub (= the default), so this is a no-op; in plumbing tests the parent is a
+        // System hub and the activity hub must be System too, else its UpdateStreamRequest/Execution
+        // posts have no AccessContext and the never-null guard fails them closed.
+        Hub = parentHub.GetHostedHub(Address,
+            conf => conf.WithPostingIdentity(parentHub.Configuration.PostingIdentity));
         logger = Hub.ServiceProvider.GetRequiredService<ILogger<Activity>>();
         this.autoClose = autoClose;
         activityLog = new(category) { StartVersion = (int)parentHub.Version };
