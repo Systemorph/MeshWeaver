@@ -437,12 +437,13 @@
    so dark mode + high-contrast read correctly. */
 .thread-chat-widget {
     /* Floating popup ABOVE the input (a command palette popping up), anchored to
-       .thread-chat-input-content — does not push the Monaco DOM. */
+       .thread-chat-input-content — does not push the Monaco DOM. Floating-popup tier (10000) so it
+       opens ABOVE the menu bar (z-index 1100 in PortalLayoutBase) instead of being covered by it. */
     position: absolute;
     bottom: calc(100% + 6px);
     left: 0;
     right: 0;
-    z-index: 30;
+    z-index: 10000;
     border: 1px solid var(--neutral-stroke-rest);
     border-radius: 8px;
     background: var(--neutral-layer-1);
