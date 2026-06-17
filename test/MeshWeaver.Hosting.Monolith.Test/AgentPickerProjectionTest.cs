@@ -169,17 +169,17 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
     /// <summary>
     /// 🚨 The atioz "Space's own agent missing from /agent" regression, end-to-end.
     /// The picker issues the ONE canonical query
-    /// (<c>nodeType:Agent namespace:Agent|{currentPath}|{nodeTypePath} scope:selfAndAncestors</c> —
+    /// (<c>namespace:{user}/Agent|{space}/Agent|Agent nodeType:Agent</c> —
     /// see <see cref="AgentPickerProjection.BuildAgentQuery"/>), which resolves to a
-    /// <c>namespace IN (self+ancestors of each)</c> membership filter. Seeds an Agent in an ANCESTOR
-    /// namespace of the context (namespace <c>ACME</c>) AND an Agent in the context node's NodeType
-    /// namespace (namespace <c>ACME/Project</c>), then drives the EXACT projection the chat picker
+    /// <c>namespace IN (...)</c> exact-membership filter. Seeds the space's own agent at
+    /// <c>ACME/Agent/SpaceAgent</c> AND the user's own at <c>rbuergi/Agent/UserAgent</c>, then drives
+    /// the EXACT projection the chat picker
     /// binds to with BOTH currentPath AND nodeTypePath set — the resolved-context inputs
     /// <c>DerivePickerContext</c> hands <c>OpenPicker</c>.
     ///
     /// <para>Before the fix, the picker failed to union the context/NodeType namespaces — so neither
-    /// seeded agent surfaced. This pins that with both context layers populated, the context-namespace
-    /// agent, the NodeType-namespace agent, AND a built-in all appear together from the single query.</para>
+    /// seeded agent surfaced. This pins that with both partition layers populated, the space's own
+    /// agent, the user's own agent, AND a platform built-in all appear together from the single query.</para>
     /// </summary>
     [Fact]
     public async Task ObserveAgents_SpaceAndUserSet_SurfacesSpaceAgent_UserAgent_AndPlatform()
