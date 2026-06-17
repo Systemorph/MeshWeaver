@@ -417,6 +417,13 @@ public partial class QueryParser
         var scope = QueryScope.Exact;
         bool explicitScope = false;
         bool namespaceUsed = false;
+        // Multi-value `namespace:A|B|C` alternation. Deferred to post-loop processing
+        // (the scope: qualifier may appear after the namespace: token) where it becomes a
+        // `namespace IN (...)` membership FILTER — expanded to each value's self+ancestor
+        // namespaces when scope:selfAndAncestors. This is what lets a SINGLE query union
+        // built-in + per-context + per-NodeType + per-user instances (see AgentPickerProjection).
+        string[]? namespaceAlternation = null;
+        bool namespaceAlternationNegated = false;
         OrderByClause? orderBy = null;
         int? limit = null;
         var source = QuerySource.Default;
@@ -457,6 +464,17 @@ public partial class QueryParser
 
                 if (field.Equals("namespace", StringComparison.OrdinalIgnoreCase))
                 {
+                    // Alternation `namespace:A|B|C` (parsed to In/NotIn with >1 values) is an EXACT
+                    // MEMBERSHIP constraint across the listed namespaces, not a single base namespace
+                    // + scope walk. Deferred to post-loop resolution (a `namespace IN (...)` filter).
+                    if (token.Condition!.Operator is QueryOperator.In or QueryOperator.NotIn
+                        && token.Condition.Values.Length > 1)
+                    {
+                        namespaceAlternation = token.Condition.Values;
+                        namespaceAlternationNegated = token.Condition.Operator == QueryOperator.NotIn;
+                        namespaceUsed = true;
+                        continue;
+                    }
                     if (value.Contains('*'))
                     {
                         // Wildcard namespace: add as LIKE filter (e.g., namespace:*/_Thread)
@@ -557,6 +575,30 @@ public partial class QueryParser
         if (namespaceUsed && !explicitScope)
         {
             scope = QueryScope.Children;
+        }
+
+        // Resolve a deferred `namespace:A|B|C` alternation into a `namespace IN (...)` membership
+        // FILTER. With scope:selfAndAncestors each value expands to itself + every ancestor
+        // namespace, so a node whose namespace is the value OR any ancestor matches (closest-wins
+        // is the caller's concern, as with AccessAssignment). Without that scope it's exact
+        // membership across the listed namespaces. Emitting a plain filter means every backend
+        // (Postgres `LOWER(n.namespace) IN`, in-memory QueryEvaluator, the static-node provider)
+        // evaluates it identically — no scope-clause surgery — and the path/scope is cleared so no
+        // path-based walk runs on top. Single `namespace:X` is left untouched (path + scope walk).
+        if (namespaceAlternation is { Length: > 1 })
+        {
+            // `namespace:A|B|C` is EXACT membership across the listed namespaces — a single
+            // `namespace IN (A, B, C)` filter, no ancestor/descendant graph walk. This is what the
+            // agent / model registry uses to list the platform + space + user namespaces directly
+            // (e.g. `namespace:{user}/Agent|{space}/Agent|Agent`). The alternation IS the namespace
+            // constraint, so the single-namespace path/scope is dropped — no walk on top.
+            var distinct = namespaceAlternation.Select(v => v.Trim('/'))
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            filterTokens.Add(new Token(TokenType.Comparison, string.Empty,
+                new QueryCondition("namespace",
+                    namespaceAlternationNegated ? QueryOperator.NotIn : QueryOperator.In, distinct)));
+            path = null;
+            scope = QueryScope.Exact;
         }
 
         var textSearch = textSearchParts.Count > 0 ? string.Join(" ", textSearchParts) : null;
