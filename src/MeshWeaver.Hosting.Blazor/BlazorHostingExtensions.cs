@@ -29,6 +29,7 @@ public static class BlazorHostingExtensions
                 .AddContentService()
                 .AddFluentUIComponents()
                 .AddSingleton<UserIdentityCache>()
+                .AddScoped<ICircuitContextAccessor, CircuitContextAccessor>()
                 .AddScoped<PortalApplication>()
                 .AddScoped<INavigationService, NavigationService>()
                 .AddScoped<IMenuItemsProvider, MenuItemsProvider>()

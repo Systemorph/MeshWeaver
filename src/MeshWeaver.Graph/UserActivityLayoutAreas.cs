@@ -82,16 +82,41 @@ public static class UserActivityLayoutAreas
 
         var syncStream = host.Workspace.GetStream(new MeshNodeReference());
 
-        return syncStream!.Select(change =>
-        {
-            var ownerNode = change.Value;
-            var ownerName = ownerNode?.Name ?? nodeOwnerId;
+        return syncStream!
+            .Select(change =>
+            {
+                var ownerNode = change.Value;
+                var ownerName = ownerNode?.Name ?? nodeOwnerId;
 
-            if (isOwner)
-                return (UiControl?)BuildOwnerDashboard(host, nodePath, ownerName, nodeOwnerId, ownerNode);
-            else
-                return (UiControl?)BuildVisitorProfile(nodePath, ownerName, ownerNode);
-        });
+                if (isOwner)
+                    return (UiControl?)BuildOwnerDashboard(host, nodePath, ownerName, nodeOwnerId, ownerNode);
+                else
+                    return (UiControl?)BuildVisitorProfile(nodePath, ownerName, ownerNode);
+            })
+            // The area must NEVER spin forever, but it must ALSO never tear itself down
+            // while idle. Two distinct failure modes, ONE narrow guard:
+            //   • NOT REACHABLE — the owner hub never returns its FIRST snapshot. No
+            //     OnError fires, so .Select never runs and the area spins. We arm a
+            //     timeout for the FIRST emission ONLY.
+            //   • NO ACCESS — the read is denied; the stream OnErrors (handled by Catch).
+            // CRITICAL: the timeout is armed for the first element ONLY (Observable.Timer
+            // as the first-timeout) and DISARMED thereafter (the per-element selector
+            // returns Observable.Never). A bare .Timeout(30s) fires on every inter-emission
+            // gap — so an idle, healthy data-bound view (no changes for 30s) would trip it
+            // and the rendered area would be torn down mid-session. Idle ≠ unreachable.
+            // On a real first-snapshot timeout or a denial we THROW a clear, attributed
+            // error (do NOT swallow) — surfaced, logged loud, root chased separately.
+            .Timeout(Observable.Timer(TimeSpan.FromSeconds(30)), _ => Observable.Never<long>())
+            .Catch<UiControl?, Exception>(ex =>
+            {
+                var reason = ex is TimeoutException
+                    ? $"user node '{nodePath}' did not return a snapshot (owner hub not reachable)"
+                    : $"could not read user node '{nodePath}' ({ex.GetType().Name}: {ex.Message})";
+                areaLogger?.LogWarning(ex,
+                    "[UserActivity.Activity] area unavailable for {NodePath} — {Reason}", nodePath, reason);
+                return Observable.Throw<UiControl?>(
+                    new InvalidOperationException($"Activity dashboard unavailable — {reason}.", ex));
+            });
     }
 
     /// <summary>

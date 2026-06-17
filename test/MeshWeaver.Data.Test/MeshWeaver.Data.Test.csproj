@@ -7,6 +7,10 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Data\MeshWeaver.Data.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <!-- IMeshChangeFeed / MeshChangeEvent live here. src/MeshWeaver.Data resolves them by
+         reflection (to avoid a Data→Mesh.Contract→Layout→Data prod cycle); a leaf TEST
+         project referencing them directly is cycle-free and lets the test drive the feed. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
     <ProjectReference Include="..\MeshWeaver.Data.TestDomain\MeshWeaver.Data.TestDomain.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.GridModel\MeshWeaver.GridModel.csproj" />
   </ItemGroup>

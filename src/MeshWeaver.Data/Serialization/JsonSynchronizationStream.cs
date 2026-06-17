@@ -439,10 +439,45 @@ public static class JsonSynchronizationStream
             // heartbeats are fire-and-forget. Compare against Address.Path (segments
             // only) — ToString() can include a "~host" suffix for hosted addresses
             // which never matches MeshChangeEvent.Path (the bare node.Path).
+            //
+            // 🚨 COALESCE the change-feed-triggered resubscribe. The mesh change feed fires
+            // one event per owner write; high-frequency owner writes (e.g. a per-HTTP-request
+            // `_UserActivity` update) produce a BURST of events. A SINGLE resubscribe already
+            // fetches the LATEST owner snapshot regardless of how many writes fired, so a
+            // per-event resubscribe is redundant AND harmful: each resubscribe posts a fresh
+            // SubscribeRequest whose handling on the owner SYNCHRONOUSLY creates a
+            // `sync/{id}` hub on the owner's single-threaded action block (SynchronizationStream
+            // ctor → Host.GetHostedHub). A burst of those serial creations starves the owner's
+            // action block so it cannot ack OTHER subscribers' SubscribeRequests within the
+            // callback timeout — the cache-hub wedge. The in-flight guard inside Resubscribe
+            // only collapses events that arrive WHILE a resubscribe is mid-flight; the moment
+            // the owner acks one, the guard clears and the next settled event fires another
+            // resubscribe — so a stream of owner writes produces one resubscribe PER write.
+            // Push each change-feed pulse through a Subject and Throttle it: a burst within the
+            // window collapses to a SINGLE resubscribe (Throttle emits the last item only after
+            // a quiet period). Recreate detection is preserved — a genuine owner restart still
+            // triggers a resubscribe, just debounced by the window. Reactive only: no timer
+            // watchdog, no async/await.
+            var resubscribeWindow = hub.ServiceProvider
+                .GetService<Microsoft.Extensions.Options.IOptions<SyncStreamOptions>>()
+                ?.Value?.ChangeFeedResubscribeWindow ?? TimeSpan.FromSeconds(1);
+            var changeFeedPulses = new System.Reactive.Subjects.Subject<System.Reactive.Unit>();
+            // Throttle (debounce) collapses a burst to one trailing emission. Subscribe on
+            // keepAlive so a terminal NotFound tears it down with the heartbeat + change feed.
+            keepAlive.Add(
+                changeFeedPulses
+                    .Throttle(resubscribeWindow)
+                    .Subscribe(
+                        _ => Resubscribe("change feed event (coalesced)"),
+                        ex => logger.LogWarning(ex,
+                            "Stream {StreamId}: change-feed coalescing stream errored.",
+                            reduced.StreamId)));
+            keepAlive.Add(changeFeedPulses);
+
             var ownerPath = owner.Path;
             var changeFeedSub = TrySubscribeOwnerPathChangeFeed(
                 hub.ServiceProvider, logger, ownerPath,
-                () => Resubscribe("change feed event"));
+                () => changeFeedPulses.OnNext(System.Reactive.Unit.Default));
             if (changeFeedSub != null)
                 keepAlive.Add(changeFeedSub); // torn down with the heartbeat on terminal NotFound
         }

@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
+using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -17,21 +18,29 @@ namespace MeshWeaver.Hosting.Blazor;
 /// Resolves the user from AuthenticationStateProvider on circuit open, stores the context,
 /// and sets the AsyncLocal circuitContext on AccessService for every inbound event.
 /// This ensures each Blazor circuit sees the correct user without cross-circuit contamination.
+///
+/// Also captures the stable per-circuit id into the circuit-scoped
+/// <see cref="ICircuitContextAccessor"/> on circuit open, so <c>PortalApplication</c> can key
+/// its portal hub address on one-hub-per-tab. Because this handler is circuit-scoped, the
+/// accessor it writes is the same instance the circuit's PortalApplication reads.
 /// </summary>
 public class CircuitAccessHandler : CircuitHandler
 {
     private readonly IMessageHub _hub;
     private readonly AuthenticationStateProvider _authStateProvider;
+    private readonly ICircuitContextAccessor _circuitContextAccessor;
     private readonly ILogger _logger;
     private AccessContext? _userContext;
 
     public CircuitAccessHandler(
         IMessageHub hub,
         AuthenticationStateProvider authStateProvider,
+        ICircuitContextAccessor circuitContextAccessor,
         ILoggerFactory loggerFactory)
     {
         _hub = hub;
         _authStateProvider = authStateProvider;
+        _circuitContextAccessor = circuitContextAccessor;
         _logger = loggerFactory.CreateLogger("MeshWeaver.AccessContext");
     }
 
@@ -55,6 +64,12 @@ public class CircuitAccessHandler : CircuitHandler
 
     public override async Task OnCircuitOpenedAsync(Circuit circuit, CancellationToken ct)
     {
+        // Capture the stable per-circuit id BEFORE anything else. The framework runs this
+        // once per circuit, before any component is initialized, so PortalApplication (resolved
+        // when the first interactive component injects it) always sees the id already set.
+        // Circuit.Id is unique per circuit and constant for the circuit's lifetime.
+        _circuitContextAccessor.SetCircuitId(circuit.Id);
+
         _userContext = await ResolveUserContextAsync();
 
         if (_userContext != null)
