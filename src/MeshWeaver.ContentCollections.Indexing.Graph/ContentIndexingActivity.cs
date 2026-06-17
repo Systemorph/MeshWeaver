@@ -47,7 +47,7 @@ public sealed class ContentIndexingActivityContext
 ///   <item>creates an <c>Activity</c> MeshNode at <c>{partition}/_Activity/{id}</c> (Status = Running);</item>
 ///   <item>watches it for <c>RequestedStatus = Cancelled</c> and trips the command's
 ///     <see cref="ContentIndexingActivityContext.CancellationToken"/>;</item>
-///   <item>runs the command (whose I/O goes through <see cref="IIoPool"/>, keeping the action block
+///   <item>runs the command (whose I/O goes through <c>IIoPool</c>, keeping the action block
 ///     responsive), forwarding <see cref="ContentIndexingActivityContext.Log"/> lines onto the node live;</item>
 ///   <item>writes the terminal <c>Status</c> (Succeeded / Failed / Cancelled) + messages in one atomic
 ///     update.</item>
