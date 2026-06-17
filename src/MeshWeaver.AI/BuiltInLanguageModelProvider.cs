@@ -201,12 +201,27 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
         // word) that pollutes namespace:Model queries with nothing useful.
         if (emitted.Count > 0)
         {
-            yield return new MeshNode("_Policy", LanguageModelNodeType.RootNamespace)
+            // 🚨 Policy MUST be on ModelProviderNodeType.RootNamespace ("_Provider") — the partition the
+            // models actually live in (the modelNamespace above) AND the one the /model picker queries
+            // (BuiltInCommandProvider: "namespace:_Provider nodeType:LanguageModel scope:descendants").
+            // It was previously seeded on LanguageModelNodeType.RootNamespace ("Model") — a DIFFERENT,
+            // model-less partition — so the "_Provider" catalog had NO access policy at all and was
+            // unreadable under a real user's identity.
+            yield return new MeshNode("_Policy", ModelProviderNodeType.RootNamespace)
             {
                 NodeType = "PartitionAccessPolicy",
                 Name = "Access Policy",
                 Content = new PartitionAccessPolicy
                 {
+                    // 🚨 World-readable, exactly like the Agent + Harness catalogs
+                    // (BuiltInAgentProvider / BuiltInHarnessProvider both set PublicRead=true).
+                    // The /model picker queries `namespace:_Provider nodeType:LanguageModel` UNDER
+                    // the user's identity; without PublicRead the partition isn't readable, so RLS
+                    // filters out every model → empty picker even though the catalog is synced + Active.
+                    // This grant was MISSING here (the Agent catalog had it, which is why agents showed
+                    // and models didn't). Read-only: the model nodes carry NO ApiKey (it's gated
+                    // separately on ModelProvider via Permission.Api), so public READ of the catalog is safe.
+                    PublicRead = true,
                     Create = false,
                     Update = false,
                     Delete = false,
