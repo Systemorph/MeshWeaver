@@ -158,6 +158,55 @@ public class IoPoolTest
         IoPool.Unbounded.CurrentInFlight.Should().Be(0);
     }
 
+    // 🚨 The IO boundary must CARRY the caller's identity. The AccessContext (the
+    // identity baton) rides an AsyncLocal; a write done INSIDE ioPool.Invoke — a
+    // compile/activity create, a thread-execution tool call — must run under the
+    // SAME identity the caller had on its thread. If the SubscribeOn(TaskPool) hop
+    // wipes the AsyncLocal, the pooled body sees null → the write posts context-null
+    // → RLS denies it (the "Create outside the boundary" / activity-access-denied
+    // bug). These pin that the pool preserves the caller's AsyncLocal into the body.
+    [Fact]
+    public async Task Invoke_carries_caller_AsyncLocal_into_the_pooled_body()
+    {
+        using var pool = new IoPool(2);
+        var baton = new AsyncLocal<string?> { Value = "owner-identity" };
+
+        string? observed = null;
+        await pool.Invoke(_ => { observed = baton.Value; return Task.FromResult(0); })
+            .ToTask(TestContext.Current.CancellationToken);
+
+        observed.Should().Be("owner-identity",
+            "the caller's AsyncLocal (the AccessContext baton) must flow into the pooled body — " +
+            "the IO boundary must carry identity, not wipe it on the ThreadPool thread");
+    }
+
+    [Fact]
+    public async Task InvokeBlocking_carries_caller_AsyncLocal_into_the_pooled_body()
+    {
+        using var pool = new IoPool(2);
+        var baton = new AsyncLocal<string?> { Value = "owner-identity" };
+
+        string? observed = null;
+        await pool.InvokeBlocking(_ => { observed = baton.Value; return 0; })
+            .ToTask(TestContext.Current.CancellationToken);
+
+        observed.Should().Be("owner-identity",
+            "InvokeBlocking must also carry the caller's identity into the blocking body");
+    }
+
+    [Fact]
+    public async Task Unbounded_fallback_carries_caller_AsyncLocal_into_the_pooled_body()
+    {
+        var baton = new AsyncLocal<string?> { Value = "owner-identity" };
+
+        string? observed = null;
+        await IoPool.Unbounded.Invoke(_ => { observed = baton.Value; return Task.FromResult(0); })
+            .ToTask(TestContext.Current.CancellationToken);
+
+        observed.Should().Be("owner-identity",
+            "the Unbounded fallback must carry the caller's identity into the pooled body too");
+    }
+
     // Subscribes from a dedicated (non-ThreadPool) thread and asserts the leaf
     // body runs on a ThreadPool thread distinct from the subscriber — i.e. the
     // pool genuinely escaped the calling scheduler. Robust by construction: a
