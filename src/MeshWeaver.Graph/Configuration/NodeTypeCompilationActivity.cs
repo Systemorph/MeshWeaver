@@ -46,6 +46,13 @@ internal static class NodeTypeCompilationActivity
         var meshService = hub.ServiceProvider.GetService<IMeshService>();
         if (meshService is null)
             return Observable.Empty<string>();
+        // 🚨 A compile activity is INFRASTRUCTURE observability, often kicked off with no user on the
+        // calling thread (background recompile, grain activation, fan-out). Without an identity the
+        // never-null guard fails the CreateNode closed and the .Catch below SWALLOWS it → the activity
+        // node never lands, yet the parent still gets stamped LastCompilationActivityPath → progress
+        // readers subscribe to a non-existent node → "NotFound for …/_Activity/compile…" resubscribe
+        // storm (atioz 2026-06-18). Run the write as System so it always persists.
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
 
         try
         {
@@ -69,8 +76,12 @@ internal static class NodeTypeCompilationActivity
 
             // Emit the path only once CreateNode has persisted + registered the
             // activity node — then it is routable for the RunCompileRequest.
-            return meshService.CreateNode(node)
-                .Select(_ => activityPath)
+            // Observable.Using holds the System impersonation across the cold CreateNode's
+            // Subscribe (a `using` around the return would have lapsed before the subscribe runs).
+            return Observable.Using<string, IDisposable>(
+                    () => accessService?.ImpersonateAsSystem()
+                          ?? System.Reactive.Disposables.Disposable.Empty,
+                    _ => meshService.CreateNode(node).Select(__ => activityPath))
                 .Catch<string, Exception>(ex =>
                 {
                     logger.LogDebug(ex,
@@ -103,21 +114,25 @@ internal static class NodeTypeCompilationActivity
             // the activity hub, so this is its OWN stream — GetRemoteStream
             // would throw "Owner cannot be the same as the subscriber"). The
             // Update rides the synchronization protocol; no message post.
-            hub.GetWorkspace().GetMeshNodeStream(activityPath!)
-                .Update(current =>
-                    current?.Content is ActivityLog log
-                        ? current with
-                        {
-                            Content = log with
+            // Impersonate System: an infrastructure activity-log write must not fail closed when the
+            // calling thread carries no user (see Start).
+            var accessService = hub.ServiceProvider.GetService<AccessService>();
+            using (accessService?.ImpersonateAsSystem())
+                hub.GetWorkspace().GetMeshNodeStream(activityPath!)
+                    .Update(current =>
+                        current?.Content is ActivityLog log
+                            ? current with
                             {
-                                Messages = log.Messages.Add(new LogMessage(message, level))
+                                Content = log with
+                                {
+                                    Messages = log.Messages.Add(new LogMessage(message, level))
+                                }
                             }
-                        }
-                        : current!)
-                .Subscribe(
-                    _ => { },
-                    ex => logger.LogDebug(ex,
-                        "Compile-activity AppendLog failed for {Path} (best-effort, ignored)", activityPath));
+                            : current!)
+                    .Subscribe(
+                        _ => { },
+                        ex => logger.LogDebug(ex,
+                            "Compile-activity AppendLog failed for {Path} (best-effort, ignored)", activityPath));
         }
         catch (Exception ex)
         {
@@ -142,23 +157,26 @@ internal static class NodeTypeCompilationActivity
         if (string.IsNullOrEmpty(activityPath)) return;
         try
         {
-            hub.GetWorkspace().GetMeshNodeStream(activityPath!)
-                .Update(current =>
-                    current?.Content is ActivityLog log
-                        ? current with
-                        {
-                            Content = log with
+            // Impersonate System: terminal activity-log write must not fail closed (see Start).
+            var accessService = hub.ServiceProvider.GetService<AccessService>();
+            using (accessService?.ImpersonateAsSystem())
+                hub.GetWorkspace().GetMeshNodeStream(activityPath!)
+                    .Update(current =>
+                        current?.Content is ActivityLog log
+                            ? current with
                             {
-                                Status = status,
-                                End = DateTime.UtcNow,
-                                Messages = log.Messages.AddRange(messages)
+                                Content = log with
+                                {
+                                    Status = status,
+                                    End = DateTime.UtcNow,
+                                    Messages = log.Messages.AddRange(messages)
+                                }
                             }
-                        }
-                        : current!)
-                .Subscribe(
-                    _ => { },
-                    ex => logger.LogDebug(ex,
-                        "Compile-activity Complete failed for {Path} (best-effort, ignored)", activityPath));
+                            : current!)
+                    .Subscribe(
+                        _ => { },
+                        ex => logger.LogDebug(ex,
+                            "Compile-activity Complete failed for {Path} (best-effort, ignored)", activityPath));
         }
         catch (Exception ex)
         {
