@@ -28,13 +28,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- BusinessRules: the scopes framework usable from node Source code. The
-         Generator is referenced as a PLAIN assembly (not an analyzer) — the
-         NodeType compiler instantiates ScopeCodeGenerator programmatically and
-         runs it over every dynamic-node compilation, so Source code nodes can
-         declare IScope<,> interfaces and get their implementations generated. -->
-    <ProjectReference Include="..\MeshWeaver.BusinessRules\MeshWeaver.BusinessRules.csproj" />
-    <ProjectReference Include="..\MeshWeaver.BusinessRules.Generator\MeshWeaver.BusinessRules.Generator.csproj" />
     <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
     <ProjectReference Include="..\MeshWeaver.Data\MeshWeaver.Data.csproj" />
     <ProjectReference Include="..\MeshWeaver.Kernel\MeshWeaver.Kernel.csproj" />

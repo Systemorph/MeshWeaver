@@ -1257,9 +1257,37 @@ internal class MeshNodeCompilationService(
         // IScope, so this is also a cheap fast-path that avoids spinning up the driver.)
         if (!DeclaresScope(compilation))
             return compilation;
-        var driver = CSharpGeneratorDriver.Create(new BusinessRules.Generator.ScopeCodeGenerator());
+        var generator = TryCreateScopeGenerator();
+        if (generator is null)
+            return compilation;
+        var driver = CSharpGeneratorDriver.Create(generator);
         driver.RunGeneratorsAndUpdateCompilation(compilation, out var updated, out _, ct);
         return (CSharpCompilation)updated;
+    }
+
+    /// <summary>
+    /// Loads the BusinessRules <c>ScopeCodeGenerator</c> at runtime BY NAME rather than through a
+    /// compile-time <c>ProjectReference</c>. The generator is a Roslyn analyzer
+    /// (<c>IsRoslynComponent</c>); referencing its project from the foundational
+    /// <c>MeshWeaver.Graph</c> propagated the analyzer to every project that references Graph
+    /// (40+) and bloated every build. The generator assembly instead reaches this runtime via the
+    /// node's <c>#r "nuget:MeshWeaver.BusinessRules.Generator"</c> resolution / the deployed
+    /// mesh-local package. When it isn't resolvable yet, returns <c>null</c> and scope generation
+    /// is skipped — the resulting compile error then surfaces on the NodeType's Progress page.
+    /// </summary>
+    private static ISourceGenerator? TryCreateScopeGenerator()
+    {
+        var type = Type.GetType(
+            "MeshWeaver.BusinessRules.Generator.ScopeCodeGenerator, MeshWeaver.BusinessRules.Generator",
+            throwOnError: false);
+        if (type is null)
+            return null;
+        return Activator.CreateInstance(type) switch
+        {
+            IIncrementalGenerator incremental => incremental.AsSourceGenerator(),
+            ISourceGenerator source => source,
+            _ => null
+        };
     }
 
     /// <summary>True when any source unit declares an <c>IScope&lt;,&gt;</c> interface — the
