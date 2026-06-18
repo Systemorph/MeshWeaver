@@ -35,7 +35,12 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
 
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
+        // Plumbing fixture with no logged-in user → post as System so the data-layer
+        // workspace.RequestChange writes carry an identity (the never-null guard fails them closed
+        // otherwise). Covers the tests that build their host via Mesh.GetHostedHub(addr, ConfigureHost)
+        // — which, unlike HubTestBase.GetHost, does not add the System posting identity itself.
         return base.ConfigureHost(configuration)
+            .WithPostingIdentity(PostingIdentity.System)
             .WithRoutes(r => r.RouteAddress(ClientType, (_, d) => d.Package()))
             .AddMeshDataSource(ds => ds.WithContentType<AccessAssignment>())
             .AddAccessAssignmentViews();
