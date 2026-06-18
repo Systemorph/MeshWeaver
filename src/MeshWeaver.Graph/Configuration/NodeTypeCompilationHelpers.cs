@@ -1044,6 +1044,7 @@ internal static class NodeTypeCompilationHelpers
                                 {
                                     CompilationStatus = CompilationStatus.Ok,
                                     CompilationError = null,
+                                    CompilationDiagnostics = null,
                                     LastCompileSucceededAt = DateTimeOffset.UtcNow,
                                     // Stamp LastCompiledVersion to MATCH the version the
                                     // IAssemblyStore upload used (set by
@@ -1088,6 +1089,9 @@ internal static class NodeTypeCompilationHelpers
                             {
                                 CompilationStatus = CompilationStatus.Error,
                                 CompilationError = errorSummary,
+                                CompilationDiagnostics = outcome.Result?.Diagnostics is { Count: > 0 } ds
+                                    ? System.Collections.Immutable.ImmutableList.CreateRange(ds)
+                                    : null,
                                 LastCompilationActivityPath = resolvedActivityPath,
                                 CompiledSources = null
                             }

@@ -144,6 +144,27 @@
                 diagnosticSourcePath = null;
             }
         }
+        else if (ViewModel.Diagnostics is { Count: > 0 } staticDiags)
+        {
+            // Static, pre-computed markers (the compile-error "error overlay"): convert the
+            // flat Layout-level CodeEditorDiagnostic shape into the DiagnosticInfo the marker
+            // pipeline expects, and feed them as a constant observable. The JS enableDiagnostics
+            // fires an initial diagnostics pass on load, so the squiggles appear immediately
+            // even though the (read-only) content never changes — no live language-server call.
+            var infos = (IReadOnlyList<DiagnosticInfo>)staticDiags
+                .Select(d => new DiagnosticInfo(
+                    d.Code ?? string.Empty,
+                    (DiagnosticSeverity)d.Severity,
+                    d.Message,
+                    new SourceLocation(
+                        string.Empty,
+                        new SourceRange(
+                            new SourcePosition(d.StartLine, d.StartCharacter),
+                            new SourcePosition(d.EndLine, d.EndCharacter)))))
+                .ToList();
+            diagnosticsCallback = _ => Observable.Return(infos);
+            diagnosticSourcePath = null; // already this file's diagnostics — no filtering
+        }
         else
         {
             diagnosticsCallback = null;

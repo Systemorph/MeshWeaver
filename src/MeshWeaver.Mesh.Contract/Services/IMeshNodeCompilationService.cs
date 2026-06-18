@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using MeshWeaver.Data;
+using MeshWeaver.Mesh.Services.LanguageServer;
 
 namespace MeshWeaver.Mesh.Services;
 
@@ -30,7 +31,12 @@ public record NodeCompilationResult(
     ImmutableDictionary<string, long>? CompiledSources = null,
     string? Collection = null,
     string? ContentPath = null,
-    long? Version = null);
+    long? Version = null,
+    // Structured, per-source-file Roslyn diagnostics for a FAILED compile — kept in
+    // their native form (id, severity, message, per-file SourceLocation) so the GUI can
+    // mark each error at its exact position in a Monaco editor and link to the Code node.
+    // Null/empty on success. Produced from the same per-file-tree (LSP) compilation model.
+    IReadOnlyList<DiagnosticInfo>? Diagnostics = null);
 
 /// <summary>
 /// Service for on-demand compilation of dynamic MeshNode assemblies.

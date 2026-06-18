@@ -66,6 +66,16 @@ public record CodeEditorControl() : UiControl<CodeEditorControl>(ModuleSetup.Mod
     /// </summary>
     public CodeEditorLanguageServerConfig? LanguageServer { get; init; }
 
+    /// <summary>
+    /// Pre-computed, STATIC diagnostics to render as Monaco markers (the IDE-style red
+    /// squiggle "error overlay") the moment the editor loads — no live language-server
+    /// round-trip. Used by the compile-error page to mark the exact lines a failed Roslyn
+    /// compile flagged, sourced from the captured <c>NodeTypeDefinition.CompilationDiagnostics</c>.
+    /// Distinct from <see cref="LanguageServer"/> (which re-derives diagnostics live as the
+    /// user types). When both are set, <see cref="LanguageServer"/> wins. Null = no markers.
+    /// </summary>
+    public IReadOnlyList<CodeEditorDiagnostic>? Diagnostics { get; init; }
+
     public CodeEditorControl WithValue(string value) => this with { Value = value };
     public CodeEditorControl WithLanguage(string language) => this with { Language = language };
     public CodeEditorControl WithTheme(string theme) => this with { Theme = theme };
@@ -78,7 +88,25 @@ public record CodeEditorControl() : UiControl<CodeEditorControl>(ModuleSetup.Mod
     public CodeEditorControl WithExtraTypeDefinitions(string definitions) => this with { ExtraTypeDefinitions = definitions };
     public CodeEditorControl WithLanguageServer(string nodeTypePath, string sourcePath) =>
         this with { LanguageServer = new CodeEditorLanguageServerConfig(nodeTypePath, sourcePath) };
+    public CodeEditorControl WithDiagnostics(IReadOnlyList<CodeEditorDiagnostic> diagnostics) =>
+        this with { Diagnostics = diagnostics };
 }
+
+/// <summary>
+/// A single static diagnostic marker for <see cref="CodeEditorControl.Diagnostics"/> — a flat,
+/// serializable shape (no dependency on the language-server contract, which lives in a
+/// higher-level assembly than <c>MeshWeaver.Layout</c>). Line/character are 0-based (LSP
+/// convention; the Monaco JS adds 1). <paramref name="Severity"/> matches the LSP
+/// <c>DiagnosticSeverity</c> ordinal (0=Hidden, 1=Info, 2=Warning, 3=Error).
+/// </summary>
+public sealed record CodeEditorDiagnostic(
+    int StartLine,
+    int StartCharacter,
+    int EndLine,
+    int EndCharacter,
+    int Severity,
+    string Message,
+    string? Code);
 
 /// <summary>
 /// Opt-in configuration for Roslyn-backed live diagnostics in <see cref="CodeEditorControl"/>.
