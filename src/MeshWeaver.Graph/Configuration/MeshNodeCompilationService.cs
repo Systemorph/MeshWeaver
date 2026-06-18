@@ -1084,11 +1084,9 @@ internal class MeshNodeCompilationService(
         // Strip #r "nuget:..." directives — Roslyn compilation (unlike scripting) does not process them.
         var (source, nugetRefs) = NuGetDirectiveParser.Extract(rawSource);
         IEnumerable<MetadataReference> references = _references;
-        IReadOnlyList<string> nugetAssemblyPaths = [];
         if (nugetRefs.Length > 0)
         {
             var resolved = await nugetResolver.ResolveAsync(nugetRefs, targetFramework: null, ct);
-            nugetAssemblyPaths = resolved.AssemblyPaths;
             references = _references.Concat(
                 resolved.AssemblyPaths.Select(p => MetadataReference.CreateFromFile(p)));
             cacheService.RegisterProbingDirectories(nodeName, resolved.ProbingDirectories);
@@ -1122,7 +1120,7 @@ internal class MeshNodeCompilationService(
             references: references,
             options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
                 .WithOptimizationLevel(OptimizationLevel.Debug)
-                .WithPlatform(Platform.AnyCpu)), nugetAssemblyPaths, ct);
+                .WithPlatform(Platform.AnyCpu)), ct);
 
         string? actualPath;
         if (cacheService.IsDiskCacheEnabled)
@@ -1140,25 +1138,19 @@ internal class MeshNodeCompilationService(
     }
 
     /// <summary>
-    /// Runs in-process Roslyn source generators over a dynamic-node compilation
-    /// before Emit. Generators are NOT baked into this low-level project (that
-    /// hard-wired the MeshWeaver.BusinessRules <c>ScopeCodeGenerator</c> + its
-    /// Roslyn component into every downstream build). Instead a node's Source pulls
-    /// a generator in on demand via <c>#r "nuget:..."</c>; the resolved generator
-    /// assemblies (<paramref name="nugetAssemblyPaths"/>) are scanned for
-    /// <c>[Generator]</c> types, which are loaded once per path
-    /// (<see cref="SourceGeneratorLoader"/>) and run. A node with no generator
-    /// <c>#r</c> passes through unchanged.
+    /// Runs the in-process Roslyn source generators over a dynamic-node
+    /// compilation before Emit — currently the MeshWeaver.BusinessRules
+    /// <c>ScopeCodeGenerator</c>, which emits the concrete implementations for
+    /// <c>IScope&lt;TIdentity, TState&gt;</c> interfaces declared in node Source.
+    /// A compilation that doesn't reference <c>IScope</c> passes through
+    /// unchanged (the generator no-ops), so this costs nothing for ordinary
+    /// node types. This is what lets Source code nodes use the business-rules
+    /// scopes framework: declare the interface, the compiler generates the
+    /// proxy, and <c>services.AddBusinessRules(assembly)</c> discovers it.
     /// </summary>
-    private CSharpCompilation RunSourceGenerators(
-        CSharpCompilation compilation, IReadOnlyList<string> nugetAssemblyPaths, CancellationToken ct)
+    private static CSharpCompilation RunSourceGenerators(CSharpCompilation compilation, CancellationToken ct)
     {
-        if (nugetAssemblyPaths.Count == 0)
-            return compilation;
-        var generators = SourceGeneratorLoader.Discover(nugetAssemblyPaths, logger);
-        if (generators.IsEmpty)
-            return compilation;
-        var driver = CSharpGeneratorDriver.Create(generators);
+        var driver = CSharpGeneratorDriver.Create(new BusinessRules.Generator.ScopeCodeGenerator());
         driver.RunGeneratorsAndUpdateCompilation(compilation, out var updated, out _, ct);
         return (CSharpCompilation)updated;
     }
@@ -1267,11 +1259,9 @@ internal class MeshNodeCompilationService(
         var (source, nugetRefs) = NuGetDirectiveParser.Extract(rawSource);
         IEnumerable<MetadataReference> references = _references;
         IReadOnlyList<string> probingDirs = [];
-        IReadOnlyList<string> nugetAssemblyPaths = [];
         if (nugetRefs.Length > 0)
         {
             var resolved = await nugetResolver.ResolveAsync(nugetRefs, targetFramework: null, ct);
-            nugetAssemblyPaths = resolved.AssemblyPaths;
             references = _references.Concat(
                 resolved.AssemblyPaths.Select(p => MetadataReference.CreateFromFile(p)));
             probingDirs = resolved.ProbingDirectories;
@@ -1301,7 +1291,7 @@ internal class MeshNodeCompilationService(
             references: references,
             options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
                 .WithOptimizationLevel(OptimizationLevel.Debug)
-                .WithPlatform(Platform.AnyCpu)), nugetAssemblyPaths, ct);
+                .WithPlatform(Platform.AnyCpu)), ct);
 
         // Emit to release folder
         await using var dllStream = File.Create(dllPath);

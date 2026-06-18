@@ -19,15 +19,7 @@
         <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" PrivateAssets="all" Version="5.3.0" />
     </ItemGroup>
     <ItemGroup>
-        <!-- Pack the generator DLL to BOTH analyzers/ (the Roslyn analyzer pipeline, for
-             build-time consumers) AND lib/ (so a node's
-             `#r "nuget:MeshWeaver.BusinessRules.Generator"` resolves it — INuGetAssemblyResolver
-             reads lib/ only — and SourceGeneratorLoader can discover + run ScopeCodeGenerator
-             at node-compile time). One <None> with two semicolon-separated PackagePaths: two
-             entries with the same Include collapse to one in MSBuild. Microsoft.CodeAnalysis
-             stays PrivateAssets=all, so #r consumers get no transitive dependency. -->
-        <None Include="$(OutputPath)\$(AssemblyName).dll" Pack="true"
-              PackagePath="analyzers/dotnet/cs;lib/netstandard2.0" Visible="false" />
+        <None Include="$(OutputPath)\$(AssemblyName).dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
     </ItemGroup>
 
 </Project>

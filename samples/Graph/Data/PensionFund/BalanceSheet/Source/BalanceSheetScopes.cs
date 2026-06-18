@@ -3,13 +3,6 @@
 // DisplayName: Balance Sheet Business Rules
 // </meshweaver>
 
-// The IScope<,> business-rules framework and its source generator are pulled in on
-// demand — they are NOT baked into the platform. The generator runs in-process during
-// this node's compilation (SourceGeneratorLoader discovers it from these references) and
-// emits the IScope proxy implementations that AddBusinessRules(...) then registers.
-#r "nuget:MeshWeaver.BusinessRules, 3.0.0-preview1"
-#r "nuget:MeshWeaver.BusinessRules.Generator, 3.0.0-preview1"
-
 using System.Collections.Immutable;
 using MeshWeaver.BusinessRules;
 

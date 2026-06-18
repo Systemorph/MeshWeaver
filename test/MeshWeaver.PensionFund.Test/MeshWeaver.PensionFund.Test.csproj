@@ -13,12 +13,22 @@
     </Content>
   </ItemGroup>
 
-  <!-- The BalanceSheet sample Source now declares its generator via `#r "nuget:..."`,
-       which is a scripting directive that a normal MSBuild compile cannot parse — so the
-       sources are NOT compile-included here anymore, and BusinessRules / its generator are
-       no build-time references. The runtime dynamic compile (PensionFundBalanceSheetTest)
-       is the validation: it discovers + runs the generator via #r exactly as the portal does. -->
   <ItemGroup>
+    <!-- Include mesh node source files for compile-time unit testing. The
+         BusinessRules generator below emits the scope implementations for
+         BalanceSheetScopes.cs exactly as the NodeType compiler does at
+         runtime — so a generator/source mismatch fails this build, not the
+         portal. -->
+    <Compile Include="..\..\samples\Graph\Data\PensionFund\Position\Source\Position.cs" Link="MeshNodeSources\Position.cs" />
+    <Compile Include="..\..\samples\Graph\Data\PensionFund\Year\Source\Year.cs" Link="MeshNodeSources\Year.cs" />
+    <Compile Include="..\..\samples\Graph\Data\PensionFund\Currency\Source\Currency.cs" Link="MeshNodeSources\Currency.cs" />
+    <Compile Include="..\..\samples\Graph\Data\PensionFund\BalanceSheetEntry\Source\BalanceSheetEntry.cs" Link="MeshNodeSources\BalanceSheetEntry.cs" />
+    <Compile Include="..\..\samples\Graph\Data\PensionFund\BalanceSheet\Source\BalanceSheetScopes.cs" Link="MeshNodeSources\BalanceSheetScopes.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MeshWeaver.BusinessRules\MeshWeaver.BusinessRules.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.BusinessRules.Generator\MeshWeaver.BusinessRules.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
