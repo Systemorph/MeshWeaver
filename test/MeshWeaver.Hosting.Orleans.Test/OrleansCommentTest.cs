@@ -52,6 +52,9 @@ public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
         builder.AddClientBuilderConfigurator<CommentClientConfigurator>();
         Cluster = builder.Build();
         await Cluster.DeployAsync();
+        // Seed a default System circuit identity so client-hub posts carry an
+        // identity (never-null AccessContext invariant). See OrleansTestIdentity.
+        OrleansTestIdentity.SeedDefaultIdentity(Cluster);
     }
 
     private IMessageHub GetClient()

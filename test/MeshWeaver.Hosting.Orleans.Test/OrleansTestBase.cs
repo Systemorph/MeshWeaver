@@ -78,6 +78,10 @@ public abstract class OrleansTestBase<TSiloConfigurator>(ITestOutputHelper outpu
         builder.AddClientBuilderConfigurator<TestClientConfigurator>();
         Cluster = builder.Build();
         await Cluster.DeployAsync();
+        // DevLogin analog: seed a default System circuit identity on the client +
+        // silo mesh hubs so direct test posts (and the mesh hubs' own re-posts)
+        // satisfy the never-null AccessContext invariant. See OrleansTestIdentity.
+        OrleansTestIdentity.SeedDefaultIdentity(Cluster);
     }
 
     /// <summary>
