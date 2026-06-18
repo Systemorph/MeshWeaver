@@ -375,6 +375,7 @@ internal static class NodeTypeCompileActivityHandler
                             {
                                 CompilationStatus = CompilationStatus.Ok,
                                 CompilationError = null,
+                                CompilationDiagnostics = null,
                                 LastCompileSucceededAt = DateTimeOffset.UtcNow,
                                 LastCompilationActivityPath = activityPath,
                                 LatestReleasePath = newReleasePath ?? def.LatestReleasePath,
@@ -404,6 +405,12 @@ internal static class NodeTypeCompileActivityHandler
                         {
                             CompilationStatus = CompilationStatus.Error,
                             CompilationError = errorSummary,
+                            // Structured, per-source-file diagnostics for the Monaco error
+                            // overlay on the Settings → Progress page — kept in native form
+                            // (the flattened summary is CompilationError above).
+                            CompilationDiagnostics = outcome.Result?.Diagnostics is { Count: > 0 } ds
+                                ? System.Collections.Immutable.ImmutableList.CreateRange(ds)
+                                : null,
                             LastCompilationActivityPath = activityPath,
                             CompiledSources = null
                         };

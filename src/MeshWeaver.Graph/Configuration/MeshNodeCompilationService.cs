@@ -15,6 +15,7 @@ using MeshWeaver.NuGet;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Emit;
+using Lsp = MeshWeaver.Mesh.Services.LanguageServer;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -632,6 +633,97 @@ internal class MeshNodeCompilationService(
               + "lambda references a type that was never compiled (see the source-discovery report below).";
     }
 
+    // Sentinel FilePath for the generated skeleton tree — must match the one the LSP uses
+    // so skeleton-internal diagnostics (framework noise the user can't act on) are filtered out.
+    private const string SkeletonDiagnosticsPath = "__skeleton__.cs";
+
+    /// <summary>
+    /// On a FAILED compile, re-derive the diagnostics in their structured, per-source-file
+    /// form by assembling ONE LSP-style compilation (skeleton tree + one tree per src/test
+    /// Code node, each carrying the MeshNode path as its <c>FilePath</c>) — exactly the model
+    /// <see cref="SpeculativeCompilation"/> / <see cref="MeshNodeLanguageService"/> use, so a
+    /// diagnostic's <see cref="Lsp.SourceLocation.SourcePath"/> is the Code node path. This is
+    /// what lets the GUI mark each error at its exact line/column in a Monaco editor and link to
+    /// the source. Runs only on failure (off the hub via <see cref="OnThreadPool{T}(Func{T})"/>),
+    /// so the working success emit path is untouched. Reuses <see cref="GetCompilationInputsAsync"/>
+    /// (already source-discovery-, @@-include- and NuGet-resolved).
+    /// </summary>
+    private IObservable<IReadOnlyList<Lsp.DiagnosticInfo>> BuildFailureDiagnostics(
+        MeshNode node, IReadOnlyList<MeshNode>? sourcesOverride)
+        => GetCompilationInputsAsync(node, sourcesOverride)
+            .Take(1)
+            .SelectMany(inputs => inputs is null
+                ? Observable.Return<IReadOnlyList<Lsp.DiagnosticInfo>>(Array.Empty<Lsp.DiagnosticInfo>())
+                : OnThreadPool(() => DiagnoseInputs(inputs)))
+            // Diagnostics are best-effort GUI sugar — a failure here must never break the
+            // compile result; the flattened FormatCompileFailure summary still surfaces.
+            .Catch<IReadOnlyList<Lsp.DiagnosticInfo>, Exception>(ex =>
+            {
+                logger.LogDebug(ex, "Structured failure-diagnostics capture failed for {NodePath} (best-effort)", node.Path);
+                return Observable.Return<IReadOnlyList<Lsp.DiagnosticInfo>>(Array.Empty<Lsp.DiagnosticInfo>());
+            });
+
+    private static IReadOnlyList<Lsp.DiagnosticInfo> DiagnoseInputs(CompilationInputs inputs)
+    {
+        var trees = new List<SyntaxTree>(inputs.Sources.Length + 1)
+        {
+            CSharpSyntaxTree.ParseText(
+                Microsoft.CodeAnalysis.Text.SourceText.From(inputs.SkeletonSource),
+                inputs.ParseOptions, path: SkeletonDiagnosticsPath),
+        };
+        foreach (var (path, code) in inputs.Sources)
+            trees.Add(CSharpSyntaxTree.ParseText(
+                Microsoft.CodeAnalysis.Text.SourceText.From(code), inputs.ParseOptions, path: path));
+
+        // Run the same source generators as the production emit so generated-code
+        // diagnostics (e.g. IScope proxies) surface identically.
+        var compilation = RunSourceGenerators(
+            CSharpCompilation.Create(inputs.AssemblyName, trees, inputs.References, inputs.CompilationOptions),
+            CancellationToken.None);
+
+        var diags = compilation.GetDiagnostics();
+        if (diags.IsDefaultOrEmpty) return Array.Empty<Lsp.DiagnosticInfo>();
+
+        var result = new List<Lsp.DiagnosticInfo>(diags.Length);
+        foreach (var d in diags)
+        {
+            if (d.Severity is not (DiagnosticSeverity.Error or DiagnosticSeverity.Warning)) continue;
+            // Skeleton-internal diagnostics are framework noise the user can't act on.
+            if (d.Location.SourceTree?.FilePath == SkeletonDiagnosticsPath) continue;
+            result.Add(ToDiagnosticInfo(d));
+        }
+        // Errors first, then by file then position — stable order for the GUI.
+        return result
+            .OrderByDescending(d => d.Severity)
+            .ThenBy(d => d.Location?.SourcePath, StringComparer.Ordinal)
+            .ThenBy(d => d.Location?.Range.Start.Line ?? 0)
+            .ToList();
+    }
+
+    private static Lsp.DiagnosticInfo ToDiagnosticInfo(Diagnostic d)
+    {
+        Lsp.SourceLocation? location = null;
+        if (d.Location.IsInSource && d.Location.SourceTree?.FilePath is { Length: > 0 } path)
+        {
+            var span = d.Location.GetLineSpan();
+            location = new Lsp.SourceLocation(
+                path,
+                new Lsp.SourceRange(
+                    new Lsp.SourcePosition(span.StartLinePosition.Line, span.StartLinePosition.Character),
+                    new Lsp.SourcePosition(span.EndLinePosition.Line, span.EndLinePosition.Character)));
+        }
+        return new Lsp.DiagnosticInfo(d.Id, MapDiagnosticSeverity(d.Severity), d.GetMessage(), location);
+    }
+
+    private static Lsp.DiagnosticSeverity MapDiagnosticSeverity(DiagnosticSeverity s) => s switch
+    {
+        DiagnosticSeverity.Hidden => Lsp.DiagnosticSeverity.Hidden,
+        DiagnosticSeverity.Info => Lsp.DiagnosticSeverity.Info,
+        DiagnosticSeverity.Warning => Lsp.DiagnosticSeverity.Warning,
+        DiagnosticSeverity.Error => Lsp.DiagnosticSeverity.Error,
+        _ => Lsp.DiagnosticSeverity.Info,
+    };
+
     private static string BuildSourceDiscoveryReport(IReadOnlyList<string> executedQueries, IReadOnlyList<string> matchedCodePaths)
     {
         var sb = new System.Text.StringBuilder();
@@ -655,7 +747,15 @@ internal class MeshNodeCompilationService(
         {
             var (assemblyLocation, log) = t;
             if (string.IsNullOrEmpty(assemblyLocation))
-                return Observable.Return((NodeCompilationResult?)new NodeCompilationResult(null, [], log));
+                // Failed compile: capture the per-source-file Roslyn diagnostics (one
+                // LSP-style per-file-tree compilation of all this NodeType's src+test) so
+                // the Settings → Progress error page can mark each error at its exact
+                // position in a Monaco editor and link to the Code node. Failure-only — the
+                // working success emit is untouched. The flattened summary still lives on
+                // the ActivityLog (FormatCompileFailure).
+                return BuildFailureDiagnostics(node, sourcesOverride)
+                    .Select(diags => (NodeCompilationResult?)new NodeCompilationResult(
+                        null, [], log, Diagnostics: diags));
 
             // Capture the per-source version snapshot AFTER the compile resolved
             // its source set so the snapshot reflects the same storage enumeration
@@ -1150,10 +1250,23 @@ internal class MeshNodeCompilationService(
     /// </summary>
     private static CSharpCompilation RunSourceGenerators(CSharpCompilation compilation, CancellationToken ct)
     {
+        // Run the BusinessRules scope generator ONLY when the unit actually declares a scope —
+        // i.e. a Scope source (an interface deriving IScope<,>) is present. Plain Code / NodeType
+        // compiles skip the generator driver entirely: the scope generator is associated with the
+        // Scope NodeType, decoupled from all-Code compilation. (The generator self-no-ops without
+        // IScope, so this is also a cheap fast-path that avoids spinning up the driver.)
+        if (!DeclaresScope(compilation))
+            return compilation;
         var driver = CSharpGeneratorDriver.Create(new BusinessRules.Generator.ScopeCodeGenerator());
         driver.RunGeneratorsAndUpdateCompilation(compilation, out var updated, out _, ct);
         return (CSharpCompilation)updated;
     }
+
+    /// <summary>True when any source unit declares an <c>IScope&lt;,&gt;</c> interface — the
+    /// trigger the scope generator looks for. Cheap text scan; a false positive (the token in a
+    /// comment) only re-runs the self-no-op generator, never mis-generates.</summary>
+    private static bool DeclaresScope(CSharpCompilation compilation) =>
+        compilation.SyntaxTrees.Any(t => t.ToString().Contains("IScope<", StringComparison.Ordinal));
 
     /// <summary>
     /// Compiles and emits assembly to a unique per-compile subdirectory.

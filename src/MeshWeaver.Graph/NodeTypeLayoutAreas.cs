@@ -12,6 +12,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Services.LanguageServer;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
@@ -143,12 +144,16 @@ public static class NodeTypeLayoutAreas
 
                 if (def.CompilationStatus == CompilationStatus.Error)
                 {
-                    // Compilation-failed is a LEGAL terminal status: show the captured error
-                    // (already in `body`) plus a Recompile button. Do NOT embed the activity
-                    // LayoutAreaControl here — the compile activity is history and may be
-                    // unaddressable, and subscribing to an inexistent address is the resubscribe
-                    // storm that wedged the portal. One atomic Update flips
+                    // Compilation-failed is a LEGAL terminal status. Surface it as a proper page:
+                    // the flat summary is in `body` above; here, for each affected source file, a
+                    // link to the Code node + a read-only Monaco editor with the errors MARKED at
+                    // their exact position (the captured per-file CompilationDiagnostics drive the
+                    // overlay) — so the user sees WHAT broke and WHERE, never an indefinite spinner.
+                    // Do NOT embed the activity LayoutAreaControl here — the compile activity is
+                    // history and may be unaddressable; subscribing to an inexistent address is the
+                    // resubscribe storm that wedged the portal. The Recompile button flips
                     // RequestedReleaseAt + Force on the NodeType's OWN node; the compile watcher reacts.
+                    stack = AppendCompileErrorSources(stack, def);
                     stack = stack.WithView(Controls.Button("Recompile")
                         .WithAppearance(Appearance.Accent)
                         .WithClickAction(_ =>
@@ -185,6 +190,82 @@ public static class NodeTypeLayoutAreas
                 }
                 return (UiControl?)stack;
             });
+    }
+
+    /// <summary>
+    /// For each source file a FAILED compile flagged, append a link to the Code node and a
+    /// read-only Monaco editor showing that file with its diagnostics MARKED at their exact
+    /// position (the IDE-style error overlay). Driven by the captured, structured
+    /// <see cref="NodeTypeDefinition.CompilationDiagnostics"/> (per-file <see cref="DiagnosticInfo"/>),
+    /// so the markers land exactly where Roslyn flagged them and the editor reads the live
+    /// source straight from the Code node's content stream (single source of truth, no replica).
+    /// Location-less diagnostics (assembly-level) stay in the flat summary rendered above.
+    /// No-op when there are no structured diagnostics (e.g. an older compile before capture).
+    /// </summary>
+    private static StackControl AppendCompileErrorSources(StackControl stack, NodeTypeDefinition def)
+    {
+        foreach (var view in BuildCompileErrorSourceViews(def))
+            stack = stack.WithView(view);
+        return stack;
+    }
+
+    /// <summary>
+    /// Pure, testable builder for the compile-error source views: for each source file the failed
+    /// compile flagged (grouped by <see cref="DiagnosticInfo"/> <see cref="SourceLocation.SourcePath"/>,
+    /// ordinal-ordered so the page is deterministic), emits — IN ORDER — a markdown link to the
+    /// Code node followed by a read-only <see cref="CodeEditorControl"/> bound to that node's source
+    /// with the diagnostics MARKED at their exact position (the IDE-style error overlay). One
+    /// link + one editor per file. Location-less diagnostics (assembly-level) are left to the flat
+    /// summary. Empty when there are no structured diagnostics.
+    /// </summary>
+    internal static IReadOnlyList<UiControl> BuildCompileErrorSourceViews(NodeTypeDefinition def)
+    {
+        var located = (def.CompilationDiagnostics ?? [])
+            .Where(d => d.Location is { } loc && !string.IsNullOrEmpty(loc.SourcePath))
+            .GroupBy(d => d.Location!.SourcePath, StringComparer.Ordinal)
+            .OrderBy(g => g.Key, StringComparer.Ordinal)
+            .ToList();
+        if (located.Count == 0)
+            return [];
+
+        var views = new List<UiControl>(located.Count * 2);
+        foreach (var group in located)
+        {
+            var sourcePath = group.Key;
+            var fileName = sourcePath.Split('/').LastOrDefault() ?? sourcePath;
+            var errorCount = group.Count(d => d.Severity == DiagnosticSeverity.Error);
+            var warnCount = group.Count(d => d.Severity == DiagnosticSeverity.Warning);
+            var counts = errorCount > 0
+                ? $"{errorCount} error{(errorCount == 1 ? "" : "s")}"
+                : $"{warnCount} warning{(warnCount == 1 ? "" : "s")}";
+
+            // Link straight to the source Code node so the user can open and fix it.
+            views.Add(Controls.Markdown($"##### [{fileName}](/{sourcePath}) — {counts}")
+                .WithStyle("margin: 16px 0 4px 0;"));
+
+            var markers = group
+                .Select(d => new CodeEditorDiagnostic(
+                    d.Location!.Range.Start.Line, d.Location.Range.Start.Character,
+                    d.Location.Range.End.Line, d.Location.Range.End.Character,
+                    (int)d.Severity, d.Message, d.Id))
+                .ToList();
+
+            views.Add(new CodeEditorControl()
+                .WithLanguage("csharp")
+                .WithReadonly(true)
+                .WithLineNumbers(true)
+                .WithMinimap(false)
+                .WithHeight("360px")
+                .WithDiagnostics(markers) with
+            {
+                // Node-bound: read the source straight from the Code node's content stream
+                // (live, single source of truth — no /data replica). bindContent:true targets
+                // the CodeConfiguration content; "Code" is its source-text field.
+                DataContext = LayoutAreaReference.GetMeshNodeDataContext(sourcePath, bindContent: true),
+                Value = new JsonPointerReference("Code")
+            });
+        }
+        return views;
     }
 
     private static (string Icon, string Header, string Body) RenderProgressLines(NodeTypeDefinition def)

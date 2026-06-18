@@ -1,7 +1,9 @@
-﻿using MeshWeaver.ContentCollections;
+﻿using System.Collections.Immutable;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Services.LanguageServer;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -225,8 +227,24 @@ public record NodeTypeDefinition
     /// <summary>
     /// Formatted Roslyn diagnostics when <see cref="CompilationStatus"/> is
     /// <see cref="Mesh.Services.CompilationStatus.Error"/>; otherwise <c>null</c>.
+    /// Human-readable summary — see <see cref="CompilationDiagnostics"/> for the
+    /// structured, per-source-file form that drives the Monaco error overlay.
     /// </summary>
     public string? CompilationError { get; init; }
+
+    /// <summary>
+    /// Structured per-source-file Roslyn diagnostics from the last FAILED compile —
+    /// kept in their native <see cref="DiagnosticInfo"/> form (id, severity, message,
+    /// and a per-file <see cref="SourceLocation"/> line/column range) rather than
+    /// flattened to a string, so the Settings → Progress error page can render each
+    /// affected source in a Monaco editor with the errors MARKED at their exact
+    /// position (the IDE-style overlay) and link straight to the Code node. Populated
+    /// when <see cref="CompilationStatus"/> is <see cref="Mesh.Services.CompilationStatus.Error"/>;
+    /// <c>null</c>/empty otherwise. Produced by the same per-file-tree compilation the
+    /// LSP uses (<c>SpeculativeCompilation</c> / <c>CompilationInputs</c>), so a
+    /// diagnostic's <see cref="SourceLocation.SourcePath"/> is the Code MeshNode path.
+    /// </summary>
+    public ImmutableList<DiagnosticInfo>? CompilationDiagnostics { get; init; }
 
     /// <summary>
     /// UTC timestamp when the currently-running compile started. Non-null only while
