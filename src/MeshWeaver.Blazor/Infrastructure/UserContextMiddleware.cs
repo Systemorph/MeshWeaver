@@ -93,7 +93,9 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
                     + "anonymous so the request can't create a parallel "
                     + "<email> partition. The cache will populate on the next request.",
                     userContext.ObjectId, userContext.Email);
-                userService.SetContext(null);
+                // Never null — treat as Anonymous (least privilege) rather than
+                // null, which would fail-close the request at the never-null guard.
+                userService.SetContext(AnonymousContext);
                 await next(context);
                 return;
             }
@@ -113,7 +115,18 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         }
         else
         {
-            userService.SetContext(null);
+            // 🚨 NEVER NULL (feedback_access_context_always_set): an
+            // unauthenticated request resolves to the well-known Anonymous
+            // identity, NOT null. A null context trips the never-null
+            // PostPipeline guard and fail-closes EVERY downstream application
+            // post (reads, subscribes, layout-area syncs) → the visitor sees a
+            // BLANK portal even for public content. This was a root of the
+            // atioz "portal down" wedge: an invalid/expired token resolves to
+            // no userContext, fell here, and the null context blanked the page.
+            // Anonymous carries Permission.None by default; RLS still filters
+            // reads to exactly what the Anonymous role is granted (public
+            // pages), and any write is cleanly rejected — never fail-closed.
+            userService.SetContext(AnonymousContext);
         }
 
         await next(context);
@@ -140,6 +153,21 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
     // NoStaticState.md. (Not exercised by tests; the HTTP pipeline doesn't run under MonolithMeshTestBase.)
     private readonly ConcurrentDictionary<string, DateTimeOffset> _loginDedup = new();
     private static readonly TimeSpan LoginDedupWindow = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// The well-known Anonymous identity stamped on every unauthenticated request.
+    /// NEVER null: a null <see cref="AccessContext"/> trips the never-null
+    /// PostPipeline guard and fail-closes every downstream post, blanking the
+    /// portal for visitors. Immutable record → safe to share one instance.
+    /// Anonymous has <c>Permission.None</c> by default; RLS grants only what the
+    /// Anonymous role is assigned (public content). Not a static cache (NoStaticState.md) —
+    /// an immutable write-once constant.
+    /// </summary>
+    private static readonly AccessContext AnonymousContext = new()
+    {
+        ObjectId = WellKnownUsers.Anonymous,
+        Name = WellKnownUsers.Anonymous,
+    };
 
     /// <summary>
     /// Posts a fire-and-forget <see cref="TrackActivityRequest"/> with
