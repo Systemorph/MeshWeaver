@@ -57,13 +57,17 @@ public partial class CSharpFileParser : IFileFormatParser
 
         var displayName = metadata.GetValueOrDefault("DisplayName");
         var nodeId = metadata.GetValueOrDefault("Id") ?? ExtractPrimaryTypeName(content) ?? id;
+        // A `.cs` source defaults to a "Code" node, but the `<meshweaver>` header may declare a
+        // different type — e.g. `// NodeType: Scope` makes it a first-class BusinessRules Scope
+        // node (still CodeConfiguration content, still folded into the parent compile).
+        var nodeType = metadata.GetValueOrDefault("NodeType") ?? "Code";
 
         var fileInfo = new FileInfo(filePath);
         var lastModified = new DateTimeOffset(fileInfo.LastWriteTimeUtc, TimeSpan.Zero);
 
         var node = new MeshNode(nodeId, ns)
         {
-            NodeType = "Code",
+            NodeType = nodeType,
             Name = displayName ?? nodeId,
             LastModified = lastModified,
             Content = codeConfig
