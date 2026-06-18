@@ -15,8 +15,7 @@
                 @{ var selInitial = GetInitial(_selectedNode); }
                 @RenderAvatar(_selectedNode, selInitial)
                 <div class="mesh-node-picker-info">
-                    <div class="mesh-node-picker-name">@(_selectedNode.Name ?? _selectedNode.Id)</div>
-                    <div class="mesh-node-picker-path" title="@_selectedNode.Path">@(_selectedNode.Path)</div>
+                    <div class="mesh-node-picker-name" title="@_selectedNode.Path">@(_selectedNode.Name ?? _selectedNode.Id)</div>
                 </div>
                 @if (!string.IsNullOrEmpty(_selectedNode.Category))
                 {
@@ -81,8 +80,7 @@
                          @onclick="() => SelectNode(node)">
                         @RenderAvatar(node, initial)
                         <div class="mesh-node-picker-item-info">
-                            <div class="mesh-node-picker-item-name">@(node.Name ?? node.Id)</div>
-                            <div class="mesh-node-picker-item-path" title="@node.Path">@(node.Path)</div>
+                            <div class="mesh-node-picker-item-name" title="@node.Path">@(node.Name ?? node.Id)</div>
                         </div>
                         @if (!string.IsNullOrEmpty(node.Category))
                         {
