@@ -89,6 +89,9 @@ public class NoStaticCollectionsTest
         // Types/ALCs so it can pin nothing. Kills the ~200 MiB-per-kernel-session native
         // metadata leak (Roslyn re-materialized ~350 metadata blocks per script session).
         ["MeshWeaver.Kernel.Hub.KernelScriptReferences.Materialized"] = "MEMO: assembly path -> shared PE reference",
+        // #r-discovered source generators, loaded once per generator-assembly path (a build
+        // tool, process-wide, never tied to a per-node collectible ALC). See SourceGeneratorLoader.
+        ["MeshWeaver.Graph.Configuration.SourceGeneratorLoader.Cache"] = "MEMO: generator assembly path -> generators",
         ["MeshWeaver.Markdown.MarkdownExtensions.PipelineCache"] = "MEMO: (lang,style) -> pipeline",
         ["MeshWeaver.Messaging.MessageHubConfiguration._systemMessageCache"] = "MEMO: Type -> bool",
         ["MeshWeaver.Messaging.MessageHubConfiguration._canBeIgnoredCache"] = "MEMO: Type -> bool",
