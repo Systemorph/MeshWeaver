@@ -230,10 +230,21 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         var hashPrefix = hash[..12];
         var tokenAddress = new Address("ApiToken", hashPrefix);
 
-        return hub.Observe(
-                new ValidateTokenRequest(rawToken),
-                o => o.WithTarget(tokenAddress))
-            .Select(d => (ValidateTokenResponse?)d.Message)
+        // 🚨 Token validation is the AUTH BOOTSTRAP — it runs BEFORE any user identity exists (that
+        // is what it establishes). With no AccessContext the ValidateTokenRequest post is fail-closed
+        // by the never-null guard, so it never reaches the ApiToken hub → validation returns null →
+        // the user resolves as ANONYMOUS → RLS returns empty → blank "portal is down" for every
+        // authenticated user (chronic token-forwarding failure, atioz 2026-06-18). Run it as System
+        // (Permission.All — NOT ImpersonateAsHub, whose hub address has no Read on the token node).
+        // Observable.Using holds the impersonation across the cold Observe's Subscribe.
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        return Observable.Using<ValidateTokenResponse?, IDisposable>(
+                () => accessService?.ImpersonateAsSystem()
+                      ?? System.Reactive.Disposables.Disposable.Empty,
+                _ => hub.Observe(
+                        new ValidateTokenRequest(rawToken),
+                        o => o.WithTarget(tokenAddress))
+                    .Select(d => (ValidateTokenResponse?)d.Message))
             // Fail closed (null = not authenticated) but NEVER silently: an
             // infrastructure fault here is otherwise indistinguishable from an
             // invalid token, which makes auth incidents undiagnosable.
