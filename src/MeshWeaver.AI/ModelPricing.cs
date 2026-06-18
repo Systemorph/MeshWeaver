@@ -48,7 +48,7 @@ public static class ModelPricing
     public static readonly ImmutableDictionary<string, ModelPriceRate> Defaults =
         new Dictionary<string, ModelPriceRate>(StringComparer.OrdinalIgnoreCase)
         {
-            // Anthropic Claude — standard input / output $ per 1M tokens.
+            // Anthropic Claude (direct API) — standard input / output $ per 1M tokens.
             ["claude-opus-4-8"] = new(5m, 25m, Usd),
             ["claude-opus-4-7"] = new(5m, 25m, Usd),
             ["claude-opus-4-6"] = new(5m, 25m, Usd),
@@ -57,6 +57,17 @@ public static class ModelPricing
             ["claude-sonnet-4-5"] = new(3m, 15m, Usd),
             ["claude-haiku-4-5"] = new(1m, 5m, Usd),
             ["claude-fable-5"] = new(10m, 50m, Usd),
+
+            // The models actually deployed on Azure AI Foundry (s-meshweaver, swedencentral) —
+            // the cost overview must bill at AZURE serverless rates, not the providers' direct
+            // API rates. USD per 1M tokens (standard / non-cached). ⚠️ VERIFY against the Azure
+            // AI Foundry rate card for the resource — region/contract rates can differ, and the
+            // Flash / V3-0324 figures below are estimates pending confirmation.
+            ["DeepSeek-V4-Pro"] = new(1.75m, 3.48m, Usd),
+            ["DeepSeek-V3-0324"] = new(0.95m, 2.40m, Usd),   // deepseek-chat; deprecates 2026-07-24 — estimate
+            ["DeepSeek-V4-Flash"] = new(0.55m, 1.10m, Usd),  // cheapest tier — estimate
+            // Moonshot Kimi K2.6 (preview on Azure AI Foundry).
+            ["Kimi-K2.6"] = new(0.95m, 4.00m, Usd),
         }.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
