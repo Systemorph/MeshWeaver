@@ -48,6 +48,9 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
         builder.AddClientBuilderConfigurator<TestClientConfigurator>();
         Cluster = builder.Build();
         await Cluster.DeployAsync();
+        // Seed a default System circuit identity so portal-hub posts carry an
+        // identity (never-null AccessContext invariant). See OrleansTestIdentity.
+        OrleansTestIdentity.SeedDefaultIdentity(Cluster);
     }
 
     /// <summary>

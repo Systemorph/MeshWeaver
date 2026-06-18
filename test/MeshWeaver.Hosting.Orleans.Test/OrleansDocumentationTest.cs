@@ -45,6 +45,9 @@ public class OrleansDocumentationTest(ITestOutputHelper output) : TestBase(outpu
         builder.AddClientBuilderConfigurator<DocClientConfigurator>();
         Cluster = builder.Build();
         await Cluster.DeployAsync();
+        // Seed a default System circuit identity so portal-hub posts carry an
+        // identity (never-null AccessContext invariant). See OrleansTestIdentity.
+        OrleansTestIdentity.SeedDefaultIdentity(Cluster);
     }
 
     private async Task<IMessageHub> CreatePortalHubAsync()

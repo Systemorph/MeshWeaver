@@ -72,6 +72,10 @@ public class TwoSiloCacheUpdateFixture : IAsyncLifetime
         builder.AddSiloBuilderConfigurator<TwoSiloConfigurator>();
         Cluster = builder.Build();
         await Cluster.DeployAsync();
+        // Seed a default System circuit identity on both silos' mesh hubs so the
+        // test driver's direct CreateNodeRequest/cache.Update posts carry an
+        // identity (never-null AccessContext invariant). See OrleansTestIdentity.
+        OrleansTestIdentity.SeedDefaultIdentity(Cluster);
     }
 
     public async ValueTask DisposeAsync()

@@ -59,6 +59,10 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
         builder.AddClientBuilderConfigurator<TestClientConfigurator>();
         Cluster = builder.Build();
         await Cluster.DeployAsync();
+        // Seed a default System circuit identity so the client + silo mesh hubs'
+        // posts carry an identity (never-null AccessContext invariant). See
+        // OrleansTestIdentity.
+        OrleansTestIdentity.SeedDefaultIdentity(Cluster);
     }
 
     public override async ValueTask DisposeAsync()

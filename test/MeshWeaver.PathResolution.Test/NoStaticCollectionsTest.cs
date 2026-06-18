@@ -91,6 +91,7 @@ public class NoStaticCollectionsTest
         ["MeshWeaver.Kernel.Hub.KernelScriptReferences.Materialized"] = "MEMO: assembly path -> shared PE reference",
         ["MeshWeaver.Markdown.MarkdownExtensions.PipelineCache"] = "MEMO: (lang,style) -> pipeline",
         ["MeshWeaver.Messaging.MessageHubConfiguration._systemMessageCache"] = "MEMO: Type -> bool",
+        ["MeshWeaver.Messaging.MessageHubConfiguration._canBeIgnoredCache"] = "MEMO: Type -> bool",
         // GenericCaches.{TypeCaches,MethodCaches} removed 2026-06-03 — the whole
         // GenericCaches/DelegateCache surface was dead code (only 2 InvokeAsFunction call
         // sites, now pure reflection via GenericMethodInvoker). Deleted, not allowlisted.
