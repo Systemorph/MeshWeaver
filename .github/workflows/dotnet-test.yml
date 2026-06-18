@@ -78,6 +78,21 @@ jobs:
       run: dotnet restore
     - name: Build
       run: dotnet build --no-restore -p:CIRun=true
+    # Node Source can pull MeshWeaver libraries in via `#r "nuget:MeshWeaver.X, 3.0.0-preview1"`
+    # (e.g. the BusinessRules scope generator the PensionFund sample uses). Tests resolve those
+    # from the mesh-local feed (nuget.config → dist/packages), which is git-ignored — so the
+    # build job must produce them. Pack at the fixed dev-feed version against the just-built
+    # output; dist/packages travels in the build artifact below, so the --no-build/--no-restore
+    # shards (and the runtime #r resolver inside them) can resolve them offline. Self-contained:
+    # BusinessRules depends only on framework packages (already in the restored .nuget cache).
+    - name: Pack mesh-local #r packages
+      run: |
+        set -euo pipefail
+        dotnet pack src/MeshWeaver.BusinessRules/MeshWeaver.BusinessRules.csproj \
+          --no-build --no-restore -o dist/packages -p:PackageVersion=3.0.0-preview1 --nologo
+        dotnet pack src/MeshWeaver.BusinessRules.Generator/MeshWeaver.BusinessRules.Generator.csproj \
+          --no-build --no-restore -o dist/packages -p:PackageVersion=3.0.0-preview1 --nologo
+        ls -lh dist/packages
     - name: Package build output
       run: |
         set -euo pipefail
@@ -89,6 +104,8 @@ jobs:
         find . -type d \( -name bin -o -name obj \) \
           -not -path './.git/*' -not -path './.nuget/*' -prune -print > .build-paths.txt
         echo "./.nuget/packages" >> .build-paths.txt
+        # The mesh-local #r feed packed above — the test shards' runtime #r resolver reads it.
+        echo "./dist/packages" >> .build-paths.txt
         # One zstd tarball (-T0 = all cores) moves through upload/download-artifact
         # FAR faster than the millions of loose bin/obj/packages files would.
         tar -I 'zstd -T0' -cf build-output.tar.zst -T .build-paths.txt
