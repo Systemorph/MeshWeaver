@@ -70,6 +70,21 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         return configured;
     }
 
+    /// <summary>
+    /// Stamps the well-known <see cref="WellKnownUsers.Anonymous"/> identity — the
+    /// never-null representation of an unauthenticated caller. This matches what
+    /// <c>UserContextMiddleware</c> now does (it resolves an unauthenticated request
+    /// to Anonymous, NOT null): with a real identity the request reaches the RLS
+    /// handler and is rejected cleanly (Anonymous has no Create/Delete), instead of
+    /// a null context fail-closing the post at the never-null PostPipeline guard.
+    /// </summary>
+    private static void SetAnonymous(AccessService accessService)
+        => accessService.SetCircuitContext(new AccessContext
+        {
+            ObjectId = WellKnownUsers.Anonymous,
+            Name = WellKnownUsers.Anonymous,
+        });
+
     [Fact]
     public async Task CreateNode_WithCreatePermission_Succeeds()
     {
@@ -593,7 +608,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     {
         // Arrange - anonymous: clear AccessContext, no CreatedBy, no role assigned
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(null);
+        SetAnonymous(accessService);
         var client = GetClient();
 
         var node = new MeshNode("AnonCreate", "rls/anon")
@@ -632,7 +647,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         createResp.Message.Success.Should().BeTrue();
 
         // Clear AccessContext to simulate anonymous user
-        accessService.SetCircuitContext(null);
+        SetAnonymous(accessService);
 
         // Act â€” anonymous delete (no DeletedBy)
         var deleteResponse = await client.Observe(new DeleteNodeRequest("rls/anon_delete/ToDeleteAnon"), o => o.WithTarget(Mesh.Address)).Should().Emit();
@@ -670,7 +685,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     {
         // Arrange â€” grant Anonymous user Viewer role (Read only), clear admin context
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(null);
+        SetAnonymous(accessService);
         var client = GetClient();
 
         const string parentPath = "rls/public_viewer";
