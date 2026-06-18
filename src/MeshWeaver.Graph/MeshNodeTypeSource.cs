@@ -476,20 +476,18 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     {
         var ownNode = rawNode != null ? ResolveJsonElementContent(rawNode) : null;
 
-        // 🚨 LEAVE Hub.Version ALONE — never set it backward. It is already strictly monotonic on its
-        // own (++ per message in MessageHub.HandleMessageAsync) and is the SHARED clock for this hub:
-        // it also stamps the hub's LAYOUT-AREA stream Fulls (Host.Version), which advance per render
-        // independently of node writes. BuildInstanceCollection runs on EVERY ownNode emission (not
-        // just first load), so the old SetInitialVersion(node.Version) re-stamped the clock BACKWARD to
-        // a low static/doc node version on every catalog push, dropping the live layout Fulls under the
-        // stale-Full monotonicity guard → "cannot find pinned doc" wedge (atioz 2026-06-18).
-        //
-        // Instead, just INCREASE the loaded node's own version by 1 so its emitted Full is strictly
-        // newer than the last one a subscriber saw (re-applies on reload/recycle instead of being
-        // dropped as a value-equal/stale duplicate). The node carries its OWN monotonic version;
-        // Hub.Version is never touched.
-        if (ownNode is not null)
-            ownNode = ownNode with { Version = ownNode.Version + 1 };
+        // 🚨 LEAVE BOTH CLOCKS ALONE on load — never touch Hub.Version, never re-stamp the node.
+        // Hub.Version is already strictly monotonic on its own (++ per message in
+        // MessageHub.HandleMessageAsync) and is the SHARED clock for this hub: it also stamps the
+        // hub's LAYOUT-AREA stream Fulls (Host.Version), which advance per render independently of
+        // node writes. BuildInstanceCollection runs on EVERY ownNode emission (not just first load),
+        // so the old SetInitialVersion(node.Version) re-stamped the clock BACKWARD to a low static/doc
+        // node version on every catalog push, dropping the live layout Fulls under the stale-Full
+        // monotonicity guard → "cannot find pinned doc" wedge (atioz 2026-06-18). Removing that reset
+        // IS the wedge fix. Do NOT bump the loaded node's own version either: a load is a READ, and a
+        // read that inflates Version breaks read-your-version semantics (MeshNodeVersionSyncTest) and
+        // would re-emit on every catalog push. Recovery/reload re-application is driven by the WRITE
+        // path stamping a higher Hub.Version on the node when it actually changes — not by load.
 
         _workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
 
