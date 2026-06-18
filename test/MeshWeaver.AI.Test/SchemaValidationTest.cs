@@ -345,6 +345,28 @@ public class SchemaValidationTest : MonolithMeshTestBase
         schema.Should().BeNull();
     }
 
+    [Fact(Timeout = 30000)]
+    public async Task GetContentSchema_TypeReferences_UseRegisteredName_NotFullyQualifiedClrName()
+    {
+        // The content type is registered in the per-NodeType hub's TypeRegistry under
+        // its clean short name ("TestProduct"). The schema MUST be generated with that
+        // hub's JsonSerializerOptions so the polymorphic $type discriminators resolve to
+        // the registered name. Generating it with the parent hub's options (whose
+        // TypeRegistry does not own the type) makes GetOrAddType fall back to
+        // TypeRegistry.FormatType, leaking the fully-qualified, capitalized CLR FullName
+        // into every $type reference — i.e. the "schema references are capitalized" bug.
+        var ops = new MeshOperations(Mesh);
+
+        var schema = await ops.GetContentSchema(TestNodeType)
+            .Should().Within(10.Seconds()).Emit();
+
+        schema.Should().NotBeNullOrEmpty();
+        schema!.Should().NotContain(typeof(TestProduct).FullName!,
+            because: "$type references must use the registered short name, never the fully-qualified CLR FullName");
+        schema.Should().Contain("\"TestProduct\"",
+            because: "the $type discriminator should be the clean registered type name");
+    }
+
     #endregion
 
     #region Id Validation

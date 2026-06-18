@@ -1540,7 +1540,15 @@ public class MeshOperations
                         var typeRegistry = tempHub.ServiceProvider.GetService<ITypeRegistry>();
                         if (typeRegistry == null || !typeRegistry.TryGetType(nodeType, out var typeDefinition))
                             return null;
-                        var schemaNode = hub.JsonSerializerOptions.GetJsonSchemaAsNode(typeDefinition!.Type);
+                        // Generate the schema with tempHub's options, NOT the parent hub's.
+                        // The compiled content type (and its nested types) is registered in
+                        // tempHub's TypeRegistry under its clean short name. The parent hub's
+                        // PolymorphicTypeInfoResolver is bound to the parent's registry, which
+                        // does not own the type — so GetOrAddType would fall back to
+                        // TypeRegistry.FormatType and leak the fully-qualified, capitalized CLR
+                        // FullName into every $type reference. Use the type-owning hub's options
+                        // so the schema references resolve to the registered name.
+                        var schemaNode = tempHub.JsonSerializerOptions.GetJsonSchemaAsNode(typeDefinition!.Type);
                         return (string?)schemaNode.ToJsonString();
                     }
                     finally
