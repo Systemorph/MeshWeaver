@@ -31,6 +31,11 @@ public static class AzureFoundryExtensions
             Order: 1,
             DisplayLabel: "Anthropic",
             DefaultEndpoint: "https://api.anthropic.com/v1/messages",
+            // Latest model PER CATEGORY (opus / sonnet / haiku) — NOT a growing pinned list.
+            // Anthropic exposes no "latest" alias and AzureClaudeChatClient sends the id raw, so a
+            // concrete id is required; this is the ONE place to bump when Anthropic ships a newer
+            // snapshot in a category. Saving an Anthropic key seeds exactly these (CreateProvider) →
+            // Opus 4.8 is the opus the key runs.
             DefaultModelIds: ImmutableArray.Create(
                 "claude-opus-4-8",
                 "claude-sonnet-4-6",
