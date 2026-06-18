@@ -675,11 +675,13 @@ internal class MeshNodeCompilationService(
             trees.Add(CSharpSyntaxTree.ParseText(
                 Microsoft.CodeAnalysis.Text.SourceText.From(code), inputs.ParseOptions, path: path));
 
-        // Run the same source generators as the production emit so generated-code
-        // diagnostics (e.g. IScope proxies) surface identically.
+        // Structured failure diagnostics are best-effort: pass no generator candidates so the
+        // DeclaresScope-gated RunSourceGenerators is a no-op here (the authoritative flat summary
+        // from the production compile already reflects generation). Avoids scanning the full
+        // reference set for [Generator] types on every failed compile.
         var compilation = RunSourceGenerators(
             CSharpCompilation.Create(inputs.AssemblyName, trees, inputs.References, inputs.CompilationOptions),
-            CancellationToken.None);
+            Array.Empty<string>(), Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, CancellationToken.None);
 
         var diags = compilation.GetDiagnostics();
         if (diags.IsDefaultOrEmpty) return Array.Empty<Lsp.DiagnosticInfo>();
@@ -1180,15 +1182,20 @@ internal class MeshNodeCompilationService(
 
         // Generate full source with MeshNodeProviderAttribute (including content collections)
         var rawSource = _attributeGenerator.GenerateAttributeSource(node, codeFile, hubConfiguration, contentCollections);
+        // Node-generation-only scope generator: a unit declaring IScope<,> auto-pulls the generator
+        // via #r from the mesh-local feed (it is never a framework reference).
+        rawSource = InjectScopeGeneratorReference(rawSource);
 
         // Strip #r "nuget:..." directives — Roslyn compilation (unlike scripting) does not process them.
         var (source, nugetRefs) = NuGetDirectiveParser.Extract(rawSource);
         IEnumerable<MetadataReference> references = _references;
+        IReadOnlyList<string> nugetAssemblyPaths = [];
         if (nugetRefs.Length > 0)
         {
             var resolved = await nugetResolver.ResolveAsync(nugetRefs, targetFramework: null, ct);
             references = _references.Concat(
                 resolved.AssemblyPaths.Select(p => MetadataReference.CreateFromFile(p)));
+            nugetAssemblyPaths = resolved.AssemblyPaths;
             cacheService.RegisterProbingDirectories(nodeName, resolved.ProbingDirectories);
         }
 
@@ -1220,7 +1227,7 @@ internal class MeshNodeCompilationService(
             references: references,
             options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
                 .WithOptimizationLevel(OptimizationLevel.Debug)
-                .WithPlatform(Platform.AnyCpu)), ct);
+                .WithPlatform(Platform.AnyCpu)), nugetAssemblyPaths, logger, ct);
 
         string? actualPath;
         if (cacheService.IsDiskCacheEnabled)
@@ -1248,46 +1255,25 @@ internal class MeshNodeCompilationService(
     /// scopes framework: declare the interface, the compiler generates the
     /// proxy, and <c>services.AddBusinessRules(assembly)</c> discovers it.
     /// </summary>
-    private static CSharpCompilation RunSourceGenerators(CSharpCompilation compilation, CancellationToken ct)
+    private static CSharpCompilation RunSourceGenerators(
+        CSharpCompilation compilation, IReadOnlyList<string> generatorAssemblyPaths, ILogger logger, CancellationToken ct)
     {
         // Run the BusinessRules scope generator ONLY when the unit actually declares a scope —
-        // i.e. a Scope source (an interface deriving IScope<,>) is present. Plain Code / NodeType
-        // compiles skip the generator driver entirely: the scope generator is associated with the
-        // Scope NodeType, decoupled from all-Code compilation. (The generator self-no-ops without
-        // IScope, so this is also a cheap fast-path that avoids spinning up the driver.)
+        // a Scope source (an interface deriving IScope<,>). Plain Code/NodeType compiles skip the
+        // driver entirely. The generator is NOT a framework reference (that propagated the analyzer
+        // and bloated builds); it is supplied at NODE-GENERATION time via the node's
+        // `#r "nuget:MeshWeaver.BusinessRules.Generator"` (auto-injected for IScope units by
+        // InjectScopeGeneratorReference), resolved from the mesh-local feed, and discovered here
+        // from those #r-resolved assemblies. No resolvable generator → scope generation is skipped
+        // and the resulting compile error surfaces on the NodeType's Progress page.
         if (!DeclaresScope(compilation))
             return compilation;
-        var generator = TryCreateScopeGenerator();
-        if (generator is null)
+        var generators = SourceGeneratorLoader.Discover(generatorAssemblyPaths, logger);
+        if (generators.IsDefaultOrEmpty)
             return compilation;
-        var driver = CSharpGeneratorDriver.Create(generator);
+        var driver = CSharpGeneratorDriver.Create(generators);
         driver.RunGeneratorsAndUpdateCompilation(compilation, out var updated, out _, ct);
         return (CSharpCompilation)updated;
-    }
-
-    /// <summary>
-    /// Loads the BusinessRules <c>ScopeCodeGenerator</c> at runtime BY NAME rather than through a
-    /// compile-time <c>ProjectReference</c>. The generator is a Roslyn analyzer
-    /// (<c>IsRoslynComponent</c>); referencing its project from the foundational
-    /// <c>MeshWeaver.Graph</c> propagated the analyzer to every project that references Graph
-    /// (40+) and bloated every build. The generator assembly instead reaches this runtime via the
-    /// node's <c>#r "nuget:MeshWeaver.BusinessRules.Generator"</c> resolution / the deployed
-    /// mesh-local package. When it isn't resolvable yet, returns <c>null</c> and scope generation
-    /// is skipped — the resulting compile error then surfaces on the NodeType's Progress page.
-    /// </summary>
-    private static ISourceGenerator? TryCreateScopeGenerator()
-    {
-        var type = Type.GetType(
-            "MeshWeaver.BusinessRules.Generator.ScopeCodeGenerator, MeshWeaver.BusinessRules.Generator",
-            throwOnError: false);
-        if (type is null)
-            return null;
-        return Activator.CreateInstance(type) switch
-        {
-            IIncrementalGenerator incremental => incremental.AsSourceGenerator(),
-            ISourceGenerator source => source,
-            _ => null
-        };
     }
 
     /// <summary>True when any source unit declares an <c>IScope&lt;,&gt;</c> interface — the
@@ -1295,6 +1281,21 @@ internal class MeshNodeCompilationService(
     /// comment) only re-runs the self-no-op generator, never mis-generates.</summary>
     private static bool DeclaresScope(CSharpCompilation compilation) =>
         compilation.SyntaxTrees.Any(t => t.ToString().Contains("IScope<", StringComparison.Ordinal));
+
+    /// <summary>
+    /// When the generated unit declares an <c>IScope&lt;,&gt;</c> but carries no
+    /// <c>#r "nuget:MeshWeaver.BusinessRules.Generator"</c>, prepend it so the scope generator is
+    /// resolved from the mesh-local feed and discovered at <see cref="RunSourceGenerators"/>.
+    /// Node-generation-only — the generator never sits in the framework reference set. Versionless:
+    /// the resolver picks the latest from the pinned <c>mesh-local</c> source (packageSourceMapping).
+    /// The <c>IScope</c>/<c>ScopeBase</c> types the generated proxies bind against come from the
+    /// <c>MeshWeaver.BusinessRules</c> runtime assembly already in the compile references.
+    /// </summary>
+    private static string InjectScopeGeneratorReference(string rawSource) =>
+        rawSource.Contains("IScope<", StringComparison.Ordinal)
+        && !rawSource.Contains("MeshWeaver.BusinessRules.Generator", StringComparison.Ordinal)
+            ? "#r \"nuget:MeshWeaver.BusinessRules.Generator\"\n" + rawSource
+            : rawSource;
 
     /// <summary>
     /// Compiles and emits assembly to a unique per-compile subdirectory.
@@ -1395,17 +1396,20 @@ internal class MeshNodeCompilationService(
         // Generate source code
         var codeConfig = string.IsNullOrEmpty(release.Code) ? null : new CodeConfiguration { Code = release.Code };
         var rawSource = _attributeGenerator.GenerateAttributeSource(node, codeConfig, release.HubConfiguration, release.ContentCollections);
+        rawSource = InjectScopeGeneratorReference(rawSource);
 
         // Strip #r "nuget:..." directives — Roslyn compilation (unlike scripting) does not process them.
         var (source, nugetRefs) = NuGetDirectiveParser.Extract(rawSource);
         IEnumerable<MetadataReference> references = _references;
         IReadOnlyList<string> probingDirs = [];
+        IReadOnlyList<string> nugetAssemblyPaths = [];
         if (nugetRefs.Length > 0)
         {
             var resolved = await nugetResolver.ResolveAsync(nugetRefs, targetFramework: null, ct);
             references = _references.Concat(
                 resolved.AssemblyPaths.Select(p => MetadataReference.CreateFromFile(p)));
             probingDirs = resolved.ProbingDirectories;
+            nugetAssemblyPaths = resolved.AssemblyPaths;
         }
 
         // Write source file for debugging
@@ -1432,7 +1436,7 @@ internal class MeshNodeCompilationService(
             references: references,
             options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
                 .WithOptimizationLevel(OptimizationLevel.Debug)
-                .WithPlatform(Platform.AnyCpu)), ct);
+                .WithPlatform(Platform.AnyCpu)), nugetAssemblyPaths, logger, ct);
 
         // Emit to release folder
         await using var dllStream = File.Create(dllPath);
