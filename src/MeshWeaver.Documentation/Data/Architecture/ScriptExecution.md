@@ -144,6 +144,67 @@ Agents call the same path as `ExecuteScriptRequest` but through the MCP tool sur
 
 ---
 
+## Creating typed / restricted-partition nodes — the `execute_script` escape hatch
+
+The MCP `create` and `patch` tools validate a node's `content.$type` against the hub they run on. Some content types are registered **only on a dedicated per-type hub** (via `WithContentType<T>()`), not on the general MCP hub — so raw `create` rejects them. `Invitation` is the canonical example:
+
+```text
+Content … carries the polymorphic discriminator '$type': 'Invitation',
+which is not a registered content type for the built-in NodeType 'Invitation'
+```
+
+The same wall guards writes into a **restricted partition** — e.g. the `Admin` partition, which ordinary identities can't write to directly (see [Access Control](/Doc/Architecture/AccessControl)).
+
+The way through is to run the write **inside the mesh**, through the canonical service, via `execute_script`. The script's `Mesh` global resolves any registered service and the kernel references every loaded assembly — so you call exactly what the GUI calls. The write then routes to the owning hub (which *does* know the type), and the service's `ImpersonateAsSystem()` scope satisfies the partition write-guard.
+
+**Recipe — three MCP calls:**
+
+1. `create` a throwaway executable `Code` node. `CodeConfiguration` *is* a registered content type, so `create` accepts it:
+
+```jsonc
+{
+  "id": "InviteUsers", "namespace": "rbuergi", "name": "Invite users (delete me)",
+  "nodeType": "Code",
+  "content": { "$type": "CodeConfiguration", "language": "csharp", "isExecutable": true,
+               "code": "/* the script in step 2 */" }
+}
+```
+
+2. The script body resolves the canonical service and **Subscribes** (the service impersonates System internally to reach the Admin partition):
+
+```csharp
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using MeshWeaver.Messaging;                 // AccessService
+using MeshWeaver.Mesh.Services;             // IMeshService
+using Microsoft.Extensions.DependencyInjection;
+using Memex.Portal.Shared.Authentication;   // InvitationService
+
+var sp  = Mesh.ServiceProvider;
+var svc = new InvitationService(
+    sp.GetRequiredService<IMeshService>(),
+    sp.GetRequiredService<AccessService>());
+
+foreach (var (email, name) in new[]
+{
+    ("roman.grob@atioz.ch",     "Roman Grob"),
+    ("steven.forster@atioz.ch", "Steven Forster"),
+})
+{
+    var node = await svc.CreateInvitation(email, invitedBy: "rbuergi", note: name)
+        .FirstAsync().ToTask(Ct);
+    Log.LogInformation("Created {Path}", node.Path);
+}
+```
+
+3. `execute_script` the node, confirm `status: Succeeded` on the returned activity, then `delete` the throwaway node.
+
+The effect is identical to the equivalent GUI action — including any node-driven follow-up (here, the [invitation email](/Doc/Architecture/InvitationOnlyOnboarding) that `InvitationEmailSender` sends for every Pending invitation it hasn't emailed yet).
+
+> **This is a break-glass / admin path, not an application pattern.** Application code, agents, and the GUI write through the typed service or `stream.Update` directly — never raw MCP `create` for these types. Reach for `execute_script` only for one-off operational writes the MCP surface legitimately can't express.
+
+---
+
 ## Writing progress in scripts
 
 Every script receives three globals:
@@ -331,3 +392,4 @@ header
 | Polling `IMeshService.QueryAsync` for activity status | Eventually consistent, will lag. | Use `GetRemoteStream` — it observes the owning hub's workspace directly. |
 | `Console.WriteLine` from heavy parallel loops | Every line becomes an activity-log message; flooding the log overwhelms subscribers and may DoS the workspace. | Aggregate before logging — one line per step, not per iteration. |
 | Long synchronous CPU loops with no log calls | No `Log` call → no snapshot → subscribers see nothing. | Add a heartbeat log if a phase runs longer than ~1 s. |
+| Raw MCP `create` rejects a node's `$type` ("not a registered content type") | The type is registered only on a dedicated hub, or the target sits in a restricted partition. | Run the write via `execute_script` through the canonical service — see *Creating typed / restricted-partition nodes* above. |
