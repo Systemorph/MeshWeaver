@@ -49,6 +49,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6
+    # The build job packages bin+obj of all 50+ projects PLUS the whole
+    # .nuget/packages folder into a zstd tarball — that's a multi-GB copy on top
+    # of the originals, which overflowed the default ~14 GB ("No space left on
+    # device" in the runner Worker, mid-package). Reclaim the ~25 GB of
+    # preinstalled tooling a .NET build never touches (Android SDK, Haskell/GHC,
+    # preloaded Docker images, big apt packages) — identical to what the test
+    # shards already do. NOT a band-aid for a leak: the build output is a
+    # legitimate, bounded artifact; this just removes genuinely-unused runner
+    # bloat so it fits. Keep .NET + the hosted tool cache (setup-dotnet uses them).
+    - name: Free disk space
+      uses: jlumbroso/free-disk-space@main
+      with:
+        tool-cache: false
+        dotnet: false
+        android: true
+        haskell: true
+        large-packages: true
+        docker-images: true
+        swap-storage: true
     - name: Setup .NET
       uses: actions/setup-dotnet@v5
       with:
