@@ -585,6 +585,8 @@ public static class MemexConfiguration
                         .AddInboxSettingsTab()
                         // GitHub Sync tab — shows only on Space nodes (self-filtered).
                         .AddGitHubSyncSettingsTab()
+                        // Token Cost tab — Space nodes; sums per-model token usage + cost over a date range.
+                        .AddTokenCostSettingsTab()
                         // Content Indexing tab — Space nodes, only when the indexing pipeline is active.
                         .AddContentIndexSettingsTab();
                 })

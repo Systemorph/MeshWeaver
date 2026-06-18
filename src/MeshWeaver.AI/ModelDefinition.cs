@@ -81,6 +81,32 @@ public record ModelDefinition
     public int Order { get; init; }
 
     /// <summary>
+    /// Price charged per ONE MILLION input (prompt) tokens, in
+    /// <see cref="Currency"/>. Used by the token-cost summaries to turn a
+    /// thread's / space's recorded token usage into a monetary cost
+    /// (cost = tokens / 1_000_000 × price). Null means "unknown / not priced"
+    /// — the summaries then fall back to <see cref="ModelPricing"/> defaults,
+    /// and show the tokens without a cost if neither is set.
+    /// </summary>
+    [System.ComponentModel.Description("Input price per 1M tokens")]
+    public decimal? InputPricePerMillionTokens { get; init; }
+
+    /// <summary>
+    /// Price charged per ONE MILLION output (completion) tokens, in
+    /// <see cref="Currency"/>. See <see cref="InputPricePerMillionTokens"/>.
+    /// </summary>
+    [System.ComponentModel.Description("Output price per 1M tokens")]
+    public decimal? OutputPricePerMillionTokens { get; init; }
+
+    /// <summary>
+    /// ISO currency code the per-million prices are denominated in (e.g.
+    /// <c>USD</c>, <c>EUR</c>, <c>CHF</c>). Null defaults to <c>USD</c> in the
+    /// cost summaries.
+    /// </summary>
+    [System.ComponentModel.Description("Currency (e.g. USD)")]
+    public string? Currency { get; init; }
+
+    /// <summary>
     /// Projects this definition into the lighter <see cref="ModelInfo"/>
     /// shape consumed by the chat picker.
     /// </summary>

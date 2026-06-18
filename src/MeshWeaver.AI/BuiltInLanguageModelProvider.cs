@@ -175,7 +175,13 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                     ProviderRef = hasAnySignal
                         ? $"{ModelProviderNodeType.RootNamespace}/{source.ProviderName}"
                         : null,
-                    Order = source.Order
+                    Order = source.Order,
+                    // Seed the published default price (USD per 1M tokens) for known
+                    // model ids so the token-cost summaries show a real cost out of
+                    // the box; users can override per model in the Models settings.
+                    InputPricePerMillionTokens = ModelPricing.Default(modelId)?.InputPerMillion,
+                    OutputPricePerMillionTokens = ModelPricing.Default(modelId)?.OutputPerMillion,
+                    Currency = ModelPricing.Default(modelId)?.Currency
                 };
 
                 // Static LanguageModel nodes live UNDER their provider's

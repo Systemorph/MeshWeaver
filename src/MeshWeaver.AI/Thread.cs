@@ -276,9 +276,25 @@ public record Thread
     public string? ActiveMessageId { get; init; }
 
     /// <summary>
-    /// Total tokens used in the current execution (input + output).
+    /// Cumulative tokens used across the ENTIRE thread (sum of every round's
+    /// input + output). Initialized to 0 at thread creation and only ever
+    /// increased — each terminal round (Completed, Cancelled, Error) adds the
+    /// tokens it consumed. Never reset on round dispatch or on a wake-cancel.
+    /// Drives the "Tokens used for this thread" status chip. Per-message token
+    /// counts live on each response cell's <see cref="ThreadMessage.InputTokens"/>
+    /// / <see cref="ThreadMessage.OutputTokens"/> / <see cref="ThreadMessage.TotalTokens"/>.
     /// </summary>
     public int TokensUsed { get; init; }
+
+    /// <summary>
+    /// Cumulative tokens used, broken down per MODEL id (the bare model id, e.g.
+    /// <c>claude-opus-4-6</c>). Accumulated alongside <see cref="TokensUsed"/> at
+    /// every terminal round so the token-cost summary can show tokens in/out (and
+    /// a $ cost via <see cref="ModelPricing"/>) per model. Sum of all entries'
+    /// in+out equals <see cref="TokensUsed"/>. Empty on legacy threads.
+    /// </summary>
+    public ImmutableDictionary<string, ModelTokenUsage> TokensByModel { get; init; }
+        = ImmutableDictionary<string, ModelTokenUsage>.Empty;
 
     /// <summary>
     /// When the current execution started. Used to show elapsed time.
@@ -376,6 +392,26 @@ public record Thread
         // PendingUserMessages (the inbox queue — the next round drains anything still pending,
         // each entry carrying its own agent/model/harness/context/attachments selection).
     };
+}
+
+/// <summary>
+/// Per-model token tally stored in <see cref="Thread.TokensByModel"/>. Records
+/// cumulative input and output token counts for one model across a thread (or,
+/// when summed across threads, a space). Cost is derived on demand via
+/// <see cref="ModelPricing"/> — pricing is NOT stored here so a price change
+/// re-prices historical usage.
+/// </summary>
+public record ModelTokenUsage
+{
+    /// <summary>Cumulative input (prompt) tokens for this model.</summary>
+    public int InputTokens { get; init; }
+
+    /// <summary>Cumulative output (completion) tokens for this model.</summary>
+    public int OutputTokens { get; init; }
+
+    /// <summary>Returns a copy with the given counts added.</summary>
+    public ModelTokenUsage Add(int inputTokens, int outputTokens)
+        => this with { InputTokens = InputTokens + inputTokens, OutputTokens = OutputTokens + outputTokens };
 }
 
 /// <summary>

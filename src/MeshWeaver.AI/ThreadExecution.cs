@@ -603,7 +603,8 @@ internal static class ThreadExecution
                         RequestedStatus = null,
                         ExecutionStatus = null,
                         ActiveMessageId = null,
-                        TokensUsed = 0,
+                        // Preserve the cumulative TokensUsed — a server-restart cancel
+                        // must not wipe the tokens earlier rounds already consumed.
                         ExecutionStartedAt = null,
                         StreamingText = null,
                         StreamingToolCalls = null,
@@ -1486,6 +1487,17 @@ internal static class ThreadExecution
                     int? inputTokens = null;
                     int? outputTokens = null;
                     int? totalTokens = null;
+                    // Normalize token usage so EVERY terminal path records a consistent
+                    // number: providers vary — some report TotalTokenCount, others only
+                    // In/Out. Derive the total from In+Out when the provider didn't report
+                    // it. Mutates the captured token locals; idempotent once a total is
+                    // present, so it's safe to call on the Completed, Cancelled, and Error
+                    // paths alike.
+                    void NormalizeTotalTokens()
+                    {
+                        if (totalTokens is null && (inputTokens.HasValue || outputTokens.HasValue))
+                            totalTokens = (inputTokens ?? 0) + (outputTokens ?? 0);
+                    }
                     // Actual model the harness reports using (e.g. Claude Code resolves
                     // "sonnet" → a concrete id). Captured from the response updates so
                     // the output cell records what really ran, not just what was asked.
@@ -1761,8 +1773,7 @@ internal static class ThreadExecution
                     }
                     // include token usage + completion timestamp so the cell can show duration / tokens.
                     var aggregatedChanges = AggregateNodeChanges(finalNodeChanges);
-                    if (totalTokens is null && (inputTokens.HasValue || outputTokens.HasValue))
-                        totalTokens = (inputTokens ?? 0) + (outputTokens ?? 0);
+                    NormalizeTotalTokens();
                     logger.LogInformation("[ThreadExec] EXECUTION_COMPLETE: {Time:HH:mm:ss.fff} threadPath={ThreadPath}, responseLength={Length}, toolCalls={ToolCalls}, tokens={In}/{Out}/{Total}",
                         DateTime.UtcNow, threadPath, finalTextLen, finalToolCalls.Count,
                         inputTokens, outputTokens, totalTokens);
@@ -1818,6 +1829,8 @@ internal static class ThreadExecution
                         // data-bound thread status row can show "tokens used for this thread"
                         // (the field was previously only ever reset to 0, never summed).
                         TokensUsed = t.TokensUsed + (totalTokens ?? 0),
+                        TokensByModel = AccumulateModelTokens(
+                            t.TokensByModel, actualModel ?? request.ModelName, inputTokens, outputTokens),
                         Summary = summaryText
                     }).Subscribe(
                         _ => { },
@@ -1859,8 +1872,15 @@ internal static class ThreadExecution
                         }
                         // 🚨 Subscribe to fire the cold cache.Update — same reason as
                         // the Completed branch above.
+                        // Record tokens consumed BEFORE the cancel — the streaming loop
+                        // already aggregated any UsageContent seen prior to the
+                        // OperationCanceledException — so the cell + thread reflect what
+                        // the round actually cost.
+                        NormalizeTotalTokens();
                         PushToResponseMessage(cancelText, cancelToolCalls, cancelNodeChanges,
                             request.AgentName, request.ModelName,
+                            inputTokens: inputTokens, outputTokens: outputTokens,
+                            totalTokens: totalTokens,
                             completedAt: DateTime.UtcNow,
                             status: ThreadMessageStatus.Cancelled).Subscribe(
                             _ => { },
@@ -1882,6 +1902,11 @@ internal static class ThreadExecution
                             Status = ThreadExecutionStatus.Cancelled, RequestedStatus = null,
                             ExecutionStatus = null, ActiveMessageId = null,
                             ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null,
+                            // Accumulate tokens burned before cancellation (parity with the
+                            // Completed path) — a cancelled round still cost tokens.
+                            TokensUsed = t.TokensUsed + (totalTokens ?? 0),
+                            TokensByModel = AccumulateModelTokens(
+                                t.TokensByModel, request.ModelName, inputTokens, outputTokens),
                             Summary = cancelSummary
                         }).Subscribe(
                             _ => { },
@@ -1919,8 +1944,13 @@ internal static class ThreadExecution
                         // continuation: push the error cell, then flip Idle, then notify.
                         // (Previous `.ToTask()` bridge would deadlock the action block —
                         // forbidden per feedback_no_totask_in_src.md / AsynchronousCalls.md.)
+                        // Record tokens consumed before the fault (same rationale as the
+                        // Cancelled branch) so an errored round still reports its cost.
+                        NormalizeTotalTokens();
                         var pushErrorObs = PushToResponseMessage(errorText, errorToolCalls, errorNodeChanges,
                             request.AgentName, request.ModelName,
+                            inputTokens: inputTokens, outputTokens: outputTokens,
+                            totalTokens: totalTokens,
                             completedAt: DateTime.UtcNow,
                             status: ThreadMessageStatus.Error)
                             .Timeout(TimeSpan.FromSeconds(10));
@@ -1946,6 +1976,11 @@ internal static class ThreadExecution
                                 {
                                     Status = ThreadExecutionStatus.Idle, ExecutionStatus = null, ActiveMessageId = null,
                                     ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null,
+                                    // Accumulate tokens burned before the fault (parity with the
+                                    // Completed path).
+                                    TokensUsed = t.TokensUsed + (totalTokens ?? 0),
+                                    TokensByModel = AccumulateModelTokens(
+                                        t.TokensByModel, request.ModelName, inputTokens, outputTokens),
                                     Summary = errorSummary
                                 }).Subscribe(
                                     _ => { },
@@ -2148,6 +2183,26 @@ internal static class ThreadExecution
     /// Aggregates node change entries: for the same path, takes min(VersionBefore) and max(VersionAfter).
     /// This merges changes from the current thread and any delegation sub-threads.
     /// </summary>
+    /// <summary>
+    /// Adds a round's input/output tokens to the per-model tally
+    /// (<see cref="Thread.TokensByModel"/>), keyed by the bare model id. A round
+    /// that consumed no tokens (both zero/null) is a no-op so empty entries never
+    /// accrue. Used by all three terminal paths alongside the
+    /// <see cref="Thread.TokensUsed"/> grand-total accumulation.
+    /// </summary>
+    internal static ImmutableDictionary<string, ModelTokenUsage> AccumulateModelTokens(
+        ImmutableDictionary<string, ModelTokenUsage> current,
+        string? modelId, int? inputTokens, int? outputTokens)
+    {
+        var inTok = inputTokens ?? 0;
+        var outTok = outputTokens ?? 0;
+        if (inTok == 0 && outTok == 0)
+            return current;
+        var key = string.IsNullOrWhiteSpace(modelId) ? "(unknown)" : modelId;
+        var existing = current.GetValueOrDefault(key) ?? new ModelTokenUsage();
+        return current.SetItem(key, existing.Add(inTok, outTok));
+    }
+
     internal static ImmutableList<NodeChangeEntry> AggregateNodeChanges(ImmutableList<NodeChangeEntry> entries)
     {
         if (entries.Count <= 1) return entries;

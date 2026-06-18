@@ -41,6 +41,7 @@ public static class ThreadLayoutAreas
             .AddNodeMenuItems("SidePanel", SidePanelMenuProvider)
             .AddNodeMenuItems(DelegationsMenuProvider)
             .AddNodeMenuItems(ChangesMenuProvider)
+            .AddNodeMenuItems(TokenCostMenuProvider)
             .AddLayout(layout => layout
                 .WithDefaultArea(ThreadNodeType.ThreadArea)
                 .WithView(ThreadNodeType.ThreadArea, ThreadView)
@@ -50,6 +51,7 @@ public static class ThreadLayoutAreas
                 .WithView(ThreadNodeType.HistoryArea, HistoryView)
                 .WithView(ThreadNodeType.HeaderArea, HeaderView)
                 .WithView(ThreadNodeType.ChangesArea, ChangesAreaView)
+                .WithView(ThreadNodeType.TokenCostArea, TokenCostView)
                 // The thread's own composer selectors — binds Thread.Composer (the composer
                 // copied onto the thread at creation), same wiring as the composer node's area.
                 .WithView(ThreadComposerView.SelectorsArea, ThreadComposerView.ComposerSelectors)
@@ -94,6 +96,55 @@ public static class ThreadLayoutAreas
             new("Changes", ThreadNodeType.ChangesArea, Order: 13,
                 Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ThreadNodeType.ChangesArea)),
         ]);
+    }
+
+    /// <summary>
+    /// Main menu item: Token cost (tokens in/out per model + $ cost).
+    /// </summary>
+    private static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> TokenCostMenuProvider(
+        LayoutAreaHost host, RenderingContext ctx)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        return Observable.Return<IReadOnlyCollection<NodeMenuItemDefinition>>(
+        [
+            new("Token cost", ThreadNodeType.TokenCostArea, Order: 14,
+                Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ThreadNodeType.TokenCostArea)),
+        ]);
+    }
+
+    /// <summary>
+    /// Renders the Token cost area — tokens in/out per model for THIS thread, with
+    /// a $ cost derived from the configured model prices. Reads
+    /// <see cref="MeshThread.TokensByModel"/> off the own node stream and joins it
+    /// with a live price resolver (model-node prices + <see cref="ModelPricing"/>
+    /// defaults). See <see cref="TokenCostSummary"/>.
+    /// </summary>
+    public static IObservable<UiControl?> TokenCostView(LayoutAreaHost host, RenderingContext _)
+    {
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
+        var priceResolver = meshQuery != null
+            ? TokenCostSummary.ObservePriceResolver(meshQuery)
+            : Observable.Return<Func<string, ModelPriceRate?>>(id => ModelPricing.Default(id));
+
+        return host.Workspace.GetMeshNodeStream()
+            .Select(node => node?.Content as MeshThread)
+            .CombineLatest(priceResolver, BuildTokenCostView);
+    }
+
+    private static UiControl? BuildTokenCostView(MeshThread? thread, Func<string, ModelPriceRate?> priceFor)
+    {
+        var rows = thread is null
+            ? Array.Empty<TokenCostSummary.CostRow>()
+            : TokenCostSummary.BuildRows(thread.TokensByModel, priceFor);
+        var table = TokenCostSummary.RenderHtml(rows, "No token usage recorded for this thread yet.");
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("padding: 24px; max-width: 640px;")
+            .WithView(Controls.Html("<h2 style=\"margin: 0 0 4px 0;\">Token cost</h2>"))
+            .WithView(Controls.Html(
+                "<p style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin: 0 0 16px 0;\">"
+                + "Tokens used by this thread, per model, priced with the configured model rates.</p>"))
+            .WithView(Controls.Html(table));
     }
 
     private static string GetContextDisplayName(string path)
