@@ -77,24 +77,23 @@ jobs:
     - name: Restore dependencies
       run: dotnet restore
     - name: Build
-      run: dotnet build --no-restore -p:CIRun=true
+      run: dotnet build --no-restore -c Release -p:CIRun=true
     # Node Source can pull MeshWeaver libraries in via `#r "nuget:MeshWeaver.X, 3.0.0-preview1"`
     # (e.g. the BusinessRules scope generator the PensionFund sample uses). Tests resolve those
     # from the mesh-local feed (nuget.config → dist/packages), which is git-ignored — so the
-    # build job must produce them. Pack at the fixed dev-feed version against the just-built
-    # output; dist/packages travels in the build artifact below, so the --no-build/--no-restore
-    # shards (and the runtime #r resolver inside them) can resolve them offline. Self-contained:
-    # BusinessRules depends only on framework packages (already in the restored .nuget cache).
+    # build job must produce them. Pack the just-built RELEASE output at the fixed dev-feed
+    # version; dist/packages travels in the build artifact below, so the --no-build/--no-restore
+    # shards (and the runtime #r resolver inside them) can resolve them offline. These are the
+    # same Release nupkgs you'd publish directly. Self-contained: BusinessRules depends only on
+    # framework packages (already in the restored .nuget cache).
     - name: Pack mesh-local #r packages
       run: |
         set -euo pipefail
-        # -c Debug: the Build step above builds Debug (dotnet build's default), but
-        # `dotnet pack` defaults to Release — without this it looks for bin/Release and
-        # fails NU5026 "file to be packed was not found".
+        # -c Release matches the Release build above (and pack's own default).
         dotnet pack src/MeshWeaver.BusinessRules/MeshWeaver.BusinessRules.csproj \
-          -c Debug --no-build --no-restore -o dist/packages -p:PackageVersion=3.0.0-preview1 --nologo
+          -c Release --no-build --no-restore -o dist/packages -p:PackageVersion=3.0.0-preview1 --nologo
         dotnet pack src/MeshWeaver.BusinessRules.Generator/MeshWeaver.BusinessRules.Generator.csproj \
-          -c Debug --no-build --no-restore -o dist/packages -p:PackageVersion=3.0.0-preview1 --nologo
+          -c Release --no-build --no-restore -o dist/packages -p:PackageVersion=3.0.0-preview1 --nologo
         ls -lh dist/packages
     - name: Package build output
       run: |
@@ -260,7 +259,7 @@ jobs:
           # --no-build --no-restore: run STRICTLY against the extracted build
           # output — never recompile or hit the network on a test runner.
           timeout --signal=TERM --kill-after=30s 6m \
-            dotnet test "$csproj" --no-build --no-restore --verbosity minimal -l:trx \
+            dotnet test "$csproj" -c Release --no-build --no-restore --verbosity minimal -l:trx \
               --blame-hang-timeout 90s --blame-hang-dump-type mini
           rc=$?
           if [ "$rc" = "124" ] || [ "$rc" = "137" ]; then
