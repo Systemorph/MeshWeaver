@@ -19,6 +19,21 @@
     <ProjectReference Include="..\..\..\src\MeshWeaver.NuGet.AzureBlob\MeshWeaver.NuGet.AzureBlob.csproj" />
   </ItemGroup>
 
+  <!-- Bake the mesh-local #r feed into the container image. The runtime
+       `#r "nuget:MeshWeaver.*"` resolver (NuGetAssemblyResolver →
+       Settings.LoadDefaultSettings from the app dir) reads nuget.config and resolves
+       MeshWeaver.*/Memex.* against the local `dist/packages` folder source — offline,
+       no nuget.org round-trip. This is how BusinessRules / BusinessRules.Generator reach
+       node compilation now that they are no longer ProjectReferenced by the framework
+       (see MeshWeaver.Graph). The nupkgs are packed into dist/packages by the build process
+       BEFORE publish (the `Pack mesh-local #r packages` step, mirrored from
+       .github/workflows/dotnet-test.yml); the glob copies whatever is there next to
+       nuget.config into the published /app so it ships in the image. -->
+  <ItemGroup>
+    <Content Include="..\..\..\nuget.config" Link="nuget.config" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\..\..\dist\packages\**\*.nupkg" LinkBase="dist\packages" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Aspire.Azure.Npgsql" />
     <PackageReference Include="Aspire.Azure.Storage.Blobs" />
