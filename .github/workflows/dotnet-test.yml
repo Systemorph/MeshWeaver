@@ -88,10 +88,13 @@ jobs:
     - name: Pack mesh-local #r packages
       run: |
         set -euo pipefail
+        # -c Debug: the Build step above builds Debug (dotnet build's default), but
+        # `dotnet pack` defaults to Release — without this it looks for bin/Release and
+        # fails NU5026 "file to be packed was not found".
         dotnet pack src/MeshWeaver.BusinessRules/MeshWeaver.BusinessRules.csproj \
-          --no-build --no-restore -o dist/packages -p:PackageVersion=3.0.0-preview1 --nologo
+          -c Debug --no-build --no-restore -o dist/packages -p:PackageVersion=3.0.0-preview1 --nologo
         dotnet pack src/MeshWeaver.BusinessRules.Generator/MeshWeaver.BusinessRules.Generator.csproj \
-          --no-build --no-restore -o dist/packages -p:PackageVersion=3.0.0-preview1 --nologo
+          -c Debug --no-build --no-restore -o dist/packages -p:PackageVersion=3.0.0-preview1 --nologo
         ls -lh dist/packages
     - name: Package build output
       run: |
