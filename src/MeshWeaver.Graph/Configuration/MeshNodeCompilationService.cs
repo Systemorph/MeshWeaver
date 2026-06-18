@@ -675,10 +675,9 @@ internal class MeshNodeCompilationService(
             trees.Add(CSharpSyntaxTree.ParseText(
                 Microsoft.CodeAnalysis.Text.SourceText.From(code), inputs.ParseOptions, path: path));
 
-        // Structured failure diagnostics are best-effort: pass no generator candidates so the
-        // DeclaresScope-gated RunSourceGenerators is a no-op here (the authoritative flat summary
-        // from the production compile already reflects generation). Avoids scanning the full
-        // reference set for [Generator] types on every failed compile.
+        // Structured failure diagnostics are best-effort: pass no generator candidates so
+        // RunSourceGenerators is a no-op here (the authoritative flat summary from the production
+        // compile already reflects generation). Avoids loading any generator on every failed compile.
         var compilation = RunSourceGenerators(
             CSharpCompilation.Create(inputs.AssemblyName, trees, inputs.References, inputs.CompilationOptions),
             Array.Empty<string>(), Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, CancellationToken.None);
@@ -1078,8 +1077,17 @@ internal class MeshNodeCompilationService(
                         "(delete .mesh-cache to force recompile), source compilation error " +
                         "(check the Code node's diagnostics), or missing dependency.",
                         node.Path);
-                    return new NodeCompilationResult(assemblyLocation, [],
-                        AppendError(log, $"Failed to load assembly at {assemblyLocation}."),
+                    // The build is NOT usable → record NO assembly. Downstream `ok` is
+                    // `Error is null && !IsNullOrEmpty(AssemblyLocation)`, so a null location
+                    // makes ok=false → CompilationStatus=Error, NO release, the emergency
+                    // compilation-error overlay renders the failure on the Overview, and the
+                    // first-build kickoff (gated on Status==null) does NOT retry. Recording the
+                    // assemblyLocation here was the wedge: it read as success (Status=Ok) while the
+                    // per-node hub could not actually activate against it → Subscribe parked.
+                    return new NodeCompilationResult(null, [],
+                        AppendError(log,
+                            $"Failed to load assembly at {assemblyLocation} — the build is not usable " +
+                            "(corrupt cached .dll or a missing dependency)."),
                         compiledSources);
                 }
 
@@ -1117,9 +1125,20 @@ internal class MeshNodeCompilationService(
             }
             catch (Exception ex)
             {
-                logger.LogWarning(ex, "Failed to extract NodeTypeConfigurations from {AssemblyLocation}", assemblyLocation);
-                return new NodeCompilationResult(assemblyLocation, [],
-                    AppendError(log, $"Failed to extract configurations: {ex.Message}"),
+                // The assembly loaded but its types can't be realised — typically a MISSING
+                // DEPENDENCY (e.g. a referenced package that isn't deployed). Surface the loader
+                // detail so the overlay Overview names the actual problem ("could not load type X").
+                // Record NO assembly (location null): ok=false → CompilationStatus=Error, NO release,
+                // the overlay renders the failure, and the kickoff does not retry (Status != null).
+                var detail = ex is System.Reflection.ReflectionTypeLoadException rtl
+                    ? string.Join("; ", rtl.LoaderExceptions
+                        .Where(e => e is not null).Select(e => e!.Message).Distinct())
+                    : ex.Message;
+                logger.LogWarning(ex,
+                    "Failed to extract NodeTypeConfigurations from {AssemblyLocation}: {Detail}",
+                    assemblyLocation, detail);
+                return new NodeCompilationResult(null, [],
+                    AppendError(log, $"Failed to load the compiled assembly — {detail}"),
                     compiledSources);
             }
     }
@@ -1182,11 +1201,12 @@ internal class MeshNodeCompilationService(
 
         // Generate full source with MeshNodeProviderAttribute (including content collections)
         var rawSource = _attributeGenerator.GenerateAttributeSource(node, codeFile, hubConfiguration, contentCollections);
-        // Node-generation-only scope generator: a unit declaring IScope<,> auto-pulls the generator
-        // via #r from the mesh-local feed (it is never a framework reference).
-        rawSource = InjectScopeGeneratorReference(rawSource);
 
         // Strip #r "nuget:..." directives — Roslyn compilation (unlike scripting) does not process them.
+        // The BusinessRules scope generator is pulled in ONLY when the node Source EXPLICITLY declares
+        // `#r "nuget:MeshWeaver.BusinessRules.Generator"` — no auto-injection heuristic (that forced
+        // generator resolution on the compile path for any node merely mentioning IScope). Explicit
+        // #r → resolved here → discovered + run by RunSourceGenerators from the resolved assemblies.
         var (source, nugetRefs) = NuGetDirectiveParser.Extract(rawSource);
         IEnumerable<MetadataReference> references = _references;
         IReadOnlyList<string> nugetAssemblyPaths = [];
@@ -1258,15 +1278,13 @@ internal class MeshNodeCompilationService(
     private static CSharpCompilation RunSourceGenerators(
         CSharpCompilation compilation, IReadOnlyList<string> generatorAssemblyPaths, ILogger logger, CancellationToken ct)
     {
-        // Run the BusinessRules scope generator ONLY when the unit actually declares a scope —
-        // a Scope source (an interface deriving IScope<,>). Plain Code/NodeType compiles skip the
-        // driver entirely. The generator is NOT a framework reference (that propagated the analyzer
-        // and bloated builds); it is supplied at NODE-GENERATION time via the node's
-        // `#r "nuget:MeshWeaver.BusinessRules.Generator"` (auto-injected for IScope units by
-        // InjectScopeGeneratorReference), resolved from the mesh-local feed, and discovered here
-        // from those #r-resolved assemblies. No resolvable generator → scope generation is skipped
-        // and the resulting compile error surfaces on the NodeType's Progress page.
-        if (!DeclaresScope(compilation))
+        // The scope generator is supplied EXPLICITLY: only nodes whose Source declares
+        // `#r "nuget:MeshWeaver.BusinessRules.Generator"` resolve it (into generatorAssemblyPaths)
+        // — there is NO auto-inject heuristic. The generator is never a framework reference (that
+        // propagated the analyzer and bloated every build). Nothing #r'd → nothing to discover →
+        // pass through unchanged (a scope source that forgot the #r fails to compile and surfaces
+        // the error on the Progress page; it never hangs).
+        if (generatorAssemblyPaths.Count == 0)
             return compilation;
         var generators = SourceGeneratorLoader.Discover(generatorAssemblyPaths, logger);
         if (generators.IsDefaultOrEmpty)
@@ -1275,27 +1293,6 @@ internal class MeshNodeCompilationService(
         driver.RunGeneratorsAndUpdateCompilation(compilation, out var updated, out _, ct);
         return (CSharpCompilation)updated;
     }
-
-    /// <summary>True when any source unit declares an <c>IScope&lt;,&gt;</c> interface — the
-    /// trigger the scope generator looks for. Cheap text scan; a false positive (the token in a
-    /// comment) only re-runs the self-no-op generator, never mis-generates.</summary>
-    private static bool DeclaresScope(CSharpCompilation compilation) =>
-        compilation.SyntaxTrees.Any(t => t.ToString().Contains("IScope<", StringComparison.Ordinal));
-
-    /// <summary>
-    /// When the generated unit declares an <c>IScope&lt;,&gt;</c> but carries no
-    /// <c>#r "nuget:MeshWeaver.BusinessRules.Generator"</c>, prepend it so the scope generator is
-    /// resolved from the mesh-local feed and discovered at <see cref="RunSourceGenerators"/>.
-    /// Node-generation-only — the generator never sits in the framework reference set. Versionless:
-    /// the resolver picks the latest from the pinned <c>mesh-local</c> source (packageSourceMapping).
-    /// The <c>IScope</c>/<c>ScopeBase</c> types the generated proxies bind against come from the
-    /// <c>MeshWeaver.BusinessRules</c> runtime assembly already in the compile references.
-    /// </summary>
-    private static string InjectScopeGeneratorReference(string rawSource) =>
-        rawSource.Contains("IScope<", StringComparison.Ordinal)
-        && !rawSource.Contains("MeshWeaver.BusinessRules.Generator", StringComparison.Ordinal)
-            ? "#r \"nuget:MeshWeaver.BusinessRules.Generator\"\n" + rawSource
-            : rawSource;
 
     /// <summary>
     /// Compiles and emits assembly to a unique per-compile subdirectory.
@@ -1396,9 +1393,10 @@ internal class MeshNodeCompilationService(
         // Generate source code
         var codeConfig = string.IsNullOrEmpty(release.Code) ? null : new CodeConfiguration { Code = release.Code };
         var rawSource = _attributeGenerator.GenerateAttributeSource(node, codeConfig, release.HubConfiguration, release.ContentCollections);
-        rawSource = InjectScopeGeneratorReference(rawSource);
 
         // Strip #r "nuget:..." directives — Roslyn compilation (unlike scripting) does not process them.
+        // Scope generator is resolved ONLY via an explicit `#r "nuget:MeshWeaver.BusinessRules.Generator"`
+        // in the node Source (no auto-inject), then discovered by RunSourceGenerators.
         var (source, nugetRefs) = NuGetDirectiveParser.Extract(rawSource);
         IEnumerable<MetadataReference> references = _references;
         IReadOnlyList<string> probingDirs = [];
