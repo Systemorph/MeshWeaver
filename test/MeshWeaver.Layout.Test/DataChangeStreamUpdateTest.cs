@@ -49,7 +49,10 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
     /// </summary>
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
+        // Plumbing fixture, no logged-in user → post as System so the layout-area DataChangeRequest
+        // writes carry an identity instead of failing closed under the never-null guard.
         return base.ConfigureHost(configuration)
+            .WithPostingIdentity(PostingIdentity.System)
             .WithRoutes(r =>
                 r.RouteAddress(ClientType, (_, d) => d.Package())
             )
