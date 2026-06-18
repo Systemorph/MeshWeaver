@@ -60,10 +60,24 @@ internal sealed class MeshService(
     // would post the create request the moment the observable is *constructed*,
     // racing the existence check and corrupting the conditional logic.
     public IObservable<MeshNode> CreateNode(MeshNode node)
-        => Observable.Defer(() =>
+    {
+        // 🚨 Capture the caller's identity EAGERLY — at the call site, where the
+        // ImpersonateAsSystem / user AsyncLocal is still correct — and pin it onto the
+        // request as CreatedBy. A request FIELD survives the cross-hub post AND a Subscribe
+        // that lands on an emission thread (PG/remote-stream) where the AsyncLocal is gone;
+        // the ambient context does not (CaptureContext inside the Defer below reads it at
+        // Subscribe, which is exactly when it's lost). The owner's RlsNodeValidator reads
+        // CreatedBy first, so a System write authorises against a read-only-_Policy partition.
+        // (atioz 2026-06-18: System compile/import writes posted as Anonymous → the Doc/_Policy
+        // Create=false cap denied them → activities never landed → phantom-path NotFound storm.)
+        var captured = CaptureContext();
+        return Observable.Defer(() =>
         {
-            var captured = CaptureContext();
-            return hub.Observe(new CreateNodeRequest(node), o => ConfigurePost(o, captured))
+            var request = new CreateNodeRequest(node);
+            if (string.IsNullOrEmpty(request.CreatedBy)
+                && captured?.ObjectId is { Length: > 0 } callerId)
+                request = request with { CreatedBy = callerId };
+            return hub.Observe(request, o => ConfigurePost(o, captured))
                 .SelectMany(d =>
                 {
                     var r = d.Message;
@@ -79,6 +93,7 @@ internal sealed class MeshService(
                     });
                 });
         }).CarryAccessContext(hub.ServiceProvider);
+    }
 
     public IObservable<MeshNode> UpdateNode(MeshNode node)
         // Canonical write via the mesh-node stream (UpdateNodeRequest retired). The
@@ -94,11 +109,18 @@ internal sealed class MeshService(
             .CarryAccessContext(hub.ServiceProvider);
 
     public IObservable<bool> DeleteNode(string path)
-        => Observable.Defer(() =>
+    {
+        // Same eager-capture as CreateNode: pin the caller's identity as DeletedBy at the call
+        // site so it survives the cross-hub post / emission-thread Subscribe (RlsNodeValidator
+        // reads DeletedBy first → System deletes authorise against read-only-_Policy partitions).
+        var captured = CaptureContext();
+        return Observable.Defer(() =>
         {
-            var captured = CaptureContext();
-            return hub.Observe(new DeleteNodeRequest(path) { Recursive = true },
-                    o => ConfigurePost(o, captured))
+            var request = new DeleteNodeRequest(path) { Recursive = true };
+            if (string.IsNullOrEmpty(request.DeletedBy)
+                && captured?.ObjectId is { Length: > 0 } callerId)
+                request = request with { DeletedBy = callerId };
+            return hub.Observe(request, o => ConfigurePost(o, captured))
                 .SelectMany(d =>
                 {
                     var r = d.Message;
@@ -116,6 +138,7 @@ internal sealed class MeshService(
                     });
                 });
         }).CarryAccessContext(hub.ServiceProvider);
+    }
 
     public IObservable<MeshNode> CreateTransient(MeshNode node)
     {
