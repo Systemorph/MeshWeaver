@@ -45,7 +45,14 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
         => base.ConfigureClient(configuration);
 
     private IMessageHub GetHostWithHandler(string hostId, Func<MessageHubConfiguration, MessageHubConfiguration> config)
-        => Mesh.GetHostedHub(new Address(HostType, hostId), config);
+    {
+        var host = Mesh.GetHostedHub(new Address(HostType, hostId), config);
+        // Log a user in: node writes must run under a real identity (the never-null AccessContext
+        // guard fails closed otherwise). Realistic — prod writes always carry the calling user.
+        host.ServiceProvider.GetRequiredService<AccessService>()
+            .SetContext(new AccessContext { ObjectId = "test-user", Name = "Test User" });
+        return host;
+    }
 
     private string GetHubPath(string hostId = "1") => $"{HostType}/{hostId}";
 
