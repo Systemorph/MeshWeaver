@@ -139,6 +139,12 @@ public static class StaticRepoImporter
         return meshHub.GetHostedHub(
             importAddress,
             config => config
+                // 🚨 The import is INFRASTRUCTURE that runs on THIS hub's own action block — a
+                // different thread from the caller's ImpersonateAsSystem scope, so that AsyncLocal
+                // does NOT reach here. Declare the hub System so its own node/partition/activity
+                // writes carry the system-security identity instead of failing closed under the
+                // never-null guard (the import-activity phantom + NotFound storm, atioz 2026-06-18).
+                .WithPostingIdentity(PostingIdentity.System)
                 .AddData()
                 .WithNodeOperationHandlers()
                 .WithInitialization(h => h.RegisterForDisposal(routingService.RegisterStream(h))),

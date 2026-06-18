@@ -12,6 +12,7 @@ using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Markdown;
+using MeshWeaver.Messaging;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
@@ -122,6 +123,39 @@ public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelpe
 
         // Idempotent re-run = no re-import.
         (await Import()).Single(r => r.Partition == _partition).Outcome.Should().NotBe("Imported");
+    }
+
+    /// <summary>
+    /// The startup import runs with NO logged-in user (boot, grain activation, fan-out) — yet every
+    /// write (the <c>_Activity/import-*</c> lock, the partition root, the content nodes) must still
+    /// persist, because the import hub runs as <see cref="PostingIdentity.System"/>. Before the fix
+    /// the import hub defaulted to <c>User</c>; on its own action block the caller's
+    /// <c>ImpersonateAsSystem</c> AsyncLocal was absent, so the writes hit the never-null AccessContext
+    /// guard and FAILED CLOSED — nothing landed, yet the parent kept the <c>LastCompilationActivityPath</c>
+    /// / activity reference → progress readers subscribed to a non-existent node → the
+    /// "NotFound for …/_Activity/import…" resubscribe storm (atioz 2026-06-18).
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task Import_WithNoUserIdentity_StillPersists_BecauseImportHubIsSystem()
+    {
+        // Drop the auto-logged-in user (MonolithMeshTestBase logs rbuergi in) — simulate the boot
+        // import with no ambient identity.
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        accessService.SetContext(null);
+        accessService.SetCircuitContext(null);
+
+        // Reaching "Imported" already proves the _Activity/import-* lock CreateNode persisted under
+        // System — a User import hub would have failed it closed (mis-reported AlreadyRunning / faulted).
+        (await Import()).Single(r => r.Partition == _partition).Outcome.Should().Be(
+            "Imported",
+            "the import hub runs as System, so its activity-lock + node writes persist with no user");
+
+        // Partition root + content land — only possible if the import hub's writes carried an identity.
+        var root = await Mesh.GetMeshNodeStream(_partition).Where(n => n is { NodeType: "Space" })
+            .Should().Within(30.Seconds()).Emit();
+        root.Should().NotBeNull("the partition root must persist with no user — the import hub is System");
+        (await Read($"{_partition}/Page1")).Should().NotBeNull(
+            "imported content must persist under the System import hub, not fail closed");
     }
 
     [Fact(Timeout = 120000)]
