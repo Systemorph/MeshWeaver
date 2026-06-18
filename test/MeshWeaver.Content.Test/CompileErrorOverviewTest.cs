@@ -101,28 +101,70 @@ public class CompileErrorOverviewTest(ITestOutputHelper output) : MonolithMeshTe
         var overviewRef = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
         var stream = clientWorkspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, overviewRef);
 
-        // 3. THE CONTRACT: the Overview display area COMES BACK — a non-null control within a bounded
-        //    time. If the per-instance hub failed to activate / parked the subscription (the wedge),
-        //    this never emits and the test fails by timeout instead of hanging the suite forever.
-        var control = await stream.GetControlStream(overviewRef.Area!)
-            .Should().Within(60.Seconds()).Match(c => c is not null);
-        Output.WriteLine($"Overview area came back as: {control?.GetType().Name}");
-        control.Should().BeOfType<StackControl>(
-            "the emergency compilation-error overlay renders its Overview as a Stack — the area must " +
-            "come back with a control, never hang");
+        // 3. THE CONTRACT: the Overview display area COMES BACK as the emergency overlay Stack within
+        //    a bounded time. If the per-instance hub failed to activate / parked the subscription (the
+        //    wedge), this never emits and the assertion fails by timeout instead of hanging forever.
+        await stream.GetControlStream(overviewRef.Area!)
+            .Should().Within(60.Seconds()).Match(c => c is StackControl);
+        Output.WriteLine("Overview area came back as the overlay Stack.");
 
-        // 4. The Overview must SAY it had a compilation error. The overlay's Stack wraps a single
-        //    MarkdownControl (BuildCompilationErrorMarkdown) carrying the ⚠ header + the error text;
-        //    it is the first child area of the Stack.
+        // 4. The Overview must SAY it had a compilation error. Reactive: wait until a MarkdownControl
+        //    that actually carries the ⚠ + "compilation" text arrives (the overlay's first child area),
+        //    rather than snapshotting the first emission and asserting once — so an early/intermediate
+        //    frame can't race the content check.
         var childArea = $"{overviewRef.Area}/1";
-        var markdown = await stream.GetControlStream(childArea)
-            .Should().Within(30.Seconds()).Match(c => c is MarkdownControl);
-        var text = ((MarkdownControl)markdown!).Markdown?.ToString() ?? string.Empty;
-        Output.WriteLine($"Overview markdown:\n{text}");
+        await stream.GetControlStream(childArea)
+            .Should().Within(30.Seconds())
+            .Match(c => c is MarkdownControl md
+                && (md.Markdown?.ToString() ?? string.Empty) is var t
+                && t.Contains('⚠')
+                && t.Contains("compilation", StringComparison.OrdinalIgnoreCase));
+        Output.WriteLine("Overview markdown says it had a compilation error.");
+    }
 
-        text.Should().Contain("⚠",
-            "the Overview overlay must visibly flag a problem, not render blank");
-        text.ToLowerInvariant().Should().Contain("compilation",
-            "the Overview must tell the user it had a COMPILATION error (or whatever its problem is)");
+    [Fact(Timeout = 120_000)]
+    public async Task OneBrokenNodeType_DoesNotBreak_OtherNodes()
+    {
+        // 🚨 Isolation contract: a single non-compiling NodeType must NOT take down the rest of the
+        // portal. The wedge was precisely this failing — one broken node's parked subscriptions
+        // saturated the single-threaded hub and everything stopped responding. With a broken type
+        // failing CLOSED (Status=Error + overlay, no park), unrelated nodes keep rendering.
+        var workspace = Mesh.GetWorkspace();
+
+        // A broken NodeType, present and settled at Error (its hubs serve the overlay only).
+        await NodeFactory.CreateNode(new MeshNode("IsolationBroken", Partition)
+        {
+            Name = "Isolation Broken Type",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition { Configuration = "config => not valid c# (((" }
+        }).Should().Emit();
+        await workspace.GetMeshNodeStream($"{Partition}/IsolationBroken")
+            .Should().Within(90.Seconds())
+            .Match(n => n.Content is NodeTypeDefinition d && d.CompilationStatus == CompilationStatus.Error);
+        Output.WriteLine("Broken NodeType settled at Error.");
+
+        // A healthy, unrelated node (built-in Markdown type — no Roslyn compile) created AFTER the
+        // broken one. Its display area must still come back promptly — proving the broken type did
+        // not wedge the mesh.
+        await NodeFactory.CreateNode(new MeshNode("healthy-doc", Partition)
+        {
+            Name = "Healthy Doc",
+            NodeType = "Markdown",
+            State = MeshNodeState.Active,
+            Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Healthy\nStill works." }
+        }).Should().Emit();
+
+        var client = GetClient();
+        var healthyAddress = new Address($"{Partition}/healthy-doc");
+        var overviewRef = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
+
+        // Reactive: the healthy node's display area must emit a control within a bounded time while
+        // the broken NodeType sits in Error. A timeout here = the broken type wedged the mesh — the
+        // exact failure this guards against. One bad type must never break the whole portal.
+        await client.GetWorkspace()
+            .GetRemoteStream<JsonElement, LayoutAreaReference>(healthyAddress, overviewRef)
+            .GetControlStream(overviewRef.Area!)
+            .Should().Within(30.Seconds()).Match(c => c is not null);
+        Output.WriteLine("Healthy node Overview came back — mesh not wedged by the broken type.");
     }
 }
