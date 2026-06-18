@@ -6,21 +6,21 @@
   <ItemGroup>
     <PackageVersion Include="AngleSharp" Version="1.4.0" />
     <PackageVersion Include="AspectCore.Extensions.Reflection" Version="2.4.0" />
-    <PackageVersion Include="Aspire.Azure.Npgsql" Version="13.3.5" />
-    <PackageVersion Include="Aspire.Azure.Storage.Blobs" Version="13.3.5" />
-    <PackageVersion Include="Aspire.Hosting" Version="13.3.5" />
-    <PackageVersion Include="Aspire.Hosting.AppHost" Version="13.3.5" />
-    <PackageVersion Include="Aspire.Hosting.Docker" Version="13.3.5" />
-    <PackageVersion Include="Aspire.Hosting.Kubernetes" Version="13.3.5-preview.1.26270.6" />
-    <PackageVersion Include="Aspire.Hosting.Azure.CosmosDB" Version="13.2.4" />
-    <PackageVersion Include="Aspire.Hosting.PostgreSQL" Version="13.3.5" />
-    <PackageVersion Include="Aspire.Hosting.Azure.PostgreSQL" Version="13.3.5" />
-    <PackageVersion Include="Aspire.Hosting.Azure.AppContainers" Version="13.3.5" />
-    <PackageVersion Include="Aspire.Hosting.Azure.ApplicationInsights" Version="13.3.5" />
-    <PackageVersion Include="Aspire.Hosting.Azure.KeyVault" Version="13.3.5" />
-    <PackageVersion Include="Aspire.Hosting.Orleans" Version="13.3.5" />
-    <PackageVersion Include="Aspire.Microsoft.Azure.Cosmos" Version="13.2.4" />
-    <PackageVersion Include="Aspire.Npgsql" Version="13.3.5" />
+    <PackageVersion Include="Aspire.Azure.Npgsql" Version="13.4.5" />
+    <PackageVersion Include="Aspire.Azure.Storage.Blobs" Version="13.4.5" />
+    <PackageVersion Include="Aspire.Hosting" Version="13.4.5" />
+    <PackageVersion Include="Aspire.Hosting.AppHost" Version="13.4.5" />
+    <PackageVersion Include="Aspire.Hosting.Docker" Version="13.4.5" />
+    <PackageVersion Include="Aspire.Hosting.Kubernetes" Version="13.4.5-preview.1.26316.12" />
+    <PackageVersion Include="Aspire.Hosting.Azure.CosmosDB" Version="13.4.5" />
+    <PackageVersion Include="Aspire.Hosting.PostgreSQL" Version="13.4.5" />
+    <PackageVersion Include="Aspire.Hosting.Azure.PostgreSQL" Version="13.4.5" />
+    <PackageVersion Include="Aspire.Hosting.Azure.AppContainers" Version="13.4.5" />
+    <PackageVersion Include="Aspire.Hosting.Azure.ApplicationInsights" Version="13.4.5" />
+    <PackageVersion Include="Aspire.Hosting.Azure.KeyVault" Version="13.4.5" />
+    <PackageVersion Include="Aspire.Hosting.Orleans" Version="13.4.5" />
+    <PackageVersion Include="Aspire.Microsoft.Azure.Cosmos" Version="13.4.5" />
+    <PackageVersion Include="Aspire.Npgsql" Version="13.4.5" />
     <!-- Pinned: Autofac.Extensions.DI 11.0.0 breaks TryAddEnumerable with factory delegates -->
     <PackageVersion Include="Autofac" Version="9.1.0" />
     <PackageVersion Include="Autofac.Extensions.DependencyInjection" Version="11.0.0" />
@@ -96,10 +96,10 @@
     <PackageVersion Include="Microsoft.Graph" Version="6.1.0" />
     <PackageVersion Include="Microsoft.Identity.Web" Version="4.9.0" />
     <PackageVersion Include="Microsoft.Identity.Web.Ui" Version="4.9.0" />
-    <PackageVersion Include="Microsoft.Orleans.BroadcastChannel" Version="10.1.0" />
-    <PackageVersion Include="Microsoft.Orleans.Core.Abstractions" Version="10.1.0" />
-    <PackageVersion Include="Microsoft.Orleans.Runtime" Version="10.1.0" />
-    <PackageVersion Include="Microsoft.Orleans.Serialization.Abstractions" Version="10.1.0" />
+    <PackageVersion Include="Microsoft.Orleans.BroadcastChannel" Version="10.2.0" />
+    <PackageVersion Include="Microsoft.Orleans.Core.Abstractions" Version="10.2.0" />
+    <PackageVersion Include="Microsoft.Orleans.Runtime" Version="10.2.0" />
+    <PackageVersion Include="Microsoft.Orleans.Serialization.Abstractions" Version="10.2.0" />
     <PackageVersion Include="Microsoft.Agents.AI" Version="1.4.0" />
     <PackageVersion Include="Microsoft.Agents.AI.OpenAI" Version="1.4.0" />
     <PackageVersion Include="Microsoft.Agents.AI.Workflows" Version="1.4.0" />
@@ -136,12 +136,12 @@
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.7" />
     <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.7" />
     <PackageVersion Include="Microsoft.Extensions.ServiceDiscovery" Version="10.5.0" />
-    <PackageVersion Include="Microsoft.Orleans.Core" Version="10.1.0" />
-    <PackageVersion Include="Microsoft.Orleans.Sdk" Version="10.1.0" />
-    <PackageVersion Include="Microsoft.Orleans.Serialization.SystemTextJson" Version="10.1.0" />
-    <PackageVersion Include="Microsoft.Orleans.Client" Version="10.1.0" />
-    <PackageVersion Include="Microsoft.Orleans.Server" Version="10.1.0" />
-    <PackageVersion Include="Microsoft.Orleans.Streaming" Version="10.1.0" />
+    <PackageVersion Include="Microsoft.Orleans.Core" Version="10.2.0" />
+    <PackageVersion Include="Microsoft.Orleans.Sdk" Version="10.2.0" />
+    <PackageVersion Include="Microsoft.Orleans.Serialization.SystemTextJson" Version="10.2.0" />
+    <PackageVersion Include="Microsoft.Orleans.Client" Version="10.2.0" />
+    <PackageVersion Include="Microsoft.Orleans.Server" Version="10.2.0" />
+    <PackageVersion Include="Microsoft.Orleans.Streaming" Version="10.2.0" />
     <PackageVersion Include="Microsoft.Playwright" Version="1.59.0" />
     <PackageVersion Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageVersion Include="NuGet.Protocol" Version="7.3.1" />
@@ -175,11 +175,11 @@
     <PackageVersion Include="Namotion.Reflection" Version="3.5.1" />
     <PackageVersion Include="System.Text.RegularExpressions" Version="4.3.1" />
     <PackageVersion Include="System.Xml.XmlSerializer" Version="4.3.0" />
-    <PackageVersion Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.1.0" />
-    <PackageVersion Include="Microsoft.Orleans.Clustering.AdoNet" Version="10.1.0" />
-    <PackageVersion Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.1.0" />
-    <PackageVersion Include="Aspire.Hosting.Azure.Storage" Version="13.3.5" />
-    <PackageVersion Include="Aspire.Azure.Data.Tables" Version="13.3.5" />
+    <PackageVersion Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.2.0" />
+    <PackageVersion Include="Microsoft.Orleans.Clustering.AdoNet" Version="10.2.0" />
+    <PackageVersion Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.2.0" />
+    <PackageVersion Include="Aspire.Hosting.Azure.Storage" Version="13.4.5" />
+    <PackageVersion Include="Aspire.Azure.Data.Tables" Version="13.4.5" />
     <PackageVersion Include="Microsoft.AspNetCore.Components.Web" Version="10.0.7" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.5.1" />
     <PackageVersion Include="UglyToad.PdfPig" Version="1.7.0-custom-5" />
