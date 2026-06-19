@@ -29,6 +29,7 @@ public static class AIExtensions
             return (TBuilder)builder
                     .AddThreadMessageType()
                     .AddThreadType()
+                    .AddTokenUsageType()
                     .AddAgentType(serveFromPartition)
                     .AddLanguageModelType(serveFromPartition)
                     .AddHarnessType(serveFromPartition)
@@ -86,6 +87,10 @@ public static class AIExtensions
             .WithType(typeof(ModelProviderConfiguration), nameof(ModelProviderConfiguration))
             .WithType(typeof(AI.Thread), nameof(AI.Thread))
             .WithType(typeof(ThreadMessage), nameof(ThreadMessage))
+            // Per-(thread, model) token usage satellite at {threadPath}/_Usage/{model}. The thread
+            // node carries NO token state — usage lives here. Registered mesh-wide so the node
+            // serialises across routing / mesh / per-node hubs.
+            .WithType(typeof(TokenUsage), nameof(TokenUsage))
             // ThreadComposer: content of the per-user {user}/_Thread/ThreadComposer composer
             // singleton (message text + harness/agent/model + attachments). Registered
             // mesh-wide so the node serialises across routing/mesh hubs.
