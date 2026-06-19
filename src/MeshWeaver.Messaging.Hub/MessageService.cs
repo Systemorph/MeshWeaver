@@ -143,7 +143,7 @@ public class MessageService : IMessageService
         postPipeline = hub.Configuration.PostPipeline
             .Aggregate(new SyncPipelineConfig(hub, d => d), (p, c) => c.Invoke(p)).SyncDelivery;
         hierarchicalRouting = new HierarchicalRouting(hub, parentHub);
-        stormBreaker = new MessageStormBreaker(logger, address);
+        stormBreaker = new MessageStormBreaker(logger, address, hub.Configuration.AggregateWatermark);
         // The pipeline LEAF now runs the handler INLINE on the single turn thread
         // (was: post to a second executionBlock). No deliveryAction->executionBlock
         // thread hop — that per-message hop was the under-load near-miss source.
@@ -344,6 +344,20 @@ public class MessageService : IMessageService
         if (stormBreaker.ShouldDrop(delivery))
         {
             MessageTrace.Write($"hub={Address} msg={typeName} id={delivery.Id} DROPPED_STORM");
+            return delivery.Ignored();
+        }
+
+        // AGGREGATE back-pressure (Invariant 3 — the per-HUB safety net, across keys). The
+        // per-key breaker above only trips when ONE tuple storms; every wedge we saw was MANY
+        // DISTINCT keys whose AGGREGATE saturated this single action block. Read the live
+        // inbound depth and, when it has crossed the watermark, SHED ONLY sheddable
+        // ([CanBeIgnored], non-lifecycle) traffic so the block keeps draining user-facing +
+        // lifecycle work. Ignored() (not Failed()) so the drop can't seed a DeliveryFailure.
+        int inboundDepth;
+        lock (turnGate) inboundDepth = mainQueue.Count;
+        if (stormBreaker.ShouldShedAggregate(delivery, inboundDepth))
+        {
+            MessageTrace.Write($"hub={Address} msg={typeName} id={delivery.Id} SHED_AGGREGATE depth={inboundDepth}");
             return delivery.Ignored();
         }
 

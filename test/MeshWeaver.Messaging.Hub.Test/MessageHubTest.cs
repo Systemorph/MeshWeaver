@@ -241,6 +241,72 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
             "messages of the storming key must be dropped at ingestion, not all processed");
     }
 
+    [CanBeIgnored]                                    // fire-and-forget → SHEDDABLE
+    record MissingSubscribeEvent(int Path);
+    record BlockTurnRequest;                          // user-facing → holds the action block
+
+    /// <summary>
+    /// Invariant 3 (Doc/Architecture/ActionBlockWedgePrevention.md) — the canonical wedge
+    /// repro. While the single action-block thread is held, flood it with sheddable traffic
+    /// so the inbound depth crosses the aggregate watermark. The per-key breaker is provably
+    /// NOT what saves us (the flood is <c>[CanBeIgnored]</c> → exempt from <c>ShouldDrop</c>
+    /// → TripCount stays 0); the AGGREGATE watermark sheds the excess so the single turn loop
+    /// stays bounded, and a user-facing probe posted DURING the overload is NEVER shed and
+    /// round-trips once the block drains. RED before the aggregate breaker (AggregateSheds
+    /// never emits — the mechanism doesn't exist); GREEN after.
+    /// </summary>
+    [Fact]
+    public async Task ManyDistinctMissingSubscribes_DoNotWedge()
+    {
+        const int watermark = 25;
+        const int flood = 200;
+        using var blockHandlerEntered = new ManualResetEventSlim(false);
+        using var releaseBlock = new ManualResetEventSlim(false);
+
+        var victim = (MessageHub)Mesh.GetHostedHub(new Address("victim", "1"), c => c
+            .WithPostingIdentity(PostingIdentity.System)
+            .WithAggregateWatermark(watermark)
+            .WithHandler<BlockTurnRequest>((hub, d) =>
+            {
+                blockHandlerEntered.Set();
+                releaseBlock.Wait(TimeSpan.FromSeconds(30)); // hold the single turn thread
+                return d.Processed();
+            })
+            .WithHandler<SayHelloRequest>((hub, request) =>
+            {
+                hub.Post(new HelloEvent(), o => o.ResponseFor(request));
+                return request.Processed();
+            }));
+
+        // Observe the FIRST aggregate shed (fires synchronously on the flooding thread).
+        var firstShed = victim.StormBreaker!.AggregateSheds.Should().Within(10.Seconds()).Emit();
+
+        // 1) Occupy the single action-block thread.
+        victim.Post(new BlockTurnRequest(), o => o.WithTarget(victim.Address));
+        blockHandlerEntered.Wait(TimeSpan.FromSeconds(10))
+            .Should().BeTrue("the block handler must occupy the turn thread before we flood");
+
+        // 2) Flood sheddable traffic while the block is held → depth crosses the watermark.
+        for (var i = 0; i < flood; i++)
+            victim.Post(new MissingSubscribeEvent(i), o => o.WithTarget(victim.Address));
+
+        await firstShed; // RED without the aggregate breaker: this never emits
+
+        // 3) A user-facing probe posted DURING the overload must never be shed.
+        var probe = victim.Observe(new SayHelloRequest(), o => o.WithTarget(victim.Address))
+            .Should().Within(10.Seconds()).Emit();
+
+        // 4) Release the block; the bounded queue drains and the probe is answered.
+        releaseBlock.Set();
+        (await probe).Should().BeAssignableTo<IMessageDelivery<HelloEvent>>(
+            "the action block stayed drainable — sheddable traffic was shed, user-facing work was not");
+
+        victim.StormBreaker.AggregateShedCount.Should().BeGreaterThan(0,
+            "the aggregate watermark shed the excess sheddable traffic");
+        victim.StormBreaker.TripCount.Should().Be(0,
+            "the per-key breaker must NOT be what saved the hub — this isolates the aggregate path");
+    }
+
     [Fact]
     public void RoutingCycleDetection_ShouldDetectCycle()
     {

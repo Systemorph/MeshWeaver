@@ -146,4 +146,41 @@ public class MessageStormBreakerTest
         breaker.TripCount.Should().Be(0,
             "lifecycle/control traffic is exempt and must never trip the breaker");
     }
+
+    /// <summary>
+    /// Invariant 3 boundary (Doc/Architecture/ActionBlockWedgePrevention.md): the per-hub
+    /// aggregate watermark sheds ONLY sheddable ([CanBeIgnored], non-lifecycle) traffic, and
+    /// only once the inbound depth has crossed the line. User-facing application messages and
+    /// lifecycle/control are NEVER shed, however deep the overload — dropping those would
+    /// strand a requester or deadlock teardown/init.
+    /// </summary>
+    [Fact]
+    public void Aggregate_ShedsOnlySheddable_AboveWatermark()
+    {
+        const int watermark = 10;
+        var breaker = new MessageStormBreaker(NullLogger.Instance, new Address("host", "1"),
+            Threshold, Window, Cooldown, () => _now, TicksPerSecond, aggregateWatermark: watermark);
+
+        var inner = Delivery(new StormableMessage());
+
+        // Below the watermark nothing is shed, even sheddable traffic.
+        breaker.ShouldShedAggregate(Delivery(new IgnorableControlMessage()), inboundDepth: watermark - 1)
+            .Should().BeFalse("under the watermark the block is draining fine — shed nothing");
+
+        // At/above the watermark, sheddable [CanBeIgnored] traffic IS shed.
+        breaker.ShouldShedAggregate(Delivery(new IgnorableControlMessage()), inboundDepth: watermark)
+            .Should().BeTrue("at the watermark, sheddable fire-and-forget traffic is shed to keep draining");
+
+        // User-facing (non-[CanBeIgnored]) is NEVER shed, however deep the overload.
+        breaker.ShouldShedAggregate(Delivery(new StormableMessage()), inboundDepth: 10_000)
+            .Should().BeFalse("user-facing application messages are never shed");
+
+        // Lifecycle / control is NEVER shed (it is itself [CanBeIgnored] — the exclude-first rule).
+        breaker.ShouldShedAggregate(Delivery(new DisposeRequest()), 10_000).Should().BeFalse();
+        breaker.ShouldShedAggregate(Delivery(new HeartBeatEvent()), 10_000).Should().BeFalse();
+        breaker.ShouldShedAggregate(Delivery(new InitializeHubRequest()), 10_000).Should().BeFalse();
+        breaker.ShouldShedAggregate(Delivery(new DeliveryFailure(inner, "boom")), 10_000).Should().BeFalse();
+
+        breaker.AggregateShedCount.Should().Be(1, "only the one sheddable message above the watermark was shed");
+    }
 }
