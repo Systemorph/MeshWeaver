@@ -116,35 +116,35 @@ public static class ThreadLayoutAreas
     /// Renders the Token cost area — tokens in/out per model for THIS thread, with
     /// a $ cost derived from the configured model prices. Reads
     /// <see cref="MeshThread.TokensByModel"/> off the own node stream and joins it
-    /// with a live price resolver (model-node prices + <see cref="ModelPricing"/>
-    /// defaults). See <see cref="TokenCostSummary"/>.
+    /// with the accessible model definitions (model-node prices + <see cref="ModelPricing"/>
+    /// defaults), rendered with the framework <c>DataGrid</c>. See
+    /// <see cref="TokenCostSummary"/> / <see cref="TokenCostGrid"/>.
     /// </summary>
     public static IObservable<UiControl?> TokenCostView(LayoutAreaHost host, RenderingContext _)
     {
         var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
-        var priceResolver = meshQuery != null
-            ? TokenCostSummary.ObservePriceResolver(meshQuery)
-            : Observable.Return<Func<string, ModelPriceRate?>>(id => ModelPricing.Default(id));
+        var models = meshQuery != null
+            ? TokenCostSummary.ObserveModels(meshQuery)
+            : Observable.Return<IReadOnlyDictionary<string, ModelDefinition>>(
+                ImmutableDictionary<string, ModelDefinition>.Empty);
 
         return host.Workspace.GetMeshNodeStream()
-            .Select(node => node?.Content as MeshThread)
-            .CombineLatest(priceResolver, BuildTokenCostView);
+            .Select(n => n?.Content as MeshThread)
+            .CombineLatest(models, BuildTokenCostView);
     }
 
-    private static UiControl? BuildTokenCostView(MeshThread? thread, Func<string, ModelPriceRate?> priceFor)
+    private static UiControl? BuildTokenCostView(
+        MeshThread? thread, IReadOnlyDictionary<string, ModelDefinition> models)
     {
-        var rows = thread is null
-            ? Array.Empty<TokenCostSummary.CostRow>()
-            : TokenCostSummary.BuildRows(thread.TokensByModel, priceFor);
-        var table = TokenCostSummary.RenderHtml(rows, "No token usage recorded for this thread yet.");
+        var rows = TokenCostSummary.BuildRows(
+            thread?.TokensByModel ?? ImmutableDictionary<string, ModelTokenUsage>.Empty, models);
         return Controls.Stack
             .WithWidth("100%")
             .WithStyle("padding: 24px; max-width: 640px;")
-            .WithView(Controls.Html("<h2 style=\"margin: 0 0 4px 0;\">Token cost</h2>"))
-            .WithView(Controls.Html(
-                "<p style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin: 0 0 16px 0;\">"
-                + "Tokens used by this thread, per model, priced with the configured model rates.</p>"))
-            .WithView(Controls.Html(table));
+            .WithView(Controls.H2("Token cost"))
+            .WithView(Controls.Markdown(
+                "Tokens used by this thread, per model, priced with the configured model rates."))
+            .WithView(TokenCostGrid.CostGrid(rows));
     }
 
     private static string GetContextDisplayName(string path)

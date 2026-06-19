@@ -223,6 +223,53 @@ public static class AgentPickerProjection
                 BuildModelQueries(currentPath, nodeTypePath, selectedProviderPaths, userPath))
             .Select(snapshot => ProjectModels(snapshot, hub.JsonSerializerOptions));
 
+    /// <summary>Named-query id for the harnesses synced subscription.</summary>
+    public const string HarnessesQueryId = "Harnesses";
+
+    /// <summary>
+    /// The DEFAULT composer selection — resolved purely by ORDER, never hardcoded. For each registry
+    /// (agent / model / harness) the default is the node with the LOWEST <c>Order</c> (the <c>Order = -1</c>
+    /// convention: "to make something the default, set its order to -1"). No hardcoded agent name, model
+    /// id, or harness; nothing is invented when a registry is empty (the field stays null). Reactive +
+    /// testable like <see cref="ObserveAgents"/> / <see cref="ObserveModels"/>; the chat view subscribes
+    /// to this to seed a new composer.
+    /// <para>Utility (generator) agents are excluded — the default is never a background generator.</para>
+    /// </summary>
+    public static IObservable<ThreadComposer> ObserveDefaultComposer(
+        IMessageHub hub, string? userPath = null, string? spacePath = null,
+        string? currentPath = null, string? nodeTypePath = null,
+        IReadOnlyList<string>? selectedProviderPaths = null)
+    {
+        var workspace = hub.GetWorkspace();
+
+        var agent = ObserveAgents(hub, userPath, spacePath)
+            .Select(list => list
+                .Where(a => !IsUtilityAgent(a) && !string.IsNullOrEmpty(a.Path))
+                .OrderBy(a => a.Order)
+                .Select(a => a.Path)
+                .FirstOrDefault());
+
+        var model = ObserveModels(workspace, hub, currentPath, nodeTypePath, selectedProviderPaths, userPath)
+            .Select(list => list
+                .Where(m => !string.IsNullOrEmpty(m.Path))
+                .OrderBy(m => m.Order)
+                .Select(m => m.Path)
+                .FirstOrDefault());
+
+        var harness = ObserveSnapshot(workspace, hub,
+                $"{HarnessesQueryId}|u={userPath ?? ""}|s={spacePath ?? ""}",
+                BuildRegistryQuery(HarnessNodeType.NodeType, HarnessNodeType.RootNamespace, userPath, spacePath, ""))
+            .Select(snapshot => snapshot
+                .Where(n => n.Path != null
+                    && string.Equals(n.NodeType, HarnessNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(n => n.Order ?? 0)
+                .Select(n => n.Path)
+                .FirstOrDefault());
+
+        return agent.CombineLatest(model, harness,
+            (a, m, h) => new ThreadComposer { AgentName = a, ModelName = m, Harness = h });
+    }
+
     /// <summary>
     /// The model picker queries: the system <c>_Provider</c> catalog plus per-context / per-NodeType /
     /// per-user subtrees and any user-selected provider subtree — all <c>nodeType:LanguageModel|ModelProvider</c>,

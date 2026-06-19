@@ -4,6 +4,8 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using MeshWeaver.Layout;
+using MeshWeaver.Layout.DataGrid;
 using Xunit;
 
 namespace MeshWeaver.AI.Test;
@@ -11,12 +13,17 @@ namespace MeshWeaver.AI.Test;
 /// <summary>
 /// Pure-logic tests for token-cost pricing and the summary builders — no hub, no
 /// async. Pins: per-million cost math, the built-in default price table + node
-/// override resolution, per-model row building, multi-thread merge, and the HTML
-/// render. The end-to-end accumulation onto a thread is covered by
-/// <see cref="ThreadTokenUsageTest"/>.
+/// override resolution, per-model row building, multi-thread merge, and the
+/// framework <c>DataGrid</c> render. The end-to-end accumulation onto a thread is
+/// covered by <see cref="ThreadTokenUsageTest"/>.
 /// </summary>
 public class TokenCostTest
 {
+    /// <summary>No <c>LanguageModel</c> node overrides — BuildRows then falls back to
+    /// the built-in <see cref="ModelPricing"/> defaults, same as before.</summary>
+    private static readonly IReadOnlyDictionary<string, ModelDefinition> NoModelOverrides =
+        ImmutableDictionary<string, ModelDefinition>.Empty;
+
     // ─── ModelPriceRate.Cost ───
 
     [Fact]
@@ -108,7 +115,7 @@ public class TokenCostTest
             ["zero-model"] = new() { InputTokens = 0, OutputTokens = 0 },
         };
 
-        var rows = TokenCostSummary.BuildRows(tokens, id => ModelPricing.Default(id));
+        var rows = TokenCostSummary.BuildRows(tokens, NoModelOverrides);
 
         rows.Should().HaveCount(2, "the zero-usage model is dropped");
         rows[0].Model.Should().Be("claude-opus-4-6", "highest total tokens sorts first");
@@ -124,9 +131,35 @@ public class TokenCostTest
         {
             ["mystery"] = new() { InputTokens = 10, OutputTokens = 5 },
         };
-        var rows = TokenCostSummary.BuildRows(tokens, id => ModelPricing.Default(id));
+        var rows = TokenCostSummary.BuildRows(tokens, NoModelOverrides);
         rows.Should().ContainSingle();
         rows[0].Cost.Should().BeNull("no price is known for the model");
+    }
+
+    [Fact]
+    public void BuildRows_ModelNodeOverride_WinsOverDefault()
+    {
+        var tokens = new Dictionary<string, ModelTokenUsage>
+        {
+            ["claude-opus-4-6"] = new() { InputTokens = 1_000_000, OutputTokens = 0 },
+        };
+        var models = new Dictionary<string, ModelDefinition>
+        {
+            ["claude-opus-4-6"] = new()
+            {
+                Id = "claude-opus-4-6",
+                Provider = "Anthropic",
+                InputPricePerMillionTokens = 7m,
+                OutputPricePerMillionTokens = 35m,
+                Currency = "EUR",
+            },
+        };
+
+        var rows = TokenCostSummary.BuildRows(tokens, models);
+
+        rows.Should().ContainSingle();
+        rows[0].Cost.Should().Be(7m, "the model node's explicit price wins over the default");
+        rows[0].Currency.Should().Be("EUR");
     }
 
     // ─── TokenCostSummary.Merge ───
@@ -156,28 +189,25 @@ public class TokenCostTest
         => TokenCostSummary.Merge(Array.Empty<IReadOnlyDictionary<string, ModelTokenUsage>>())
             .Should().BeEmpty();
 
-    // ─── TokenCostSummary.RenderHtml ───
+    // ─── TokenCostGrid.CostGrid (framework DataGrid render) ───
 
     [Fact]
-    public void RenderHtml_NoRows_ShowsEmptyText()
+    public void CostGrid_NoRows_IsMarkdownPlaceholder()
     {
-        var html = TokenCostSummary.RenderHtml(Array.Empty<TokenCostSummary.CostRow>(), "nothing here");
-        html.Should().Contain("nothing here");
-        html.Should().NotContain("<table");
+        var control = TokenCostGrid.CostGrid(Array.Empty<TokenCostSummary.CostRow>());
+        control.Should().BeOfType<MarkdownControl>("an empty summary shows a placeholder line, not a grid");
     }
 
     [Fact]
-    public void RenderHtml_WithRows_ShowsModelTokensAndTotal()
+    public void CostGrid_WithRows_IsDataGridWithColumns()
     {
         var rows = new List<TokenCostSummary.CostRow>
         {
             new("claude-opus-4-6", 1_000_000, 200_000, 10m, "USD"),
         };
-        var html = TokenCostSummary.RenderHtml(rows);
-        html.Should().Contain("claude-opus-4-6");
-        html.Should().Contain("1,000,000");
-        html.Should().Contain("Total");
-        html.Should().Contain("USD");
+        var control = TokenCostGrid.CostGrid(rows);
+        var grid = control.Should().BeOfType<DataGridControl>().Subject;
+        grid.Columns.Should().HaveCount(5, "Model · Tokens in · Tokens out · Cost · Currency");
     }
 
     // ─── ModelTokenUsage.Add ───

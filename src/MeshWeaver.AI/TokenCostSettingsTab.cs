@@ -23,11 +23,12 @@ namespace MeshWeaver.AI;
 /// Space) and sums every thread's per-model token usage
 /// (<see cref="MeshThread.TokensByModel"/>) over a user-picked date range, pricing
 /// each model via <see cref="ModelPricing"/> (model-node prices, default table
-/// fallback). Hidden outside a Space and for users who lack Read on it.
-/// Mirrors <c>GitHubSyncSettingsTab</c>'s space-gating; the aggregate UI follows the
-/// Northwind <c>OrdersSummaryArea</c> toolbar-driven pattern.
+/// fallback) and rendering with the framework <c>DataGrid</c> (see
+/// <see cref="TokenCostGrid"/>). Hidden outside a Space and for users who lack Read
+/// on it. Mirrors <c>GitHubSyncSettingsTab</c>'s space-gating; the aggregate UI
+/// follows the Northwind <c>OrdersSummaryArea</c> toolbar-driven pattern.
 /// </summary>
-public static class TokenCostSettingsTab
+internal static class TokenCostSettingsTab
 {
     /// <summary>Settings tab id.</summary>
     public const string TabId = "TokenCost";
@@ -76,19 +77,18 @@ public static class TokenCostSettingsTab
     {
         var spacePath = SpaceRootPath(node?.Path ?? host.Hub.Address.ToString());
         if (string.IsNullOrEmpty(spacePath))
-            return stack.WithView(Controls.Html("<p><em>Token cost is available inside a Space.</em></p>"));
+            return stack.WithView(Controls.Markdown("*Token cost is available inside a Space.*"));
 
         var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
         if (meshQuery is null)
-            return stack.WithView(Controls.Html("<p>Query service not available.</p>"));
+            return stack.WithView(Controls.Markdown("Query service not available."));
 
-        stack = stack.WithView(Controls.H2("Token cost").WithStyle("margin: 0 0 8px 0;"));
-        stack = stack.WithView(Controls.Html(
-            "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);margin-bottom:16px;\">"
-            + "Tokens and cost for every thread in this space, summed per model. Pick a date range — "
-            + "threads are included by their last-activity date.</p>"));
+        stack = stack.WithView(Controls.H2("Token cost"));
+        stack = stack.WithView(Controls.Markdown(
+            "Tokens and cost for every thread in this space, summed per model. Pick a date range — "
+            + "threads are included by their last-activity date."));
 
-        var priceResolver = TokenCostSummary.ObservePriceResolver(meshQuery);
+        var models = TokenCostSummary.ObserveModels(meshQuery);
         // Default to the past month. (Layout-area content builder — DateTime.UtcNow is fine here;
         // the no-DateTime rule is workflow-script-only.)
         var now = DateTime.UtcNow.Date;
@@ -105,7 +105,7 @@ public static class TokenCostSettingsTab
                 .Catch<IReadOnlyList<MeshNode>, Exception>(_ =>
                     Observable.Return((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>()));
 
-            return threads.CombineLatest(priceResolver, (nodes, priceFor) =>
+            return threads.CombineLatest(models, (nodes, modelsById) =>
             {
                 var from = range.From.Date;
                 var to = range.To.Date;
@@ -122,13 +122,12 @@ public static class TokenCostSettingsTab
                     ((n.Content as MeshThread)?.TokensByModel
                      ?? ImmutableDictionary<string, ModelTokenUsage>.Empty)));
 
-                var rows = TokenCostSummary.BuildRows(aggregate, priceFor);
-                var caption = Controls.Html(
-                    $"<p style=\"font-size:0.8rem;color:var(--neutral-foreground-hint);margin:8px 0;\">"
-                    + $"{inRange.Count} thread(s) with activity in {from:yyyy-MM-dd} – {to:yyyy-MM-dd}</p>");
+                var rows = TokenCostSummary.BuildRows(aggregate, modelsById);
+                var caption = Controls.Markdown(
+                    $"{inRange.Count} thread(s) with activity in {from:yyyy-MM-dd} – {to:yyyy-MM-dd}");
                 return (UiControl)Controls.Stack
                     .WithView(caption)
-                    .WithView(Controls.Html(TokenCostSummary.RenderHtml(rows, "No token usage in this period.")));
+                    .WithView(TokenCostGrid.CostGrid(rows));
             });
         });
 

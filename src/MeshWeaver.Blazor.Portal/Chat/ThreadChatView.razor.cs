@@ -228,6 +228,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private string? boundAgentPath;
     private string? boundModelPath;
     private IDisposable? composerSubscription;
+    private IDisposable? composerDefaultsSubscription;
 
     // ─── Composer binding target ───
     // Out of a thread: the per-user singleton composer NODE {userHome}/_Thread/ThreadComposer.
@@ -244,11 +245,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private static string FormatTokens(int tokens) =>
         tokens >= 1000 ? $"{tokens / 1000.0:0.#}k" : tokens.ToString();
 
-    /// <summary>Fallback model id (the deployment's configured standard tier, <c>ModelTier:Standard</c>)
-    /// when nothing is selected — so submit never sends an empty model that the agent factory can't
-    /// resolve (the "no model configured" failure).</summary>
-    private string? DefaultModelId() =>
-        Hub.ServiceProvider.GetService<IConfiguration>()?["ModelTier:Standard"];
+    // (Removed DefaultModelId / ModelTier:Standard — defaults are no longer hardcoded. The default
+    //  model is the Order=-1 model resolved by AgentPickerProjection.ObserveDefaultComposer and
+    //  written onto the composer; submit sends the bound selection, never an invented fallback.)
 
     /// <summary>
     /// True when viewing an existing thread created by another user. Threads are
@@ -396,20 +395,37 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private void EnsureComposer()
     {
         composerSubscription?.Dispose();
+        composerDefaultsSubscription?.Dispose();
         boundHarness = boundAgentPath = boundModelPath = null;
         if (string.IsNullOrEmpty(_templatePath))
             return;
         var path = _templatePath;
 
-        var defaults = DefaultComposer();
+        // Resolve the default composer selection BY ORDER — the Order=-1 (lowest-order) agent / model /
+        // harness from the live registries, never a hardcoded name/id (AgentPickerProjection.ObserveDefaultComposer).
+        // Take(1) + a short timeout so a brand-new composer seeds promptly; on timeout/empty we seed with
+        // empty selections (no invented fallback) — the picker still defaults to the Order=-1 item.
+        var picker = AgentPickerProjection.DerivePickerContext(_currentNavContext, initialContext);
+        composerDefaultsSubscription = AgentPickerProjection
+            .ObserveDefaultComposer(Hub, _userHome, AgentPickerProjection.PartitionOf(initialContext),
+                picker.ContextPath, picker.NodeTypePath)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Catch<MeshWeaver.AI.ThreadComposer, Exception>(_ => System.Reactive.Linq.Observable.Return(new MeshWeaver.AI.ThreadComposer()))
+            .Subscribe(defaults => InvokeAsync(() => CreateComposerWithDefaults(path, defaults)));
+    }
 
-        // Self-heal: existing users predate the onboarding seed (ThreadComposerSeedHandler), so the
-        // composer node may be missing. RELIABLY create it with sensible defaults — CreateNode registers
-        // a routable node (unlike GetMeshNodeStream(path).Update, which only patches an EXISTING node and
-        // otherwise NotFound-storms the partition hub — that wedged the portal). CreateNode rejects an
-        // existing node (NodeAlreadyExists), so BOTH success and that benign error mean "node present" —
-        // then we fill any EMPTY selection with defaults (heals composers created before this fix) and
-        // open the live read. We never subscribe GetMeshNodeStream on an absent node.
+    /// <summary>
+    /// Creates the composer node with the order-resolved <paramref name="defaults"/> (heals users who
+    /// predate the onboarding seed), then fills any EMPTY selection + opens the live projection.
+    /// CreateNode registers a routable node (unlike GetMeshNodeStream(path).Update, which only patches
+    /// an EXISTING node and otherwise NotFound-storms the partition hub — that wedged the portal);
+    /// NodeAlreadyExists is benign (node present), so both paths proceed to fill + project.
+    /// </summary>
+    private void CreateComposerWithDefaults(string path, MeshWeaver.AI.ThreadComposer defaults)
+    {
+        if (_isDisposed || _templatePath != path)
+            return;
         MeshQuery.CreateNode(MeshWeaver.Mesh.MeshNode.FromPath(path) with
             {
                 NodeType = MeshWeaver.AI.ThreadComposerNodeType.NodeType,
@@ -424,22 +440,6 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                         "[ThreadChat:{InstanceId}] ensure composer node (benign if already exists) {Path}", _instanceId, path);
                     FillDefaultsAndProject(path, defaults);
                 }));
-    }
-
-    /// <summary>Sensible default composer selection — MeshWeaver harness + the standard-tier model
-    /// (so a brand-new chat resolves to a configured factory instead of the empty Azure Foundry).</summary>
-    private MeshWeaver.AI.ThreadComposer DefaultComposer()
-    {
-        var standard = Hub.ServiceProvider.GetService<IConfiguration>()?["ModelTier:Standard"];
-        return new MeshWeaver.AI.ThreadComposer
-        {
-            Harness = $"{MeshWeaver.AI.HarnessNodeType.RootNamespace}/{MeshWeaver.AI.Harnesses.MeshWeaver}",
-            // Default to the conversational default agent (Assistant), NEVER a utility/naming agent.
-            AgentName = $"{MeshWeaver.AI.AgentNodeType.NodeType}/Assistant",
-            ModelName = string.IsNullOrEmpty(standard)
-                ? null
-                : $"{MeshWeaver.AI.ModelProviderNodeType.RootNamespace}/Anthropic/{standard}",
-        };
     }
 
     /// <summary>
@@ -752,7 +752,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     namespacePath: ns,
                     userText: userMessageText!,
                     agentName: boundAgentPath,
-                    modelName: boundModelPath ?? DefaultModelId(),
+                    modelName: boundModelPath,
                     contextPath: initialContext,
                     attachments: capturedAttachments,
                     createdBy: createdBy,
@@ -2063,7 +2063,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         }), o => o.WithTarget(new Address(threadPath)));
         // Picked node PATHS flow through — execution normalizes to ids at its boundary.
         Hub.ResubmitMessage(threadPath, id, newUserText: state.Text ?? "",
-            agentName: boundAgentPath, modelName: boundModelPath ?? DefaultModelId(), harness: boundHarness);
+            agentName: boundAgentPath, modelName: boundModelPath, harness: boundHarness);
     }
 
     private void DeleteFromMessage(string id)
@@ -2184,6 +2184,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             elapsedTicker?.Dispose();
             _navContextSubscription?.Dispose();
             composerSubscription?.Dispose();
+            composerDefaultsSubscription?.Dispose();
             agentSubscription?.Dispose();
             submissionHandler.Dispose();
             foreach (var sub in messageSubs.Values) sub.Dispose();

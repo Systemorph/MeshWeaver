@@ -1,6 +1,5 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
-using System.Web;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -8,17 +7,26 @@ using MeshWeaver.Mesh.Services;
 namespace MeshWeaver.AI;
 
 /// <summary>
-/// Shared building blocks for the token-cost summaries shown (a) on a Thread and
-/// (b) on a Space's Settings page. Turns a per-model token aggregate
+/// Shared, pure-data building blocks for the token-cost summaries shown on a Thread
+/// and on a Space's Settings page. Turns a per-model token aggregate
 /// (<see cref="Thread.TokensByModel"/>, or a sum of many threads') into priced
-/// rows and renders them as a compact HTML table. Pricing is resolved live from
-/// <c>LanguageModel</c> nodes (explicit per-model prices) with a fall back to the
-/// built-in <see cref="ModelPricing"/> defaults — so a price edit re-prices
-/// historical usage and a never-configured model still shows a number.
+/// <see cref="CostRow"/>s for a framework <c>DataGrid</c> (see
+/// <see cref="TokenCostGrid"/>) — there is no hand-rolled HTML here. Pricing is
+/// resolved live from <c>LanguageModel</c> nodes (explicit per-model prices),
+/// falling back to the built-in <see cref="ModelPricing"/> defaults — so a price
+/// edit re-prices historical usage and a never-configured model still shows a number.
+///
+/// <para>This type holds NO UI generics and NO delegate streams: it exposes the
+/// accessible <c>LanguageModel</c> nodes as a plain <c>id → ModelDefinition</c>
+/// dictionary (<see cref="ObserveModels"/>) and resolves prices inside the plain-loop
+/// <see cref="BuildRows"/>. The earlier <c>IObservable&lt;Func&lt;string,
+/// ModelPriceRate?&gt;&gt;</c> resolver stream was the MeshWeaver.AI compile-time
+/// regression (e30e9b5f1); a nullable-returning-delegate stream blew the clean
+/// compile from ~7s to &gt;7min. Keep this file delegate-free.</para>
 /// </summary>
-public static class TokenCostSummary
+internal static class TokenCostSummary
 {
-    /// <summary>One priced model row in a summary table.</summary>
+    /// <summary>One priced model row for the cost DataGrid.</summary>
     /// <param name="Model">Bare model id (e.g. <c>claude-opus-4-6</c>).</param>
     /// <param name="InputTokens">Cumulative input tokens for the model.</param>
     /// <param name="OutputTokens">Cumulative output tokens for the model.</param>
@@ -26,30 +34,63 @@ public static class TokenCostSummary
     /// <param name="Currency">Currency the cost is in (defaults to USD).</param>
     public record CostRow(string Model, long InputTokens, long OutputTokens, decimal? Cost, string Currency);
 
+    /// <summary>The empty model lookup, emitted immediately and on error.</summary>
+    private static readonly IReadOnlyDictionary<string, ModelDefinition> EmptyModels =
+        ImmutableDictionary<string, ModelDefinition>.Empty;
+
+    /// <summary>
+    /// Live <c>id → ModelDefinition</c> lookup built from the accessible
+    /// <c>LanguageModel</c> nodes. Emits the empty lookup immediately so the grid
+    /// renders before the model query resolves; folds in the real models as the
+    /// query streams. A plain foreach (not a LINQ <c>GroupBy/ToDictionary</c>) — the
+    /// reactive delegate/LINQ shapes are what regressed the compile.
+    /// </summary>
+    public static IObservable<IReadOnlyDictionary<string, ModelDefinition>> ObserveModels(IMeshService meshQuery)
+        => meshQuery.Query<MeshNode>(
+                MeshQueryRequest.FromQuery($"nodeType:{LanguageModelNodeType.NodeType}"))
+            .Select(change =>
+            {
+                var byId = new Dictionary<string, ModelDefinition>(StringComparer.OrdinalIgnoreCase);
+                foreach (var node in change.Items)
+                    if (node.Content is ModelDefinition def && !byId.ContainsKey(def.Id))
+                        byId[def.Id] = def;
+                return (IReadOnlyDictionary<string, ModelDefinition>)byId;
+            })
+            .Catch((Exception _) => Observable.Return(EmptyModels))
+            .StartWith(EmptyModels);
+
     /// <summary>
     /// Builds priced rows from a per-model token aggregate, sorted by total tokens
-    /// descending. Models with zero tokens are dropped.
+    /// descending. Models with zero tokens are dropped. A plain loop (not a LINQ
+    /// <c>Where/OrderByDescending/Select</c> chain over the dictionary) — that chain
+    /// shape was the MeshWeaver.AI compile-time regression (e30e9b5f1); a loop binds
+    /// in normal time. The price is resolved per row from the model node (explicit
+    /// price wins) else the <see cref="ModelPricing"/> default for the id.
     /// </summary>
     public static IReadOnlyList<CostRow> BuildRows(
         IReadOnlyDictionary<string, ModelTokenUsage> tokensByModel,
-        Func<string, ModelPriceRate?> priceFor)
-        => tokensByModel
-            .Where(kv => kv.Value.InputTokens > 0 || kv.Value.OutputTokens > 0)
-            .OrderByDescending(kv => (long)kv.Value.InputTokens + kv.Value.OutputTokens)
-            .Select(kv =>
-            {
-                var rate = priceFor(kv.Key);
-                return new CostRow(
-                    kv.Key, kv.Value.InputTokens, kv.Value.OutputTokens,
-                    rate?.Cost(kv.Value.InputTokens, kv.Value.OutputTokens),
-                    rate?.Currency ?? "USD");
-            })
-            .ToList();
+        IReadOnlyDictionary<string, ModelDefinition> modelsById)
+    {
+        var rows = new List<CostRow>();
+        foreach (var kv in tokensByModel)
+        {
+            var usage = kv.Value;
+            if (usage.InputTokens <= 0 && usage.OutputTokens <= 0)
+                continue;
+            var rate = ModelPricing.Resolve(kv.Key, modelsById.GetValueOrDefault(kv.Key));
+            rows.Add(new CostRow(
+                kv.Key, usage.InputTokens, usage.OutputTokens,
+                rate?.Cost(usage.InputTokens, usage.OutputTokens),
+                rate?.Currency ?? "USD"));
+        }
+        rows.Sort(static (a, b) =>
+            (b.InputTokens + b.OutputTokens).CompareTo(a.InputTokens + a.OutputTokens));
+        return rows;
+    }
 
     /// <summary>
-    /// Merges several per-model token tallies into one summed aggregate (used by
-    /// the Space summary to fold every thread's <see cref="Thread.TokensByModel"/>
-    /// together).
+    /// Merges several per-model token tallies into one summed aggregate (used by the
+    /// Space summary to fold every thread's <see cref="Thread.TokensByModel"/> together).
     /// </summary>
     public static ImmutableDictionary<string, ModelTokenUsage> Merge(
         IEnumerable<IReadOnlyDictionary<string, ModelTokenUsage>> tallies)
@@ -60,102 +101,5 @@ public static class TokenCostSummary
                 acc[model] = (acc.TryGetValue(model, out var existing) ? existing : new ModelTokenUsage())
                     .Add(usage.InputTokens, usage.OutputTokens);
         return acc.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
-    /// Live price resolver built from the accessible <c>LanguageModel</c> nodes:
-    /// an explicit per-model price wins, else the <see cref="ModelPricing"/>
-    /// default for the id. Emits the defaults-only resolver immediately so the
-    /// table renders before the model query resolves.
-    /// </summary>
-    public static IObservable<Func<string, ModelPriceRate?>> ObservePriceResolver(IMeshService meshQuery)
-        => meshQuery.Query<MeshNode>(
-                MeshQueryRequest.FromQuery($"nodeType:{LanguageModelNodeType.NodeType}"))
-            .Select(change =>
-            {
-                var byId = change.Items
-                    .Select(n => n.Content as ModelDefinition)
-                    .Where(d => d is not null)
-                    .GroupBy(d => d!.Id, StringComparer.OrdinalIgnoreCase)
-                    .ToDictionary(g => g.Key, g => g.First()!, StringComparer.OrdinalIgnoreCase);
-                return (Func<string, ModelPriceRate?>)(id =>
-                    ModelPricing.Resolve(id, byId.GetValueOrDefault(id)));
-            })
-            .Catch<Func<string, ModelPriceRate?>, Exception>(_ =>
-                Observable.Return<Func<string, ModelPriceRate?>>(id => ModelPricing.Default(id)))
-            .StartWith(id => ModelPricing.Default(id));
-
-    /// <summary>
-    /// Renders the priced rows as a compact HTML table (Model · Tokens in · Tokens
-    /// out · Cost) with a totals footer grouped by currency. Returns an
-    /// "empty"-state message when there are no rows.
-    /// </summary>
-    public static string RenderHtml(IReadOnlyList<CostRow> rows, string? emptyText = null)
-    {
-        if (rows.Count == 0)
-            return "<p style=\"color: var(--neutral-foreground-hint); font-size: 0.9rem; margin: 0;\">"
-                 + HttpUtility.HtmlEncode(emptyText ?? "No token usage recorded yet.")
-                 + "</p>";
-
-        const string cell = "padding: 4px 10px; text-align: right; white-space: nowrap;";
-        const string cellL = "padding: 4px 10px; text-align: left; white-space: nowrap;";
-        const string head = "padding: 4px 10px; text-align: right; font-weight: 600; "
-                          + "border-bottom: 1px solid var(--neutral-stroke-divider); color: var(--neutral-foreground-hint);";
-
-        var sb = new System.Text.StringBuilder();
-        sb.Append("<table style=\"border-collapse: collapse; font-size: 0.85rem; min-width: 360px;\">");
-        sb.Append("<thead><tr>")
-          .Append($"<th style=\"{head.Replace("text-align: right", "text-align: left")}\">Model</th>")
-          .Append($"<th style=\"{head}\">Tokens in</th>")
-          .Append($"<th style=\"{head}\">Tokens out</th>")
-          .Append($"<th style=\"{head}\">Cost</th>")
-          .Append("</tr></thead><tbody>");
-
-        foreach (var r in rows)
-        {
-            sb.Append("<tr>")
-              .Append($"<td style=\"{cellL}\">{HttpUtility.HtmlEncode(r.Model)}</td>")
-              .Append($"<td style=\"{cell}\">{r.InputTokens:N0}</td>")
-              .Append($"<td style=\"{cell}\">{r.OutputTokens:N0}</td>")
-              .Append($"<td style=\"{cell}\">{FormatCost(r.Cost, r.Currency)}</td>")
-              .Append("</tr>");
-        }
-        sb.Append("</tbody>");
-
-        // Totals footer — tokens always; cost per currency (omit unpriced rows).
-        var totalIn = rows.Sum(r => r.InputTokens);
-        var totalOut = rows.Sum(r => r.OutputTokens);
-        var costByCurrency = rows
-            .Where(r => r.Cost.HasValue)
-            .GroupBy(r => r.Currency)
-            .Select(g => (Currency: g.Key, Total: g.Sum(r => r.Cost!.Value)))
-            .ToList();
-        var totalCostText = costByCurrency.Count switch
-        {
-            0 => "—",
-            1 => FormatCost(costByCurrency[0].Total, costByCurrency[0].Currency),
-            _ => string.Join(" + ", costByCurrency.Select(c => FormatCost(c.Total, c.Currency)))
-        };
-        const string foot = "padding: 6px 10px; text-align: right; font-weight: 600; "
-                          + "border-top: 1px solid var(--neutral-stroke-divider);";
-        sb.Append("<tfoot><tr>")
-          .Append($"<td style=\"{foot.Replace("text-align: right", "text-align: left")}\">Total</td>")
-          .Append($"<td style=\"{foot}\">{totalIn:N0}</td>")
-          .Append($"<td style=\"{foot}\">{totalOut:N0}</td>")
-          .Append($"<td style=\"{foot}\">{totalCostText}</td>")
-          .Append("</tr></tfoot>");
-
-        sb.Append("</table>");
-        return sb.ToString();
-    }
-
-    /// <summary>Formats a cost with its currency, trimming trailing zeros down to 2–4 dp.</summary>
-    private static string FormatCost(decimal? cost, string currency)
-    {
-        if (cost is not { } c)
-            return "—";
-        // Small costs need more precision; large ones read better at 2 dp.
-        var text = c < 1m ? c.ToString("0.####") : c.ToString("N2");
-        return $"{text} {HttpUtility.HtmlEncode(currency)}";
     }
 }
