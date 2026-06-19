@@ -275,6 +275,16 @@ internal static class ThreadSubmissionServer
         var serial = new System.Reactive.Disposables.SerialDisposable();
         var disposed = false;
         void Establish() => serial.Disposable = threadHub.GetWorkspace().GetMeshNodeStream()
+            // 🚨 React ONLY to control-plane changes — Status, and the pending / ingested /
+            // user-message id sets. A running round emits hundreds of StreamingText / Messages
+            // updates; without this filter the watcher re-ran ReconcileUserMessageIds (an
+            // own-write self-heal) AND re-evaluated dispatch on every one of them — i.e. it
+            // reacted to, and could write state during, an in-flight round. The fingerprint
+            // excludes all streaming fields, so an Executing round produces NO fingerprint
+            // change and the watcher stays dormant until a real submit / ingest / dispatch /
+            // terminal transition. (Dispatch is still additionally guarded by NeedsDispatch =
+            // Idle/Cancelled only — this just stops the watcher waking at all mid-round.)
+            .DistinctUntilChanged(SubmissionFingerprint)
             .Do(n =>
             {
                 if (n?.Content is MeshThread t)
@@ -368,6 +378,26 @@ internal static class ThreadSubmissionServer
         // queued input → claim a fresh round.
         return t.Status is ThreadExecutionStatus.Idle or ThreadExecutionStatus.Cancelled
                && t.PendingUserMessages.Count > 0;
+    }
+
+    /// <summary>
+    /// The submission watcher's reaction key: ONLY the control-plane fields it acts on —
+    /// <see cref="MeshThread.Status"/> and the pending / ingested / user-message id sets.
+    /// Deliberately EXCLUDES StreamingText, StreamingToolCalls, Messages content, Summary,
+    /// ExecutionStartedAt, etc. — the high-churn fields a round mutates while Executing. Used
+    /// with <c>DistinctUntilChanged</c> so the watcher wakes only on a genuine submit / ingest /
+    /// dispatch / terminal transition, never on streaming churn during an in-flight round.
+    /// </summary>
+    private static string SubmissionFingerprint(MeshNode? node)
+    {
+        if (node?.Content is not MeshThread t) return "∅";
+        static string Join(IEnumerable<string> ids) =>
+            string.Join(",", ids.OrderBy(x => x, StringComparer.Ordinal));
+        return string.Concat(
+            t.Status.ToString(), "|",
+            Join(t.PendingUserMessages.Keys), "|",
+            Join(t.IngestedMessageIds), "|",
+            Join(t.UserMessageIds));
     }
 
     /// <summary>
