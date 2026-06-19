@@ -384,10 +384,10 @@ else
         <div class="thread-chat-input-content @(inputDimmed ? "dimmed" : "")" aria-hidden="@(inputDimmed.ToString().ToLowerInvariant())">
 
         @* Thin, READ-ONLY thread status — what this thread uses (harness · agent · model)
-           plus tokens consumed, fully data-bound to the composer selections
-           (boundHarness/boundAgentPath/boundModelPath) and ThreadViewModel.TokensUsed.
-           Selection itself is via the /harness, /agent and /model slash-commands — this
-           row only displays. *@
+           plus a token-usage chip, fully data-bound to the composer selections
+           (boundHarness/boundAgentPath/boundModelPath). The chip reads the per-model TokenUsage
+           satellites ({threadPath}/_Usage/*). Selection itself is via the /harness, /agent and
+           /model slash-commands — this row only displays. *@
         @if (!string.IsNullOrEmpty(boundHarness) || !string.IsNullOrEmpty(boundModelPath) || !string.IsNullOrEmpty(boundAgentPath))
         {
             <div class="thread-chat-status-row">
@@ -403,11 +403,8 @@ else
                 {
                     <span class="thread-chat-status-item" title="Model (/model to change)">✦ @LastSegment(boundModelPath)</span>
                 }
-                @if ((ThreadViewModel?.TokensUsed ?? 0) > 0)
-                {
-                    <span class="thread-chat-status-sep">·</span>
-                    <span class="thread-chat-status-item thread-chat-status-tokens" title="Tokens used for this thread">@FormatTokens(ThreadViewModel!.TokensUsed) tok</span>
-                }
+                <span class="thread-chat-status-sep">·</span>
+                <ThreadTokenChip ThreadPath="@threadPath" />
             </div>
         }
 

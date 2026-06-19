@@ -1,13 +1,12 @@
-using System.Collections.Immutable;
 using System.Globalization;
 using System.Reactive.Linq;
 using MeshWeaver.AI;
+using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using MeshThread = MeshWeaver.AI.Thread;
 
 namespace MeshWeaver.Blazor.Portal.Chat;
 
@@ -16,13 +15,12 @@ namespace MeshWeaver.Blazor.Portal.Chat;
 /// <c>↑1.2k ↓3.4k · $0.05</c> (total input / output tokens + summed cost) and
 /// expands on click into a per-model breakdown (<c>model ↑in ↓out</c>).
 ///
-/// <para>Reads — never recomputes — the per-model tallies already accumulated on
-/// the thread node (<see cref="MeshThread.TokensByModel"/>). Cost is derived from
-/// the built-in <see cref="ModelPricing.Default(string?)"/> table. Fully reactive:
-/// it subscribes to the thread MeshNode stream (the process-wide
-/// <see cref="IMeshNodeStreamCache"/> handle via <c>Hub.GetMeshNodeStream(path)</c>)
-/// exactly like the sibling chat components — no <c>async</c>/<c>await</c>, no
-/// <c>.Take(1)</c>, so the chip stays live for the lifetime of the component.</para>
+/// <para>Reads — never recomputes — the per-model <see cref="TokenUsage"/> satellites under the
+/// thread (<c>{threadPath}/_Usage/*</c>). Cost is derived from the built-in
+/// <see cref="ModelPricing.Default(string?)"/> table. Fully reactive: it subscribes to a LIVE
+/// query of those satellites (<c>Hub.GetQuery(...)</c>), which re-emits whenever a round writes or
+/// updates a usage node — no <c>async</c>/<c>await</c>, no <c>.Take(1)</c>, so the chip stays live
+/// for the lifetime of the component.</para>
 /// </summary>
 public partial class ThreadTokenChip : ComponentBase, IDisposable
 {
@@ -65,50 +63,53 @@ public partial class ThreadTokenChip : ComponentBase, IDisposable
         _subscription = null;
         _subscribedPath = ThreadPath;
         _expanded = false;
-        ApplyThread(null);
+        ApplyUsage(null);
 
         if (string.IsNullOrEmpty(ThreadPath)) return;
 
-        // Live, shared cache handle — same read path every chat component uses.
-        // Each emission re-renders the chip; never .Take(1) (that would freeze it).
-        _subscription = Hub.GetMeshNodeStream(ThreadPath)
-            .Select(node => node.ContentAs<MeshThread>(Hub.JsonSerializerOptions, _logger))
-            .Subscribe(
-                thread => InvokeAsync(() =>
+        // Live query of the per-model TokenUsage satellites under the thread ({threadPath}/_Usage/*).
+        // A shared, live cache handle — re-emits whenever a round writes/updates a usage node, so the
+        // chip stays live; never .Take(1) (that would freeze it).
+        _subscription = Hub.GetQuery(
+                $"tokenchip:{ThreadPath}",
+                $"path:{ThreadPath}/{TokenUsageNodeType.SatelliteSegment} scope:children nodeType:{TokenUsageNodeType.NodeType}")
+            ?.Subscribe(
+                nodes => InvokeAsync(() =>
                 {
                     if (_disposed) return;
-                    ApplyThread(thread);
+                    ApplyUsage(nodes);
                     StateHasChanged();
                 }),
-                ex => _logger?.LogDebug(ex, "[ThreadTokenChip] stream errored for {Path}", ThreadPath));
+                ex => _logger?.LogDebug(ex, "[ThreadTokenChip] usage query errored for {Path}", ThreadPath));
     }
 
     /// <summary>
-    /// Recomputes the totals and per-model rows from the thread's
-    /// <see cref="MeshThread.TokensByModel"/>. Cost is summed per model from the
-    /// built-in pricing table (no per-model node price overrides — kept simple).
+    /// Recomputes the totals and per-model rows from the thread's per-model
+    /// <see cref="TokenUsage"/> satellites (<c>{threadPath}/_Usage/*</c>). Cost is summed per model
+    /// from the built-in pricing table (no per-model node price overrides — kept simple).
     /// </summary>
-    private void ApplyThread(MeshThread? thread)
+    private void ApplyUsage(IEnumerable<MeshNode>? nodes)
     {
-        var byModel = thread?.TokensByModel ?? ImmutableDictionary<string, ModelTokenUsage>.Empty;
-
         long totalIn = 0;
         long totalOut = 0;
         decimal cost = 0m;
-        var rows = new List<ModelRow>(byModel.Count);
-        foreach (var (modelId, usage) in byModel)
+        var rows = new List<ModelRow>();
+        foreach (var node in nodes ?? [])
         {
+            var usage = node.ContentAs<TokenUsage>(Hub.JsonSerializerOptions, _logger);
+            if (usage is null)
+                continue;
             totalIn += usage.InputTokens;
             totalOut += usage.OutputTokens;
-            cost += ModelPricing.Default(modelId)?.Cost(usage.InputTokens, usage.OutputTokens) ?? 0m;
-            rows.Add(new ModelRow(modelId, usage.InputTokens, usage.OutputTokens));
+            cost += ModelPricing.Default(usage.Model)?.Cost(usage.InputTokens, usage.OutputTokens) ?? 0m;
+            rows.Add(new ModelRow(usage.Model, usage.InputTokens, usage.OutputTokens));
         }
 
         _totalInput = totalIn;
         _totalOutput = totalOut;
         _totalCost = cost;
         _rows = rows
-            .OrderByDescending(r => (long)r.Input + r.Output)
+            .OrderByDescending(r => r.Input + r.Output)
             .ToArray();
     }
 
@@ -149,5 +150,5 @@ public partial class ThreadTokenChip : ComponentBase, IDisposable
         _subscription = null;
     }
 
-    private sealed record ModelRow(string Model, int Input, int Output);
+    private sealed record ModelRow(string Model, long Input, long Output);
 }

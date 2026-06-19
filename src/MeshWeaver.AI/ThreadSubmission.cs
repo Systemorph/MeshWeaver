@@ -842,11 +842,6 @@ internal static class ThreadSubmissionServer
                         // full response path derives as {threadPath}/{ActiveMessageId}.
                         ActiveMessageId = responseMsgId,
                         ExecutionStartedAt = DateTime.UtcNow,
-                        // 🚨 Do NOT reset TokensUsed here. It is the thread's CUMULATIVE
-                        // token total (see Thread.TokensUsed) — resetting at round dispatch
-                        // silently discarded every prior round's usage, so the "tokens used
-                        // for this thread" chip only ever showed the last round. The next
-                        // round's terminal write adds onto the running total.
                         ExecutionStatus = null,
                         // The round's selection rides on RoundParams (from the drained
                         // ThreadMessage) — no thread-level Pending* mirror to write.

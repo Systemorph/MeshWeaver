@@ -51,9 +51,6 @@ public record ThreadViewModel
     /// </summary>
     public IReadOnlyList<string> PendingMessageTexts { get; init; } = [];
 
-    /// <summary>Total tokens used in the current execution.</summary>
-    public int TokensUsed { get; init; }
-
     /// <summary>When the current execution started (for elapsed time display).</summary>
     public DateTime? ExecutionStartedAt { get; init; }
 
@@ -76,7 +73,6 @@ public record ThreadViewModel
                && IsExecuting == other.IsExecuting
                && ExecutionStatus == other.ExecutionStatus
                && StreamingText == other.StreamingText
-               && TokensUsed == other.TokensUsed
                && ExecutionStartedAt == other.ExecutionStartedAt
                && CreatedBy == other.CreatedBy
                && Messages.SequenceEqual(other.Messages)
@@ -95,7 +91,6 @@ public record ThreadViewModel
         hash.Add(IsExecuting);
         hash.Add(ExecutionStatus);
         hash.Add(StreamingText);
-        hash.Add(TokensUsed);
         hash.Add(ExecutionStartedAt);
         hash.Add(CreatedBy);
         foreach (var msg in Messages)

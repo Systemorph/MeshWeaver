@@ -603,8 +603,6 @@ internal static class ThreadExecution
                         RequestedStatus = null,
                         ExecutionStatus = null,
                         ActiveMessageId = null,
-                        // Preserve the cumulative TokensUsed — a server-restart cancel
-                        // must not wipe the tokens earlier rounds already consumed.
                         ExecutionStartedAt = null,
                         StreamingText = null,
                         StreamingToolCalls = null,
@@ -1817,14 +1815,14 @@ internal static class ThreadExecution
                     // flip. Single emission → the parent's reactive subscriber
                     // (DelegationTool) sees both Summary and Idle atomically,
                     // never reads a stale empty Summary in an interleaving.
+                    // Token usage is NOT stored on the thread — record it onto the per-model
+                    // TokenUsage satellite ({threadPath}/_Usage/{model}); all cost tracking lives
+                    // outside the Thread node now.
+                    TokenUsageNodeType.RecordUsage(parentHub, threadPath,
+                        AgentPickerProjection.PartitionOf(threadPath),
+                        actualModel ?? request.ModelName, inputTokens, outputTokens, execLogger);
                     UpdateThreadExecution(t => t.ResetExecution() with
                     {
-                        // Accumulate this round's token usage into the thread total so the
-                        // data-bound thread status row can show "tokens used for this thread"
-                        // (the field was previously only ever reset to 0, never summed).
-                        TokensUsed = t.TokensUsed + (totalTokens ?? 0),
-                        TokensByModel = AccumulateModelTokens(
-                            t.TokensByModel, actualModel ?? request.ModelName, inputTokens, outputTokens),
                         Summary = summaryText
                     }).Subscribe(
                         _ => { },
@@ -1891,16 +1889,15 @@ internal static class ThreadExecution
                         // Clear the cancel request now that it's achieved; leave
                         // PendingUserMessages intact so the submission watcher
                         // re-dispatches a fresh round from Cancelled+pending.
+                        // A cancelled round still cost tokens — record them on the satellite.
+                        TokenUsageNodeType.RecordUsage(parentHub, threadPath,
+                            AgentPickerProjection.PartitionOf(threadPath),
+                            request.ModelName, inputTokens, outputTokens, execLogger);
                         UpdateThreadExecution(t => t with
                         {
                             Status = ThreadExecutionStatus.Cancelled, RequestedStatus = null,
                             ExecutionStatus = null, ActiveMessageId = null,
                             ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null,
-                            // Accumulate tokens burned before cancellation (parity with the
-                            // Completed path) — a cancelled round still cost tokens.
-                            TokensUsed = t.TokensUsed + (totalTokens ?? 0),
-                            TokensByModel = AccumulateModelTokens(
-                                t.TokensByModel, request.ModelName, inputTokens, outputTokens),
                             Summary = cancelSummary
                         }).Subscribe(
                             _ => { },
@@ -1966,15 +1963,14 @@ internal static class ThreadExecution
                                 var errorSummary = string.IsNullOrEmpty(errorTextLocal)
                                     ? $"Error: {ex.Message}"
                                     : errorTextLocal;
+                                // Tokens burned before the fault — record on the satellite.
+                                TokenUsageNodeType.RecordUsage(parentHub, threadPath,
+                                    AgentPickerProjection.PartitionOf(threadPath),
+                                    request.ModelName, inputTokens, outputTokens, execLogger);
                                 UpdateThreadExecution(t => t with
                                 {
                                     Status = ThreadExecutionStatus.Idle, ExecutionStatus = null, ActiveMessageId = null,
                                     ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null,
-                                    // Accumulate tokens burned before the fault (parity with the
-                                    // Completed path).
-                                    TokensUsed = t.TokensUsed + (totalTokens ?? 0),
-                                    TokensByModel = AccumulateModelTokens(
-                                        t.TokensByModel, request.ModelName, inputTokens, outputTokens),
                                     Summary = errorSummary
                                 }).Subscribe(
                                     _ => { },
@@ -2171,30 +2167,6 @@ internal static class ThreadExecution
         if (openIdx >= 0)
             stripped = stripped[..openIdx];
         return stripped.TrimEnd();
-    }
-
-    /// <summary>
-    /// Aggregates node change entries: for the same path, takes min(VersionBefore) and max(VersionAfter).
-    /// This merges changes from the current thread and any delegation sub-threads.
-    /// </summary>
-    /// <summary>
-    /// Adds a round's input/output tokens to the per-model tally
-    /// (<see cref="Thread.TokensByModel"/>), keyed by the bare model id. A round
-    /// that consumed no tokens (both zero/null) is a no-op so empty entries never
-    /// accrue. Used by all three terminal paths alongside the
-    /// <see cref="Thread.TokensUsed"/> grand-total accumulation.
-    /// </summary>
-    internal static ImmutableDictionary<string, ModelTokenUsage> AccumulateModelTokens(
-        ImmutableDictionary<string, ModelTokenUsage> current,
-        string? modelId, int? inputTokens, int? outputTokens)
-    {
-        var inTok = inputTokens ?? 0;
-        var outTok = outputTokens ?? 0;
-        if (inTok == 0 && outTok == 0)
-            return current;
-        var key = string.IsNullOrWhiteSpace(modelId) ? "(unknown)" : modelId;
-        var existing = current.GetValueOrDefault(key) ?? new ModelTokenUsage();
-        return current.SetItem(key, existing.Add(inTok, outTok));
     }
 
     /// <summary>

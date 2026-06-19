@@ -169,7 +169,6 @@ public static class ThreadLayoutAreas
                 StreamingText = threadContent?.StreamingText,
                 StreamingToolCalls = threadContent?.StreamingToolCalls,
                 PendingMessageTexts = ExtractPendingTexts(threadContent),
-                TokensUsed = threadContent?.TokensUsed ?? 0,
                 ExecutionStartedAt = threadContent?.ExecutionStartedAt,
                 CreatedBy = node?.CreatedBy,
             };
@@ -338,7 +337,6 @@ public static class ThreadLayoutAreas
                 StreamingText = threadContent?.StreamingText,
                 StreamingToolCalls = threadContent?.StreamingToolCalls,
                 PendingMessageTexts = ExtractPendingTexts(threadContent),
-                TokensUsed = threadContent?.TokensUsed ?? 0,
                 ExecutionStartedAt = threadContent?.ExecutionStartedAt,
                 CreatedBy = node?.CreatedBy,
             };

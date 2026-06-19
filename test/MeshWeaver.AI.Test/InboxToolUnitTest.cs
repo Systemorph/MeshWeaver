@@ -136,8 +136,7 @@ public class InboxToolUnitTest
             ActiveMessageId = "r1",
             CreatedBy = "user@example.com",
             // The composer is the single surviving selection home (agent/model/harness).
-            Composer = new ThreadComposer { AgentName = "TestAgent", ModelName = "TestModel" },
-            TokensUsed = 42
+            Composer = new ThreadComposer { AgentName = "TestAgent", ModelName = "TestModel" }
         };
 
         var updated = InboxTool.Drain(thread).UpdatedThread;
@@ -147,7 +146,6 @@ public class InboxToolUnitTest
         updated.CreatedBy.Should().Be("user@example.com");
         updated.Composer!.AgentName.Should().Be("TestAgent");
         updated.Composer.ModelName.Should().Be("TestModel");
-        updated.TokensUsed.Should().Be(42);
     }
 
     [Fact]

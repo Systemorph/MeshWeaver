@@ -26,8 +26,8 @@ namespace MeshWeaver.AI.Test;
 /// The agent stream emits <see cref="UsageContent"/>; <c>ThreadExecution</c> aggregates it and
 /// must (a) stamp the per-message response cell's
 /// <see cref="ThreadMessage.InputTokens"/>/<see cref="ThreadMessage.OutputTokens"/>/<see cref="ThreadMessage.TotalTokens"/>
-/// and (b) accumulate the thread's cumulative <see cref="MeshThread.TokensUsed"/> — on Completed,
-/// Cancelled, AND Error rounds alike.
+/// and (b) accumulate the per-(thread, model) <see cref="TokenUsage"/> satellite at
+/// {threadPath}/_Usage/{model} — on Completed, Cancelled, AND Error rounds alike.
 /// </para>
 /// <para>
 /// These tests cover the four holes the accounting had: the round-dispatch reset that defeated
@@ -84,13 +84,12 @@ public class ThreadTokenUsageTest : AITestBase
                  && t.IngestedMessageIds.Count >= 1,
             20_000);
 
-        thread.TokensUsed.Should().Be(TotalTokens,
-            "the completed round's tokens accumulate onto the thread total");
-
-        // Per-model breakdown is recorded too (model id = the bare submitted model name).
-        thread.TokensByModel.Should().ContainKey("usage-model");
-        thread.TokensByModel["usage-model"].InputTokens.Should().Be(InTokens);
-        thread.TokensByModel["usage-model"].OutputTokens.Should().Be(OutTokens);
+        // Usage is recorded on the per-model TokenUsage satellite ({threadPath}/_Usage/{model}),
+        // NOT on the thread node. Model id "usage-model" → key "usage_model".
+        var usage = await WaitForUsage(threadPath, "usage_model",
+            u => u.InputTokens == InTokens && u.OutputTokens == OutTokens, 10_000);
+        usage.Model.Should().Be("usage-model");
+        usage.ThreadId.Should().Be(threadPath);
 
         var cell = await WaitForCell(threadPath, thread.Messages[^1],
             m => m.Status == ThreadMessageStatus.Completed, 10_000);
@@ -108,21 +107,19 @@ public class ThreadTokenUsageTest : AITestBase
         var client = GetClient();
 
         client.SubmitMessage(threadPath, "round one", modelName: "usage-model", createdBy: TestUser);
-        var afterRound1 = await WaitForThread(threadPath,
+        await WaitForThread(threadPath,
             t => t.Status == ThreadExecutionStatus.Idle && t.Messages.Count >= 2, 20_000);
-        afterRound1.TokensUsed.Should().Be(TotalTokens, "first round's tokens land on the thread");
+        await WaitForUsage(threadPath, "usage_model",
+            u => u.InputTokens == InTokens && u.OutputTokens == OutTokens, 10_000);
 
         client.SubmitMessage(threadPath, "round two", modelName: "usage-model", createdBy: TestUser);
-        var afterRound2 = await WaitForThread(threadPath,
+        await WaitForThread(threadPath,
             t => t.Status == ThreadExecutionStatus.Idle && t.Messages.Count >= 4, 20_000);
 
-        afterRound2.TokensUsed.Should().Be(TotalTokens * 2,
-            "TokensUsed is the thread's CUMULATIVE total — a second round adds onto the first; "
-            + "the round-dispatch reset that wiped it to 0 each round is the bug being pinned");
-
-        // The per-model breakdown accumulates cumulatively too.
-        afterRound2.TokensByModel["usage-model"].InputTokens.Should().Be(InTokens * 2);
-        afterRound2.TokensByModel["usage-model"].OutputTokens.Should().Be(OutTokens * 2);
+        // The per-model TokenUsage satellite ACCUMULATES across rounds — a second round adds onto
+        // the first (each terminal RecordUsage reads the current satellite value and adds).
+        await WaitForUsage(threadPath, "usage_model",
+            u => u.InputTokens == InTokens * 2 && u.OutputTokens == OutTokens * 2, 10_000);
     }
 
     // ─── Cancelled round (pins the dropped-usage hole on cancel) ───
@@ -150,11 +147,11 @@ public class ThreadTokenUsageTest : AITestBase
                 : curr!)
             .FirstAsync().ToTask();
 
-        var cancelled = await WaitForThread(threadPath,
+        await WaitForThread(threadPath,
             t => t.Status == ThreadExecutionStatus.Cancelled, 20_000);
 
-        cancelled.TokensUsed.Should().Be(TotalTokens,
-            "tokens consumed before the cancel must accumulate onto the thread total");
+        await WaitForUsage(threadPath, "usage_cancel_model",
+            u => u.InputTokens == InTokens && u.OutputTokens == OutTokens, 10_000);
 
         var cell = await WaitForCell(threadPath, cellId,
             m => m.Status == ThreadMessageStatus.Cancelled, 10_000);
@@ -179,8 +176,8 @@ public class ThreadTokenUsageTest : AITestBase
                  && t.Messages.Count >= 2,
             20_000);
 
-        terminal.TokensUsed.Should().Be(TotalTokens,
-            "tokens consumed before the fault must accumulate onto the thread total");
+        await WaitForUsage(threadPath, "usage_error_model",
+            u => u.InputTokens == InTokens && u.OutputTokens == OutTokens, 10_000);
 
         var cell = await WaitForCell(threadPath, terminal.Messages[^1],
             m => m.Status == ThreadMessageStatus.Error, 10_000);
@@ -201,8 +198,10 @@ public class ThreadTokenUsageTest : AITestBase
 
         var thread = await WaitForThread(threadPath,
             t => t.Status == ThreadExecutionStatus.Idle && t.Messages.Count >= 2, 20_000);
-        thread.TokensUsed.Should().Be(TotalTokens,
-            "the total is derived from in+out when the provider omits TotalTokenCount");
+
+        // The satellite stores in/out; the total is derived on the cell when the provider omits it.
+        await WaitForUsage(threadPath, "usage_nototal_model",
+            u => u.InputTokens == InTokens && u.OutputTokens == OutTokens, 10_000);
 
         var cell = await WaitForCell(threadPath, thread.Messages[^1],
             m => m.Status == ThreadMessageStatus.Completed, 10_000);
@@ -240,6 +239,14 @@ public class ThreadTokenUsageTest : AITestBase
             .Where(m => m is not null)
             .Should().Within(TimeSpan.FromMilliseconds(timeoutMs))
             .Match(m => predicate(m!)))!;
+
+    // The per-model TokenUsage satellite at {threadPath}/_Usage/{modelKey}.
+    private async Task<TokenUsage> WaitForUsage(string threadPath, string modelKey, Func<TokenUsage, bool> predicate, int timeoutMs)
+        => (await Mesh.GetWorkspace().GetMeshNodeStream($"{threadPath}/{TokenUsageNodeType.SatelliteSegment}/{modelKey}")
+            .Select(n => n?.Content as TokenUsage)
+            .Where(u => u is not null)
+            .Should().Within(TimeSpan.FromMilliseconds(timeoutMs))
+            .Match(u => predicate(u!)))!;
 
     // ─── Fake usage-reporting chat client ───
 

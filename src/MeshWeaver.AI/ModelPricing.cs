@@ -24,8 +24,8 @@ public record ModelPriceRate(decimal InputPerMillion, decimal OutputPerMillion, 
 
 /// <summary>
 /// Built-in default per-million-token prices keyed by model id (the bare model
-/// identifier stamped on a response cell / accumulated in
-/// <see cref="Thread.TokensByModel"/>). These are a FALLBACK — an explicit price
+/// identifier stamped on a response cell / accumulated on a per-model
+/// <see cref="TokenUsage"/> satellite). These are a FALLBACK — an explicit price
 /// on a <see cref="ModelDefinition"/> node always wins. Seeded onto catalog model
 /// nodes at import time so a user sees (and can override) a sensible number.
 ///

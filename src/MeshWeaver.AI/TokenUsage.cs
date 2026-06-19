@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Security;
@@ -6,6 +7,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.AI;
 
@@ -78,4 +80,57 @@ public static class TokenUsageNodeType
             .AddMeshDataSource(source => source
                 .WithContentType<TokenUsage>())
     };
+
+    /// <summary>
+    /// Records ONE round's token usage onto the per-model satellite at
+    /// <c>{threadPath}/_Usage/{modelKey}</c>, ACCUMULATING input/output across the thread's rounds
+    /// (keyed by model, per your "key by model"). Fire-and-forget: a no-token round is a no-op.
+    ///
+    /// <para>Read-modify-write, but SAFE and race-free: rounds run serially per thread (one terminal
+    /// path at a time), so there is no concurrent writer to the same model node within a thread. The
+    /// current value is read AUTHORITATIVELY off the live node stream (<c>GetMeshNodeStream().Take(1)</c>),
+    /// bounded by <c>Timeout</c> + <c>Catch</c> so an absent node (first round for this model) resolves
+    /// to null rather than parking on a never-acked subscribe — then the create-or-update lands it via
+    /// <see cref="CreateOrUpdateNodeRequest"/> (NOT a point-read <c>.Update</c>, which NotFound-storms).</para>
+    /// </summary>
+    public static void RecordUsage(
+        IMessageHub hub, string threadPath, string? userId,
+        string? modelId, int? inputTokens, int? outputTokens, ILogger? logger = null)
+    {
+        long inTok = inputTokens ?? 0;
+        long outTok = outputTokens ?? 0;
+        if (inTok == 0 && outTok == 0)
+            return; // parity with the old per-model accumulator: empty rounds never accrue a node
+
+        var model = string.IsNullOrWhiteSpace(modelId) ? "(unknown)" : modelId!;
+        var key = new string(model.Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray());
+        var ns = $"{threadPath}/{SatelliteSegment}";
+        var usagePath = $"{ns}/{key}";
+
+        hub.GetWorkspace().GetMeshNodeStream(usagePath)
+            .Select(n => n?.ContentAs<TokenUsage>(hub.JsonSerializerOptions, logger))
+            .Take(1)
+            // Absent node (first round for this model): the read hangs (no node) → Timeout switches to
+            // null; or it faults (not-found) → Catch switches to null. Either way we create fresh. An
+            // existing node emits its current value so the accumulate adds onto it.
+            .Timeout(TimeSpan.FromSeconds(5), Observable.Return<TokenUsage?>(null))
+            .Catch((Exception _) => Observable.Return<TokenUsage?>(null))
+            .SelectMany(current =>
+            {
+                var content = (current ?? new TokenUsage { UserId = userId, ThreadId = threadPath, Model = model })
+                    .Add(inTok, outTok);
+                var node = new MeshNode(key, ns)
+                {
+                    Name = model,
+                    NodeType = NodeType,
+                    State = MeshNodeState.Active,
+                    MainNode = threadPath,
+                    Content = content,
+                };
+                return hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node));
+            })
+            .Subscribe(
+                _ => { },
+                ex => logger?.LogWarning(ex, "[TokenUsage] RecordUsage failed for {Path}", usagePath));
+    }
 }
