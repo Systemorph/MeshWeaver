@@ -89,13 +89,6 @@ public static class ThreadNodeType
     public const string ChangesArea = "Changes";
 
     /// <summary>
-    /// Layout area showing the thread's token-cost summary — tokens in / out per
-    /// model, with a $ cost derived from the model prices (see
-    /// <see cref="ModelPricing"/>). Surfaced through the node menu (Token cost).
-    /// </summary>
-    public const string TokenCostArea = "TokenCost";
-
-    /// <summary>
     /// Generates a human-readable speaking ID from message text.
     /// Takes the first few words, lowercases, replaces non-alphanumeric with hyphens,
     /// and appends a short unique suffix.
