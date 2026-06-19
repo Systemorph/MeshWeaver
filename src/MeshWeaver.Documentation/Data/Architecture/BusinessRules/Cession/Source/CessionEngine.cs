@@ -3,6 +3,10 @@
 // DisplayName: Cession Calculation Engine
 // </meshweaver>
 
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
 /// <summary>
 /// Pure business logic for Excess-of-Loss cession.
 /// No framework dependencies — just math.

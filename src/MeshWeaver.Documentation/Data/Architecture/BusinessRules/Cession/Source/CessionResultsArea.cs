@@ -3,9 +3,12 @@
 // DisplayName: Cession Results Chart
 // </meshweaver>
 
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Reactive.Linq;
-using MeshWeaver.Charting;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
 
 /// <summary>
@@ -34,20 +37,16 @@ public static class CessionResultsArea
             $"**Retained:** {totalRetained:N0} | " +
             $"**Ratio:** {ratio:P1}");
 
-        // Stacked bar chart: retained (blue) + ceded (red) per claim
-        var labels = results.Select(r => r.ClaimId);
-        var retainedData = results.Select(r => r.RetainedAmount).ToArray();
-        var cededData = results.Select(r => r.CededAmount).ToArray();
+        // Column chart: retained + ceded per claim — framework ChartControl (Radzen-rendered).
+        var labels = results.Select(r => $"{r.ClaimId}").ToArray();
+        var retainedData = results.Select(r => (object)r.RetainedAmount);
+        var cededData = results.Select(r => (object)r.CededAmount);
 
-        var chart = Chart.Create(
-                DataSet.Bar(retainedData).WithLabel("Retained").WithBackgroundColor("rgba(54, 162, 235, 0.7)"),
-                DataSet.Bar(cededData).WithLabel("Ceded").WithBackgroundColor("rgba(255, 99, 132, 0.7)")
-            )
+        var chart = Charts.Create()
+            .WithSeries(new ColumnSeries(retainedData, "Retained"))
+            .WithSeries(new ColumnSeries(cededData, "Ceded"))
             .WithLabels(labels)
-            .WithOptions(o => o.Stacked())
-            .WithTitle("Claims — Retained vs Ceded (XL 500k xs 200k)")
-            .ToControl()
-            .WithStyle("width: 100%; height: 400px;");
+            .WithTitle("Claims — Retained vs Ceded (XL 500k xs 200k)");
 
         return Observable.Return<UiControl>(
             Controls.Stack
