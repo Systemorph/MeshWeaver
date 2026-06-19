@@ -1487,17 +1487,11 @@ internal static class ThreadExecution
                     int? inputTokens = null;
                     int? outputTokens = null;
                     int? totalTokens = null;
-                    // Normalize token usage so EVERY terminal path records a consistent
-                    // number: providers vary — some report TotalTokenCount, others only
-                    // In/Out. Derive the total from In+Out when the provider didn't report
-                    // it. Mutates the captured token locals; idempotent once a total is
-                    // present, so it's safe to call on the Completed, Cancelled, and Error
-                    // paths alike.
-                    void NormalizeTotalTokens()
-                    {
-                        if (totalTokens is null && (inputTokens.HasValue || outputTokens.HasValue))
-                            totalTokens = (inputTokens ?? 0) + (outputTokens ?? 0);
-                    }
+                    // Total-token normalization is the static NormalizeTotal helper (below),
+                    // assigned per terminal path — NOT a local function here. A mutable-capturing
+                    // local function threaded through this ~1400-line method's branches exploded
+                    // Roslyn's nullable-flow/closure analysis: the MeshWeaver.AI ~10-min compile
+                    // cliff (build step 259s → 676s at e30e9b5f1). See NormalizeTotal.
                     // Actual model the harness reports using (e.g. Claude Code resolves
                     // "sonnet" → a concrete id). Captured from the response updates so
                     // the output cell records what really ran, not just what was asked.
@@ -1773,7 +1767,7 @@ internal static class ThreadExecution
                     }
                     // include token usage + completion timestamp so the cell can show duration / tokens.
                     var aggregatedChanges = AggregateNodeChanges(finalNodeChanges);
-                    NormalizeTotalTokens();
+                    totalTokens = NormalizeTotal(totalTokens, inputTokens, outputTokens);
                     logger.LogInformation("[ThreadExec] EXECUTION_COMPLETE: {Time:HH:mm:ss.fff} threadPath={ThreadPath}, responseLength={Length}, toolCalls={ToolCalls}, tokens={In}/{Out}/{Total}",
                         DateTime.UtcNow, threadPath, finalTextLen, finalToolCalls.Count,
                         inputTokens, outputTokens, totalTokens);
@@ -1876,7 +1870,7 @@ internal static class ThreadExecution
                         // already aggregated any UsageContent seen prior to the
                         // OperationCanceledException — so the cell + thread reflect what
                         // the round actually cost.
-                        NormalizeTotalTokens();
+                        totalTokens = NormalizeTotal(totalTokens, inputTokens, outputTokens);
                         PushToResponseMessage(cancelText, cancelToolCalls, cancelNodeChanges,
                             request.AgentName, request.ModelName,
                             inputTokens: inputTokens, outputTokens: outputTokens,
@@ -1946,7 +1940,7 @@ internal static class ThreadExecution
                         // forbidden per feedback_no_totask_in_src.md / AsynchronousCalls.md.)
                         // Record tokens consumed before the fault (same rationale as the
                         // Cancelled branch) so an errored round still reports its cost.
-                        NormalizeTotalTokens();
+                        totalTokens = NormalizeTotal(totalTokens, inputTokens, outputTokens);
                         var pushErrorObs = PushToResponseMessage(errorText, errorToolCalls, errorNodeChanges,
                             request.AgentName, request.ModelName,
                             inputTokens: inputTokens, outputTokens: outputTokens,
@@ -2202,6 +2196,19 @@ internal static class ThreadExecution
         var existing = current.GetValueOrDefault(key) ?? new ModelTokenUsage();
         return current.SetItem(key, existing.Add(inTok, outTok));
     }
+
+    /// <summary>
+    /// Normalizes a round's total token count: providers vary — some report a total, others
+    /// only in/out. Returns <paramref name="total"/> when present, else in+out (when either is
+    /// present), else null. STATIC on purpose — NOT a local function inside ExecuteMessageAsync:
+    /// a mutable-capturing local function threaded through that ~1400-line reactive method's
+    /// branches exploded Roslyn's nullable-flow/closure analysis and was the MeshWeaver.AI
+    /// ~10-minute compile cliff (build step 259s → 676s at commit e30e9b5f1).
+    /// </summary>
+    internal static int? NormalizeTotal(int? total, int? inputTokens, int? outputTokens)
+        => total ?? ((inputTokens.HasValue || outputTokens.HasValue)
+            ? (inputTokens ?? 0) + (outputTokens ?? 0)
+            : (int?)null);
 
     internal static ImmutableList<NodeChangeEntry> AggregateNodeChanges(ImmutableList<NodeChangeEntry> entries)
     {
