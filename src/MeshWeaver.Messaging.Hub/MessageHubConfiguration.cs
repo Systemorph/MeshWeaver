@@ -519,6 +519,19 @@ public record MessageHubConfiguration
     public MessageHubConfiguration WithQuiesceTimeout(TimeSpan timeout) => this with { QuiesceTimeout = timeout };
 
     /// <summary>
+    /// Per-hub aggregate inbound-depth watermark for the storm breaker's Invariant-3 safety
+    /// net (see <c>Doc/Architecture/ActionBlockWedgePrevention.md</c>). Default
+    /// <see cref="MessageStormBreaker.DefaultAggregateWatermark"/>. When this hub's single
+    /// inbox crosses the watermark, sheddable ([CanBeIgnored], non-lifecycle) traffic is shed
+    /// at ingestion so the turn loop keeps draining user-facing + lifecycle work. Tests inject
+    /// a low value to drive a hub past the line deterministically.
+    /// </summary>
+    internal int AggregateWatermark { get; init; } = MessageStormBreaker.DefaultAggregateWatermark;
+
+    /// <summary>Sets the aggregate inbound-depth watermark. See <see cref="AggregateWatermark"/>.</summary>
+    public MessageHubConfiguration WithAggregateWatermark(int watermark) => this with { AggregateWatermark = watermark };
+
+    /// <summary>
     /// When true, the hub will not automatically post InitializeHubRequest during construction.
     /// Manual initialization is required by posting InitializeHubRequest to the hub.
     /// </summary>

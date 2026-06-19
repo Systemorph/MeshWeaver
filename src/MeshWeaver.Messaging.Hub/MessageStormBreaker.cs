@@ -82,6 +82,17 @@ public sealed class MessageStormBreaker
     /// </summary>
     public static readonly TimeSpan DefaultCooldown = TimeSpan.FromSeconds(2);
 
+    /// <summary>
+    /// Default per-hub AGGREGATE inbound-depth watermark. The per-key breaker only trips when
+    /// ONE (sender,target,type) tuple storms; every wedge we saw was MANY DISTINCT keys whose
+    /// AGGREGATE saturated the single action block (per-key is the gap). When a hub's inbound
+    /// queue depth crosses this, the block is being driven past its drain rate, so we SHED
+    /// sheddable ([CanBeIgnored], non-lifecycle) traffic to keep it draining user-facing +
+    /// lifecycle work. Deliberately high — no healthy hub backs its single inbox up this deep.
+    /// Tests inject a low value via WithAggregateWatermark.
+    /// </summary>
+    public const int DefaultAggregateWatermark = 10_000;
+
     private readonly int threshold;
     private readonly long windowTicks;
     private readonly long cooldownTicks;
@@ -95,6 +106,11 @@ public sealed class MessageStormBreaker
     private readonly ILogger logger;
     private readonly Address address;
 
+    private readonly int aggregateWatermark;
+    private long aggregateShedCount;
+    private int aggregateShedding; // rising-edge guard: log once per overload episode
+    private readonly Subject<AggregateShed> aggregateSheds = new();
+
     // Instance state — dies with the hub. ConcurrentDictionary is the sanctioned
     // exception for concurrent mutation (an instance field, never static).
     private readonly ConcurrentDictionary<StormKey, Counter> counters = new();
@@ -104,9 +120,10 @@ public sealed class MessageStormBreaker
     private readonly Subject<StormTrip> trips = new();
 
     /// <summary>Production constructor — real Stopwatch clock and default tuning.</summary>
-    public MessageStormBreaker(ILogger logger, Address address)
+    public MessageStormBreaker(ILogger logger, Address address,
+        int aggregateWatermark = DefaultAggregateWatermark)
         : this(logger, address, DefaultThreshold, DefaultWindow, DefaultCooldown,
-            Stopwatch.GetTimestamp, Stopwatch.Frequency)
+            Stopwatch.GetTimestamp, Stopwatch.Frequency, aggregateWatermark)
     {
     }
 
@@ -120,7 +137,8 @@ public sealed class MessageStormBreaker
     public MessageStormBreaker(
         ILogger logger, Address address,
         int threshold, TimeSpan window, TimeSpan cooldown,
-        Func<long> nowTicks, long ticksPerSecond)
+        Func<long> nowTicks, long ticksPerSecond,
+        int aggregateWatermark = DefaultAggregateWatermark)
     {
         this.logger = logger;
         this.address = address;
@@ -130,6 +148,7 @@ public sealed class MessageStormBreaker
         this.windowSeconds = window.TotalSeconds;
         this.cooldownSeconds = cooldown.TotalSeconds;
         this.nowTicks = nowTicks;
+        this.aggregateWatermark = aggregateWatermark;
     }
 
     /// <summary>
@@ -260,10 +279,66 @@ public sealed class MessageStormBreaker
         catch { /* a faulting test subscriber must never wedge the hot path */ }
     }
 
+    /// <summary>
+    /// Fires once per aggregate-shed decision (the same moment the overload Error is logged
+    /// on the rising edge). Diagnostic only — the production signal is the <c>Error</c> log.
+    /// </summary>
+    public IObservable<AggregateShed> AggregateSheds => aggregateSheds;
+
+    /// <summary>Total number of messages this breaker has shed for aggregate overload.</summary>
+    public long AggregateShedCount => Interlocked.Read(ref aggregateShedCount);
+
+    /// <summary>
+    /// Aggregate (per-hub) overload check. The per-key <see cref="ShouldDrop"/> only fires
+    /// when ONE tuple storms; this fires when the hub's TOTAL inbound queue depth crosses the
+    /// watermark — the many-distinct-keys overload the per-key breaker can't see. When over
+    /// the watermark we SHED sheddable ([CanBeIgnored], non-lifecycle) traffic so the single
+    /// turn loop keeps draining user-facing and lifecycle work. User-facing and lifecycle
+    /// messages are NEVER shed.
+    /// </summary>
+    public bool ShouldShedAggregate(IMessageDelivery delivery, int inboundDepth)
+    {
+        if (inboundDepth < aggregateWatermark)
+        {
+            Interlocked.Exchange(ref aggregateShedding, 0);
+            return false;
+        }
+        if (!IsSheddable(delivery))
+            return false;
+        Interlocked.Increment(ref aggregateShedCount);
+        if (Interlocked.Exchange(ref aggregateShedding, 1) == 0)
+            logger.LogError(
+                "ACTION-BLOCK OVERLOAD in hub {Address}: inbound queue depth {Depth} crossed the aggregate "
+                + "watermark {Watermark}. Shedding sheddable [CanBeIgnored] traffic (e.g. {Type}) at ingestion to "
+                + "keep the single-threaded turn loop draining — user-facing and lifecycle messages are NEVER shed. "
+                + "An amplifying source (many distinct keys) is driving this block past its drain rate; find and fix it.",
+                address, inboundDepth, aggregateWatermark, delivery.Message?.GetType().Name);
+        try { aggregateSheds.OnNext(new AggregateShed(delivery.Sender, delivery.Target, delivery.Message!.GetType().Name, inboundDepth)); }
+        catch { }
+        return true;
+    }
+
+    private static bool IsSheddable(IMessageDelivery delivery)
+    {
+        var message = delivery.Message;
+        if (message is null) return false;
+        // The lifecycle/control set is itself [CanBeIgnored], so it MUST be excluded FIRST,
+        // before the attribute check — mirror ShouldDrop's exempt block exactly so these are
+        // never shed (dropping them could deadlock teardown/init).
+        if (message is ShutdownRequest or DisposeRequest or DeliveryFailure
+            or InitializeHubRequest or HeartBeatEvent)
+            return false;
+        return message.GetType().HasAttribute<CanBeIgnoredAttribute>();
+    }
+
+    public readonly record struct AggregateShed(Address Sender, Address? Target, string TypeName, int InboundDepth);
+
     public void Dispose()
     {
         try { trips.OnCompleted(); } catch { /* ignore */ }
         trips.Dispose();
+        try { aggregateSheds.OnCompleted(); } catch { /* ignore */ }
+        aggregateSheds.Dispose();
         counters.Clear();
     }
 
