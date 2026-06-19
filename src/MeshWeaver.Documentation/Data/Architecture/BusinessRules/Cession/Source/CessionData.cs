@@ -3,7 +3,9 @@
 // DisplayName: Cession Data Model
 // </meshweaver>
 
+using System.ComponentModel.DataAnnotations;
 using MeshWeaver.Domain;
+using MeshWeaver.Mesh;
 
 /// <summary>
 /// Content type for a Cession node — holds the layer configuration.
