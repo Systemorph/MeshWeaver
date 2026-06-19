@@ -637,64 +637,34 @@ internal static class NodeTypeCompilationHelpers
     }
 
     /// <summary>
-    /// The live MeshWeaver framework version — the identity a compiled NodeType
-    /// release is pinned to. Two regimes, picked automatically:
-    /// <list type="bullet">
-    ///   <item><b>Deployed builds</b> — the NuGet pack process stamps a real
-    ///     semver into <c>AssemblyInformationalVersion</c> (e.g.
-    ///     <c>"3.0.0-preview2"</c>). That value is identical on every server
-    ///     running the same deployed build, so the version alone is the
-    ///     framework identity — a redeploy at a new version invalidates every
-    ///     release; a file write-time (which differs per machine) would not.</item>
-    ///   <item><b>Un-packed dev builds</b> — the version stays the frozen
-    ///     default (<c>"1.0.0"</c>) across every <c>dotnet build</c>, so a
-    ///     version-only check would never recompile a NodeType after the
-    ///     framework is rebuilt locally. There we append the
-    ///     <c>MeshWeaver.Graph</c> assembly's last-write time: on the single dev
-    ///     machine it is "frozen" per build (stable within a run, changes on
-    ///     rebuild) — exactly the dev-iteration signal we want.</item>
-    /// </list>
-    /// Computed once per process.
+    /// The live MeshWeaver framework identity a compiled NodeType release is pinned to — the
+    /// <c>MeshWeaver.Graph</c> assembly's MVID (a content hash of the compiled module). It is
+    /// identical on every server running the same build, stable across local rebuilds that don't
+    /// change Graph's bytes, and changes whenever the framework is rebuilt with different content
+    /// — so a mismatch against a NodeType's <c>CompiledFrameworkVersion</c> means "recompile".
+    /// (MVID rationale below.) Computed once per process.
     /// </summary>
     internal static string FrameworkVersion => _frameworkVersion.Value;
 
+    // Content-based framework identity: the Graph assembly's MVID (Module Version Id). It is
+    // part of the compiled module, so it is STABLE whenever the DLL bytes are identical (an
+    // incremental build that skips recompiling Graph, or a deterministic rebuild of unchanged
+    // source) and CHANGES whenever Graph — or any dependency, which forces Graph's recompile —
+    // is rebuilt with different content. That is exactly the "did the framework ABI change?"
+    // signal a compiled NodeType release pins to.
+    //
+    // Why MVID and not AssemblyInformationalVersion: deriving this from the version STRING forced
+    // Directory.Build.props to stamp a fresh version into EVERY build (so the string changed on a
+    // local rebuild), which regenerated AssemblyInfo every build and DESTROYED incremental builds
+    // (full rebuild every time → hot machine). The MVID decouples the two — the version string can
+    // now stay stable across local rebuilds (incremental restored) while ABI invalidation stays
+    // correct. An earlier scheme appended the DLL's last-write time, but that drifted on
+    // copies/touches even when the bytes were identical; the MVID does not. For a deployed build
+    // the MVID is fixed in the shipped DLL (identical on every server) and changes only when a
+    // redeploy actually changes framework content — so it also recompiles LESS than the old
+    // per-build-version scheme, which invalidated on every deploy whether or not anything changed.
     private static readonly Lazy<string> _frameworkVersion = new(() =>
-    {
-        var asm = typeof(NodeTypeCompilationHelpers).Assembly;
-        var info = asm
-            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
-            ?.InformationalVersion;
-        // "{semver}+{gitSha}" → keep only the semver part.
-        string semver;
-        if (!string.IsNullOrEmpty(info))
-        {
-            var plus = info.IndexOf('+');
-            semver = plus >= 0 ? info[..plus] : info;
-        }
-        else
-        {
-            semver = asm.GetName().Version?.ToString() ?? "0.0.0";
-        }
-
-        // Un-packed dev default — the SDK leaves semver at "1.0.0" across
-        // every dotnet build, so the bare semver alone would never invalidate
-        // a stale cache. Directory.Build.props bakes `1.0.0+dev.{ticks}` into
-        // AssemblyInformationalVersion at compile time (only re-evaluated when
-        // the assembly is actually recompiled), so use the full string as the
-        // dev fingerprint. Stable across copies/touches of the same .dll
-        // (which is what was broken before — File.GetLastWriteTimeUtc drifted
-        // even when the bytes were identical). Deployed builds carry a real
-        // semver (`3.0.0-preview2`) and skip this fallback.
-        if (semver is "1.0.0" or "1.0.0.0" or "0.0.0")
-        {
-            if (!string.IsNullOrEmpty(info))
-                return info;
-            var loc = asm.Location;
-            if (!string.IsNullOrEmpty(loc) && System.IO.File.Exists(loc))
-                return $"{semver}+{System.IO.File.GetLastWriteTimeUtc(loc):O}";
-        }
-        return semver;
-    });
+        typeof(NodeTypeCompilationHelpers).Assembly.ManifestModule.ModuleVersionId.ToString("N"));
 
     /// <summary>
     /// True when a NodeType's persisted compile state is backed by a compiled

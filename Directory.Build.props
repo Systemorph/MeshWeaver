@@ -42,9 +42,16 @@
        is distinct every build (NodeType cache invalidation), released or continuous. A direct
        -p:Version=… still overrides everything (escape hatch). -->
   <PropertyGroup Condition="'$(Version)' == ''">
-    <!-- Build number: seconds-since-midnight / 2 (16-bit safe, ~2s granularity). -->
+    <!-- Build number. CI (CIRun=true): seconds-since-midnight / 2 (~2s granularity) so continuous
+         packages are distinguishable. LOCAL DEV: a STABLE 0 — a per-build number re-stamps
+         AssemblyVersion/FileVersion/InformationalVersion every build, regenerating AssemblyInfo.cs
+         and DESTROYING incremental builds (full rebuild every time → hot machine). NodeType ABI
+         invalidation no longer depends on the version string (it uses the Graph assembly MVID —
+         NodeTypeCompilationHelpers.FrameworkVersion), so a stable local version is correct; CI does
+         clean builds so incremental doesn't apply there anyway. -->
     <_SecondsToday>$([System.DateTime]::UtcNow.TimeOfDay.TotalSeconds.ToString("F0"))</_SecondsToday>
-    <_BuildNumber>$([MSBuild]::Divide($(_SecondsToday), 2).ToString("F0"))</_BuildNumber>
+    <_BuildNumber Condition="'$(CIRun)' == 'true'">$([MSBuild]::Divide($(_SecondsToday), 2).ToString("F0"))</_BuildNumber>
+    <_BuildNumber Condition="'$(CIRun)' != 'true'">0</_BuildNumber>
     <!-- Numeric version core: PlatformVersion with the -rc label stripped (3.0.0-rc1 → 3.0.0). -->
     <_VersionDash>$(PlatformVersion.IndexOf('-'))</_VersionDash>
     <_VersionNumeric Condition="'$(_VersionDash)' == '-1'">$(PlatformVersion)</_VersionNumeric>
@@ -55,7 +62,11 @@
     <_CiSep Condition="'$(_VersionDash)' != '-1'">.</_CiSep>
     <Version Condition="'$(PublicRelease)' == 'true'">$(PlatformVersion)</Version>
     <Version Condition="'$(PublicRelease)' != 'true'">$(PlatformVersion)$(_CiSep)ci.$(_BuildNumber)</Version>
-    <InformationalVersion>$(Version)+build.$([System.DateTime]::UtcNow.Ticks)</InformationalVersion>
+    <!-- CI appends +build.<ticks> so each continuous build's InformationalVersion is unique; LOCAL
+         keeps it stable (= $(Version)) so AssemblyInfo isn't regenerated every build. ABI identity
+         is the Graph MVID now, not this string, so a stable local value is safe. -->
+    <InformationalVersion Condition="'$(CIRun)' == 'true'">$(Version)+build.$([System.DateTime]::UtcNow.Ticks)</InformationalVersion>
+    <InformationalVersion Condition="'$(CIRun)' != 'true'">$(Version)</InformationalVersion>
     <!-- AssemblyVersion + FileVersion = 3.0.0.<build> (numeric only — the -rc1 label is not
          allowed here); changes every build for MSBuild's CopyToOutputDirectory heuristic (else
          test bins hold stale framework DLLs and re-runs exercise old code). -->
