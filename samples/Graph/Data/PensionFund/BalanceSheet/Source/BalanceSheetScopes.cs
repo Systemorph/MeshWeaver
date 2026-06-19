@@ -3,6 +3,22 @@
 // DisplayName: Balance Sheet Business Rules
 // </meshweaver>
 
+// Pull the scope SOURCE GENERATOR in at node-compile time. It is NOT a framework reference (that
+// propagated the analyzer to every downstream project and bloated every build — commit ef2e756d6,
+// project_graph_generator_build_bloat); instead it travels WITH the node Source via #r, resolved
+// from the mesh-local feed (dist/packages, baked into the container image — NOT on nuget.org).
+// SourceGeneratorLoader discovers the [Generator] and MeshNodeCompilationService.RunSourceGenerators
+// emits the concrete IScope<,> implementations AddBusinessRules then discovers. Version-LESS: the
+// resolver picks whatever single version the feed carries (one global PlatformVersion, no drift).
+// MeshWeaver.BusinessRules itself is already in the compile's reference set (the portal ships it via
+// MeshWeaver.Documentation), so it is NOT #r'd here — a second reference would be a duplicate identity.
+//
+// NOTE: this file is therefore NOT a `<Compile>` item in MeshWeaver.PensionFund.Test — `#r` is illegal
+// in a regular (non-script) compilation (CS7011). The runtime NodeType compiler strips #r before Roslyn
+// sees it; the design-time scope-codegen contract is covered by FxConversionScopeTest + the runtime
+// render tests here + NuGetAssemblyResolverTest (the #r-feed mechanism).
+#r "nuget:MeshWeaver.BusinessRules.Generator"
+
 using System.Collections.Immutable;
 using MeshWeaver.BusinessRules;
 

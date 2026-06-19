@@ -137,6 +137,8 @@ All docs embedded in `src/MeshWeaver.Documentation/` and served under `Doc/` at 
 - **AKS** — the shared cluster `memex` portal. Full ref: [DeploymentAKS.md](src/MeshWeaver.Documentation/Data/Architecture/DeploymentAKS.md).
 - **Azure Container Apps** — the Aspire `test`/`prod` modes, via `tools/deploy.sh prod|test`. Full ref: [DeploymentContainerApps.md](src/MeshWeaver.Documentation/Data/Architecture/DeploymentContainerApps.md).
 
+**🚨 Before any AKS deploy, read [DeploymentAKS.md](src/MeshWeaver.Documentation/Data/Architecture/DeploymentAKS.md) end-to-end** — it is the source of truth for build → roll-out → verify AND for the **auto-baked mesh-local `#r` package feed** (the `BakeMeshLocalFeed` target packs `MeshWeaver.BusinessRules` + `.Generator` into the image so scope/`IScope` nodes compile offline in prod — Release publish only, no manual pack step). The commands inlined below are a quick reference, not a substitute for the doc.
+
 The `memex` portal runs on the shared **AKS cluster** `memexaks-cluster` (RG `memex-aks-rg`, swedencentral) — namespace `memex` — against the Postgres Flexible Server, images in ACR `meshweaver.azurecr.io`. **Private cluster: `kubectl` ONLY via `az aks command invoke -g memex-aks-rg -n memexaks-cluster --command "…"`.**
 
 **On AKS a code update = build image → set image → restart** (the AKS route does NOT use `tools/deploy.sh` or `aspire deploy` — those are the Container Apps route):
