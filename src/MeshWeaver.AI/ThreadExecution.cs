@@ -1818,13 +1818,18 @@ internal static class ThreadExecution
                     // Token usage is NOT stored on the thread — record it onto the per-model
                     // TokenUsage satellite ({threadPath}/_Usage/{model}); all cost tracking lives
                     // outside the Thread node now.
+                    // Record usage onto the per-model satellite FIRST, then flip the thread Idle — the
+                    // satellite must exist before the round shows terminal, so the GUI chip and the
+                    // token tests (which read {threadPath}/_Usage/{model} right after observing the
+                    // terminal status) see it. RecordUsage is fail-open (it never errors the chain), so
+                    // a usage write that fails still lets the terminal write proceed.
                     TokenUsageNodeType.RecordUsage(parentHub, threadPath,
                         AgentPickerProjection.PartitionOf(threadPath),
-                        actualModel ?? request.ModelName, inputTokens, outputTokens, execLogger);
-                    UpdateThreadExecution(t => t.ResetExecution() with
+                        actualModel ?? request.ModelName, inputTokens, outputTokens, execLogger)
+                    .SelectMany(_ => UpdateThreadExecution(t => t.ResetExecution() with
                     {
                         Summary = summaryText
-                    }).Subscribe(
+                    })).Subscribe(
                         _ => { },
                         ex =>
                         {
@@ -1889,17 +1894,19 @@ internal static class ThreadExecution
                         // Clear the cancel request now that it's achieved; leave
                         // PendingUserMessages intact so the submission watcher
                         // re-dispatches a fresh round from Cancelled+pending.
-                        // A cancelled round still cost tokens — record them on the satellite.
+                        // A cancelled round still cost tokens — record them on the satellite BEFORE the
+                        // terminal Cancelled write (see Completed branch: the reader observes the
+                        // satellite right after the terminal status).
                         TokenUsageNodeType.RecordUsage(parentHub, threadPath,
                             AgentPickerProjection.PartitionOf(threadPath),
-                            request.ModelName, inputTokens, outputTokens, execLogger);
-                        UpdateThreadExecution(t => t with
+                            request.ModelName, inputTokens, outputTokens, execLogger)
+                        .SelectMany(_ => UpdateThreadExecution(t => t with
                         {
                             Status = ThreadExecutionStatus.Cancelled, RequestedStatus = null,
                             ExecutionStatus = null, ActiveMessageId = null,
                             ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null,
                             Summary = cancelSummary
-                        }).Subscribe(
+                        })).Subscribe(
                             _ => { },
                             ex =>
                             {
@@ -1963,16 +1970,17 @@ internal static class ThreadExecution
                                 var errorSummary = string.IsNullOrEmpty(errorTextLocal)
                                     ? $"Error: {ex.Message}"
                                     : errorTextLocal;
-                                // Tokens burned before the fault — record on the satellite.
+                                // Tokens burned before the fault — record on the satellite BEFORE the
+                                // terminal Idle write (see Completed branch).
                                 TokenUsageNodeType.RecordUsage(parentHub, threadPath,
                                     AgentPickerProjection.PartitionOf(threadPath),
-                                    request.ModelName, inputTokens, outputTokens, execLogger);
-                                UpdateThreadExecution(t => t with
+                                    request.ModelName, inputTokens, outputTokens, execLogger)
+                                .SelectMany(_ => UpdateThreadExecution(t => t with
                                 {
                                     Status = ThreadExecutionStatus.Idle, ExecutionStatus = null, ActiveMessageId = null,
                                     ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null,
                                     Summary = errorSummary
-                                }).Subscribe(
+                                })).Subscribe(
                                     _ => { },
                                     updEx =>
                                     {
