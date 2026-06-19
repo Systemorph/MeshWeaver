@@ -3,7 +3,10 @@
 // DisplayName: Social Media Profile
 // </meshweaver>
 
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
 using MeshWeaver.Domain;
+using MeshWeaver.Mesh;
 
 public record SocialMediaProfile
 {
@@ -12,7 +15,6 @@ public record SocialMediaProfile
     public string Name { get; init; } = string.Empty;
 
     [Required]
-    [Dimension<Platform>]
     [UiControl(Style = "width: 200px;")]
     public string Platform { get; init; } = "LinkedIn";
 
