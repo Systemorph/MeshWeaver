@@ -50,7 +50,8 @@ public class PortalApplication : IDisposable
         IMessageHub hub,
         IRoutingService routingService,
         INavigationService navigationService,
-        ICircuitContextAccessor circuitContextAccessor)
+        ICircuitContextAccessor circuitContextAccessor,
+        PortalErrorSink errorSink)
     {
         // Prefer a stable per-circuit id (one portal hub per browser tab). The accessor is
         // resolved from the SAME DI scope that constructs this PortalApplication (the Blazor
@@ -90,14 +91,20 @@ public class PortalApplication : IDisposable
                 hub.ServiceProvider.GetRequiredService<ILayoutClient>()
                     .Configuration
                     .PortalConfiguration
-                    .Aggregate(DefaultPortalConfig(c, routingService, navigationService, circuitUser),
+                    .Aggregate(DefaultPortalConfig(c, routingService, navigationService, circuitUser, errorSink),
                         (cc, ccc) => ccc.Invoke(cc)))!;
     }
 
     public static MessageHubConfiguration DefaultPortalConfig(MessageHubConfiguration config,
         IRoutingService routingService, INavigationService navigationService,
-        AccessContext? circuitUser = null)
+        AccessContext? circuitUser = null, PortalErrorSink? errorSink = null)
     {
+        // Surface un-awaited failed posts originating from this portal hub to the GUI as a
+        // modal (PortalErrorModal subscribes to the sink). Awaited failures already surface
+        // per-callsite via the response callback's OnError; this catches the silent ones
+        // (stream.Update writes, fire-and-forget posts). See PortalErrorSink.
+        if (errorSink is not null)
+            config = config.WithPortalErrorReporting(errorSink);
         // 🚨 SOURCE of the never-null AccessContext invariant for the portal hub.
         // This PostPipeline step runs OUTERMOST (added after UserServicePostPipeline, and
         // AddPipeline wraps outer-first) so it stamps the circuit user BEFORE
