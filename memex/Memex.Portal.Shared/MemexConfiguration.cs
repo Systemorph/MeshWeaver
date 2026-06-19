@@ -583,6 +583,9 @@ public static class MemexConfiguration
                         // Permission.All: Invitations + Inbox.
                         .AddInvitationsSettingsTab()
                         .AddInboxSettingsTab()
+                        // Token-usage analytics (per-model _Usage satellites): filter by period,
+                        // group by model / person / thread, cost from ModelPricing.
+                        .AddTokenUsageSettingsTab()
                         // GitHub Sync tab — shows only on Space nodes (self-filtered).
                         .AddGitHubSyncSettingsTab()
                         // Content Indexing tab — Space nodes, only when the indexing pipeline is active.
