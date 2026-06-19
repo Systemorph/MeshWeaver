@@ -39,6 +39,17 @@ public class NodeTypeReleaseTest(ITestOutputHelper output) : MonolithMeshTestBas
     private const string NodeTypeId = "Sample";
     private const string NodeTypePath = $"{ReleaseTestPartition}/{NodeTypeId}";
 
+    // This test drives TWO full cold Roslyn compiles end-to-end (the first-build kickoff
+    // AND the explicit RequestedReleaseAt release), each up to ~60–90s on a 2-core CI Linux
+    // runner — which is exactly why the test declares [Fact(Timeout = 120_000)]. The base
+    // class's default TestHardDeadline is 60s, so the dispose watchdog was killing the test
+    // at 60.2s — BEFORE its own declared 120s budget — mid-second-compile. Align the HARD
+    // deadline with the [Fact] timeout (the same override LinkedInTelemetryImportTest,
+    // FrameworkStaleInstanceRenderTest, DeletionTests and PensionFundBalanceSheetTest apply
+    // for their compile/render-heavy work). This is NOT papering over a hang — the compile
+    // chain completes; it simply needs the budget the test already declares.
+    protected override TimeSpan TestHardDeadline => TimeSpan.FromSeconds(120);
+
     [Fact(Timeout = 120_000)]
     public async Task CompilationPending_CreatesReleaseMeshNode_WithNotes()
     {

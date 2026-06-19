@@ -796,6 +796,23 @@ internal static class ThreadSubmissionServer
                 // entries re-dispatch when the round settles.
                 didCommitThisEmission = true;
 
+                // 🚨 Compute the drain set from the CURRENT node — NEVER the pre-claim
+                // snapshot. dispatch.UserMessageIds / pendingForRound were captured back in
+                // DispatchAfterClaim, BEFORE this commit; the claim races pending-adds (a
+                // follow-up submit, or a cancel→re-dispatch) that change PendingUserMessages
+                // in the window between the plan and this commit. The fix: drain the PLANNED
+                // ids that are STILL pending right now, and key ingested / Messages /
+                // PendingUserMessages off THAT same set, so the three mutate consistently in
+                // one atomic write — we ingest exactly what we remove from pending. A planned
+                // id no longer pending is skipped (it was drained elsewhere — no ghost-ingest
+                // of an un-removed id, which left the thread Executing with the entry still
+                // pending → the Cancel_With*Pending stuck-round). A pending id NOT in this
+                // plan stays queued and re-dispatches when the round settles. Resume carries
+                // an empty plan, so drainIds is empty and only the status flip applies.
+                var drainIds = dispatch.UserMessageIds
+                    .Where(uid => t.PendingUserMessages.ContainsKey(uid))
+                    .ToImmutableList();
+
                 // User ids in dispatch order, then the response id last.
                 // Contains check covers the resubmit case where u1 was already in
                 // Messages from a prior round — ApplyResubmit removed u1 from
@@ -804,12 +821,12 @@ internal static class ThreadSubmissionServer
                 // Contains check on responseMsgId catches resume (the cell is
                 // already in Messages) and DispatchRound retries.
                 var msgs = t.Messages;
-                foreach (var uid in dispatch.UserMessageIds)
+                foreach (var uid in drainIds)
                     if (!msgs.Contains(uid)) msgs = msgs.Add(uid);
                 if (!msgs.Contains(responseMsgId)) msgs = msgs.Add(responseMsgId);
 
                 var ingested = t.IngestedMessageIds.AddRange(
-                    dispatch.UserMessageIds.Where(uid => !t.IngestedMessageIds.Contains(uid)));
+                    drainIds.Where(uid => !t.IngestedMessageIds.Contains(uid)));
 
                 // Restore the invariant UserMessageIds ⊇ IngestedMessageIds. A concurrent
                 // cross-hub SubmitMessage can drop an id from the UserMessageIds *array*
@@ -824,10 +841,13 @@ internal static class ThreadSubmissionServer
                 foreach (var uid in ingested)
                     if (!userIds.Contains(uid)) userIds = userIds.Add(uid);
 
-                // Drop consumed PendingUserMessages entries — their satellites now exist
-                // and their ids are now in Messages.
+                // Drop the entries we actually drained this commit — their satellites now
+                // exist and their ids are now in Messages + IngestedMessageIds. Keyed off
+                // drainIds (computed above from the CURRENT pending), so we remove exactly
+                // what we ingested — never a stale pendingForRound id that a concurrent
+                // path already consumed, and never leaving an ingested id still pending.
                 var pending = t.PendingUserMessages;
-                foreach (var (uid, _) in pendingForRound)
+                foreach (var uid in drainIds)
                     pending = pending.Remove(uid);
 
                 return node with

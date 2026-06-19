@@ -56,13 +56,20 @@ public class FirstUserOnboardingTests
         var (adminDs, adminAdapter) = await _fixture.CreateSchemaAdapter("admin", partitionDef, ct)
             .Should().Within(60.Seconds()).Emit();
 
-        // Create User schema
-        var (_, userAdapter) = await _fixture.CreateSchemaAdapter("user", null, ct)
+        // Step 1: Create the User node (simulates NodeFactory.CreateNodeAsync in onboarding).
+        // 🚨 Users are partition ROOTS: the User node lives in the user's OWN partition schema
+        // (named after the id), namespace="". There is NO shared legacy `user` schema — the
+        // pre-V27 access-object schema is gone. Creating a literal `user` schema here leaked into
+        // the collection-shared fixture (CleanData only truncates rows, never drops schemas), so a
+        // later test in the same run — MigrationUserBackfillFromIndexTests, whose whole premise is
+        // "the V05 backfill neither creates nor requires a `user` schema" — saw the stale schema and
+        // failed its `information_schema.schemata WHERE schema_name='user' = 0` invariant. Provision
+        // the user's own partition instead, matching the live architecture.
+        const string username = "firstadmin";
+        var (_, userAdapter) = await _fixture.CreateSchemaAdapter(username, null, ct)
             .Should().Within(60.Seconds()).Emit();
 
-        // Step 1: Create User node (simulates NodeFactory.CreateNodeAsync in onboarding)
-        const string username = "firstadmin";
-        await userAdapter.Write(new MeshNode(username, "User")
+        await userAdapter.Write(new MeshNode(username)
         {
             Name = "First Admin",
             NodeType = "User",

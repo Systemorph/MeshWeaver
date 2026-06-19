@@ -69,14 +69,26 @@ public sealed class NuGetAssemblyResolver(
             sources = [new SourceRepository(new PackageSource("https://api.nuget.org/v3/index.json"), providers)];
         }
 
+        // Honor nuget.config's packageSourceMapping. The repo config pins MeshWeaver.*/Memex.*
+        // to the `mesh-local` feed (dist/packages) precisely so a version-LESS
+        // `#r "nuget:MeshWeaver.BusinessRules.Generator"` resolves the locally-built package and
+        // NOT a same-named package republished on nuget.org. Without this, the version-less
+        // resolve picks the HIGHEST version across ALL enabled sources and returns from the first
+        // source that has it (nuget.org is listed first). nuget.org carries a stale 3.0.0-preview1
+        // of the generator — published before the lib/<tfm> asset was added, so it ships ONLY
+        // analyzers/dotnet/cs/ — which outranks/ties the local feed; the resolver then surfaces no
+        // lib/ assembly, the generator never loads, and scope nodes compile but generate nothing.
+        var sourceMapping = PackageSourceMapping.GetPackageSourceMapping(_settings);
+
         var available = new HashSet<SourcePackageDependencyInfo>(PackageIdentityComparer.Default);
         var targets = new List<PackageIdentity>();
 
         foreach (var req in requested)
         {
-            var identity = await ResolveIdentityAsync(req, sources, framework, ct);
+            var identity = await ResolveIdentityAsync(
+                req, FilterSourcesForPackage(req.Id, sources, sourceMapping), framework, ct);
             targets.Add(identity);
-            await WalkDependenciesAsync(identity, sources, framework, available, ct);
+            await WalkDependenciesAsync(identity, sources, sourceMapping, framework, available, ct);
         }
 
         var resolverContext = new PackageResolverContext(
@@ -158,8 +170,29 @@ public sealed class NuGetAssemblyResolver(
         throw new InvalidOperationException($"No NuGet package '{req.Id}' matching '{req.VersionRange ?? "*"}' found on configured sources.");
     }
 
+    /// <summary>
+    /// Restricts the candidate sources for a single package id to those allowed by
+    /// nuget.config's <c>packageSourceMapping</c> (longest-prefix pattern wins, exactly as
+    /// NuGet restore applies it). When no mapping is configured, or the id matches no pattern,
+    /// all sources are returned — matching NuGet's own behavior. This is what keeps a
+    /// version-less <c>#r "nuget:MeshWeaver.*"</c> pinned to the mesh-local feed instead of
+    /// resolving a same-named package off nuget.org. Falls back to all sources only if the
+    /// mapped source is not among the enabled ones (a config mismatch) rather than failing.
+    /// </summary>
+    private static SourceRepository[] FilterSourcesForPackage(
+        string packageId, SourceRepository[] sources, PackageSourceMapping mapping)
+    {
+        if (!mapping.IsEnabled) return sources;
+        var allowed = mapping.GetConfiguredPackageSources(packageId);
+        if (allowed is null || allowed.Count == 0) return sources;
+        var filtered = sources
+            .Where(s => allowed.Contains(s.PackageSource.Name, StringComparer.OrdinalIgnoreCase))
+            .ToArray();
+        return filtered.Length > 0 ? filtered : sources;
+    }
+
     private async Task WalkDependenciesAsync(
-        PackageIdentity root, SourceRepository[] sources, NuGetFramework framework,
+        PackageIdentity root, SourceRepository[] sources, PackageSourceMapping mapping, NuGetFramework framework,
         HashSet<SourcePackageDependencyInfo> collected, CancellationToken ct)
     {
         var queue = new Queue<PackageIdentity>();
@@ -171,7 +204,9 @@ public sealed class NuGetAssemblyResolver(
             if (collected.Any(c => PackageIdentityComparer.Default.Equals(c, current))) continue;
 
             SourcePackageDependencyInfo? info = null;
-            foreach (var src in sources)
+            // Each package id is restricted to its mapped source(s) too, so a transitive
+            // MeshWeaver.* dependency can't silently slip in from nuget.org either.
+            foreach (var src in FilterSourcesForPackage(current.Id, sources, mapping))
             {
                 var resource = await src.GetResourceAsync<DependencyInfoResource>(ct);
                 info = await resource.ResolvePackage(current, framework, _sourceCache, _nugetLogger, ct);
