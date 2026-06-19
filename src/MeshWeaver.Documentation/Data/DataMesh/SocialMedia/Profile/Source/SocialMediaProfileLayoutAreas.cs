@@ -3,6 +3,8 @@
 // DisplayName: Social Media Profile Views
 // </meshweaver>
 
+using System;
+using System.Linq;
 using System.Text.Json;
 using System.Web;
 using MeshWeaver.Layout.Composition;
@@ -64,4 +66,24 @@ public static class SocialMediaProfileLayoutAreas
                 return (UiControl?)stack;
             });
     }
+}
+
+/// <summary>
+/// Display metadata for a social platform — id, label, emoji, brand color. Replaces the
+/// previously-missing <c>Platform</c> dimension type the sample referenced (the compile break).
+/// </summary>
+public sealed record Platform(string Id, string Name, string Emoji, string Color)
+{
+    private static readonly Platform[] All =
+    {
+        new("LinkedIn", "LinkedIn", "💼", "#0A66C2"),
+        new("Twitter", "Twitter / X", "🐦", "#1DA1F2"),
+        new("GitHub", "GitHub", "🐙", "#181717"),
+        new("YouTube", "YouTube", "▶", "#FF0000"),
+        new("Instagram", "Instagram", "📷", "#E4405F"),
+    };
+
+    public static Platform GetById(string? id) =>
+        All.FirstOrDefault(p => string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase))
+        ?? new(id ?? "Unknown", id ?? "Unknown", "🌐", "#888888");
 }
