@@ -14,16 +14,16 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Include mesh node source files for compile-time unit testing. The
-         BusinessRules generator below emits the scope implementations for
-         BalanceSheetScopes.cs exactly as the NodeType compiler does at
-         runtime — so a generator/source mismatch fails this build, not the
-         portal. -->
+    <!-- Compile-time validation of the mesh node DATA records (dimension + fact types) so a
+         malformed sample fails this build, not the portal. BalanceSheetScopes.cs is intentionally
+         NOT here: it carries a `#r "nuget:MeshWeaver.BusinessRules.Generator"` directive (the runtime
+         compiler strips #r, but a regular `<Compile>` rejects it — CS7011). Its scope codegen is
+         covered build-time by FxConversionScopeTest (generator-as-analyzer) and end-to-end by the
+         runtime render tests in THIS project; the #r-feed resolution by NuGetAssemblyResolverTest. -->
     <Compile Include="..\..\samples\Graph\Data\PensionFund\Position\Source\Position.cs" Link="MeshNodeSources\Position.cs" />
     <Compile Include="..\..\samples\Graph\Data\PensionFund\Year\Source\Year.cs" Link="MeshNodeSources\Year.cs" />
     <Compile Include="..\..\samples\Graph\Data\PensionFund\Currency\Source\Currency.cs" Link="MeshNodeSources\Currency.cs" />
     <Compile Include="..\..\samples\Graph\Data\PensionFund\BalanceSheetEntry\Source\BalanceSheetEntry.cs" Link="MeshNodeSources\BalanceSheetEntry.cs" />
-    <Compile Include="..\..\samples\Graph\Data\PensionFund\BalanceSheet\Source\BalanceSheetScopes.cs" Link="MeshNodeSources\BalanceSheetScopes.cs" />
   </ItemGroup>
 
   <ItemGroup>

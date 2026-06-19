@@ -25,14 +25,43 @@
        MeshWeaver.*/Memex.* against the local `dist/packages` folder source — offline,
        no nuget.org round-trip. This is how BusinessRules / BusinessRules.Generator reach
        node compilation now that they are no longer ProjectReferenced by the framework
-       (see MeshWeaver.Graph). The nupkgs are packed into dist/packages by the build process
-       BEFORE publish (the `Pack mesh-local #r packages` step, mirrored from
-       .github/workflows/dotnet-test.yml); the glob copies whatever is there next to
-       nuget.config into the published /app so it ships in the image. -->
+       (see MeshWeaver.Graph). nuget.config ships next to the feed so the resolver finds it. -->
   <ItemGroup>
     <Content Include="..\..\..\nuget.config" Link="nuget.config" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="..\..\..\dist\packages\**\*.nupkg" LinkBase="dist\packages" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <!-- 🚨 dist/packages is git-ignored, so the curated #r-referenceable packages must be PACKED
+       into it AS PART OF PUBLISH — the AKS image build is `dotnet publish -t:PublishContainer`
+       with no separate pack step, so without this the image would ship an EMPTY feed and a
+       deployed portal's `#r "nuget:MeshWeaver.BusinessRules.Generator"` would resolve on no
+       source (it is NOT published to nuget.org) → every scope node fails to compile in prod.
+       This target packs the curated set — MeshWeaver.BusinessRules (the IScope<,> surface, i.e.
+       "business processes") + MeshWeaver.BusinessRules.Generator (its scope source generator) —
+       at the single global $(Version) from Directory.Build.props, then adds the freshly-produced
+       nupkgs to the publish set. In-process Pack (MSBuild task, not a nested `dotnet pack`) so it
+       reuses this build's restore/output and the exact same version. The identical set is packed
+       for tests by .github/workflows/dotnet-test.yml ("Pack mesh-local #r packages"). -->
+  <!-- Release-only: the AKS/container image is always published `-c Release`. A Debug publish is
+       a local convenience that doesn't ship, so skip the (non-trivial) pack there. -->
+  <Target Name="BakeMeshLocalFeed" BeforeTargets="ComputeFilesToPublish"
+          Condition="'$(Configuration)' == 'Release'">
+    <PropertyGroup>
+      <_MeshLocalFeed>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..\dist\packages'))</_MeshLocalFeed>
+    </PropertyGroup>
+    <MSBuild Projects="$(MSBuildThisFileDirectory)..\..\..\src\MeshWeaver.BusinessRules\MeshWeaver.BusinessRules.csproj"
+             Targets="Pack"
+             Properties="Configuration=$(Configuration);PackageOutputPath=$(_MeshLocalFeed)" />
+    <MSBuild Projects="$(MSBuildThisFileDirectory)..\..\..\src\MeshWeaver.BusinessRules.Generator\MeshWeaver.BusinessRules.Generator.csproj"
+             Targets="Pack"
+             Properties="Configuration=$(Configuration);PackageOutputPath=$(_MeshLocalFeed)" />
+    <!-- Re-glob AFTER packing: a static ItemGroup is evaluated before any target runs, so on a
+         clean (git-ignored, empty) dist/packages it would capture nothing. -->
+    <ItemGroup>
+      <Content Include="$(_MeshLocalFeed)\**\*.nupkg"
+               Link="dist\packages\%(RecursiveDir)%(Filename)%(Extension)"
+               CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
 
   <ItemGroup>
     <PackageReference Include="Aspire.Azure.Npgsql" />

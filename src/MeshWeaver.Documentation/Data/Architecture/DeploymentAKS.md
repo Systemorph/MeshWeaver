@@ -33,6 +33,23 @@ dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.cs
 
 Pick a `<tag>` that pins the change (e.g. `bugfix-2026-06-05`). CI also builds images on push, but it lags — check `az acr repository show-tags -n meshweaver --repository memex-portal-ai --orderby time_desc --top 5` before assuming your commit is built; if it isn't, build manually as above. If only portal code changed (no migration/schema change), you can reuse the live `memex-migration` tag and skip the migration build.
 
+### The node-compile `#r` feed is auto-baked into the image (no manual pack step)
+
+Node Source pulls MeshWeaver libraries in at compile time via `#r "nuget:MeshWeaver.X"` — most importantly the scope **source generator** every `IScope<,>` node needs (e.g. the PensionFund balance sheet):
+
+```csharp
+#r "nuget:MeshWeaver.BusinessRules.Generator"
+```
+
+These resolve **offline from a feed baked into the image**, never from nuget.org (they are not published there). The portal publish above runs the `BakeMeshLocalFeed` MSBuild target (in `Memex.Portal.Distributed.csproj`; **Release-only**, `BeforeTargets="ComputeFilesToPublish"`): it packs the curated set — `MeshWeaver.BusinessRules` (the `IScope<,>` surface) + `MeshWeaver.BusinessRules.Generator` (its scope generator) — into `dist/packages` at the single global `$(Version)` from `Directory.Build.props`, then copies that folder next to `nuget.config` into `/app`. At runtime `NuGetAssemblyResolver` reads `nuget.config` from the app dir and resolves `MeshWeaver.*` against that local folder.
+
+**So the `dotnet publish -t:PublishContainer` command above is self-contained — there is no separate pack step.** Notes:
+
+- `dist/packages` is git-ignored; the target (re)packs it on every Release publish, so the image always carries packages matching the built code.
+- Node Source pins **no** version (`#r "nuget:MeshWeaver.BusinessRules.Generator"`), so it resolves whatever single version the baked feed carries — the version lives in one place (`PlatformVersion`).
+- If a deployed scope node ever fails with a NuGet-resolve error, the image was built **without** this target (a `-c Debug` publish, or a `dist/packages` exclusion) — rebuild `-c Release`.
+- The same curated set is packed for the test suite by `.github/workflows/dotnet-test.yml` ("Pack mesh-local #r packages"), kept in sync with this target.
+
 ## 2. Roll out (NS = `memex`)
 
 ```bash
