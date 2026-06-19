@@ -77,7 +77,7 @@ jobs:
     - name: Restore dependencies
       run: dotnet restore
     - name: Build
-      run: dotnet build --no-restore -c Release -p:CIRun=true
+      run: dotnet build --no-restore -c Release -p:CIRun=true -p:ReportAnalyzer=true -clp:PerformanceSummary
     # Node Source can pull MeshWeaver libraries in via `#r "nuget:MeshWeaver.X, 3.0.0-preview1"`
     # (e.g. the BusinessRules scope generator the PensionFund sample uses). Tests resolve those
     # from the mesh-local feed (nuget.config → dist/packages), which is git-ignored — so the
