@@ -8,6 +8,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Messaging;
+using Xunit;
 
 namespace MeshWeaver.Layout.Test;
 
@@ -170,9 +171,18 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
     }
 
     /// <summary>
-    /// Test that verifies the complete data change and view update flow
+    /// Test that verifies the complete data change and view update flow.
     /// </summary>
-    [HubFact]
+    /// <remarks>
+    /// Uses [Fact] (project default 30s methodTimeout), NOT [HubFact]. [HubFact] hard-caps at
+    /// 5000ms in Release builds — appropriate for fast in-process routing tests, but this test
+    /// drives FOUR sequential remote layout-area round-trips (initial TaskListView load, the
+    /// DataChangeRequest update, then a fresh TaskCountView subscription + its update). Its own
+    /// waits are already .Within(10.Seconds())/.Within(1000.Seconds()), which the 5000ms cap
+    /// silently contradicted — the test reached the count-view check and was killed at the 5s
+    /// method cap mid-handshake. The work completes; it just needs more than 5s on a loaded CI runner.
+    /// </remarks>
+    [Fact(Timeout = 30000)]
     public async Task DataChangeRequest_ShouldUpdateLayoutAreaViews()
     {
         // Get client and workspace

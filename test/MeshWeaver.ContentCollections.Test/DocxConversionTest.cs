@@ -157,12 +157,17 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
     [Fact]
     public async Task ContentAutocomplete_Wraps_Spaces_In_Quotes()
     {
-        // Arrange — create a file with spaces in the name
-        File.WriteAllText(Path.Combine(_contentBasePath, "my document.docx"), "");
-        // Create a valid docx instead
+        // Arrange — GetClient() runs ConfigureClient, which creates the content
+        // directory (Directory.CreateDirectory(_contentBasePath)). It MUST precede the
+        // file write below: on a fresh CI checkout the bin/.../Files/DocxTest folder
+        // does not exist until ConfigureClient creates it (else DirectoryNotFoundException).
+        // The content provider walks the filesystem live per query, so a docx created
+        // after the client is obtained still surfaces in autocomplete.
+        var hub = GetClient();
+
+        // Create a file with spaces in the name.
         CreateTestDocx(Path.Combine(_contentBasePath, "my document.docx"), "Spaced Doc", "Content");
 
-        var hub = GetClient();
         var providers = hub.ServiceProvider.GetServices<IAutocompleteProvider>();
         var contentProvider = providers
             .OfType<ContentCollections.Completion.ContentAutocompleteProvider>()
