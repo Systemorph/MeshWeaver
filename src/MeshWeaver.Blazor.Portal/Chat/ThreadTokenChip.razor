@@ -1,0 +1,34 @@
+@* Wire into ThreadChatView's progress area (e.g. inside `.thread-exec-bar` or the
+   `.thread-chat-status-row`) with:  <ThreadTokenChip ThreadPath="@threadPath" />
+   — the context variable is the `threadPath` field on ThreadChatView. *@
+@namespace MeshWeaver.Blazor.Portal.Chat
+
+@if (HasData)
+{
+    <div class="thread-token-chip" style="font-size: 0.8rem;">
+        <FluentButton Appearance="Appearance.Stealth"
+                      OnClick="ToggleExpanded"
+                      Title="Token usage — click for the per-model breakdown">
+            @ChipLabel
+        </FluentButton>
+
+        @if (_expanded)
+        {
+            <FluentStack Orientation="Orientation.Vertical"
+                         VerticalGap="2"
+                         Style="padding: 4px 8px;">
+                @foreach (var row in _rows)
+                {
+                    <FluentStack Orientation="Orientation.Horizontal"
+                                 HorizontalGap="12"
+                                 VerticalAlignment="VerticalAlignment.Center">
+                        <span style="flex: 1 1 auto; min-width: 120px; overflow: hidden; text-overflow: ellipsis;"
+                              title="@row.Model">@row.Model</span>
+                        <span title="Input tokens">↑@FormatCompact(row.Input)</span>
+                        <span title="Output tokens">↓@FormatCompact(row.Output)</span>
+                    </FluentStack>
+                }
+            </FluentStack>
+        }
+    </div>
+}
