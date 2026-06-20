@@ -54,4 +54,12 @@ public class ClaudeCodeConfiguration
     /// portal's container default (single-user dev).
     /// </summary>
     public string? ConfigDirRoot { get; set; }
+
+    /// <summary>
+    /// The shared on-disk skills directory maintained by the agent→skill sync service. When set, the
+    /// harness links it into each user's <c>CLAUDE_CONFIG_DIR/skills</c> (symlink) and enables the
+    /// <c>user</c> setting source so the CLI discovers the MeshWeaver agents as skills. Null ⇒ no skill
+    /// linking (the sync is disabled / not configured).
+    /// </summary>
+    public string? SkillsDirectory { get; set; }
 }

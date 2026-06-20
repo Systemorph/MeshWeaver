@@ -1,4 +1,3 @@
-using System.Reactive.Linq;
 using MeshWeaver.AI.Connect;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
@@ -67,22 +66,11 @@ public sealed class ClaudeCodeHarness(IOptions<ClaudeCodeConfiguration> options)
         var mcp = hub.ServiceProvider.GetService<IMcpBackConnection>();
         var clientLogger = hub.ServiceProvider.GetService<ILogger<ClaudeCodeChatClient>>();
 
-        // Project the user's selectable MeshWeaver agents as Claude Code skills (only when we have a
-        // per-user config dir to write them into). Each conversational agent (utility/background
-        // generators excluded) with instructions becomes a {CLAUDE_CONFIG_DIR}/skills/<id>/SKILL.md
-        // the CLI invokes on demand via the Skill tool.
-        var agentSkills = !string.IsNullOrEmpty(userId) && !string.IsNullOrEmpty(configDir)
-            ? AgentPickerProjection.ObserveAgents(hub, userId, null)
-                .Select(agents => (IReadOnlyList<AgentSkill>)agents
-                    .Where(a => !AgentPickerProjection.IsUtilityAgent(a)
-                                && !string.IsNullOrWhiteSpace(a.AgentConfiguration.Instructions))
-                    .Select(a => new AgentSkill(
-                        a.AgentConfiguration.Id, a.Name, a.Description, a.AgentConfiguration.Instructions!))
-                    .ToList())
-            : null;
-
+        // Note: the MeshWeaver agents are materialised as Claude Code skills by the reactive
+        // AgentSkillSyncService (shared dir), which the client LINKS into this user's config dir +
+        // enables the "user" setting source. No per-spawn skill writing here.
         return new ClaudeCodeChatClient(
             configuration, modelName: null, clientLogger, configDir, token,
-            mcp, userId, accessCtx?.Name, accessCtx?.Email, agentSkills);
+            mcp, userId, accessCtx?.Name, accessCtx?.Email);
     }
 }
