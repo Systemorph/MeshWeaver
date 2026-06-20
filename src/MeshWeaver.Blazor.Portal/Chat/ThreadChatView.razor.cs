@@ -684,12 +684,18 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 if (parsed.Command != null)
                 {
                     // Under a CLI harness (Claude Code / Copilot) FORWARD slash commands 1:1 to the
-                    // harness — it owns its own /login, /model, /agent, … — with NO MeshWeaver
-                    // interception. The ONE exception is /harness (the runtime switch) so the user is
-                    // never stuck inside a CLI harness. Under the MeshWeaver harness, intercept every
-                    // slash-skill as before.
+                    // harness as the message — with two exceptions that MeshWeaver MUST own:
+                    //   • /harness — the runtime switch (so the user is never stuck in a CLI harness);
+                    //   • the harness's OWN Commands (/login, /logout) — these drive the inline Connect
+                    //     flow (`claude setup-token` + store token). They CANNOT be forwarded: the CLI
+                    //     can't interactively authenticate from a piped prompt, so forwarding /login
+                    //     just yields an endless "Not logged in" loop.
+                    // Under the MeshWeaver harness, intercept every slash-skill as before.
+                    var harness = ActiveHarness();
                     var isRuntimeSwitch = string.Equals(parsed.Command.Name, "harness", StringComparison.OrdinalIgnoreCase);
-                    if (ActiveHarness() is null || isRuntimeSwitch)
+                    var isHarnessOwnedCommand = harness?.Commands.Any(
+                        c => string.Equals(c.Name, parsed.Command.Name, StringComparison.OrdinalIgnoreCase)) == true;
+                    if (harness is null || isRuntimeSwitch || isHarnessOwnedCommand)
                     {
                         _ = HandleSlashCommandAsync(parsed.Command);
                         // Clear the input + bail — submissionHandler.TryBeginSubmit
@@ -700,8 +706,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                         StateHasChanged();
                         return;
                     }
-                    // else: CLI harness + non-/harness command → fall through, so the raw "/command"
-                    // text is submitted to the harness as the message (forwarded 1:1, no interception).
+                    // else: CLI harness + a command the harness does NOT own → fall through, so the raw
+                    // "/command" text is submitted to the harness as the message (forwarded 1:1).
                 }
             }
 
