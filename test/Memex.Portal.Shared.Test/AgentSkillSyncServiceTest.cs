@@ -52,9 +52,10 @@ public class AgentSkillSyncServiceTest
             Assert.True(File.Exists(Path.Combine(skillsRoot, "assistant", "SKILL.md")));
             Assert.Contains("body2", File.ReadAllText(Path.Combine(skillsRoot, "coder", "SKILL.md")));
 
-            // Base instructions written for both CLIs, referencing the meshweaver MCP server.
+            // Single base-instructions file (AGENTS.md — both CLIs read it; no CLAUDE.md duplicate),
+            // referencing the meshweaver MCP server.
             Assert.True(File.Exists(Path.Combine(dir, "AGENTS.md")));
-            Assert.True(File.Exists(Path.Combine(dir, "CLAUDE.md")));
+            Assert.False(File.Exists(Path.Combine(dir, "CLAUDE.md")));
             Assert.Contains("meshweaver", File.ReadAllText(Path.Combine(dir, "AGENTS.md")));
 
             // Second reconcile drops "coder" → its skill folder is pruned; "assistant" remains.
