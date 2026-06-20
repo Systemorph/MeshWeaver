@@ -140,4 +140,28 @@ public class FileSystemAssemblyStoreTest : IDisposable
         bSeesA.Should().NotBeNull();
         aSeesB.Should().NotBe(bSeesA, "v1 and v2 live at distinct paths");
     }
+
+    [Fact]
+    public async Task Assembly_key_includes_framework_identity_so_cross_image_dlls_never_collide()
+    {
+        // 🚨 Regression guard for the atioz 2026-06-20 deploy wedge. The assembly cache is keyed by
+        // (path, MeshNode version), but the COMPILED bytes are bound to the framework's reference
+        // assemblies — two DIFFERENT images compiling the same (path, version) produce INCOMPATIBLE
+        // DLLs. Before the fix the key omitted the framework identity, so a freshly-deployed image's
+        // lookup matched (and first-write-wins RETURNED) the PREVIOUS image's DLL → BadImageFormat-
+        // Exception on ALC load → failed grain activations → portal wedge. The filename now carries the
+        // framework MVID tag, so a new framework misses the old DLLs (clean recompile).
+        var fwTag = NodeTypeCompilationHelpers.FrameworkVersion[..8];
+        var putPath = (await store.Put("Some/Type", version: 9, new byte[] { 1, 2, 3 }, null).Should().Emit())!;
+
+        var name = Path.GetFileName(putPath);
+        name.Should().StartWith($"v9-{fwTag}-",
+            "the assembly filename must be keyed on the framework MVID, not just (path, version) — else a "
+            + "new image reuses the old image's incompatible DLL (BadImageFormatException)");
+        name.Should().EndWith(".dll");
+
+        // The lookup uses the same framework-tagged glob, so it still round-trips under this framework.
+        var getPath = await store.TryGetAssemblyPath("Some/Type", version: 9).Should().Emit();
+        getPath.Should().Be(putPath);
+    }
 }
