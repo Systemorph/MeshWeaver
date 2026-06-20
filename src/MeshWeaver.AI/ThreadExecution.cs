@@ -1818,18 +1818,27 @@ internal static class ThreadExecution
                     // Token usage is NOT stored on the thread — record it onto the per-model
                     // TokenUsage satellite ({threadPath}/_Usage/{model}); all cost tracking lives
                     // outside the Thread node now.
-                    // Record usage onto the per-model satellite FIRST, then flip the thread Idle — the
-                    // satellite must exist before the round shows terminal, so the GUI chip and the
-                    // token tests (which read {threadPath}/_Usage/{model} right after observing the
-                    // terminal status) see it. RecordUsage is fail-open (it never errors the chain), so
-                    // a usage write that fails still lets the terminal write proceed.
+                    // 🚨 The satellite write is an INDEPENDENT subscribed side effect — it must NOT
+                    // gate the terminal Status write or the round-completion gate. The satellite is a
+                    // SEPARATE node; the GUI chip and the token tests WAIT for it (a Where(...).Timeout
+                    // read), so it can land shortly AFTER the round shows terminal. Chaining it BEFORE
+                    // the Idle flip (via SelectMany) delayed the terminal write on token-reporting
+                    // rounds — up to RecordUsage's 15s cap — and gated roundCompletion on that write,
+                    // so a slow satellite create+accumulate under load could push the round past the
+                    // delegation tests' terminal-status timeouts. RecordUsage is fail-open (never
+                    // errors) and a guaranteed no-op on zero-token rounds, so this fire-and-subscribe
+                    // never touches the round on the no-usage path.
                     TokenUsageNodeType.RecordUsage(parentHub, threadPath,
                         AgentPickerProjection.PartitionOf(threadPath),
                         actualModel ?? request.ModelName, inputTokens, outputTokens, execLogger)
-                    .SelectMany(_ => UpdateThreadExecution(t => t.ResetExecution() with
+                    .Subscribe(
+                        _ => { },
+                        ex => execLogger?.LogWarning(ex,
+                            "RecordUsage(Completed) failed for {ThreadPath}", threadPath));
+                    UpdateThreadExecution(t => t.ResetExecution() with
                     {
                         Summary = summaryText
-                    })).Subscribe(
+                    }).Subscribe(
                         _ => { },
                         ex =>
                         {
@@ -1894,19 +1903,24 @@ internal static class ThreadExecution
                         // Clear the cancel request now that it's achieved; leave
                         // PendingUserMessages intact so the submission watcher
                         // re-dispatches a fresh round from Cancelled+pending.
-                        // A cancelled round still cost tokens — record them on the satellite BEFORE the
-                        // terminal Cancelled write (see Completed branch: the reader observes the
-                        // satellite right after the terminal status).
+                        // A cancelled round still cost tokens — record them on the satellite as an
+                        // INDEPENDENT subscribed side effect (see Completed branch: NOT chained before
+                        // the terminal write; the reader WAITS for the satellite, so it may land just
+                        // after the terminal Cancelled status). Fail-open + no-op on zero tokens.
                         TokenUsageNodeType.RecordUsage(parentHub, threadPath,
                             AgentPickerProjection.PartitionOf(threadPath),
                             request.ModelName, inputTokens, outputTokens, execLogger)
-                        .SelectMany(_ => UpdateThreadExecution(t => t with
+                        .Subscribe(
+                            _ => { },
+                            ex => execLogger?.LogWarning(ex,
+                                "RecordUsage(Cancelled) failed for {ThreadPath}", threadPath));
+                        UpdateThreadExecution(t => t with
                         {
                             Status = ThreadExecutionStatus.Cancelled, RequestedStatus = null,
                             ExecutionStatus = null, ActiveMessageId = null,
                             ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null,
                             Summary = cancelSummary
-                        })).Subscribe(
+                        }).Subscribe(
                             _ => { },
                             ex =>
                             {
@@ -1970,17 +1984,23 @@ internal static class ThreadExecution
                                 var errorSummary = string.IsNullOrEmpty(errorTextLocal)
                                     ? $"Error: {ex.Message}"
                                     : errorTextLocal;
-                                // Tokens burned before the fault — record on the satellite BEFORE the
-                                // terminal Idle write (see Completed branch).
+                                // Tokens burned before the fault — record on the satellite as an
+                                // INDEPENDENT subscribed side effect (see Completed branch: NOT chained
+                                // before the terminal Idle write; the reader WAITS for the satellite).
+                                // Fail-open + no-op on zero tokens.
                                 TokenUsageNodeType.RecordUsage(parentHub, threadPath,
                                     AgentPickerProjection.PartitionOf(threadPath),
                                     request.ModelName, inputTokens, outputTokens, execLogger)
-                                .SelectMany(_ => UpdateThreadExecution(t => t with
+                                .Subscribe(
+                                    _ => { },
+                                    recEx => execLogger?.LogWarning(recEx,
+                                        "RecordUsage(Error) failed for {ThreadPath}", threadPath));
+                                UpdateThreadExecution(t => t with
                                 {
                                     Status = ThreadExecutionStatus.Idle, ExecutionStatus = null, ActiveMessageId = null,
                                     ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null,
                                     Summary = errorSummary
-                                })).Subscribe(
+                                }).Subscribe(
                                     _ => { },
                                     updEx =>
                                     {

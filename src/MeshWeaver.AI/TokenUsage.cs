@@ -85,9 +85,11 @@ public static class TokenUsageNodeType
     /// Records ONE round's token usage onto the per-model satellite at
     /// <c>{threadPath}/_Usage/{modelKey}</c>, ACCUMULATING input/output across the thread's rounds
     /// (keyed by model). A no-token round is a no-op. Returns an <see cref="IObservable{T}"/> that
-    /// completes when the satellite is persisted (fail-open: it never errors), so a caller can
-    /// sequence it BEFORE the round's terminal status write — the satellite then exists when the GUI
-    /// chip / tests read it right after observing the terminal status.
+    /// completes when the satellite is persisted (fail-open: it never errors). The caller subscribes
+    /// it as an INDEPENDENT side effect — it MUST NOT be chained before the round's terminal status
+    /// write (that delayed the terminal write and gated round-completion on a slow satellite write).
+    /// The satellite is a SEPARATE node; the GUI chip and the token tests WAIT for it (a
+    /// <c>Where(...).Timeout</c> read), so it can land shortly AFTER the terminal status.
     ///
     /// <para>Two NON-poisoning phases (rounds run serially per thread, so this read-modify-write is
     /// race-free): (1) create-only EnsureExists via <see cref="IMeshService.CreateNode"/> (a mesh-targeted
@@ -162,8 +164,9 @@ public static class TokenUsageNodeType
                     return node with { Content = cur.Add(inTok, outTok) };
                 }))
             .Select(_ => System.Reactive.Unit.Default)
-            // This now sits on the round-completion path (the terminal status write is sequenced AFTER
-            // it), so a stuck usage write must never block the round: cap it and fail open.
+            // Subscribed as an INDEPENDENT side effect (NOT chained before the terminal status write),
+            // so it can never block the round. Still cap + fail open as basic hygiene: a wedged create
+            // or accumulate resolves to a no-op rather than leaking a live subscription.
             .Timeout(TimeSpan.FromSeconds(15), Observable.Return(System.Reactive.Unit.Default))
             .Catch((Exception ex) =>
             {
