@@ -508,11 +508,11 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
 
         // Act - check permissions at each path
         var permissions1 = await Mesh.GetEffectivePermissions(path1, userId).Should().Match(p => p == (Permission.Read | Permission.Execute | Permission.Api));
-        var permissions2 = await Mesh.GetEffectivePermissions(path2, userId).Should().Match(p => p == (Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export));
+        var permissions2 = await Mesh.GetEffectivePermissions(path2, userId).Should().Match(p => p == (Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export | Permission.Compile));
 
         // Assert
         permissions1.Should().Be(Permission.Read | Permission.Execute | Permission.Api); // Viewer only
-        permissions2.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export); // Editor
+        permissions2.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export | Permission.Compile); // Editor
     }
 
     [Fact]

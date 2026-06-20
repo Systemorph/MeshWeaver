@@ -55,7 +55,7 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
     public async Task AddUserRole_GlobalAssignment_GrantsPermissionsEverywhere()
     {
         await Mesh.GetEffectivePermissions("ACME/Project", "GlobalUser")
-            .Should().Match(p => p == Permission.All);
+            .Should().Match(p => p == (Permission.All | Permission.Compile));
     }
 
     [Fact(Timeout = 20000)]
@@ -79,7 +79,7 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
     public async Task AddUserRole_MixedLevels_CombinesPermissions()
     {
         await Mesh.GetEffectivePermissions("ACME/Project", "GlobalAdmin")
-            .Should().Match(p => p == Permission.All);
+            .Should().Match(p => p == (Permission.All | Permission.Compile));
 
         var orgPerms = await Mesh.GetEffectivePermissions("ACME/Project", "OrgEditor")
             .Should().Match(p => p.HasFlag(Permission.Read) && p.HasFlag(Permission.Update));

@@ -59,7 +59,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     public async Task GetEffectivePermissions_WithAdminRole_ReturnsAllPermissions()
     {
         await Mesh.GetEffectivePermissions("org/acme/project", "user123")
-            .Should().Match(p => p == Permission.All);
+            .Should().Match(p => p == (Permission.All | Permission.Compile));
     }
 
     [Fact(Timeout = 20000)]
@@ -72,7 +72,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     [Fact(Timeout = 20000)]
     public async Task GetEffectivePermissions_WithEditorRole_ReturnsReadCreateUpdate()
     {
-        var editorPerms = Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export;
+        var editorPerms = Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export | Permission.Compile;
         await Mesh.GetEffectivePermissions("org/acme/project/docs", "editor123")
             .Should().Match(p => p == editorPerms);
     }
@@ -88,14 +88,14 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     public async Task GetEffectivePermissions_WithInheritance_InheritsFromParent()
     {
         await Mesh.GetEffectivePermissions("org/parent/child/grandchild", "inherituser")
-            .Should().Match(p => p == Permission.All);
+            .Should().Match(p => p == (Permission.All | Permission.Compile));
     }
 
     [Fact(Timeout = 20000)]
     public async Task GetEffectivePermissions_WithGlobalRole_AppliesEverywhere()
     {
         await Mesh.GetEffectivePermissions("some/random/path", "globaladmin")
-            .Should().Match(p => p == Permission.All);
+            .Should().Match(p => p == (Permission.All | Permission.Compile));
     }
 
     [Fact(Timeout = 20000)]
@@ -103,7 +103,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     {
         // multiuser has Editor at "org/project1/subproject"; multiuser_v has Viewer at "org/project1".
         // Reading multiuser at the deeper path returns Editor permissions only.
-        var editorPerms = Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export;
+        var editorPerms = Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export | Permission.Compile;
         await Mesh.GetEffectivePermissions("org/project1/subproject", "multiuser")
             .Should().Match(p => p == editorPerms);
     }
@@ -148,7 +148,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
             // Verify the assignment took effect first (so the test fails on a hung
             // CREATE, not a hung DELETE).
             await Mesh.GetEffectivePermissions("org/removeproject", "removetest")
-                .Should().Match(p => p == Permission.All);
+                .Should().Match(p => p == (Permission.All | Permission.Compile));
 
             // org/removeproject must always keep at least one administrator
             // (SpaceAdminInvariantValidator); seed a co-admin so removing 'removetest' is
@@ -218,7 +218,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
             // on the first emission carrying the new role so the test is robust
             // against the synced-query emitting one stale snapshot first.
             await Mesh.GetEffectivePermissions(scope, userId)
-                .Should().Match(p => p == Permission.All,
+                .Should().Match(p => p == (Permission.All | Permission.Compile),
                     "Admin role on the scope grants every permission once the synced query observes the new node");
         }
         finally
@@ -262,7 +262,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         // resolve Permission.All; if SecurityService didn't read claim-based
         // roles, we'd see Permission.None.
         await sec.GetEffectivePermissions("any/scope", userId)
-            .Should().Be(Permission.All,
+            .Should().Be(Permission.All | Permission.Compile,
                 "claim-based Admin restored from delivery.AccessContext must grant " +
                 "all permissions on the receiver's permission check");
     }
@@ -294,7 +294,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         });
 
         await sec.GetEffectivePermissions("any/scope", userId)
-            .Should().Be(Permission.All,
+            .Should().Be(Permission.All | Permission.Compile,
                 "claim-based Admin must grant all permissions regardless of the " +
                 "synced-query state");
     }
@@ -380,7 +380,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         // Built-in roles are static — assert directly. The (gone) SecurityService.GetRole
         // surface is no longer reachable from tests; the per-hub scoped service handles
         // role merging at permission-evaluation time.
-        Role.Admin.Permissions.Should().Be(Permission.All);
+        Role.Admin.Permissions.Should().Be(Permission.All | Permission.Compile);
     }
 
     [Fact(Timeout = 20000)]
@@ -633,10 +633,10 @@ public class SampleDataSecurityTests(ITestOutputHelper output) : MonolithMeshTes
         const string userId = "Roland";
         const string nodePath = "MeshWeaver/Documentation/Architecture";
 
-        var permissions = await Mesh.GetEffectivePermissions(nodePath, userId).Should().Match(p => p == Permission.All);
+        var permissions = await Mesh.GetEffectivePermissions(nodePath, userId).Should().Match(p => p == (Permission.All | Permission.Compile));
         var canEdit = await Mesh.CheckPermission(nodePath, userId, Permission.Update).Should().Emit();
 
-        permissions.Should().Be(Permission.All, "Roland has global Admin role");
+        permissions.Should().Be(Permission.All | Permission.Compile, "Roland has global Admin role");
         canEdit.Should().BeTrue("Roland should be able to edit the Architecture node");
     }
 
@@ -736,15 +736,15 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
         var childPermissions = await Mesh.GetEffectivePermissions("platform/docs/readme", userId).Should().Match(p => p == capped);
         childPermissions.Should().Be(capped);
 
-        var otherPermissions = await Mesh.GetEffectivePermissions("platform/code", userId).Should().Match(p => p == Permission.All);
-        otherPermissions.Should().Be(Permission.All);
+        var otherPermissions = await Mesh.GetEffectivePermissions("platform/code", userId).Should().Match(p => p == (Permission.All | Permission.Compile));
+        otherPermissions.Should().Be(Permission.All | Permission.Compile);
     }
 
     [Fact(Timeout = 20000)]
     public async Task PolicyDoesNotAffectSiblingNamespace()
     {
         await Mesh.GetEffectivePermissions("ACME/Project", "user2")
-            .Should().Match(p => p == Permission.All, "ACME should not be affected by Doc_test_pol policy");
+            .Should().Match(p => p == (Permission.All | Permission.Compile), "ACME should not be affected by Doc_test_pol policy");
     }
 
     [Fact(Timeout = 20000)]
@@ -771,7 +771,7 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
     public async Task BreaksInheritance_KeepsLocalRoles()
     {
         // user5 has Admin globally + Editor at scoped (which breaks inheritance)
-        var editorPerms = Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export;
+        var editorPerms = Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export | Permission.Compile;
         await Mesh.GetEffectivePermissions("scoped/item", "user5")
             .Should().Match(p => p == editorPerms,
                 "local Editor role should survive, inherited Admin should be discarded");
@@ -846,7 +846,7 @@ public class StaticNamespacePolicyTests(ITestOutputHelper output) : MonolithMesh
     public async Task StaticPolicy_DoesNotAffectOtherNamespaces()
     {
         await Mesh.GetEffectivePermissions("ACME/Project/Task1", "admin_other")
-            .Should().Match(p => p == Permission.All, "ACME is not a static namespace, Admin should have full access");
+            .Should().Match(p => p == (Permission.All | Permission.Compile), "ACME is not a static namespace, Admin should have full access");
     }
 
     [Fact(Timeout = 20000)]

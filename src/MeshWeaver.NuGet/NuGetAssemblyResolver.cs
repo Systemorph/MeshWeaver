@@ -26,7 +26,20 @@ public sealed class NuGetAssemblyResolver(
 
     private readonly ConcurrentDictionary<string, Task<ResolvedPackageSet>> _cache = new();
     private readonly SourceCacheContext _sourceCache = new();
-    private readonly ISettings _settings = Settings.LoadDefaultSettings(root: null);
+    // Anchor settings discovery to the ASSEMBLY directory, NOT the ambient CWD. With
+    // root: null, NuGet loads ONLY the user/machine-wide configs and does NOT walk a
+    // directory tree — so the repo/app nuget.config (which declares the `mesh-local`
+    // feed + the packageSourceMapping that pins MeshWeaver.*/Memex.* to it) is never
+    // seen. A version-LESS `#r "nuget:MeshWeaver.BusinessRules.Generator"` then resolves
+    // off nuget.org, where the stale 3.0.0-preview1 ships analyzers/ only (no lib/<tfm>) —
+    // the generator never loads and scope nodes compile but generate nothing (PensionFund
+    // renders empty; NuGetAssemblyResolverTest fails the lib/ assertion). Passing the
+    // assembly dir as root makes NuGet walk UP the tree to find it: in tests bin/.../net10.0
+    // → repo root nuget.config; in the published container the app dir, where the csproj
+    // ships nuget.config NEXT TO the baked dist/packages feed. CWD is whatever launched the
+    // process and can't be relied on; the assembly location can.
+    private readonly ISettings _settings =
+        Settings.LoadDefaultSettings(root: AppContext.BaseDirectory);
     private readonly NuGetLogger _nugetLogger = new(logger);
     private readonly INuGetPackageCache _packageCache = packageCache ?? NullNuGetPackageCache.Instance;
 

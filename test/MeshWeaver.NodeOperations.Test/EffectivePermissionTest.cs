@@ -49,8 +49,9 @@ public class EffectivePermissionTest(ITestOutputHelper output) : MonolithMeshTes
 
         permissions.Should().NotBe(Permission.None,
             "Creator should have permissions from persisted AccessAssignment on the Space");
-        permissions.Should().Be(Permission.All,
-            "Admin role grants all permissions");
+        permissions.Should().Be(Permission.All | Permission.Compile,
+            "Admin role grants all permissions plus the explicit Compile grant "
+            + "(Compile is excluded from Permission.All and added explicitly to the built-in roles)");
     }
 
     /// <summary>
