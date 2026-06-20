@@ -72,12 +72,20 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
 
     /// <summary>
     /// Reactive provider creation. Creates the <c>ModelProvider</c> node at
-    /// <c>{ownerPath}/_Memex/{provider}</c> with the supplied key + endpoint,
-    /// then creates one <c>LanguageModel</c> child per default model id
-    /// (each pointing back at the provider node via
+    /// <c>{ownerPath}/_Memex/{instanceId ?? provider}</c> with the supplied key +
+    /// endpoint, then creates one <c>LanguageModel</c> child per model id (each
+    /// pointing back at the provider node via
     /// <see cref="ModelDefinition.ProviderRef"/>). Defaults come from the
     /// live <see cref="LanguageModelCatalogOptions.Sources"/> registered by
     /// each provider's <c>AddXxxCatalog</c> extension — no central registry.
+    ///
+    /// <para><paramref name="instanceId"/> is the node id (and path segment); it
+    /// defaults to <paramref name="provider"/>. For a generic OpenAI-compatible
+    /// provider the user can stand up several instances (OpenRouter, Groq, …) that
+    /// all carry <c>Content.Provider = "OpenAICompatible"</c> (the wire-protocol
+    /// stamp that routes them to the OpenAI factory) but live at distinct paths so
+    /// they never collide. For named providers (OpenAI, Anthropic) leave it null —
+    /// one instance per type, keyed by the provider name.</para>
     /// </summary>
     public IObservable<ProviderCreationResult> CreateProvider(
         string ownerPath,
@@ -85,12 +93,18 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
         string? apiKey,
         string? label = null,
         string? endpointOverride = null,
-        IReadOnlyList<string>? modelIdsOverride = null)
+        IReadOnlyList<string>? modelIdsOverride = null,
+        string? instanceId = null)
     {
         if (string.IsNullOrEmpty(ownerPath))
             return Observable.Throw<ProviderCreationResult>(new ArgumentException("ownerPath required", nameof(ownerPath)));
         if (string.IsNullOrEmpty(provider))
             return Observable.Throw<ProviderCreationResult>(new ArgumentException("provider required", nameof(provider)));
+
+        // The node id/path segment. Distinct instances of the same wire-protocol
+        // provider (e.g. two OpenAICompatible gateways) get distinct ids while
+        // Content.Provider stays the protocol stamp.
+        var providerId = string.IsNullOrWhiteSpace(instanceId) ? provider : instanceId!.Trim();
 
         var source = FindCatalogSource(provider);
         var endpoint = endpointOverride ?? source?.DefaultEndpoint;
@@ -100,23 +114,23 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
             ?? Array.Empty<string>();
 
         // User-owned providers/models live in the owner's dotfile namespace
-        // ({owner}/_Memex/{provider}/{model}), NOT a shared _Provider satellite.
+        // ({owner}/_Memex/{providerId}/{model}), NOT a shared _Provider satellite.
         // See ModelProviderNodeType.UserNamespace.
         var providerNamespace = ModelProviderNodeType.UserNamespacePath(ownerPath);
-        var providerPath = $"{providerNamespace}/{provider}";
+        var providerPath = $"{providerNamespace}/{providerId}";
 
         var providerConfig = new ModelProviderConfiguration
         {
             Provider = provider,
             ApiKey = Protect(apiKey),
             Endpoint = endpoint,
-            Label = label ?? source?.EffectiveLabel ?? provider,
+            Label = label ?? (string.IsNullOrWhiteSpace(instanceId) ? null : instanceId) ?? source?.EffectiveLabel ?? provider,
             CreatedAt = DateTimeOffset.UtcNow,
             Models = modelIds.Where(m => !string.IsNullOrWhiteSpace(m))
                 .ToImmutableArrayCompat(),
         };
 
-        var providerNode = new MeshNode(provider, providerNamespace)
+        var providerNode = new MeshNode(providerId, providerNamespace)
         {
             NodeType = ModelProviderNodeType.NodeType,
             Name = providerConfig.Label,
@@ -125,8 +139,8 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
             Content = providerConfig,
         };
 
-        logger.LogInformation("Creating ModelProvider {Provider} for owner {Owner} with {ModelCount} models, keyFp={KeyFp}",
-            provider, ownerPath, modelIds.Count, Fingerprint(apiKey));
+        logger.LogInformation("Creating ModelProvider {ProviderId} (provider={Provider}) for owner {Owner} with {ModelCount} models, keyFp={KeyFp}",
+            providerId, provider, ownerPath, modelIds.Count, Fingerprint(apiKey));
 
         // 1. Create the ModelProvider node.
         // 2. After commit, fan out N CreateNode calls for the LanguageModel children.

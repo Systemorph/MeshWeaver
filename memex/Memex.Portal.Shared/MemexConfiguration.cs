@@ -7,7 +7,7 @@ using Memex.Portal.Shared.Social;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using MeshWeaver.AI;
 using MeshWeaver.AI.AzureFoundry;
-using MeshWeaver.AI.AzureOpenAI;
+using MeshWeaver.AI.OpenAI;
 using MeshWeaver.AI.ClaudeCode;
 using MeshWeaver.AI.Copilot;
 using MeshWeaver.Blazor.AI;
@@ -216,6 +216,9 @@ public static class MemexConfiguration
         // ModelProviderService backs the Models settings tab — users store
         // their own AI provider credentials as MeshNodes in their namespace.
         services.AddSingleton<Memex.Portal.Shared.Models.ModelProviderService>();
+        // ProviderModelLister fetches a provider's live model list (HTTP /models via
+        // the I/O pool) so the add-provider flow lets users pick which models to bring.
+        services.AddSingleton<Memex.Portal.Shared.Models.ProviderModelLister>();
 
         // GitHub sync — per-user OAuth credential (device flow) + bidirectional
         // Space ↔ GitHub sync (export = "sync back"; import = create / re-import a
@@ -490,6 +493,7 @@ public static class MemexConfiguration
             if (features.Ai.Providers.AzureFoundry) mb = mb.AddAzureFoundry();
             if (features.Ai.Providers.AzureOpenAI) mb = mb.AddAzureOpenAI();
             if (features.Ai.Providers.OpenAI) mb = mb.AddOpenAI();
+            if (features.Ai.Providers.OpenAICompatible) mb = mb.AddOpenAICompatible();
             if (features.Ai.Clis.ClaudeCode) mb = mb.AddClaudeCode();   // catalog source (factory + config via services.AddClaudeCode)
             if (features.Ai.Clis.Copilot) mb = mb.AddCopilot();         // catalog source (factory + config via services.AddCopilot)
 
