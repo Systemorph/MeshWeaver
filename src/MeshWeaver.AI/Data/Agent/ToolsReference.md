@@ -600,6 +600,15 @@ Search('namespace:Doc scope:descendants')
 ```
 Then read any article with `Get('@Doc/...')`.
 
+## Skills — capabilities you load as you go
+
+Reusable **skills** are `nodeType:Skill` nodes in the mesh — step-by-step instructions for a specific operation (importing data, running a checklist, a domain workflow). They are NOT loaded up-front; you pull one in on demand:
+
+1. **Find** the relevant skill with `Search('nodeType:Skill <what you need>')` — e.g. `Search('nodeType:Skill import claims')`. Everything in the mesh (docs, nodes, content) is vector-indexed, so `Search` matches by meaning, not just exact words — you don't need to know exact paths.
+2. **Load** it with `load_skill('<skillPath>')` — this returns the skill's instructions (its how-to), which you then follow.
+
+Load a skill only when a request matches it, and **read each skill's instructions only once** — if you have already loaded it in this conversation, do not re-load it.
+
 ## Binary Attachments (PDF, Images)
 
 Chat threads support binary file attachments from content collections. When a `content/` path references a binary file, it is sent to the AI model as native binary content (base64).

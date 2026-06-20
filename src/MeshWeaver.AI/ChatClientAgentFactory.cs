@@ -184,6 +184,9 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         }
 
         tools = tools.Append(PlanStorageTool.Create(Hub, chat));
+        // load_skill: inject a nodeType:Skill node's instructions on demand (found via search nodeType:Skill);
+        // a LaunchesSubThread skill runs in its own sub-thread via the generic StartThread launcher.
+        tools = tools.Append(SkillTool.Create(Hub, chat));
 
         // Wrap all tools to restore user access context before invocation.
         // AsyncLocal doesn't flow through the AI framework's streaming + tool invocation,

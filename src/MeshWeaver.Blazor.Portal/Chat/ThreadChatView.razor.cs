@@ -887,9 +887,13 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 }
                 break;
             case MeshWeaver.AI.SkillActionKind.OpenContent:
+                // Load the manual/document into the content window (side panel) and make it visible.
                 var path = string.IsNullOrEmpty(action.ContentPath) ? skill.Path : action.ContentPath;
                 if (!string.IsNullOrEmpty(path))
-                    SidePanelState.SetContentPath(path);
+                {
+                    SidePanelState.SetTitle(skill.Name ?? skill.Id);
+                    SidePanelState.OpenWithContent(path);
+                }
                 ShowSkillStatus(skill.Name ?? skill.Id, false);
                 break;
             default:

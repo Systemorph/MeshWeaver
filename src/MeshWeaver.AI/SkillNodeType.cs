@@ -69,19 +69,14 @@ public static class SkillNodeType
     };
 
     /// <summary>
-    /// The queries that discover the skills available in a context, in priority order: the global
-    /// built-in catalog, the current context node + ancestors, and the user's home + ancestors.
-    /// Mirrors the retired <c>CommandNodeType.CommandQueries</c>.
+    /// The query that discovers the skills available in a context — the SAME unified registry pattern as
+    /// agents and models: platform <c>Skill</c> + the current space's <c>{space}/Skill</c> + the user's
+    /// <c>{user}/Skill</c>, as one <c>namespace:A|B|C</c> exact-membership query
+    /// (<see cref="AgentPickerProjection.BuildSkillQueries"/>). <paramref name="contextPath"/> names the
+    /// space (its partition); <paramref name="userPath"/> the user's home.
     /// </summary>
     public static string[] SkillQueries(string? contextPath, string? userPath)
-    {
-        var queries = new List<string> { $"namespace:{RootNamespace} nodeType:{NodeType}" };
-        if (!string.IsNullOrEmpty(contextPath))
-            queries.Add($"path:{contextPath} nodeType:{NodeType} scope:selfAndAncestors");
-        if (!string.IsNullOrEmpty(userPath))
-            queries.Add($"path:{userPath} nodeType:{NodeType} scope:selfAndAncestors");
-        return queries.ToArray();
-    }
+        => AgentPickerProjection.BuildSkillQueries(userPath, AgentPickerProjection.PartitionOf(contextPath));
 
     /// <summary>
     /// Projects a mesh-node snapshot into the available skills, deduped by id (the slash word). Reads

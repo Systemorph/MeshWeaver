@@ -1,42 +1,128 @@
+using Markdig;
+using Markdig.Extensions.Yaml;
+using Markdig.Syntax;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using YamlDotNet.Serialization;
+using YamlDotNet.Serialization.NamingConventions;
 
 namespace MeshWeaver.AI;
 
 /// <summary>
-/// Ships the built-in chat skills as read-only <c>nodeType:Skill</c> nodes under the
-/// <see cref="SkillNodeType.RootNamespace"/> partition: <c>/agent</c>, <c>/model</c>, <c>/harness</c> —
-/// each a <see cref="SkillActionKind.Pick"/> behaviour (the old <c>CommandDefinition</c>). Users,
-/// Spaces and NodeTypes add their own Skill nodes in their own partitions; all are discovered together
-/// via <see cref="SkillNodeType.SkillQueries"/>. Replaces the retired <c>BuiltInCommandProvider</c>.
+/// Provides the built-in skill nodes from embedded <c>Data/Skill/*.md</c> resources — the SAME
+/// .md-with-YAML authoring model as agents (<see cref="BuiltInAgentProvider"/>). Each skill is a
+/// <c>nodeType: Skill</c> markdown file: <b>behaviour</b> skills carry an <c>action:</c> block in the
+/// frontmatter (<c>Pick</c> / <c>OpenContent</c> / <c>Connect</c>), <b>instruction</b> skills carry
+/// their how-to in the markdown body. The slash word is the file name (<c>agent.md</c> → <c>/agent</c>).
+/// Discovered together with per-space / per-user skills via <see cref="SkillNodeType.SkillQueries"/>.
 /// </summary>
 public class BuiltInSkillProvider : IStaticNodeProvider
 {
+    private static readonly Lazy<MeshNode[]> LazyNodes = new(LoadEmbeddedNodes);
+
+    private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder()
+        .UseYamlFrontMatter()
+        .Build();
+
+    private static readonly IDeserializer Yaml = new DeserializerBuilder()
+        .WithNamingConvention(CamelCaseNamingConvention.Instance)
+        .IgnoreUnmatchedProperties()
+        .Build();
+
     /// <inheritdoc />
-    public IEnumerable<MeshNode> GetStaticNodes()
+    public IEnumerable<MeshNode> GetStaticNodes() => LazyNodes.Value;
+
+    private static MeshNode[] LoadEmbeddedNodes()
     {
-        // `sort:order` puts the catalog head first so the picker's default-to-first selects it —
-        // ordering lives in the QUERY (data), never replicated in the GUI picker.
-        yield return Pick("agent", "Switch the agent for subsequent messages",
-            "namespace:Agent nodeType:Agent -content.modelTier:utility sort:order", "agentName", "Choose an agent");
-        yield return Pick("model", "Switch the AI model for subsequent messages",
-            "namespace:_Provider nodeType:LanguageModel scope:descendants sort:order", "modelName", "Choose a model");
-        yield return Pick("harness", "Switch the harness (runtime) for subsequent messages",
-            "namespace:Harness nodeType:Harness sort:order", "harness", "Choose a harness");
+        var assembly = typeof(BuiltInSkillProvider).Assembly;
+        // Resource names dot-separate path segments: Data/Skill/agent.md → {asm}.Data.Skill.agent.md
+        var skillPrefix = $"{assembly.GetName().Name}.Data.{SkillNodeType.RootNamespace}.";
+
+        var nodes = new List<MeshNode>();
+        foreach (var resourceName in assembly.GetManifestResourceNames()
+                     .Where(n => n.StartsWith(skillPrefix, StringComparison.Ordinal)
+                                 && n.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+                     .Order())
+        {
+            using var stream = assembly.GetManifestResourceStream(resourceName);
+            if (stream == null) continue;
+            using var reader = new StreamReader(stream);
+            var node = ParseSkillNode(reader.ReadToEnd(), ResourceNameToId(resourceName, skillPrefix));
+            if (node != null) nodes.Add(node);
+        }
+        return nodes.ToArray();
     }
 
-    private static MeshNode Pick(string id, string description, string query, string field, string title) =>
-        new(id, SkillNodeType.RootNamespace)
+    private static MeshNode? ParseSkillNode(string content, string id)
+    {
+        if (string.IsNullOrEmpty(id)) return null;
+
+        var document = Markdig.Markdown.Parse(content, Pipeline);
+        var yamlBlock = document.Descendants<YamlFrontMatterBlock>().FirstOrDefault();
+        if (yamlBlock == null) return null;
+
+        var fm = Yaml.Deserialize<SkillFrontMatter>(yamlBlock.Lines.ToString());
+        if (fm == null) return null;
+
+        var body = content[(yamlBlock.Span.End + 1)..].TrimStart('\r', '\n').Trim();
+
+        var definition = new SkillDefinition
+        {
+            Instructions = string.IsNullOrWhiteSpace(body) ? null : body,
+            AutoMount = fm.AutoMount,
+            LaunchesSubThread = fm.LaunchesSubThread,
+            Action = fm.Action is null ? null : new SkillAction
+            {
+                Kind = Enum.TryParse<SkillActionKind>(fm.Action.Kind, ignoreCase: true, out var kind)
+                    ? kind : SkillActionKind.Pick,
+                Query = fm.Action.Query,
+                Field = fm.Action.Field,
+                Title = fm.Action.Title,
+                ContentPath = fm.Action.ContentPath,
+                Provider = fm.Action.Provider,
+            },
+        };
+
+        return new MeshNode(id, SkillNodeType.RootNamespace)
         {
             NodeType = SkillNodeType.NodeType,
-            Name = $"/{id}",
-            Description = description,
-            Category = "Skills",
-            Icon = "Sparkle",
+            Name = fm.Name ?? $"/{id}",
+            Description = fm.Description,
+            Category = fm.Category ?? "Skills",
+            Icon = fm.Icon ?? "Sparkle",
+            Order = fm.Order,
             State = MeshNodeState.Active,
-            Content = new SkillDefinition
-            {
-                Action = new SkillAction { Kind = SkillActionKind.Pick, Query = query, Field = field, Title = title }
-            }
+            Content = definition,
         };
+    }
+
+    private static string ResourceNameToId(string resourceName, string skillPrefix)
+    {
+        var rest = resourceName[skillPrefix.Length..]; // e.g. "agent.md"
+        var lastDot = rest.LastIndexOf('.');           // strip the ".md" extension
+        return lastDot > 0 ? rest[..lastDot] : rest;
+    }
+
+    private sealed class SkillFrontMatter
+    {
+        public string? NodeType { get; set; }
+        public string? Name { get; set; }
+        public string? Description { get; set; }
+        public string? Icon { get; set; }
+        public string? Category { get; set; }
+        public int Order { get; set; }
+        public bool AutoMount { get; set; } = true;
+        public bool LaunchesSubThread { get; set; }
+        public SkillActionFrontMatter? Action { get; set; }
+    }
+
+    private sealed class SkillActionFrontMatter
+    {
+        public string? Kind { get; set; }
+        public string? Query { get; set; }
+        public string? Field { get; set; }
+        public string? Title { get; set; }
+        public string? ContentPath { get; set; }
+        public string? Provider { get; set; }
+    }
 }

@@ -5,6 +5,7 @@ using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.AI;
 using MeshWeaver.AI.Plugins;
+using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Services.LanguageServer;
 using MeshWeaver.Messaging;
@@ -151,6 +152,51 @@ Full reference: read the 'tools-reference' MCP resource.")]
         [Description("Base path to search from (e.g., @graph). Empty for all.")] string? basePath = null,
         [Description("Maximum number of results to return. Default 50, max 200.")] int limit = 50)
         => ops.Search(query, basePath, limit).FirstAsync().ToTask();
+
+    [McpServerTool(Title = "Autocomplete an @-reference", ReadOnly = true, Idempotent = true, OpenWorld = false)]
+    [Description(@"Autocomplete a partial @-reference using the REAL in-portal autocomplete engine — DISTINCT from `search`. Where `search` runs one GitHub-style query, autocomplete blends multiple ranked sources (current-node providers, partition list + drill-down, and a global fan-out), deduped and priority-sorted — the same suggestions the chat input shows as you type `@`. Use it to resolve a name/path fragment the user typed into a concrete `insertText`/path before Get / NavigateTo. Returns {count, results:[{label, insertText, kind, category, description}]}.
+
+The leading `@` is required (this is @-reference autocomplete, not free-text search):
+  - '@'            -> top suggestions for the current context
+  - '@/'           -> the partition list
+  - '@/ACME/art'   -> drill-down under a partition
+  - '@MyFile'      -> current-node + global matches for 'MyFile'")]
+    public Task<string> Autocomplete(
+        [Description("The partial @-reference to complete (leading @ required), e.g. '@', '@/', '@MyFile', '@/ACME/art'.")] string query,
+        [Description("The current context namespace used to rank nearby results (e.g. 'ACME/Project'). Empty for global only.")] string? context = null)
+    {
+        var orchestrator = rootHub.ServiceProvider.GetService<IChatCompletionOrchestrator>();
+        if (orchestrator is null)
+            return Task.FromResult("{\"count\":0,\"results\":[],\"note\":\"autocomplete engine unavailable\"}");
+
+        var q = string.IsNullOrWhiteSpace(query) ? "@" : (query.StartsWith('@') ? query : "@" + query);
+
+        // The orchestrator emits ranked batches progressively and completes when all producers finish.
+        // Bound it with a timer (autocomplete is interactive — take whatever arrived), sort, project to JSON.
+        return orchestrator.GetCompletions(q, context)
+            .TakeUntil(Observable.Timer(TimeSpan.FromSeconds(8)))
+            .ToList()
+            .Select(batches =>
+            {
+                var results = batches
+                    .OrderByDescending(b => b.CategoryPriority)
+                    .SelectMany(b => b.Items.Select(i => new
+                    {
+                        label = i.Label,
+                        insertText = i.InsertText,
+                        kind = i.Kind.ToString(),
+                        category = b.Category,
+                        description = i.Description,
+                    }))
+                    .Take(50)
+                    .ToList();
+                return JsonSerializer.Serialize(new { count = results.Count, results });
+            })
+            .Catch<string, Exception>(ex => Observable.Return(
+                JsonSerializer.Serialize(new { count = 0, results = Array.Empty<object>(), error = ex.Message })))
+            .FirstAsync()
+            .ToTask();
+    }
 
     [McpServerTool(Title = "Search content chunks", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description(@"Semantic search over INDEXED content chunks — the chunk-level companion to `Search`. Where node `Search` resolves a content hit up to its Document node and drops the chunk position, this returns the matching chunks WITH their (collectionPath, filePath, chunkIndex) so you can read the exact window or step through neighbours with `get_chunk`. Use it to FIND relevant passages and gather context; for whole-document reads (e.g. table extraction) use `Get` on the Document.

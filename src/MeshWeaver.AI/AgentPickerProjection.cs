@@ -79,6 +79,24 @@ public static class AgentPickerProjection
         => BuildRegistryQuery(AgentNodeType.NodeType, AgentSubNamespace, userPath, spacePath,
             excludeUtility ? $" -content.modelTier:{UtilityModelTier}" : "");
 
+    /// <summary>The dedicated sub-namespace each partition uses for its OWN skills — <c>{partition}/Skill</c>;
+    /// platform skill defaults live in the bare <c>Skill</c> namespace. Same registry shape as agents/models.</summary>
+    public const string SkillSubNamespace = "Skill";
+
+    /// <summary>Array form of <see cref="BuildSkillQuery"/> for the <c>hub.GetQuery</c> surface.</summary>
+    public static string[] BuildSkillQueries(string? userPath = null, string? spacePath = null)
+        => new[] { BuildSkillQuery(userPath, spacePath) };
+
+    /// <summary>
+    /// THE single canonical skill-registry query — IDENTICAL pattern to agents + models. Skills live in a
+    /// dedicated <c>/Skill</c> sub-namespace PER PARTITION (platform <c>Skill</c> + <c>{space}/Skill</c> +
+    /// <c>{user}/Skill</c>), listed directly as a <c>namespace:A|B|C</c> exact-membership alternation — one
+    /// registry pattern for every public top-level domain (Agent, Model, Skill, …). Produces e.g.
+    /// <c>namespace:rbuergi/Skill|AgenticPension/Skill|Skill nodeType:Skill</c>.
+    /// </summary>
+    public static string BuildSkillQuery(string? userPath = null, string? spacePath = null)
+        => BuildRegistryQuery(SkillNodeType.NodeType, SkillSubNamespace, userPath, spacePath, "");
+
     /// <summary>
     /// Assembles a per-partition registry query: the platform default namespace (<paramref name="sub"/>)
     /// plus the user's and space's own (<c>{partition}/{sub}</c>), listed directly as a

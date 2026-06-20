@@ -3,7 +3,6 @@
     <Nullable>enable</Nullable>
 </PropertyGroup>
     <ItemGroup>
-        <EmbeddedResource Include="Commands\Help\*.md" />
         <EmbeddedResource Include="Data\**\*.md" />
     </ItemGroup>
     <ItemGroup>

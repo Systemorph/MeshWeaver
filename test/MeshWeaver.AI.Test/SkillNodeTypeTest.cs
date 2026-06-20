@@ -86,15 +86,15 @@ public class SkillNodeTypeTest
     }
 
     [Fact]
-    public void SkillQueries_IncludeGlobalCatalog_AndInheritedScopes()
+    public void SkillQueries_AreTheUnifiedRegistryPattern_PlatformPlusSpacePlusUser()
     {
-        var queries = SkillNodeType.SkillQueries(contextPath: "Acme/Project", userPath: "rbuergi");
+        // Same shape as agents + models: ONE namespace:A|B|C exact-membership query (platform Skill +
+        // the space's {space}/Skill + the user's {user}/Skill).
+        SkillNodeType.SkillQueries(contextPath: "Acme/Project", userPath: "rbuergi")
+            .Should().ContainSingle()
+            .Which.Should().Be("namespace:rbuergi/Skill|Acme/Skill|Skill nodeType:Skill");
 
-        queries.Should().Contain("namespace:Skill nodeType:Skill");
-        queries.Should().Contain("path:Acme/Project nodeType:Skill scope:selfAndAncestors");
-        queries.Should().Contain("path:rbuergi nodeType:Skill scope:selfAndAncestors");
-
-        // No context / user → only the global catalog.
+        // No context / user → platform defaults only.
         SkillNodeType.SkillQueries(null, null).Should().ContainSingle()
             .Which.Should().Be("namespace:Skill nodeType:Skill");
     }

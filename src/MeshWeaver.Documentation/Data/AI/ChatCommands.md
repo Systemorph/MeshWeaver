@@ -80,29 +80,35 @@ an agent".
 default-to-first land on the catalog head (e.g. Assistant's `order: -1`). The picker renders the query
 result as-is — to change which nodes appear or their order, change the **query**, not the view.
 
-### The standard skills are mesh nodes
+### The standard skills are authored as `.md` files
 
-`/agent`, `/model`, `/harness` ship as `Pick` skill nodes from `BuiltInSkillProvider` under the `Skill`
-partition. They are **imported into Postgres** on boot via `SkillStaticRepoSource` (mirroring
-agents/models/Doc) — the distributed/Orleans routing never consults the in-memory static adapter, so
-without the import `namespace:Skill` queries return nothing and **the chat finds no skills**. The same
-applies to the harness catalog (`HarnessStaticRepoSource`). See
-[StaticRepoImport](/Doc/Architecture/StaticRepoImport).
+`/agent`, `/model`, `/harness` ship as `Pick` skill nodes, authored the **same way as agents**: a markdown
+file with a YAML frontmatter header (`src/MeshWeaver.AI/Data/Skill/*.md` — e.g. `agent.md` → `/agent`),
+loaded by `BuiltInSkillProvider`. A behaviour skill puts its `action:` block in the frontmatter; an
+instruction skill puts its how-to in the markdown body:
 
-> **`/agent` and `/model` resolve a PARTITION-AWARE registry query, not their stored one.** The picker
-> host (`ThreadChatView.OpenPicker`) builds the agent list from the single canonical
-> `AgentPickerProjection.BuildAgentQueries` — `namespace:{user}/Agent|{space}/Agent|Agent nodeType:Agent`
-> — so a Space's or the user's own agents surface alongside the platform catalog. It runs via
-> `hub.GetQuery`, so per-user RLS hides another user's private agents. The Skill node's stored `query` is
-> the declared fallback.
+```yaml
+---
+nodeType: Skill
+name: /agent
+description: Switch the agent for subsequent messages
+action: { kind: Pick, query: "namespace:Agent nodeType:Agent sort:order", field: agentName, title: Choose an agent }
+---
+```
 
-### Per-Space / per-NodeType / per-user skills
+They are **imported into Postgres** on boot via `SkillStaticRepoSource` (mirroring agents/models/Doc) — the
+distributed/Orleans routing never consults the in-memory static adapter, so without the import
+`namespace:Skill` queries return nothing. See [StaticRepoImport](/Doc/Architecture/StaticRepoImport).
 
-A Space or NodeType can define its **own** Skill nodes in its partition. They are discovered through
-**namespace inheritance** — `SkillNodeType.SkillQueries` unions the global catalog, the current context
-node + ancestors, and the user's home + ancestors — so a skill defined nearer the context overrides a
-global one by id. Drop a `nodeType:Skill` node under a Space and `/yourskill` works in that Space's chat,
-with zero code.
+### Discovery is the unified registry pattern — same as agents and models
+
+Skills, agents, and models are discovered the **identical** way: a per-partition registry query unioning
+the platform namespace, the current space's, and the user's own —
+`namespace:{user}/Skill|{space}/Skill|Skill nodeType:Skill` (`AgentPickerProjection.BuildSkillQueries`, the
+sibling of `BuildAgentQueries` / `BuildModelQueries`). All are **public-read top-level domains**. So a
+Space's own skills (under `{space}/Skill`) or the user's (`{user}/Skill`) surface alongside the platform
+catalog, with per-user RLS hiding another user's private skills. Drop a `nodeType:Skill` node under
+`{space}/Skill` and `/yourskill` works in that Space's chat, with zero code.
 
 ---
 
@@ -112,9 +118,11 @@ with zero code.
   (`SidePanelState.SetContentPath`). Set `action.contentPath`, or pair a `Pick` with the content window.
 - **`Connect` / `Disconnect`** — harness auth. Under a non-MeshWeaver harness, `/login` and `/logout` are
   owned by the harness (`IHarness.Commands`) and route to its connect flow; they take priority in dispatch.
-- **`Instructions`** (no `Action`) — a pure-instruction skill. With `AutoMount`, `AgentSkillSyncService`
-  materialises it to `{workspace}/.claude/skills/<slug>/SKILL.md` so Claude Code / Copilot discover it,
-  and the MeshWeaver agent advertises it (name + description) to load on demand via the `load_skill` tool.
+- **`Instructions`** (no `Action`) — a pure-instruction skill (its how-to is the markdown body). Skills are
+  **read from the mesh on demand**, never materialised to disk: the MeshWeaver agent finds them with
+  `search nodeType:Skill` and injects one with the `load_skill` tool; the CLI harnesses (Claude Code /
+  Copilot) discover + read them through the `meshweaver` MCP server. A `LaunchesSubThread` skill runs in
+  its own sub-thread when loaded (the generic `StartThread` launcher).
 
 ---
 

@@ -107,9 +107,12 @@ public class BuiltInAgentProvider : IStaticNodeProvider
     {
         var assembly = typeof(BuiltInAgentProvider).Assembly;
         var prefix = $"{assembly.GetName().Name}.Data.";
+        // Data/Skill/*.md are nodeType:Skill nodes served by BuiltInSkillProvider — not agents/docs.
+        var skillPrefix = $"{prefix}{SkillNodeType.RootNamespace}.";
 
         foreach (var resourceName in assembly.GetManifestResourceNames()
-                     .Where(n => n.StartsWith(prefix) && n.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+                     .Where(n => n.StartsWith(prefix) && n.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
+                                 && !n.StartsWith(skillPrefix, StringComparison.Ordinal))
                      .Order())
         {
             using var stream = assembly.GetManifestResourceStream(resourceName);

@@ -95,7 +95,7 @@ data:
   Features__StaticRepoSync__Partitions__1: "{{ .Values.config.memex_portal.Features__StaticRepoSync__Partitions__1 | default "Agent" }}"
   Features__StaticRepoSync__Partitions__2: "{{ .Values.config.memex_portal.Features__StaticRepoSync__Partitions__2 | default "Model" }}"
   Features__StaticRepoSync__Partitions__3: "{{ .Values.config.memex_portal.Features__StaticRepoSync__Partitions__3 | default "Harness" }}"
-  Features__StaticRepoSync__Partitions__4: "{{ .Values.config.memex_portal.Features__StaticRepoSync__Partitions__4 | default "Command" }}"
+  Features__StaticRepoSync__Partitions__4: "{{ .Values.config.memex_portal.Features__StaticRepoSync__Partitions__4 | default "Skill" }}"
   # ---- System email (Microsoft Graph) — BIDIRECTIONAL. Outbound invitations + notifications
   # (/sendMail, Mail.Send app permission) AND optional inbound email→agent channel (inbox
   # change-notification subscription, Mail.ReadWrite app permission). Non-secret here;
