@@ -220,6 +220,17 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         cacheHub = meshHub.GetHostedHub(
             cacheAddress,
             config => config
+                // 🚨 Process-wide INFRASTRUCTURE hub (its own `cache/{meshId}` address, never a user).
+                // It MUST post as System, not the default User (MessageHubConfiguration.PostingIdentity
+                // = User). Its hosted sync sub-hubs inherit this identity (SynchronizationStream
+                // .WithPostingIdentity(Host.Configuration.PostingIdentity)); without it their background
+                // UpdateStreamRequest posts are "User but no user" → fail the never-null AccessContext
+                // guard ("hub=sync/… UpdateStreamRequest … no AccessContext") in a storm. This is the
+                // FALLBACK identity only — genuine user reads/writes still carry the real user (the write
+                // primitive + JsonSynchronizationStream's `isRealUser ? SwitchAccessContext(ambient) :
+                // ImpersonateAsSystem()`), so per-user RLS is unaffected. Same infra identity storage
+                // declares (DataSourceWithStorage: WithPostingIdentity(PostingIdentity.System)).
+                .WithPostingIdentity(PostingIdentity.System)
                 // 🚨 Cache hub is domain-type-agnostic by design: its TypeRegistry
                 // knows ONLY framework types (MeshNode, MeshNodeReference inherited
                 // from the parent mesh hub) and treats MeshNode.Content as
