@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using MeshWeaver.AI.Connect;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
@@ -44,7 +45,8 @@ public sealed class CopilotHarness(IOptions<CopilotConfiguration> options) : IHa
     public IChatClient? CreateChatClient(HarnessExecutionContext context)
     {
         var hub = context.Hub;
-        var userId = hub.ServiceProvider.GetService<AccessService>()?.Context?.ObjectId;
+        var accessCtx = hub.ServiceProvider.GetService<AccessService>()?.Context;
+        var userId = accessCtx?.ObjectId;
 
         // 🚫 NEVER pass a model to the CLI. Copilot self-selects; forwarding the MeshWeaver composer's
         // selected model (a non-Copilot id) makes the round fail. The harness surfaces no model
@@ -59,6 +61,8 @@ public sealed class CopilotHarness(IOptions<CopilotConfiguration> options) : IHa
         // Subprocess CLI spawn + SDK network round-trips → Http pool (off the hub scheduler,
         // bounded). Unbounded fallback when no pool is wired (tests / DI-less construction).
         var ioPool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
+        // Automatic MCP back-connection — the mesh is this CLI's workspace (per-user Bearer token).
+        var mcp = hub.ServiceProvider.GetService<IMcpBackConnection>();
 
         // Project the user's selectable MeshWeaver agents — injected into the Copilot session's system
         // message (Copilot's SDK has no filesystem skills folder). Utility/background generators excluded.
@@ -72,6 +76,7 @@ public sealed class CopilotHarness(IOptions<CopilotConfiguration> options) : IHa
                     .ToList())
             : null;
 
-        return new CopilotChatClient(configuration, modelName: null, clientLogger, githubToken, ioPool, agentSkills);
+        return new CopilotChatClient(configuration, modelName: null, clientLogger, githubToken, ioPool, agentSkills,
+            mcp, userId, accessCtx?.Name, accessCtx?.Email);
     }
 }

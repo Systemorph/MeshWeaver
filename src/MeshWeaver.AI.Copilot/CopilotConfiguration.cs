@@ -41,4 +41,11 @@ public class CopilotConfiguration
     /// Session timeout in milliseconds.
     /// </summary>
     public int SessionTimeoutMs { get; set; } = 30000;
+
+    /// <summary>
+    /// The shared on-disk workspace dir the agent→skill sync maintains (<c>.claude/skills/</c> +
+    /// <c>AGENTS.md</c>). When set, the harness points the Copilot session's working directory at it
+    /// (with config discovery on) so the CLI surfaces the MeshWeaver agents + skills. Null ⇒ none.
+    /// </summary>
+    public string? SkillsDirectory { get; set; }
 }

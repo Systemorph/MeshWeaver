@@ -149,20 +149,18 @@ public class ClaudeCodeChatClient : IChatClient
         if (!string.IsNullOrEmpty(oauthToken))
             env["CLAUDE_CODE_OAUTH_TOKEN"] = oauthToken;
 
-        // Link the SHARED, sync-maintained skills directory into this user's config so the CLI
-        // discovers the MeshWeaver agents as skills (symlink $CLAUDE_CONFIG_DIR/skills → shared dir).
-        // AgentSkillSyncService is the SINGLE writer of that dir (reactive, from nodeType:Agent); the
-        // harness only LINKS it + opts into the "user" setting source below. Best-effort: a real skills
-        // dir already present is left alone, and symlink failures never block the chat.
-        if (!string.IsNullOrEmpty(configDir) && !string.IsNullOrEmpty(configuration.SkillsDirectory))
-            LinkSharedSkills(configDir!, configuration.SkillsDirectory!, logger);
-
         var claudeOptions = new ClaudeAgentOptions { Env = env };
 
-        // The SDK ignores user-scope skills/settings unless we opt into the "user" setting source —
-        // this is what makes the linked shared skills dir discoverable.
+        // The shared, sync-maintained WORKSPACE ({SkillsDirectory}) holds .claude/skills/<slug>/SKILL.md
+        // (the MeshWeaver agents + skills) plus a base CLAUDE.md/AGENTS.md telling the agent the mesh is
+        // reachable via the meshweaver MCP server. Point the session's Cwd at it and load PROJECT scope
+        // so the CLI discovers those; USER scope keeps the per-user config/creds. The sync service
+        // (AgentSkillSyncService) is the single writer of the workspace.
         if (!string.IsNullOrEmpty(configuration.SkillsDirectory))
-            claudeOptions.SettingSources = new List<SettingSource> { SettingSource.User };
+        {
+            claudeOptions.Cwd = configuration.SkillsDirectory;
+            claudeOptions.SettingSources = new List<SettingSource> { SettingSource.User, SettingSource.Project };
+        }
 
         // Automatic MCP back-connection — the mesh is this CLI's workspace (no file tree). Inject a
         // per-spawn HTTP MCP server at the portal's /mcp, authenticated AS THE USER via a Bearer
@@ -215,7 +213,7 @@ public class ClaudeCodeChatClient : IChatClient
             claudeOptions.MaxTurns = configuration.MaxTurns.Value;
         }
 
-        if (!string.IsNullOrEmpty(configuration.WorkingDirectory))
+        if (string.IsNullOrEmpty(claudeOptions.Cwd) && !string.IsNullOrEmpty(configuration.WorkingDirectory))
         {
             claudeOptions.Cwd = configuration.WorkingDirectory;
         }
@@ -410,37 +408,6 @@ public class ClaudeCodeChatClient : IChatClient
             .Select(c => c.Text);
 
         return string.Join("", textParts);
-    }
-
-    /// <summary>
-    /// Links the SHARED, sync-maintained skills directory into this user's config so the CLI
-    /// discovers it under user scope: symlinks <c>{configDir}/skills</c> → <paramref name="sharedSkillsDir"/>.
-    /// Idempotent (already-correct link → no-op); never clobbers a real directory; symlink failures are
-    /// logged and swallowed (some network volumes disallow symlinks — then skills simply aren't linked).
-    /// </summary>
-    private static void LinkSharedSkills(string configDir, string sharedSkillsDir, ILogger? logger)
-    {
-        try
-        {
-            Directory.CreateDirectory(sharedSkillsDir);
-            var link = Path.Combine(configDir, "skills");
-            var info = new DirectoryInfo(link);
-            if (info.Exists)
-            {
-                if (string.Equals(info.LinkTarget, sharedSkillsDir, StringComparison.Ordinal))
-                    return;                  // already linked correctly
-                if (info.LinkTarget != null)
-                    info.Delete();           // stale symlink → recreate
-                else
-                    return;                  // a real directory — don't clobber
-            }
-            Directory.CreateSymbolicLink(link, sharedSkillsDir);
-        }
-        catch (Exception ex)
-        {
-            logger?.LogDebug(ex, "Could not link shared skills {Link} → {Target}",
-                Path.Combine(configDir, "skills"), sharedSkillsDir);
-        }
     }
 
     /// <summary>

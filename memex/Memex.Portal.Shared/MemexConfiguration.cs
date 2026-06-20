@@ -181,20 +181,23 @@ public static class MemexConfiguration
             // so the messaging endpoint can resolve them and return NotFound when disabled.
             services.AddHostedService<Teams.TeamsReplySender>();
 
-        if (features.Ai.Clis.Copilot)
-            services.AddCopilot(config =>
-                builder.Configuration.GetSection("Copilot").Bind(config));
-
-        // Shared on-disk skills dir the agent→skill sync maintains; the Claude Code harness links it
-        // into each user's CLAUDE_CONFIG_DIR/skills so every session sees the MeshWeaver agents as
-        // skills. Defaults to a sibling of the per-user .claude root (e.g. /mnt/users → /mnt/users/_skills)
-        // when not explicitly configured.
+        // Shared on-disk WORKSPACE dir the agent→skill sync maintains (.claude/skills + AGENTS.md); both
+        // CLI harnesses set it as the session's working directory so every session sees the MeshWeaver
+        // agents/skills + the mesh-is-via-MCP base instructions. Defaults to a sibling of the per-user
+        // .claude root (e.g. /mnt/users → /mnt/users/_skills) when not explicitly configured.
         var skillsDir = builder.Configuration["Skills:Directory"];
         if (string.IsNullOrWhiteSpace(skillsDir))
         {
             var claudeRoot = builder.Configuration["ClaudeCode:ConfigDirRoot"]?.TrimEnd('/', '\\');
             skillsDir = string.IsNullOrEmpty(claudeRoot) ? null : $"{claudeRoot}/_skills";
         }
+
+        if (features.Ai.Clis.Copilot)
+            services.AddCopilot(config =>
+            {
+                builder.Configuration.GetSection("Copilot").Bind(config);
+                config.SkillsDirectory = skillsDir;
+            });
 
         if (features.Ai.Clis.ClaudeCode)
             services.AddClaudeCode(config =>
@@ -203,9 +206,9 @@ public static class MemexConfiguration
                 config.SkillsDirectory = skillsDir;
             });
 
-        // Reactive agent→skill sync: materialises the platform nodeType:Agent nodes as CLI skills on
-        // the shared volume and keeps them in sync as nodes change (observable query). Started at
-        // startup, runs for the process lifetime.
+        // Reactive agent/skill→file sync: materialises the platform nodeType:Agent + nodeType:Skill
+        // nodes as CLI skills (+ AGENTS.md) on the shared volume and keeps them in sync as nodes change
+        // (observable query). Started at startup, runs for the process lifetime.
         if ((features.Ai.Clis.ClaudeCode || features.Ai.Clis.Copilot) && !string.IsNullOrWhiteSpace(skillsDir))
         {
             services.Configure<Skills.AgentSkillSyncOptions>(o => o.Directory = skillsDir);

@@ -3,6 +3,7 @@ using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using GitHub.Copilot.SDK;
+using MeshWeaver.AI.Connect;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Reactive;
 using Microsoft.Extensions.AI;
@@ -20,8 +21,14 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
     private readonly string? modelName;
     private readonly string? githubToken;
     // The user's selectable MeshWeaver agents — injected into the Copilot session's system message
-    // (Copilot's SDK has no filesystem "skills" folder like Claude Code). Resolved per session.
+    // (a guaranteed path; the SDK also discovers the workspace skills via the working dir). Resolved per session.
     private readonly IObservable<IReadOnlyList<AgentSkill>>? agentSkills;
+    // Automatic MCP back-connection — the mesh is this CLI's workspace. Resolved per session to the
+    // per-user `meshweaver` HTTP MCP server (Bearer-authenticated as the calling user).
+    private readonly IMcpBackConnection? mcpBackConnection;
+    private readonly string? userId;
+    private readonly string? userName;
+    private readonly string? userEmail;
     private readonly ILogger? logger;
     // Genuine IO (subprocess CLI spawn + SDK network round-trips) runs off the hub scheduler,
     // bounded, through the Http pool — the ControlledIoPooling boundary. Everything ABOVE the
@@ -39,7 +46,11 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
         ILogger<CopilotChatClient>? logger = null,
         string? githubToken = null,
         IIoPool? ioPool = null,
-        IObservable<IReadOnlyList<AgentSkill>>? agentSkills = null)
+        IObservable<IReadOnlyList<AgentSkill>>? agentSkills = null,
+        IMcpBackConnection? mcpBackConnection = null,
+        string? userId = null,
+        string? userName = null,
+        string? userEmail = null)
     {
         this.configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         this.modelName = modelName;
@@ -50,6 +61,10 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
         this.githubToken = githubToken;
         this.ioPool = ioPool ?? IoPool.Unbounded;
         this.agentSkills = agentSkills;
+        this.mcpBackConnection = mcpBackConnection;
+        this.userId = userId;
+        this.userName = userName;
+        this.userEmail = userEmail;
     }
 
     /// <inheritdoc />
@@ -240,12 +255,13 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
     {
         var messageList = messages.ToList();
 
-        // Resolve the user's selectable MeshWeaver agents (best-effort) and fold them into the system
-        // message — Copilot's SDK has no filesystem "skills" folder, so the system message is the hook.
+        // Resolve the user's selectable MeshWeaver agents (best-effort) → system message, AND the
+        // per-user `meshweaver` HTTP MCP server → the session, so Copilot reaches the mesh by default.
         var agentsSection = await ResolveAgentsSectionAsync(cancellationToken);
+        var mcpServers = await ResolveMcpServersAsync(cancellationToken);
 
         // Build session configuration, including system messages as SystemMessage
-        var sessionConfig = BuildSessionConfig(options, messageList, agentsSection);
+        var sessionConfig = BuildSessionConfig(options, messageList, agentsSection, mcpServers);
         var lastUserMessage = messageList.LastOrDefault(m => m.Role == ChatRole.User);
         var userPrompt = lastUserMessage != null ? GetTextContent(lastUserMessage) : string.Empty;
 
@@ -364,7 +380,9 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
         }
     }
 
-    private SessionConfig BuildSessionConfig(ChatOptions? options, List<ChatMessage>? messages = null, string? agentsSection = null)
+    private SessionConfig BuildSessionConfig(
+        ChatOptions? options, List<ChatMessage>? messages = null, string? agentsSection = null,
+        IDictionary<string, McpServerConfig>? mcpServers = null)
     {
         var config = new SessionConfig
         {
@@ -384,6 +402,12 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
             .Select(GetTextContent)
             .Where(t => !string.IsNullOrEmpty(t))
             .ToList() ?? new List<string>();
+        // When the mesh MCP server is wired, tell the agent it's there (guaranteed, regardless of file discovery).
+        if (mcpServers is { Count: > 0 })
+            systemParts.Insert(0,
+                "The memex mesh is available through the `meshweaver` MCP server (wired automatically, " +
+                "authenticated as you). The mesh — not a local file tree — is your workspace: use the MCP " +
+                "tools to read and modify content.");
         if (!string.IsNullOrWhiteSpace(agentsSection))
             systemParts.Add(agentsSection!);
 
@@ -402,7 +426,56 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
             config.Tools = options.Tools.OfType<AIFunction>().ToList();
         }
 
+        // The mesh: per-user `meshweaver` HTTP MCP server (Bearer-authenticated as the calling user).
+        if (mcpServers is { Count: > 0 })
+            config.McpServers = mcpServers;
+
+        // Point the session at the shared sync workspace (.claude/skills + AGENTS.md) and let the CLI
+        // discover its skills + instructions from the working directory.
+        if (!string.IsNullOrEmpty(configuration.SkillsDirectory))
+        {
+            config.WorkingDirectory = configuration.SkillsDirectory;
+            config.EnableConfigDiscovery = true;
+        }
+
+        // Headless: auto-approve tool/permission prompts so MCP + tool calls proceed without a TTY.
+        // (MCP tools are still scoped to the user's own permissions via the Bearer token.)
+        config.OnPermissionRequest = PermissionHandler.ApproveAll;
+
         return config;
+    }
+
+    /// <summary>
+    /// Resolves the per-user <c>meshweaver</c> HTTP MCP server (Bearer-authenticated as the calling
+    /// user) for the session, or null when unavailable. The mesh is this CLI's workspace. The await is
+    /// at the SDK boundary (inside the IIoPool stream leaf), never on a hub scheduler.
+    /// </summary>
+    private async Task<IDictionary<string, McpServerConfig>?> ResolveMcpServersAsync(CancellationToken cancellationToken)
+    {
+        if (mcpBackConnection is null || string.IsNullOrEmpty(userId))
+            return null;
+        try
+        {
+            var info = await mcpBackConnection.EnsureForUser(userId, userName, userEmail)
+                .FirstOrDefaultAsync().ToTask(cancellationToken);
+            if (info is null)
+                return null;
+            logger?.LogInformation("Copilot MCP workspace wired to {McpUrl}", info.McpUrl);
+            return new Dictionary<string, McpServerConfig>
+            {
+                ["meshweaver"] = new McpHttpServerConfig
+                {
+                    Url = info.McpUrl,
+                    Headers = new Dictionary<string, string> { ["Authorization"] = $"Bearer {info.BearerToken}" },
+                    Tools = new List<string> { "*" },
+                }
+            };
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Could not provision the Copilot MCP back-connection; running without mesh access.");
+            return null;
+        }
     }
 
     /// <summary>
