@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using GitHub.Copilot.SDK;
@@ -18,6 +19,9 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
     private readonly CopilotConfiguration configuration;
     private readonly string? modelName;
     private readonly string? githubToken;
+    // The user's selectable MeshWeaver agents — injected into the Copilot session's system message
+    // (Copilot's SDK has no filesystem "skills" folder like Claude Code). Resolved per session.
+    private readonly IObservable<IReadOnlyList<AgentSkill>>? agentSkills;
     private readonly ILogger? logger;
     // Genuine IO (subprocess CLI spawn + SDK network round-trips) runs off the hub scheduler,
     // bounded, through the Http pool — the ControlledIoPooling boundary. Everything ABOVE the
@@ -34,7 +38,8 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
         string? modelName = null,
         ILogger<CopilotChatClient>? logger = null,
         string? githubToken = null,
-        IIoPool? ioPool = null)
+        IIoPool? ioPool = null,
+        IObservable<IReadOnlyList<AgentSkill>>? agentSkills = null)
     {
         this.configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         this.modelName = modelName;
@@ -44,6 +49,7 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
         // (single-user dev / ambient auth).
         this.githubToken = githubToken;
         this.ioPool = ioPool ?? IoPool.Unbounded;
+        this.agentSkills = agentSkills;
     }
 
     /// <inheritdoc />
@@ -234,8 +240,12 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
     {
         var messageList = messages.ToList();
 
+        // Resolve the user's selectable MeshWeaver agents (best-effort) and fold them into the system
+        // message — Copilot's SDK has no filesystem "skills" folder, so the system message is the hook.
+        var agentsSection = await ResolveAgentsSectionAsync(cancellationToken);
+
         // Build session configuration, including system messages as SystemMessage
-        var sessionConfig = BuildSessionConfig(options, messageList);
+        var sessionConfig = BuildSessionConfig(options, messageList, agentsSection);
         var lastUserMessage = messageList.LastOrDefault(m => m.Role == ChatRole.User);
         var userPrompt = lastUserMessage != null ? GetTextContent(lastUserMessage) : string.Empty;
 
@@ -354,7 +364,7 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
         }
     }
 
-    private SessionConfig BuildSessionConfig(ChatOptions? options, List<ChatMessage>? messages = null)
+    private SessionConfig BuildSessionConfig(ChatOptions? options, List<ChatMessage>? messages = null, string? agentsSection = null)
     {
         var config = new SessionConfig
         {
@@ -367,23 +377,23 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
             config.Model = modelName;
         }
 
-        // Extract system messages (agent instructions from ChatClientAgent) and set as SystemMessage
-        if (messages != null)
-        {
-            var systemParts = messages
-                .Where(m => m.Role == ChatRole.System)
-                .Select(GetTextContent)
-                .Where(t => !string.IsNullOrEmpty(t))
-                .ToList();
+        // Extract system messages (agent instructions from ChatClientAgent) + the projected MeshWeaver
+        // agents section, and set them as the session SystemMessage.
+        var systemParts = messages?
+            .Where(m => m.Role == ChatRole.System)
+            .Select(GetTextContent)
+            .Where(t => !string.IsNullOrEmpty(t))
+            .ToList() ?? new List<string>();
+        if (!string.IsNullOrWhiteSpace(agentsSection))
+            systemParts.Add(agentsSection!);
 
-            if (systemParts.Count > 0)
+        if (systemParts.Count > 0)
+        {
+            config.SystemMessage = new SystemMessageConfig
             {
-                config.SystemMessage = new SystemMessageConfig
-                {
-                    Content = string.Join("\n\n", systemParts),
-                    Mode = SystemMessageMode.Append
-                };
-            }
+                Content = string.Join("\n\n", systemParts),
+                Mode = SystemMessageMode.Append
+            };
         }
 
         // Add tools if provided - the SDK accepts AIFunction from Microsoft.Extensions.AI.Abstractions
@@ -393,6 +403,51 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
         }
 
         return config;
+    }
+
+    /// <summary>
+    /// Resolves the projected MeshWeaver agents (best-effort, bounded) into a system-message section,
+    /// or null when none / unavailable. The await is at the SDK boundary (inside the IIoPool stream
+    /// leaf), never on a hub scheduler.
+    /// </summary>
+    private async Task<string?> ResolveAgentsSectionAsync(CancellationToken cancellationToken)
+    {
+        if (agentSkills is null)
+            return null;
+        try
+        {
+            var skills = await agentSkills
+                .Take(1).Timeout(TimeSpan.FromSeconds(5))
+                .FirstOrDefaultAsync().ToTask(cancellationToken);
+            return BuildAgentsSection(skills);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Could not project MeshWeaver agents for the Copilot session.");
+            return null;
+        }
+    }
+
+    /// <summary>Renders the selectable MeshWeaver agents as a markdown system-message section.</summary>
+    private static string? BuildAgentsSection(IReadOnlyList<AgentSkill>? skills)
+    {
+        if (skills is null || skills.Count == 0)
+            return null;
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("# Available MeshWeaver agents");
+        sb.AppendLine("Adopt the behavior of one of these MeshWeaver agents when the user's request matches it. Each has a name, a description, and instructions:");
+        foreach (var s in skills)
+        {
+            if (string.IsNullOrWhiteSpace(s.Instructions))
+                continue;
+            sb.AppendLine();
+            sb.AppendLine($"## {s.Name}");
+            if (!string.IsNullOrWhiteSpace(s.Description))
+                sb.AppendLine(s.Description);
+            sb.AppendLine();
+            sb.AppendLine(s.Instructions);
+        }
+        return sb.ToString();
     }
 
     private static string GetTextContent(ChatMessage message)

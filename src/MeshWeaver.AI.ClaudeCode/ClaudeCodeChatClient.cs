@@ -23,6 +23,7 @@ public class ClaudeCodeChatClient : IChatClient
     private readonly string? userId;
     private readonly string? userName;
     private readonly string? userEmail;
+    private readonly IObservable<IReadOnlyList<AgentSkill>>? agentSkills;
     private readonly ILogger? logger;
 
     public ClaudeCodeChatClient(
@@ -34,7 +35,8 @@ public class ClaudeCodeChatClient : IChatClient
         IMcpBackConnection? mcpBackConnection = null,
         string? userId = null,
         string? userName = null,
-        string? userEmail = null)
+        string? userEmail = null,
+        IObservable<IReadOnlyList<AgentSkill>>? agentSkills = null)
     {
         this.configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         this.modelName = modelName;
@@ -50,6 +52,9 @@ public class ClaudeCodeChatClient : IChatClient
         this.userId = userId;
         this.userName = userName;
         this.userEmail = userEmail;
+        // The user's selectable MeshWeaver agents, projected into per-spawn Claude Code SKILLS — the
+        // mesh is this CLI's workspace, so its skills ARE the user's agents. Resolved per spawn.
+        this.agentSkills = agentSkills;
     }
 
     /// <inheritdoc />
@@ -148,6 +153,25 @@ public class ClaudeCodeChatClient : IChatClient
         }
         if (!string.IsNullOrEmpty(oauthToken))
             env["CLAUDE_CODE_OAUTH_TOKEN"] = oauthToken;
+
+        // Project the user's selectable MeshWeaver agents as Claude Code SKILLS: write each to
+        // {CLAUDE_CONFIG_DIR}/skills/<id>/SKILL.md so the CLI auto-discovers them and can invoke each
+        // on demand via the Skill tool. The mesh is this CLI's workspace, so its skills ARE the user's
+        // agents. Best-effort + per-spawn (idempotent overwrite); failures never block the chat.
+        if (agentSkills != null && !string.IsNullOrEmpty(configDir))
+        {
+            try
+            {
+                var skills = await agentSkills
+                    .Take(1).Timeout(TimeSpan.FromSeconds(5))
+                    .FirstOrDefaultAsync().ToTask(cancellationToken);
+                WriteAgentSkills(configDir!, skills, logger);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "Could not project MeshWeaver agents as Claude Code skills.");
+            }
+        }
 
         var claudeOptions = new ClaudeAgentOptions { Env = env };
 
@@ -397,6 +421,53 @@ public class ClaudeCodeChatClient : IChatClient
             .Select(c => c.Text);
 
         return string.Join("", textParts);
+    }
+
+    /// <summary>
+    /// Writes each projected MeshWeaver agent as a Claude Code skill at
+    /// <c>{configDir}/skills/&lt;slug&gt;/SKILL.md</c> (YAML frontmatter <c>name</c> + <c>description</c>,
+    /// the agent's instructions as the body). The CLI auto-discovers user-level skills under
+    /// <c>CLAUDE_CONFIG_DIR/skills</c>. Best-effort per skill — one bad agent never blocks the rest.
+    /// </summary>
+    private static void WriteAgentSkills(string configDir, IReadOnlyList<AgentSkill>? skills, ILogger? logger)
+    {
+        if (skills is null || skills.Count == 0)
+            return;
+        var root = Path.Combine(configDir, "skills");
+        var written = 0;
+        foreach (var s in skills)
+        {
+            try
+            {
+                var slug = SkillSlug(s.Id);
+                if (string.IsNullOrEmpty(slug) || string.IsNullOrWhiteSpace(s.Instructions))
+                    continue;
+                var dir = Path.Combine(root, slug);
+                Directory.CreateDirectory(dir);
+                // description must be a single YAML line.
+                var description = (s.Description ?? s.Name ?? slug)
+                    .Replace("\r", " ").Replace("\n", " ").Trim();
+                var md = $"---\nname: {slug}\ndescription: {description}\n---\n\n{s.Instructions}";
+                File.WriteAllText(Path.Combine(dir, "SKILL.md"), md);
+                written++;
+            }
+            catch (Exception ex)
+            {
+                logger?.LogDebug(ex, "Failed writing Claude Code skill for agent {Id}", s.Id);
+            }
+        }
+        if (written > 0)
+            logger?.LogInformation("Projected {Count} MeshWeaver agent(s) as Claude Code skills under {Root}", written, root);
+    }
+
+    /// <summary>Slug for a skill folder/name: lowercase, non-alphanumerics → hyphens (Claude Code
+    /// requires a <c>^[a-z0-9-]+$</c> skill name).</summary>
+    private static string SkillSlug(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+            return string.Empty;
+        var chars = id.Trim().ToLowerInvariant().Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray();
+        return new string(chars).Trim('-');
     }
 
     /// <summary>

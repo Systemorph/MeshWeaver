@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
@@ -59,6 +60,18 @@ public sealed class CopilotHarness(IOptions<CopilotConfiguration> options) : IHa
         // bounded). Unbounded fallback when no pool is wired (tests / DI-less construction).
         var ioPool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
 
-        return new CopilotChatClient(configuration, modelName: null, clientLogger, githubToken, ioPool);
+        // Project the user's selectable MeshWeaver agents — injected into the Copilot session's system
+        // message (Copilot's SDK has no filesystem skills folder). Utility/background generators excluded.
+        var agentSkills = !string.IsNullOrEmpty(userId)
+            ? AgentPickerProjection.ObserveAgents(hub, userId, null)
+                .Select(agents => (IReadOnlyList<AgentSkill>)agents
+                    .Where(a => !AgentPickerProjection.IsUtilityAgent(a)
+                                && !string.IsNullOrWhiteSpace(a.AgentConfiguration.Instructions))
+                    .Select(a => new AgentSkill(
+                        a.AgentConfiguration.Id, a.Name, a.Description, a.AgentConfiguration.Instructions!))
+                    .ToList())
+            : null;
+
+        return new CopilotChatClient(configuration, modelName: null, clientLogger, githubToken, ioPool, agentSkills);
     }
 }
