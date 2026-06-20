@@ -731,10 +731,18 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             var isCompact = ViewModel.HideEmptyState;
             var capturedAttachments = attachments.Select(a => a.Path).ToList();
 
-            var ns = !string.IsNullOrEmpty(NavigationService.CurrentNamespace)
-                ? NavigationService.CurrentNamespace
-                : !string.IsNullOrEmpty(initialContext)
-                    ? initialContext
+            // A thread must live in a REAL partition (a space or the user's home), NEVER a rogue/reserved
+            // ROUTE partition (login, welcome, …): that partition has no write policy, so StartThread there
+            // is denied → onError → no thread → the side-panel chat tears down (the "login" symptom). Strip
+            // a reserved nav-namespace / context and fall back to the user's own namespace.
+            var navNs = MeshWeaver.AI.AgentPickerProjection.IsReservedPartition(NavigationService.CurrentNamespace)
+                ? null : NavigationService.CurrentNamespace;
+            var safeContext = MeshWeaver.AI.AgentPickerProjection.IsReservedPartition(initialContext)
+                ? null : initialContext;
+            var ns = !string.IsNullOrEmpty(navNs)
+                ? navNs
+                : !string.IsNullOrEmpty(safeContext)
+                    ? safeContext
                     : !string.IsNullOrEmpty(createdBy)
                         ? createdBy
                         : "";
@@ -761,7 +769,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     userText: userMessageText!,
                     agentName: boundAgentPath,
                     modelName: boundModelPath,
-                    contextPath: initialContext,
+                    contextPath: safeContext,
                     attachments: capturedAttachments,
                     createdBy: createdBy,
                     authorName: authorName,
@@ -771,7 +779,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                         Harness = boundHarness,
                         AgentName = boundAgentPath,
                         ModelName = boundModelPath,
-                        ContextPath = initialContext
+                        ContextPath = safeContext
                     },
                     onCreated: node => InvokeAsync(() =>
                     {
@@ -805,7 +813,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 Hub.SubmitComposer(
                     threadPath: threadPath,
                     userText: userMessageText!,
-                    contextPath: initialContext,
+                    contextPath: safeContext,
                     attachments: capturedAttachments,
                     createdBy: createdBy,
                     authorName: authorName,

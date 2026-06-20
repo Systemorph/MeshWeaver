@@ -97,12 +97,6 @@ public static class AgentPickerProjection
     public static string BuildSkillQuery(string? userPath = null, string? spacePath = null)
         => BuildRegistryQuery(SkillNodeType.NodeType, SkillSubNamespace, userPath, spacePath, "");
 
-    /// <summary>
-    /// Assembles a per-partition registry query: the platform default namespace (<paramref name="sub"/>)
-    /// plus the user's and space's own (<c>{partition}/{sub}</c>), listed directly as a
-    /// <c>namespace:A|B|C</c> exact-membership alternation. No scope — agents/models are placed in a
-    /// flat, well-known namespace per partition, so there is no graph search.
-    /// </summary>
     // Rogue/reserved ROUTE partitions — auto-minted page artifacts (login, welcome, settings, …; mirrors
     // the reserved-schema list in PostgreSqlCrossSchemaQueryProvider). They carry NO read policy and never
     // hold registry nodes, so including one in the namespace IN(...) — e.g. when the chat context resolves
@@ -113,6 +107,18 @@ public static class AgentPickerProjection
         "login", "markdown", "onboarding", "welcome", "settings", "storage",
     };
 
+    /// <summary>True when <paramref name="path"/>'s partition (first segment) is a rogue/reserved ROUTE
+    /// partition (login, welcome, settings, …) — never a real space, so never a valid thread or registry
+    /// namespace. Creating a thread there is denied (no write policy) and tears the side-panel chat down.</summary>
+    public static bool IsReservedPartition(string? path)
+        => PartitionOf(path) is { } p && ReservedPartitions.Contains(p);
+
+    /// <summary>
+    /// Assembles a per-partition registry query: the platform default namespace (<paramref name="sub"/>)
+    /// plus the user's and space's own (<c>{partition}/{sub}</c>), listed directly as a
+    /// <c>namespace:A|B|C</c> exact-membership alternation. No scope — agents/models are placed in a
+    /// flat, well-known namespace per partition, so there is no graph search.
+    /// </summary>
     private static string BuildRegistryQuery(
         string nodeType, string sub, string? userPath, string? spacePath, string extra)
     {

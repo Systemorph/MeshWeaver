@@ -255,6 +255,12 @@ A matching row in `{schema}.user_effective_permissions` with the longest-prefix 
 
 Cross-schema search (`public.search_across_schemas`) iterates `searchable_schemas`, applies both gates per schema, and returns only rows where both pass. See `PostgreSqlSchemaInitializer.cs:34`.
 
+### Which schemas are searchable (and the catalog-partition rule)
+
+`searchable_schemas` is (re)discovered by `PostgreSqlCrossSchemaQueryProvider.SyncSearchableSchemasAsync`: every schema that has a `mesh_nodes` table, **minus** the `ExcludedSchemas` denylist (the `auth` access-object mirror — to avoid double-surfacing; `admin`/`portal`/`kernel`; `_`-prefixed satellite/global schemas; and a set of legacy reserved route words).
+
+🚨 **A public catalog partition MUST NOT be in `ExcludedSchemas`.** The platform AI catalogs — `agent`, `skill`, `model`, `_provider`, `harness`, `command` — are real `publicRead` partitions whose nodes are listed by the **per-partition registry fan-out**: a single multi-namespace query of the form `namespace:{user}/Agent|{space}/Agent|Agent nodeType:Agent` (see `AgentPickerProjection`). That query is **unscoped** (a `namespace IN (...)` membership filter, no concrete first path segment), so it routes through the **cross-schema fan-out**, which only visits schemas in `searchable_schemas`. If a catalog schema is excluded, the fan-out silently skips it and the registry comes back **empty** (the chat agent/model/skill picker shows nothing). A **single**-namespace query (`namespace:Agent`) masks the bug: it is *scoped* — it resolves the one schema directly via the registered-partition cache, bypassing `searchable_schemas`. The agent picker was empty on prod (2026-06-20) for exactly this reason: `"agent"` was a stale entry in `ExcludedSchemas` from before the per-partition agent-registry migration, so `skill`/`model` worked but `agent` did not.
+
 ---
 
 ## Versioning schemas

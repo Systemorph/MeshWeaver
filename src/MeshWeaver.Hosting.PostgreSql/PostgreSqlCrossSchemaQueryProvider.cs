@@ -69,7 +69,15 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         "_access", "_address_", "_graph", "_settings", "_tracking", "_thread", "_source", "_test",
         "source", "test",
         "login", "markdown", "onboarding", "welcome", "settings", "storage",
-        "p", "path", "mesh", "thread", "agent", "partition", "organization", "vuser",
+        // NOTE: 'agent' is NOT excluded. Since the per-partition agent-registry migration
+        // (V36/V37) the `agent` schema is a REAL public catalog partition (publicRead, like
+        // `skill`/`model`/`harness`) holding the platform agents. Excluding it kept the `agent`
+        // schema out of `searchable_schemas`, so the multi-namespace registry fan-out
+        // (`namespace:{user}/Agent|{space}/Agent|Agent`) never queried it → the chat agent
+        // picker came back EMPTY for every user while models/skills worked (atioz 2026-06-20).
+        // Single-namespace `namespace:Agent` masked it because that path is SCOPED (resolves the
+        // schema directly, bypassing searchable_schemas).
+        "p", "path", "mesh", "thread", "partition", "organization", "vuser",
         "public", "information_schema", "pg_catalog", "pg_toast"
     };
 
