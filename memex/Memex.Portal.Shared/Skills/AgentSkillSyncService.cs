@@ -123,16 +123,22 @@ public sealed class AgentSkillSyncService(
         var builder = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
         foreach (var node in nodes)
         {
-            if (string.IsNullOrEmpty(node.Id) || IsUtility(node.Id))
+            if (string.IsNullOrEmpty(node.Id))
                 continue;
-            var instructions = InstructionsOf(node, jsonOptions);
-            if (string.IsNullOrWhiteSpace(instructions))
+            var content = ContentOf(node, jsonOptions);
+            if (content is null || string.IsNullOrWhiteSpace(content.Instructions))
+                continue;
+            // Exclude background-generator / utility agents (the "naming" agent + other helpers) — by
+            // modelTier (the canonical signal, same as the chat's AgentPickerProjection.IsUtilityAgent),
+            // with a name-based fallback for any that predate the tier. Skills (no tier) are never utility.
+            if (string.Equals(content.ModelTier, AgentPickerProjection.UtilityModelTier, StringComparison.OrdinalIgnoreCase)
+                || IsUtilityName(node.Id))
                 continue;
             var slug = Slug(node.Id);
             if (string.IsNullOrEmpty(slug))
                 continue;
             var description = (node.Description ?? node.Name ?? slug).Replace("\r", " ").Replace("\n", " ").Trim();
-            builder[slug] = $"---\nname: {slug}\ndescription: {description}\n---\n\n{instructions}";
+            builder[slug] = $"---\nname: {slug}\ndescription: {description}\n---\n\n{content.Instructions}";
         }
         return builder.ToImmutable();
     }
