@@ -78,22 +78,36 @@ jobs:
       run: dotnet restore
     - name: Build
       run: dotnet build --no-restore -c Release -p:CIRun=true
-    # Node Source can pull MeshWeaver libraries in via `#r "nuget:MeshWeaver.X, 3.0.0-preview1"`
+    # Node Source can pull MeshWeaver libraries in via a version-LESS `#r "nuget:MeshWeaver.X"`
     # (e.g. the BusinessRules scope generator the PensionFund sample uses). Tests resolve those
     # from the mesh-local feed (nuget.config → dist/packages), which is git-ignored — so the
-    # build job must produce them. Pack the just-built RELEASE output at the fixed dev-feed
-    # version; dist/packages travels in the build artifact below, so the --no-build/--no-restore
+    # build job must produce them. Pack the just-built RELEASE output at the dev-feed $(Version);
+    # dist/packages travels in the build artifact below, so the --no-build/--no-restore
     # shards (and the runtime #r resolver inside them) can resolve them offline. These are the
     # same Release nupkgs you'd publish directly. Self-contained: BusinessRules depends only on
     # framework packages (already in the restored .nuget cache).
     - name: Pack mesh-local #r packages
       run: |
         set -euo pipefail
-        # -c Release matches the Release build above (and pack's own default).
+        # -c Release matches the Release build above. NO -p:PackageVersion override: pack at the
+        # repo's continuous dev-feed $(Version) from Directory.Build.props (= 3.0.0-rc1.ci.0 here),
+        # exactly as the portal image's BakeMeshLocalFeed target and the test's documented local
+        # repro do.
+        #
+        # 🚨 Do NOT pin -p:PackageVersion=3.0.0-preview1. nuget.org carries a STALE
+        # MeshWeaver.BusinessRules.Generator 3.0.0-preview1 (published 2026-04-16, before the
+        # generator shipped its lib/<tfm> asset) that has analyzers/dotnet/cs ONLY — no lib/. NuGet's
+        # global-packages cache is keyed solely by (id, version), so once that lib-less copy lands
+        # under .nuget/packages/meshweaver.businessrules.generator/3.0.0-preview1 the runtime #r
+        # resolver's install short-circuit reuses it and NEVER surfaces the lib/ assembly — scope
+        # nodes compile but generate nothing (PensionFund balance sheet renders empty;
+        # NuGetAssemblyResolverTest fails at the lib/ assertion). packageSourceMapping pins resolution
+        # to this feed, but it can't un-poison a colliding cache key. rc1.ci.N is never published on
+        # nuget.org, so the cache key can ONLY ever be this lib-containing local package.
         dotnet pack src/MeshWeaver.BusinessRules/MeshWeaver.BusinessRules.csproj \
-          -c Release --no-build --no-restore -o dist/packages -p:PackageVersion=3.0.0-preview1 --nologo
+          -c Release --no-build --no-restore -o dist/packages --nologo
         dotnet pack src/MeshWeaver.BusinessRules.Generator/MeshWeaver.BusinessRules.Generator.csproj \
-          -c Release --no-build --no-restore -o dist/packages -p:PackageVersion=3.0.0-preview1 --nologo
+          -c Release --no-build --no-restore -o dist/packages --nologo
         ls -lh dist/packages
     - name: Package build output
       run: |
