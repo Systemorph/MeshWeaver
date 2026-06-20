@@ -33,6 +33,8 @@ public class ProviderCatalogRegistrationTest : AITestBase
         => base.ConfigureMesh(builder)
             // OpenAI is a model provider → its builder extension registers a catalog source.
             .AddOpenAI()
+            // OpenAICompatible is the generic custom-URL provider (OpenRouter, Groq, …).
+            .AddOpenAICompatible()
             // 🚨 Claude Code / Copilot are HARNESSES (620f07069). The MeshBuilder
             // .AddClaudeCode()/.AddCopilot() overloads are retained NO-OPS (they used to
             // register catalog sources); the real IHarness registration is the
@@ -51,6 +53,11 @@ public class ProviderCatalogRegistrationTest : AITestBase
         byName.Should().ContainKey("OpenAI");
         byName["OpenAI"].RequiresApiKey.Should().BeTrue();
 
+        // OpenAICompatible is the generic custom-URL provider → it registers a catalog
+        // source too, so it surfaces as a selectable "type" in the add-provider flow.
+        byName.Should().ContainKey("OpenAICompatible");
+        byName["OpenAICompatible"].RequiresApiKey.Should().BeTrue();
+
         // 🚨 Claude Code and Copilot are HARNESSES, not model providers (620f07069).
         // AddClaudeCode/AddCopilot register IHarness instead of an IChatClientFactory,
         // so they must NOT appear as model-provider catalog sources — they live in the
@@ -60,6 +67,27 @@ public class ProviderCatalogRegistrationTest : AITestBase
             "Claude Code is a harness, not a model-provider catalog source (620f07069)");
         byName.Should().NotContainKey("Copilot",
             "Copilot is a harness, not a model-provider catalog source (620f07069)");
+    }
+
+    /// <summary>
+    /// The generic <c>OpenAICompatible</c> provider registers a custom-URL catalog
+    /// profile: an API (key-based) provider with NO baked-in endpoint or model list —
+    /// the user supplies the base URL and fetches the model list live. This is what
+    /// makes OpenRouter / Groq / Together / a local vLLM "just work" without any
+    /// provider-specific wiring.
+    /// </summary>
+    [Fact]
+    public void OpenAiCompatible_RegistersGenericCustomUrlCatalogSource()
+    {
+        var opts = Mesh.ServiceProvider.GetRequiredService<LanguageModelCatalogOptions>();
+        var src = opts.Sources.Single(s =>
+            string.Equals(s.ProviderName, "OpenAICompatible", StringComparison.OrdinalIgnoreCase));
+
+        src.Kind.Should().Be(ProviderKind.Api, "it is a bring-your-own-key provider, not a CLI");
+        src.RequiresApiKey.Should().BeTrue();
+        src.DefaultEndpoint.Should().BeNull("the user supplies the base URL for a custom gateway");
+        src.EffectiveModelIds.Should().BeEmpty("no baked-in model list — the models are fetched live");
+        src.EffectiveLabel.Should().Be("OpenAI-compatible (custom URL)");
     }
 
     /// <summary>
