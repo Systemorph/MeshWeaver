@@ -114,7 +114,7 @@ Use unified reference syntax to steer a conversation:
 @agent/RiskImportAgent import Microsoft.xlsx   combine selection with a prompt
 ```
 
-Slash commands work too: `/agent <name>`, `/model <name>`, `/help`.
+Slash skills work too: `/agent <name>`, `/model <name>`, `/harness <name>`.
 
 ---
 

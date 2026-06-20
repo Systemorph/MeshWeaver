@@ -1,0 +1,112 @@
+#pragma warning disable CS1591
+
+using System.Linq;
+using System.Text.Json;
+using MeshWeaver.AI;
+using MeshWeaver.Mesh;
+using Xunit;
+
+namespace MeshWeaver.AI.Test;
+
+/// <summary>
+/// Skills AS mesh nodes — the unified slash-skill data layer (subsumes the retired Command tests):
+/// the built-in catalog (<see cref="BuiltInSkillProvider"/>), the inheritance query templates
+/// (<see cref="SkillNodeType.SkillQueries"/>), the projection (<see cref="SkillNodeType.ProjectSkills"/>),
+/// and the picker mapping (<see cref="SkillInfo.ToPickerRequest"/>) for a <see cref="SkillActionKind.Pick"/>.
+/// </summary>
+public class SkillNodeTypeTest
+{
+    private static readonly JsonSerializerOptions Json = new();
+
+    [Fact]
+    public void BuiltInSkillProvider_ShipsStandardSkills_AsPickSkillNodes()
+    {
+        var nodes = new BuiltInSkillProvider().GetStaticNodes().ToList();
+
+        nodes.Should().OnlyContain(n => n.NodeType == SkillNodeType.NodeType);
+        nodes.Should().OnlyContain(n => n.Namespace == SkillNodeType.RootNamespace);
+        nodes.Select(n => n.Id).OrderBy(x => x).Should().Equal("agent", "harness", "model");
+
+        var def = (SkillDefinition)nodes.Single(n => n.Id == "model").Content!;
+        def.Action!.Kind.Should().Be(SkillActionKind.Pick);
+        def.Action.Query.Should().Be("namespace:_Provider nodeType:LanguageModel scope:descendants sort:order");
+        def.Action.Field.Should().Be("modelName");
+        def.Action.Title.Should().Be("Choose a model");
+    }
+
+    [Fact]
+    public void ProjectSkills_DedupesById_NearerContextOverridesGlobal()
+    {
+        // Global /model then a Space-defined /model — the later (nearer-in-query-order) wins by id.
+        var global = SkillNode("model", "global", "namespace:_Provider nodeType:LanguageModel", "modelName", "Choose a model");
+        var spaceOverride = SkillNode("model", "space", "namespace:Acme/Models nodeType:LanguageModel", "modelName", "Acme models");
+
+        var projected = SkillNodeType.ProjectSkills(new[] { global, spaceOverride }, Json);
+
+        projected.Should().ContainSingle();
+        projected[0].Id.Should().Be("model");
+        projected[0].Definition.Action!.Query.Should().Be("namespace:Acme/Models nodeType:LanguageModel");
+    }
+
+    [Fact]
+    public void ProjectSkills_ReadsJsonElementContent()
+    {
+        // Cross-hub query content arrives as JsonElement — the projection must still read it.
+        var raw = JsonSerializer.SerializeToElement(
+            new SkillDefinition
+            {
+                Action = new SkillAction { Kind = SkillActionKind.Pick, Query = "nodeType:Space", Field = "contextPath", Title = "Choose a Space" }
+            }, Json);
+        var node = new MeshNode("space", SkillNodeType.RootNamespace)
+        {
+            NodeType = SkillNodeType.NodeType, Description = "Pick a Space", Content = raw
+        };
+
+        var projected = SkillNodeType.ProjectSkills(new[] { node }, Json);
+
+        projected.Should().ContainSingle();
+        projected[0].Id.Should().Be("space");
+        projected[0].Definition.Action!.Field.Should().Be("contextPath");
+    }
+
+    [Fact]
+    public void SkillInfo_ToPickerRequest_CarriesSpecAndSearchTerm()
+    {
+        var info = SkillNodeType.ProjectSkills(
+            new[] { SkillNode("agent", "switch", "namespace:Agent nodeType:Agent", "agentName", "Choose an agent") }, Json)
+            .Single();
+
+        var req = info.ToPickerRequest("Worker");
+
+        req.Should().NotBeNull();
+        req!.Query.Should().Be("namespace:Agent nodeType:Agent");
+        req.ComposerField.Should().Be("agentName");
+        req.Title.Should().Be("Choose an agent");
+        req.SearchTerm.Should().Be("Worker");
+    }
+
+    [Fact]
+    public void SkillQueries_IncludeGlobalCatalog_AndInheritedScopes()
+    {
+        var queries = SkillNodeType.SkillQueries(contextPath: "Acme/Project", userPath: "rbuergi");
+
+        queries.Should().Contain("namespace:Skill nodeType:Skill");
+        queries.Should().Contain("path:Acme/Project nodeType:Skill scope:selfAndAncestors");
+        queries.Should().Contain("path:rbuergi nodeType:Skill scope:selfAndAncestors");
+
+        // No context / user → only the global catalog.
+        SkillNodeType.SkillQueries(null, null).Should().ContainSingle()
+            .Which.Should().Be("namespace:Skill nodeType:Skill");
+    }
+
+    private static MeshNode SkillNode(string id, string desc, string query, string field, string title) =>
+        new(id, SkillNodeType.RootNamespace)
+        {
+            NodeType = SkillNodeType.NodeType,
+            Description = desc,
+            Content = new SkillDefinition
+            {
+                Action = new SkillAction { Kind = SkillActionKind.Pick, Query = query, Field = field, Title = title }
+            }
+        };
+}

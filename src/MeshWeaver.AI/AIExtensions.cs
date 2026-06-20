@@ -1,5 +1,4 @@
 ﻿using System.Reactive.Linq;
-using MeshWeaver.AI.Commands;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
@@ -33,8 +32,7 @@ public static class AIExtensions
                     .AddAgentType(serveFromPartition)
                     .AddLanguageModelType(serveFromPartition)
                     .AddHarnessType(serveFromPartition)
-                    .AddCommandType(serveFromPartition)
-                    .AddSkillType()
+                    .AddSkillType(serveFromPartition)
                     .AddThreadComposerType()
                     .AddAiSettingsType()
                     .ConfigureServices(services => services.AddAgentChatServices())
@@ -134,21 +132,9 @@ public static class AIExtensions
             services.AddTransient<IIconGenerator, IconGenerator>();
             services.AddTransient<IDescriptionGenerator, DescriptionGenerator>();
 
-            // Slash-command infrastructure: each IChatCommand is an independent handler; the registry
-            // composes them. The standard /agent /model /harness pickers ship as nodeType:Command
-            // MESH NODES (BuiltInCommandProvider, imported to PG) — NOT C# classes — so the catalog is
-            // data, extensible per Space/NodeType/user via namespace inheritance, and carries its own
-            // query (incl. `sort:order`). Only commands that need CODE (a workflow beyond "pick a node
-            // and save it on the composer") register here. /help is the canonical example.
-            services.TryAddEnumerable(ServiceDescriptor.Singleton<IChatCommand, HelpCommand>());
-            services.TryAddSingleton<ChatCommandRegistry>(sp =>
-            {
-                var registry = new ChatCommandRegistry(
-                    sp.GetService<ILoggerFactory>()?.CreateLogger<ChatCommandRegistry>());
-                foreach (var cmd in sp.GetServices<IChatCommand>())
-                    registry.Register(cmd);
-                return registry;
-            });
+            // Slash-skills are declarative nodeType:Skill mesh nodes (BuiltInSkillProvider, imported to
+            // PG), extensible per Space/NodeType/user via namespace inheritance — there is no C# command
+            // registry. See SkillNodeType / SkillAutocompleteProvider.
 
             return services;
         }

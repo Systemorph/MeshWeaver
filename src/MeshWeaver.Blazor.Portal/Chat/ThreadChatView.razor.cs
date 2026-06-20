@@ -1,7 +1,6 @@
 ﻿using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.AI;
-using MeshWeaver.AI.Commands;
 using MeshWeaver.AI.Parsing;
 using MeshWeaver.Blazor.Components;
 using MeshWeaver.Blazor.Components.Monaco;
@@ -34,13 +33,6 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     [Inject] private IChatCompletionOrchestrator CompletionOrchestrator { get; set; } = null!;
     [Inject] private IConfiguration Configuration { get; set; } = null!;
 
-    /// <summary>
-    /// Optional — when present, leading "/word args" in the user input is
-    /// parsed by <see cref="ChatPreParser"/> and dispatched to the matching
-    /// <see cref="IChatCommand"/> instead of being sent to the agent. Wired
-    /// up by <c>AddAgentChatServices</c>.
-    /// </summary>
-    [Inject] private ChatCommandRegistry? CommandRegistry { get; set; }
 
     /// <summary>Stateless — single instance reused per submission.</summary>
     private static readonly ChatPreParser ChatParser = new();
@@ -684,11 +676,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             // Use MessageText (updated via Monaco ValueChanged binding) — no blocking Monaco read.
             var userMessageText = MessageText;
 
-            // Slash-command interception: parse leading "/word args" via
-            // ChatPreParser. If a registered IChatCommand handles it,
-            // dispatch and short-circuit (don't post to the agent). Tests
-            // for /agent + /model live in MeshWeaver.AI.Test.
-            if (!string.IsNullOrWhiteSpace(userMessageText) && CommandRegistry != null)
+            // Slash-skill interception: parse leading "/word args" via ChatPreParser. If it resolves to
+            // a nodeType:Skill, run its action and short-circuit (don't post to the agent).
+            if (!string.IsNullOrWhiteSpace(userMessageText))
             {
                 var parsed = ChatParser.Parse(userMessageText);
                 if (parsed.Command != null)
@@ -818,115 +808,103 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     }
 
     /// <summary>
-    /// Dispatches a parsed slash command through <see cref="ChatCommandRegistry"/>.
-    /// Reads + writes the chat view's local agent/model state via the
-    /// <see cref="CommandContext"/> callbacks; updates
-    /// <see cref="lastCommandStatus"/> for the breadcrumb. No await on hub
-    /// calls — the IChatCommand contract is in-process logic only.
+    /// Dispatches a parsed leading "/word args" — harness-owned commands (/login, /logout) first, then
+    /// a nodeType:Skill resolved by slash word (<see cref="ResolveSkillNodeAndRun"/>). Updates
+    /// <see cref="lastCommandStatus"/> for the breadcrumb. No await on hub calls — skill actions are
+    /// in-process GUI logic (open a picker, load the content window) or reactive subscriptions.
     /// </summary>
     private async Task HandleSlashCommandAsync(ParsedCommand parsedCommand)
     {
         // Harness-owned commands take priority: when a non-MeshWeaver harness is active, its own
         // slash-commands (/login, /logout) route to the harness itself — NOT to MeshWeaver's
-        // /agent /model node-pickers. /harness, /help and everything else fall through below.
+        // /agent /model node-pickers. /harness and everything else fall through below.
         if (TryHandleHarnessCommand(parsedCommand))
         {
             await InvokeAsync(StateHasChanged);
             return;
         }
 
-        if (CommandRegistry == null)
-            return;
-
-        // 🚦 GENERIC command context — no per-command data/setters. The command is a HANDLER that
-        // runs in this thread and TRIGGERS the GUI callbacks below to inject UI (the node selector)
-        // or surface status. The chat view knows nothing about any specific command; a module ships
-        // an IChatCommand (or a nodeType:Command node) and it just works. See Doc/AI/ChatCommands.md.
-        var context = new CommandContext
-        {
-            ParsedCommand = parsedCommand,
-            Hub = Hub,
-            ContextPath = initialContext,
-            ThreadPath = threadPath,
-            ComposerPath = _templatePath,
-            CommandRegistry = CommandRegistry,
-            // GUI callback: pop the generic node selector; selection writes the node PATH onto the
-            // composer field (saved on ThreadComposer — the status row + next submission read it).
-            ShowNodePicker = picker =>
-            {
-                lastCommandStatus = null;
-                lastCommandStatusIsError = false;
-                OpenPicker(picker);
-            },
-            // GUI callback: status / error / help line under the input.
-            ShowStatus = (msg, isError) =>
-            {
-                pendingPicker = null;
-                pickerNodes = [];
-                lastCommandStatus = msg;
-                lastCommandStatusIsError = isError;
-            }
-        };
-
-        if (!CommandRegistry.TryGetCommand(parsedCommand.Name, out var command) || command == null)
-        {
-            // Not a registered C# command — resolve a nodeType:Command MESH NODE (the built-in
-            // /agent /model /harness ship as Command nodes; Spaces/NodeTypes/users add their own).
-            // The node's CommandDefinition IS the pick spec → triggers the SAME ShowNodePicker.
-            ResolveCommandNodeAndRun(parsedCommand, context);
-            return;
-        }
-
-        try
-        {
-            command.Execute(context);
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(ex, "[ThreadChat:{InstanceId}] /{Cmd} failed", _instanceId, parsedCommand.Name);
-            context.ShowStatus?.Invoke($"/{parsedCommand.Name} failed: {ex.Message}", true);
-        }
-
+        // Otherwise resolve a nodeType:Skill by slash word and run its action (Pick → combobox,
+        // OpenContent → content window, …). Skills are declarative mesh nodes (the built-in
+        // /agent /model /harness + any Space/NodeType/user-defined one) — there is no C# registry.
+        ResolveSkillNodeAndRun(parsedCommand);
         await InvokeAsync(StateHasChanged);
     }
 
     /// <summary>
-    /// Resolves a <c>nodeType:Command</c> mesh node by its slash word and opens the generic picker.
-    /// Built-in commands (/agent, /model, /harness — shipped as Command nodes by
-    /// <see cref="BuiltInCommandProvider"/>) AND any Space/NodeType/user-defined command resolve
-    /// here, with namespace inheritance (<see cref="CommandNodeType.CommandQueries"/> — global
-    /// catalog + context+ancestors + user-home+ancestors). There is no C# class per command.
-    /// Reactive: queries the mesh once, then opens the picker or reports "unknown command".
+    /// Resolves a <c>nodeType:Skill</c> mesh node by its slash word and runs its action. Built-in
+    /// skills (/agent, /model, /harness — Pick behaviours shipped by
+    /// <see cref="MeshWeaver.AI.BuiltInSkillProvider"/>) AND any Space/NodeType/user-defined skill
+    /// resolve here, with namespace inheritance (<see cref="MeshWeaver.AI.SkillNodeType.SkillQueries"/>).
+    /// Reactive: queries the mesh once, then runs the matched skill or reports "unknown command".
     /// </summary>
-    private void ResolveCommandNodeAndRun(ParsedCommand parsed, CommandContext context)
+    private void ResolveSkillNodeAndRun(ParsedCommand parsed)
     {
         var workspace = Hub.ServiceProvider.GetService<IWorkspace>();
         if (workspace is null)
         {
-            context.ShowStatus?.Invoke($"Unknown command: /{parsed.Name}", true);
+            ShowSkillStatus($"Unknown command: /{parsed.Name}", true);
             return;
         }
 
-        var queries = CommandNodeType.CommandQueries(initialContext, _userHome);
-        AgentPickerProjection.ObserveSnapshot(workspace, Hub, $"commands|{initialContext}|{_userHome}", queries)
+        var queries = MeshWeaver.AI.SkillNodeType.SkillQueries(initialContext, _userHome);
+        AgentPickerProjection.ObserveSnapshot(workspace, Hub, $"skills|{initialContext}|{_userHome}", queries)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(5))
             .Subscribe(
                 snapshot => InvokeAsync(() =>
                 {
-                    var match = CommandNodeType.ProjectCommands(snapshot, Hub.JsonSerializerOptions)
-                        .FirstOrDefault(c => string.Equals(c.Id, parsed.Name, StringComparison.OrdinalIgnoreCase));
+                    var match = MeshWeaver.AI.SkillNodeType.ProjectSkills(snapshot, Hub.JsonSerializerOptions)
+                        .FirstOrDefault(s => string.Equals(s.Id, parsed.Name, StringComparison.OrdinalIgnoreCase));
                     if (match is null)
                     {
-                        context.ShowStatus?.Invoke($"Unknown command: /{parsed.Name}", true);
+                        ShowSkillStatus($"Unknown command: /{parsed.Name}", true);
                         return;
                     }
-                    // The Command node's CommandDefinition IS the pick spec → trigger the SAME
-                    // ShowNodePicker callback the C# commands use. Identical GUI, one code path.
-                    var term = parsed.Arguments.Length == 0 ? null : LastSegment(parsed.RawArguments.Trim());
-                    context.ShowNodePicker?.Invoke(match.ToPickerRequest(term));
+                    RunSkill(match, parsed);
                 }),
-                _ => InvokeAsync(() => context.ShowStatus?.Invoke($"Unknown command: /{parsed.Name}", true)));
+                _ => InvokeAsync(() => ShowSkillStatus($"Unknown command: /{parsed.Name}", true)));
+    }
+
+    /// <summary>
+    /// Runs a resolved skill's action: <c>Pick</c> → combobox (write the pick to the composer);
+    /// <c>OpenContent</c> → load into the content window; instruction/Connect skills have no inline
+    /// chat behaviour (mounted to the CLI harnesses / advertised to the agent).
+    /// </summary>
+    private void RunSkill(MeshWeaver.AI.SkillInfo skill, ParsedCommand parsed)
+    {
+        var term = parsed.Arguments.Length == 0 ? null : LastSegment(parsed.RawArguments.Trim());
+        var action = skill.Definition.Action;
+        switch (action?.Kind)
+        {
+            case MeshWeaver.AI.SkillActionKind.Pick:
+                var picker = skill.ToPickerRequest(term);
+                if (picker is not null)
+                {
+                    lastCommandStatus = null;
+                    lastCommandStatusIsError = false;
+                    OpenPicker(picker);
+                }
+                break;
+            case MeshWeaver.AI.SkillActionKind.OpenContent:
+                var path = string.IsNullOrEmpty(action.ContentPath) ? skill.Path : action.ContentPath;
+                if (!string.IsNullOrEmpty(path))
+                    SidePanelState.SetContentPath(path);
+                ShowSkillStatus(skill.Name ?? skill.Id, false);
+                break;
+            default:
+                ShowSkillStatus(skill.Description ?? $"/{skill.Id}", false);
+                break;
+        }
+    }
+
+    /// <summary>Surface a status / error line under the chat input (replaces the old command status callback).</summary>
+    private void ShowSkillStatus(string message, bool isError)
+    {
+        pendingPicker = null;
+        pickerNodes = [];
+        lastCommandStatus = message;
+        lastCommandStatusIsError = isError;
     }
 
     // ─── Harness-owned commands + inline Connect (login) ───
@@ -1779,10 +1757,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     }
 
     /// <summary>
-    /// Slash-command completions: lists <c>nodeType:Command</c> nodes (built-ins imported to PG plus
-    /// any Space/NodeType/user command via namespace inheritance) AND registry <c>IChatCommand</c>s,
-    /// straight from <see cref="MeshWeaver.AI.Completion.CommandAutocompleteProvider"/> — NOT through
-    /// the @-oriented node-search orchestrator. Monaco filters the list by the typed "/word".
+    /// Slash-skill completions: lists <c>nodeType:Skill</c> nodes (built-ins imported to PG plus any
+    /// Space/NodeType/user skill via namespace inheritance), straight from
+    /// <see cref="MeshWeaver.AI.Completion.SkillAutocompleteProvider"/> — NOT through the @-oriented
+    /// node-search orchestrator. Monaco filters the list by the typed "/word".
     /// </summary>
     private IObservable<IReadOnlyList<CompletionItem>> GetCommandCompletions(string query)
     {
@@ -1794,12 +1772,11 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             return Observable.Return(BuildHarnessCommandCompletions(harness));
 
         // Construct the provider directly against the chat hub's service provider — it self-resolves
-        // its deps (IWorkspace + IMessageHub for the nodeType:Command catalog, ChatCommandRegistry for
-        // the C# /help command). Resolving via GetServices<IAutocompleteProvider>() does NOT work here:
-        // CommandAutocompleteProvider is only registered in the Agents-application hub's container
-        // (ConfigureAgentsApplication), never on the chat hub — so the enumerable lookup returned null
-        // and typing "/" showed nothing. (This is exactly how CommandAutocompleteTest drives it.)
-        var provider = new MeshWeaver.AI.Completion.CommandAutocompleteProvider(Hub.ServiceProvider);
+        // its deps (IWorkspace + IMessageHub for the nodeType:Skill catalog). Resolving via
+        // GetServices<IAutocompleteProvider>() does NOT work here: the provider is only registered in
+        // the Agents-application hub's container (ConfigureAgentsApplication), never on the chat hub —
+        // so the enumerable lookup returned null and typing "/" showed nothing.
+        var provider = new MeshWeaver.AI.Completion.SkillAutocompleteProvider(Hub.ServiceProvider);
 
         return provider.GetItems(query, initialContext)
             .Select(items => (IReadOnlyList<CompletionItem>)items

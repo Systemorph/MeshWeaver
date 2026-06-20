@@ -223,28 +223,29 @@ public sealed class AgentSkillSyncService(
         }
     }
 
-    private static string? InstructionsOf(MeshNode node, JsonSerializerOptions json) => node.Content switch
+    private static ContentCarrier? ContentOf(MeshNode node, JsonSerializerOptions json) => node.Content switch
     {
-        AgentConfiguration a => a.Instructions,
-        SkillDefinition s => s.Instructions,
-        JsonElement je => InstructionsFromJson(je, json),
+        AgentConfiguration a => new ContentCarrier { Instructions = a.Instructions, ModelTier = a.ModelTier },
+        SkillDefinition s => new ContentCarrier { Instructions = s.Instructions },
+        JsonElement je => DeserializeContent(je, json),
         _ => null
     };
 
-    private static string? InstructionsFromJson(JsonElement je, JsonSerializerOptions json)
+    private static ContentCarrier? DeserializeContent(JsonElement je, JsonSerializerOptions json)
     {
-        // Both AgentConfiguration and SkillDefinition carry `Instructions`.
-        try { return JsonSerializer.Deserialize<InstructionsCarrier>(je.GetRawText(), json)?.Instructions; }
+        // AgentConfiguration and SkillDefinition both carry `Instructions`; only agents carry ModelTier.
+        try { return JsonSerializer.Deserialize<ContentCarrier>(je.GetRawText(), json); }
         catch { return null; }
     }
 
-    private sealed record InstructionsCarrier
+    private sealed record ContentCarrier
     {
         public string? Instructions { get; init; }
+        public string? ModelTier { get; init; }
     }
 
-    /// <summary>The background-generator agents that must never be a conversational skill.</summary>
-    private static bool IsUtility(string id)
+    /// <summary>Name-based fallback for background-generator agents that predate the modelTier tag.</summary>
+    private static bool IsUtilityName(string id)
     {
         var seg = id.Contains('/') ? id[(id.LastIndexOf('/') + 1)..] : id;
         return seg is "ThreadNamer" or "NodeInitializer" or "DescriptionWriter";

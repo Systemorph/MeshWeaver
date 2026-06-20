@@ -32,8 +32,8 @@ public static class AgentsApplicationExtensions
                 .AddScoped<IAutocompleteProvider>(sp =>
                     new MeshCatalogAutocompleteProvider(sp)
                 )
-                // Command provider — slash commands (/agent, /model, /harness, …) from the registry.
-                .AddScoped<IAutocompleteProvider, CommandAutocompleteProvider>())
+                // Skill provider — slash skills (/agent, /model, /harness, …) from the nodeType:Skill catalog.
+                .AddScoped<IAutocompleteProvider, SkillAutocompleteProvider>())
             .WithHandler<AutocompleteRequest>(HandleAutocompleteRequest);
 
     private const int AutocompleteTopN = 50;
