@@ -444,6 +444,10 @@ Always `GetRequiredService<T>()` — never `GetService<T>()` + null check for re
 
 Full reference: [DataAccessPatterns.md](src/MeshWeaver.Documentation/Data/Architecture/DataAccessPatterns.md)
 
+## Memex is available through MCP
+
+The memex mesh is reachable through the **`meshweaver` MCP server** — for agents working on this repo (the `atioz` / `memex-systemorph` MCP tools you already have) AND for the co-hosted **Claude Code / GitHub Copilot** harnesses, which get a per-user `meshweaver` HTTP MCP server wired **automatically** (authenticated as the calling user). The mesh — NOT a local file tree — is the workspace: use the MCP tools to read/modify mesh content rather than guessing — `get` / `search` (read), `create` / `update` / `patch` / `move` / `copy` / `delete` (mutate), `execute_script`, `render_area`, `navigate_to`, `upload`. This file (`AGENTS.md`, read by both Claude Code and Copilot) is the canonical place that tells the co-hosted agents the mesh is MCP-accessible.
+
 ## MCP Mutations — Always Show a Diff
 
 For every MCP mutation (`patch`, `update`, `create`, `delete`, `move`, `copy`):
