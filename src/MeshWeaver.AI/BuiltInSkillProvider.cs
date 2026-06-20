@@ -2,6 +2,7 @@ using Markdig;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
@@ -30,7 +31,30 @@ public class BuiltInSkillProvider : IStaticNodeProvider
         .Build();
 
     /// <inheritdoc />
-    public IEnumerable<MeshNode> GetStaticNodes() => LazyNodes.Value;
+    public IEnumerable<MeshNode> GetStaticNodes()
+    {
+        // Read-only, world-readable policy for the Skill namespace — the skill catalog is public, same
+        // as Agent/Harness. On the SYNCED path this _Policy MUST be imported (SkillStaticRepoSource),
+        // else the partition has no read policy and the skills are unreadable → the chat finds no skills
+        // (the Harness wedge, atioz 2026-06-15). The write caps keep the built-in skills unmodifiable.
+        yield return new MeshNode("_Policy", SkillNodeType.RootNamespace)
+        {
+            NodeType = "PartitionAccessPolicy",
+            Name = "Access Policy",
+            Content = new PartitionAccessPolicy
+            {
+                PublicRead = true,
+                Create = false,
+                Update = false,
+                Delete = false,
+                Comment = false,
+                Thread = false,
+            }
+        };
+
+        foreach (var node in LazyNodes.Value)
+            yield return node;
+    }
 
     private static MeshNode[] LoadEmbeddedNodes()
     {

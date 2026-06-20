@@ -32,11 +32,19 @@ public class SkillHarnessImportSourceTest(ITestOutputHelper output) : MonolithMe
 
         source.Partition.Should().Be("Skill");
 
-        var skills = source.EnumerateSourceNodes();
+        var nodes = source.EnumerateSourceNodes();
+
+        // The partition's PublicRead _Policy MUST travel to the synced partition — without it the
+        // partition has no read policy → its skills are unreadable → the chat finds no skills (the
+        // Harness wedge, atioz 2026-06-15).
+        var policy = nodes.SingleOrDefault(n => n.NodeType == "PartitionAccessPolicy");
+        policy.Should().NotBeNull("the Skill partition PublicRead _Policy must be imported");
+        ((MeshWeaver.Mesh.Security.PartitionAccessPolicy)policy!.Content!).PublicRead.Should().BeTrue();
+
+        var skills = nodes.Where(n => n.NodeType == SkillNodeType.NodeType).ToList();
         skills.Select(n => n.Id).OrderBy(x => x).Should().Equal("agent", "harness", "model");
         skills.Should().AllSatisfy(n =>
         {
-            n.NodeType.Should().Be(SkillNodeType.NodeType);
             n.Namespace.Should().Be(SkillNodeType.RootNamespace);
             // The pick-spec content must arrive typed — ProjectSkills drops a skill whose Content
             // isn't a SkillDefinition, so the chat would silently lose it.

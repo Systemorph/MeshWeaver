@@ -21,9 +21,14 @@ public sealed class SkillStaticRepoSource(BuiltInSkillProvider provider) : IStat
     public bool Versioned => false;
 
     /// <inheritdoc />
+    // Skill content nodes PLUS the partition's PublicRead "_Policy" (PartitionAccessPolicy). On the
+    // SYNCED path the in-memory provider that served the policy is gated off, so the policy MUST be
+    // imported or the partition has no read policy → its skills are unreadable (the Harness wedge —
+    // OrleansHarnessPartitionPublicReadTest). Only OTHER "_"-governance is dropped.
     public IReadOnlyList<MeshNode> EnumerateSourceNodes() =>
         provider.GetStaticNodes()
-            .Where(n => !n.Segments.Skip(1).Any(seg => seg.StartsWith('_')))
+            .Where(n => n.NodeType == "PartitionAccessPolicy"
+                        || !n.Segments.Skip(1).Any(seg => seg.StartsWith('_')))
             .ToArray();
 
     /// <inheritdoc />

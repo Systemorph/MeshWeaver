@@ -23,11 +23,14 @@ public class SkillNodeTypeTest
     {
         var nodes = new BuiltInSkillProvider().GetStaticNodes().ToList();
 
-        nodes.Should().OnlyContain(n => n.NodeType == SkillNodeType.NodeType);
-        nodes.Should().OnlyContain(n => n.Namespace == SkillNodeType.RootNamespace);
-        nodes.Select(n => n.Id).OrderBy(x => x).Should().Equal("agent", "harness", "model");
+        // The catalog also ships the partition PublicRead _Policy (so the synced partition is readable).
+        nodes.Should().Contain(n => n.NodeType == "PartitionAccessPolicy" && n.Id == "_Policy");
 
-        var def = (SkillDefinition)nodes.Single(n => n.Id == "model").Content!;
+        var skills = nodes.Where(n => n.NodeType == SkillNodeType.NodeType).ToList();
+        skills.Should().OnlyContain(n => n.Namespace == SkillNodeType.RootNamespace);
+        skills.Select(n => n.Id).OrderBy(x => x).Should().Equal("agent", "harness", "model");
+
+        var def = (SkillDefinition)skills.Single(n => n.Id == "model").Content!;
         def.Action!.Kind.Should().Be(SkillActionKind.Pick);
         def.Action.Query.Should().Be("namespace:_Provider nodeType:LanguageModel scope:descendants sort:order");
         def.Action.Field.Should().Be("modelName");
