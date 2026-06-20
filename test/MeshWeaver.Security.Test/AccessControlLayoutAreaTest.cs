@@ -177,11 +177,11 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         // Verify permissions via the live effective-permission stream.
         var deepPath = "Org/Division/Team/Project";
 
-        var rootPerms = await Mesh.GetEffectivePermissions(deepPath, "RootUser").Should().Match(p => p == Permission.All);
+        var rootPerms = await Mesh.GetEffectivePermissions(deepPath, "RootUser").Should().Match(p => p == (Permission.All | Permission.Compile));
         var divPerms = await Mesh.GetEffectivePermissions(deepPath, "DivUser").Should().Match(p => p.HasFlag(Permission.Update));
         var deepPerms = await Mesh.GetEffectivePermissions(deepPath, "DeepUser").Should().Match(p => p == (Permission.Read | Permission.Execute | Permission.Api));
 
-        rootPerms.Should().Be(Permission.All, "RootUser with Admin at Org should have all permissions on deeply nested path");
+        rootPerms.Should().Be(Permission.All | Permission.Compile, "RootUser with Admin at Org should have all permissions on deeply nested path");
         divPerms.Should().HaveFlag(Permission.Update, "DivUser with Editor at Org/Division should have update on deeply nested path");
         deepPerms.Should().Be(Permission.Read | Permission.Execute | Permission.Api, "DeepUser with Viewer at exact path should have read + execute + api permissions");
     }
@@ -193,11 +193,11 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         // Verify permissions via the live effective-permission stream.
         var nestedPath = "MyOrg/Project/SubFolder";
 
-        var globalPerms = await Mesh.GetEffectivePermissions(nestedPath, "GlobalAdmin").Should().Match(p => p == Permission.All);
+        var globalPerms = await Mesh.GetEffectivePermissions(nestedPath, "GlobalAdmin").Should().Match(p => p == (Permission.All | Permission.Compile));
         var orgPerms = await Mesh.GetEffectivePermissions(nestedPath, "OrgEditor").Should().Match(p => p.HasFlag(Permission.Update));
         var projectPerms = await Mesh.GetEffectivePermissions(nestedPath, "ProjectViewer").Should().Match(p => p == (Permission.Read | Permission.Execute | Permission.Api));
 
-        globalPerms.Should().Be(Permission.All, "GlobalAdmin with global Admin role should have all permissions");
+        globalPerms.Should().Be(Permission.All | Permission.Compile, "GlobalAdmin with global Admin role should have all permissions");
         orgPerms.Should().HaveFlag(Permission.Update, "OrgEditor with Editor at MyOrg should have update on nested path");
         projectPerms.Should().Be(Permission.Read | Permission.Execute | Permission.Api, "ProjectViewer with Viewer at exact path should have read + execute + api");
 

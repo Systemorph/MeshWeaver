@@ -38,9 +38,9 @@ public class AdminPartitionAdminTests(ITestOutputHelper output) : MonolithMeshTe
     [Fact]
     public async Task PlatformAdmin_HasAllOnAdminPartition_IncludingInvitations()
     {
-        await Mesh.GetEffectivePermissions("Admin", "AdminBoss").Should().Match(p => p == Permission.All);
+        await Mesh.GetEffectivePermissions("Admin", "AdminBoss").Should().Match(p => p == (Permission.All | Permission.Compile));
         // Invitations live in the Admin partition — a platform admin manages them.
-        await Mesh.GetEffectivePermissions("Admin/Invitation", "AdminBoss").Should().Match(p => p == Permission.All);
+        await Mesh.GetEffectivePermissions("Admin/Invitation", "AdminBoss").Should().Match(p => p == (Permission.All | Permission.Compile));
     }
 
     [Fact]

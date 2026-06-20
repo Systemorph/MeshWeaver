@@ -108,7 +108,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     public async Task AddUserRole_GlobalRole_GrantsPermissionsEverywhere()
     {
         await Mesh.GetEffectivePermissions("ACME/SomeProject", "NewUser")
-            .Should().Match(p => p == Permission.All);
+            .Should().Match(p => p == (Permission.All | Permission.Compile));
     }
 
     [Fact]
@@ -159,19 +159,19 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public async Task GetEffectivePermissions_GlobalAdmin_HasAllPermissionsEverywhere()
     {
-        var permMeshWeaver = await Mesh.GetEffectivePermissions("MeshWeaver", "Roland").Should().Match(p => p == Permission.All);
-        var permACME = await Mesh.GetEffectivePermissions("ACME", "Roland").Should().Match(p => p == Permission.All);
-        var permDeep = await Mesh.GetEffectivePermissions("ACME/ProductLaunch/Todo/Task1", "Roland").Should().Match(p => p == Permission.All);
+        var permMeshWeaver = await Mesh.GetEffectivePermissions("MeshWeaver", "Roland").Should().Match(p => p == (Permission.All | Permission.Compile));
+        var permACME = await Mesh.GetEffectivePermissions("ACME", "Roland").Should().Match(p => p == (Permission.All | Permission.Compile));
+        var permDeep = await Mesh.GetEffectivePermissions("ACME/ProductLaunch/Todo/Task1", "Roland").Should().Match(p => p == (Permission.All | Permission.Compile));
 
-        permMeshWeaver.Should().Be(Permission.All);
-        permACME.Should().Be(Permission.All);
-        permDeep.Should().Be(Permission.All);
+        permMeshWeaver.Should().Be(Permission.All | Permission.Compile);
+        permACME.Should().Be(Permission.All | Permission.Compile);
+        permDeep.Should().Be(Permission.All | Permission.Compile);
     }
 
     [Fact]
     public async Task GetEffectivePermissions_NamespacedEditor_HasEditorInNamespace()
     {
-        var editorPerms = Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export;
+        var editorPerms = Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export | Permission.Compile;
         var permACME = await Mesh.GetEffectivePermissions("ACME", "Alice").Should().Match(p => p == editorPerms);
         var permChild = await Mesh.GetEffectivePermissions("ACME/ProductLaunch", "Alice").Should().Match(p => p == editorPerms);
         var permMeshWeaver = await Mesh.GetEffectivePermissions("MeshWeaver", "Alice").Should().Match(p => p == Permission.None);
@@ -191,7 +191,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public async Task GetEffectivePermissions_MultipleRoles_CombinesPermissions()
     {
-        var editorPerms = Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export;
+        var editorPerms = Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export | Permission.Compile;
         var permMeshWeaver = await Mesh.GetEffectivePermissions("MeshWeaver", "MultiUser_MW")
             .Should().Match(p => p == (Permission.Read | Permission.Execute | Permission.Api));
         var permACME = await Mesh.GetEffectivePermissions("ACME", "MultiUser").Should().Match(p => p == editorPerms);
@@ -207,14 +207,14 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public async Task GetEffectivePermissions_RoleOnParent_InheritsToChildren()
     {
-        var permParent = await Mesh.GetEffectivePermissions("Space", "InheritUser").Should().Match(p => p == Permission.All);
-        var permChild = await Mesh.GetEffectivePermissions("Space/Team", "InheritUser").Should().Match(p => p == Permission.All);
-        var permGrandchild = await Mesh.GetEffectivePermissions("Space/Team/Project", "InheritUser").Should().Match(p => p == Permission.All);
+        var permParent = await Mesh.GetEffectivePermissions("Space", "InheritUser").Should().Match(p => p == (Permission.All | Permission.Compile));
+        var permChild = await Mesh.GetEffectivePermissions("Space/Team", "InheritUser").Should().Match(p => p == (Permission.All | Permission.Compile));
+        var permGrandchild = await Mesh.GetEffectivePermissions("Space/Team/Project", "InheritUser").Should().Match(p => p == (Permission.All | Permission.Compile));
         var permSibling = await Mesh.GetEffectivePermissions("OtherOrg", "InheritUser").Should().Match(p => p == Permission.None);
 
-        permParent.Should().Be(Permission.All);
-        permChild.Should().Be(Permission.All);
-        permGrandchild.Should().Be(Permission.All);
+        permParent.Should().Be(Permission.All | Permission.Compile);
+        permChild.Should().Be(Permission.All | Permission.Compile);
+        permGrandchild.Should().Be(Permission.All | Permission.Compile);
         permSibling.Should().Be(Permission.None);
     }
 
@@ -222,13 +222,13 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     public async Task GetEffectivePermissions_ExactMatch_TakesPrecedence()
     {
         var permOrg = await Mesh.GetEffectivePermissions("Org", "OverrideUser").Should().Match(p => p == Permission.None);
-        var permSpecial = await Mesh.GetEffectivePermissions("Org/Special", "OverrideUser").Should().Match(p => p == Permission.All);
+        var permSpecial = await Mesh.GetEffectivePermissions("Org/Special", "OverrideUser").Should().Match(p => p == (Permission.All | Permission.Compile));
         var permOther = await Mesh.GetEffectivePermissions("Org/Other", "OverrideUser").Should().Match(p => p == Permission.None);
 
         // OverrideUser_Org has Viewer at "Org"; OverrideUser has Admin at "Org/Special".
         // GetEffectivePermissions is called twice for two distinct user IDs (different objects).
         permOrg.Should().Be(Permission.None, "OverrideUser has no role at Org — only OverrideUser_Org does");
-        permSpecial.Should().Be(Permission.All); // Admin at Org/Special
+        permSpecial.Should().Be(Permission.All | Permission.Compile); // Admin at Org/Special
         permOther.Should().Be(Permission.None); // No role inherited (Viewer was for OverrideUser_Org, not OverrideUser)
     }
 
@@ -313,7 +313,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public async Task GetEffectivePermissions_AuthenticatedUser_HasAccessToPrivateNamespace()
     {
-        var editorPerms = Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export;
+        var editorPerms = Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export | Permission.Compile;
         var permAnonymous = await Mesh.GetEffectivePermissions("Restricted", "").Should().Match(p => p == Permission.None);
         var permAuthUser = await Mesh.GetEffectivePermissions("Restricted", "AuthUser").Should().Match(p => p == editorPerms);
 

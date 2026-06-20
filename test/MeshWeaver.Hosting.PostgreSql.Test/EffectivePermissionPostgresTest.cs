@@ -161,13 +161,16 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
         // The post-creation handler granted Admin to Roland via persisted
         // AccessAssignment.
         // Without fix: returns Permission.None (GetChildrenAsync filters satellite nodes)
-        // With fix: returns Permission.All (GetAllChildrenAsync includes satellites)
+        // With fix: returns Permission.All | Compile (GetAllChildrenAsync includes satellites).
+        // The Admin role grants Permission.All PLUS the privileged Compile bit, which is
+        // deliberately excluded from Permission.All and added explicitly to the built-in roles
+        // (see Role.cs / Permission.Compile) — so the effective set is All | Compile, not All.
         var permissions = await Mesh.GetEffectivePermissions("Systemorph", TestUsers.Admin.ObjectId)
-            .Should().Within(90.Seconds()).Match(p => p == Permission.All);
+            .Should().Within(90.Seconds()).Match(p => p == (Permission.All | Permission.Compile));
         permissions.Should().NotBe(Permission.None,
             "Creator should have permissions from persisted AccessAssignment on the Organization");
-        permissions.Should().Be(Permission.All,
-            "Admin role grants all permissions");
+        permissions.Should().Be(Permission.All | Permission.Compile,
+            "Admin role grants all permissions plus the explicit Compile grant");
     }
 
     /// <summary>
@@ -241,7 +244,7 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
 
             var after = await Mesh.GetEffectivePermissions(scope, userId)
                 .Should().Within(90.Seconds()).Match(p => p.HasFlag(Permission.Read));
-            after.Should().Be(Permission.All);
+            after.Should().Be(Permission.All | Permission.Compile);
         }
         finally
         {
@@ -282,12 +285,14 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
                     : Observable.Throw<MeshNode>(ex))
             .Should().Within(90.Seconds()).Emit();
 
-        // AdminMenuGate's exact check is the ROOT path "".
+        // AdminMenuGate's exact check is the ROOT path "" (HasFlag(All)). The Admin role's
+        // effective set is All | Compile (Compile is granted explicitly on the role, excluded
+        // from Permission.All — see Role.cs / Permission.Compile).
         await Mesh.GetEffectivePermissions("", userId)
-            .Should().Within(90.Seconds()).Match(p => p == Permission.All);
+            .Should().Within(90.Seconds()).Match(p => p == (Permission.All | Permission.Compile));
         // And the root grant must still cover the Admin/Invitation subtree the tab manages.
         await Mesh.GetEffectivePermissions("Admin/Invitation", userId)
-            .Should().Within(90.Seconds()).Match(p => p == Permission.All);
+            .Should().Within(90.Seconds()).Match(p => p == (Permission.All | Permission.Compile));
     }
 
 }

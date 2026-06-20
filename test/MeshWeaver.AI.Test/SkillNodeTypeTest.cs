@@ -127,6 +127,17 @@ public class SkillNodeTypeTest
             .Which.Should().Be("namespace:Skill nodeType:Skill");
     }
 
+    [Fact]
+    public void SkillQueries_SkipRogueReservedContextPartition()
+    {
+        // A rogue/reserved ROUTE context (e.g. "login" — an auto-minted page artifact) must NOT be added
+        // to the namespace IN(...): it has no read policy, so including "login/Skill" fails the WHOLE
+        // query ("lacks Read permission on 'login'") and the picker/autocomplete goes empty.
+        var q = SkillNodeType.SkillQueries(contextPath: "login", userPath: "rbuergi").Single();
+        q.Should().Be("namespace:rbuergi/Skill|Skill nodeType:Skill");
+        q.Should().NotContain("login/Skill");
+    }
+
     private static MeshNode SkillNode(string id, string desc, string query, string field, string title) =>
         new(id, SkillNodeType.RootNamespace)
         {

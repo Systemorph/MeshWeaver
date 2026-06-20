@@ -103,13 +103,24 @@ public static class AgentPickerProjection
     /// <c>namespace:A|B|C</c> exact-membership alternation. No scope — agents/models are placed in a
     /// flat, well-known namespace per partition, so there is no graph search.
     /// </summary>
+    // Rogue/reserved ROUTE partitions — auto-minted page artifacts (login, welcome, settings, …; mirrors
+    // the reserved-schema list in PostgreSqlCrossSchemaQueryProvider). They carry NO read policy and never
+    // hold registry nodes, so including one in the namespace IN(...) — e.g. when the chat context resolves
+    // to a rogue "login" node — fails the WHOLE query with "lacks Read permission on 'login'" and the
+    // picker/autocomplete goes empty. A read-only reserved-word set (allowed static; never written).
+    private static readonly HashSet<string> ReservedPartitions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "login", "markdown", "onboarding", "welcome", "settings", "storage",
+    };
+
     private static string BuildRegistryQuery(
         string nodeType, string sub, string? userPath, string? spacePath, string extra)
     {
         var namespaces = new List<string>();
         void Add(string? partition)
         {
-            if (string.IsNullOrEmpty(partition)) return;
+            // Skip empty + rogue/reserved route partitions so a poisoned context can't break the query.
+            if (string.IsNullOrEmpty(partition) || ReservedPartitions.Contains(partition)) return;
             var ns = $"{partition}/{sub}";
             if (!namespaces.Contains(ns, StringComparer.OrdinalIgnoreCase))
                 namespaces.Add(ns);
