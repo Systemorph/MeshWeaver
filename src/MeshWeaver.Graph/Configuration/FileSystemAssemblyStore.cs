@@ -43,7 +43,7 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
             return Observable.Return<string?>(null);
         }
         var candidate = new DirectoryInfo(dir)
-            .EnumerateFiles($"v{version}-*.dll")
+            .EnumerateFiles($"v{version}-{FrameworkTag}-*.dll")
             .OrderByDescending(f => f.LastWriteTimeUtc)
             .FirstOrDefault();
         if (candidate is null)
@@ -90,7 +90,7 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
         //
         // Lookup mirrors TryGetAssemblyPath above (newest v{version}-*.dll).
         var existing = new DirectoryInfo(dir)
-            .EnumerateFiles($"v{version}-*.dll")
+            .EnumerateFiles($"v{version}-{FrameworkTag}-*.dll")
             .OrderByDescending(f => f.LastWriteTimeUtc)
             .FirstOrDefault();
         if (existing is not null)
@@ -114,10 +114,20 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
         return Observable.Return(new AssemblyStoreLocation(dllPath, FileSystemCollectionName, relativeContentPath));
     }
 
+    // 🚨 Per-image framework identity baked into every assembly-cache filename + lookup glob. The store
+    // is keyed by (nodeTypePath, MeshNode version), but the COMPILED bytes are bound to the framework's
+    // reference assemblies — two DIFFERENT images compiling the SAME (path, version) produce
+    // INCOMPATIBLE DLLs. Without this tag a freshly-deployed image's lookup matched (and first-write-
+    // wins RETURNED) the PREVIOUS image's DLL → System.BadImageFormatException on ALC load, which
+    // cascaded into failed grain activations and a portal-wide wedge on deploy (atioz 2026-06-20). The
+    // MVID (Graph module content hash) changes only when the framework bytes change, so a new image
+    // misses the old DLLs (clean recompile) while an unchanged framework still hits the cache.
+    private static readonly string FrameworkTag = NodeTypeCompilationHelpers.FrameworkVersion[..8];
+
     private string GetDllPath(string nodeTypePath, long version, byte[] bytes)
     {
         var hash = ContentHash(bytes);
-        return Path.Combine(rootDirectory, Sanitize(nodeTypePath), $"v{version}-{hash}.dll");
+        return Path.Combine(rootDirectory, Sanitize(nodeTypePath), $"v{version}-{FrameworkTag}-{hash}.dll");
     }
 
     private static string ContentHash(byte[] bytes)

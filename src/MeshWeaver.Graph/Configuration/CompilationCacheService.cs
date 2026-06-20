@@ -482,15 +482,26 @@ internal class CompilationCacheService(
 
     private static DateTimeOffset ComputeFrameworkTimestamp()
     {
-        var assemblyLocation = typeof(CompilationCacheService).Assembly.Location;
-        if (string.IsNullOrEmpty(assemblyLocation) || !File.Exists(assemblyLocation))
-        {
-            // Running in-memory (e.g., single-file deployment) - use current time
-            return DateTimeOffset.UtcNow;
-        }
-
-        var lastWrite = File.GetLastWriteTimeUtc(assemblyLocation);
-        return new DateTimeOffset(lastWrite, TimeSpan.Zero);
+        // 🚨 The framework identity for the compile cache key MUST be the MeshWeaver.Graph assembly's
+        // MVID (ManifestModule.ModuleVersionId — a content hash of the compiled module), NOT the DLL
+        // file's last-write time. `dotnet publish -t:PublishContainer` NORMALIZES file timestamps for
+        // reproducible container images, so File.GetLastWriteTimeUtc returns the SAME value across
+        // DIFFERENT images → the release hash (NodeTypeRelease.ComputeRelease) didn't change between
+        // images → a freshly-deployed image loaded the PREVIOUS image's cached DLLs, which were
+        // compiled against different reference-assembly bytes → System.BadImageFormatException →
+        // failed grain activations cascading into a portal-wide wedge on deploy (the atioz 2026-06-20
+        // regression). The MVID changes only when the framework bytes actually change (a real
+        // redeploy) and is STABLE across copies/touches — so a new build gets a clean recompile and an
+        // unchanged framework still hits the cache. (Same identity FrameworkVersion already uses for
+        // CompiledFrameworkVersion matching — see NodeTypeCompilationHelpers._frameworkVersion.)
+        //
+        // The cache only needs a deterministic per-framework-content distinguishing value, and the key
+        // carrier here is a DateTimeOffset, so derive stable ticks from the MVID's bytes. A 64-bit
+        // projection of a 128-bit content hash collides at ~2^-64 — negligible for cache keying.
+        var mvid = typeof(CompilationCacheService).Assembly.ManifestModule.ModuleVersionId;
+        var seed = BitConverter.ToUInt64(mvid.ToByteArray(), 0);
+        var ticks = (long)(seed % (ulong)DateTime.MaxValue.Ticks);
+        return new DateTimeOffset(ticks, TimeSpan.Zero);
     }
 
     /// <inheritdoc />
