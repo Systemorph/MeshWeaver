@@ -20,7 +20,7 @@ MeshWeaver integrates AI agents as first-class citizens. Agents can query data, 
   <rect x="270" y="155" width="220" height="90" rx="12" fill="#1e88e5"/>
   <text x="380" y="192" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="bold" fill="#fff">Mesh Graph</text>
   <text x="380" y="212" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" fill-opacity=".85">Instructions · Schemas · Data</text>
-  <text x="380" y="230" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" fill-opacity=".85">Commands · Documentation</text>
+  <text x="380" y="230" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" fill-opacity=".85">Skills · Documentation</text>
   <rect x="20" y="30" width="150" height="52" rx="10" fill="#5c6bc0"/>
   <text x="95" y="52" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Orchestrator</text>
   <text x="95" y="70" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fff" fill-opacity=".85">Standard Model</text>
@@ -160,23 +160,23 @@ flowchart TB
 
 Custom agents are ordinary Agent nodes in the mesh. They inherit from a base agent and add domain-specific instructions, tools, and behaviours — no code required.
 
-# Custom Commands
+# Custom Skills
 
-Define `/commands` to provide detailed, step-by-step instructions for specific operations. Commands live in the mesh alongside the data they operate on:
+Define **skills** to provide detailed, step-by-step instructions for specific operations. Skills live in the mesh alongside the data they operate on (a skill is "a thing that does something" — see [ChatCommands](/Doc/AI/ChatCommands)):
 
 ```
 Insurance/Claims/
-  Command/
-    import.md      <- /import command instructions
-    validate.md    <- /validate command instructions
-    assign.md      <- /assign command instructions
+  Skill/
+    import.md      <- /import skill instructions
+    validate.md    <- /validate skill instructions
+    assign.md      <- /assign skill instructions
 ```
 
-**Example `/import` command:**
+**Example `/import` skill:**
 ```markdown
-# Import Command
+# Import Skill
 
-This command imports claims from external sources.
+This skill imports claims from external sources.
 
 ## Steps
 1. Validate the source format (CSV, JSON, XML)
@@ -189,7 +189,7 @@ This command imports claims from external sources.
 - claimReference, policyNumber, lossDate, description
 ```
 
-Commands are context-aware and discoverable. An agent handling a claims task will find and follow `Insurance/Claims/Command/import.md` automatically — no wiring needed.
+Skills are context-aware and discoverable. An agent handling a claims task will find and follow `Insurance/Claims/Skill/import.md` automatically — no wiring needed.
 
 # MeshPlugin Tools
 
@@ -381,7 +381,7 @@ At runtime, an agent builds its context from the mesh — no pre-loaded knowledg
 
 1. **Task Descriptions** — Markdown nodes that explain what needs to be done
 2. **Data Schemas** — NodeType definitions with field metadata and validation rules
-3. **Custom Commands** — `/command` instruction nodes for specific operations
+3. **Custom Skills** — `/skill` instruction nodes for specific operations
 4. **Domain Knowledge** — Documentation distributed throughout the hierarchy
 
 This keeps agents thin at start-up and rich in context by the time they act.

@@ -262,7 +262,7 @@ var portal = builder
     .WithEnvironment("Features__StaticRepoSync__Partitions__1", "Agent")
     .WithEnvironment("Features__StaticRepoSync__Partitions__2", "Model")
     .WithEnvironment("Features__StaticRepoSync__Partitions__3", "Harness")
-    .WithEnvironment("Features__StaticRepoSync__Partitions__4", "Command")
+    .WithEnvironment("Features__StaticRepoSync__Partitions__4", "Skill")
     // Embedding
     .WithEnvironment("Embedding__Endpoint", embeddingEndpoint)
     .WithEnvironment("Embedding__Model", embeddingModel)
