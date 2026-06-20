@@ -1982,13 +1982,23 @@ public class MeshOperations
 
             try
             {
-                workspace.GetMeshNodeStream(resolvedPath).Update(node => node with
-                {
-                    Content = WithPendingCompilationStatus(node.Content)
-                }).Subscribe(
-                    _ => { },
-                    ex => logger.LogWarning(ex,
-                        "Compile: UpdateMeshNode failed for {Path}", resolvedPath));
+                // Impersonate System for the Pending flip. Triggering a recompile is an
+                // INFRASTRUCTURE operation that fills the assembly cache — it must succeed
+                // even when the caller has no Update right on the target partition (the
+                // read-only Doc partition is the canonical case). Under the caller's identity
+                // this flip was denied → "UpdateMeshNode failed" → the compile never ran and
+                // the cache stayed empty (atioz on-demand-compile failure on Doc). The
+                // RunCompile watcher + Release-node creation already run as System; this entry
+                // flip was the straggler still on the caller's identity.
+                var accessService = hub.ServiceProvider.GetService<AccessService>();
+                using (accessService?.ImpersonateAsSystem())
+                    workspace.GetMeshNodeStream(resolvedPath).Update(node => node with
+                    {
+                        Content = WithPendingCompilationStatus(node.Content)
+                    }).Subscribe(
+                        _ => { },
+                        ex => logger.LogWarning(ex,
+                            "Compile: UpdateMeshNode failed for {Path}", resolvedPath));
             }
             catch (Exception ex)
             {

@@ -523,21 +523,21 @@ public static class MeshExtensions
     }
 
     /// <summary>
-    /// Fully synchronous handler — returns <see cref="IMessageDelivery"/>, never <see cref="Task"/>.
-    /// No <c>IMeshCatalog</c> usage:
+    /// 100% reactive delete handler — no <c>await</c>, no <c>Observable.FromAsync</c> wrapping
+    /// blocking <c>IMeshStorage</c> calls. Because <see cref="IMeshService.DeleteNode"/> now
+    /// targets the node's own hub (via <c>new Address(path)</c>), this handler always runs on
+    /// the node's own hub and can therefore:
     /// <list type="bullet">
-    /// <item>Own-node read: <c>hub.GetWorkspace().GetStream&lt;MeshNode&gt;().Take(1)</c> — the
-    /// node-operation handlers run on the node's own hub (registered via MeshDataSource), so
-    /// the workspace already has the live MeshNode in its replay-cached BehaviorSubject.</item>
-    /// <item>Children listing: internal <see cref="IMeshQueryCore"/> with <c>namespace:{path}</c>
-    /// — bypasses access control because the caller has already passed RunDeletionValidatorsObs.</item>
-    /// <item>Self / child deletion: <see cref="IMeshService.DeleteNode"/>, which Posts
-    /// <see cref="DeleteNodeRequest"/> through the security pipeline and returns
-    /// <c>IObservable&lt;bool&gt;</c>. No <c>catalog.DeleteNodeAsync</c> call.</item>
+    /// <item>Read its own node via <c>hub.GetWorkspace().GetStream&lt;MeshNode&gt;().Take(1)</c> —
+    /// the workspace's MeshNode type source is a replay-cached stream that emits the own node
+    /// synchronously on subscribe (see <c>Doc/Architecture/CqrsAndContentAccess</c>).</item>
+    /// <item>Discover children via <c>meshService.ObserveQuery&lt;MeshNode&gt;</c> with
+    /// <c>namespace:{path}</c> — reactive query, no <c>IAsyncEnumerable</c> enumeration on
+    /// the thread pool.</item>
+    /// <item>Fan out recursive child deletes via <c>Observable.Merge</c> + <c>ToArray</c> —
+    /// each child bounded by <c>Timeout</c>, so a lost response surfaces as a failure instead
+    /// of hanging forever. No <c>Interlocked</c> counter.</item>
     /// </list>
-    /// Recursive child deletes are issued in parallel; on the FIRST failure observed, the
-    /// parent's Fail response is posted (in-flight child deletes are not aborted but the
-    /// parent will not be deleted).
     /// </summary>
     /// <summary>
     /// Central delete orchestrator. Four phases:

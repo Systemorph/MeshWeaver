@@ -254,6 +254,63 @@ public class SatelliteQueryTests : IAsyncLifetime
             "source:activity should return main nodes with activity satellites");
     }
 
+    // ── Path resolution over satellite tables (atioz NotFound-storm wedge) ──
+
+    /// <summary>
+    /// Reproduces the atioz wedge: a SubscribeRequest to a satellite path
+    /// <c>{owner}/_Activity/{id}</c> went through <see cref="MeshWeaver.Hosting.PathResolutionService"/>,
+    /// which issues the multi-prefix resolution query
+    /// <c>path:"{deepest}"|...|"{root}"</c>. Before satellite-aware routing,
+    /// that lookup only scanned <c>mesh_nodes</c>, so the deepest match was the
+    /// partition root with a non-empty remainder <c>_Activity/{id}</c> →
+    /// RoutingGrain NACKed NotFound → the progress reader re-subscribed →
+    /// continuous [ROUTE] NotFound storm → action-block saturation → wedge.
+    ///
+    /// The resolution query MUST find the <c>_Activity</c> row in the
+    /// <c>activities</c> satellite table so the deepest match is the full
+    /// satellite path (remainder == null, routes to the owning hub).
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task PathResolutionQuery_ActivitySatellite_ResolvesToFullPath()
+    {
+        // Seed the partition root in mesh_nodes + a compile-activity satellite
+        // in the activities table — the exact shape behind Doc/.../_Activity/compile-*.
+        await Write(new MeshNode("alice", "User")
+        {
+            Name = "Alice",
+            NodeType = "User",
+        });
+        await Write(new MeshNode("compile-xyz", "User/alice/_Activity")
+        {
+            Name = "Compile",
+            NodeType = "Activity",
+            MainNode = "User/alice",
+        });
+
+        // Build the resolution query EXACTLY as PathResolutionService.ResolveOnce does:
+        // every prefix of the requested path, quoted, deepest-first, joined by '|'.
+        const string requested = "User/alice/_Activity/compile-xyz";
+        var segments = requested.Split('/');
+        var pathList = string.Join("|", System.Linq.Enumerable
+            .Range(1, segments.Length)
+            .Select(depth => "\"" + string.Join("/", segments.Take(depth)) + "\"")
+            .Reverse());
+
+        var results = await Query($"path:{pathList}");
+
+        // The deepest match must be the full satellite path — proving the
+        // resolution query reached the activities table. If only the root
+        // resolved, PathResolutionService would emit Prefix=User/alice with a
+        // non-empty remainder → the NotFound storm.
+        var deepest = results
+            .OrderByDescending(n => (n.Path ?? "").Length)
+            .FirstOrDefault();
+        deepest.Should().NotBeNull("the satellite path must resolve");
+        deepest!.Path.Should().Be(requested,
+            "the multi-prefix resolution query must find the _Activity row in the activities table, "
+            + "not stop at the partition root with a dangling _Activity/{id} remainder");
+    }
+
     // ── UserActivity ─────────────────────────────────────────────────────
 
     [Fact(Timeout = 30000)]

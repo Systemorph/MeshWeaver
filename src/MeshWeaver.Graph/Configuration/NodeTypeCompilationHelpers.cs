@@ -74,6 +74,10 @@ internal static class NodeTypeCompilationHelpers
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.CompileWatcher");
         var accessService = hub.ServiceProvider.GetService<MeshWeaver.Messaging.AccessService>();
+        // 🅿️ Park registry — the parked short-circuit below refuses to dispatch Roslyn for a
+        // NodeType whose compile already terminally failed, so a broken type can never drive
+        // the recompile storm that saturates this hub's single-threaded action block.
+        var parkRegistry = hub.ServiceProvider.GetService<NodeTypeCompileParkRegistry>();
 
         var installSeq = System.Threading.Interlocked.Increment(ref _watcherInstallCount);
         logger?.LogDebug(
@@ -185,6 +189,22 @@ internal static class NodeTypeCompilationHelpers
             .Subscribe(
                 pendingNode =>
                 {
+                    // 🅿️ PARKED short-circuit. A prior compile of this NodeType reached a
+                    // terminal failed state, so we do NOT re-run Roslyn — that is the
+                    // containment that turns a broken type from a portal-wide recompile storm
+                    // (every Pending flip = a fresh Roslyn pass on the action block) into a
+                    // single, bounded, visible failure. The only thing that flips a parked
+                    // (Error) type back to Pending is a DELIBERATE release request, and
+                    // InstallReleaseRequestWatcher un-parks before it does — so this guard never
+                    // blocks a legitimate retry, only a stray re-trigger.
+                    if (parkRegistry?.IsParked(hubPath) == true)
+                    {
+                        logger?.LogDebug(
+                            "Compile watcher: {HubPath} is PARKED (terminal compile failure) — " +
+                            "skipping recompile, serving cached error", hubPath);
+                        return;
+                    }
+
                     logger?.LogDebug(
                         "Compile watcher: saw Pending for {HubPath} — posting DispatchCompileTrigger to OWN hub (system identity)",
                         hubPath);
@@ -560,6 +580,11 @@ internal static class NodeTypeCompilationHelpers
             ?.CreateLogger("MeshWeaver.Graph.CompileWatcher");
         var hubPath = hub.Address.Path;
         var ownStream = workspace.GetMeshNodeStream();
+        // 🅿️ A fresh release request is the DELIBERATE retry that un-parks a previously
+        // parked (broken) type — the single un-park trigger, analogous to the old
+        // InvalidateCache. We un-park before promoting the request to Pending so the
+        // compile watcher's parked short-circuit doesn't refuse the user's explicit rebuild.
+        var parkRegistry = hub.ServiceProvider.GetService<NodeTypeCompileParkRegistry>();
 
         // Process-local memory of the last RequestedReleaseAt we have already
         // dispatched. The framework's stream emissions can arrive faster than
@@ -598,6 +623,9 @@ internal static class NodeTypeCompilationHelpers
                     var triggerAt = (node!.Content as NodeTypeDefinition)?.RequestedReleaseAt;
                     if (triggerAt is null) return;
                     localLastDispatched = triggerAt;
+                    // 🅿️ Deliberate retry → un-park so the explicit rebuild is allowed through
+                    // the compile watcher's parked short-circuit (and the attempt budget resets).
+                    parkRegistry?.Unpark(hubPath);
                     logger?.LogInformation(
                         "[ReleaseRequestWatcher] {HubPath}: handling RequestedReleaseAt={Req} (force={Force}, lastHandled={Handled})",
                         hubPath, triggerAt,
@@ -824,6 +852,13 @@ internal static class NodeTypeCompilationHelpers
         // denied. This is the StaticRepoImporter pattern. See AccessContextPropagation.md.
         var accessService = hub.ServiceProvider.GetService<AccessService>();
 
+        // 🅿️ Record this real Roslyn kick-off in the park registry. A parked (broken) type
+        // holds at its small attempt count instead of climbing on every access — the
+        // observable proof the failure is bounded. The terminal write-back below parks the
+        // type (and notifies) on failure, or clears the park on success.
+        var parkRegistry = hub.ServiceProvider.GetService<NodeTypeCompileParkRegistry>();
+        parkRegistry?.RecordAttempt(hubPath);
+
         // Activity Control Plane — THE official progress mechanism. Create the
         // compile activity UP FRONT (canonical uppercase _Activity, satellite
         // routing + Releases query) so compile progress is observable via the
@@ -963,6 +998,39 @@ internal static class NodeTypeCompilationHelpers
                     var ok = outcome.Error is null
                         && !string.IsNullOrEmpty(outcome.Result?.AssemblyLocation);
 
+                    // 🅿️ Park / un-park on the terminal compile outcome. On success, clear any
+                    // parked failure so a fixed type recompiles cleanly. On failure, park the
+                    // type (bounded + terminal) and emit one user notification — so the broken
+                    // type serves its cached error WITHOUT re-running Roslyn on every later
+                    // access (the recompile-storm wedge). A deterministic source error (Roslyn
+                    // diagnostics / CompilationException, or a clean "no assembly" outcome with
+                    // no infra exception) parks immediately; a non-deterministic infra fault is
+                    // retried up to the registry's bound, then parked. The release requester
+                    // (RequestedReleaseBy, set by the Compile-gated Create Release action) is the
+                    // bell to notify; a System first-build / seed compile has none → the
+                    // notification becomes a satellite of the failing type instead.
+                    if (parkRegistry is not null)
+                    {
+                        if (ok)
+                            parkRegistry.OnCompileSucceeded(hubPath);
+                        else
+                        {
+                            var hasRoslynErrors =
+                                (outcome.Result?.Log?.Errors() is { Count: > 0 })
+                                || (outcome.Result?.Diagnostics is { Count: > 0 });
+                            var deterministic = outcome.Error is null
+                                || outcome.Error is CompilationException
+                                || hasRoslynErrors;
+                            var parkError = outcome.Error?.Message
+                                ?? (outcome.Result?.Log?.Errors() is { Count: > 0 } perr
+                                    ? string.Join("; ", perr.Select(m => m.Message))
+                                    : "Compilation produced no assembly");
+                            var requestedBy = (outcome.PendingNode.Content as NodeTypeDefinition)?.RequestedReleaseBy;
+                            parkRegistry.OnCompileFailed(
+                                hub, hubPath, parkError, deterministic, requestedBy, logger);
+                        }
+                    }
+
                     // The CONFIRMED activity path (or null when the create didn't land).
                     // Everything below stamps / writes against this — never an un-created
                     // node, so no reader can subscribe to a phantom `compile-*` path.
@@ -1043,7 +1111,13 @@ internal static class NodeTypeCompilationHelpers
                                     // against — HasUsableBuild compares this to the live
                                     // FrameworkVersion so a MeshWeaver redeploy forces a
                                     // recompile instead of loading an ABI-stale DLL.
-                                    CompiledFrameworkVersion = FrameworkVersion
+                                    CompiledFrameworkVersion = FrameworkVersion,
+                                    // Clear the consumed release-requester. TryCreateReleaseNode
+                                    // already read it (off pendingNode) to stamp this release's
+                                    // owner; clearing it here ensures a SUBSEQUENT System-only
+                                    // recompile (first-build kickoff / framework-stale self-heal)
+                                    // doesn't mis-attribute its release to a stale prior user.
+                                    RequestedReleaseBy = null
                                 }
                             };
                         }
@@ -1063,7 +1137,10 @@ internal static class NodeTypeCompilationHelpers
                                     ? System.Collections.Immutable.ImmutableList.CreateRange(ds)
                                     : null,
                                 LastCompilationActivityPath = resolvedActivityPath,
-                                CompiledSources = null
+                                CompiledSources = null,
+                                // Clear the consumed release-requester on failure too — the
+                                // failed request is done; a fresh request must re-stamp it.
+                                RequestedReleaseBy = null
                             }
                         };
                     })

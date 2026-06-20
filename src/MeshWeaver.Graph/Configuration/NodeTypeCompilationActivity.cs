@@ -214,26 +214,34 @@ internal static class NodeTypeCompilationActivity
             // stream (GetRemoteStream would throw "Owner cannot be the same as
             // the subscriber"). The Update rides the synchronization protocol;
             // no UpdateNodeRequest message post.
-            hub.GetWorkspace().GetMeshNodeStream(activityPath!)
-                .Update(current =>
-                    current?.Content is ActivityLog log
-                        ? current with
-                        {
-                            Content = log with
+            // Impersonate System: a terminal compile-activity write is INFRASTRUCTURE
+            // observability — it must not fail closed when the calling thread carries no
+            // user (background recompile, grain activation) or a non-writer user (a compile
+            // on a read-only partition). MarkSucceeded/MarkFailed route through here, so
+            // this is the one place the System scope was missing from its Start/AppendLog/
+            // Complete siblings (atioz 2026-06-18 phantom-activity storm class).
+            var accessService = hub.ServiceProvider.GetService<AccessService>();
+            using (accessService?.ImpersonateAsSystem())
+                hub.GetWorkspace().GetMeshNodeStream(activityPath!)
+                    .Update(current =>
+                        current?.Content is ActivityLog log
+                            ? current with
                             {
-                                Status = status,
-                                End = DateTime.UtcNow,
-                                Messages = error is { Length: > 0 }
-                                    ? log.Messages.Add(new LogMessage(error,
-                                        Microsoft.Extensions.Logging.LogLevel.Error))
-                                    : log.Messages
+                                Content = log with
+                                {
+                                    Status = status,
+                                    End = DateTime.UtcNow,
+                                    Messages = error is { Length: > 0 }
+                                        ? log.Messages.Add(new LogMessage(error,
+                                            Microsoft.Extensions.Logging.LogLevel.Error))
+                                        : log.Messages
+                                }
                             }
-                        }
-                        : current!)
-                .Subscribe(
-                    _ => { },
-                    ex => logger.LogDebug(ex,
-                        "Compile-activity Update failed for {Path} (best-effort, ignored)", activityPath));
+                            : current!)
+                    .Subscribe(
+                        _ => { },
+                        ex => logger.LogDebug(ex,
+                            "Compile-activity Update failed for {Path} (best-effort, ignored)", activityPath));
         }
         catch (Exception ex)
         {

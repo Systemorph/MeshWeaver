@@ -192,6 +192,12 @@ public static class GraphConfigurationExtensions
                     // for callers that need the concrete CompileAndGetConfigurations entry point.
                     services.AddSingleton<MeshNodeCompilationService>();
                     services.AddSingleton<IMeshNodeCompilationService>(sp => sp.GetRequiredService<MeshNodeCompilationService>());
+                    // 🅿️ Mesh-scoped park registry — one shared instance across every per-NodeType
+                    // hub. Contains a broken NodeType: a terminal compile failure parks (bounded +
+                    // terminal) so it can't drive an unbounded recompile storm, and emits one
+                    // user-visible notification. Instance maps only — no static state. See
+                    // NodeTypeCompileParkRegistry + InstallCompileWatcher's parked short-circuit.
+                    services.AddSingleton<NodeTypeCompileParkRegistry>();
                     // Stage-1 LSP language services over a NodeType's live CSharpCompilation
                     // — hover, completion, diagnostics, speculative pre-flight checks. Consumed
                     // by the Lsp* MCP tools + Coder agent's Lsp plugin. SpeculativeCompilation

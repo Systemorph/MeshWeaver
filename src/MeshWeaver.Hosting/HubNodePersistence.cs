@@ -1,5 +1,6 @@
 using System.Reactive.Linq;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -16,6 +17,9 @@ namespace MeshWeaver.Hosting;
 internal sealed class HubNodePersistence(
     IMessageHub hub)
 {
+    private TimeSpan OpTimeout =>
+        (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions()).Timeout;
+
     private PostOptions ConfigurePost(PostOptions o)
         => o.WithTarget(hub.Address);
 

@@ -12,6 +12,17 @@ namespace MeshWeaver.Hosting;
 /// Writes go through hub messaging (Post + RegisterCallback) — no direct persistence dependency.
 /// Reads go through MeshQuery (aggregated query providers).
 /// Identity is captured from AccessService and stamped on each delivery.
+///
+/// The CRUD observables use <c>Observable.Create(observer =&gt; ...)</c> and signal all outcomes —
+/// success, handler rejection, and routing <see cref="DeliveryFailure"/> — via
+/// <c>observer.OnNext</c> / <c>observer.OnError</c>. <b>Never <see cref="Observable.FromAsync"/></b>
+/// (FromAsync wraps a Task and blocks a thread-pool thread), <b>never Task return types</b> on the
+/// public surface, <b>never <see cref="Task"/>.<see cref="Task.FromResult{TResult}(TResult)"/></b>
+/// inside callbacks (use the <see cref="SyncDelivery"/> overload of RegisterCallback instead).
+/// See <c>Doc/Architecture/AsynchronousCalls</c>.
+///
+/// Each call is bounded by <see cref="MeshOperationOptions.Timeout"/> so a lost/slow response
+/// surfaces as <see cref="TimeoutException"/> within a few seconds — never a hang.
 /// </summary>
 internal sealed class MeshService(
     IEnumerable<IMeshQueryProvider> providers,
@@ -37,6 +48,15 @@ internal sealed class MeshService(
     private Address? _meshAddress;
     private Address MeshAddress => _meshAddress ??= hub.GetMeshHub().Address;
 
+    /// <summary>
+    /// Per-call timeout ceiling. Every CRUD observable is bounded by this so a lost response
+    /// (routing failure, deleted hub, stuck handler) surfaces as TimeoutException within
+    /// a few seconds instead of hanging forever. Default 30s, configurable via
+    /// <c>WithMeshOperationTimeout</c>.
+    /// </summary>
+    private TimeSpan OpTimeout =>
+        (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions()).Timeout;
+
     private AccessContext? CaptureContext()
     {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
@@ -46,6 +66,17 @@ internal sealed class MeshService(
     private PostOptions ConfigurePost(PostOptions o, AccessContext? captured)
     {
         o = o.WithTarget(MeshAddress);
+        return captured != null ? o.WithAccessContext(captured) : o;
+    }
+
+    /// <summary>
+    /// Targets the node's own hub directly (not the mesh hub). The handler runs there with
+    /// the node's OWN workspace available for reactive reads via <c>GetStream&lt;MeshNode&gt;</c> —
+    /// no persistence fallback, no <c>Observable.FromAsync</c> wrapping of blocking async calls.
+    /// </summary>
+    private PostOptions ConfigurePostToNode(PostOptions o, string path, AccessContext? captured)
+    {
+        o = o.WithTarget(new Address(path));
         return captured != null ? o.WithAccessContext(captured) : o;
     }
 

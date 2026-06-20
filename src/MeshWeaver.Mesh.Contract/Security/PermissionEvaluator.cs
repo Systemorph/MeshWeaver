@@ -87,9 +87,12 @@ internal static class PermissionEvaluator
         if (string.IsNullOrEmpty(userId))
             userId = WellKnownUsers.Anonymous;
 
-        // System identity has full access.
+        // System identity has full access — literally every permission, including the
+        // privileged grants (Sync, Compile) deliberately excluded from Permission.All. An
+        // explicit CheckPermission(System, Compile/Sync) must pass; the infra recompile that
+        // fills the assembly cache runs under this identity.
         if (userId == WellKnownUsers.System)
-            return Observable.Return(Permission.All);
+            return Observable.Return(Permission.All | Permission.Sync | Permission.Compile);
 
         // MeshNodeCache's hydrator identity — granted Read only.
         if (userId == MeshNodeCacheIdentityAddress)
@@ -363,7 +366,11 @@ internal static class PermissionEvaluator
         ImmutableDictionary<string, PartitionAccessPolicy>? runtimePolicies = null)
     {
         var roleIds = ImmutableHashSet<string>.Empty;
-        var permissionCap = Permission.All;
+        // ALL BITS SET = "no cap". `p &= permissionCap` (line ~179) must never strip a permission
+        // a role legitimately grants. Permission.All excludes the privileged bits (Sync, Compile),
+        // so using it as the default cap silently masked Compile out of every Editor/Admin's
+        // effective set — the Compile gate then refused the very users meant to hold it.
+        var permissionCap = (Permission)~0;
         var publicGrant = Permission.None;
         var isSelfScopeOwner = userId != WellKnownUsers.Anonymous
                                && userId != WellKnownUsers.Public;
@@ -378,7 +385,7 @@ internal static class PermissionEvaluator
             if (policy is not null && policy.BreaksInheritance)
             {
                 roleIds = ImmutableHashSet<string>.Empty;
-                permissionCap = Permission.All;
+                permissionCap = (Permission)~0;   // reset to "no cap" (all bits) — see above
             }
 
             if (scopeToRoles.TryGetValue(scope, out var roles))

@@ -1130,37 +1130,31 @@ public static class NodeTypeLayoutAreas
             .DistinctUntilChanged();
 
         var releaseButton = (LayoutAreaHost h, RenderingContext rc) => isUpToDate
-            .Select(upToDate => (UiControl)Controls.Button(upToDate ? "Up to Date" : "Create Release")
+            .Select(upToDate => (UiControl)Controls.Button("Create Release")
+                // Appearance still signals the up-to-date state (Neutral = nothing changed
+                // since the last release; Accent = actionable) without renaming the button —
+                // it is THE "Create Release" entry point regardless of dirty state.
                 .WithAppearance(upToDate ? Appearance.Neutral : Appearance.Accent)
                 .WithIconStart(FluentIcons.Play())
                 .WithClickAction(ctx =>
                 {
-                    // Canonical request-via-stream-update trigger — flips
-                    // `RequestedReleaseAt` + `RequestedReleaseForce` on the
-                    // NodeType's own MeshNode. The per-NodeType hub's
-                    // `InstallReleaseRequestWatcher` observes the timestamp
-                    // moving past `LastReleaseRequestHandledAt` and flips
-                    // `CompilationStatus = Pending`; `InstallCompileWatcher`
-                    // then runs Roslyn. No bespoke `CreateReleaseRequest`
-                    // round-trip — the trigger and observation flow through
-                    // the same node state every other subscriber already
-                    // watches. See `Doc/Architecture/RequestViaStreamUpdate.md`.
-                    ctx.Host.Workspace.GetMeshNodeStream(nodeTypePath).Update(curr =>
-                    {
-                        if (curr?.Content is not NodeTypeDefinition def) return curr!;
-                        return curr with
-                        {
-                            Content = def with
-                            {
-                                RequestedReleaseAt = DateTimeOffset.UtcNow,
-                                RequestedReleaseForce = upToDate,
-                            }
-                        };
-                    }).Subscribe(
-                        _ => { },
-                        ex => ctx.Host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                    // Creating a release is a privileged USER action gated by
+                    // Permission.Compile. Route through the canonical, permission-checked
+                    // entry point: hub.RequestNodeTypeRelease verifies the caller holds
+                    // Compile on the target and refuses cleanly (status message, no release)
+                    // when they don't. On success it flips RequestedReleaseAt +
+                    // RequestedReleaseBy via stream.Update; the per-NodeType hub's
+                    // InstallReleaseRequestWatcher promotes that to CompilationStatus=Pending
+                    // and InstallCompileWatcher runs Roslyn UNDER SYSTEM (the pure compilation
+                    // fills the cache; the resulting Release node is stamped to the caller).
+                    // No bespoke CreateReleaseRequest. See RequestViaStreamUpdate.md +
+                    // NodeTypeReleaseExtensions.
+                    ctx.Host.Hub.RequestNodeTypeRelease(
+                        nodeTypePath,
+                        force: upToDate,
+                        onError: msg => ctx.Host.Hub.ServiceProvider.GetService<ILoggerFactory>()
                             ?.CreateLogger(typeof(NodeTypeLayoutAreas))
-                            .LogWarning(ex, "Release-request write failed for {Path}", nodeTypePath));
+                            .LogWarning("Create Release refused for {Path}: {Reason}", nodeTypePath, msg));
                     return Task.CompletedTask;
                 }));
 

@@ -332,6 +332,19 @@ public record NodeTypeDefinition
     public bool RequestedReleaseForce { get; init; }
 
     /// <summary>
+    /// The user id that requested the current release (the caller of
+    /// <c>hub.RequestNodeTypeRelease(...)</c>, who passed the <see cref="Permission.Compile"/>
+    /// gate at the entry point). Carried on the NodeType node so the credential split holds
+    /// across the watcher → compile → release-node-create chain: the "pure" compilation that
+    /// fills the assembly cache runs as <b>System</b> (it must succeed on read-only partitions),
+    /// but the resulting <c>Release</c> MeshNode is stamped to THIS user (owner = caller) so the
+    /// release is attributable to the person who authored it. <c>null</c> when no user-initiated
+    /// release is pending (e.g. the System-driven Doc-release seed, or the first-build kickoff),
+    /// in which case the release node is created under System.
+    /// </summary>
+    public string? RequestedReleaseBy { get; init; }
+
+    /// <summary>
     /// Set by the per-NodeType release watcher after it has reacted to a
     /// <see cref="RequestedReleaseAt"/> flip. The watcher only dispatches when
     /// <c>RequestedReleaseAt &gt; LastReleaseRequestHandledAt</c>, preventing

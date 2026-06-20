@@ -239,6 +239,12 @@ internal static class NodeTypeEnrichmentHelpers
         ILogger? logger)
     {
         var typeStream = meshHub.GetWorkspace().GetMeshNodeStream(nodeType);
+        // The self-heal Pending flip below is INFRASTRUCTURE (it un-strands a stale-Ok
+        // NodeType so the compile watcher rebuilds the assembly cache). It fires on a
+        // workspace-stream emission, off the originating user's thread — so it must run as
+        // System, exactly like RunCompile / NodeTypeCompilationActivity. Under the ambient
+        // user it was denied on read-only partitions (Doc), leaving the NodeType stranded.
+        var enrichAccessService = meshHub.ServiceProvider.GetService<AccessService>();
 
         // Self-heal: stale `Status=Ok + null LatestAssembly{Collection,Path}`
         // is on-disk JSON written before the AssemblyLocation→AssemblyStore
@@ -260,16 +266,21 @@ internal static class NodeTypeEnrichmentHelpers
                 // already handled them; only get here for dynamic types.
                 && t.HubConfiguration is null)
             .Take(1)
-            .SelectMany(_ => typeStream.Update(curr =>
-                curr.Content is NodeTypeDefinition d
-                && d.CompilationStatus == CompilationStatus.Ok
-                && (string.IsNullOrEmpty(d.LatestAssemblyCollection)
-                    || string.IsNullOrEmpty(d.LatestAssemblyPath))
-                    ? curr with
-                    {
-                        Content = d with { CompilationStatus = CompilationStatus.Pending }
-                    }
-                    : curr))
+            // Hold the System scope across the cold Update's Subscribe (Observable.Using
+            // keeps the impersonation alive until the inner observable completes; a bare
+            // `using` would lapse before the subscribe runs on the stream-emission thread).
+            .SelectMany(_ => Observable.Using(
+                () => AccessContextScope.AsSystem(enrichAccessService),
+                _2 => typeStream.Update(curr =>
+                    curr.Content is NodeTypeDefinition d
+                    && d.CompilationStatus == CompilationStatus.Ok
+                    && (string.IsNullOrEmpty(d.LatestAssemblyCollection)
+                        || string.IsNullOrEmpty(d.LatestAssemblyPath))
+                        ? curr with
+                        {
+                            Content = d with { CompilationStatus = CompilationStatus.Pending }
+                        }
+                        : curr)))
             .Subscribe(
                 _ => logger?.LogInformation(
                     "EnrichWithNodeType: self-healed stale Status=Ok with null assembly for {NodeType} — flipped to Pending to trigger recompile",
