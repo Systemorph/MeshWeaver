@@ -189,9 +189,10 @@ public sealed class AgentSkillSyncService(
     }
 
     /// <summary>
-    /// The static base instructions both CLIs read from the workspace (Claude via project-scope
-    /// CLAUDE.md/AGENTS.md, Copilot via cwd AGENTS.md) — telling the agent the mesh is reachable through
-    /// the <c>meshweaver</c> MCP server. Idempotent (rewrites only on change).
+    /// The static base instructions both CLIs read from the workspace — telling the agent the mesh is
+    /// reachable through the <c>meshweaver</c> MCP server. ONE file, <c>AGENTS.md</c>: it is the
+    /// cross-tool instructions file Claude Code (project scope) AND GitHub Copilot (cwd) both read, so
+    /// there is no <c>CLAUDE.md</c> duplicate. Idempotent (rewrites only on change).
     /// </summary>
     private static void WriteBaseInstructions(string workspace, ILogger? logger)
     {
@@ -204,18 +205,15 @@ public sealed class AgentSkillSyncService(
             "`render_area`, `navigate_to`, `upload`.\n\n" +
             "Your **skills** (under `.claude/skills/`) are the MeshWeaver agents and skills defined in the " +
             "mesh — invoke them on demand when a request matches.\n";
-        foreach (var name in new[] { "AGENTS.md", "CLAUDE.md" })
+        try
         {
-            try
-            {
-                var path = Path.Combine(workspace, name);
-                if (!File.Exists(path) || File.ReadAllText(path) != content)
-                    File.WriteAllText(path, content);
-            }
-            catch (Exception ex)
-            {
-                logger?.LogDebug(ex, "AgentSkillSync: write base instructions {Name} failed", name);
-            }
+            var path = Path.Combine(workspace, "AGENTS.md");
+            if (!File.Exists(path) || File.ReadAllText(path) != content)
+                File.WriteAllText(path, content);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogDebug(ex, "AgentSkillSync: write AGENTS.md failed");
         }
     }
 
