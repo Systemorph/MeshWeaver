@@ -683,14 +683,25 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 var parsed = ChatParser.Parse(userMessageText);
                 if (parsed.Command != null)
                 {
-                    _ = HandleSlashCommandAsync(parsed.Command);
-                    // Clear the input + bail — submissionHandler.TryBeginSubmit
-                    // hasn't been called yet, so no need to release.
-                    MessageText = null;
-                    if (monacoEditor != null)
-                        _ = ClearMonacoAsync();
-                    StateHasChanged();
-                    return;
+                    // Under a CLI harness (Claude Code / Copilot) FORWARD slash commands 1:1 to the
+                    // harness — it owns its own /login, /model, /agent, … — with NO MeshWeaver
+                    // interception. The ONE exception is /harness (the runtime switch) so the user is
+                    // never stuck inside a CLI harness. Under the MeshWeaver harness, intercept every
+                    // slash-skill as before.
+                    var isRuntimeSwitch = string.Equals(parsed.Command.Name, "harness", StringComparison.OrdinalIgnoreCase);
+                    if (ActiveHarness() is null || isRuntimeSwitch)
+                    {
+                        _ = HandleSlashCommandAsync(parsed.Command);
+                        // Clear the input + bail — submissionHandler.TryBeginSubmit
+                        // hasn't been called yet, so no need to release.
+                        MessageText = null;
+                        if (monacoEditor != null)
+                            _ = ClearMonacoAsync();
+                        StateHasChanged();
+                        return;
+                    }
+                    // else: CLI harness + non-/harness command → fall through, so the raw "/command"
+                    // text is submitted to the harness as the message (forwarded 1:1, no interception).
                 }
             }
 
