@@ -1,5 +1,3 @@
-#pragma warning disable CS1591
-
 using System;
 using System.Linq;
 using System.Net;
@@ -24,10 +22,8 @@ namespace MeshWeaver.AI.Test;
 /// through the mesh's <c>Http</c> I/O pool, so it needs a real hub (the test base's
 /// <c>Mesh</c>).
 /// </summary>
-public class ProviderModelListerTest : AITestBase
+public class ProviderModelListerTest(ITestOutputHelper output) : AITestBase(output)
 {
-    public ProviderModelListerTest(ITestOutputHelper output) : base(output) { }
-
     private sealed class CapturingHandler(string responseJson, HttpStatusCode status = HttpStatusCode.OK)
         : HttpMessageHandler
     {
@@ -52,6 +48,7 @@ public class ProviderModelListerTest : AITestBase
         return (lister, handler);
     }
 
+    /// <summary>OpenAI-family: <c>GET {base}/models</c> with Bearer auth; results sorted + de-duplicated.</summary>
     [Fact]
     public async Task OpenAiCompatible_AppendsModelsToBaseUrl_WithBearerAuth()
     {
@@ -67,6 +64,7 @@ public class ProviderModelListerTest : AITestBase
         ids.Should().Equal("a", "b");
     }
 
+    /// <summary>A trailing slash on the base URL collapses to a single <c>…/models</c>.</summary>
     [Fact]
     public async Task TrailingSlashOnBaseUrl_IsNormalized()
     {
@@ -78,6 +76,7 @@ public class ProviderModelListerTest : AITestBase
         handler.Last!.RequestUri!.ToString().Should().Be("https://openrouter.ai/api/v1/models");
     }
 
+    /// <summary>A blank endpoint falls back to the OpenAI default base (<c>api.openai.com/v1</c>).</summary>
     [Fact]
     public async Task BlankEndpoint_DefaultsToOpenAiV1()
     {
@@ -90,6 +89,7 @@ public class ProviderModelListerTest : AITestBase
         handler.Last.Headers.Authorization!.Scheme.Should().Be("Bearer");
     }
 
+    /// <summary>Anthropic uses <c>x-api-key</c> + <c>anthropic-version</c> at the fixed <c>/v1/models</c> URL, not Bearer.</summary>
     [Fact]
     public async Task Anthropic_UsesApiKeyHeader_AndFixedModelsUrl()
     {
@@ -106,6 +106,7 @@ public class ProviderModelListerTest : AITestBase
         handler.Last.Headers.GetValues("anthropic-version").Should().ContainSingle();
     }
 
+    /// <summary><c>data[].id</c> is sorted and de-duplicated.</summary>
     [Fact]
     public async Task Parse_SortsAndDeduplicates()
     {
@@ -117,22 +118,26 @@ public class ProviderModelListerTest : AITestBase
         ids.Should().Equal("a", "z");
     }
 
+    /// <summary>A non-success HTTP status surfaces as an error (never a silent empty list).</summary>
     [Fact]
     public async Task NonSuccessResponse_SurfacesError()
     {
         var (lister, _) = Make("{\"error\":\"nope\"}", HttpStatusCode.Unauthorized);
 
         await Assert.ThrowsAnyAsync<Exception>(() =>
-            lister.ListModels("https://gateway/v1", "bad-key", "OpenAICompatible").FirstAsync().ToTask());
+            lister.ListModels("https://gateway/v1", "bad-key", "OpenAICompatible")
+                .FirstAsync().ToTask(TestContext.Current.CancellationToken));
     }
 
+    /// <summary>A blank key throws before any HTTP request is made.</summary>
     [Fact]
     public async Task MissingApiKey_ThrowsBeforeAnyRequest()
     {
         var (lister, handler) = Make();
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            lister.ListModels("https://gateway/v1", apiKey: "", "OpenAICompatible").FirstAsync().ToTask());
+            lister.ListModels("https://gateway/v1", apiKey: "", "OpenAICompatible")
+                .FirstAsync().ToTask(TestContext.Current.CancellationToken));
 
         handler.Last.Should().BeNull("a blank key must short-circuit before any HTTP call");
     }
