@@ -157,8 +157,14 @@ public record SkillDefinition
 /// </summary>
 public record SkillAction
 {
-    /// <summary>The action discriminator.</summary>
-    public required SkillActionKind Kind { get; init; }
+    /// <summary>
+    /// The action discriminator. NOT <c>required</c> and defaults to <see cref="SkillActionKind.Pick"/>:
+    /// the hub serializer OMITS default-valued properties on write, so a <c>Pick</c> action (the default
+    /// enum value 0) is written with no <c>kind</c> field — a <c>required</c> Kind then fails to
+    /// deserialize ("missing required properties including: 'kind'"), dropping every Pick skill. A plain
+    /// default round-trips the omitted value correctly.
+    /// </summary>
+    public SkillActionKind Kind { get; init; } = SkillActionKind.Pick;
 
     /// <summary><see cref="SkillActionKind.Pick"/>: the mesh query whose nodes the combobox lists.</summary>
     public string? Query { get; init; }

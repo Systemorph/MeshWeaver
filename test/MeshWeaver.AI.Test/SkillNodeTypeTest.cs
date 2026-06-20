@@ -2,6 +2,7 @@
 
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using MeshWeaver.AI;
 using MeshWeaver.Mesh;
 using Xunit;
@@ -70,6 +71,30 @@ public class SkillNodeTypeTest
         projected.Should().ContainSingle();
         projected[0].Id.Should().Be("space");
         projected[0].Definition.Action!.Field.Should().Be("contextPath");
+    }
+
+    [Fact]
+    public void SkillAction_RoundTrips_WhenKindOmittedAsDefault()
+    {
+        // The hub serializer omits default-valued properties (DefaultIgnoreCondition.WhenWritingDefault),
+        // so a Pick action (Kind = the default enum value 0) serializes with NO `kind` field. A *required*
+        // Kind then fails to deserialize ("missing required properties including: 'kind'") and EVERY Pick
+        // skill is dropped — the live memex/atioz bug. Verify the omitted default round-trips to Pick.
+        var opts = new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault };
+        var def = new SkillDefinition
+        {
+            Action = new SkillAction
+            {
+                Kind = SkillActionKind.Pick, Query = "namespace:Agent nodeType:Agent", Field = "agentName", Title = "Choose an agent"
+            }
+        };
+
+        var json = JsonSerializer.Serialize(def, opts);
+        json.Should().NotContain("kind", "Pick is the default enum value, so the serializer omits it");
+
+        var roundTripped = JsonSerializer.Deserialize<SkillDefinition>(json, opts);
+        roundTripped!.Action!.Kind.Should().Be(SkillActionKind.Pick);
+        roundTripped.Action.Field.Should().Be("agentName");
     }
 
     [Fact]
