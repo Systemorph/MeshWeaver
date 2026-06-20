@@ -337,8 +337,12 @@ it's a *missed reactive emission*, not a blocking deadlock or CPU starvation.
    **never** the subscriber's echo — subscribers only ever send Patches via
    `DataChangeRequest`. So the owner-side filter must **always** forward Fulls:
    `c => c.ChangeType == ChangeType.Full || !reduced.ClientId.Equals(c.ChangedBy)`.
-   This mirrors the client side, whose `UpdateStream` monotonicity guard is
-   **PATCHES-ONLY** ("a Full is always applied, no matter the version").
+   This is the **echo** filter (owner side) — it always forwards Fulls because a Full
+   is never a subscriber echo. Do not confuse it with the client-side **version**
+   guard in `UpdateStream`, which now drops *both* stale Patches **and** stale Fulls
+   (`Version < Current.Version`). A real Full is never below `Current` because every
+   owner frame rides one clock (`OwnerVersion()`); see
+   [DataSyncAndCrdt.md](/Doc/Architecture/DataSyncAndCrdt) §2–3.
 
 ### The heartbeat must NOT re-broadcast the Full
 

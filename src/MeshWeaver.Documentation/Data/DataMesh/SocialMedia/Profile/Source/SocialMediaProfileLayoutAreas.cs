@@ -74,7 +74,7 @@ public static class SocialMediaProfileLayoutAreas
 /// </summary>
 public sealed record Platform(string Id, string Name, string Emoji, string Color)
 {
-    private static readonly Platform[] All =
+    public static readonly Platform[] All =
     {
         new("LinkedIn", "LinkedIn", "💼", "#0A66C2"),
         new("Twitter", "Twitter / X", "🐦", "#1DA1F2"),
