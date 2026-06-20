@@ -104,6 +104,19 @@ public class ClaudeCodeChatClient : IChatClient
         var messageList = messages.ToList();
         var userPrompt = BuildPromptFromMessages(messageList);
 
+        // Co-hosted multi-user: when this user runs under their OWN per-user config dir, a missing
+        // subscription token AND missing .credentials.json means they've never logged in. Surface an
+        // actionable auth error (ThreadExecution turns it into a "/login" affordance) instead of
+        // letting the CLI fail later with a cryptic "Not logged in · Please run /login" →
+        // ProcessException exit 1. (configDir is null only in single-user dev, where the CLI uses the
+        // machine's own login — so we don't pre-empt there.)
+        if (!string.IsNullOrEmpty(configDir) && string.IsNullOrEmpty(oauthToken) && !HasCredentials(configDir))
+        {
+            throw new AuthRequiredException(
+                Harnesses.ClaudeCode,
+                "Not logged in to Claude Code. Run /login to connect your Claude subscription.");
+        }
+
         // If CliDirectory is specified, add it to PATH for CLI discovery
         // This must be done BEFORE calling the SDK as FindCli() checks PATH
         if (!string.IsNullOrEmpty(configuration.CliDirectory))
@@ -384,6 +397,24 @@ public class ClaudeCodeChatClient : IChatClient
             .Select(c => c.Text);
 
         return string.Join("", textParts);
+    }
+
+    /// <summary>
+    /// True when the per-user config dir holds a non-empty <c>.credentials.json</c> (the CLI's
+    /// persisted OAuth login). A cheap file probe that mirrors
+    /// <c>ClaudeConnectStrategy.IsLoggedIn</c> — the Connect flow writes this file into the same dir.
+    /// </summary>
+    private static bool HasCredentials(string configDir)
+    {
+        try
+        {
+            var creds = Path.Combine(configDir, ".credentials.json");
+            return File.Exists(creds) && new FileInfo(creds).Length > 2;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static readonly object PathLock = new();

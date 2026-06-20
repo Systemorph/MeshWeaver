@@ -205,6 +205,20 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
         }
         catch (Exception ex)
         {
+            // Not logged in / token rejected → actionable "/login" affordance (ThreadExecution renders
+            // it), not the generic "CLI not installed" message.
+            var msg = ex.Message ?? string.Empty;
+            if (msg.Contains("auth", StringComparison.OrdinalIgnoreCase)
+                || msg.Contains("login", StringComparison.OrdinalIgnoreCase)
+                || msg.Contains("unauthor", StringComparison.OrdinalIgnoreCase)
+                || msg.Contains("credential", StringComparison.OrdinalIgnoreCase)
+                || msg.Contains("not signed in", StringComparison.OrdinalIgnoreCase))
+            {
+                logger?.LogWarning(ex, "Copilot not authenticated for this user");
+                throw new AuthRequiredException(
+                    Harnesses.Copilot,
+                    "Not logged in to GitHub Copilot. Run /login to connect.", ex);
+            }
             logger?.LogError(ex, "Failed to start Copilot client. Ensure the Copilot CLI is installed and available in PATH.");
             throw new InvalidOperationException(
                 "Failed to start Copilot client. Ensure the Copilot CLI is installed and available in PATH. " +

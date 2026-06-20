@@ -30,21 +30,35 @@ public sealed class ClaudeCodeHarness(IOptions<ClaudeCodeConfiguration> options)
         SupportsAgentSelection = false
     };
 
+    // Claude Code owns its auth slash-commands: /login (re)authenticates the user's Claude
+    // subscription via the Connect flow; /logout forgets the stored token. When this harness is the
+    // active one, these REPLACE MeshWeaver's /agent /model in the chat autocomplete + dispatch.
+    public IReadOnlyList<HarnessCommand> Commands { get; } =
+    [
+        new("login", "Log in to your Claude subscription", HarnessCommandKind.Connect),
+        new("logout", "Log out of Claude Code", HarnessCommandKind.Disconnect),
+    ];
+
+    public Connect.ConnectProvider? AuthProvider => Connect.ConnectProvider.ClaudeCode;
+
     public IChatClient? CreateChatClient(HarnessExecutionContext context)
     {
         var hub = context.Hub;
-        // CLI harnesses don't surface model selection; fall back to the configured
-        // default (Claude Code understands the sonnet/opus/haiku aliases).
-        var modelName = !string.IsNullOrEmpty(context.ModelName)
-            ? context.ModelName
-            : configuration.Models.FirstOrDefault() ?? "sonnet";
-
-        // Per-user isolation owned by the harness (Claude Code is a harness, not an agent):
-        // the user's own subscription token + CLAUDE_CONFIG_DIR + token-based MCP back-connection.
-        var resolver = hub.ServiceProvider.GetService<ChatClientCredentialResolver>();
-        var token = !string.IsNullOrEmpty(modelName) ? resolver?.Resolve(modelName).ApiKey : null;
         var accessCtx = hub.ServiceProvider.GetService<AccessService>()?.Context;
         var userId = accessCtx?.ObjectId;
+
+        // 🚫 NEVER pass a model to the CLI. Claude Code runs the user's OWN subscription and picks
+        // its default model; forwarding the MeshWeaver composer's selected model (e.g.
+        // "DeepSeek-V3-0324") makes the `claude` CLI fail outright. The harness surfaces no model
+        // selection (SupportsAgentSelection = false), so there is nothing to forward.
+        //
+        // 🔑 The token is the user's per-user Connect (subscription) token, NOT a selected model's
+        // API key — resolve it from the user's ClaudeCode provider node. Best-effort: the CLI also
+        // reads its own .credentials.json from the per-user CLAUDE_CONFIG_DIR on the shared volume,
+        // so an absent token simply means "rely on the config dir" (and Connect/login can populate it).
+        var resolver = hub.ServiceProvider.GetService<ChatClientCredentialResolver>();
+        var token = resolver?.ResolveConnectToken(Harnesses.ClaudeCode, userId);
+
         var root = configuration.ConfigDirRoot?.TrimEnd('/');
         var configDir = !string.IsNullOrEmpty(root) && !string.IsNullOrEmpty(userId)
             ? $"{root}/{userId}/.claude"
@@ -53,7 +67,7 @@ public sealed class ClaudeCodeHarness(IOptions<ClaudeCodeConfiguration> options)
         var clientLogger = hub.ServiceProvider.GetService<ILogger<ClaudeCodeChatClient>>();
 
         return new ClaudeCodeChatClient(
-            configuration, modelName, clientLogger, configDir, token,
+            configuration, modelName: null, clientLogger, configDir, token,
             mcp, userId, accessCtx?.Name, accessCtx?.Email);
     }
 }

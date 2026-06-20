@@ -1951,7 +1951,12 @@ internal static class ThreadExecution
                             errorToolCalls = toolCallLog;
                             errorNodeChanges = nodeChangeLog;
                         }
-                        var errorText = (errorTextBase + $"\n\n*Error: {ex.Message}*").Trim();
+                        // A CLI harness that isn't logged in (e.g. Claude Code "Not logged in · Please
+                        // run /login") surfaces as AuthRequiredException — render an actionable "/login"
+                        // affordance instead of the cryptic "exit code 1" the SDK throws.
+                        var errorText = (ex is AuthRequiredException authEx
+                            ? errorTextBase + "\n\n" + authEx.ToMarkdown()
+                            : errorTextBase + $"\n\n*Error: {ex.Message}*").Trim();
                         // 🚨 NO await on hub-touching observables in src/. Subscribe-
                         // continuation: push the error cell, then flip Idle, then notify.
                         // (Previous `.ToTask()` bridge would deadlock the action block —

@@ -94,4 +94,31 @@ public class HarnessTest
         cli.Definition.SupportsAgentSelection.Should().BeFalse();
         cli.CreateChatClient(new HarnessExecutionContext(null!, null, null)).Should().NotBeNull();
     }
+
+    [Fact]
+    public void CliHarnesses_OwnLoginLogoutCommands_AndDeclareTheirConnectProvider()
+    {
+        IHarness claude = new MeshWeaver.AI.ClaudeCode.ClaudeCodeHarness(
+            Microsoft.Extensions.Options.Options.Create(new MeshWeaver.AI.ClaudeCode.ClaudeCodeConfiguration()));
+        IHarness copilot = new MeshWeaver.AI.Copilot.CopilotHarness(
+            Microsoft.Extensions.Options.Options.Create(new MeshWeaver.AI.Copilot.CopilotConfiguration()));
+
+        var cases = new (IHarness Harness, MeshWeaver.AI.Connect.ConnectProvider Provider)[]
+        {
+            (claude, MeshWeaver.AI.Connect.ConnectProvider.ClaudeCode),
+            (copilot, MeshWeaver.AI.Connect.ConnectProvider.Copilot),
+        };
+        foreach (var (harness, provider) in cases)
+        {
+            harness.AuthProvider.Should().Be(provider);
+            harness.Commands.Should().Contain(c => c.Name == "login" && c.Kind == HarnessCommandKind.Connect);
+            harness.Commands.Should().Contain(c => c.Name == "logout" && c.Kind == HarnessCommandKind.Disconnect);
+        }
+
+        // MeshWeaver keeps the node-pick commands (/agent /model) → owns no slash-commands and has no
+        // per-user CLI login.
+        IHarness mw = new MeshWeaverHarness();
+        mw.Commands.Should().BeEmpty();
+        mw.AuthProvider.Should().BeNull();
+    }
 }

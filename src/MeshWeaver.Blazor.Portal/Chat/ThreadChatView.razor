@@ -1,6 +1,7 @@
 @inherits BlazorView<ThreadChatControl, ThreadChatView>
 @using MeshWeaver.AI
 @using MeshWeaver.AI.Commands
+@using MeshWeaver.AI.Connect
 @using MeshWeaver.Data
 @using MeshWeaver.Layout
 @using MeshWeaver.Blazor.Components
@@ -454,6 +455,57 @@ else
                     @if (pickerNodes.Count == 0)
                     {
                         <div class="thread-chat-widget-empty">Nothing to pick.</div>
+                    }
+                </div>
+            </div>
+        }
+
+        @* Inline harness LOGIN (Connect) — driven by a harness's /login command. Reuses
+           ConnectSessionManager (the same flow Settings → Models uses), surfaced in the chat so the
+           user never leaves the conversation to authenticate a CLI harness. *@
+        @if (_connectProvider is not null)
+        {
+            <div class="thread-chat-widget">
+                <div class="thread-chat-widget-header">
+                    <span>Log in to @_connectHarnessLabel</span>
+                    <button class="thread-msg-action-btn" @onclick="CancelConnect" title="Close">&#10005;</button>
+                </div>
+                <div class="thread-chat-widget-list" style="padding:10px 12px; gap:8px; display:flex; flex-direction:column;">
+                    @switch (_connectStatus)
+                    {
+                        case ConnectStatus.Connected:
+                            <div style="color:var(--success-foreground, #16a34a);">&#10003; Connected — you can chat now.</div>
+                            break;
+
+                        case ConnectStatus.Error err:
+                            <div style="color:var(--error-foreground, #dc2626);">@err.Reason</div>
+                            <button class="thread-chat-widget-item" @onclick="@(() => StartHarnessConnect(_connectHarness!))">Try again</button>
+                            break;
+
+                        case ConnectStatus.Connecting c when !string.IsNullOrEmpty(c.Challenge.VerificationUrl):
+                            <div>1&nbsp; Open this URL and authorize:</div>
+                            <a href="@c.Challenge.VerificationUrl" target="_blank" rel="noopener"
+                               style="word-break:break-all;">@c.Challenge.VerificationUrl</a>
+                            @if (c.Challenge.RequiresPastedCode)
+                            {
+                                <div>2&nbsp; Paste the code shown, then submit:</div>
+                                <input class="thread-chat-connect-input" @bind="_connectCode" @bind:event="oninput"
+                                       placeholder="Paste code" @onkeydown="OnConnectInputKeyDown"
+                                       style="width:100%; padding:6px 8px; box-sizing:border-box;" />
+                                <button class="thread-chat-widget-item"
+                                        disabled="@(_connectBusy || string.IsNullOrWhiteSpace(_connectCode))"
+                                        @onclick="SubmitConnectCode">@(_connectBusy ? "Verifying…" : "Submit")</button>
+                            }
+                            else if (!string.IsNullOrEmpty(c.Challenge.UserCode))
+                            {
+                                <div>Enter this code in the browser: <strong>@c.Challenge.UserCode</strong></div>
+                                <div style="color:var(--neutral-foreground-hint);">Waiting for authorization…</div>
+                            }
+                            break;
+
+                        default:
+                            <div style="color:var(--neutral-foreground-hint);">Starting login…</div>
+                            break;
                     }
                 </div>
             </div>

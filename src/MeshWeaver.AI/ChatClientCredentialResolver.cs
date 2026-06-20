@@ -190,6 +190,33 @@ public sealed class ChatClientCredentialResolver : IDisposable
     }
 
     /// <summary>
+    /// Resolve the per-user <b>Connect</b> token for a CLI harness — the user's OWN subscription
+    /// token captured by the login (Connect) flow and stored, encrypted, as a <c>ModelProvider</c>
+    /// node at <c>{UserNamespacePath(userPartition)}/{providerName}</c>
+    /// (e.g. <c>{user}/_Memex/ClaudeCode</c>). Returns the decrypted key, or <c>null</c> when the
+    /// user hasn't connected.
+    ///
+    /// <para>This is deliberately NOT <see cref="Resolve(string)"/>: a CLI harness (Claude Code /
+    /// GitHub Copilot) authenticates with the user's <i>subscription</i> token, never with a selected
+    /// MODEL's API key. Passing the selected model's key (e.g. the DeepSeek/AzureFoundry key) is
+    /// exactly what produced the atioz "Not logged in" failure. Best-effort: the authoritative login
+    /// also lives in the CLI's own per-user config dir (<c>.credentials.json</c> on the shared
+    /// volume), so a not-yet-warm node read simply leaves the env var unset and the CLI falls back to
+    /// its config dir.</para>
+    /// </summary>
+    public string? ResolveConnectToken(string providerName, string? userPartition)
+    {
+        if (string.IsNullOrEmpty(providerName) || string.IsNullOrEmpty(userPartition))
+            return null;
+        // Widen subsequent snapshots to the user's own partition (idempotent), then read.
+        WatchPartition(userPartition!);
+        var providerPath = $"{ModelProviderNodeType.UserNamespacePath(userPartition!)}/{providerName}";
+        return TryGetProvider(ReadSnapshot(), providerPath, out var cfg) && cfg is not null
+            ? Decrypt(cfg.ApiKey)
+            : null;
+    }
+
+    /// <summary>
     /// Decrypts a stored credential. Passthrough when no protector is registered
     /// or the value is legacy plaintext (see <see cref="IProviderKeyProtector"/>).
     /// </summary>

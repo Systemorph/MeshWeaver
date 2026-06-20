@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using MeshWeaver.AI.Connect;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
 
@@ -64,6 +65,43 @@ public interface IHarness
     /// they never touch the model-provider factory chain.
     /// </summary>
     IChatClient? CreateChatClient(HarnessExecutionContext context);
+
+    /// <summary>
+    /// The slash-commands this harness OWNS. When this harness is the active one in the chat, these
+    /// drive BOTH the slash-command autocomplete (the harness is the authority for its command list)
+    /// AND dispatch — a non-MeshWeaver harness routes its own commands (e.g. <c>/login</c>,
+    /// <c>/logout</c>) to itself instead of MeshWeaver's <c>/agent</c>/<c>/model</c> node-pickers.
+    /// Empty for the MeshWeaver harness (it keeps the node-pick commands). Default: none.
+    /// </summary>
+    IReadOnlyList<HarnessCommand> Commands => [];
+
+    /// <summary>
+    /// The Connect provider this harness authenticates per-user (Claude Code / GitHub Copilot), or
+    /// <c>null</c> for MeshWeaver (no per-user CLI login). The chat drives <see cref="HarnessCommandKind.Connect"/>
+    /// / <see cref="HarnessCommandKind.Disconnect"/> commands against this provider.
+    /// </summary>
+    ConnectProvider? AuthProvider => null;
+}
+
+/// <summary>
+/// A slash-command a <see cref="IHarness"/> owns. Pure data: the harness DECLARES its commands (so
+/// the chat autocomplete lists them) and the chat view EXECUTES the <see cref="Kind"/> (Connect /
+/// Disconnect) against the harness's <see cref="IHarness.AuthProvider"/>. Extensible by adding kinds.
+/// </summary>
+public sealed record HarnessCommand(string Name, string Description, HarnessCommandKind Kind)
+{
+    /// <summary>Usage syntax for help / the autocomplete detail (e.g. <c>/login</c>).</summary>
+    public string Usage => $"/{Name}";
+}
+
+/// <summary>What a <see cref="HarnessCommand"/> does when run in the chat.</summary>
+public enum HarnessCommandKind
+{
+    /// <summary>Log in / (re)authenticate this harness's subscription — drives the Connect flow inline.</summary>
+    Connect,
+
+    /// <summary>Log out — forget this harness's stored per-user subscription token.</summary>
+    Disconnect,
 }
 
 /// <summary>Inputs a harness needs to build its chat client for one round.</summary>

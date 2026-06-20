@@ -1,4 +1,5 @@
 using MeshWeaver.Mesh.Threading;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -28,23 +29,36 @@ public sealed class CopilotHarness(IOptions<CopilotConfiguration> options) : IHa
         SupportsAgentSelection = false
     };
 
+    // Copilot owns its auth slash-commands: /login runs the GitHub device-flow login via the Connect
+    // flow; /logout forgets the stored token. When this harness is active these REPLACE MeshWeaver's
+    // /agent /model in the chat autocomplete + dispatch.
+    public IReadOnlyList<HarnessCommand> Commands { get; } =
+    [
+        new("login", "Log in to GitHub Copilot", HarnessCommandKind.Connect),
+        new("logout", "Log out of GitHub Copilot", HarnessCommandKind.Disconnect),
+    ];
+
+    public Connect.ConnectProvider? AuthProvider => Connect.ConnectProvider.Copilot;
+
     public IChatClient? CreateChatClient(HarnessExecutionContext context)
     {
         var hub = context.Hub;
-        // "auto" lets Copilot self-select; CLI harnesses don't surface model choice.
-        var modelName = !string.IsNullOrEmpty(context.ModelName)
-            ? context.ModelName
-            : configuration.Models.FirstOrDefault() ?? "auto";
+        var userId = hub.ServiceProvider.GetService<AccessService>()?.Context?.ObjectId;
 
-        // Per-user GitHub token pass-through (the same per-user CLI auth the harness owns now
-        // that Copilot is a harness, not an agent).
+        // 🚫 NEVER pass a model to the CLI. Copilot self-selects; forwarding the MeshWeaver composer's
+        // selected model (a non-Copilot id) makes the round fail. The harness surfaces no model
+        // selection (SupportsAgentSelection = false), so there is nothing to forward.
+        //
+        // 🔑 The GitHub token is the user's per-user Connect (subscription) token, NOT a selected
+        // model's API key — resolve it from the user's Copilot provider node. When absent the CLI
+        // falls back to the machine's logged-in user (single-user dev / ambient auth).
         var resolver = hub.ServiceProvider.GetService<ChatClientCredentialResolver>();
-        var githubToken = !string.IsNullOrEmpty(modelName) ? resolver?.Resolve(modelName).ApiKey : null;
+        var githubToken = resolver?.ResolveConnectToken(Harnesses.Copilot, userId);
         var clientLogger = hub.ServiceProvider.GetService<ILogger<CopilotChatClient>>();
         // Subprocess CLI spawn + SDK network round-trips → Http pool (off the hub scheduler,
         // bounded). Unbounded fallback when no pool is wired (tests / DI-less construction).
         var ioPool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
 
-        return new CopilotChatClient(configuration, modelName, clientLogger, githubToken, ioPool);
+        return new CopilotChatClient(configuration, modelName: null, clientLogger, githubToken, ioPool);
     }
 }

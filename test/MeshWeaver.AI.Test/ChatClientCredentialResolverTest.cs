@@ -96,6 +96,38 @@ public class ChatClientCredentialResolverTest : AITestBase
     }
 
     [Fact]
+    public async Task ResolveConnectToken_ReturnsPerUserProviderKey_AndIsUserScoped()
+    {
+        // The per-user Connect (CLI subscription) token lives as a ModelProvider node at
+        // {user}/_Memex/{providerName} — the SAME place ConnectTokenSink writes it. A CLI harness
+        // reads it via ResolveConnectToken, NOT via Resolve(modelId) (which is the wrong-key bug).
+        var user = Mesh.ServiceProvider.GetRequiredService<AccessService>().Context?.ObjectId ?? "rbuergi";
+        var providerNs = ModelProviderNodeType.UserNamespacePath(user); // {user}/_Memex
+
+        await MeshService.CreateNode(new MeshNode(Harnesses.ClaudeCode, providerNs)
+        {
+            NodeType = ModelProviderNodeType.NodeType,
+            Name = "Claude Code",
+            State = MeshNodeState.Active,
+            Content = new ModelProviderConfiguration
+            {
+                Provider = Harnesses.ClaudeCode,
+                ApiKey = "sk-ant-oat-connect-test",
+            }
+        }).Should().Within(15.Seconds()).Emit();
+
+        var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
+        var token = await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .Select(_ => resolver.ResolveConnectToken(Harnesses.ClaudeCode, user))
+            .Should().Within(10.Seconds()).Match(t => t != null);
+        token.Should().Be("sk-ant-oat-connect-test");
+
+        // A different user has no provider node → no token (per-user isolation, never a shared key).
+        resolver.ResolveConnectToken(Harnesses.ClaudeCode, "nobody-" + Guid.NewGuid().ToString("N"))
+            .Should().BeNull();
+    }
+
+    [Fact]
     public async Task GetProviderForModel_LooksUpProviderStamp()
     {
         var modelId = $"pmodel-{Guid.NewGuid():N}";

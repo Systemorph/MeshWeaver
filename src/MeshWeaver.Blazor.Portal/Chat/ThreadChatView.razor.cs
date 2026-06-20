@@ -32,6 +32,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     [Inject] private SidePanelStateService SidePanelState { get; set; } = null!;
     [Inject] private IMeshService MeshQuery { get; set; } = null!;
     [Inject] private IChatCompletionOrchestrator CompletionOrchestrator { get; set; } = null!;
+    [Inject] private IConfiguration Configuration { get; set; } = null!;
 
     /// <summary>
     /// Optional — when present, leading "/word args" in the user input is
@@ -825,6 +826,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// </summary>
     private async Task HandleSlashCommandAsync(ParsedCommand parsedCommand)
     {
+        // Harness-owned commands take priority: when a non-MeshWeaver harness is active, its own
+        // slash-commands (/login, /logout) route to the harness itself — NOT to MeshWeaver's
+        // /agent /model node-pickers. /harness, /help and everything else fall through below.
+        if (TryHandleHarnessCommand(parsedCommand))
+        {
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
         if (CommandRegistry == null)
             return;
 
@@ -917,6 +927,207 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     context.ShowNodePicker?.Invoke(match.ToPickerRequest(term));
                 }),
                 _ => InvokeAsync(() => context.ShowStatus?.Invoke($"Unknown command: /{parsed.Name}", true)));
+    }
+
+    // ─── Harness-owned commands + inline Connect (login) ───
+    // When a non-MeshWeaver harness is active, ITS slash-commands (/login, /logout) route to the
+    // harness, not to MeshWeaver's node-pickers. /login drives the per-user Connect flow inline
+    // (auth URL + paste-code), reusing ConnectSessionManager — the same flow Settings → Models uses.
+    private MeshWeaver.AI.Connect.ConnectProvider? _connectProvider;
+    private MeshWeaver.AI.IHarness? _connectHarness;
+    private string? _connectHarnessLabel;
+    private MeshWeaver.AI.Connect.ConnectStatus? _connectStatus;
+    private string _connectCode = "";
+    private bool _connectBusy;
+    private IDisposable? _connectSub;
+
+    /// <summary>The active non-MeshWeaver harness (resolved from the composer's harness selection), or
+    /// null when MeshWeaver is active. Drives harness-owned command dispatch + autocomplete.</summary>
+    private MeshWeaver.AI.IHarness? ActiveHarness()
+    {
+        var harness = MeshWeaver.AI.HarnessNodeType.ResolveHarness(Hub.ServiceProvider, boundHarness);
+        return harness is null
+               || string.Equals(harness.Id, MeshWeaver.AI.Harnesses.MeshWeaver, StringComparison.OrdinalIgnoreCase)
+            ? null : harness;
+    }
+
+    /// <summary>
+    /// Routes a parsed slash-command to the active harness when the harness owns a command of that
+    /// name (/login, /logout). Returns true when handled (so the caller short-circuits the MeshWeaver
+    /// command path). /harness, /help and everything else fall through.
+    /// </summary>
+    private bool TryHandleHarnessCommand(ParsedCommand parsed)
+    {
+        var harness = ActiveHarness();
+        var cmd = harness?.Commands.FirstOrDefault(
+            c => string.Equals(c.Name, parsed.Name, StringComparison.OrdinalIgnoreCase));
+        if (harness is null || cmd is null)
+            return false;
+        switch (cmd.Kind)
+        {
+            case MeshWeaver.AI.HarnessCommandKind.Connect: StartHarnessConnect(harness); break;
+            case MeshWeaver.AI.HarnessCommandKind.Disconnect: DisconnectHarness(harness); break;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Begins the harness's per-user login (Connect) and renders the challenge inline (replacing the
+    /// node picker). Reactive: subscribe ConnectSessionManager.StartConnect; each ConnectStatus drives
+    /// the widget. For Claude (paste-code) the user pastes the code via <see cref="SubmitConnectCode"/>;
+    /// Copilot (device-flow) auto-polls to Connected.
+    /// </summary>
+    private void StartHarnessConnect(MeshWeaver.AI.IHarness harness)
+    {
+        var provider = harness.AuthProvider;
+        if (provider is null)
+            return;
+        var sessionManager = Hub.ServiceProvider.GetService<MeshWeaver.AI.Connect.ConnectSessionManager>();
+        if (sessionManager is null || !sessionManager.Supports(provider.Value))
+        {
+            lastCommandStatus = "Login is not available in this deployment.";
+            lastCommandStatusIsError = true;
+            return;
+        }
+        if (string.IsNullOrEmpty(_userHome))
+        {
+            lastCommandStatus = "No user identity for login.";
+            lastCommandStatusIsError = true;
+            return;
+        }
+        // Mutually exclusive with the node picker.
+        pendingPicker = null;
+        pickerNodes = [];
+        lastCommandStatus = null;
+        _connectHarness = harness;
+        _connectProvider = provider;
+        _connectHarnessLabel = harness.Definition.DisplayName ?? harness.Id;
+        _connectStatus = null;   // "Starting login…" until the first emission
+        _connectCode = "";
+        _connectBusy = false;
+        _connectSub?.Dispose();
+        var ownerPath = _userHome!;
+        var configDir = ResolveHarnessConfigDir(provider.Value);
+        _connectSub = sessionManager.StartConnect(ownerPath, provider.Value, configDir)
+            .Subscribe(
+                status => InvokeAsync(() =>
+                {
+                    if (_isDisposed) return;
+                    _connectStatus = status;
+                    _connectBusy = false;
+                    StateHasChanged();
+                }),
+                ex => InvokeAsync(() =>
+                {
+                    if (_isDisposed) return;
+                    _connectStatus = new MeshWeaver.AI.Connect.ConnectStatus.Error(ex.Message);
+                    _connectBusy = false;
+                    StateHasChanged();
+                }));
+        StateHasChanged();
+    }
+
+    /// <summary>Submits the pasted code for a Claude paste-code login and drives it to completion.</summary>
+    private void SubmitConnectCode()
+    {
+        if (_connectProvider is not { } provider || string.IsNullOrWhiteSpace(_connectCode) || string.IsNullOrEmpty(_userHome))
+            return;
+        var sessionManager = Hub.ServiceProvider.GetService<MeshWeaver.AI.Connect.ConnectSessionManager>();
+        if (sessionManager is null)
+            return;
+        var ownerPath = _userHome!;
+        var code = _connectCode.Trim();
+        _connectBusy = true;
+        _connectSub?.Dispose();
+        _connectSub = sessionManager.SubmitCode(ownerPath, provider, code)
+            .Subscribe(
+                status => InvokeAsync(() =>
+                {
+                    if (_isDisposed) return;
+                    _connectStatus = status;
+                    _connectBusy = false;
+                    StateHasChanged();
+                }),
+                ex => InvokeAsync(() =>
+                {
+                    if (_isDisposed) return;
+                    _connectStatus = new MeshWeaver.AI.Connect.ConnectStatus.Error(ex.Message);
+                    _connectBusy = false;
+                    StateHasChanged();
+                }));
+        StateHasChanged();
+    }
+
+    /// <summary>Enter in the paste-code field submits the code.</summary>
+    private void OnConnectInputKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            SubmitConnectCode();
+    }
+
+    /// <summary>Dismiss the Connect widget and tear down any live login session.</summary>
+    private void CancelConnect()
+    {
+        if (_connectProvider is { } p && !string.IsNullOrEmpty(_userHome))
+            Hub.ServiceProvider.GetService<MeshWeaver.AI.Connect.ConnectSessionManager>()?.Cancel(_userHome!, p);
+        _connectSub?.Dispose();
+        _connectSub = null;
+        _connectProvider = null;
+        _connectHarness = null;
+        _connectStatus = null;
+        _connectCode = "";
+        _connectBusy = false;
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Logs the user out of a CLI harness: forgets the stored per-user subscription token (the
+    /// ModelProvider node the harness reads) AND clears the CLI's own cached credentials in the
+    /// per-user config dir, so the next round is genuinely logged out.
+    /// </summary>
+    private void DisconnectHarness(MeshWeaver.AI.IHarness harness)
+    {
+        var provider = harness.AuthProvider;
+        if (provider is null || string.IsNullOrEmpty(_userHome))
+            return;
+        Hub.ServiceProvider.GetService<MeshWeaver.AI.Connect.ConnectSessionManager>()?.Cancel(_userHome!, provider.Value);
+
+        var providerPath = $"{MeshWeaver.AI.ModelProviderNodeType.UserNamespacePath(_userHome!)}/{harness.Id}";
+        MeshQuery.DeleteNode(providerPath).Subscribe(
+            _ => { },
+            ex => Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] logout: delete provider node {Path} failed",
+                _instanceId, providerPath));
+
+        // Clear the CLI's own cached credentials on the shared volume (best-effort, server-side).
+        var configDir = ResolveHarnessConfigDir(provider.Value);
+        if (!string.IsNullOrEmpty(configDir))
+        {
+            try
+            {
+                var creds = System.IO.Path.Combine(configDir, ".credentials.json");
+                if (System.IO.File.Exists(creds)) System.IO.File.Delete(creds);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] logout: clear credentials failed", _instanceId);
+            }
+        }
+
+        lastCommandStatus = $"Logged out of {harness.Definition.DisplayName ?? harness.Id}.";
+        lastCommandStatusIsError = false;
+    }
+
+    /// <summary>
+    /// The per-user CLI config dir the login writes to — IDENTICAL to the dir the harness reads
+    /// (<c>{ClaudeCode:ConfigDirRoot}/{userId}/.claude</c>), so a completed login authenticates the
+    /// harness's CLI. Null for Copilot (device-flow uses the SDK's own auth state, not a creds file).
+    /// </summary>
+    private string? ResolveHarnessConfigDir(MeshWeaver.AI.Connect.ConnectProvider provider)
+    {
+        if (provider != MeshWeaver.AI.Connect.ConnectProvider.ClaudeCode || string.IsNullOrEmpty(_userHome))
+            return null;
+        var root = Configuration["ClaudeCode:ConfigDirRoot"]?.TrimEnd('/', '\\');
+        return string.IsNullOrEmpty(root) ? null : $"{root}/{_userHome}/.claude";
     }
 
     private void DismissWidget()
@@ -1575,6 +1786,13 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// </summary>
     private IObservable<IReadOnlyList<CompletionItem>> GetCommandCompletions(string query)
     {
+        // When a non-MeshWeaver harness is active, IT is the authority for the slash-command list:
+        // show its own commands (/login, /logout) plus /harness (to switch back), NOT MeshWeaver's
+        // /agent /model. Monaco filters the list by the typed "/word".
+        var harness = ActiveHarness();
+        if (harness is not null)
+            return Observable.Return(BuildHarnessCommandCompletions(harness));
+
         // Construct the provider directly against the chat hub's service provider — it self-resolves
         // its deps (IWorkspace + IMessageHub for the nodeType:Command catalog, ChatCommandRegistry for
         // the C# /help command). Resolving via GetServices<IAutocompleteProvider>() does NOT work here:
@@ -1593,6 +1811,27 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] command completions failed", _instanceId);
                 return Observable.Return<IReadOnlyList<CompletionItem>>(Array.Empty<CompletionItem>());
             });
+    }
+
+    /// <summary>
+    /// Builds the slash-command completion list for an active non-MeshWeaver harness: the harness's
+    /// OWN commands (the harness is the autocomplete authority) plus <c>/harness</c> so the user can
+    /// still switch back. No mesh query — the list is the harness's declared <see cref="MeshWeaver.AI.IHarness.Commands"/>.
+    /// </summary>
+    private IReadOnlyList<CompletionItem> BuildHarnessCommandCompletions(MeshWeaver.AI.IHarness harness)
+    {
+        CompletionItem Item(string name, string description) =>
+            AutocompleteToCompletion(
+                new Data.Completion.AutocompleteItem(
+                    Label: $"/{name}", InsertText: $"/{name} ", Description: description,
+                    Category: "Commands", Priority: 2000, Kind: Data.Completion.AutocompleteKind.Command),
+                "Commands", 2000);
+
+        var items = harness.Commands.Select(c => Item(c.Name, c.Description)).ToList();
+        // /harness stays available (it falls through to the node-pick path) so a CLI harness isn't a
+        // one-way door — the user can switch runtime back to MeshWeaver or another harness.
+        items.Add(Item("harness", "Switch the harness (runtime)"));
+        return items.OrderBy(c => c.SortKey, StringComparer.Ordinal).ToList();
     }
 
     /// <summary>
@@ -2182,6 +2421,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         {
             _isDisposed = true;
             elapsedTicker?.Dispose();
+            _connectSub?.Dispose();
             _navContextSubscription?.Dispose();
             composerSubscription?.Dispose();
             composerDefaultsSubscription?.Dispose();
