@@ -1218,6 +1218,111 @@ The mechanism is `IObservable<T>.CarryAccessContext(IServiceProvider)` in `src/M
 Legitimate hub-internal writes that must bypass user identity (cache hydration, SyncStream heartbeats) opt in explicitly via `accessService.ImpersonateAsSystem()` or `accessService.ImpersonateAsHub(hub)` / `PostOptions.ImpersonateAsHub`. PostPipeline fails closed otherwise.
 
 ---
+## 🚨 `Observable.FromAsync` is blocking — never use it in hub flow
+
+`Observable.FromAsync(() => someTask)` **looks** reactive but the implementation invokes
+the factory on subscribe, gets a `Task` back, and then sits on a thread-pool thread
+awaiting the Task. Under test-suite load, the thread pool saturates and the whole
+reactive pipeline stalls — the exact symptom of "tests pass alone, hang when the full
+suite runs."
+
+**Don't do this:**
+```csharp
+// ❌ Blocks a thread waiting for GetNodeAsync. Under load, this hangs.
+Observable.FromAsync(token => persistence.GetNodeAsync(path, token))
+
+// ❌ Same problem — async foreach inside FromAsync still blocks a thread.
+Observable.FromAsync(async token =>
+{
+    var list = new List<MeshNode>();
+    await foreach (var child in persistence.GetChildrenAsync(path).WithCancellation(token))
+        list.Add(child);
+    return list;
+})
+```
+
+**Do this instead:**
+- For node content reads, use the live workspace stream:
+  `hub.GetWorkspace().GetStream(new MeshNodeReference())` (local, strong consistency)
+  or `workspace.GetRemoteStream<MeshNode>(address, new MeshNodeReference())` (remote).
+- For set discovery, use `meshService.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(...)).Take(1)`.
+- If you absolutely must wrap a one-shot async boundary call, do it at an application
+  edge (controller, Blazor event handler), **not inside a hub handler's reactive chain**.
+
+## `Task` on the public surface is forbidden
+
+Public methods on `IMeshService`, `HubNodePersistence`, `MeshOperations`, layout areas,
+and similar mesh-facing services return **`IObservable<T>`**, not `Task<T>`. This is
+not a style preference: a `Task` return type forces every caller into `.ContinueWith`
+or `await`, and every one of those becomes a future deadlock candidate.
+
+**Inside a RegisterCallback delegate, use the `SyncDelivery` overload (no `Task.FromResult`):**
+```csharp
+hub.RegisterCallback((IMessageDelivery)delivery, (SyncDelivery)(d =>
+{
+    if (d.Message is DeliveryFailure df)
+    {
+        observer.OnError(new InvalidOperationException(df.Message));
+        return d;
+    }
+    var r = ((IMessageDelivery<DeleteNodeResponse>)d).Message;
+    if (r.Success) { observer.OnNext(true); observer.OnCompleted(); }
+    else observer.OnError(new InvalidOperationException(r.Error));
+    return d;
+}), cts.Token);
+```
+
+`SyncDelivery` is `IMessageDelivery SyncDelivery(IMessageDelivery request)` — no
+`Task`, no `Task.FromResult`.
+
+## `DeliveryFailure` must flow through `observer.OnError`
+
+When routing fails (no hub at target, target disposed, message undeliverable), the
+router posts a `DeliveryFailure` response to the sender. **Historically the
+`RegisterCallback` wrapper swallowed this message** — it set an exception on its
+internal `Task` but never invoked the user callback — so any subscriber built on
+`Observable.Create(observer =&gt; { hub.RegisterCallback(...) })` **waited forever**.
+
+That was the root cause of the recursive-delete hang: one child's
+`DeleteNodeRequest` routed to a path with no hub, the router posted
+`DeliveryFailure`, the callback was skipped, the `Interlocked` counter never reached
+zero, and the outer `Ok` was never posted.
+
+**Fix:** the callback is now invoked for **every** inbound message, including
+`DeliveryFailure`. Inspect `d.Message is DeliveryFailure` in your callback and call
+`observer.OnError(...)` to propagate it to the reactive chain. See
+`MessageHub.ResolveCallback`.
+
+## Every reactive chain must have a timeout
+
+`Observable.Create(observer =&gt; ...)` alone can hang forever if nothing ever calls
+`observer.OnNext` / `OnError` — e.g. a response posted to the wrong address, or a
+hub torn down between Post and response. **Always** apply `.Timeout(opts.Timeout)` on
+the public surface:
+
+```csharp
+return Observable.Create<bool>(observer =>
+{
+    var cts = new CancellationTokenSource();
+    var delivery = hub.Post(new DeleteNodeRequest(path) { Recursive = true },
+        o => o.WithTarget(new Address(path)));
+    hub.RegisterCallback((IMessageDelivery)delivery, (SyncDelivery)(d => { ... return d; }),
+        cts.Token);
+    return Disposable.Create(() => cts.Cancel());
+})
+.Timeout(OpTimeout);   // ← NEVER OMIT
+```
+
+Default `OpTimeout` is 30 s (`MeshOperationOptions.Timeout`). Tune with
+`WithMeshOperationTimeout`. A `TimeoutException` is always better than a hang.
+
+## Route write-request handlers to the node's own hub
+
+`IMeshService.DeleteNode` / `UpdateNode` target `new Address(path)` (the node's own
+hub), not the mesh hub. This lets the handler read the node's state from its local
+workspace stream — no persistence fallback, no `Observable.FromAsync` wrapping a
+blocking async call. `CreateNode` still targets the mesh hub (the target node doesn't
+exist yet).
 
 ## Rules Summary
 
@@ -1233,6 +1338,19 @@ Legitimate hub-internal writes that must bypass user identity (cache hydration, 
 | `Observable.FromAsync(() => hub.RegisterCallback(...))` | **NEVER** | Bridges Task into Rx; continuation captures sync-context → deadlock. Use `hub.Observe(...)` |
 | Direct workspace mutation in a Subscribe callback | **NO** | Wrong thread in Orleans, deadlocks — compose the next write into the observable chain instead |
 | `meshService.QueryAsync(...)` | **NO** | Blocks waiting for response |
+| `hub.RegisterCallback(delivery, (SyncDelivery)d => ..., ct)` | Yes | Sync variant, no Task.FromResult |
+| `meshService.CreateNode(...).Subscribe()` | Yes | Fire-and-forget, no callback logic |
+| `workspace.GetStream(new MeshNodeReference())` | Yes | Local authoritative content stream |
+| `workspace.GetRemoteStream<MeshNode>(addr, new MeshNodeReference())` | Yes | Remote authoritative content stream |
+| `meshService.ObserveQuery<T>(req).Take(1)` | Yes | Reactive query for set discovery |
+| `workspace.UpdateMeshNode(...)` in handler body | Yes | Runs on grain scheduler |
+| `workspace.UpdateMeshNode(...)` in Subscribe callback | **NO** | Wrong thread in Orleans, deadlocks |
+| `meshService.QueryAsync(...)` (IAsyncEnumerable) | **NO** | Blocks the caller's thread while enumerating |
+| `Observable.FromAsync(() => someTask)` | **NO** | Blocks a thread-pool thread waiting for Task |
+| `Task<T>` on public mesh-facing API | **NO** | Forces callers into await; use `IObservable<T>` |
+| `Task.FromResult(d)` inside RegisterCallback callback | **NO** | Use `SyncDelivery` overload instead |
+| Observable chain without `.Timeout(...)` | **NO** | A lost response = infinite hang |
+| `await hub.AwaitResponse(...)` | **NO** | Deadlocks the hub scheduler |
 | `await someTask` | **NO** | Blocks the hub scheduler |
 | `hub.InvokeAsync(...)` | **NO** | Schedules on potentially blocked scheduler |
 | `stream.Subscribe(...)` | **Risky** | May deadlock if stream observes on hub scheduler |

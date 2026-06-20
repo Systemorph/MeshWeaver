@@ -51,6 +51,7 @@ public static class DeleteLayoutArea
             .Timeout(TimeSpan.FromSeconds(10))
             .Catch<Permission, Exception>(_ => Observable.Return(Permission.None));
 
+        // Descendant count via reactive ObserveQuery — no await foreach on the thread pool.
         var descendantsObs = (meshQuery != null
             ? CountDescendants(meshQuery, nodePath)
             : Observable.Return(0))

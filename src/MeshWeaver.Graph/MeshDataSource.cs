@@ -531,14 +531,34 @@ public static class MeshDataSourceExtensions
                 Content = release
             };
 
+            // Credential split: the surrounding compile (RunCompile) runs as System so the
+            // pure compilation fills the assembly cache even on read-only partitions. But the
+            // RELEASE node is the user-facing artefact — stamp it to the user who requested it
+            // (RequestedReleaseBy, who passed the Compile gate at the entry point) so the
+            // release is attributable to its author (owner = caller). When no user requested it
+            // (the System-driven Doc-release seed, or the first-build kickoff), RequestedReleaseBy
+            // is null and the create falls through under the ambient System scope.
+            var requestedBy = (pendingNode.Content as NodeTypeDefinition)?.RequestedReleaseBy;
+            var accessService = hub.ServiceProvider.GetService<AccessService>();
+            var userScope = !string.IsNullOrEmpty(requestedBy) && accessService is not null
+                ? accessService.SwitchAccessContext(new AccessContext
+                {
+                    ObjectId = requestedBy,
+                    Name = requestedBy
+                })
+                : null;
+
             // Fire-and-forget — observability, not correctness. If the create
             // fails (replication race, transient mesh-side error) we log and
-            // skip; the next compile retry creates a fresh release.
-            meshService.CreateNode(node).Subscribe(
-                _ => { },
-                ex => logger?.LogWarning(ex,
-                    "CompileWatcher: failed to create Release node at {ReleasePath}",
-                    releasePath));
+            // skip; the next compile retry creates a fresh release. The Subscribe
+            // runs synchronously inside userScope, so CreateNode captures the
+            // caller's identity for the stored MeshNode.CreatedBy.
+            using (userScope)
+                meshService.CreateNode(node).Subscribe(
+                    _ => { },
+                    ex => logger?.LogWarning(ex,
+                        "CompileWatcher: failed to create Release node at {ReleasePath}",
+                        releasePath));
 
             return releasePath;
         }

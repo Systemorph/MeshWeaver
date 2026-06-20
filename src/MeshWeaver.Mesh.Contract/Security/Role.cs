@@ -40,7 +40,9 @@ public record Role
         Id = "Admin",
         DisplayName = "Administrator",
         Description = "Full access to all operations",
-        Permissions = Permission.All,
+        // Compile is excluded from Permission.All (so HasFlag(All)/IsGlobalAdmin stays
+        // byte-stable) but Admin is a superset of every user capability — grant it explicitly.
+        Permissions = Permission.All | Permission.Compile,
         IsInheritable = true
     };
 
@@ -51,8 +53,10 @@ public record Role
     {
         Id = "Editor",
         DisplayName = "Editor",
-        Description = "Can read, create, update, export nodes, comment, and use threads",
-        Permissions = Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export,
+        Description = "Can read, create, update, export nodes, comment, use threads, and create releases",
+        // Compile = "may create a NodeType release". Space editors ship releases by default;
+        // the pure compilation that fills the cache still runs as System (not the editor).
+        Permissions = Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export | Permission.Compile,
         IsInheritable = true
     };
 
@@ -91,7 +95,7 @@ public record Role
         Id = "PlatformAdmin",
         DisplayName = "Platform Admin",
         Description = "Full access to platform settings and administration",
-        Permissions = Permission.All,
+        Permissions = Permission.All | Permission.Compile,
         IsInheritable = true
     };
 }

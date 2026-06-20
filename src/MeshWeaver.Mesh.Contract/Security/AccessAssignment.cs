@@ -95,7 +95,11 @@ public record PartitionAccessPolicy
     /// </summary>
     public Permission GetPermissionCap()
     {
-        var cap = Permission.All;
+        // Start from ALL BITS SET, not Permission.All. A policy only RESTRICTS the permissions
+        // it explicitly lists below; it must never implicitly strip a permission outside that
+        // list — Permission.All excludes the privileged grants (Sync, Compile) and any future
+        // bit, so using it as the base silently capped Compile/Sync out of every effective set.
+        var cap = (Permission)~0;
         if (Read == false) cap &= ~Permission.Read;
         if (Create == false) cap &= ~Permission.Create;
         if (Update == false) cap &= ~Permission.Update;

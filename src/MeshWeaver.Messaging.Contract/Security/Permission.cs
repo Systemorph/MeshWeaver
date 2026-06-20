@@ -72,9 +72,33 @@ public enum Permission
     Sync = 512,
 
     /// <summary>
+    /// Permission to CREATE A RELEASE of a NodeType — i.e. kick off the user-facing
+    /// "Create Release" operation that compiles a NodeType's source and writes a
+    /// <c>Release</c> MeshNode. Granted to <c>Editor</c> (and above) by default so Space
+    /// editors can ship releases; absent from <c>Viewer</c>/<c>Commenter</c>.
+    /// <para>
+    /// Deliberately EXCLUDED from <see cref="All"/> (same reasoning as <see cref="Sync"/>):
+    /// <see cref="HubPermissionExtensions.IsGlobalAdmin"/> is <c>HasFlag(All)</c>, and a
+    /// read-only-capped Admin's effective set is folded against the role int — folding a new
+    /// bit into <c>All</c> would silently demand it be re-materialized into the PG
+    /// <c>user_effective_permissions</c> table before any admin check passes again (the
+    /// 2026-06-08 lock-out shape). Granting <c>Compile</c> explicitly on the built-in roles
+    /// keeps <c>All</c> — and therefore every <c>HasFlag(All)</c> gate — byte-stable.
+    /// </para>
+    /// <para>
+    /// This gates the USER's request to create a release; the subsequent "pure" compilation
+    /// that fills the assembly cache is INFRASTRUCTURE and runs under the System identity
+    /// (<c>accessService.ImpersonateAsSystem()</c>), never the caller — so it succeeds even on
+    /// a read-only partition (e.g. <c>Doc</c>) where the caller has no Update right.
+    /// </para>
+    /// </summary>
+    Compile = 1024,
+
+    /// <summary>
     /// All standard permissions (Read, Create, Update, Delete, Comment, Execute, Thread, Api,
-    /// Export). NOTE: <see cref="Sync"/> is intentionally excluded — it is a privileged
-    /// static-repo-sync grant, never implied by "all", so a read-only-capped Admin can't write.
+    /// Export). NOTE: <see cref="Sync"/> and <see cref="Compile"/> are intentionally excluded —
+    /// each is a privileged grant added explicitly to the roles that need it, never implied by
+    /// "all", so a read-only-capped Admin can't write and <c>HasFlag(All)</c> stays byte-stable.
     /// </summary>
     All = Read | Create | Update | Delete | Comment | Execute | Thread | Api | Export
 }

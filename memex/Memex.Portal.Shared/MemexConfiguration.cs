@@ -552,6 +552,14 @@ public static class MemexConfiguration
                 .AddSelfRegistry()
                 .AddDocumentation(serveFromPartition)
                 .AddStaticRepoSync(serveFromPartition)
+                // Ship compiled releases WHEREVER we ship code NodeTypes — Doc AND the sample
+                // partitions (ACME, FutuRe, Northwind, Cornerstone, MeshWeaver). Pre-build every
+                // shipped code NodeType's release at boot, as System, so the runtime path is a
+                // cache hit and no user navigation ever triggers an on-demand compile (the atioz
+                // 2026-06-18 phantom _Activity/compile-* storm). Idempotent (skips already-built
+                // types); off the thread pool so it never blocks startup.
+                .ConfigureServices(services =>
+                    services.AddHostedService<ShippedReleaseSeedHostedService>())
                 .AddMarkdownExport()
                 // Register Azure Blob support for content collections.
                 .ConfigureServices(services => services.AddAzureBlob())
