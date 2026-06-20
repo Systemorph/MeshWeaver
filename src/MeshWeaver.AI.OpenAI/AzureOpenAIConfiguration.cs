@@ -1,4 +1,4 @@
-﻿namespace MeshWeaver.AI.AzureOpenAI;
+﻿namespace MeshWeaver.AI.OpenAI;
 
 /// <summary>
 /// Configuration for AI service credentials

@@ -134,7 +134,14 @@ public sealed record AiProviderFeatureOptions
     public bool AzureOpenAI { get; init; } = true;
     public bool OpenAI { get; init; } = true;
 
-    public bool HasAny => Anthropic || AzureFoundry || AzureOpenAI || OpenAI;
+    /// <summary>
+    /// The generic OpenAI-compatible custom-URL provider — the "type" a user picks in
+    /// Settings → Language Models to bring any OpenAI-wire endpoint (OpenRouter, Groq,
+    /// Together, a local vLLM, …) by base URL + key. No system default; always user-supplied.
+    /// </summary>
+    public bool OpenAICompatible { get; init; } = true;
+
+    public bool HasAny => Anthropic || AzureFoundry || AzureOpenAI || OpenAI || OpenAICompatible;
 }
 
 public sealed record AiCliFeatureOptions

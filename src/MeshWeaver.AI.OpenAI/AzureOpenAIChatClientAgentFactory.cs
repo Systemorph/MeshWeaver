@@ -6,7 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace MeshWeaver.AI.AzureOpenAI;
+namespace MeshWeaver.AI.OpenAI;
 
 /// <summary>
 /// Factory for creating ChatClientAgent instances with Azure OpenAI.

@@ -4,7 +4,7 @@ using MeshWeaver.Mesh;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
-namespace MeshWeaver.AI.AzureOpenAI;
+namespace MeshWeaver.AI.OpenAI;
 
 /// <summary>
 /// Extension methods for adding Azure OpenAI services. Each provider

@@ -3,7 +3,7 @@
 using System;
 using System.Linq;
 using MeshWeaver.AI;
-using MeshWeaver.AI.AzureOpenAI;
+using MeshWeaver.AI.OpenAI;
 using MeshWeaver.AI.ClaudeCode;
 using MeshWeaver.AI.Copilot;
 using MeshWeaver.Hosting.Monolith.TestBase;

@@ -8,7 +8,7 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
-using MeshWeaver.AI.AzureOpenAI;
+using MeshWeaver.AI.OpenAI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
