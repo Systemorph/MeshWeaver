@@ -31,9 +31,25 @@ public static class McpExtensions
     /// into <c>Mcp__BaseUrl</c> at deployment time, no per-environment
     /// source patches needed).
     /// </summary>
+    /// <summary>
+    /// Connect-time guidance the MCP client (Claude Code / Copilot) receives in the <c>instructions</c>
+    /// field of the initialize response — so NOTHING is synced to disk: the mesh is the workspace, search
+    /// is vector-indexed, and skills are mesh nodes found + read on demand. The full tool + query reference
+    /// is the <c>tools-reference</c> resource (the same embedded ToolsReference the in-portal agents use).
+    /// </summary>
+    public const string ServerInstructions =
+        "You are connected to the MeshWeaver mesh through this MCP server — the mesh IS your workspace " +
+        "(not a local file tree). Use these tools to read and modify content.\n\n" +
+        "Everything in the mesh is vector-indexed: retrieve anything with `search` (free-text routes to the " +
+        "semantic index) — you do not need exact paths.\n\n" +
+        "Skills are reusable capabilities stored as `nodeType:Skill` nodes. When a request matches a specific " +
+        "operation, find the relevant skill with `search nodeType:Skill`, then read it with `get` to follow " +
+        "its instructions. Read each skill only once.\n\n" +
+        "Read the `tools-reference` resource for the full tool + query-syntax reference.";
+
     public static IServiceCollection AddMeshMcp(this IServiceCollection services)
     {
-        services.AddMcpServer()
+        services.AddMcpServer(options => options.ServerInstructions = ServerInstructions)
             .WithHttpTransport()
             .WithToolsFromAssembly(typeof(McpMeshPlugin).Assembly)
             .WithResourcesFromAssembly(typeof(McpResources).Assembly);
