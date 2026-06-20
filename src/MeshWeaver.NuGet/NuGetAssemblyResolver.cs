@@ -257,7 +257,7 @@ public sealed class NuGetAssemblyResolver(
                 MsLogging.LoggerExtensions.LogWarning(logger, delEx,
                     "Failed to delete poisoned cache contents at {Path}", installedPath);
             }
-            // Recreate the empty directory for ExtractPackageAsync to land into.
+            // Recreate the empty directory for the v3 install below to land into.
             Directory.CreateDirectory(installedPath);
         }
 
@@ -270,10 +270,21 @@ public sealed class NuGetAssemblyResolver(
             throw new InvalidOperationException($"Failed to download {info.Id} {info.Version}: {result.Status}");
 
         result.PackageStream.Seek(0, SeekOrigin.Begin);
-        await PackageExtractor.ExtractPackageAsync(
+        // Install into the v3 global-packages layout ({id-lowercase}/{version}/) — the SAME path
+        // `installedPath` above reads back from. ExtractPackageAsync + PackagePathResolver writes
+        // the packages.config-style side-by-side `{Id}.{Version}` folder (original cased) instead,
+        // so for any package that actually has to be downloaded (i.e. is NOT already in the global
+        // cache — exactly the freshly-packed MeshWeaver.BusinessRules.Generator), the read path
+        // stayed the EMPTY directory we pre-created: GetLibItemsAsync returned nothing and the
+        // package's lib/ assembly was never surfaced (the scope generator silently failed to load,
+        // scope nodes compiled but generated no IScope<,> implementations). VersionFolderPathResolver
+        // is the canonical v3 install resolver and lands exactly at
+        // Path.Combine(packagesRoot, id.ToLowerInvariant(), version.ToNormalizedString()).
+        await PackageExtractor.InstallFromSourceAsync(
             source: info.Source.PackageSource.Source,
-            packageStream: result.PackageStream,
-            packagePathResolver: new PackagePathResolver(packagesRoot),
+            packageIdentity: new PackageIdentity(info.Id, info.Version),
+            copyToAsync: destination => result.PackageStream.CopyToAsync(destination, ct),
+            versionFolderPathResolver: new VersionFolderPathResolver(packagesRoot),
             packageExtractionContext: new PackageExtractionContext(
                 PackageSaveMode.Defaultv3,
                 XmlDocFileSaveMode.Skip,

@@ -159,16 +159,17 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         //    loop-fix shape: status-guarded kickoff so the activation fan-out
         //    can't trigger an endless recompile chain.
         var activityNamespace = $"{typePath}/_Activity";
-        await Task.Delay(TimeSpan.FromSeconds(15), ct);
-        var firstSnapshot = await SiloMeshService
+        // The first background activation fires the System first-build kickoff
+        // exactly once → exactly one compile activity. Wait for it to appear
+        // (WritingTests.md — wait on the condition, not a fixed sleep) instead of
+        // a fixed 15s. The query is a LIVE stream, so the count flips 0→1 the
+        // moment the activity create lands.
+        var activityCount = SiloMeshService
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{activityNamespace} scope:subtree"))
-            .FirstAsync()
-            .ToTask(ct);
-        var firstActivities = firstSnapshot.Items.ToList();
-        Output.WriteLine($"_Activity rows after first background-activation: {firstActivities.Count}");
-        foreach (var row in firstActivities)
-            Output.WriteLine($"  - {row.Path} (NodeType={row.NodeType}, Name={row.Name})");
+            .Select(r => r.Items.Count);
+        var firstCount = await activityCount.Should().Within(30.Seconds()).Match(c => c >= 1);
+        Output.WriteLine($"_Activity rows after first background-activation: {firstCount}");
 
         // Re-activate by a SECOND background read. If the kickoff is unguarded
         // (the original prod bug), this would fire ANOTHER compile and the
@@ -176,26 +177,24 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         // Take(1) on the kickoff Subject, the second read MUST NOT add an
         // activity — the same single compile from the first activation is the
         // only one that ever runs.
-        var dataResp2 = await client
+        await client
             .Observe(new GetDataRequest(new MeshNodeReference()),
                 o => o.WithTarget(new Address(typePath)))
             .FirstAsync().ToTask(ct);
-        await Task.Delay(TimeSpan.FromSeconds(8), ct);
-        var secondSnapshot = await SiloMeshService
-            .Query<MeshNode>(MeshQueryRequest.FromQuery(
-                $"namespace:{activityNamespace} scope:subtree"))
-            .FirstAsync()
-            .ToTask(ct);
-        var secondActivities = secondSnapshot.Items.ToList();
-        Output.WriteLine($"_Activity rows after SECOND background-activation: {secondActivities.Count}");
 
-        secondActivities.Count.Should().Be(firstActivities.Count,
-            "the first-build kickoff fires exactly once (status guard + Take(1)). " +
-            "A second background activation MUST NOT trigger a second compile — " +
-            "that is precisely the prod 2026-05-21 loop bug the status guard fixes. " +
-            "Prior to the guard, every grain activation re-fired the kickoff when " +
-            "HasUsableBuild was false, generating an endless stream of " +
-            "\"Access denied: user 'sync/...' lacks Create permission\" log lines.");
+        // Robust negative (WritingTests.md): the activity count must NEVER grow
+        // past the first one. A second kickoff would push it beyond firstCount —
+        // `.Where(c => c > firstCount)` then NotEmit catches exactly that, with no
+        // fixed sleep. Prior to the status guard + Take(1), every grain activation
+        // re-fired the kickoff when HasUsableBuild was false, generating an endless
+        // stream of "Access denied: user 'sync/...' lacks Create permission" lines.
+        await activityCount
+            .Where(c => c > firstCount)
+            .Should().NotEmit(within: TimeSpan.FromSeconds(8),
+                because: "the first-build kickoff fires exactly once (status guard + Take(1)); " +
+                    "a second background activation MUST NOT trigger a second compile — the prod " +
+                    "2026-05-21 loop bug the status guard fixes");
+        Output.WriteLine($"_Activity rows after SECOND background-activation: still {firstCount} (no second compile).");
     }
 
     /// <summary>
@@ -343,26 +342,37 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
 
         // 🚨 Post-settle quiescence pin (2026-05-21 user directive: "check there
         // are no more messages after it's over. having endless messages in
-        // prod"). After the terminal status lands, the chain MUST be quiet —
-        // no further watcher firings, no further partition writes. Concrete
-        // probe: read the NodeType's MeshNode Version twice with a quiet
-        // window between, assert it didn't change. Endless messages would
-        // bump the version every cycle.
-        var versionSnap1 = await SiloMeshService
-            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{typePath}"))
-            .FirstAsync().ToTask(ct);
-        var version1 = versionSnap1.Items.FirstOrDefault()?.Version ?? -1;
-        await Task.Delay(TimeSpan.FromSeconds(3), ct);
-        var versionSnap2 = await SiloMeshService
-            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{typePath}"))
-            .FirstAsync().ToTask(ct);
-        var version2 = versionSnap2.Items.FirstOrDefault()?.Version ?? -1;
-
-        Output.WriteLine($"Post-settle version1={version1} version2={version2} (3s window)");
-        version2.Should().Be(version1,
-            "the chain must quiesce after settling — endless messages in prod " +
-            "were the original 2026-05-21 symptom. Version growth in a 3-second " +
-            "post-settle window indicates a runaway watcher.");
+        // prod"). The chain MUST eventually go quiet — no runaway watcher.
+        //
+        // Robust check (WritingTests.md — wait on the condition, not a fixed
+        // sleep). The OLD probe read the Version twice with a fixed 3s Task.Delay
+        // between and asserted it didn't change — which FLAKED, because a clean
+        // settle here legitimately includes a SECOND compile: the System
+        // first-build kickoff fires on grain activation (CompilationStatus null →
+        // Pending under System), and the user's explicit RequestedReleaseAt then
+        // drives a FRESH release compile (InstallReleaseRequestWatcher is gated on
+        // a SETTLED status by design, so it runs AFTER the kickoff's compile). The
+        // FIRST terminal Ok (kickoff's) satisfies the settle wait above, so the
+        // fixed 3s window raced the bounded trailing writes of the second compile
+        // and saw Version grow (6→9 under a 2-core repro).
+        //
+        // Instead, watch the NodeType's authoritative live stream and wait for its
+        // Version to STABILISE: `Throttle(quietWindow)` emits only after Version
+        // has stopped changing for the window. A bounded settle (the two compiles)
+        // stabilises and emits; a genuine runaway watcher keeps bumping Version,
+        // so Throttle never fires and the Timeout trips — the test fails exactly as
+        // the 2026-05-21 symptom demands. This makes the benchmark robust without
+        // ever hiding a real runaway.
+        var quietWindow = TimeSpan.FromSeconds(3);
+        var stableVersion = await siloHub.GetWorkspace().GetMeshNodeStream(typePath)
+            .Select(n => n.Version)
+            .DistinctUntilChanged()
+            .Throttle(quietWindow)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(30))
+            .ToTask(ct);
+        Output.WriteLine($"Post-settle Version stabilised at {stableVersion} " +
+            $"(quiet {quietWindow.TotalSeconds}s — chain quiesced, no runaway watcher).");
     }
 
     /// <summary>
@@ -383,6 +393,21 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         // Seed a dynamic NodeType in OtherUser's partition. TestUser has no
         // role on OtherUser/ — RestrictedAccessSiloConfigurator only grants
         // TestUser Admin on TestUser/_Access.
+        //
+        // 🚨 Seed a SETTLED CompilationStatus (Error) so the System first-build
+        // kickoff cannot fire. The kickoff in InstallCompileWatcher fires on ANY
+        // grain activation when CompilationStatus is null — under System identity
+        // — and creates exactly one compile activity (the by-design behaviour that
+        // OrleansCompileActivityAccessTest.BackgroundActivation_…
+        // DoesNotLoopRecompiles pins as "exactly one"). That kickoff is
+        // INFRASTRUCTURE, orthogonal to user authorization: it would create an
+        // _Activity row here even though TestUser is denied, making the
+        // access-control invariant un-observable. Seeding a terminal status
+        // (CompilationStatus is non-null → kickoff needs null, recovery needs
+        // Compiling, release-watcher needs RequestedReleaseAt) means the ONLY
+        // path to a compile activity is the release-request — which requires
+        // TestUser's denied write to land. So "no activity row" cleanly proves
+        // the denial, with no race against the orthogonal kickoff.
         var typeId = $"NoEdit{Guid.NewGuid():N}";
         var typePath = $"OtherUser/{typeId}";
         var typeNode = MeshNode.FromPath(typePath) with
@@ -392,7 +417,9 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
             Content = new NodeTypeDefinition
             {
                 Description = "Negative — user lacks Edit, recompile must fail-closed",
-                Configuration = $"config => config.WithContentType<{typeId}>()"
+                Configuration = $"config => config.WithContentType<{typeId}>()",
+                CompilationStatus = CompilationStatus.Error,
+                CompilationError = "seeded terminal state (isolates access-control from the first-build kickoff)"
             }
         };
         await SeedAsSystem(typeNode, ct);
@@ -433,25 +460,31 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
             Output.WriteLine($"Update threw (expected): {ex.GetType().Name}: {ex.Message}");
         }
 
-        // Wait long enough for any kickoff-driven compile to have fired
-        // (it shouldn't — the kickoff is deleted; even if a write succeeded
-        // the watcher couldn't find user-context for activity creation).
-        await Task.Delay(TimeSpan.FromSeconds(5), ct);
-
+        // 🚨 Robust negative (WritingTests.md — wait on the condition, not a fixed
+        // sleep). No compile activity may EVER be created: the first-build kickoff
+        // is suppressed by the seeded terminal status above, and TestUser's
+        // release-request write was denied — so the _Activity namespace must stay
+        // empty. Watch the LIVE activity query and assert it never emits a non-empty
+        // result within a bounded window. (The prior fixed Task.Delay(5s) + count
+        // raced the activity create either way; the live query is also the primitive
+        // the sibling BackgroundActivation test uses. A persistent GetMeshNodeStream
+        // subscribe on this cross-partition node is the wrong tool here — under the
+        // post-denial ambient context that sync subscription does not settle; a
+        // one-shot query is the right primitive.)
         var activityNamespace = $"{typePath}/_Activity";
-        var snapshot = await SiloMeshService
+        var activityCount = SiloMeshService
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{activityNamespace} scope:subtree"))
-            .FirstAsync()
-            .ToTask(ct);
-        var activities = snapshot.Items.ToList();
-
-        activities.Should().BeEmpty(
-            "TestUser lacks Edit on OtherUser/; either the write itself was denied " +
-            "or — if the underlying mechanism allowed the trigger write — the compile " +
-            "activity creation must fail closed (PostPipeline no longer stamps hub-self " +
-            "as principal). Either way no activity row lands. Pin against the " +
-            "MessageHubConfiguration.cs:328-342 deletion.");
+            .Select(r => r.Items.Count);
+        await activityCount
+            .Where(c => c > 0)
+            .Should().NotEmit(within: TimeSpan.FromSeconds(5),
+                because: "TestUser lacks Edit on OtherUser/; the write itself was denied " +
+                    $"({updateException?.GetType().Name ?? "no exception"}), so no release-request " +
+                    "lands and — with the first-build kickoff suppressed by the seeded terminal " +
+                    "status — no compile activity row is ever created. Pin against the " +
+                    "MessageHubConfiguration.cs:328-342 deletion (PostPipeline no longer stamps " +
+                    "hub-self as principal).");
     }
 
     /// <summary>

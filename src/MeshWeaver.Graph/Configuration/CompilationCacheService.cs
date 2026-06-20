@@ -482,26 +482,31 @@ internal class CompilationCacheService(
 
     private static DateTimeOffset ComputeFrameworkTimestamp()
     {
-        // 🚨 The framework identity for the compile cache key MUST be the MeshWeaver.Graph assembly's
-        // MVID (ManifestModule.ModuleVersionId — a content hash of the compiled module), NOT the DLL
-        // file's last-write time. `dotnet publish -t:PublishContainer` NORMALIZES file timestamps for
-        // reproducible container images, so File.GetLastWriteTimeUtc returns the SAME value across
-        // DIFFERENT images → the release hash (NodeTypeRelease.ComputeRelease) didn't change between
-        // images → a freshly-deployed image loaded the PREVIOUS image's cached DLLs, which were
-        // compiled against different reference-assembly bytes → System.BadImageFormatException →
-        // failed grain activations cascading into a portal-wide wedge on deploy (the atioz 2026-06-20
-        // regression). The MVID changes only when the framework bytes actually change (a real
-        // redeploy) and is STABLE across copies/touches — so a new build gets a clean recompile and an
-        // unchanged framework still hits the cache. (Same identity FrameworkVersion already uses for
-        // CompiledFrameworkVersion matching — see NodeTypeCompilationHelpers._frameworkVersion.)
+        // This value's ONLY consumer is the wall-clock freshness comparison in
+        // TryGetLatestCachedDllPath ("a cached node DLL written BEFORE the framework was built is
+        // ABI-stale → recompile"), so it MUST be a real framework-production timestamp — the
+        // MeshWeaver.Graph DLL's file last-write time. It must NOT be derived from the assembly MVID:
+        // projecting the 128-bit MVID into ticks yields a uniformly-random date (frequently in the
+        // FUTURE), which makes the `dllLastWrite < frameworkTime` check reject every fresh DLL →
+        // permanent cache miss / recompile storm (the regression that broke
+        // CompilationCacheServiceTest 2026-06-20). It also mirrors the parallel file-time check in
+        // NodeAssemblyLoadContext.LoadNodeAssembly, which was never MVID-keyed.
         //
-        // The cache only needs a deterministic per-framework-content distinguishing value, and the key
-        // carrier here is a DateTimeOffset, so derive stable ticks from the MVID's bytes. A 64-bit
-        // projection of a 128-bit content hash collides at ~2^-64 — negligible for cache keying.
-        var mvid = typeof(CompilationCacheService).Assembly.ManifestModule.ModuleVersionId;
-        var seed = BitConverter.ToUInt64(mvid.ToByteArray(), 0);
-        var ticks = (long)(seed % (ulong)DateTime.MaxValue.Ticks);
-        return new DateTimeOffset(ticks, TimeSpan.Zero);
+        // 🚨 The framework's per-image CONTENT identity (for cross-image / cross-silo cache keying —
+        // the atioz BadImageFormatException-on-deploy fix) is the Graph assembly MVID, but it is
+        // carried as a STRING by NodeTypeCompilationHelpers.FrameworkVersion → stamped into
+        // CompiledFrameworkVersion (HasUsableBuild equality) and baked into the FileSystemAssemblyStore
+        // filename/glob. Those are the mechanisms that defeat reproducible-build timestamp
+        // normalization — NOT this wall-clock value. Do not fold the MVID in here.
+        var assemblyLocation = typeof(CompilationCacheService).Assembly.Location;
+        if (string.IsNullOrEmpty(assemblyLocation) || !File.Exists(assemblyLocation))
+        {
+            // Running in-memory (e.g., single-file deployment) - use current time
+            return DateTimeOffset.UtcNow;
+        }
+
+        var lastWrite = File.GetLastWriteTimeUtc(assemblyLocation);
+        return new DateTimeOffset(lastWrite, TimeSpan.Zero);
     }
 
     /// <inheritdoc />
