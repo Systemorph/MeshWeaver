@@ -50,4 +50,18 @@ public record SkillDefinition
 {
     /// <summary>The skill instructions — the <c>SKILL.md</c> body (markdown).</summary>
     public string? Instructions { get; init; }
+
+    /// <summary>
+    /// Whether the skill is <b>auto-mounted</b>: materialised to the shared skills directory so the CLI
+    /// harnesses (Claude Code / Copilot) discover it up-front, and advertised to the MeshWeaver harness.
+    /// When <c>false</c> the skill still exists in the mesh but is NOT mounted — it is referenced/loaded
+    /// on demand (by path) only when a task calls for it. Default <c>true</c>.
+    /// </summary>
+    public bool AutoMount { get; init; } = true;
+
+    /// <summary>
+    /// Whether invoking the skill launches a <b>sub-thread</b> (a separate conversation the skill runs
+    /// in) rather than running inline in the current thread. Default <c>false</c>.
+    /// </summary>
+    public bool LaunchesSubThread { get; init; } = false;
 }
