@@ -338,6 +338,25 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     /// single place that knows how to fill Updates + ChangeType + Version. See
     /// <see cref="Update(System.Func{TStream,TStream},System.Action{System.Exception})"/>.
     /// </summary>
+    /// <summary>
+    /// The version this stream stamps on a frame it ORIGINATES. 🚨 ONE clock per stream:
+    /// the OWNING hub's monotonic <c>Hub.Version</c> (this stream's own sync hub), never the
+    /// parent <c>Host.Version</c>. A subscriber (non-owner) only carries the base it last read.
+    /// <para>
+    /// Every frame an owned stream emits — the init/base frame (<see cref="Initialize"/>), a
+    /// value <see cref="Update(System.Func{TStream,TStream},System.Action{System.Exception})"/>,
+    /// and a layout-area render push (<c>LayoutAreaHost.PushRenderResult</c>) — MUST come off
+    /// this same clock. Mixing <c>Host.Version</c> (the parent host hub, which runs far ahead)
+    /// into the init frame while content frames use <c>Hub.Version</c> stamped the base frame
+    /// with a HIGHER version than the render that follows; the receive-side monotonicity guard
+    /// (drops a Full whose version &lt; Current) then discarded every render Full as "stale",
+    /// so a freshly-subscribed layout area stayed stuck on the "Building layout…" base frame and
+    /// never emitted its content (the DataChangeStreamUpdateTest count-view non-emission).
+    /// </para>
+    /// </summary>
+    private long OwnerVersion()
+        => Owner.Equals(Host.Address) ? Hub.Version : (Current?.Version ?? 0L);
+
     private ChangeItem<TStream> BuildChangeItem(TStream? current, TStream updated)
     {
         // 🚨 ChangedBy is the stream-echo-suppression key — the identity of the STREAM that
@@ -356,7 +375,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         // an empty ChangedBy breaks both filters. ClientId is a non-empty Guid by construction.
         var changedBy = ClientId;
         // 🚨 ONLY the owning hub sets Version. Subscriber carries the base it read.
-        var version = Owner.Equals(Host.Address) ? Hub.Version : (Current?.Version ?? 0L);
+        var version = OwnerVersion();
 
         if (current is not null)
         {
@@ -406,7 +425,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         // never the per-instance StreamId). AccessContext is orthogonal. See BuildChangeItem.
         var changedBy = ClientId;
         // 🚨 ONLY the owning hub sets Version. Subscriber carries the base it read.
-        var version = Owner.Equals(Host.Address) ? Hub.Version : (Current?.Version ?? 0L);
+        var version = OwnerVersion();
 
         var typeRegistry = Hub.ServiceProvider.GetService<MeshWeaver.Domain.ITypeRegistry>();
         if (typeRegistry is not null
@@ -861,7 +880,13 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 var subscription = Configuration.ObservableInitialization(this).Subscribe(
                     value =>
                     {
-                        SetCurrent(hub, new ChangeItem<TStream>(value, StreamId, Host.Version));
+                        // 🚨 OwnerVersion() (this stream's Hub.Version), NOT Host.Version. The
+                        // init/base frame and every subsequent render frame MUST ride one clock —
+                        // see OwnerVersion. Stamping the base frame with the parent host hub's
+                        // (far-higher) version made the monotonicity guard drop the lower-versioned
+                        // render Fulls as stale, so a late layout-area subscriber stayed stuck on
+                        // "Building layout…" and never emitted its content.
+                        SetCurrent(hub, new ChangeItem<TStream>(value, StreamId, OwnerVersion()));
                         observer.OnNext(System.Reactive.Unit.Default);
                     },
                     observer.OnError,
@@ -877,7 +902,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 .FromAsync(ct => Configuration.Initialization(this, ct))
                 .Select(init =>
                 {
-                    SetCurrent(hub, new ChangeItem<TStream>(init, StreamId, Host.Version));
+                    // Same one-clock invariant as the observable-init path above: OwnerVersion(),
+                    // never Host.Version, so the init frame can't outrank later owned writes.
+                    SetCurrent(hub, new ChangeItem<TStream>(init, StreamId, OwnerVersion()));
                     return System.Reactive.Unit.Default;
                 });
         }

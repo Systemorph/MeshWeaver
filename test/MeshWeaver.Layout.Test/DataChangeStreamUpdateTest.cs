@@ -174,15 +174,15 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
     /// Test that verifies the complete data change and view update flow.
     /// </summary>
     /// <remarks>
-    /// Uses [Fact] (project default 30s methodTimeout), NOT [HubFact]. [HubFact] hard-caps at
-    /// 5000ms in Release builds — appropriate for fast in-process routing tests, but this test
-    /// drives FOUR sequential remote layout-area round-trips (initial TaskListView load, the
-    /// DataChangeRequest update, then a fresh TaskCountView subscription + its update). Its own
-    /// waits are already .Within(10.Seconds())/.Within(1000.Seconds()), which the 5000ms cap
-    /// silently contradicted — the test reached the count-view check and was killed at the 5s
-    /// method cap mid-handshake. The work completes; it just needs more than 5s on a loaded CI runner.
+    /// The fresh TaskCountView subscription (created AFTER the DataChangeRequest) is the part that
+    /// exercised the sync-stream version regression: a layout area's init/base frame was stamped
+    /// with the parent <c>Host.Version</c> while its render content rode the area's own
+    /// <c>Hub.Version</c>, so the (lower-versioned) render Full was dropped by the receive-side
+    /// monotonicity guard and the area stayed stuck on "Building layout…". Fixed in
+    /// <c>SynchronizationStream.OwnerVersion</c> — both frames now ride one clock. This is NOT a
+    /// timeout: with the fix the count view emits as fast as the siblings, so [HubFact] is correct.
     /// </remarks>
-    [Fact(Timeout = 30000)]
+    [HubFact]
     public async Task DataChangeRequest_ShouldUpdateLayoutAreaViews()
     {
         // Get client and workspace

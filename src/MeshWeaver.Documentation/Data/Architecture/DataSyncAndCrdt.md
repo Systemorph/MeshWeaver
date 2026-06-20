@@ -1,7 +1,7 @@
 ---
 NodeType: Markdown
 Name: "Data Synchronization and CRDT"
-Abstract: "The synchronization-stream contract: who assigns the version (the owning hub, in its queue), the patches-only monotonicity guard, version + string-splice conflict resolution, reject→rollback via Full, and the minimal-bytes (JSON-patch + string-delta) transport."
+Abstract: "The synchronization-stream contract: who assigns the version (the owning hub, in its queue, via the single OwnerVersion() clock — init frame included), the monotonicity guard over patches AND Fulls, version + string-splice conflict resolution, reject→rollback via a current-versioned Full, and the minimal-bytes (JSON-patch + string-delta) transport."
 Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#00897b'/><path d='M7 9a6 6 0 0 1 10-1' stroke='white' stroke-width='2' fill='none' stroke-linecap='round'/><path d='M17 16a6 6 0 0 1-10 1' stroke='white' stroke-width='2' fill='none' stroke-linecap='round'/><path d='M17 5v3h-3' stroke='white' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/><path d='M7 19v-3h3' stroke='white' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>"
 Thumbnail: "images/DataMesh.svg"
 Authors:
@@ -70,25 +70,50 @@ Net effect: every frame on a given stream carries a **strictly increasing**
 version assigned by one clock — the owner's. (Pinned by
 `StreamVersionMonotonicityTest`.)
 
+**One helper, every emission path.** `SynchronizationStream.OwnerVersion()` is
+the single place that picks the clock — `Owner.Equals(Host.Address) ? Hub.Version
+: (Current?.Version ?? 0L)`. **Every** frame an owned stream emits funnels
+through it: a value `Update` (`BuildChangeItem`), a full overwrite
+(`BuildFullChangeItem`), **and the init/base frame** (`Initialize` — the layout
+area's "Building layout…" shell, a data source's initial snapshot). The init
+frame used to read `Host.Version` directly; because `Host.Version` (the parent
+host hub) runs hundreds of ticks ahead of a freshly-created `sync/<id>` sub-hub,
+the base frame outranked the render content that followed on `Hub.Version`, and
+§3's guard dropped the content. Funnelling the init frame through `OwnerVersion()`
+keeps it on the same clock as the renders, so `base.Version < content.Version`
+always holds.
+
 ---
 
-## 3. The monotonicity guard — patches only
+## 3. The monotonicity guard — patches *and* Fulls
 
 When a subscriber receives an owner frame (`UpdateStream`):
 
 ```
-PATCH  : drop it if  Version < Current.Version   (a reordered/stale delta would corrupt the mirror)
-FULL   : ALWAYS apply, regardless of Version
+ANY FRAME (Patch or Full) : drop it if  Version < Current.Version
 ```
 
 A **Patch** is a delta computed against a *specific base version*; applying a
 reordered older patch corrupts the mirror, so it is version-guarded.
 
-A **Full** is the owner's *complete authoritative state*. It is always applied,
-no matter the version — it cannot be a harmful straggler (it's the whole truth),
-and **a Full is normally a ROLL-BACK** (§6). Letting Fulls through
-unconditionally is what makes reject→rollback work and what lets a re-sync
-recover a confused subscriber.
+A **Full** is the owner's *complete authoritative state* — but it is **also
+version-guarded**. The guard once let every Full through unconditionally; that
+let a resubscribe's point-in-time Full, snapshotted *before* a write the mirror
+had already applied, overwrite the newer state (the lost-message data loss). So
+a Full whose `Version < Current.Version` is a **stale snapshot** and is dropped
+too. (`SynchronizationStream.UpdateStream`.)
+
+This is safe **only because every frame the owner emits rides one clock** — the
+owner's `Hub.Version` (§2). A legitimate re-assertion can never carry a version
+*below* `Current`: a reject→ROLLBACK Full re-asserts the owner's CURRENT state,
+stamped with its current (higher-or-equal) version, so it still lands (§6); only
+a genuinely older snapshot can be below `Current`, and that is exactly what we
+drop. **The corollary is unforgiving:** if even one frame is stamped from a
+*different* clock — e.g. the init/base frame stamped with `Host.Version` while
+the render content rides `Hub.Version` — the version order breaks and the guard
+discards real content. That was the layout-area "stuck on *Building layout…*"
+non-emission; the fix is `OwnerVersion()` (§2, §11), which forces every frame
+onto the owner's stream clock.
 
 ---
 
@@ -144,10 +169,12 @@ quick brown fox" + "…fox **leaps**" → "The VERY quick brown fox leaps".
 
 When the owner **rejects** a proposed change (validation/RLS fails), the
 subscriber holds an *optimistic* value the owner never accepted. The fix is a
-roll-back: **the owner re-asserts its authoritative state as a FULL**, which —
-per §3 — is always applied and overwrites the subscriber's optimistic bump even
-though the subscriber had locally advanced its version. No re-version gymnastics
-needed; "Full always lands" is precisely the property that makes the undo clean.
+roll-back: **the owner re-asserts its authoritative state as a FULL**. That Full
+carries the owner's **current** version (≥ the subscriber's optimistic bump, which
+was only ever a *base* the subscriber carried — a subscriber never mints a version,
+§2), so it passes §3's guard and overwrites the optimistic value. The undo is clean
+because the rollback Full is *current*, not because Fulls bypass the guard — they
+no longer do.
 
 **Request a Full when unsure.** A subscriber that detects it is out of sync (a
 patch arrived with no base, a patch failed to apply, a write was rejected) calls
@@ -198,9 +225,10 @@ mirror and the convergence rules above hold.
 
 | Invariant | Guard / Test |
 |---|---|
-| Owner assigns strictly increasing versions per stream | `StreamVersionMonotonicityTest` |
+| Owner assigns strictly increasing versions per stream — including the init/base frame | `SynchronizationStream.OwnerVersion`; `StreamVersionMonotonicityTest` |
 | A subscriber never mints a version | `UpdateStream` adopt-only; `StreamUpdateIdentityTest` |
-| Stale **patch** dropped; **Full** always applied | `SynchronizationStream.UpdateStream` guard |
+| Stale **patch** AND stale **Full** dropped (`Version < Current`) | `SynchronizationStream.UpdateStream` guard |
+| A late layout-area subscriber gets its render content, not just the base frame | `DataChangeStreamUpdateTest.DataChangeRequest_ShouldUpdateLayoutAreaViews` |
 | Disjoint concurrent string edits merge | `StringDeltaTest`, `StreamConflictResolutionTest` |
 | A changed string field (incl. nested) ships only its splice | `StringDeltaPatchTest` |
 | Cross-hub: subscriber sends a delta, owner reconstructs the exact entity | `EntityDeltaTest`, `StringDeltaTransportTest` |
@@ -242,11 +270,18 @@ roll-back `Full` propagates unimpeded.
 
 ## 11. Mistakes this design exists to prevent
 
-- **Stamping `Host.Version`** (or a subscriber's sync-hub) instead of the
-  owner's stream clock → non-monotonic versions → the guard drops real updates
-  → "view doesn't refresh / blank layout".
-- **Guarding Fulls** → a roll-back / re-sync Full is dropped → a confused
-  subscriber stays confused forever.
+- **Stamping `Host.Version`** (or a subscriber's sync-hub) on *any* frame instead
+  of the owner's stream clock → non-monotonic versions → the guard drops real
+  updates → "view doesn't refresh / blank layout". The trap is the **init/base
+  frame**: it is easy to stamp it from the surrounding `Host` while the content
+  frames correctly ride `Hub.Version`. Funnel **every** emission through
+  `OwnerVersion()` (§2). *(This is the exact defect behind the 2026-06 layout-area
+  "stuck on Building layout…" non-emission — latent until §3 began guarding Fulls.)*
+- **Guarding Fulls *without* the one-clock guarantee** → a real Full looks stale
+  and is dropped. Guarding Fulls (§3) is correct and necessary, but it is only
+  safe because every owner frame rides `OwnerVersion()`; break that and the guard
+  turns on you. A genuine roll-back/re-sync Full always carries the owner's
+  *current* version, so it is never below `Current` — see §6.
 - **Sending whole entities / whole strings** → bandwidth blowup on large content.
 - **Letting a subscriber mint versions** → two mirrors fight over ordering; last
   write wins on the whole node instead of a field-wise merge.
