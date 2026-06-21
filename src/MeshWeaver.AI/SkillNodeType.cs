@@ -125,8 +125,8 @@ public static class SkillNodeType
 public record SkillDefinition
 {
     /// <summary>
-    /// INSTRUCTION skill — the <c>SKILL.md</c> body (markdown). Mounted to the CLI harnesses
-    /// (when <see cref="AutoMount"/>) and advertised to the MeshWeaver agent to load on demand. Null
+    /// INSTRUCTION skill — the <c>SKILL.md</c> body (markdown). Surfaced to the CLI harnesses + the
+    /// MeshWeaver agent (when <see cref="AutoMount"/>) and loaded on demand from the mesh. Null
     /// for a pure behaviour skill.
     /// </summary>
     public string? Instructions { get; init; }
@@ -138,9 +138,10 @@ public record SkillDefinition
     public SkillAction? Action { get; init; }
 
     /// <summary>
-    /// Whether the skill is <b>auto-mounted</b>: instruction skills materialised to the shared skills
-    /// directory so the CLI harnesses discover them up-front, and advertised to the MeshWeaver harness.
-    /// When <c>false</c> the skill still exists but is referenced/loaded on demand only. Default <c>true</c>.
+    /// Whether the skill is <b>advertised up-front</b>: instruction skills surfaced to the CLI harnesses
+    /// and the MeshWeaver agent so they're discoverable without being asked (read from the mesh on demand —
+    /// never materialised to disk). When <c>false</c> the skill still exists but is referenced/loaded on
+    /// demand only. Default <c>true</c>.
     /// </summary>
     public bool AutoMount { get; init; } = true;
 

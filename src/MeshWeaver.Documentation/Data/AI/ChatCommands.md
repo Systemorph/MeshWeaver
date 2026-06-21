@@ -30,7 +30,7 @@ public record SkillDefinition
 {
     public string? Instructions { get; init; }   // SKILL.md body — CLI harnesses + agent load-on-demand
     public SkillAction? Action { get; init; }     // what it DOES in the chat (null for a pure instruction skill)
-    public bool AutoMount { get; init; } = true;  // mount to the shared skills dir / advertise to the agent
+    public bool AutoMount { get; init; } = true;  // advertise the skill to the agent up-front (vs load-on-demand only)
     public bool LaunchesSubThread { get; init; } = false; // run in a sub-thread vs inline
 }
 
