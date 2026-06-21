@@ -51,4 +51,26 @@ public sealed record SatelliteTableMapping(string Segment, string Table, params 
     public static string? SegmentForNodeType(string nodeType)
         => Defaults.FirstOrDefault(
             m => m.NodeTypes.Any(nt => string.Equals(nt, nodeType, StringComparison.OrdinalIgnoreCase)))?.Segment;
+
+    /// <summary>
+    /// True if <paramref name="path"/> contains a metadata satellite SEGMENT — one of the
+    /// underscore-prefixed <see cref="Defaults"/> segments (<c>_Access</c>, <c>_Thread</c>,
+    /// <c>_Activity</c>, <c>_Comment</c>, <c>_Notification</c>, …) that live in a SEPARATE table.
+    /// <para>🚨 Matches the EXACT segment, not "any <c>/_</c>": <c>_Policy</c>, <c>_Provider</c> and
+    /// other underscore-prefixed nodes are REGULAR <c>mesh_nodes</c> rows (no satellite table), so they
+    /// are NOT satellite paths. Treating them as satellites wrongly hid them from content queries —
+    /// e.g. a <c>PartitionAccessPolicy</c> at <c>{ns}/_Policy</c> vanished from the permission
+    /// evaluator's lookup. <c>Source</c>/<c>Test</c> share the <c>code</c> table but are primary
+    /// CONTENT (no leading underscore) and are intentionally not matched here.</para>
+    /// </summary>
+    public static bool IsSatellitePath(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return false;
+        foreach (var seg in path.Split('/', StringSplitOptions.RemoveEmptyEntries))
+            if (seg.Length > 1 && seg[0] == '_'
+                && Defaults.Any(m => m.Segment.Length > 0 && m.Segment[0] == '_'
+                                     && string.Equals(m.Segment, seg, StringComparison.Ordinal)))
+                return true;
+        return false;
+    }
 }

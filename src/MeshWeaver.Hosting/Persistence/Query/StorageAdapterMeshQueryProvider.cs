@@ -206,25 +206,47 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             {
                 var (matched, parsedQuery, _) = collected;
 
-                // Match PG's table separation: a NON-satellite content query must not return
-                // satellite-path nodes (_Access grants, _Thread, _Comment, …). On PG these live in
-                // separate per-prefix tables so a mesh_nodes content query never sees them; the
-                // in-memory adapter keeps everything in one store, so e.g. an auto-created
-                // {partition}/_Access/{creator}_Access grant leaked into `scope:descendants`.
-                // Explicit satellite queries (a _-segment path, a satellite nodeType, or
-                // source:activity/accessed) are unaffected — they still return their satellites.
+                // Match PG's table separation: a NON-satellite content query must not return satellite
+                // nodes. On PG these live in separate per-prefix tables (the partition's configured
+                // satellite SEGMENTS: _Access→access, _Thread→threads, _Notification→notifications, …),
+                // so a mesh_nodes content query never sees them. The in-memory adapter keeps everything
+                // in one store, so we mirror PG's routing here (e.g. an auto-created AccessAssignment
+                // grant otherwise leaked into `scope:descendants`).
+                //
+                // 🚨 Satellite-ness = the node's STORAGE TABLE, which is CONFIGURATION (the configured
+                // satellite segments), NOT the raw '_' character and NOT the nodeType alone:
+                //   • '_'-but-content: {ns}/_Policy (PartitionAccessPolicy), {ns}/_Provider are NOT
+                //     configured segments → they live in mesh_nodes → regular content. The old "any
+                //     /_Upper" heuristic hid them (EffectivePermissionTest's PublicRead _Policy lookup
+                //     vanished).
+                //   • satellite-nodeType-but-content-PATH: a Notification at {ns}/acme/project/task (no
+                //     _Notification segment) is routed BY PATH to mesh_nodes, so it IS content —
+                //     classifying by nodeType wrongly hid it (QueryAsync_NamespaceWithDescendants).
+                // Storage follows the configured path segment, so the exclusion does too.
+                // SatelliteTableMapping.IsSatellitePath matches ONLY configured satellite segments.
                 IEnumerable<object> matchedNodes = matched;
                 if (!IsSatelliteTargetedQuery(parsedQuery))
-                    matchedNodes = matchedNodes.Where(n => n is not MeshNode mn || !IsSatellitePath(mn.Path));
+                    matchedNodes = matchedNodes.Where(n => n is not MeshNode mn || !SatelliteTableMapping.IsSatellitePath(mn.Path));
 
                 // Partition roots (the auto-provisioned Space node at namespace="") are STRUCTURAL
-                // partition containers, not content — and abac5dec2 stamps them with a current
-                // LastModified, so they would otherwise dominate broad recency/listing sweeps
-                // (is:main scope:descendants sort:LastModified-desc). Drop them from BROAD (non-Exact)
-                // scope queries. An EXACT path read (path:Globex) still returns the node at that path
-                // — a Space you asked for by exact path is yours to read — as does an explicit
-                // nodeType:Space query.
-                if (parsedQuery.Scope != QueryScope.Exact && !QueryTargetsPartitionRoot(parsedQuery))
+                // containers, not content. abac5dec2 stamps them with a current LastModified, so a deep
+                // recursive content LISTING (scope:descendants, no search term) would surface them as
+                // recency/result noise — e.g. `is:main scope:descendants sort:LastModified-desc` ranking
+                // the just-provisioned namespace roots above real items (FanOut_SortByLastModified), or a
+                // `namespace:X scope:descendants` listing counting the X root itself
+                // (QueryAsync_NamespaceWithDescendants).
+                //
+                // 🚨 Excluded ONLY for the listing shape: scope:descendants with NO free-text term. A root
+                // is KEPT whenever the caller actually wants it:
+                //   • scope:subtree — "the subtree rooted HERE" explicitly includes the root (autocomplete
+                //     walks subtree; AcmeSearchTest.SubtreeSearch_FindsOrganizationRootNode);
+                //   • a free-text term — the root's name/path matched the search, so it IS a result
+                //     (`*ACME* scope:descendants` → AcmeSearchTest.DescendantsSearch_FindsOrganizationRootNode);
+                //   • scope:children (e.g. "list the spaces" surfaces the roots themselves), exact reads,
+                //     and explicit nodeType:Space.
+                if (parsedQuery.Scope == QueryScope.Descendants
+                    && string.IsNullOrEmpty(parsedQuery.TextSearch)
+                    && !QueryTargetsPartitionRoot(parsedQuery))
                     matchedNodes = matchedNodes.Where(n => n is not MeshNode mn || !IsPartitionRoot(mn));
 
                 IEnumerable<object> sorted = matchedNodes;
@@ -258,32 +280,22 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     /// in-memory adapter matches PG's separate-table behaviour. Mirrors the satellite detection in
     /// <see cref="DefersToNativeProvider"/>.
     /// </summary>
+    /// <summary>
+    /// True when the query explicitly asks for satellites, so the satellite exclusion is skipped.
+    /// All three signals are CONFIGURATION-driven (never the raw '_' character):
+    /// <list type="bullet">
+    /// <item><c>source:activity</c> / <c>source:accessed</c> — satellite-backed sources;</item>
+    /// <item>a path under a CONFIGURED satellite segment (<see cref="SatelliteTableMapping.IsSatellitePath"/>
+    /// matches only the configured <c>_Access</c>/<c>_Thread</c>/… segments — a <c>_Policy</c> path does NOT);</item>
+    /// <item>a satellite <c>nodeType</c> filter (<see cref="PartitionDefinition.IsSatelliteNodeType"/>).</item>
+    /// </list>
+    /// </summary>
     private static bool IsSatelliteTargetedQuery(ParsedQuery parsed)
     {
         if (parsed.Source is QuerySource.Activity or QuerySource.Accessed) return true;
-        var path = parsed.Path;
-        if (!string.IsNullOrEmpty(path))
-            foreach (var seg in path.Split('/', StringSplitOptions.RemoveEmptyEntries))
-                if (seg.StartsWith('_')) return true;
+        if (SatelliteTableMapping.IsSatellitePath(parsed.Path)) return true;
         var nodeType = parsed.ExtractNodeType();
         return !string.IsNullOrEmpty(nodeType) && PartitionDefinition.IsSatelliteNodeType(nodeType);
-    }
-
-    /// <summary>
-    /// True when <paramref name="path"/> contains a satellite segment (<c>/_X</c> where X is
-    /// upper-case: <c>_Access</c>, <c>_Thread</c>, <c>_Comment</c>, …). Same rule as
-    /// <c>MeshQuery.IsSatellitePath</c>.
-    /// </summary>
-    private static bool IsSatellitePath(string? path)
-    {
-        if (string.IsNullOrEmpty(path)) return false;
-        var idx = 0;
-        while ((idx = path.IndexOf("/_", idx, StringComparison.Ordinal)) >= 0)
-        {
-            idx += 2;
-            if (idx < path.Length && char.IsUpper(path[idx])) return true;
-        }
-        return false;
     }
 
     /// <summary>The partition-root (Space) NodeType — matches <c>MeshExtensions.PartitionRootNodeTypeName</c>.</summary>
