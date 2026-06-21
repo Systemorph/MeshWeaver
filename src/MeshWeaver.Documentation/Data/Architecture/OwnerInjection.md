@@ -74,20 +74,32 @@ submits a message:
 
 1. `ThreadInput.AppendUserInput` runs with `Context=null`, `CircuitContext=TestUser`, and writes
    the pending message via `GetMeshNodeStream(threadPath).Update(...)`.
-2. That write reaches a freshly-activated owner whose **data-source sync stream** posts an
-   internal `UpdateStreamRequest`. On the deferred continuation the live `AsyncLocal` is gone, and
-   the stream's creation context was captured cold (from the empty sync sub-hub) — so the post
-   carries a **null AccessContext**.
-3. The never-null guard **fails it closed** → the patch never commits → the thread node never gets
+2. That write reaches the freshly-activated owner's **data-source sync stream**
+   (`ds/TestUser/_Thread/history-cold-start`, whose `Host` IS the thread hub), which posts an
+   internal `UpdateStreamRequest`. On the deferred continuation the live `AsyncLocal` is gone — so
+   the post must fall back to the hub's standing owner identity.
+3. **The race.** `SetThreadHubIdentity` resolves the owner from the node **asynchronously**
+   (`hub.GetMeshNode(...).Subscribe(...)` — a `GetDataRequest` round-trip). On a cold start the
+   **first** submit write reaches the sync stream *before* that response lands, so the owner is not
+   yet on the hub's `CircuitContext` → the post carries a **null AccessContext**.
+4. The never-null guard **fails it closed** → the patch never commits → the thread node never gets
    `PendingUserMessages` → the submission watcher observes `pending=0` forever → no round is
    dispatched → `Messages.Count` is stuck below the expected count → 30 s timeout.
 
-Proven with a probe: with the owner injected the chain runs end-to-end
-(`pending=1 → CLAIMED → DISPATCH_ROUND → msgs=6`); without it, `pending=0` throughout.
+Proven with a probe on the data-source sync stream — two writes on the SAME stream:
+
+```
+[SYNCUPD] owner=ds/…/history-cold-start host=…/history-cold-start hub=sync/2od…  hubCtx=(null)   creation=(null)   hostReal=(null)   final=(NULL→FAIL)   ← first write loses the race
+[SYNCUPD] owner=ds/…/history-cold-start host=…/history-cold-start hub=sync/2od…  hubCtx=TestUser creation=TestUser hostReal=TestUser final=TestUser        ← 200 ms later, owner now established
+```
 
 The fix is **not** a System fallback at the sync-write layer (that would make a *user* write run
 as System and violates rule 3 + the `StreamUpdate_WithoutAsyncLocalIdentity_FailsClosed`
-contract). The fix is to **inject the thread owner** so the context is non-empty and correct.
+contract). Nor is it "capture from a different hub" — the `Host` is already correct. The fix is to
+**establish the owner before the first write can be processed**: resolve it from the node
+**synchronously** (the node is already in the data-source stream's `Current` when the submit lands —
+its `CreatedBy` is right there), rather than via the async `SetThreadHubIdentity` round-trip that
+loses the cold-start race.
 
 ## Where it is wired (implementation map)
 
@@ -95,14 +107,17 @@ contract). The fix is to **inject the thread owner** so the context is non-empty
 |---|---|
 | Thread hub | `ThreadExecution.SetThreadHubIdentity` — reads the thread node's `CreatedBy` and stamps it as **both** `Context` and `CircuitContext` (carry-forward) on hub activation. |
 | Activity hub | The activity control-plane establishes the activity owner the same way (resolve from the activity node, inject as CircuitContext). |
-| Per-node data source / sync stream | The node's data-source `SynchronizationStream` must carry the **node owner** for its deferred `UpdateStreamRequest` writes — its `_creationContext` is the owner (resolved from the node), not a value captured from the empty sync sub-hub. Genuine infra streams (doc sync) carry System. |
+| Per-node data source / sync stream | The node's data-source `SynchronizationStream` must carry the **node owner** for its deferred `UpdateStreamRequest` writes. Because the owner is established on the hub **asynchronously**, the stream must resolve it **synchronously from the node already in its `Current`** (`CreatedBy`) when the live/standing context is null — not depend on the async hub-identity round-trip winning the cold-start race. Genuine infra streams (doc sync) carry System. |
 | One-shot helpers | `AccessContextScope.FromNode(node, accessService)` — runs a block under the node's owner (`CreatedBy`/`LastModifiedBy`), falling back to System only for an unattributed node. |
 
-> 🚧 **Status:** the thread-hub and `FromNode` injection are in place; extending owner injection
-> down to the per-node **data-source sync stream** (so the cold-start owner-side write carries the
-> owner without relying on the thread hub's CircuitContext, which a separate sync sub-hub does not
-> inherit) is the remaining cross-cutting piece. It composes with the deferred-write context
-> capture added in the `SynchronizationStream` access work.
+> 🚧 **Status:** the thread-hub and `FromNode` injection are in place. The remaining cross-cutting
+> piece is the per-node **data-source sync stream**: on a cold start the first submit write reaches
+> the stream *before* the async `SetThreadHubIdentity` establishes the owner on the (correct) `Host`
+> hub, so the write posts null and fails closed. The fix is a **synchronous owner resolver** — the
+> data-source stream resolves the owner from the node in its own `Current` (its `CreatedBy`) at write
+> time, wired by the MeshNode-aware data-source layer (a generic `SynchronizationStream<EntityStore>`
+> can't read `CreatedBy` itself). This removes the race entirely. It composes with the deferred-write
+> context capture in the `SynchronizationStream` access work.
 
 ## See also
 
