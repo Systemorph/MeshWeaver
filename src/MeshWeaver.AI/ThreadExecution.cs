@@ -770,6 +770,22 @@ internal static class ThreadExecution
             logger.LogDebug("[ThreadExec] PUSH_TO_MSG: responsePath={ResponsePath}, textLen={TextLen}, toolCalls={ToolCalls}, updatedNodes={UpdatedNodes}, status={Status}",
                 curResponsePath, text.Length, toolCalls.Count, updatedNodes.Count, status?.ToString() ?? "(preserve)");
 
+            // 🚨 Re-seed the user AccessContext immediately before the cell write. Every caller of
+            // this helper reaches it via a Reactive continuation — the streaming Sample(100ms)
+            // callback, the init-phase history/contextNode SelectMany ("Generating response..."), and
+            // the terminal completion path — each running on a hub-pipeline / ThreadPool thread where
+            // the per-hub AsyncLocal Context has been flipped to a per-cell impersonated address or
+            // dropped entirely (worse under a starved 2-core runner). MeshNodeStreamHandle.Update
+            // captures the AMBIENT context at THIS point and carries it onto the cross-hub
+            // UpdateStreamRequest; if it's null the owner's PostPipeline fails the write closed
+            // ("hub=sync/… UpdateStreamRequest … no AccessContext") → the round faults → the cell shows
+            // "Agent initialization stalled" and IsExecuting never clears (the 2-core CI flake in
+            // OrleansSubThreadAutoResume / Reentrancy / NodeChangePropagation). A thread cell is ALWAYS
+            // owned by the thread user, so re-asserting userAccessContext is the correct identity.
+            // See AccessContextPropagation.md / feedback_access_context_always_set.
+            if (userAccessContext != null)
+                parentHub.ServiceProvider.GetService<AccessService>()?.SetContext(userAccessContext);
+
             // 🚨 Route the cell write through parentHub (the thread hub), NOT
             // `hub` (the _Exec hosted hub). _Exec is created with no AddData, so
             // hub.GetMeshNodeStream(...) → hub.GetWorkspace() throws
@@ -915,7 +931,17 @@ internal static class ThreadExecution
         // round completion). Per AsynchronousCalls.md: never bridge to Task,
         // always compose into the observable chain.
         IObservable<MeshNode> UpdateThreadExecution(Func<MeshThread, MeshThread> mutate) =>
-            parentHub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
+            // Re-seed the user AccessContext before the thread-node write — same reason as
+            // PushToResponseMessage above. All terminal callers (Completed / Cancelled / Error /
+            // NothingToSend) reach this from a Reactive continuation where the AsyncLocal Context was
+            // flipped/dropped; the write must carry the thread owner. Observable.Defer so the reseed
+            // runs at SUBSCRIBE time (when the cold Update is actually invoked), not at the (often
+            // earlier, differently-threaded) point the observable is constructed.
+            System.Reactive.Linq.Observable.Defer(() =>
+            {
+                if (userAccessContext != null)
+                    parentHub.ServiceProvider.GetService<AccessService>()?.SetContext(userAccessContext);
+                return parentHub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
             {
                 // 🚨 No silent fallback. This Update runs on the parent thread
                 // hub's own action block; by the time this lambda fires, the
@@ -929,6 +955,7 @@ internal static class ThreadExecution
                         + $"{node.Content?.GetType().Name ?? "<null>"}, not MeshThread. "
                         + "The hub must be fully initialized before terminal-state writes.");
                 return node with { Content = mutate(thread) };
+            });
             });
 
 
@@ -2080,6 +2107,14 @@ internal static class ThreadExecution
                     logger.LogError(ex,
                         "[ThreadExec] Initialize failed / stalled for {ThreadPath} — flipping thread to Idle",
                         threadPath);
+
+                    // Re-seed the user AccessContext before the unstick writes. This recovery path runs
+                    // on the Catch continuation thread where the AsyncLocal is gone; its cross-hub
+                    // stream.Update + UpdateResponseCell would otherwise post UpdateStreamRequest with no
+                    // AccessContext and fail closed — leaving the thread stuck Executing (the very state
+                    // this handler exists to clear).
+                    if (userAccessContext != null)
+                        accessService?.SetContext(userAccessContext);
 
                     parentHub.GetWorkspace().GetMeshNodeStream().Update(node =>
                     {
