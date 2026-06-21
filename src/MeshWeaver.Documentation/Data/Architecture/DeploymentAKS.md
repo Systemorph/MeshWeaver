@@ -49,6 +49,11 @@ These resolve **offline from a feed baked into the image**, never from nuget.org
 - Node Source pins **no** version (`#r "nuget:MeshWeaver.BusinessRules.Generator"`), so it resolves whatever single version the baked feed carries — the version lives in one place (`PlatformVersion`).
 - If a deployed scope node ever fails with a NuGet-resolve error, the image was built **without** this target (a `-c Debug` publish, or a `dist/packages` exclusion) — rebuild `-c Release`.
 - The same curated set is packed for the test suite by `.github/workflows/dotnet-test.yml` ("Pack mesh-local #r packages"), kept in sync with this target.
+- **`NETSDK1047` on `MeshWeaver.BusinessRules` during the publish** (`Assets file … doesn't have a target for 'net10.0/linux-x64'`): because `BusinessRules` is **decoupled** from the portal's project graph (pulled in only via `#r "nuget:"`), the publish's implicit restore doesn't cover it, so a stale local `obj` can lack the `-r linux-x64` RID target the `BakeMeshLocalFeed` pack needs. Restore it for the RID once, then re-publish:
+  ```bash
+  dotnet restore src/MeshWeaver.BusinessRules/MeshWeaver.BusinessRules.csproj -r linux-x64
+  ```
+  CI is immune (it restores from a clean checkout); this only bites incremental local builds.
 
 ## 2. Roll out (NS = `memex`)
 
