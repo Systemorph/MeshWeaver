@@ -77,6 +77,7 @@
 
     <ItemGroup>
       <ProjectReference Include="..\..\src\MeshWeaver.Connection.SignalR\MeshWeaver.Connection.SignalR.csproj" />
+      <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
     </ItemGroup>
 
 </Project>
