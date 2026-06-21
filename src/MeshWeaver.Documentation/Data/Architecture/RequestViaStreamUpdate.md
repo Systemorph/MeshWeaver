@@ -79,6 +79,8 @@ Everything else — state machines, "trigger work and observe progress" flows, e
 
 When you call `workspace.GetMeshNodeStream(otherPath).Update(...)` from a non-owner hub (`UpdateRemote`), the framework re-runs your lambda against the caller's snapshot and ships an RFC 7396 JSON-merge patch of the diff to the owner.
 
+> 🔑 **Identity across the hop.** The outbound patch carries the caller's `AccessContext`. On the owner, applying it and propagating the result through the data-source sync stream happens on a deferred continuation where the live `AsyncLocal` is gone — so the owner falls back to its standing **owner** identity (the node's `CreatedBy`, carried via `CircuitContext`). On a cold start the owner must have that identity established *before* the first such write, or the deferred sync post carries a null context and fails closed. See [Owner Injection](/Doc/Architecture/OwnerInjection).
+
 This is safe only when the patch is **idempotent under merge** — applying it twice yields the same result as applying it once.
 
 **Merge-safe operations:**

@@ -311,8 +311,18 @@ per-message edit / resubmit / delete actions are all hidden. The new-thread comp
 (no `threadPath`) and the user's own threads stay fully editable. This is a UI
 affordance on top of server-side access control — not a replacement for it.
 
+## Thread identity — the owner is the standing access context
+
+Everything the thread hub does with no live caller (the submission watcher's claim write, the
+round dispatch, the data-source sync propagation) runs under the **thread owner** — the node's
+`CreatedBy`, established on the hub and carried forward via `CircuitContext`. This is what keeps a
+cold-start submit (grains inactive, the user's write racing the hub's activation) from posting a
+null `AccessContext` that the never-null guard would fail closed. See
+[Owner Injection](/Doc/Architecture/OwnerInjection) for the rule and the cold-start race it fixes.
+
 ## See also
 
+- [Owner Injection](/Doc/Architecture/OwnerInjection) — the thread/activity owner as standing access identity, carried forward via `CircuitContext`
 - [RequestViaStreamUpdate](/Doc/Architecture/RequestViaStreamUpdate) — the canonical "stream.Update + watcher" pattern this surface is built on
 - [ActivityControlPlane](/Doc/Architecture/ActivityControlPlane) — the `Status` / `RequestedStatus` pattern thread state uses, and its matching recovery-on-init
 - [AsynchronousCalls](/Doc/Architecture/AsynchronousCalls) — why everything returns `IObservable<T>` and how tests bridge to `Task`

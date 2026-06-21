@@ -47,4 +47,5 @@ The dozen words that carry the whole platform. Each entry says what the thing *i
 | **Agent** | An AI participant defined as a mesh node under `Agent/…`, acting through the same APIs as users. See [Agentic AI Architecture](/Doc/Architecture/AgenticAI). |
 | **AccessAssignment** | The permission grant: a node in a `_Access` namespace giving a user/group roles at that scope. See [Granting Access](/Doc/Architecture/GrantingAccess). |
 | **AccessContext** | The identity riding every operation; framework write primitives carry it across `Subscribe` boundaries. See [AccessContext Propagation](/Doc/Architecture/AccessContextPropagation). |
+| **Owner Injection** | The node OWNER (from `CreatedBy`) is the standing access context on a node/thread/activity hub — injected everywhere, carried forward via `CircuitContext`. Genuine infra (doc sync) = System; an empty context is rejected, never faked. See [Owner Injection](/Doc/Architecture/OwnerInjection). |
 | **IoPool** | The bounded bridge where async/blocking I/O enters the reactive world — the only place `Observable.FromAsync` exists. See [Controlled I/O Pooling](/Doc/Architecture/ControlledIoPooling). |

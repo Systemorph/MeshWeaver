@@ -144,3 +144,4 @@ The running script receives the cancellation, throws `OperationCanceledException
 - [Activity Control Plane](/Doc/Architecture/ActivityControlPlane) — the `Status` / `RequestedStatus` pattern and how to wire your own NodeType to it
 - [Thread Operations](/Doc/Architecture/ThreadOperations) — the matching `IMessageHub` surface for thread mutations (same shape)
 - [RequestViaStreamUpdate](/Doc/Architecture/RequestViaStreamUpdate) — the underlying `stream.Update` mechanism every method here is built on
+- [Owner Injection](/Doc/Architecture/OwnerInjection) — the activity **owner** is the standing access context on the activity hub, injected everywhere and carried forward via `CircuitContext`
