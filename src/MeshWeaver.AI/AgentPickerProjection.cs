@@ -325,9 +325,13 @@ public static class AgentPickerProjection
         {
             $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants",
         };
-        if (!string.IsNullOrEmpty(currentPath))
+        // Skip reserved/rogue ROUTE partitions (login, welcome, settings, …): a reserved currentPath/
+        // nodeTypePath would make namespace:{login}/_Provider read the policy-less reserved partition and
+        // fail the WHOLE model query with "lacks Read permission on 'login'" — the picker goes empty.
+        // Mirrors BuildRegistryQuery's filter (the agent/skill queries already skip these).
+        if (!string.IsNullOrEmpty(currentPath) && !IsReservedPartition(currentPath))
             queries.Add($"namespace:{currentPath}/{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants");
-        if (!string.IsNullOrEmpty(nodeTypePath))
+        if (!string.IsNullOrEmpty(nodeTypePath) && !IsReservedPartition(nodeTypePath))
             queries.Add($"namespace:{nodeTypePath}/{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants");
         if (!string.IsNullOrEmpty(userPath))
             queries.Add($"namespace:{ModelProviderNodeType.UserNamespacePath(userPath)} nodeType:{typeFilter} scope:descendants");

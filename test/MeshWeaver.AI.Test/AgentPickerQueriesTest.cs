@@ -193,6 +193,26 @@ public class AgentPickerQueriesTest
     }
 
     [Fact]
+    public void BuildModelQueries_ReservedCurrentPath_IsSkipped()
+    {
+        // On the login page the resolved context is the rogue "login" ROUTE partition. Including it would
+        // make namespace:login/_Provider read the policy-less reserved partition and fail the WHOLE query
+        // with "lacks Read permission on 'login'" → empty model picker. Reserved partitions are filtered.
+        var queries = AgentPickerProjection.BuildModelQueries(currentPath: "login", nodeTypePath: "welcome");
+
+        queries.Should().ContainSingle("a reserved currentPath/nodeTypePath is skipped — only the platform catalog remains")
+            .Which.Should().Be("namespace:_Provider nodeType:LanguageModel|ModelProvider scope:descendants");
+    }
+
+    [Fact]
+    public void BuildModelQueries_RealCurrentPath_IsIncluded()
+    {
+        // A real (non-reserved) context partition still contributes its /_Provider namespace.
+        var queries = AgentPickerProjection.BuildModelQueries(currentPath: "AgenticPension");
+        queries.Should().Contain("namespace:AgenticPension/_Provider nodeType:LanguageModel|ModelProvider scope:descendants");
+    }
+
+    [Fact]
     public void BuildModelQueries_AllQueriesShareSameNodeTypeFilter()
     {
         // The synced collection's all-Initial gating breaks if nodeType filters
