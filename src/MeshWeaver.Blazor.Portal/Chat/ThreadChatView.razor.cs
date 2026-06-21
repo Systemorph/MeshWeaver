@@ -1044,6 +1044,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     _connectStatus = status;
                     _connectBusy = false;
                     StateHasChanged();
+                    // Login finished — auto-dismiss the widget (briefly showing "✓ Connected") so the
+                    // user doesn't have to click ✕.
+                    if (status is MeshWeaver.AI.Connect.ConnectStatus.Connected)
+                        ScheduleConnectAutoClose();
                 }),
                 ex => InvokeAsync(() =>
                 {
@@ -1075,6 +1079,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     _connectStatus = status;
                     _connectBusy = false;
                     StateHasChanged();
+                    // Login finished — auto-dismiss the widget (briefly showing "✓ Connected") so the
+                    // user doesn't have to click ✕.
+                    if (status is MeshWeaver.AI.Connect.ConnectStatus.Connected)
+                        ScheduleConnectAutoClose();
                 }),
                 ex => InvokeAsync(() =>
                 {
@@ -1098,6 +1106,35 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     {
         if (_connectProvider is { } p && !string.IsNullOrEmpty(_userHome))
             Hub.ServiceProvider.GetService<MeshWeaver.AI.Connect.ConnectSessionManager>()?.Cancel(_userHome!, p);
+        _connectSub?.Dispose();
+        _connectSub = null;
+        _connectProvider = null;
+        _connectHarness = null;
+        _connectStatus = null;
+        _connectCode = "";
+        _connectBusy = false;
+        StateHasChanged();
+    }
+
+    /// <summary>Reactively dismiss the Connect widget ~1.2s after a successful login (no Task.Delay) —
+    /// shows "✓ Connected" briefly, then closes so the user never has to click ✕. The timer lives in
+    /// <see cref="_connectSub"/> so a dispose / new connect cancels a pending auto-close.</summary>
+    private void ScheduleConnectAutoClose()
+    {
+        _connectSub?.Dispose();
+        _connectSub = System.Reactive.Linq.Observable.Timer(TimeSpan.FromSeconds(1.2))
+            .Subscribe(_ => InvokeAsync(() =>
+            {
+                if (_isDisposed) return;
+                CloseConnectWidget();
+            }));
+    }
+
+    /// <summary>Clears the Connect widget UI state WITHOUT cancelling the session — used after a
+    /// successful login (the session already completed and stored the token); mirrors
+    /// <see cref="CancelConnect"/> minus the <c>sessionManager.Cancel</c> call.</summary>
+    private void CloseConnectWidget()
+    {
         _connectSub?.Dispose();
         _connectSub = null;
         _connectProvider = null;
