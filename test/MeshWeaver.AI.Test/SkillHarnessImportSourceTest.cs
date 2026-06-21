@@ -42,17 +42,21 @@ public class SkillHarnessImportSourceTest(ITestOutputHelper output) : MonolithMe
         ((MeshWeaver.Mesh.Security.PartitionAccessPolicy)policy!.Content!).PublicRead.Should().BeTrue();
 
         var skills = nodes.Where(n => n.NodeType == SkillNodeType.NodeType).ToList();
-        skills.Select(n => n.Id).OrderBy(x => x).Should().Equal("agent", "harness", "model");
+        skills.Select(n => n.Id).OrderBy(x => x).Should().Equal("agent", "code", "create-space", "harness", "model");
         skills.Should().AllSatisfy(n =>
         {
             n.Namespace.Should().Be(SkillNodeType.RootNamespace);
             // The pick-spec content must arrive typed — ProjectSkills drops a skill whose Content
             // isn't a SkillDefinition, so the chat would silently lose it.
             n.Content.Should().BeOfType<SkillDefinition>();
-            // Ordering lives in the QUERY (data), not the GUI picker: `sort:order` makes the picker's
-            // default-to-first land on the catalog head.
-            ((SkillDefinition)n.Content!).Action!.Query.Should().Contain("sort:order");
         });
+        // Ordering lives in the QUERY (data), not the GUI picker: `sort:order` makes the picker's
+        // default-to-first land on the catalog head. This applies ONLY to PICK skills that carry a
+        // query (agent / model / harness) — command/prompt skills (code, create-space) have no pick
+        // Action and are exempt.
+        skills.Select(n => (SkillDefinition)n.Content!)
+            .Where(d => d.Action?.Query is not null)
+            .Should().AllSatisfy(d => d.Action!.Query.Should().Contain("sort:order"));
     }
 
     [Fact(Timeout = 60000)]
