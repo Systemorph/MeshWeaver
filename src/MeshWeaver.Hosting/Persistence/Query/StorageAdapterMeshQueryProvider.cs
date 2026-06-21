@@ -206,12 +206,23 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             {
                 var (matched, parsedQuery, _) = collected;
 
-                IEnumerable<object> sorted = matched;
+                // Match PG's table separation: a NON-satellite content query must not return
+                // satellite-path nodes (_Access grants, _Thread, _Comment, …). On PG these live in
+                // separate per-prefix tables so a mesh_nodes content query never sees them; the
+                // in-memory adapter keeps everything in one store, so e.g. an auto-created
+                // {partition}/_Access/{creator}_Access grant leaked into `scope:descendants`.
+                // Explicit satellite queries (a _-segment path, a satellite nodeType, or
+                // source:activity/accessed) are unaffected — they still return their satellites.
+                IEnumerable<object> matchedNodes = matched;
+                if (!IsSatelliteTargetedQuery(parsedQuery))
+                    matchedNodes = matched.Where(n => n is not MeshNode mn || !IsSatellitePath(mn.Path));
+
+                IEnumerable<object> sorted = matchedNodes;
                 if (parsedQuery.OrderBy != null)
                 {
                     sorted = parsedQuery.OrderBy.Descending
-                        ? matched.OrderByDescending(n => GetSortableValue(n, parsedQuery.OrderBy.Property))
-                        : matched.OrderBy(n => GetSortableValue(n, parsedQuery.OrderBy.Property));
+                        ? matchedNodes.OrderByDescending(n => GetSortableValue(n, parsedQuery.OrderBy.Property))
+                        : matchedNodes.OrderBy(n => GetSortableValue(n, parsedQuery.OrderBy.Property));
                 }
 
                 IEnumerable<object> projected = sorted.Select(node =>
@@ -229,6 +240,41 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
 
                 return (IReadOnlyList<object>)projected.ToList();
             });
+
+    /// <summary>
+    /// True when the query explicitly TARGETS satellite nodes — a <c>_</c>-prefixed path segment,
+    /// a satellite nodeType, or <c>source:activity</c>/<c>accessed</c>. Such queries keep their
+    /// satellites; every other (content) query has satellite-path rows filtered out so the
+    /// in-memory adapter matches PG's separate-table behaviour. Mirrors the satellite detection in
+    /// <see cref="DefersToNativeProvider"/>.
+    /// </summary>
+    private static bool IsSatelliteTargetedQuery(ParsedQuery parsed)
+    {
+        if (parsed.Source is QuerySource.Activity or QuerySource.Accessed) return true;
+        var path = parsed.Path;
+        if (!string.IsNullOrEmpty(path))
+            foreach (var seg in path.Split('/', StringSplitOptions.RemoveEmptyEntries))
+                if (seg.StartsWith('_')) return true;
+        var nodeType = parsed.ExtractNodeType();
+        return !string.IsNullOrEmpty(nodeType) && PartitionDefinition.IsSatelliteNodeType(nodeType);
+    }
+
+    /// <summary>
+    /// True when <paramref name="path"/> contains a satellite segment (<c>/_X</c> where X is
+    /// upper-case: <c>_Access</c>, <c>_Thread</c>, <c>_Comment</c>, …). Same rule as
+    /// <c>MeshQuery.IsSatellitePath</c>.
+    /// </summary>
+    private static bool IsSatellitePath(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return false;
+        var idx = 0;
+        while ((idx = path.IndexOf("/_", idx, StringComparison.Ordinal)) >= 0)
+        {
+            idx += 2;
+            if (idx < path.Length && char.IsUpper(path[idx])) return true;
+        }
+        return false;
+    }
 
     private static int? LoadCap(MeshQueryRequest request, ParsedQuery parsedQuery)
     {
