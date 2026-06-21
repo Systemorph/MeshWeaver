@@ -71,24 +71,6 @@ public class MeshQuery : IMeshQueryCore
         return combined;
     }
 
-    /// <summary>
-    /// Checks if a path is a satellite node path (contains /_Prefix/ segments).
-    /// Satellite prefixes start with underscore: _Thread, _Comment, _Activity, _Access, etc.
-    /// </summary>
-    private static bool IsSatellitePath(string? path)
-    {
-        if (string.IsNullOrEmpty(path)) return false;
-        // Check for /_X segments where X starts with uppercase (satellite convention)
-        var idx = 0;
-        while ((idx = path.IndexOf("/_", idx, StringComparison.Ordinal)) >= 0)
-        {
-            idx += 2; // skip "/_"
-            if (idx < path.Length && char.IsUpper(path[idx]))
-                return true;
-        }
-        return false;
-    }
-
     public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request)
     {
         var matched = SelectMatchingProviders(NamespacesForRequest(request));
@@ -184,7 +166,12 @@ public class MeshQuery : IMeshQueryCore
             foreach (var row in snapshot)
             {
                 if (string.IsNullOrEmpty(row.Path)) continue;
-                if (IsSatellitePath(row.Path)) continue;
+                // Keep satellite NOISE (AccessAssignment grants, Thread/Comment cells, …) out of
+                // autocomplete — by the node's STORAGE table (configured satellite SEGMENT), NOT the raw
+                // '_' character: {ns}/_Policy, {ns}/_Provider have a '_' segment yet are NOT configured
+                // satellite segments, so they live in mesh_nodes and are real content the user should be
+                // able to autocomplete to. Satellite-ness is configuration (SatelliteTableMapping).
+                if (SatelliteTableMapping.IsSatellitePath(row.Path)) continue;
                 if (byPath.TryGetValue(row.Path, out var existing) && existing.Score >= row.Score)
                     continue;
                 var boosted = string.IsNullOrEmpty(contextPath)
