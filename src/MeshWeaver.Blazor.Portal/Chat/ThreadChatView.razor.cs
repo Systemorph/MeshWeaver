@@ -192,6 +192,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     // pendingCells removed — GUI creates real nodes, LayoutAreaView renders them directly.
     private bool showSubmissionProgress;
 
+    // The just-submitted user text, shown UNDER the progress panel while the new thread is created +
+    // redirected to, so the user sees their message immediately instead of a blank composer.
+    private string? lastSubmittedText;
+
     // Unified attachments (context + @references)
     private readonly List<AttachmentInfo> attachments = new();
     private const string placeholderText = "Type a message... Use @ to reference nodes";
@@ -315,7 +319,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             {
                 var normalized = NormalizeContextPath(ctx.PrimaryPath);
                 initialContext = normalized;
-                if (!attachments.Any(a => a.IsContext && a.Path == normalized))
+                // normalized is "" for a reserved route partition (login, …) — no context chip.
+                if (!string.IsNullOrEmpty(normalized) && !attachments.Any(a => a.IsContext && a.Path == normalized))
                     attachments.Add(new AttachmentInfo(normalized, ctx.Node?.Name ?? ctx.Node?.Id, IsContext: true));
             }
         }
@@ -325,7 +330,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             // Look up the display name via GetDataRequest + RegisterCallback — never await.
             var capturedContext = NormalizeContextPath(initialContext);
             initialContext = capturedContext;
-            if (!attachments.Any(a => a.IsContext && a.Path == capturedContext))
+            // capturedContext is "" for a reserved route partition (login, …) — no context chip / read.
+            if (!string.IsNullOrEmpty(capturedContext) && !attachments.Any(a => a.IsContext && a.Path == capturedContext))
             {
                 attachments.Add(new AttachmentInfo(capturedContext, null, IsContext: true));
                 RequestDisplayName(capturedContext, name => InvokeAsync(() =>
@@ -752,13 +758,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 if (_isDisposed) return;
                 Logger.LogWarning("[ThreadChat:{InstanceId}] Submit failed: {Error}", _instanceId, err);
                 showSubmissionProgress = false;
+                lastSubmittedText = null;
                 submissionHandler.ForceRelease();
                 StateHasChanged();
             });
 
             if (string.IsNullOrEmpty(threadPath))
             {
-                showSubmissionProgress = isCompact;
+                showSubmissionProgress = true; // step 2: show progress in the composer immediately on submit
+                lastSubmittedText = userMessageText; // ...and echo the submitted message under the progress
                 Logger.LogInformation("[Chat] Creating thread + submitting message");
                 // Selections flow as the picked node PATHS — execution normalizes to ids
                 // at its boundary (SelectionId.IdOf). The composer snapshot is copied onto
@@ -781,26 +789,39 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                         ModelName = boundModelPath,
                         ContextPath = safeContext
                     },
-                    onCreated: node => InvokeAsync(() =>
+                    onCreated: node =>
                     {
-                        if (_isDisposed) return;
-                        Logger.LogInformation(
-                            "[Chat] Thread created path={Path} elapsed={Ms}ms",
-                            node.Path, perfSw.ElapsedMilliseconds);
-                        threadPath = node.Path;
-                        threadName = node.Name;
-                        UpdateSidePanelTitle();
-                        if (isCompact && !string.IsNullOrEmpty(node.Path))
-                        {
-                            NavigationManager.NavigateTo($"/{node.Path}");
-                        }
-                        else if (!string.IsNullOrEmpty(node.Path))
-                        {
-                            SidePanelState.SetContentPath(node.Path);
-                        }
-                        showSubmissionProgress = false;
-                        StateHasChanged();
-                    }),
+                        var path = node.Path;
+                        if (string.IsNullOrEmpty(path)) { onError("Thread created with no path"); return; }
+                        // 🚨 Redirect ONLY once the thread node is actually READABLE on its own stream.
+                        // Navigating on the bare CreateNode ack races the thread's per-node hub
+                        // activation: the target page subscribes to a not-yet-ready node, the render
+                        // throws, and the whole side panel blanks (the "blackout"). Subscribing here is
+                        // "redirect in .Subscribe() when the thread is written" — no miss.
+                        Hub.GetWorkspace().GetMeshNodeStream(path)
+                            .Where(n => n is not null)
+                            .Take(1)
+                            .Timeout(TimeSpan.FromSeconds(10))
+                            .Subscribe(
+                                ready => InvokeAsync(() =>
+                                {
+                                    if (_isDisposed) return;
+                                    Logger.LogInformation(
+                                        "[Chat] Thread created+readable path={Path} elapsed={Ms}ms",
+                                        path, perfSw.ElapsedMilliseconds);
+                                    threadPath = path;
+                                    threadName = ready!.Name;
+                                    UpdateSidePanelTitle();
+                                    if (isCompact)
+                                        NavigationManager.NavigateTo($"/{path}");
+                                    else
+                                        SidePanelState.SetContentPath(path);
+                                    showSubmissionProgress = false;
+                                    lastSubmittedText = null;
+                                    StateHasChanged();
+                                }),
+                                ex => onError(ex.Message));
+                    },
                     onError: onError);
             }
             else
@@ -1490,7 +1511,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
             initialContext = newPath;
             attachments.RemoveAll(a => a.IsContext);
-            attachments.Insert(0, new AttachmentInfo(newPath, name, IsContext: true));
+            // newPath is "" when the context is a reserved route partition (login, …) — clear the
+            // context chip rather than pinning an empty/rogue one.
+            if (!string.IsNullOrEmpty(newPath))
+                attachments.Insert(0, new AttachmentInfo(newPath, name, IsContext: true));
             StateHasChanged();
         });
     }
@@ -1507,13 +1531,20 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (string.IsNullOrEmpty(path))
             return path;
 
+        var normalized = path;
         var segments = path.Split('/');
         for (var i = 0; i < segments.Length; i++)
         {
             if (segments[i].StartsWith('_'))
-                return string.Join('/', segments, 0, i);
+            {
+                normalized = string.Join('/', segments, 0, i);
+                break;
+            }
         }
-        return path;
+        // A rogue/reserved ROUTE partition (login, welcome, settings, …) is NOT a real node — never use
+        // it as a chat context. Reading it sends a GetDataRequest to a hub that never opens its init
+        // gates (DataContextInit/MeshNodeInit) and the read hangs >30s. Treat a reserved context as none.
+        return MeshWeaver.AI.AgentPickerProjection.IsReservedPartition(normalized) ? "" : normalized;
     }
 
     private void OnMessageTextChanged(string value)

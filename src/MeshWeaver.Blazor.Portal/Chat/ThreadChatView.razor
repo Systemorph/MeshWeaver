@@ -379,6 +379,14 @@ else
                     <div class="thread-allocating-subtitle">Creating conversation and redirecting</div>
                 </div>
             </div>
+            @if (!string.IsNullOrWhiteSpace(lastSubmittedText))
+            {
+                @* Echo the just-submitted message under the progress so it's visible during create+redirect. *@
+                <div class="thread-allocating-submitted">
+                    <div class="thread-allocating-submitted-label">You</div>
+                    <div class="thread-allocating-submitted-text">@lastSubmittedText</div>
+                </div>
+            }
         }
         @{ var inputDimmed = showSubmissionProgress; }
         <div class="thread-chat-input-content @(inputDimmed ? "dimmed" : "")" aria-hidden="@(inputDimmed.ToString().ToLowerInvariant())">
@@ -469,7 +477,9 @@ else
                     <span>Log in to @_connectHarnessLabel</span>
                     <button class="thread-msg-action-btn" @onclick="CancelConnect" title="Close">&#10005;</button>
                 </div>
-                <div class="thread-chat-widget-list" style="padding:10px 12px; gap:8px; display:flex; flex-direction:column;">
+                @* max-height:none/overflow:visible override the picker list's scroll cap so the paste
+                   field + Submit are never clipped (the user shouldn't have to scroll to reach Submit). *@
+                <div class="thread-chat-widget-list" style="padding:10px 12px; gap:8px; display:flex; flex-direction:column; max-height:none; overflow:visible;">
                     @switch (_connectStatus)
                     {
                         case ConnectStatus.Connected:
@@ -492,8 +502,9 @@ else
                                        placeholder="Paste code" @onkeydown="OnConnectInputKeyDown"
                                        style="width:100%; padding:6px 8px; box-sizing:border-box;" />
                                 <button class="thread-chat-widget-item"
+                                        style="background:var(--accent-fill-rest, #2563eb); color:#fff; font-weight:600; text-align:center; border-radius:6px; padding:8px 12px; border:none; cursor:pointer;"
                                         disabled="@(_connectBusy || string.IsNullOrWhiteSpace(_connectCode))"
-                                        @onclick="SubmitConnectCode">@(_connectBusy ? "Verifying…" : "Submit")</button>
+                                        @onclick="SubmitConnectCode">@(_connectBusy ? "Verifying…" : "Submit code")</button>
                             }
                             else if (!string.IsNullOrEmpty(c.Challenge.UserCode))
                             {
@@ -513,7 +524,12 @@ else
         @* Monaco editor for markdown input with completion. Stays visible during
            execution (Claude.ai pattern) — typing while a round is in flight is
            allowed; it queues via PendingUserMessages and dispatches when the round
-           completes. Esc cancels the in-flight round; the typed text is preserved. *@
+           completes. Esc cancels the in-flight round; the typed text is preserved.
+           HIDDEN while a CLI-harness login (Connect) widget is up, so the user pastes the
+           code into the widget's field above — not into this chat box — and the widget's
+           Submit isn't pushed below the fold. *@
+        @if (_connectProvider is null)
+        {
         <div class="input-container" @onkeydown="@OnInputKeyDown">
             <MonacoEditorView @ref="monacoEditor"
                               Value="@MessageText"
@@ -526,6 +542,7 @@ else
                               CompletionProvider="@GetCompletionConfig()"
                               CompletionCallback="@GetCompletions" />
         </div>
+        }
 
         @* Attachments split: the navigation-context chip(s) sit inline in the compact bottom
            row (next to the harness combobox + Send); any extra @@-reference attachments get
@@ -550,6 +567,9 @@ else
            wired threw out of the embedded area and tore the whole composer down (the "choosing
            Assistant crashes the chat" defect). Slash-command selection records the choice on the
            composer without building the agent, so it can never crash the footer. *@
+        @* Hidden while the login (Connect) widget is up — only its paste-field + Submit are interactive. *@
+        @if (_connectProvider is null)
+        {
         <div class="thread-chat-bottom-row" style="display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; margin-top: 4px;">
             @if (contextChips.Count > 0)
             {
@@ -576,6 +596,7 @@ else
                 }
             </div>
         </div>
+        }
         @if (!string.IsNullOrEmpty(lastCommandStatus))
         {
             <span class="thread-chat-status-msg @(lastCommandStatusIsError ? "error" : "")">@lastCommandStatus</span>
