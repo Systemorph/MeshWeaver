@@ -11,6 +11,8 @@
   { "op": "add", "path": "/spec/template/spec/volumes/-",
     "value": { "name": "memex-attachments", "persistentVolumeClaim": { "claimName": "memex-attachments" } } },
   { "op": "add", "path": "/spec/template/spec/volumes/-",
+    "value": { "name": "memex-workspace", "persistentVolumeClaim": { "claimName": "memex-workspace" } } },
+  { "op": "add", "path": "/spec/template/spec/volumes/-",
     "value": { "name": "kv-ai-secrets",
                "csi": { "driver": "secrets-store.csi.k8s.io", "readOnly": true,
                         "volumeAttributes": { "secretProviderClass": "memexcloud-portal-ai-secrets" } } } },
@@ -19,6 +21,8 @@
     "value": { "name": "memex-content", "mountPath": "/mnt/content" } },
   { "op": "add", "path": "/spec/template/spec/containers/0/volumeMounts/-",
     "value": { "name": "memex-attachments", "mountPath": "/mnt/attachments" } },
+  { "op": "add", "path": "/spec/template/spec/containers/0/volumeMounts/-",
+    "value": { "name": "memex-workspace", "mountPath": "/workspace" } },
   { "op": "add", "path": "/spec/template/spec/containers/0/volumeMounts/-",
     "value": { "name": "kv-ai-secrets", "mountPath": "/mnt/secrets-store", "readOnly": true } },
 

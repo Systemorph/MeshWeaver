@@ -87,6 +87,8 @@ spec:
               mountPath: /mnt/content
             - name: memex-attachments
               mountPath: /mnt/attachments
+            - name: memex-workspace
+              mountPath: /workspace
       # volumes merge by `name`. memex-data / memex-users override the chart's
       # emptyDir with the real RWX PVCs; memex-content / memex-attachments are new.
       volumes:
@@ -102,3 +104,6 @@ spec:
         - name: memex-attachments
           persistentVolumeClaim:
             claimName: memex-attachments
+        - name: memex-workspace
+          persistentVolumeClaim:
+            claimName: memex-workspace
