@@ -1,15 +1,40 @@
 @page "/voice"
 @using Memex.Client.Voice
 @using Memex.Client.Services
+@using MeshWeaver.Messaging
+@using Microsoft.Maui.Media
+@using Microsoft.Maui.Storage
 @inject AudioCaptureService Capture
 @inject VoiceService VoiceSvc
+@inject IMessageHub Hub
+@implements IDisposable
 
 <PageTitle>Voice</PageTitle>
 
-<h1>Voice — on-device Whisper</h1>
+<h1>Voice — on-device Whisper → thread</h1>
 
-<p>Speech is transcribed <strong>on this device</strong> with Whisper (whisper.cpp). Nothing leaves
-   the phone; works offline. The model downloads once on first use.</p>
+<p>Speech is transcribed <strong>on this device</strong> (Whisper). The first utterance opens a new
+   thread; each one after feeds the thread's inbox. The agent's reply is spoken back.</p>
+
+<details class="mb-3">
+    <summary>Conversation</summary>
+    <div class="row g-2 mt-1">
+        <div class="col-12 col-md-6">
+            <label class="form-label">Thread namespace</label>
+            <input class="form-control" @bind="_namespace" placeholder="rbuergi" />
+        </div>
+        <div class="col-12 col-md-6">
+            <label class="form-label">Agent (optional)</label>
+            <input class="form-control" @bind="_agent" placeholder="Assistant" />
+        </div>
+    </div>
+    @if (!string.IsNullOrEmpty(_threadPath))
+    {
+        <small class="text-muted d-block mt-1">Thread: <code>@_threadPath</code>
+            <button class="btn btn-link btn-sm p-0 ms-2" @onclick="NewConversation">new conversation</button>
+        </small>
+    }
+</details>
 
 <div class="mb-3">
     <label class="form-label">Language</label>
@@ -21,19 +46,19 @@
         <option value="fr">French</option>
         <option value="it">Italian</option>
     </select>
-    <small class="text-muted d-block mt-1">
-        Auto detection is constrained to German/English, so any Swiss German dialect routes to German.
-        Strong dialect (e.g. Bernese) needs the large model for usable accuracy — see Mesh settings.
-    </small>
 </div>
 
 @if (!Capture.IsRecording)
 {
-    <button class="btn btn-primary" @onclick="StartAsync" disabled="@_busy">● Record</button>
+    <button class="btn btn-primary" @onclick="StartAsync" disabled="@(_busy || !CanTalk)">● Record</button>
+    @if (!CanTalk)
+    {
+        <small class="text-muted ms-2">Set a thread namespace under “Conversation”.</small>
+    }
 }
 else
 {
-    <button class="btn btn-danger" @onclick="StopAsync">■ Stop &amp; transcribe</button>
+    <button class="btn btn-danger" @onclick="StopAsync">■ Stop &amp; send</button>
 }
 
 @if (!string.IsNullOrEmpty(_status))
@@ -43,18 +68,19 @@ else
 
 @if (_segments is { Count: > 0 })
 {
-    <table class="table table-sm mt-3">
-        <thead><tr><th>Time</th><th>Text</th></tr></thead>
-        <tbody>
-            @foreach (var s in _segments)
-            {
-                <tr>
-                    <td class="text-nowrap">@s.Start.ToString(@"mm\:ss") – @s.End.ToString(@"mm\:ss")</td>
-                    <td>@s.Text</td>
-                </tr>
-            }
-        </tbody>
-    </table>
+    <h5 class="mt-3">You said</h5>
+    <p>@string.Join(" ", _segments.Select(s => s.Text))</p>
+}
+
+@if (!string.IsNullOrEmpty(_reply))
+{
+    <div class="card mt-3">
+        <div class="card-header">Agent</div>
+        <div class="card-body">
+            <p class="card-text">@_reply</p>
+            <button class="btn btn-outline-secondary btn-sm" @onclick="SpeakReplyAsync">🔊 Speak again</button>
+        </div>
+    </div>
 }
 
 @code {
@@ -63,9 +89,32 @@ else
     private string? _status;
     private IReadOnlyList<TranscriptSegment>? _segments;
 
+    private string _namespace = "";
+    private string _agent = "";
+    private string? _threadPath;
+    private string? _reply;
+    private IDisposable? _replySub;
+
+    private bool CanTalk => !string.IsNullOrWhiteSpace(_namespace);
+
+    protected override void OnInitialized()
+    {
+        _namespace = Preferences.Default.Get("thread.namespace", "");
+        _agent = Preferences.Default.Get("thread.agent", "");
+    }
+
+    private void NewConversation()
+    {
+        _replySub?.Dispose();
+        _replySub = null;
+        _threadPath = null;
+        _reply = null;
+        _segments = null;
+        _status = null;
+    }
+
     private async Task StartAsync()
     {
-        _segments = null;
         _status = "Recording… speak now.";
         await Capture.StartAsync();
     }
@@ -73,7 +122,7 @@ else
     private async Task StopAsync()
     {
         _busy = true;
-        _status = "Processing…";
+        _status = "Transcribing on device…";
         try
         {
             var samples = await Capture.StopAsync();
@@ -85,7 +134,27 @@ else
 
             var progress = new Progress<string>(m => { _status = m; InvokeAsync(StateHasChanged); });
             _segments = await VoiceSvc.TranscribeAsync(samples, _language, progress);
-            _status = $"Done — {_segments.Count} segment(s), {samples.Length / 16000.0:F1}s of audio.";
+            var text = string.Join(" ", _segments.Select(s => s.Text)).Trim();
+            if (text.Length == 0)
+            {
+                _status = "Nothing recognised.";
+                return;
+            }
+
+            Preferences.Default.Set("thread.namespace", _namespace);
+            Preferences.Default.Set("thread.agent", _agent);
+
+            _status = _threadPath is null ? "Opening thread…" : "Sent — agent is thinking…";
+            Hub.SpeakToThread(
+                _threadPath, _namespace, text,
+                string.IsNullOrWhiteSpace(_agent) ? null : _agent,
+                onThreadOpened: path =>
+                {
+                    _threadPath = path;
+                    SubscribeReplies(path);
+                    InvokeAsync(StateHasChanged);
+                },
+                onError: err => { _status = $"Thread error: {err}"; InvokeAsync(StateHasChanged); });
         }
         catch (Exception ex)
         {
@@ -96,4 +165,26 @@ else
             _busy = false;
         }
     }
+
+    private void SubscribeReplies(string threadPath)
+    {
+        _replySub?.Dispose();
+        _replySub = Hub.ObserveAssistantReplies(threadPath).Subscribe(
+            reply => InvokeAsync(async () =>
+            {
+                _reply = reply;
+                _status = "Reply received.";
+                StateHasChanged();
+                await SpeakReplyAsync();
+            }),
+            ex => InvokeAsync(() => { _status = $"Reply stream error: {ex.Message}"; StateHasChanged(); }));
+    }
+
+    private async Task SpeakReplyAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(_reply))
+            await TextToSpeech.Default.SpeakAsync(_reply);
+    }
+
+    public void Dispose() => _replySub?.Dispose();
 }
