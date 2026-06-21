@@ -30,36 +30,60 @@
     <Content Include="..\..\..\nuget.config" Link="nuget.config" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
-  <!-- 🚨 dist/packages is git-ignored, so the curated #r-referenceable packages must be PACKED
-       into it AS PART OF PUBLISH — the AKS image build is `dotnet publish -t:PublishContainer`
-       with no separate pack step, so without this the image would ship an EMPTY feed and a
-       deployed portal's `#r "nuget:MeshWeaver.BusinessRules.Generator"` would resolve on no
-       source (it is NOT published to nuget.org) → every scope node fails to compile in prod.
+  <!-- 🚨 The curated #r-referenceable packages must be PACKED and SHIPPED into the image AS PART OF
+       PUBLISH — the AKS image build is `dotnet publish -t:PublishContainer` with no separate pack
+       step, so without this the image ships an EMPTY feed and a deployed portal's
+       `#r "nuget:MeshWeaver.BusinessRules.Generator"` resolves on no source (it is NOT published to
+       nuget.org) → every scope node fails to compile in prod with
+       "No NuGet package 'MeshWeaver.BusinessRules.Generator' matching '*' found on configured sources".
        This target packs the curated set — MeshWeaver.BusinessRules (the IScope<,> surface, i.e.
-       "business processes") + MeshWeaver.BusinessRules.Generator (its scope source generator) —
-       at the single global $(Version) from Directory.Build.props, then adds the freshly-produced
-       nupkgs to the publish set. In-process Pack (MSBuild task, not a nested `dotnet pack`) so it
-       reuses this build's restore/output and the exact same version. The identical set is packed
-       for tests by .github/workflows/dotnet-test.yml ("Pack mesh-local #r packages"). -->
+       "business processes") + MeshWeaver.BusinessRules.Generator (its scope source generator) — at
+       this build's $(Version), then injects the freshly-produced nupkgs into the publish set so they
+       land at /app/dist/packages, the relative folder nuget.config's `mesh-local` source points at.
+       In-process Pack (MSBuild task, not a nested `dotnet pack`) reuses this build's restore/output;
+       the child Pack inherits the build's global -p: props (PlatformVersion/CIRun), so the staged feed
+       carries the SAME $(Version) as the portal binary. The identical set is packed for tests by
+       .github/workflows/dotnet-test.yml ("Pack mesh-local #r packages"). -->
   <!-- Release-only: the AKS/container image is always published `-c Release`. A Debug publish is
        a local convenience that doesn't ship, so skip the (non-trivial) pack there. -->
   <Target Name="BakeMeshLocalFeed" BeforeTargets="ComputeFilesToPublish"
           Condition="'$(Configuration)' == 'Release'">
+    <!-- Pack into a CLEAN per-build staging dir under obj — NOT the repo's `dist/packages` dev
+         feed, which accumulates dozens of stale nupkgs across builds (incl. a lib-LESS
+         3.0.0-preview1 generator). Shipping that whole folder would bloat the image and let the
+         version-less `#r` resolve a stale package. RemoveDir guarantees the staged feed holds only
+         this build's curated pair. Do NOT force Version= here: the child Pack inherits the build's
+         global PlatformVersion/CIRun so it computes the SAME version the portal binary carries
+         (forcing Version=$(Version) passed an empty value and degraded the package to 1.0.0). -->
     <PropertyGroup>
-      <_MeshLocalFeed>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..\dist\packages'))</_MeshLocalFeed>
+      <_MeshLocalFeedStage>$([System.IO.Path]::GetFullPath('$(IntermediateOutputPath)meshlocalfeed'))</_MeshLocalFeedStage>
     </PropertyGroup>
+    <RemoveDir Directories="$(_MeshLocalFeedStage)" />
     <MSBuild Projects="$(MSBuildThisFileDirectory)..\..\..\src\MeshWeaver.BusinessRules\MeshWeaver.BusinessRules.csproj"
              Targets="Pack"
-             Properties="Configuration=$(Configuration);PackageOutputPath=$(_MeshLocalFeed)" />
+             Properties="Configuration=$(Configuration);PackageOutputPath=$(_MeshLocalFeedStage)" />
     <MSBuild Projects="$(MSBuildThisFileDirectory)..\..\..\src\MeshWeaver.BusinessRules.Generator\MeshWeaver.BusinessRules.Generator.csproj"
              Targets="Pack"
-             Properties="Configuration=$(Configuration);PackageOutputPath=$(_MeshLocalFeed)" />
-    <!-- Re-glob AFTER packing: a static ItemGroup is evaluated before any target runs, so on a
-         clean (git-ignored, empty) dist/packages it would capture nothing. -->
+             Properties="Configuration=$(Configuration);PackageOutputPath=$(_MeshLocalFeedStage)" />
+    <!-- Inject via ResolvedFileToPublish, NOT Content. A <Content> item added inside a
+         BeforeTargets="ComputeFilesToPublish" hook arrives TOO LATE: the SDK chain
+         ComputeFilesToPublish → ComputeResolvedFilesToPublishList → _ComputeCopyToPublishDirectoryItems
+         → GetCopyToPublishDirectoryItems runs as a DEPENDENCY (before this hook) and has already
+         frozen @(Content) into the publish set, so a late Content item is silently dropped — the
+         exact bug that shipped an empty feed to atioz. ResolvedFileToPublish is the canonical
+         publish-injection item: the SDK only ever APPENDS to it and the copy / container-layer step
+         runs later, so items added here always reach /app. The glob runs AFTER Pack (a static
+         ItemGroup evaluates before any target, capturing nothing in the just-cleaned dir).
+         RelativePath = dist/packages/<file> matches nuget.config's relative `mesh-local` source.
+         Two-step (glob into _MeshLocalNupkg, then transform with the QUALIFIED %(_MeshLocalNupkg.Filename)):
+         an UNqualified %(Filename) in a target ItemGroup does not self-batch — it expands to empty,
+         so both nupkgs would collapse to the same RelativePath `dist\packages\` and fail NETSDK1152. -->
     <ItemGroup>
-      <Content Include="$(_MeshLocalFeed)\**\*.nupkg"
-               Link="dist\packages\%(RecursiveDir)%(Filename)%(Extension)"
-               CopyToPublishDirectory="PreserveNewest" />
+      <_MeshLocalNupkg Include="$(_MeshLocalFeedStage)\*.nupkg" />
+      <ResolvedFileToPublish Include="@(_MeshLocalNupkg)">
+        <RelativePath>dist\packages\%(_MeshLocalNupkg.Filename)%(_MeshLocalNupkg.Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
     </ItemGroup>
   </Target>
 
