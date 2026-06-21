@@ -215,7 +215,16 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 // source:activity/accessed) are unaffected — they still return their satellites.
                 IEnumerable<object> matchedNodes = matched;
                 if (!IsSatelliteTargetedQuery(parsedQuery))
-                    matchedNodes = matched.Where(n => n is not MeshNode mn || !IsSatellitePath(mn.Path));
+                    matchedNodes = matchedNodes.Where(n => n is not MeshNode mn || !IsSatellitePath(mn.Path));
+
+                // Partition roots (the auto-provisioned Space node at namespace="") are STRUCTURAL
+                // partition containers, not content — and abac5dec2 stamps them with a current
+                // LastModified, so they would otherwise dominate recency sorts (is:main
+                // scope:descendants sort:LastModified-desc) and show up under exact partition-path
+                // reads. Drop them from content queries; a query that explicitly targets the root
+                // type (nodeType:Space) still gets them.
+                if (!QueryTargetsPartitionRoot(parsedQuery))
+                    matchedNodes = matchedNodes.Where(n => n is not MeshNode mn || !IsPartitionRoot(mn));
 
                 IEnumerable<object> sorted = matchedNodes;
                 if (parsedQuery.OrderBy != null)
@@ -275,6 +284,21 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         }
         return false;
     }
+
+    /// <summary>The partition-root (Space) NodeType — matches <c>MeshExtensions.PartitionRootNodeTypeName</c>.</summary>
+    private const string PartitionRootNodeType = "Space";
+
+    /// <summary>
+    /// True when <paramref name="node"/> is a partition root: a <see cref="PartitionRootNodeType"/>
+    /// node at the partition path itself (empty <see cref="MeshNode.Namespace"/>).
+    /// </summary>
+    private static bool IsPartitionRoot(MeshNode node)
+        => string.IsNullOrEmpty(node.Namespace)
+            && string.Equals(node.NodeType, PartitionRootNodeType, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>True when the query explicitly targets the partition-root type (<c>nodeType:Space</c>).</summary>
+    private static bool QueryTargetsPartitionRoot(ParsedQuery parsed)
+        => string.Equals(parsed.ExtractNodeType(), PartitionRootNodeType, StringComparison.OrdinalIgnoreCase);
 
     private static int? LoadCap(MeshQueryRequest request, ParsedQuery parsedQuery)
     {
