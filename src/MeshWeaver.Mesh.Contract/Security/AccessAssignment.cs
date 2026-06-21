@@ -108,6 +108,16 @@ public record PartitionAccessPolicy
         if (Execute == false) cap &= ~Permission.Execute;
         if (Thread == false) cap &= ~Permission.Thread;
         if (Api == false) cap &= ~Permission.Api;
+        // 🚨 Compile (create a NodeType release) and Sync (static-repo overwrite) are CREATE-class
+        // privileged WRITES — there is no per-policy flag for them, so they ride the ~0 base. A
+        // partition that denies Create must deny them too: otherwise an Admin/Editor (whose ROLE
+        // grants Compile) would retain release-creation on a READ-ONLY partition (Doc / Agent / Role),
+        // writing a Release node the policy forbids. Gating on the Create flag keeps them on writable
+        // policies (the reason the base is ~0, not Permission.All) while capping them on read-only ones.
+        // On a read-only partition the legitimate compile runs as System, never the user
+        // (NodeTypeReleaseGateTest.SystemCompile_FillsCache_OnReadOnlyPartition). Without this, the 16
+        // PartitionAccessPolicy/StaticNamespacePolicy "capped to Read…" tests see Compile leak through.
+        if (Create == false) cap &= ~(Permission.Compile | Permission.Sync);
         return cap;
     }
 }
