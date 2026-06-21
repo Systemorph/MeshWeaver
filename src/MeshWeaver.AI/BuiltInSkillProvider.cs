@@ -95,6 +95,7 @@ public class BuiltInSkillProvider : IStaticNodeProvider
             Instructions = string.IsNullOrWhiteSpace(body) ? null : body,
             AutoMount = fm.AutoMount,
             LaunchesSubThread = fm.LaunchesSubThread,
+            Harness = fm.Harness,
             Action = fm.Action is null ? null : new SkillAction
             {
                 Kind = Enum.TryParse<SkillActionKind>(fm.Action.Kind, ignoreCase: true, out var kind)
@@ -137,6 +138,7 @@ public class BuiltInSkillProvider : IStaticNodeProvider
         public int Order { get; set; }
         public bool AutoMount { get; set; } = true;
         public bool LaunchesSubThread { get; set; }
+        public string? Harness { get; set; }
         public SkillActionFrontMatter? Action { get; set; }
     }
 

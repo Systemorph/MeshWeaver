@@ -149,6 +149,16 @@ public record SkillDefinition
     /// in) rather than running inline in the current thread. Default <c>false</c>.
     /// </summary>
     public bool LaunchesSubThread { get; init; } = false;
+
+    /// <summary>
+    /// The harness this skill belongs to — <c>null</c> = the MeshWeaver harness / applies everywhere.
+    /// This is what makes the status bar a per-harness, CLI-like control strip: the status row renders
+    /// exactly the ACTIVE harness's skills (each chip showing the current composer value, clickable into
+    /// its Pick combobox), and the <c>/</c>-menu offers them. Claude Code ships <c>/model</c> + <c>/effort</c>
+    /// (Harness = "ClaudeCode") with options it provides; Copilot ships its own; MeshWeaver keeps
+    /// <c>/agent</c> + <c>/model</c>. A skill is a value + a picker + a status chip — one concept.
+    /// </summary>
+    public string? Harness { get; init; }
 }
 
 /// <summary>
