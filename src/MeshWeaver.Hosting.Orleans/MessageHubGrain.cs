@@ -401,6 +401,11 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     {
         var staticNode = meshHub.ServiceProvider.FindStaticNode(addressPath);
         if (staticNode is null) return null;
+        // Definition-only catalog type-def: it supplies HubConfiguration BY NAME (role B — resolved
+        // in EnrichWithNodeType for the catalog's instances) but is NOT the runtime node at this
+        // path. Fall through to the path resolver / stream cache so Postgres' nodeType:NodeType
+        // partition root is served as @<Type>. See Doc/Architecture/NodeTypeCatalogs.md.
+        if (staticNode.IsDefinitionOnly) return null;
         if (staticNode.HubConfiguration is not null) return staticNode;
 
         // Instance node (NodeType = "User", "Markdown", etc.) with no

@@ -1,4 +1,4 @@
-using MeshWeaver.Markdown;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 
 namespace MeshWeaver.AI;
@@ -36,20 +36,25 @@ public sealed class HarnessStaticRepoSource(BuiltInHarnessProvider provider) : I
             .ToArray();
 
     /// <inheritdoc />
+    // The partition root is the catalog's single nodeType:NodeType node (id = the type name) —
+    // NOT a nodeType:Space root. It IS the routable partition root AND the "Harness" NodeType
+    // definition, and it LINKS (NodeTypeDefinition.StaticTypeName) to the registered static C#
+    // type "Harness" for its HubConfiguration (a non-serialisable delegate, supplied in-memory).
+    // Postgres owns this node — the sole runtime owner of @Harness — so the in-memory type-def
+    // (registered definition-only) never collides with it. See Doc/Architecture/NodeTypeCatalogs.md.
     public MeshNode? PartitionRoot => new(HarnessNodeType.RootNamespace)
     {
         Name = "Harnesses",
-        NodeType = "Space",
+        NodeType = MeshNode.NodeTypePath,
+        Icon = "/static/NodeTypeIcons/bot.svg",
         State = MeshNodeState.Active,
-        Content = new MarkdownContent
+        Content = new NodeTypeDefinition
         {
-            Content = """
-                # Harnesses
-
-                The available execution harnesses (runtimes) — MeshWeaver's native agent loop, and any
-                CLI harness (Claude Code, GitHub Copilot) whose assembly is deployed. Pick one per
-                thread with `/harness`.
-                """
+            StaticTypeName = HarnessNodeType.NodeType,
+            Description =
+                "The available execution harnesses (runtimes) — MeshWeaver's native agent loop, and "
+                + "any CLI harness (Claude Code, GitHub Copilot) whose assembly is deployed. Pick one "
+                + "per thread with `/harness`."
         }
     };
 }

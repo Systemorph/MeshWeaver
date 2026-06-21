@@ -1236,6 +1236,12 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
         // Check if this hub path corresponds to a built-in node (registered via AddMeshNodes).
         // Built-in nodes (NodeType, Markdown, Agent, etc.) are pre-loaded — no persistence needed.
         var builtInNode = Workspace.Hub.ServiceProvider.FindStaticNode(_hubPath);
+        // A definition-only static node (a DB-synced NodeType catalog's in-memory type-def) is NOT
+        // the runtime node at this path — Postgres owns the nodeType:NodeType partition root. Fall
+        // through to persistence so the PG root is served, never the colliding in-memory type-def.
+        // See Doc/Architecture/NodeTypeCatalogs.md.
+        if (builtInNode is { IsDefinitionOnly: true })
+            builtInNode = null;
         if (builtInNode is not null)
         {
             _logger?.LogDebug("[DIAG-MeshDataSource] BUILT-IN node for hubPath='{HubPath}'", _hubPath);
@@ -1248,8 +1254,10 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
         // Check static node providers (e.g., DocumentationNodeProvider, BuiltInAgentProvider)
         var allStatic = Workspace.Hub.ServiceProvider.GetServices<IStaticNodeProvider>()
             .SelectMany(p => p.GetStaticNodes()).ToList();
+        // Skip definition-only catalog type-defs here too — PG owns the runtime node at their path.
         var staticNode = allStatic
-            .FirstOrDefault(n => string.Equals(n.Path, _hubPath, StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(n => !n.IsDefinitionOnly
+                && string.Equals(n.Path, _hubPath, StringComparison.OrdinalIgnoreCase));
         _logger?.LogDebug("[DIAG-MeshDataSource] static lookup hubPath='{HubPath}', total={Total}, found={Found}",
             _hubPath, allStatic.Count, staticNode != null);
         if (staticNode != null)

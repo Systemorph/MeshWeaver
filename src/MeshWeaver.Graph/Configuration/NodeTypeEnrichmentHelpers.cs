@@ -79,6 +79,20 @@ internal static class NodeTypeEnrichmentHelpers
         if (node.HubConfiguration != null)
             return Observable.Return(node);
 
+        // Built-in / static-linked NodeType node (a NodeType-catalog partition root, e.g. @Harness):
+        // its NodeTypeDefinition content NAMES the registered static C# type whose HubConfiguration
+        // it links to. Resolve that delegate from the static registry BY NAME — NOT via this node's
+        // own NodeType ("NodeType"), which would wrongly activate the NodeType editor. This is the
+        // read half of the catalog dissociation: Postgres owns the single node at the bare path,
+        // while the in-memory (definition-only) static node supplies the non-serialisable delegate.
+        // See Doc/Architecture/NodeTypeCatalogs.md.
+        if (node.Content is NodeTypeDefinition { StaticTypeName: { Length: > 0 } linkedType })
+        {
+            var linked = meshHub.ServiceProvider.FindStaticNode(linkedType);
+            if (linked is { HubConfiguration: { } linkedCfg })
+                return Observable.Return(ApplyEntry(node, linkedCfg, linkedType, meshConfiguration));
+        }
+
         var nodeType = node.NodeType;
         if (string.IsNullOrEmpty(nodeType))
             return Observable.Return(ApplyDefaultConfig(node, meshConfiguration));

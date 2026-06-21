@@ -263,6 +263,11 @@ public static class MeshExtensions
                 if (existing == null)
                 {
                     var configNode = hub.ServiceProvider.FindStaticNode(node.Path);
+                    // A definition-only catalog type-def is NOT a real node at this path (Postgres
+                    // owns the nodeType:NodeType partition root) — it must never stand in as an
+                    // "existing" node and block creating the real PG root. See NodeTypeCatalogs.md.
+                    if (configNode is { IsDefinitionOnly: true })
+                        configNode = null;
                     if (configNode is not null)
                         return configNode;
                 }

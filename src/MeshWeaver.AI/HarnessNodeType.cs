@@ -29,14 +29,26 @@ public static class HarnessNodeType
     public static TBuilder AddHarnessType<TBuilder>(this TBuilder builder,
         IReadOnlySet<string>? serveFromPartition = null) where TBuilder : MeshBuilder
     {
-        builder.AddMeshNodes(CreateMeshNode());
-        builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         // When the "Harness" partition is DB-synced (static-repo import), DO NOT register the
         // read-only in-memory static surfaces — on the distributed/PG path queries never consult
         // the in-memory adapter, so the harness catalog would be invisible (empty picker / the
         // combobox spins). The import materializes harnesses into the partition; PG serves them.
         // Mirrors AddAgentType — see HarnessStaticRepoSource + Doc/Architecture/StaticRepoImport.md.
         var dbSynced = serveFromPartition?.Contains(RootNamespace) == true;
+
+        // The in-memory "Harness" NodeType definition. On the DB-synced path it is registered
+        // DEFINITION-ONLY: it still supplies the HubConfiguration delegate BY NAME (the catalog's
+        // instances enrich through it) and proves the type exists, but it is NOT served as the
+        // runtime node at @Harness — Postgres owns the nodeType:NodeType partition root the import
+        // materializes (HarnessStaticRepoSource.PartitionRoot). Without IsDefinitionOnly the
+        // in-memory type-def and the DB root BOTH claim @Harness → the bare-address GetDataRequest
+        // bounces → routing-loop guard fails it → ds/Harness faults → the harness picker vanishes.
+        // See Doc/Architecture/NodeTypeCatalogs.md.
+        var typeDefinition = CreateMeshNode();
+        if (dbSynced)
+            typeDefinition = typeDefinition with { IsDefinitionOnly = true };
+        builder.AddMeshNodes(typeDefinition);
+        builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         builder.ConfigureServices(services =>
         {
             // The native MeshWeaver harness ships from this assembly. CLI harnesses

@@ -248,6 +248,30 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     public Func<MessageHubConfiguration, MessageHubConfiguration>? HubConfiguration { get; init; }
 
     /// <summary>
+    /// Runtime-only marker for an in-memory static NodeType <b>definition</b> that has been
+    /// dissociated from runtime node-serving because its partition is a DB-synced
+    /// <i>NodeType catalog</i> (Harness, Agent, Skill — see
+    /// <c>Doc/Architecture/NodeTypeCatalogs.md</c>). When <c>true</c>, this node:
+    /// <list type="bullet">
+    ///   <item>is NOT served as the runtime node at its <see cref="Path"/> — Postgres owns the
+    ///     <c>nodeType:NodeType</c> partition root (the serve seams
+    ///     <c>MeshDataSource.WithMeshNodes</c> / <c>MessageHubGrain.TryResolveStaticNode</c> /
+    ///     the <c>CreateNode</c> existing-node probe skip it);</item>
+    ///   <item>is NOT returned as a query result (<c>StaticNodeQueryProvider</c> excludes it),
+    ///     so the bare partition path resolves to exactly one node;</item>
+    ///   <item>IS still consulted as a <i>definition</i> via
+    ///     <see cref="MeshWeaver.Mesh.Services.StaticNodeProviderExtensions.FindStaticNode"/> —
+    ///     it supplies <see cref="HubConfiguration"/> by type name (enrichment of the catalog's
+    ///     instances) and proves the type exists.</item>
+    /// </list>
+    /// <c>[JsonIgnore]/[NotMapped]</c>: it is never persisted (the in-memory definition node is
+    /// never written to a partition) and, like <see cref="HubConfiguration"/>, is excluded from
+    /// value equality.
+    /// </summary>
+    [JsonIgnore, NotMapped]
+    public bool IsDefinitionOnly { get; init; }
+
+    /// <summary>
     /// Pre-rendered HTML for markdown nodes.
     /// Populated at parse time for instant display during Blazor prerender phase.
     /// </summary>
