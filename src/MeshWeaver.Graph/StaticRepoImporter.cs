@@ -70,6 +70,14 @@ public static class StaticRepoImporter
         // import; the mesh hub stays free to route.
         var importHub = CreateImportHub(hub, logger);
 
+        // The partitions the COMPILED static-repo sources own this run — the only set eligible for
+        // source-owned pruning below (GitSync's ImportSource is NOT in this list and writes no marker).
+        var currentSourcePartitions = sources
+            .Select(s => s.Partition)
+            .Where(p => !string.IsNullOrEmpty(p))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
         // Establish System identity for the whole import subscription so each source's writes
         // capture it (CarryAccessContext) — disposed when the import completes.
         return Observable.Using(
@@ -85,7 +93,104 @@ public static class StaticRepoImporter
                         logger?.LogWarning(ex, "[StaticRepoImport] source {Partition} failed.", s.Partition);
                         return Observable.Return(new StaticRepoImportResult(s.Partition, string.Empty, "Failed"));
                     }))
-                .Concat());
+                .Concat()
+                // 🚨 After every source has imported, RECONCILE the source-owned catalog set: prune any
+                // partition a compiled source USED to own but no longer does (e.g. the retired `command`
+                // catalog after commands were unified into Skill). Source-owned ONLY — tracked via markers
+                // this method writes, which GitSync/user partitions never get — so user data is never
+                // touched. Guarded so a prune failure can't fail the whole import.
+                .Concat(Observable.Defer(() =>
+                    ReconcileSourceOwnedPartitions(importHub, currentSourcePartitions, logger)
+                        .Catch<StaticRepoImportResult, Exception>(ex =>
+                        {
+                            logger?.LogWarning(ex, "[StaticRepoImport] source-owned partition reconcile failed.");
+                            return Observable.Return(new StaticRepoImportResult("_SourceOwnedCatalogs", string.Empty, "Failed"));
+                        }))));
+    }
+
+    /// <summary>Namespace under the Admin partition where one marker node per source-owned catalog
+    /// partition is kept (id == partition name). The marker is the durable record that a partition was
+    /// imported by a COMPILED <see cref="IStaticRepoSource"/> — and therefore the ONLY thing the
+    /// reconcile below may prune. GitSync (<see cref="ImportSource"/>) writes no marker.</summary>
+    internal const string SourceOwnedRegistryNamespace = "Admin/_SourceOwnedCatalogs";
+
+    /// <summary>
+    /// Orphaned source-owned partitions: those <paramref name="previouslyOwned"/> (recorded by a prior
+    /// run's markers) that are no longer backed by a registered source (<paramref name="currentSources"/>).
+    /// Pure + case-insensitive so it is unit-testable without a database — the "removing partitions"
+    /// decision. A partition that is still a current source, or was never source-owned, is never returned.
+    /// </summary>
+    public static IReadOnlyList<string> ComputeOrphanedSourcePartitions(
+        IEnumerable<string> previouslyOwned, IEnumerable<string> currentSources)
+    {
+        var current = new HashSet<string>(
+            currentSources.Where(s => !string.IsNullOrEmpty(s)), StringComparer.OrdinalIgnoreCase);
+        return previouslyOwned
+            .Where(p => !string.IsNullOrEmpty(p) && !current.Contains(p))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    /// <summary>
+    /// Reconciles the source-owned catalog set: (1) reads the existing markers under
+    /// <see cref="SourceOwnedRegistryNamespace"/>, (2) DELETES every partition that is orphaned
+    /// (<see cref="ComputeOrphanedSourcePartitions"/>) — its subtree AND its marker — and (3) writes a
+    /// marker for each current source so the next run knows what it owns. Runs on the dedicated import
+    /// hub under System (so cross-partition deletes authorise). Reactive end-to-end.
+    /// </summary>
+    private static IObservable<StaticRepoImportResult> ReconcileSourceOwnedPartitions(
+        IMessageHub hub, IReadOnlyCollection<string> currentSourcePartitions, ILogger? logger)
+    {
+        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+
+        return ProvisionPartitions(hub, ["Admin"])
+            .SelectMany(_ => meshService.Query<MeshNode>(
+                    MeshQueryRequest.FromQuery($"namespace:{SourceOwnedRegistryNamespace} scope:children"))
+                .Take(1))
+            .SelectMany(change =>
+            {
+                var previouslyOwned = change.Items
+                    .Select(n => n.Id)               // marker id == partition name
+                    .Where(id => !string.IsNullOrEmpty(id))
+                    .ToArray();
+                var orphans = ComputeOrphanedSourcePartitions(previouslyOwned, currentSourcePartitions);
+
+                // Delete each orphan partition (recursive subtree) + its marker — System-scoped, guarded
+                // per-orphan so one failure doesn't abort the rest.
+                var prunes = orphans.Select(orphan =>
+                {
+                    logger?.LogInformation("[StaticRepoImport] pruning orphaned source-owned partition '{Partition}'.", orphan);
+                    return AsSystem(hub, () => meshService.DeleteNode(orphan)).Select(_ => 1)
+                        .Concat(AsSystem(hub, () => meshService.DeleteNode($"{SourceOwnedRegistryNamespace}/{orphan}")).Select(_ => 0))
+                        .Catch<int, Exception>(ex =>
+                        {
+                            logger?.LogWarning(ex, "[StaticRepoImport] prune of '{Partition}' failed (continuing).", orphan);
+                            return Observable.Return(0);
+                        });
+                });
+
+                // Ensure a marker exists for every current source partition (idempotent upsert).
+                var markers = currentSourcePartitions.Select(p =>
+                    Upsert(hub, new MeshNode(p, SourceOwnedRegistryNamespace)
+                    {
+                        NodeType = SpaceNodeTypeName,
+                        Name = p,
+                        State = MeshNodeState.Active,
+                        Content = new MarkdownContent { Content = $"Source-owned catalog marker for `{p}`." }
+                    }).Catch<int, Exception>(_ => Observable.Return(0)));
+
+                var work = prunes.Concat(markers).ToList();
+                var prunedCount = orphans.Count;
+                return (work.Count == 0 ? Observable.Return(0) : work.ToObservable().Merge(BatchSize).Sum())
+                    .Select(_ =>
+                    {
+                        logger?.LogInformation(
+                            "[StaticRepoImport] source-owned reconcile: {Pruned} pruned, {Owned} owned.",
+                            prunedCount, currentSourcePartitions.Count);
+                        return new StaticRepoImportResult("_SourceOwnedCatalogs", string.Empty,
+                            prunedCount > 0 ? "Pruned" : "Reconciled", prunedCount);
+                    });
+            });
     }
 
     /// <summary>
