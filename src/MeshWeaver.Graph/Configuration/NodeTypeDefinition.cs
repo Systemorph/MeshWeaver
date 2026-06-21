@@ -74,6 +74,23 @@ public record NodeTypeDefinition
     public string? Configuration { get; init; }
 
     /// <summary>
+    /// For a <b>built-in / static-linked</b> NodeType node — a NodeType-catalog partition root
+    /// such as <c>@Harness</c> (<c>nodeType:NodeType</c>, id = the type name) — the name of the
+    /// registered static C# NodeType whose <see cref="MeshNode.HubConfiguration"/> this node
+    /// links to. When set, enrichment resolves the node's hub configuration from the static
+    /// registry by THIS name — NOT compiled from <see cref="Configuration"/>/<see cref="Sources"/>,
+    /// and NOT via the node's own <see cref="MeshNode.NodeType"/> (which is <c>"NodeType"</c> and
+    /// would otherwise activate the NodeType editor). It is the persisted half of the
+    /// NodeType-catalog dissociation: Postgres owns the single node at the bare partition path,
+    /// while the in-memory static definition (registered definition-only — see
+    /// <see cref="MeshNode.IsDefinitionOnly"/>) still supplies the non-serialisable delegate.
+    /// <c>null</c> for ordinary NodeTypes (framework built-ins served in-memory, or dynamic types
+    /// compiled from <see cref="Configuration"/>/<see cref="Sources"/>).
+    /// See <c>Doc/Architecture/NodeTypeCatalogs.md</c>.
+    /// </summary>
+    public string? StaticTypeName { get; init; }
+
+    /// <summary>
     /// List of NodeType paths this type depends on.
     /// Used for Monaco autocomplete to include types from dependencies.
     /// Example: ["type/Person", "type/Organization"]

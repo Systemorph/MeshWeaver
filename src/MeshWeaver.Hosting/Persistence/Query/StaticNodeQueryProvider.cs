@@ -93,6 +93,11 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
 
         _providerNodes = providerList
             .SelectMany(p => p.GetStaticNodes())
+            // Definition-only nodes (a DB-synced NodeType catalog's in-memory type-def) are NOT
+            // queryable — Postgres owns the runtime node at their path. Excluding them keeps the
+            // bare partition path (e.g. path:Harness) resolving to exactly the PG nodeType:NodeType
+            // root, with no second claimant. See Doc/Architecture/NodeTypeCatalogs.md.
+            .Where(n => !n.IsDefinitionOnly)
             .Where(n => !configPaths.Contains(n.Path))
             .ToArray();
         _logger?.LogDebug(
@@ -102,7 +107,10 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
             string.Join(", ", _providerNodes.GroupBy(n => n.NodeType ?? "(null)").Select(g => $"{g.Key}={g.Count()}")),
             string.Join(", ", _providerNodes.GroupBy(n => n.Namespace ?? "(null)").OrderByDescending(g => g.Count()).Take(5).Select(g => $"{g.Key}={g.Count()}")));
 
-        _configNodes = ((meshConfiguration?.AddMeshNodesList ?? Enumerable.Empty<MeshNode>())).ToArray();
+        _configNodes = ((meshConfiguration?.AddMeshNodesList ?? Enumerable.Empty<MeshNode>()))
+            // See _providerNodes: a definition-only catalog type-def is never a query result.
+            .Where(n => !n.IsDefinitionOnly)
+            .ToArray();
 
         _allNodes = _providerNodes.Concat(_configNodes).ToArray();
 
