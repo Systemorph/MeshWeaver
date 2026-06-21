@@ -26,7 +26,7 @@ public sealed class CopilotHarness(IOptions<CopilotConfiguration> options) : IHa
         Id = Harnesses.Copilot,
         DisplayName = "GitHub Copilot",
         Description = "Runs the GitHub Copilot CLI.",
-        Icon = "/static/NodeTypeIcons/bot.svg",
+        Icon = "/static/NodeTypeIcons/copilot.svg",
         Order = 2,
         SupportsAgentSelection = false
     };

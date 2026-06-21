@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
@@ -102,10 +103,12 @@ public static class AgentPickerProjection
     // hold registry nodes, so including one in the namespace IN(...) — e.g. when the chat context resolves
     // to a rogue "login" node — fails the WHOLE query with "lacks Read permission on 'login'" and the
     // picker/autocomplete goes empty. A read-only reserved-word set (allowed static; never written).
-    private static readonly HashSet<string> ReservedPartitions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "login", "markdown", "onboarding", "welcome", "settings", "storage",
-    };
+    // ImmutableHashSet (not HashSet): a never-written constant lookup must use an immutable type so
+    // it satisfies the no-static-mutable-collection rule (NoStaticCollectionsTest / NoStaticState.md)
+    // without an allowlist entry — and the Collections Policy mandates Immutable over mutable anyway.
+    private static readonly ImmutableHashSet<string> ReservedPartitions =
+        ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase,
+            "login", "markdown", "onboarding", "welcome", "settings", "storage");
 
     /// <summary>True when <paramref name="path"/>'s partition (first segment) is a rogue/reserved ROUTE
     /// partition (login, welcome, settings, …) — never a real space, so never a valid thread or registry

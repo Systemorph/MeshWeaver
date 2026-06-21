@@ -25,7 +25,7 @@ public sealed class ClaudeCodeHarness(IOptions<ClaudeCodeConfiguration> options)
         Id = Harnesses.ClaudeCode,
         DisplayName = "Claude Code",
         Description = "Runs the Claude Code CLI (Claude Agent SDK).",
-        Icon = "/static/NodeTypeIcons/bot.svg",
+        Icon = "/static/NodeTypeIcons/claude.svg",
         Order = 1,
         SupportsAgentSelection = false
     };

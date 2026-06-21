@@ -18,7 +18,7 @@ public sealed class MeshWeaverHarness : IHarness
         Id = Harnesses.MeshWeaver,
         DisplayName = "MeshWeaver",
         Description = "MeshWeaver agents with a selectable model.",
-        Icon = "/static/NodeTypeIcons/bot.svg",
+        Icon = "/static/NodeTypeIcons/meshweaver-logo.svg",
         Order = 0,
         IsDefault = true,
         SupportsAgentSelection = true

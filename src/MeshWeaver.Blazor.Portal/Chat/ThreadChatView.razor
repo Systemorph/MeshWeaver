@@ -472,14 +472,18 @@ else
            user never leaves the conversation to authenticate a CLI harness. *@
         @if (_connectProvider is not null)
         {
-            <div class="thread-chat-widget">
+            @* Override the shared picker widget's 280px cap — the login flow (URL button + paste field +
+               Submit) needs more height. Tall max-height so it fits WITHOUT scrolling; the inner list
+               keeps overflow-y:auto as a fallback so the paste field + Submit are always reachable. *@
+            <div class="thread-chat-widget" style="max-height: min(78vh, 560px);">
                 <div class="thread-chat-widget-header">
                     <span>Log in to @_connectHarnessLabel</span>
                     <button class="thread-msg-action-btn" @onclick="CancelConnect" title="Close">&#10005;</button>
                 </div>
-                @* max-height:none/overflow:visible override the picker list's scroll cap so the paste
-                   field + Submit are never clipped (the user shouldn't have to scroll to reach Submit). *@
-                <div class="thread-chat-widget-list" style="padding:10px 12px; gap:8px; display:flex; flex-direction:column; max-height:none; overflow:visible;">
+                @* Composed with the framework's FluentStack + FluentAnchor / FluentTextField / FluentButton
+                   rather than hand-rolled flex divs + a raw <input> — one vertical stack, framework-themed. *@
+                <FluentStack Orientation="Microsoft.FluentUI.AspNetCore.Components.Orientation.Vertical" VerticalGap="10"
+                             Style="padding:12px 14px; flex:1 1 auto; min-height:0; overflow-y:auto;">
                     @switch (_connectStatus)
                     {
                         case ConnectStatus.Connected:
@@ -488,23 +492,24 @@ else
 
                         case ConnectStatus.Error err:
                             <div style="color:var(--error-foreground, #dc2626);">@err.Reason</div>
-                            <button class="thread-chat-widget-item" @onclick="@(() => StartHarnessConnect(_connectHarness!))">Try again</button>
+                            <FluentButton Appearance="FluentAppearance.Accent"
+                                          OnClick="@(() => StartHarnessConnect(_connectHarness!))">Try again</FluentButton>
                             break;
 
                         case ConnectStatus.Connecting c when !string.IsNullOrEmpty(c.Challenge.VerificationUrl):
-                            <div>1&nbsp; Open this URL and authorize:</div>
-                            <a href="@c.Challenge.VerificationUrl" target="_blank" rel="noopener"
-                               style="word-break:break-all;">@c.Challenge.VerificationUrl</a>
+                            @* A compact accent link instead of the raw OAuth URL — the full URL wraps to
+                               ~8 lines and shoves the paste field + Submit off the bottom of the widget. *@
+                            <div><strong>1</strong>&nbsp; Open the authorization page and approve:</div>
+                            <FluentAnchor Href="@c.Challenge.VerificationUrl" Target="_blank"
+                                          Appearance="FluentAppearance.Accent">Open authorization page&nbsp;↗</FluentAnchor>
                             @if (c.Challenge.RequiresPastedCode)
                             {
-                                <div>2&nbsp; Paste the code shown, then submit:</div>
-                                <input class="thread-chat-connect-input" @bind="_connectCode" @bind:event="oninput"
-                                       placeholder="Paste code" @onkeydown="OnConnectInputKeyDown"
-                                       style="width:100%; padding:6px 8px; box-sizing:border-box;" />
-                                <button class="thread-chat-widget-item"
-                                        style="background:var(--accent-fill-rest, #2563eb); color:#fff; font-weight:600; text-align:center; border-radius:6px; padding:8px 12px; border:none; cursor:pointer;"
-                                        disabled="@(_connectBusy || string.IsNullOrWhiteSpace(_connectCode))"
-                                        @onclick="SubmitConnectCode">@(_connectBusy ? "Verifying…" : "Submit code")</button>
+                                <div style="margin-top:4px;"><strong>2</strong>&nbsp; Paste the code Claude shows you, then submit:</div>
+                                <FluentTextField @bind-Value="_connectCode" Immediate="true" Placeholder="Paste code"
+                                                 @onkeydown="OnConnectInputKeyDown" Style="width:100%;" />
+                                <FluentButton Appearance="FluentAppearance.Accent" Style="width:100%;"
+                                              Disabled="@(_connectBusy || string.IsNullOrWhiteSpace(_connectCode))"
+                                              OnClick="SubmitConnectCode">@(_connectBusy ? "Verifying…" : "Submit code")</FluentButton>
                             }
                             else if (!string.IsNullOrEmpty(c.Challenge.UserCode))
                             {
@@ -517,7 +522,7 @@ else
                             <div style="color:var(--neutral-foreground-hint);">Starting login…</div>
                             break;
                     }
-                </div>
+                </FluentStack>
             </div>
         }
 
