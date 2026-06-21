@@ -110,6 +110,16 @@ Space's own skills (under `{space}/Skill`) or the user's (`{user}/Skill`) surfac
 catalog, with per-user RLS hiding another user's private skills. Drop a `nodeType:Skill` node under
 `{space}/Skill` and `/yourskill` works in that Space's chat, with zero code.
 
+### Agents proactively offer to create skills
+
+A conversational agent watches for **repetition** — the user asking for the same multi-step task more
+than once — and **proactively offers** to capture it as a `/<name>` skill (it does not wait to be asked).
+"Create a skill" means `create` a `nodeType:Skill` node with a `SkillDefinition` content (an
+`Instructions` how-to and/or an `Action`), placed under the **user's own** `{user}/Skill` (private to
+them) or the **Space's** `{space}/Skill` (shared with that Space) — the platform-wide catalog is `Skill`.
+This guidance lives in the shared agent base prompt (`AgentChatClient`); the agent reads the
+`SkillDefinition` shape from this page.
+
 ---
 
 ## Other behaviours
