@@ -283,25 +283,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         // restores the subscribing user's identity instead of posting a null AccessContext
         // that the never-null PostPipeline guard would fail closed (the storm).
         var capturedContext = CaptureCallerAccessContext(hub) ?? _creationContext;
-        if (capturedContext is not null)
-        {
-            hub.Post(
-                new UpdateStreamRequest(update, exceptionCallback),
-                opt => opt.WithAccessContext(capturedContext));
-            return;
-        }
-        // No caller context survived to here: the live AsyncLocal was lost on the Rx hop AND
-        // the stream was created cold (no real-user creation context). This is the COLD-START
-        // case — e.g. the first cross-hub write into a freshly-activated owner. The data-source
-        // sync write is INFRASTRUCTURE; the user's access was already enforced upstream at the
-        // PatchDataRequest boundary, so post as System rather than posting a NULL AccessContext
-        // that the never-null PostPipeline guard fails closed — that fail-closed was the
-        // cold-start submit deadlock ("AccessContext must never be null … message=UpdateStreamRequest").
-        // Sanctioned infra fallback per AccessContextPropagation.md. (Warm streams never reach here:
-        // _creationContext carries the creating user.)
-        var accessService = hub.ServiceProvider.GetService<AccessService>();
-        using (accessService?.ImpersonateAsSystem())
-            hub.Post(new UpdateStreamRequest(update, exceptionCallback));
+        hub.Post(
+            new UpdateStreamRequest(update, exceptionCallback),
+            opt => capturedContext is null ? opt : opt.WithAccessContext(capturedContext));
     }
 
     /// <summary>
