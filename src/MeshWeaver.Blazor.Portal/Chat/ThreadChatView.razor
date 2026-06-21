@@ -472,10 +472,9 @@ else
            user never leaves the conversation to authenticate a CLI harness. *@
         @if (_connectProvider is not null)
         {
-            @* Override the shared picker widget's 280px cap — the login flow (URL button + paste field +
-               Submit) needs more height. Tall max-height so it fits WITHOUT scrolling; the inner list
-               keeps overflow-y:auto as a fallback so the paste field + Submit are always reachable. *@
-            <div class="thread-chat-widget" style="max-height: min(78vh, 560px);">
+            @* Uses the shared widget's responsive max-height (min(440px, calc(100vh-180px))) so it fits
+               below the side-panel header; the inner list scrolls if the login content exceeds it. *@
+            <div class="thread-chat-widget">
                 <div class="thread-chat-widget-header">
                     <span>Log in to @_connectHarnessLabel</span>
                     <button class="thread-msg-action-btn" @onclick="CancelConnect" title="Close">&#10005;</button>

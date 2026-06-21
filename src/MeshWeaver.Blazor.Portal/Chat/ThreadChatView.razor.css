@@ -448,7 +448,11 @@
     border-radius: 8px;
     background: var(--neutral-layer-1);
     overflow: hidden;
-    max-height: 280px;
+    /* Responsive cap: never taller than the space between the side-panel header and the input,
+       so the popup (agent/model picker AND the CLI-login dialog) can't overrun the "New Thread"
+       header at the top of a short side panel. calc(100vh - 180px) ≈ viewport minus header+input+gap;
+       capped at 440px so it stays compact on a tall window. The inner list scrolls past that. */
+    max-height: min(440px, calc(100vh - 180px));
     display: flex;
     flex-direction: column;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);

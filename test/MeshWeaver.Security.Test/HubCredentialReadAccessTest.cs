@@ -36,8 +36,8 @@ public class HubCredentialReadAccessTest(ITestOutputHelper output) : MonolithMes
     [InlineData("acme/space/child", "acme/space/child", true)]  // self — hub reads its own node
     [InlineData("acme/space/child", "acme/space", true)]        // parent — sub-hub reads its parent
     [InlineData("acme/space/child", "acme", true)]              // partition root (ancestor)
+    [InlineData("acme/space/child", "acme/space/child/leaf", true)]  // descendant — hub reads its own subtree
     [InlineData("acme/space/child", "acme/other", false)]       // sibling subtree — denied
-    [InlineData("acme/space/child", "acme/space/child/leaf", false)] // descendant — denied
     [InlineData("acme/space/child", "beta", false)]             // unrelated partition — denied
     [InlineData("acme/space/child", "", false)]                 // mesh root — denied
     public async Task HubCredential_ReadsSelfAndAncestors_NotSiblings(
