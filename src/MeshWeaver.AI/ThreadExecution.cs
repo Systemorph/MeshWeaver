@@ -358,6 +358,7 @@ internal static class ThreadExecution
         var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
         var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         var workspace = hub.GetWorkspace();
+        var accessService = hub.ServiceProvider.GetService<MeshWeaver.Messaging.AccessService>();
         var threadPath = hub.Address.Path;
 
         // Self-healing recovery. The prior one-shot Take(1).Timeout(15s) SILENTLY
@@ -393,6 +394,14 @@ internal static class ThreadExecution
                 {
                     if (node?.Content is not MeshThread thread)
                         return;
+
+                    // 🚨 Forcibly run EVERY recovery write below under the thread OWNER's identity
+                    // (mirrors ExecRoundWatcher's FromNode scope). The reset / cancel / resume writes
+                    // drive an UpdateStreamRequest from the sync hub on a context-less re-establish
+                    // continuation; without this they post a null AccessContext → the never-null guard
+                    // fails them → a DeliveryFailure storm that faults the observation → it re-establishes
+                    // in a tight loop ("[ThreadExec] Init observation faulted for Thread — re-establishing").
+                    using var recoveryScope = MeshWeaver.Mesh.Security.AccessContextScope.FromNode(node, accessService, logger);
 
                     // (1) Honor a cancel that was requested before the hub died,
                     //     before looking at Status.
