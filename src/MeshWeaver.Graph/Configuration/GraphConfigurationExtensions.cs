@@ -125,7 +125,14 @@ public static class GraphConfigurationExtensions
             // LinkedInProfile_NodeType_CompilesAndRendersOverview.
             builder.ConfigureDefaultNodeHub(config => config
                 .WithGraphTypes()
-                .AddDefaultLayoutAreas());
+                .AddDefaultLayoutAreas()
+                // Owner-injection at the sync chokepoint: lets SynchronizationStream.Update resolve the
+                // node OWNER (CreatedBy) from the node already in its Current when no live/creation
+                // context survives — the cold-start FIRST-write race (the owning hub establishes its
+                // standing identity asynchronously). Per-node hub so Host.ServiceProvider has it.
+                .WithServices(services => services
+                    .AddSingleton<MeshWeaver.Data.Serialization.IStreamOwnerResolver,
+                        MeshNodeStreamOwnerResolver>()));
 
             // Seed the built-in NodeCopy + Mirror script templates as Code MeshNodes
             // at Templates/Import/{NodeCopy,Mirror}. ImportLayoutArea fires
