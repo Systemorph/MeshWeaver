@@ -460,14 +460,16 @@ internal static class PermissionEvaluator
 
     /// <summary>
     /// True when <paramref name="hubAddress"/> may Read <paramref name="scope"/> as a hub
-    /// credential: the scope is the hub's OWN path or an ANCESTOR of it (the EntityStore
-    /// self-sync + a sub-hub reading its parent/owner). Siblings, descendants, and the empty
-    /// (mesh) root are NOT readable — a hub only syncs up its own chain.
+    /// credential: the scope lies on the hub's OWN VERTICAL CHAIN — the hub's path itself, an
+    /// ANCESTOR of it (EntityStore self-sync + a sub-hub reading its parent/owner), or a
+    /// DESCENDANT of it (the hub reading its own subtree: child cells, satellites). SIBLINGS and
+    /// the empty (mesh) root are NOT readable — a hub never reaches sideways out of its own chain.
     /// </summary>
     private static bool IsHubReadableScope(string hubAddress, string scope)
         => !string.IsNullOrEmpty(scope)
             && (string.Equals(hubAddress, scope, StringComparison.Ordinal)
-                || hubAddress.StartsWith(scope + "/", StringComparison.Ordinal));
+                || hubAddress.StartsWith(scope + "/", StringComparison.Ordinal)   // scope is an ancestor of the hub
+                || scope.StartsWith(hubAddress + "/", StringComparison.Ordinal));  // scope is a descendant of the hub
 
     private static (ImmutableDictionary<string, ImmutableHashSet<string>> Granted,
                     ImmutableDictionary<string, ImmutableHashSet<string>> Denied) ComputeScopeRoles(
