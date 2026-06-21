@@ -186,6 +186,43 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
                                     {
                                         Logger.LogError(ex, "Error scheduling bound property update in Area {area}", Area);
                                     }
+                                },
+                                // 🚨 A bound stream that FAULTS must be SURFACED, never swallowed: a
+                                // Subscribe with no onError leaves the fault unobserved, the property
+                                // never gets a value, and the control spins forever — the "gui is just
+                                // hanging" symptom (atioz 2026-06-21, when the data stream OnError'd from
+                                // the AccessContext storm). Mirror the node-bound branch above: log it,
+                                // then render the DEFAULT value on the UI thread so the control draws
+                                // (empty/zeroed) instead of hanging. ObjectDisposedException is a benign
+                                // teardown artifact (navigation / component swap) — Debug, not surfaced.
+                                ex =>
+                                {
+                                    if (_viewDisposed || ex is ObjectDisposedException)
+                                    {
+                                        Logger.LogDebug(ex, "Suppressed teardown error binding '{pointer}' in Area {area}", reference.Pointer, Area);
+                                        return;
+                                    }
+                                    Logger.LogWarning(ex,
+                                        "Data binding for '{pointer}' in Area {area} faulted — rendering default so the control does not hang",
+                                        reference.Pointer, Area);
+                                    try
+                                    {
+                                        InvokeAsync(() =>
+                                        {
+                                            if (_viewDisposed) return;
+                                            try
+                                            {
+                                                setter(Hub.ConvertSingle(null, conversion, defaultValue));
+                                                RequestStateChange();
+                                            }
+                                            catch (ObjectDisposedException) { /* renderer gone */ }
+                                            catch (Exception inner)
+                                            {
+                                                Logger.LogError(inner, "Error setting default after binding fault in Area {area}", Area);
+                                            }
+                                        });
+                                    }
+                                    catch (ObjectDisposedException) { /* renderer gone */ }
                                 }
                             )
                         );
