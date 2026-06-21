@@ -207,6 +207,44 @@ public class PartitionRootBootstrapTest(ITestOutputHelper output) : MonolithMesh
     }
 
     [Fact]
+    public async Task MainNode_StaleSelfDefaultAfterRebase_IsRepairedToPath_OnCreate_NoPhantomPartition()
+    {
+        const string partition = "BootstrapMainNode";
+
+        // Reproduce the construction bug behind the atioz 42P01: a node first built BARE
+        // (`new MeshNode("Datenextraktion")` → MainNode = "Datenextraktion") and only LATER given a
+        // namespace via `with { … }`. Path is computed (follows the rebase) but MainNode is a STORED
+        // property and stays the stale bare id. Persisted, that bare value flows
+        // Node.MainNode → NavigationContext.PrimaryPath → CurrentNamespace → the chat composer's
+        // StartThread namespace → a thread under the NON-EXISTENT "Datenextraktion" partition → 42P01.
+        var buggy = new MeshNode("Datenextraktion") with
+        {
+            Namespace = $"{partition}/Sub",
+            Name = "Datenextraktion",
+            NodeType = "Markdown",   // a MAIN (non-satellite) type
+            State = MeshNodeState.Active
+        };
+        buggy.Path.Should().Be($"{partition}/Sub/Datenextraktion");
+        buggy.MainNode.Should().Be("Datenextraktion",
+            "pre-condition: the stored MainNode did NOT follow the with{Namespace} rebase — the bug under test");
+
+        await MeshService.CreateNode(buggy).Should().Within(30.Seconds()).Emit();
+
+        // The create handler re-stamps a stale self-default MainNode to the node's real Path, so a
+        // main node is never persisted pointing at a phantom partition.
+        var read = await ReadStorage(buggy.Path);
+        read.Should().NotBeNull();
+        read!.MainNode.Should().Be(read.Path);
+        read.MainNode.Should().Be($"{partition}/Sub/Datenextraktion",
+            "a main node's MainNode must equal its own Path after a namespace rebase");
+
+        // The bare short id was NEVER bootstrapped as a top-level partition — that bootstrap is the
+        // symptom (it reacts to a `Datenextraktion/…` create); fixing the MainNode upstream avoids it.
+        (await ReadStorage("Datenextraktion")).Should().BeNull(
+            "the bare short id must never become a partition root");
+    }
+
+    [Fact]
     public async Task ConcurrentFirstWrites_BothSucceed_OneRootOneGrant()
     {
         const string partition = "BootstrapConcurrent";

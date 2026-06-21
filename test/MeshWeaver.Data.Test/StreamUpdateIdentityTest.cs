@@ -119,6 +119,102 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     /// <summary>
+    /// THE central fix: a stream's <c>Update(...)</c> invoked from a DEFERRED/CONTINUATION
+    /// path — where the live AsyncLocal AccessContext has gone null (a layout-area render
+    /// emission, a watcher tick, an agent streaming hop) — must still post the
+    /// <c>UpdateStreamRequest</c> with the SUBSCRIBING USER's identity, restored from the
+    /// context captured when the stream was created on the user's thread. Without it the
+    /// post carried a null AccessContext, which the never-null PostPipeline guard fails
+    /// closed → the systemic "hub=sync/… message=UpdateStreamRequest … no AccessContext"
+    /// DeliveryFailure storm (the AgenticPension layout-area / thread-path wedge).
+    /// </summary>
+    [HubFact]
+    public async Task StreamUpdate_FromContinuationWithNullLiveContext_RestoresCreationContext()
+    {
+        // USER posting identity so the never-null guard actually engages: if the creation
+        // context were NOT restored, the null-context post would fail closed and the
+        // delegate would never run — making this a meaningful regression guard.
+        var host = GetHost(c => ConfigureHost(c).WithPostingIdentity(PostingIdentity.User));
+        var workspace = host.GetWorkspace();
+        var accessService = host.ServiceProvider.GetRequiredService<AccessService>();
+
+        var collectionName = workspace.DataContext.GetTypeSource(typeof(MyData))!.CollectionName;
+
+        // The stream is CREATED while the real subscribing user's context is set — this is
+        // the circuit / SubscribeRequest-handler thread in production.
+        accessService.SetContext(new AccessContext { ObjectId = "alice", Name = "Alice" });
+        var stream = workspace.GetStream(new CollectionsReference(collectionName))!;
+
+        // Now simulate the deferred/continuation Update: the live AsyncLocal is wiped (the
+        // render emission / watcher / streaming-hop runs on a scheduler thread).
+        accessService.SetContext(null);
+        accessService.SetCircuitContext(null);
+
+        var seen = new System.Reactive.Subjects.ReplaySubject<string?>();
+        stream.Update(_ =>
+        {
+            seen.OnNext(accessService.Context?.ObjectId);
+            return (ChangeItem<EntityStore>?)null;
+        }, _ => { });
+
+        var aliceSeen = await seen
+            .Should().Within(5.Seconds())
+            .Match(id => id == "alice");
+
+        aliceSeen.Should().Be(
+            "alice",
+            "a continuation Update whose live AsyncLocal is null must restore the captured " +
+            "creation-context (the subscribing user) — never post a null AccessContext that " +
+            "the never-null guard fails closed");
+    }
+
+    /// <summary>
+    /// Guard for the captured creation-context: a stream CREATED under a hub-shaped
+    /// principal (sync/…, the leak the user explicitly banned) must NOT capture it. So when
+    /// a later continuation Update has a null live context, there is nothing legitimate to
+    /// restore and the never-null guard fails closed — the delegate never runs with a
+    /// faked hub-self identity. (Capturing the hub address would re-introduce the
+    /// "CreatedBy=sync/xxx" leak.)
+    /// </summary>
+    [HubFact]
+    public async Task StreamCreatedUnderHubPrincipal_DoesNotCaptureItAsCreationContext()
+    {
+        var host = GetHost(c => ConfigureHost(c).WithPostingIdentity(PostingIdentity.User));
+        var workspace = host.GetWorkspace();
+        var accessService = host.ServiceProvider.GetRequiredService<AccessService>();
+
+        var collectionName = workspace.DataContext.GetTypeSource(typeof(MyData))!.CollectionName;
+
+        // Create the stream while a HUB-shaped principal is ambient — must NOT be captured.
+        accessService.SetContext(new AccessContext
+        {
+            ObjectId = "sync/should-never-be-captured",
+            Name = "sync-hub",
+            IsHub = true
+        });
+        var stream = workspace.GetStream(new CollectionsReference(collectionName))!;
+
+        // Continuation with a null live context — there is no real user to restore.
+        accessService.SetContext(null);
+        accessService.SetCircuitContext(null);
+
+        var delegateRan = false;
+        stream.Update(_ =>
+        {
+            delegateRan = true;
+            return (ChangeItem<EntityStore>?)null;
+        }, _ => { });
+
+        // Sanctioned fixed wait: a "confirm nothing happened" negative test — there is no
+        // positive signal to filter for. The hub-principal creation context must have been
+        // rejected, so the null-context post fails closed and the delegate never runs.
+        await Task.Delay(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+        delegateRan.Should().BeFalse(
+            "a hub-shaped creation principal must never be captured as the creation-context; " +
+            "with no real user to restore, the never-null guard fails the delivery closed");
+    }
+
+    /// <summary>
     /// The agent's streaming loop iterates a chat client's response via
     /// <c>await foreach</c>. Inside that loop body, the agent posts node-update
     /// messages (tool-call results, content chunks). Each of those posts must

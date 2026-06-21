@@ -318,6 +318,28 @@ public static class MeshExtensions
                 {
                     node = node with { MainNode = node.Namespace };
                 }
+                // 1b'. Repair a STALE BARE-ID self-default MainNode on a MAIN (non-satellite) node.
+                // MainNode is a STORED property: unlike the computed Path/Segments it does NOT follow
+                // a `with { Namespace = … }` rebase. A node first built BARE
+                // (`new MeshNode("Datenextraktion")` → MainNode defaults to the bare Id
+                // "Datenextraktion") and only LATER given a namespace keeps that stale bare MainNode
+                // while its Path becomes the full path. Persisted, the bare value flows
+                // Node.MainNode → NavigationContext.PrimaryPath → NavigationService.CurrentNamespace →
+                // the chat composer's StartThread namespace → a thread created under the NON-EXISTENT
+                // "Datenextraktion" partition (the agent's short id) → Postgres 42P01
+                // (`relation "datenextraktion.mesh_nodes" does not exist`). Re-stamp it to the node's
+                // real Path so a main node is never persisted pointing at a phantom partition.
+                // Trigger is deliberately the EXACT bug shape — MainNode == the bare Id on a namespaced
+                // node — NOT a blanket `MainNode != Path`: a non-satellite node may legitimately point
+                // MainNode at a PARENT path (e.g. GitHubSyncConfig's `MainNode = spacePath`), which is
+                // never equal to its own Id and so is left untouched. Satellites are handled in 1b.
+                else if (!string.IsNullOrEmpty(node.NodeType)
+                    && !string.IsNullOrEmpty(node.Namespace)
+                    && !meshConfig.IsSatelliteNodeType(node.NodeType)
+                    && node.MainNode == node.Id)
+                {
+                    node = node with { MainNode = node.Path };
+                }
 
                 // 1c. SELF-HEALING PARTITION BOOTSTRAP. Ensure the partition's Space root +
                 //     creator grant exist BEFORE the requested child is validated/persisted.
