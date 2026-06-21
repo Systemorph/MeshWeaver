@@ -139,7 +139,14 @@ public class NodeTypeReleaseGateTest(ITestOutputHelper output) : MonolithMeshTes
                 && d.CompilationStatus == CompilationStatus.Ok);
 
         // As the Viewer (no Compile), request a release. The entry point must refuse cleanly.
-        var refusals = new Subject<string>();
+        // 🚨 ReplaySubject(1), NOT Subject: RequestNodeTypeRelease's permission check can fire
+        // onError SYNCHRONOUSLY (re-entrant, inside the call below) when the effective-permission
+        // is already cached — e.g. warmed by the preceding compile's RLS reads. A plain Subject
+        // would drop that synchronous OnNext (no subscriber until FirstAsync subscribes on the next
+        // line), so refusals.FirstAsync().ToTask() would wait forever → 2-core "deadlock"/timeout.
+        // ReplaySubject(1) buffers the refusal so the later FirstAsync observes it regardless of
+        // whether the gate answered synchronously (warm cache) or asynchronously (cold).
+        var refusals = new ReplaySubject<string>(1);
         using (Access.SwitchAccessContext(new AccessContext { ObjectId = "rel-viewer", Name = "rel-viewer" }))
             Mesh.RequestNodeTypeRelease(typePath, force: true, onError: e => refusals.OnNext(e));
 
