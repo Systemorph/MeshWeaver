@@ -4,6 +4,7 @@ using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data;
@@ -47,6 +48,22 @@ public record VirtualDataSource(object Id, IWorkspace Workspace)
     {
         var stream = base.SetupDataSourceStream(identity, config);
 
+        // 🚨 The GetStreamUpdates emissions below land on the UPSTREAM provider's scheduler —
+        // a SyncedQueryMeshNodes query-result hop, a derived-data CombineLatest, a timer —
+        // where the per-request AsyncLocal AccessContext is WIPED (it does not flow across an
+        // Rx scheduler boundary). Writing the data source's OWN computed snapshot into its OWN
+        // local mirror stream is INFRASTRUCTURE: the data is already RLS-filtered at the query
+        // layer (SyncedQueryMeshNodes runs per-user) or is derived framework data, and per-user
+        // enforcement is re-applied at the CONSUMER (SyncedQueryDataSourceExtensions.WrapWithPerUserRls).
+        // Without an explicit identity the stream.Update below posts an UpdateStreamRequest with a
+        // NULL AccessContext and the PostPipeline never-null guard fails it CLOSED → a
+        // DeliveryFailure storm (atioz 2026-06-21: ds/Skill at ~3/sec, OnError-ing the typed
+        // content stream so the bound area hangs). Stamp System on these writes — the SAME rule and
+        // fix as the resubscribe in JsonSynchronizationStream and the stale-patch refresh in
+        // SynchronizationStream. (System on this WRITE does not collapse per-user READS the way the
+        // 88764f803 subscribe-path regression did — reads stay filtered at the consumer.)
+        var accessService = Workspace.Hub.ServiceProvider.GetService<AccessService>();
+
         // Subscribe to each virtual type source's stream updates to propagate changes
         foreach (var typeSource in TypeSources.Values)
         {
@@ -69,14 +86,16 @@ public record VirtualDataSource(object Id, IWorkspace Workspace)
                             GetKey = typeSource.TypeDefinition.GetKey
                         };
 
-                        // Update the stream with the new collection
-                        stream.Update(store =>
-                        {
-                            var newStore = (store ?? new EntityStore())
-                                .WithCollection(typeSource.CollectionName, collection);
-                            return (ChangeItem<EntityStore>?)
-                                new ChangeItem<EntityStore>(newStore, Id.ToString()!, stream.StreamId, ChangeType.Full, stream.Hub.Version, []);
-                        }, _ => { });
+                        // Update the stream with the new collection — under System identity so the
+                        // post is never null-AccessContext on a background scheduler hop (see above).
+                        using (accessService?.ImpersonateAsSystem())
+                            stream.Update(store =>
+                            {
+                                var newStore = (store ?? new EntityStore())
+                                    .WithCollection(typeSource.CollectionName, collection);
+                                return (ChangeItem<EntityStore>?)
+                                    new ChangeItem<EntityStore>(newStore, Id.ToString()!, stream.StreamId, ChangeType.Full, stream.Hub.Version, []);
+                            }, _ => { });
                     })
             );
         }
