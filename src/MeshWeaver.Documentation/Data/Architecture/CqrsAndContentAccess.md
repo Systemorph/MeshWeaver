@@ -330,7 +330,10 @@ If you find yourself reading `MeshNode.Content` out of a one-shot `meshService.Q
 
 Revocation propagates within the TTL window. The permission cache is not invalidated reactively — subscribers can keep listening past a revocation event for up to 30 s before the next `GetStream` issues a fresh probe and surfaces the denial.
 
-Full propagation model: [AccessContextPropagation.md](/Doc/Architecture/AccessContextPropagation).
+Full propagation model: [AccessContextPropagation.md](/Doc/Architecture/AccessContextPropagation). For the
+case where a node's OWN hub writes with no live caller (a watcher tick, a deferred sync write, a
+cold-start activation), the node **owner** is the standing identity — see
+[Owner Injection](/Doc/Architecture/OwnerInjection) (and why an empty context is rejected, never faked).
 
 ---
 

@@ -48,6 +48,12 @@ If you find yourself reaching for `Cancel<X>Request`, `Pause<X>Request`, `Retry<
 >
 > The activity hub is the **execution sandbox**: created by the owner when work starts, holding the work's state in its own `ActivityLog` MeshNode, and writing results back to the owner via the synchronization protocol when done. The owner stays responsive throughout — watching its own MeshNode for updates while serving all other traffic.
 
+> 🔑 **Identity:** the activity hub acts under the **activity owner** (the node's `CreatedBy`) for every
+> context-less write — status flips, progress, the terminal write-back over the sync protocol. The owner
+> is injected on the hub and carried forward via `CircuitContext` (a deferred sync write whose live
+> `AsyncLocal` is gone still resolves the owner, never a null context). See
+> [Owner Injection](/Doc/Architecture/OwnerInjection).
+
 ---
 
 ## Why this is the default
