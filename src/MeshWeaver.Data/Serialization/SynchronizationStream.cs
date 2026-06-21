@@ -283,6 +283,23 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         // restores the subscribing user's identity instead of posting a null AccessContext
         // that the never-null PostPipeline guard would fail closed (the storm).
         var capturedContext = CaptureCallerAccessContext(hub) ?? _creationContext;
+        if (capturedContext is null)
+        {
+            // Owner-injection fallback at the chokepoint. The live AsyncLocal is gone (a deferred /
+            // cross-hub continuation) AND the construction-time capture (_creationContext) was null —
+            // the stream was built before its OWNING hub established a standing identity (the
+            // cold-activation race: SetThreadHubIdentity / the per-node owner identity resolves the
+            // owner ASYNC, after the stream ctor ran, so the ctor's CaptureRealUserContext(Host) saw
+            // nothing). Re-capture from Host at WRITE time: by the time a real write happens the owning
+            // per-node hub carries its OWNER as its standing CircuitContext, so Host now yields it.
+            // Cache it back so later writes skip the lookup. Real-user ONLY (CaptureRealUserContext
+            // refuses null / IsHub / hub-shaped / system), so a hub/system Host still yields null and
+            // the never-null PostPipeline guard fails the write closed — the
+            // StreamUpdate_WithoutAsyncLocalIdentity_FailsClosed invariant holds. This carries the owner
+            // across the async boundary that previously dropped it (the CI-only deferred owner-side sync
+            // write — InboxToolIntegrationTest.Cancel and similar).
+            capturedContext = _creationContext = CaptureRealUserContext(Host);
+        }
         hub.Post(
             new UpdateStreamRequest(update, exceptionCallback),
             opt => capturedContext is null ? opt : opt.WithAccessContext(capturedContext));
