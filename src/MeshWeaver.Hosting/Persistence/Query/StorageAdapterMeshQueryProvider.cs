@@ -219,11 +219,12 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
 
                 // Partition roots (the auto-provisioned Space node at namespace="") are STRUCTURAL
                 // partition containers, not content — and abac5dec2 stamps them with a current
-                // LastModified, so they would otherwise dominate recency sorts (is:main
-                // scope:descendants sort:LastModified-desc) and show up under exact partition-path
-                // reads. Drop them from content queries; a query that explicitly targets the root
-                // type (nodeType:Space) still gets them.
-                if (!QueryTargetsPartitionRoot(parsedQuery))
+                // LastModified, so they would otherwise dominate broad recency/listing sweeps
+                // (is:main scope:descendants sort:LastModified-desc). Drop them from BROAD (non-Exact)
+                // scope queries. An EXACT path read (path:Globex) still returns the node at that path
+                // — a Space you asked for by exact path is yours to read — as does an explicit
+                // nodeType:Space query.
+                if (parsedQuery.Scope != QueryScope.Exact && !QueryTargetsPartitionRoot(parsedQuery))
                     matchedNodes = matchedNodes.Where(n => n is not MeshNode mn || !IsPartitionRoot(mn));
 
                 IEnumerable<object> sorted = matchedNodes;

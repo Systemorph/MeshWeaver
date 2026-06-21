@@ -195,13 +195,17 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_EmptyQuery_ReturnsAllAtPath()
     {
         var p = P();
-        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/laptop") with { Name = "Laptop", NodeType = "Markdown" }).Should().Emit();
-        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/phone") with { Name = "Phone", NodeType = "Markdown" }).Should().Emit();
+        // Use a deeper prefix: the FIRST-segment partition root ({p}) is auto-provisioned as a
+        // Space node, so `path:{p}` exact now legitimately returns it. The INTERMEDIATE namespace
+        // `{p}/sub` is NOT a node (only its children + the partition root are), so it's the right
+        // shape to assert "exact path of a namespace-prefix-with-no-node returns empty".
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/sub/laptop") with { Name = "Laptop", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/sub/phone") with { Name = "Phone", NodeType = "Markdown" }).Should().Emit();
         await NodeFactory.CreateNode(MeshNode.FromPath("other_empty/chair") with { Name = "Chair", NodeType = "Markdown" }).Should().Emit();
 
-        var results = await QueryNodes(MeshQueryRequest.FromQuery($"path:{p}"));
+        var results = await QueryNodes(MeshQueryRequest.FromQuery($"path:{p}/sub"));
 
-        // p node doesn't exist as a standalone node, so empty result for exact path
+        // {p}/sub doesn't exist as a standalone node, so empty result for exact path
         results.Should().BeEmpty();
     }
 
