@@ -153,7 +153,10 @@ public static class AccessControlPipeline
                             decided = true;
                             var effectiveUser = userId ?? "(anonymous)";
                             var message = $"Access denied: user '{effectiveUser}' lacks {result.Check.Permission} permission on '{result.Check.Path}'";
-                            logger?.LogWarning("AccessControlPipeline: {Message}", message);
+                            // Include the triggering message + sender so a denial on a rogue/reserved path
+                            // (e.g. 'login') names its caller instead of being an unattributable warning.
+                            logger?.LogWarning("AccessControlPipeline: {Message} (triggered by message={MessageType} sender={Sender} hub={Hub})",
+                                message, delivery.Message.GetType().Name, delivery.Sender, hub.Address);
 
                             hub.Post(
                                 new DeliveryFailure(delivery)
