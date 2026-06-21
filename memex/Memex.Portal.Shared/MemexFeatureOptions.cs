@@ -28,6 +28,13 @@ public sealed record MemexFeatureOptions
     public OrleansFeatureOptions Orleans { get; init; } = new();
 
     /// <summary>
+    /// SignalR mesh transport (<c>/signalr</c>) for external participants — native clients, and a
+    /// future native iOS portal. On by default (like the other flags); an operator can close the
+    /// connection surface with <c>Features:SignalR=false</c>. See Doc/Architecture/SignalRMeshParticipant.
+    /// </summary>
+    public bool SignalR { get; init; } = true;
+
+    /// <summary>
     /// True when the deployment ships at least one in-process API provider OR one
     /// co-hosted CLI. When false, the portal has no built-in chat capability via
     /// catalog sources (users may still bring their own keys via ModelProviders) —

@@ -63,6 +63,7 @@
     <Project Path="src/MeshWeaver.ContentCollections/MeshWeaver.ContentCollections.csproj" />
     <Project Path="src/MeshWeaver.ContentCollections.Indexing/MeshWeaver.ContentCollections.Indexing.csproj" />
     <Project Path="src/MeshWeaver.ContentCollections.Indexing.PostgreSql/MeshWeaver.ContentCollections.Indexing.PostgreSql.csproj" />
+    <Project Path="src/MeshWeaver.Connection.SignalR/MeshWeaver.Connection.SignalR.csproj" />
     <Project Path="src/MeshWeaver.ContentCollections.Indexing.Graph/MeshWeaver.ContentCollections.Indexing.Graph.csproj" />
     <Project Path="src/MeshWeaver.Data.Contract/MeshWeaver.Data.Contract.csproj" />
     <Project Path="src/MeshWeaver.Data/MeshWeaver.Data.csproj" />
@@ -88,6 +89,7 @@
     <Project Path="src/MeshWeaver.Hosting.AzureStorage/MeshWeaver.Hosting.AzureStorage.csproj" />
     <Project Path="src/MeshWeaver.Hosting.Cosmos/MeshWeaver.Hosting.Cosmos.csproj" />
     <Project Path="src/MeshWeaver.Hosting.PostgreSql/MeshWeaver.Hosting.PostgreSql.csproj" />
+    <Project Path="src/MeshWeaver.Hosting.SignalR/MeshWeaver.Hosting.SignalR.csproj" />
     <Project Path="src/MeshWeaver.Hosting/MeshWeaver.Hosting.csproj" />
     <Project Path="src/MeshWeaver.Import/MeshWeaver.Import.csproj" />
     <Project Path="src/MeshWeaver.Kernel.Hub/MeshWeaver.Kernel.Hub.csproj" />

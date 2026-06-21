@@ -17,6 +17,7 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.AzureBlob\MeshWeaver.Hosting.AzureBlob.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Blazor\MeshWeaver.Hosting.Blazor.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.SignalR\MeshWeaver.Hosting.SignalR.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />
     <!-- Content → vector index (core tech): chunk/embed/store on a separate Postgres vector DB,
