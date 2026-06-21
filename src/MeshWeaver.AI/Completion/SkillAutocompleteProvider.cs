@@ -39,11 +39,29 @@ public class SkillAutocompleteProvider : IAutocompleteProvider
 
         // nodeType:Skill catalog with inheritance — cached by queryId so per-keystroke calls reuse the
         // same shared subscription. Built-in skills are served live under the Skill partition; any
-        // Space/NodeType/user-defined skill comes from the inherited scopes.
-        var queries = SkillNodeType.SkillQueries(contextPath, null);
-        return AgentPickerProjection.ObserveSnapshot(workspace, hub, $"skill-autocomplete|{contextPath}", queries)
+        // Space/NodeType/user-defined skill comes from the inherited scopes — INCLUDING the chatting
+        // user's own {user}/Skill (derived from the hub identity), so a user's personal skills appear
+        // alongside the space's and the platform's. Cache key includes the user so the per-user
+        // subscription isn't shared across identities.
+        var accessService = _serviceProvider.GetService<AccessService>();
+        var userHome = AgentPickerProjection.ResolveUserHome(accessService);
+        var queries = BuildQueries(accessService, contextPath);
+        return AgentPickerProjection.ObserveSnapshot(
+                workspace, hub, $"skill-autocomplete|{contextPath}|{userHome}", queries)
             .Select(snapshot => BuildItems(snapshot, hub));
     }
+
+    /// <summary>
+    /// The skill-autocomplete query union: the platform <c>Skill</c> catalog plus the current space's
+    /// <c>{space}/Skill</c> and the chatting user's <c>{user}/Skill</c> (derived from
+    /// <paramref name="accessService"/> via <see cref="AgentPickerProjection.ResolveUserHome"/>), as one
+    /// <c>namespace:A|B|C nodeType:Skill</c> exact-membership query with reserved partitions filtered —
+    /// IDENTICAL inheritance to the agent / model registry. Extracted as a pure method so the union is
+    /// unit-testable without a mesh (see <c>AgentPickerQueriesTest</c>). Was the bug: the provider passed
+    /// a null userPath, so a user's OWN skills never appeared in autocomplete.
+    /// </summary>
+    internal static string[] BuildQueries(AccessService? accessService, string? contextPath)
+        => SkillNodeType.SkillQueries(contextPath, AgentPickerProjection.ResolveUserHome(accessService));
 
     private static IReadOnlyCollection<AutocompleteItem> BuildItems(IEnumerable<MeshNode> snapshot, IMessageHub? hub)
     {

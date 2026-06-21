@@ -3,8 +3,10 @@
 using System;
 using System.Linq;
 using MeshWeaver.AI;
+using MeshWeaver.AI.Completion;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Xunit;
 
 namespace MeshWeaver.AI.Test;
@@ -253,5 +255,98 @@ public class AgentPickerQueriesTest
         // behaviour so existing (non-user-scoped) callers are unaffected.
         var queries = AgentPickerProjection.BuildModelQueries();
         queries.Should().NotContain(q => q.Contains("/_Memex"));
+    }
+
+    // ─── BuildSkillQuery / SkillQueries: the chat slash-skill registry ───
+    // Skills inherit EXACTLY like agents/models: platform Skill + {space}/Skill + {user}/Skill,
+    // one namespace:A|B|C exact-membership query, reserved partitions filtered.
+
+    [Fact]
+    public void BuildSkillQuery_UserAndSpace_ListsBothPartitionsPlusPlatform()
+    {
+        AgentPickerProjection.BuildSkillQuery(userPath: "rbuergi", spacePath: "AgenticPension")
+            .Should().Be("namespace:rbuergi/Skill|AgenticPension/Skill|Skill nodeType:Skill",
+                "skills use the SAME per-partition inheritance as agents/models — the user's, the "
+                + "space's and the platform /Skill namespaces, listed directly.");
+        AgentPickerProjection.BuildSkillQueries("rbuergi", "AgenticPension")
+            .Should().ContainSingle().Which.Should()
+            .Be("namespace:rbuergi/Skill|AgenticPension/Skill|Skill nodeType:Skill");
+    }
+
+    [Fact]
+    public void BuildSkillQuery_NeitherSet_PlatformDefaultsOnly()
+    {
+        AgentPickerProjection.BuildSkillQuery().Should().Be("namespace:Skill nodeType:Skill");
+    }
+
+    [Fact]
+    public void BuildSkillQuery_ReservedPartition_IsSkipped()
+    {
+        // A reserved/rogue ROUTE partition (login, welcome, …) carries no read policy and never holds
+        // skills; including it would fail the WHOLE query with "lacks Read permission". It must be
+        // filtered — the user's home is kept, the reserved space dropped.
+        AgentPickerProjection.BuildSkillQuery(userPath: "rbuergi", spacePath: "login")
+            .Should().Be("namespace:rbuergi/Skill|Skill nodeType:Skill");
+    }
+
+    [Fact]
+    public void SkillQueries_DerivesSpaceFromContextPath()
+    {
+        // SkillNodeType.SkillQueries(contextPath, userPath) is what the chat + autocomplete call:
+        // the space partition is derived from the context path's first segment.
+        SkillNodeType.SkillQueries("AgenticPension/Foo/_Thread/x", "rbuergi")
+            .Should().ContainSingle().Which.Should()
+            .Be("namespace:rbuergi/Skill|AgenticPension/Skill|Skill nodeType:Skill");
+    }
+
+    // ─── SkillAutocompleteProvider.BuildQueries: pins the FIX ───
+    // The autocomplete used to pass userPath=null, so a user's OWN skills never appeared. BuildQueries
+    // derives the user home from the hub identity and unions {user|space|platform}/Skill.
+
+    [Fact]
+    public void SkillAutocomplete_BuildQueries_IncludesUserHomeFromIdentity()
+    {
+        var access = new AccessService();
+        access.SetCircuitContext(new AccessContext { ObjectId = "rbuergi", Name = "rbuergi" });
+
+        SkillAutocompleteProvider.BuildQueries(access, "AgenticPension/Foo")
+            .Should().ContainSingle().Which.Should()
+            .Be("namespace:rbuergi/Skill|AgenticPension/Skill|Skill nodeType:Skill",
+                "the chatting user's own /Skill namespace MUST be unioned in — passing null userPath "
+                + "(the bug) hid every user-defined skill from autocomplete.");
+    }
+
+    [Fact]
+    public void SkillAutocomplete_BuildQueries_ReservedContextPartition_IsSkipped_UserKept()
+    {
+        var access = new AccessService();
+        access.SetCircuitContext(new AccessContext { ObjectId = "rbuergi", Name = "rbuergi" });
+
+        // On the bare /login route the context partition is reserved — it must be dropped while the
+        // user's own /Skill namespace is still unioned.
+        SkillAutocompleteProvider.BuildQueries(access, "login")
+            .Should().ContainSingle().Which.Should()
+            .Be("namespace:rbuergi/Skill|Skill nodeType:Skill");
+    }
+
+    [Fact]
+    public void SkillAutocomplete_BuildQueries_SystemPrincipal_NotUsedAsUserHome()
+    {
+        // A leaked system-security / hub principal is NOT a user partition — it must be filtered, so the
+        // union falls back to space + platform only (never namespace:system-security/Skill).
+        var access = new AccessService();
+        access.SetCircuitContext(new AccessContext { ObjectId = "system-security", Name = "system-security" });
+
+        SkillAutocompleteProvider.BuildQueries(access, "AgenticPension")
+            .Should().ContainSingle().Which.Should()
+            .Be("namespace:AgenticPension/Skill|Skill nodeType:Skill");
+    }
+
+    [Fact]
+    public void SkillAutocomplete_BuildQueries_NullAccessService_PlatformAndSpaceOnly()
+    {
+        SkillAutocompleteProvider.BuildQueries(accessService: null, contextPath: "AgenticPension")
+            .Should().ContainSingle().Which.Should()
+            .Be("namespace:AgenticPension/Skill|Skill nodeType:Skill");
     }
 }

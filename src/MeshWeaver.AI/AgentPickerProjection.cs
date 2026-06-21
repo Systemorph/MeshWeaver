@@ -143,6 +143,27 @@ public static class AgentPickerProjection
         return $"{nsClause} nodeType:{nodeType}{extra}";
     }
 
+    /// <summary>
+    /// The signed-in user's HOME partition — the partition whose <c>{user}/Skill</c> (and
+    /// <c>{user}/Agent</c>, <c>{user}/_Provider</c>) namespaces the registry surfaces. Resolved from the
+    /// hub/circuit identity, preferring the durable <see cref="AccessService.CircuitContext"/> then the
+    /// per-request <see cref="AccessService.Context"/>; a leaked <c>system-security</c> or hub-shaped
+    /// principal (<c>sync/</c>, <c>mesh/</c>, …) is filtered out — never a real user partition. Returns
+    /// <c>null</c> when no real user is set. The SINGLE source of truth for "who is the user" across the
+    /// picker, the slash-skill resolver, and the autocomplete — mirrors <c>ThreadChatView.ResolveUserHome</c>
+    /// so a user's own agents / models / skills surface the SAME way everywhere.
+    /// </summary>
+    public static string? ResolveUserHome(MeshWeaver.Messaging.AccessService? accessService)
+    {
+        if (accessService is null) return null;
+        foreach (var candidate in new[] { accessService.CircuitContext?.ObjectId, accessService.Context?.ObjectId })
+            if (!string.IsNullOrEmpty(candidate)
+                && candidate != MeshWeaver.Mesh.Security.WellKnownUsers.System
+                && !MeshWeaver.Messaging.AccessService.LooksLikeHubPrincipal(candidate))
+                return candidate;
+        return null;
+    }
+
     /// <summary>The partition (top-level path segment) a context path belongs to — the "space" whose
     /// <c>/Agent</c> + <c>/Model</c> namespaces the registry surfaces. <c>AgenticPension/Foo/_Thread/x</c>
     /// → <c>AgenticPension</c>; null/empty → null.</summary>
