@@ -1,6 +1,9 @@
+using Memex.Client.Services;
+using Memex.Client.Voice;
 using MeshWeaver.Connection.SignalR;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
+using Plugin.Maui.Audio;
 
 namespace Memex.Client;
 
@@ -28,6 +31,15 @@ public static class MauiProgram
         builder.Services.AddMessageHubs(
             AddressExtensions.CreatePortalAddress("memex-client"),
             config => config.UseSignalRClient(PortalSignalRUrl));
+
+        // On-device voice: mic capture + Whisper (whisper.cpp, runs locally incl. iOS Metal/GPU).
+        // The model downloads to app data on first use. Transcript feeds the mesh participant.
+        builder.Services.AddSingleton<IAudioManager>(AudioManager.Current);
+        builder.Services.AddSingleton<AudioCaptureService>();
+        builder.Services.AddSingleton(_ => new VoiceModelCatalog(
+            Path.Combine(FileSystem.AppDataDirectory, "models")));
+        builder.Services.AddSingleton(sp => new VoiceService(
+            sp.GetRequiredService<VoiceModelCatalog>()));
 
 #if DEBUG
         builder.Services.AddBlazorWebViewDeveloperTools();
