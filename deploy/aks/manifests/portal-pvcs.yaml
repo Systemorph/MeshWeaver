@@ -92,6 +92,24 @@ spec:
     requests:
       storage: 32Gi
 ---
+# /workspace — per-user git working trees ({userId}/{repoSlug}) for the in-portal
+# checkout/edit/commit feature + the co-hosted AI CLIs. RWX so both HA replicas share
+# the same checkouts.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: memex-workspace
+  namespace: memex
+  labels:
+    app.kubernetes.io/component: memex-portal
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: azurefile-memex
+  resources:
+    requests:
+      storage: 64Gi
+---
 # Postgres data volume — single-writer, so ReadWriteOnce on Premium SSD.
 # (If you keep the chart's StatefulSet emptyDir you LOSE data on pod restart —
 # always bind a real PVC for the database.)

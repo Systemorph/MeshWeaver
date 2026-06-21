@@ -2,6 +2,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -32,6 +33,18 @@ public static class GitHubSyncConfiguration
         services.AddSingleton<GitHubCredentialService>();
         services.AddSingleton<GitHubSyncService>();
         services.AddSingleton<PullRequestService>();
+        // On-disk per-user git working trees (clone/edit/commit/push) — the working-tree
+        // counterpart to content sync, shared by the AI harness + the in-portal editor.
+        // Root binds from GitWorkspace:Root (env GitWorkspace__Root=/workspace in the portal,
+        // where the RWX workspace PVC is mounted); absent, it defaults to a temp subdir.
+        services.AddOptions<GitWorkingTreeOptions>()
+            .Configure<IConfiguration>((o, cfg) =>
+            {
+                var root = cfg["GitWorkspace:Root"];
+                if (!string.IsNullOrWhiteSpace(root)) o.Root = root;
+            });
+        services.AddSingleton<GitCli>();
+        services.AddSingleton<GitWorkingTreeService>();
         // AI-drafted PR title/body. Default delegates to the PullRequestWriter agent via the
         // existing chat surface (mirrors DescriptionGenerator); tests override with a stub.
         services.AddSingleton<IPullRequestDraftService, PullRequestDraftService>();

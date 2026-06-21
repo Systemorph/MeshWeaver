@@ -20,3 +20,10 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata: { name: memex-users, namespace: memex-cloud, labels: { app.kubernetes.io/component: memex-portal } }
 spec: { accessModes: [ReadWriteMany], storageClassName: azurefile-memex, resources: { requests: { storage: 32Gi } } }
+---
+# Per-user git working trees (/workspace/{userId}/{repoSlug}) for the in-portal checkout/edit/commit
+# feature + the co-hosted AI CLIs. RWX so it survives pod restarts and is shared across replicas.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: memex-workspace, namespace: memex-cloud, labels: { app.kubernetes.io/component: memex-portal } }
+spec: { accessModes: [ReadWriteMany], storageClassName: azurefile-memex, resources: { requests: { storage: 64Gi } } }
