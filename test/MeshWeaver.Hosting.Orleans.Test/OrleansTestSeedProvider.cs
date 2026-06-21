@@ -85,6 +85,10 @@ public sealed class OrleansTestSeedProvider : IStaticNodeProvider
             Name = "History cold start test",
             NodeType = ThreadNodeType.NodeType,
             MainNode = "TestUser",
+            // The framework stamps MeshNode.CreatedBy from the AccessContext on every create; a seeded
+            // node must carry it too (it is the canonical OWNER the cold-start owner-injection resolver
+            // reads). Without it the cold-start first write has no owner to fall back to.
+            CreatedBy = "TestUser",
             Content = new MeshThread
             {
                 CreatedBy = "TestUser",

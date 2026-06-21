@@ -299,6 +299,19 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             // across the async boundary that previously dropped it (the CI-only deferred owner-side sync
             // write — InboxToolIntegrationTest.Cancel and similar).
             capturedContext = _creationContext = CaptureRealUserContext(Host);
+            if (capturedContext is null)
+            {
+                // Still nothing — the cold-start FIRST write, where Host has not yet established its
+                // standing identity (SetThreadHubIdentity is async and lost the race). The node itself is
+                // ALREADY in Current at write time, so resolve the OWNER from it directly (CreatedBy) via
+                // the MeshNode-aware IStreamOwnerResolver registered on the owning hub. Race-free: no async
+                // round-trip, the node is in hand. Filtered through IsRealUser so a hub/system CreatedBy
+                // can never leak in and the fail-closed invariant holds when no real owner exists.
+                var resolved = Host?.ServiceProvider?.GetService<IStreamOwnerResolver>()
+                    ?.ResolveOwner(Current is null ? default : Current.Value, Host.Address);
+                if (IsRealUser(resolved))
+                    capturedContext = _creationContext = resolved;
+            }
         }
         hub.Post(
             new UpdateStreamRequest(update, exceptionCallback),
