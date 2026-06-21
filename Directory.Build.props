@@ -24,12 +24,13 @@
     <!-- Suppress FluentAssertions license warning for open source project -->
     <FLUENTASSERTIONS_SUPPRESS_WARNING>true</FLUENTASSERTIONS_SUPPRESS_WARNING>
     <!-- Maintained platform version — the ONE number, set centrally here. Override at
-         build time (Docker image / CI) with -p:PlatformVersion=3.0.0-rc2 (or 3.0.0 once the
-         RC graduates). Pre-release while we iterate RCs; the per-build +build.<ticks> suffix
-         below keeps every build distinct (NodeType cache invalidation). It is also the
-         content-version for static-repo / GitHub data-sync (Doc/Architecture/DataSyncSetup.md
-         §3): a release tagged v$(PlatformVersion) is what a deployed binary syncs from. -->
-    <PlatformVersion Condition="'$(PlatformVersion)' == ''">3.0.0-rc1</PlatformVersion>
+         build time (Docker image / CI) with -p:PlatformVersion=3.0.1 (the next patch) or
+         3.1.0-rc1 (to start the next pre-release line). Clean release; the per-build
+         +build.<ticks> suffix below keeps every build distinct (NodeType cache invalidation).
+         It is also the content-version for static-repo / GitHub data-sync
+         (Doc/Architecture/DataSyncSetup.md §3): a release tagged v$(PlatformVersion) is what
+         a deployed binary syncs from. -->
+    <PlatformVersion Condition="'$(PlatformVersion)' == ''">3.0.0</PlatformVersion>
   </PropertyGroup>
   <!-- Two version channels — CONTINUOUS (CI) vs RELEASED (CD):
        • RELEASED  (-p:PublicRelease=true, the CD/release pipeline): clean $(PlatformVersion).
