@@ -1,0 +1,22 @@
+@page "/mesh"
+@using MeshWeaver.Messaging
+@inject IMessageHub Hub
+
+<PageTitle>Mesh</PageTitle>
+
+<h1>Memex — mesh participant</h1>
+
+<p>This client joins the MeshWeaver mesh as a SignalR participant. Interactive Blazor runs
+   <strong>in-process</strong>; only mesh data crosses the persistent socket.</p>
+
+<dl>
+    <dt>Portal address</dt>
+    <dd><code>@Hub.Address</code></dd>
+    <dt>Transport</dt>
+    <dd>SignalR (<code>/signalr</code>) — <code>signalr client ⇒ portal hub ⇒ rest of mesh</code></dd>
+</dl>
+
+<p class="text-muted">
+    Resolving the hub above connects this participant to the portal. Next: bind an interactive
+    view (chat/thread) to <code>GetMeshNodeStream(path)</code> so updates push in over the socket.
+</p>
