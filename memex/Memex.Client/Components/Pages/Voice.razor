@@ -13,13 +13,18 @@
 
 <div class="mb-3">
     <label class="form-label">Language</label>
-    <select class="form-select" style="max-width: 20rem" @bind="_language" disabled="@_busy">
-        <option value="auto">Auto-detect</option>
+    <select class="form-select" style="max-width: 24rem" @bind="_language" disabled="@_busy">
+        <option value="auto-de-en">Auto — German · English (Swiss German → German)</option>
         <option value="de">German / Swiss German → Standard German</option>
         <option value="en">English</option>
+        <option value="auto">Auto — any language</option>
         <option value="fr">French</option>
         <option value="it">Italian</option>
     </select>
+    <small class="text-muted d-block mt-1">
+        Auto detection is constrained to German/English, so any Swiss German dialect routes to German.
+        Strong dialect (e.g. Bernese) needs the large model for usable accuracy — see Mesh settings.
+    </small>
 </div>
 
 @if (!Capture.IsRecording)
@@ -53,7 +58,7 @@ else
 }
 
 @code {
-    private string _language = "auto";
+    private string _language = "auto-de-en";
     private bool _busy;
     private string? _status;
     private IReadOnlyList<TranscriptSegment>? _segments;
