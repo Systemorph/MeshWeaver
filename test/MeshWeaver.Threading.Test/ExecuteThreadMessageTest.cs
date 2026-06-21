@@ -462,6 +462,76 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         Output.WriteLine($"Validation error: {response.Message.Error}");
     }
 
+    /// <summary>
+    /// Pins the prod 2026-06-20 "thread disappears on submit" storm: the per-thread submission
+    /// watcher's own-writes (the claim <c>Status: Idle → StartingExecution</c> and the
+    /// <c>ReconcileUserMessageIds</c> self-heal) fire on a scheduler that does NOT carry the
+    /// originating user's AsyncLocal. Even though they are OWN writes, <c>UpdateOwn</c> drives the
+    /// data-source <c>SynchronizationStream.Update</c>, which posts a (non-exempt, User-posting)
+    /// <c>UpdateStreamRequest</c> from the <c>sync/&lt;id&gt;</c> hub. With no ambient identity that
+    /// post is null-AccessContext → the never-null PostPipeline guard fails it → a DeliveryFailure
+    /// storm the submit never recovers from.
+    ///
+    /// <para>In Monolith the storm is normally MASKED by <c>AccessService.persistentCircuitContext</c>
+    /// (the durable test-login fallback that every hub's post resolves). Prod/Orleans grains have NO
+    /// such fallback (<c>CircuitContext</c> is always null on a grain), so the watcher continuation
+    /// genuinely has no identity. This test removes the mask (<c>SetCircuitContext(null)</c>) to
+    /// reproduce the grain condition, seeds the pending message under an EXPLICIT owner scope (so the
+    /// seed write itself is attributed), then asserts the round still dispatches and completes — proving
+    /// the watcher re-stamps the thread owner's identity (via <c>AccessContextScope.FromNode</c>) on its
+    /// claim write. Pre-fix this hangs at <c>Messages.Count == 0</c>; post-fix it reaches 2.</para>
+    /// </summary>
+    [Fact]
+    public async Task SubmitMessage_OnNullAmbientContinuation_DispatchesWithoutNullContextStorm()
+    {
+        var client = GetClient();
+        // 🚨 The thread hub (hosted under the Mesh) uses the MESH's AccessService singleton — that is the
+        // instance DevLogin set the persistent circuit fallback on, and the one the submission watcher's
+        // CaptureCallerAccessContext reads. Clear THAT instance to unmask the storm; the client's
+        // AccessService is separate and drives the seed write's identity.
+        var meshAccess = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var clientAccess = client.ServiceProvider.GetRequiredService<AccessService>();
+
+        // Create the thread + (later) seed the message while a real identity is available so those
+        // writes are attributed. The thread OWNER is this identity (rbuergi/Admin from the test base).
+        var threadPath = await CreateEmptyThread(client, "Null-ambient submit");
+        var ownerCtx = meshAccess.CircuitContext ?? meshAccess.Context;
+        ownerCtx.Should().NotBeNull("the test base logs in a user as the circuit identity");
+
+        // 🚨 Reproduce the prod/Orleans grain: clear the persistent circuit fallback on the MESH's
+        // AccessService so the submission watcher's continuation has NO ambient identity (Context AND
+        // CircuitContext both null) — exactly a grain, which never had a circuit context.
+        meshAccess.SetCircuitContext(null);
+        try
+        {
+            // Seed the pending user message under an EXPLICIT owner scope (on the CLIENT's AccessService,
+            // which the client-side seed write captures from) so the SEED write (a cross-hub
+            // PatchDataRequest) carries identity and lands. AppendUserInput subscribes synchronously, so
+            // the capture happens inside this using; the WATCHER continuation that reacts afterwards runs
+            // with the null ambient we established on the mesh instance.
+            using (clientAccess.SwitchAccessContext(ownerCtx))
+            {
+                client.SubmitMessage(threadPath, "Hello with no ambient identity",
+                    contextPath: ContextPath);
+            }
+
+            // Post-fix: the watcher stamps FromNode(threadNode) on its claim write, the round dispatches
+            // under the owner, and the user + assistant cells land. Pre-fix: the claim write's
+            // UpdateStreamRequest fails the never-null guard → storm → Messages never reaches 2.
+            var thread = await ThreadFlow.ReadThread(client, threadPath,
+                t => t.Messages.Count >= 2).Should().Within(20.Seconds()).Emit();
+            thread.Messages.Should().HaveCount(2,
+                "the submission watcher's claim write must carry the thread owner's identity even on a "
+                + "null-ambient continuation, so the round dispatches and completes (no null-context "
+                + "DeliveryFailure storm).");
+        }
+        finally
+        {
+            // Restore the shared circuit identity for any subsequent test on a shared mesh.
+            meshAccess.SetCircuitContext(ownerCtx);
+        }
+    }
+
     #region Fake Chat Client Infrastructure
 
     private class FakeChatClient : IChatClient

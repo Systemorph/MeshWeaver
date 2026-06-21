@@ -257,14 +257,19 @@ internal static class ThreadSubmissionServer
     {
         var logger = threadHub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
         var threadPath = threadHub.Address.Path;
-        // 🚨 Identity note: the claim Update below is an OWN write on the thread
-        // hub — it doesn't cross a hub boundary, doesn't post a PatchDataRequest,
-        // doesn't pass through any RLS gate. The action block serialises and the
-        // owning hub IS the writer; ambient AsyncLocal at the Subscribe callback
-        // doesn't matter for this specific transition. The real identity-needing
-        // work happens in `ExecRoundWatcher` (DispatchAfterClaim creates satellite
-        // cells and posts cross-hub messages) — see ThreadExecution.cs where the
-        // FromNode scope is applied.
+        var accessService = threadHub.ServiceProvider.GetService<MeshWeaver.Messaging.AccessService>();
+        // 🚨 Identity: every write this watcher performs — the ReconcileUserMessageIds own-write in
+        // .Do below AND the claim Update — runs under the thread OWNER's identity via
+        // AccessContextScope.FromNode, the SAME pattern InstallExecRoundWatcher uses. Even an OWN
+        // write is NOT identity-free: UpdateOwn drives the data-source SynchronizationStream.Update,
+        // which posts a (non-exempt, User-posting) UpdateStreamRequest from the sync/<id> hub. This
+        // watcher fires on a scheduler that does NOT carry the originating user's AsyncLocal; in
+        // prod/Orleans (no persistent circuit context on the grain) that ambient is null, so without
+        // the re-stamp the UpdateStreamRequest is posted with NO AccessContext and the never-null
+        // PostPipeline guard fails it → a DeliveryFailure storm the submit never recovers from
+        // ("thread disappears on submit"). The access check that gated the dispatch already happened
+        // (a user with no thread access could not have queued the pending message), so the round
+        // inherits the trust the submit already verified.
         // Self-healing: this watcher drains pending input into the next round (the
         // resubmit / follow-up-message path). If its stream FAULTS it must NOT die
         // silently — a dead watcher means the resubmit is never claimed and the
@@ -303,15 +308,22 @@ internal static class ThreadSubmissionServer
                 // the derived list back to a superset via an OWN write (serialised, no clobber).
                 // Idempotent: once UserMessageIds ⊇ pending ∪ ingested the recomputed node is
                 // byte-identical and the stream's value-equality check dedupes it — no loop.
-                ReconcileUserMessageIds(threadHub, n, logger);
+                // 🚨 Run the own-write under the thread OWNER's identity (see the identity note
+                // above) so its UpdateStreamRequest carries a non-null AccessContext.
+                using (MeshWeaver.Mesh.Security.AccessContextScope.FromNode(n, accessService, logger))
+                    ReconcileUserMessageIds(threadHub, n, logger);
             })
-            .Select(NeedsDispatch)
-            .Where(needs => needs)
+            .Where(NeedsDispatch)
             .Subscribe(
-                _ =>
+                triggerNode =>
                 {
                     logger?.LogDebug("[SubmissionWatcher] DISPATCH_TRIGGERED for {ThreadPath}", threadPath);
                     var workspace = threadHub.GetWorkspace();
+                    // 🚨 Re-stamp the thread OWNER's identity for the claim own-write (see the
+                    // identity note at the top of this method). The .Update().Subscribe() below
+                    // posts the UpdateStreamRequest SYNCHRONOUSLY on this thread, so capturing the
+                    // owner here is sufficient for it to ride the post.
+                    using var dispatchScope = MeshWeaver.Mesh.Security.AccessContextScope.FromNode(triggerNode, accessService, logger);
                     workspace.GetMeshNodeStream().Update(node =>
                     {
                         var t = node.Content as MeshThread;
