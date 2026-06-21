@@ -626,6 +626,8 @@ public static class MemexConfiguration
                         .AddTokenUsageSettingsTab()
                         // GitHub Sync tab — shows only on Space nodes (self-filtered).
                         .AddGitHubSyncSettingsTab()
+                        // Code workspace tab — on-disk working-tree editor (checkout/edit/commit/push).
+                        .AddWorkingTreeTab()
                         // Content Indexing tab — Space nodes, only when the indexing pipeline is active.
                         .AddContentIndexSettingsTab();
                 })
