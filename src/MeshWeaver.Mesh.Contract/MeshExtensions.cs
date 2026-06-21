@@ -314,8 +314,16 @@ public static class MeshExtensions
                     node = node with { MainNode = node.Namespace };
                 }
 
+                // 1c. SELF-HEALING PARTITION BOOTSTRAP. Ensure the partition's Space root +
+                //     creator grant exist BEFORE the requested child is validated/persisted.
+                //     A missing root makes the bare partition address un-routable (GetDataRequest
+                //     routing loop → faulted data source), and RLS would otherwise deny the first
+                //     child-write into a fresh partition. Sequenced ahead of the validators via
+                //     SelectMany so root + grant are in place by the time RLS / the write-guard run.
+                //     See EnsurePartitionBootstrap.
                 // 2. Validators → 3. NodeType existence → 4-7. Enrich + save + change feed + version
-                return RunCreationValidatorsObs(hub, node, capturedRequest)
+                return EnsurePartitionBootstrap(hub, node, capturedRequest, logger)
+                    .SelectMany(_ => RunCreationValidatorsObs(hub, node, capturedRequest))
                     .SelectMany(validationError =>
                     {
                         if (validationError != null)
@@ -520,6 +528,247 @@ public static class MeshExtensions
                 });
 
         return request.Processed();
+    }
+
+    /// <summary>
+    /// The <c>Space</c> node type name — referenced by literal so this Mesh.Contract-level
+    /// handler needs no dependency on the MeshWeaver.Graph assembly that defines the type.
+    /// </summary>
+    private const string PartitionRootNodeTypeName = "Space";
+
+    /// <summary>The <c>AccessAssignment</c> node type name — same rationale as <see cref="PartitionRootNodeTypeName"/>.</summary>
+    private const string AccessAssignmentNodeTypeName = "AccessAssignment";
+
+    /// <summary>
+    /// SELF-HEALING PARTITION BOOTSTRAP — the centralized invariant that every mesh partition
+    /// has a persisted ROOT node (<c>Namespace==""</c>, <c>Id==partition</c>, NodeType
+    /// <c>Space</c>). Without that root a <see cref="GetDataRequest"/> targeting the bare
+    /// partition address has no terminal node to resolve to → the router loops → the
+    /// partition's data source (<c>ds/&lt;Partition&gt;</c>) faults → catalog UIs break. The
+    /// invariant used to be written in three scattered places (the static-repo importer,
+    /// onboarding, the Space post-creation handler); here it is centralized on the one create
+    /// handler every node create flows through, and made idempotent + re-healing.
+    ///
+    /// <para>For a CHILD create (non-empty namespace that is NOT itself an <c>_Access</c>
+    /// assignment) it (1) re-creates the partition's <c>Space</c> root if it is absent —
+    /// provisioning the partition's backing store first — and (2) grants the creator Admin under
+    /// <c>{partition}/_Access</c> if absent. Both writes run under
+    /// <see cref="AccessService.ImpersonateAsSystem"/> (a brand-new partition is owned by
+    /// nobody, so the creator cannot authorize its own root/grant — the canonical
+    /// infrastructure-write case).</para>
+    ///
+    /// <para><b>Gated to stay inside the existing security + partition model — it never
+    /// implicitly creates a partition for someone who couldn't create there anyway:</b></para>
+    /// <list type="bullet">
+    ///   <item><b>Central mesh hub only.</b> Off-router create handlers — the static-repo import
+    ///     hub (which already provisions its own roots and runs as System) and per-node hubs —
+    ///     don't redo it.</item>
+    ///   <item><b>Host uses the Space partition model.</b> Skips entirely when the <c>Space</c>
+    ///     node type is not registered (a host serving raw / doc / embedded partitions has its
+    ///     own root mechanism — forcing a <c>Space</c> root there is wrong, and would fail the
+    ///     type-existence check).</item>
+    ///   <item><b>Authoritative existence.</b> Root + grant are probed by EXACT path through the
+    ///     storage adapter AND the static/config node provider (a partition whose root is a
+    ///     static node — e.g. the seeded test root — is NOT re-created). EXACT path is mandatory:
+    ///     <c>scope:descendants</c> emits <c>LIKE 'P/%'</c> and never matches the
+    ///     <c>namespace=""</c> root.</item>
+    ///   <item><b>Authorization gate.</b> The heal runs ONLY when the creator actually holds
+    ///     <see cref="Permission.Create"/> on the partition (the same predicate RLS uses). An
+    ///     unauthorized creator triggers NO heal — the requested child is then denied by the
+    ///     validators exactly as before, so the bootstrap can never launder an implicit-space
+    ///     creation past <c>PartitionWriteGuardValidator</c>'s "no partition, no write" rule.</item>
+    /// </list>
+    ///
+    /// <para><b>No recursion:</b> the root create (empty namespace) and the grant create (path
+    /// under <c>/_Access/</c>) are exactly the two node shapes skipped at the top, so they never
+    /// re-enter the bootstrap. <b>Idempotent + race-safe:</b> a concurrent first-writer that
+    /// loses the create race sees "already exists" and treats it as success. <b>Re-heals:</b>
+    /// root + grant presence are re-probed on every child create, so a partition left half-broken
+    /// (root-missing, grant-missing, or both) is repaired on the next authorized child create —
+    /// nothing is permanently cached as "bootstrapped".</para>
+    /// </summary>
+    private static IObservable<System.Reactive.Unit> EnsurePartitionBootstrap(
+        IMessageHub hub, MeshNode node, CreateNodeRequest request, ILogger logger)
+    {
+        // Central mesh hub only — see remarks.
+        if (!ReferenceEquals(hub, hub.GetMeshHub()))
+            return Observable.Return(System.Reactive.Unit.Default);
+
+        // Skip the two node shapes the bootstrap itself writes: a partition root (empty
+        // namespace) and an _Access assignment. Skipping them is what guarantees the root/grant
+        // writes below never re-enter this method (no recursion / no infinite re-entry).
+        if (string.IsNullOrEmpty(node.Namespace)
+            || node.Path.Contains("/_Access/", StringComparison.Ordinal))
+            return Observable.Return(System.Reactive.Unit.Default);
+
+        // Only when the host uses the Space partition model. A host without the Space NodeType
+        // (raw doc/embedded servers, minimal test hosts) has its own root mechanism — never force
+        // a Space root onto it (that would also fail the type-existence check downstream).
+        if (hub.ServiceProvider.FindStaticNode(PartitionRootNodeTypeName) is null)
+            return Observable.Return(System.Reactive.Unit.Default);
+
+        var partition = node.Segments.Count > 0 ? node.Segments[0] : null;
+        if (string.IsNullOrEmpty(partition))
+            return Observable.Return(System.Reactive.Unit.Default);
+
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+        if (persistence is null || meshService is null)
+            return Observable.Return(System.Reactive.Unit.Default);
+
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var creator = request.CreatedBy;
+        var isRealCreator = !string.IsNullOrEmpty(creator)
+            && !string.Equals(creator, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase);
+        var grantPath = isRealCreator ? $"{partition}/_Access/{creator}_Access" : null;
+
+        // Authoritative existence probes (persistence + static/config fallback), run together.
+        var rootObs = ReadNodeAuthoritative(hub, persistence, partition);
+        var grantObs = grantPath is null
+            ? Observable.Return<MeshNode?>(null)
+            : ReadNodeAuthoritative(hub, persistence, grantPath);
+
+        return Observable.Zip(rootObs, grantObs, (root, grant) => (root, grant))
+            .SelectMany(t =>
+            {
+                var rootExists = t.root is not null;
+                // For a System / unattributed creator there is no per-creator grant to ensure.
+                var grantExists = !isRealCreator || t.grant is not null;
+                if (rootExists && grantExists)
+                    return Observable.Return(System.Reactive.Unit.Default);
+
+                // Authorization gate — heal ONLY for a creator who could legitimately create here.
+                // System short-circuits to Permission.All; an unauthorized creator gets no heal,
+                // so the requested child is denied by the validators exactly as before.
+                var effectiveUser = string.IsNullOrEmpty(creator) ? WellKnownUsers.Anonymous : creator;
+                return hub.CheckPermission(partition, effectiveUser, Permission.Create)
+                    .Take(1)
+                    .Timeout(TimeSpan.FromSeconds(15))
+                    .Catch<bool, Exception>(ex =>
+                    {
+                        logger.LogDebug(ex,
+                            "[PartitionBootstrap] authorization probe for {User} on '{Partition}' faulted; skipping heal",
+                            effectiveUser, partition);
+                        return Observable.Return(false);
+                    })
+                    .SelectMany(authorized =>
+                    {
+                        if (!authorized)
+                            return Observable.Return(System.Reactive.Unit.Default);
+
+                        var healRoot = rootExists
+                            ? Observable.Return(System.Reactive.Unit.Default)
+                            : ProvisionAndCreateRoot(hub, partition, meshService, accessService, logger);
+                        return healRoot.SelectMany(_ => isRealCreator && !grantExists
+                            ? CreateCreatorGrant(partition, creator!, meshService, accessService, logger)
+                            : Observable.Return(System.Reactive.Unit.Default));
+                    });
+            });
+    }
+
+    /// <summary>
+    /// Reads a single node by EXACT path authoritatively: the storage adapter first (a read fault
+    /// on a not-yet-provisioned PG schema means the node is, by definition, absent → null), then
+    /// the static/config node provider — so a partition whose root is a static node is recognized
+    /// as present and never re-created.
+    /// </summary>
+    private static IObservable<MeshNode?> ReadNodeAuthoritative(
+        IMessageHub hub, IStorageAdapter persistence, string path)
+        => persistence.Read(path, hub.JsonSerializerOptions)
+            .Take(1)
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+            .DefaultIfEmpty(null)
+            .Select(n => n ?? hub.ServiceProvider.FindStaticNode(path));
+
+    /// <summary>
+    /// Provisions every provider's backing store (PG schema + tables) then writes the partition's
+    /// <c>Space</c> root under System. Idempotent — a concurrent-create "already exists" is success.
+    /// </summary>
+    private static IObservable<System.Reactive.Unit> ProvisionAndCreateRoot(
+        IMessageHub hub, string partition, IMeshService meshService,
+        AccessService? accessService, ILogger logger)
+    {
+        // Reactive + pooled + promise-cached; the InMemory / FileSystem providers no-op. Merge +
+        // ToList so the chain always emits exactly once (even with no providers) before the write.
+        var providers = hub.ServiceProvider.GetServices<IPartitionStorageProvider>().ToArray();
+        var provision = providers.Length == 0
+            ? Observable.Return(System.Reactive.Unit.Default)
+            : Observable.Merge(providers.Select(p => p.EnsurePartitionProvisioned(partition)))
+                .ToList()
+                .Select(_ => System.Reactive.Unit.Default);
+
+        var root = new MeshNode(partition)
+        {
+            NodeType = PartitionRootNodeTypeName,
+            State = MeshNodeState.Active,
+            Name = partition,
+        };
+
+        return provision.SelectMany(_ =>
+            AsSystem(accessService, () => meshService.CreateNode(root).Take(1))
+                .Select(_ => System.Reactive.Unit.Default)
+                .Catch<System.Reactive.Unit, Exception>(ex => IsAlreadyExists(ex)
+                    ? Observable.Return(System.Reactive.Unit.Default)
+                    : Observable.Throw<System.Reactive.Unit>(ex))
+                .Do(_ => logger.LogInformation(
+                    "[PartitionBootstrap] created missing Space root for partition '{Partition}'", partition)));
+    }
+
+    /// <summary>
+    /// Writes the creator's Admin <c>AccessAssignment</c> under <c>{partition}/_Access</c> as
+    /// System, mirroring exactly the shape onboarding / <c>SpacePostCreationHandler</c> write
+    /// (id <c>{creator}_Access</c>, the <c>Admin</c> role, <c>MainNode = partition</c>).
+    /// Idempotent — a concurrent-create "already exists" is success.
+    /// </summary>
+    private static IObservable<System.Reactive.Unit> CreateCreatorGrant(
+        string partition, string creator, IMeshService meshService,
+        AccessService? accessService, ILogger logger)
+    {
+        var grant = new MeshNode($"{creator}_Access", $"{partition}/_Access")
+        {
+            NodeType = AccessAssignmentNodeTypeName,
+            Name = $"{creator} Access",
+            MainNode = partition,
+            State = MeshNodeState.Active,
+            Content = new AccessAssignment
+            {
+                AccessObject = creator,
+                DisplayName = creator,
+                Roles = [new RoleAssignment { Role = Role.Admin.Id, Denied = false }]
+            }
+        };
+
+        return AsSystem(accessService, () => meshService.CreateNode(grant).Take(1))
+            .Select(_ => System.Reactive.Unit.Default)
+            .Catch<System.Reactive.Unit, Exception>(ex => IsAlreadyExists(ex)
+                ? Observable.Return(System.Reactive.Unit.Default)
+                : Observable.Throw<System.Reactive.Unit>(ex))
+            .Do(_ => logger.LogInformation(
+                "[PartitionBootstrap] granted {Role} to creator '{Creator}' on partition '{Partition}'",
+                Role.Admin.Id, creator, partition));
+    }
+
+    /// <summary>
+    /// Establishes the well-known System identity on the write's OWN subscribe thread so the cold
+    /// <see cref="IMeshService.CreateNode"/> captures System into its <c>CreatedBy</c> at its
+    /// <c>Defer</c> (a brand-new partition root/grant is owned by nobody — the canonical
+    /// infrastructure-write). Mirrors <c>StaticRepoImporter.AsSystem</c>.
+    /// </summary>
+    private static IObservable<T> AsSystem<T>(AccessService? access, Func<IObservable<T>> write)
+        => access is null
+            ? Observable.Defer(write)
+            : Observable.Using(() => access.ImpersonateAsSystem(), _ => write());
+
+    /// <summary>
+    /// True if the exception (or any inner) reports an "already exists" outcome — the idempotent-create
+    /// success signal when a concurrent first-writer won the race.
+    /// </summary>
+    private static bool IsAlreadyExists(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException)
+            if (e.Message?.Contains("already exists", StringComparison.OrdinalIgnoreCase) == true)
+                return true;
+        return false;
     }
 
     /// <summary>
