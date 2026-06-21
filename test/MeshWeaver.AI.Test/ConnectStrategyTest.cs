@@ -132,14 +132,6 @@ public class ConnectStrategyTest : AITestBase
         ok.ProviderNodePath.Should().Be($"{ModelProviderNodeType.UserNamespacePath(owner)}/ClaudeCode");
         ok.KeyFingerprint.Should().NotBe("(empty)");
 
-        // "make its way to the file": the captured token is ALSO persisted to .credentials.json on the
-        // (shared) config dir, so the harness finds it after a reload when the node-backed resolver
-        // cache is cold — instead of a spurious "Not logged in". `claude setup-token` only PRINTS the
-        // token, so the Connect flow must write this file itself (ClaudeConnectStrategy.PersistCredentials).
-        var credsFile = Path.Combine(configDir, ".credentials.json");
-        File.Exists(credsFile).Should().BeTrue("the connect flow must persist the captured token to .credentials.json");
-        File.ReadAllText(credsFile).Should().Contain("FAKE-TOKEN", "the persisted creds file must hold the captured token");
-
         // Diagnostic single-node read — confirms the satellite read path resolves.
         var directRead = await Mesh.GetWorkspace().GetMeshNodeStream(ok.ProviderNodePath)
             .Take(1).Timeout(8.Seconds())

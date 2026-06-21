@@ -246,11 +246,10 @@ public sealed class ClaudeConnectStrategy : IConnectStrategy
         if (!string.IsNullOrEmpty(fromStdout))
         {
             logger?.LogInformation("Claude Connect captured token (stdout) for session {Session}", session.SessionId);
-            // `claude setup-token` only PRINTS the token — it never writes .credentials.json. Persist it
-            // to {ConfigDir}/.credentials.json on the shared config-dir volume so the harness still finds
-            // it after a reload / pod restart (when the node-backed resolver cache is cold) instead of
-            // surfacing a spurious "Not logged in". Runs inside the Process IoPool worker (sync I/O OK).
-            PersistCredentials(ResolveConfigDir(session, options), fromStdout);
+            // NOTE: do NOT write the captured token to .credentials.json — a `setup-token` token is used
+            // via the CLAUDE_CODE_OAUTH_TOKEN env var, not that file (which is the interactive
+            // `claude login` OAuth-bundle schema). Writing it there made the CLI choke and exit 1. The
+            // token is persisted in the ModelProvider node and re-applied to the env by the harness.
             return fromStdout;
         }
 
@@ -293,25 +292,6 @@ public sealed class ClaudeConnectStrategy : IConnectStrategy
         }
     }
 
-    /// <summary>Persists the captured token to <c>{configDir}/.credentials.json</c> in the Claude Code
-    /// shape (<c>claudeAiOauth.accessToken</c>) — so the harness's <c>HasCredentials</c> check + token
-    /// read-back find it after a reload / pod restart on the shared config-dir volume. Sync I/O; only
-    /// ever called from inside the Process IoPool worker.</summary>
-    private void PersistCredentials(string? configDir, string token)
-    {
-        if (string.IsNullOrEmpty(configDir) || string.IsNullOrEmpty(token)) return;
-        try
-        {
-            Directory.CreateDirectory(configDir);
-            var path = Path.Combine(configDir, ".credentials.json");
-            File.WriteAllText(path, JsonSerializer.Serialize(new { claudeAiOauth = new { accessToken = token } }));
-            logger?.LogInformation("Persisted Claude credentials to {Path}", path);
-        }
-        catch (Exception ex)
-        {
-            logger?.LogWarning(ex, "Could not persist .credentials.json to {Dir}", configDir);
-        }
-    }
 
     private static string? ExtractToken(JsonElement el)
     {
