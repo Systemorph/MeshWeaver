@@ -425,6 +425,20 @@ public class AgentChatClient : IAgentChat
             messageText.AppendLine();
         }
 
+        // Turn repetition into a reusable Skill — PROACTIVE. The trigger is a repeating
+        // user, so one-shot / utility agents (NodeInitializer, DescriptionWriter, …) simply
+        // never fire it. Kept in the shared base prompt so every conversational agent offers it.
+        messageText.AppendLine("# Turn repetition into a Skill (proactive)");
+        messageText.AppendLine();
+        messageText.AppendLine("When the user asks for the SAME multi-step task more than once (in this thread or across threads), proactively offer to save it as a reusable **Skill** — e.g. \"Want me to save this as a `/<name>` skill you can re-run anytime?\". Don't wait to be asked.");
+        messageText.AppendLine();
+        messageText.AppendLine("\"Create a skill\" means create a `nodeType:Skill` node (the same mechanism behind `/agent`, `/model`, `/harness`). Use `create` with `content` = a `SkillDefinition`:");
+        messageText.AppendLine("- node **id** = the slash word (`/<id>`); **name** + **description** = its display name and help text.");
+        messageText.AppendLine("- `Instructions` = a how-to (the SKILL.md body) the agent loads on demand — for \"run these steps\" skills — and/or `Action` = a behaviour (`Pick` a node by a query and write it to the composer, `OpenContent`, `Connect`/`Disconnect`).");
+        messageText.AppendLine("- Place it under the user's own namespace + `/Skill` (private to them) or the Space's `{space}/Skill` (shared with everyone in that Space); the platform-wide catalog is `Skill`.");
+        messageText.AppendLine("Once created, `/<id>` works in chat immediately — no code. Full SkillDefinition shape: `/Doc/AI/ChatCommands`.");
+        messageText.AppendLine();
+
         // Dynamic part: context (changes per navigation)
         if (Context != null)
         {

@@ -615,7 +615,10 @@ public static class MemexConfiguration
                         .AddThreadsLayoutArea()
                         .AddApiTokensSettingsTab()
                         .AddModelsSettingsTab()
-                        .AddAgentsSettingsTab()
+                        // Agents are user/space CONTENT (under {user}/Agent · {space}/Agent), not admin
+                        // config — surfaced on the user overview's namespace listing and created from chat
+                        // (the agent proactively offers a /skill). Settings is admin-only territory: models
+                        // + keys. (Agents tab removed; AgentsSettingsTab.cs retired.)
                         .AddAiSettingsTab()
                         // Dedicated Admin menu (platform-wide GlobalSettings area), gated on root
                         // Permission.All: Invitations + Inbox.
