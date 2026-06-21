@@ -114,6 +114,19 @@ internal static class PermissionEvaluator
         var capturedContext = accessService?.Context;
         var capturedCircuitContext = accessService?.CircuitContext;
 
+        // 🛡️ Hub credential (ImpersonateAsHub): ObjectId is the hub's OWN mesh address, never a
+        // user/group identity — no AccessAssignment ever exists for a hub address. A hub
+        // initializes + syncs its own EntityStore under this credential, and a sub-hub subscribes
+        // to its parent/owner under it (JsonSynchronizationStream.CreateExternalClient with
+        // impersonateAsHub: true). Grant Read on the hub's OWN path and its ANCESTOR scopes (the
+        // sync direction) — never siblings or descendants. Returning here also keeps hub self-sync
+        // off the cold permission-query path entirely. See AccessControl.md → "Hub credentials".
+        var hubCredential = capturedContext ?? capturedCircuitContext;
+        if (hubCredential?.IsHub == true
+            && string.Equals(userId, hubCredential.ObjectId, StringComparison.Ordinal)
+            && IsHubReadableScope(userId, nodePath))
+            return Observable.Return(Permission.Read);
+
         // Claim-first composition: static + claim-based roles available
         // synchronously. Emit immediately; then enrich asynchronously with
         // the synced AccessAssignment query (so long-lived subscribers see
@@ -444,6 +457,17 @@ internal static class PermissionEvaluator
         var idx = scope.LastIndexOf('/');
         return idx < 0 ? string.Empty : scope[..idx];
     }
+
+    /// <summary>
+    /// True when <paramref name="hubAddress"/> may Read <paramref name="scope"/> as a hub
+    /// credential: the scope is the hub's OWN path or an ANCESTOR of it (the EntityStore
+    /// self-sync + a sub-hub reading its parent/owner). Siblings, descendants, and the empty
+    /// (mesh) root are NOT readable — a hub only syncs up its own chain.
+    /// </summary>
+    private static bool IsHubReadableScope(string hubAddress, string scope)
+        => !string.IsNullOrEmpty(scope)
+            && (string.Equals(hubAddress, scope, StringComparison.Ordinal)
+                || hubAddress.StartsWith(scope + "/", StringComparison.Ordinal));
 
     private static (ImmutableDictionary<string, ImmutableHashSet<string>> Granted,
                     ImmutableDictionary<string, ImmutableHashSet<string>> Denied) ComputeScopeRoles(
