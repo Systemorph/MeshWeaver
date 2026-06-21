@@ -9,6 +9,13 @@ A user's identity (`AccessContext`) flows from the authentication boundary throu
 
 This document explains the model, the six propagation phases, the sanctioned exceptions, and the anti-patterns to avoid.
 
+> 🚨 **For the OWNER case — read [Owner Injection](/Doc/Architecture/OwnerInjection).** When a
+> node's own hub acts with no live caller (a watcher tick, a deferred sync write, a cold-start
+> activation), the node **owner** is the standing identity, injected everywhere and **carried
+> forward via `CircuitContext`** (not `Context`, which is wiped across Rx hops). Genuine infra
+> (doc sync, cache hydration) runs as System; an empty context is rejected, never faked. That page
+> covers the cold-start submit deadlock this prevents.
+
 ---
 
 ## 🚨🚨🚨 THE INVARIANT: AccessContext must ALWAYS be set — never null
