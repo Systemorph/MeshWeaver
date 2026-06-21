@@ -75,6 +75,13 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     public virtual IDisposable Subscribe(IObserver<ChangeItem<TStream>> observer)
     {
+        // Fallback creation-context capture: a stream constructed off the subscriber's
+        // thread (e.g. a reduced stream built on a non-user scheduler) may not have seen
+        // a real user at construction. The FIRST real-user subscriber's context is an
+        // acceptable fallback — it is only ever USED by Update when the live context is
+        // null, and it is strictly better than the null-post storm. Still real-user only.
+        if (_creationContext is null && Hub is not null)
+            _creationContext = CaptureRealUserContext(Hub);
         try
         {
             var subscription = Store.Synchronize().Subscribe(observer);
@@ -91,6 +98,27 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     private bool isDisposed;
     private readonly object disposeLock = new();
     private readonly ILogger<SynchronizationStream<TStream>> logger;
+
+    // Mirror of MeshWeaver.Mesh.Security.WellKnownUsers.System — Data sits below
+    // Mesh.Contract in the project graph and cannot reference it. Same literal
+    // recognised by AccessService.ImpersonateAsSystem.
+    private const string SystemUserId = "system-security";
+
+    /// <summary>
+    /// The real-user <see cref="AccessContext"/> captured ONCE on the thread that
+    /// CONSTRUCTS (or first subscribes to) this stream — the circuit / SubscribeRequest
+    /// handler thread, where <see cref="AccessService.Context"/> still identifies the
+    /// subscribing user. <see cref="Update"/> RESTORES it when the LIVE AsyncLocal context
+    /// has gone null — a deferred / continuation write (a layout-area render emission, a
+    /// watcher tick, an agent streaming hop). Without it those writes posted a NULL
+    /// AccessContext, which the never-null PostPipeline guard fails closed: the systemic
+    /// "hub=sync/… message=UpdateStreamRequest … no AccessContext" DeliveryFailure storm.
+    /// <para>NEVER a hub/system principal — see <see cref="CaptureRealUserContext"/>: an
+    /// infrastructure-created stream (no real user) captures null and the existing
+    /// PostPipeline fallback still applies, so a hub address can never leak into
+    /// <c>CreatedBy</c>.</para>
+    /// </summary>
+    private AccessContext? _creationContext;
 
     public ChangeItem<TStream>? Current
     {
@@ -249,7 +277,12 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             SignalDisposedToProducer(exceptionCallback);
             return;
         }
-        var capturedContext = CaptureCallerAccessContext(hub);
+        // A present LIVE context always wins; only fall back to the captured creation
+        // context when the live AsyncLocal is null (the deferred/continuation case — a
+        // layout-area render emission, a watcher tick, an agent streaming hop). This
+        // restores the subscribing user's identity instead of posting a null AccessContext
+        // that the never-null PostPipeline guard would fail closed (the storm).
+        var capturedContext = CaptureCallerAccessContext(hub) ?? _creationContext;
         hub.Post(
             new UpdateStreamRequest(update, exceptionCallback),
             opt => capturedContext is null ? opt : opt.WithAccessContext(capturedContext));
@@ -474,6 +507,30 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             return null;
         }
     }
+
+    /// <summary>
+    /// Captures the caller's <see cref="AccessContext"/> but ONLY when it identifies a
+    /// REAL USER — not null/empty, not a hub-shaped principal (sync/…, mesh/…, node/…,
+    /// activity/…, portal/…), not a hub credential (<see cref="AccessContext.IsHub"/>),
+    /// and not the well-known System identity. Seeds <see cref="_creationContext"/>: a
+    /// creation context restored on a continuation write MUST be a real user — capturing a
+    /// hub address would re-introduce the "CreatedBy=sync/xxx" leak, and capturing System
+    /// would silently run every continuation with Permission.All. An infrastructure-created
+    /// stream (no real user) therefore captures null and the existing PostPipeline fallback
+    /// still applies.
+    /// </summary>
+    private static AccessContext? CaptureRealUserContext(IMessageHub hub)
+    {
+        var ctx = CaptureCallerAccessContext(hub);
+        return IsRealUser(ctx) ? ctx : null;
+    }
+
+    private static bool IsRealUser(AccessContext? ctx)
+        => ctx is not null
+           && !ctx.IsHub
+           && !string.IsNullOrEmpty(ctx.ObjectId)
+           && !AccessService.LooksLikeHubPrincipal(ctx.ObjectId)
+           && !string.Equals(ctx.ObjectId, SystemUserId, StringComparison.Ordinal);
 
     /// <summary>
     /// Resolves the synchronization hub if the stream is alive and the hub is
@@ -708,6 +765,15 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         logger.LogDebug("Creating Synchronization Stream {StreamId} for Host {Host} and {StreamIdentity} and {Reference}", StreamId, Host.Address, StreamIdentity, Reference);
 
         Hub = Host.GetHostedHub(SynchronizationAddress.Create(ClientId), ConfigureSynchronizationHub);
+
+        // 🚨 Capture the creating user's identity ONCE, here on the thread that constructs
+        // the stream — in production that is the circuit thread (cache.GetMeshNodeStream)
+        // or the owner's SubscribeRequest handler, where AccessService.Context is the real
+        // subscribing user. Update() restores it for deferred/continuation writes whose
+        // live AsyncLocal context has gone null. Real users only (CaptureRealUserContext):
+        // an infrastructure-created stream captures null and falls back to the existing
+        // PostPipeline behaviour — a hub/system principal is never captured.
+        _creationContext = CaptureRealUserContext(Host);
     }
 
     private MessageHubConfiguration ConfigureSynchronizationHub(MessageHubConfiguration config)
