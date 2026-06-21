@@ -96,7 +96,16 @@ public static class LayoutClientExtensions
                 : stream.GetDataBoundValue<T>($"{dataContext}/{reference.Pointer}");
 
         if (value is string stringValue && typeof(T).IsEnum)
-            return (T)Enum.Parse(typeof(T), stringValue);
+            // Case-INSENSITIVE + non-throwing: a control property bound to an enum may carry a
+            // mis-cased (e.g. "center" vs Center) or unknown literal from a node's Source. A bare
+            // Enum.Parse is case-sensitive and THROWS on a miss — and this runs inside a Blazor
+            // BuildRenderTree (DataGridView.RenderPropertyColumn), so the throw escapes the render,
+            // kills the circuit, and hangs the whole page (atioz 2026-06-21: HorizontalAlignment
+            // "center"). TryParse(ignoreCase) resolves the common mis-cased case and falls back to
+            // default for a genuinely unknown literal — never crash a render over one bad value.
+            return Enum.TryParse(typeof(T), stringValue, ignoreCase: true, out var parsed)
+                ? (T)parsed!
+                : default;
 
         if (value is null)
             return default;
