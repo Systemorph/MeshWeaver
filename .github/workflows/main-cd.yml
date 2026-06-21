@@ -1,0 +1,148 @@
+name: Continuous Delivery (main)
+
+# CONTINUOUS-channel delivery: every merge to main that PASSES the test suite ships a
+# fresh deployment image and rolls it out to every environment.
+#
+#   push main ─▶ "MeshWeaver Build and Test" (existing) ─▶ [THIS] images ─▶ deploy (memex, atioz, memex-cloud)
+#
+# Why workflow_run (and not push: branches:[main]): we want the image+deploy to fire ONLY
+# after the full test suite is green on the merged commit — never ship an image that failed
+# tests. workflow_run starts after the named workflow COMPLETES; the `if` below filters to a
+# successful run that came from a push to main (not a PR run, not a failed run).
+#
+# This is the CONTINUOUS channel (build-numbered 3.0.0-ci.<build> baked in, images tagged by
+# commit SHA). The RELEASED channel — clean 3.0.0 NuGet packages + clean GHCR images — is a
+# SEPARATE path fired by pushing a v*.*.* tag (release-packages.yml + release-images.yml).
+# "Freeze a release" = push a tag; "merge to main" = this workflow.
+on:
+  workflow_run:
+    workflows: ["MeshWeaver Build and Test"]
+    types: [completed]
+
+# id-token: write is required for OIDC federated login to Azure (no stored client secret).
+permissions:
+  contents: read
+  id-token: write
+
+# Never let two main merges deploy concurrently — a later merge waits for the in-flight
+# rollout rather than racing it. cancel-in-progress:false so we don't abort a half-done deploy.
+concurrency:
+  group: main-cd
+  cancel-in-progress: false
+
+env:
+  ACR: meshweaver.azurecr.io
+  AKS_RG: memex-aks-rg
+  AKS_CLUSTER: memexaks-cluster
+
+jobs:
+  # ─────────────────────────── BUILD + PUSH IMAGES ───────────────────────────
+  images:
+    name: "Build + push images to ACR"
+    # Gate: only a SUCCESSFUL test run, from a PUSH (not a PR), on main.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      tag: ${{ steps.vars.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Build the EXACT commit the tests passed on — not whatever main is now.
+          ref: ${{ github.event.workflow_run.head_sha }}
+      # The SDK container build + the publish output overflow the runner's ~14 GB; reclaim the
+      # ~25 GB of preinstalled tooling a .NET build never touches (same as the test workflow).
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          dotnet: false
+          android: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+      - name: Compute image tag (short SHA)
+        id: vars
+        run: echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      # OIDC federated login — no client secret stored. Requires a federated credential on the
+      # Azure AD app scoped to this repo's main branch (see the README block at the bottom).
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        run: az acr login --name meshweaver
+      - name: Restore workloads
+        run: dotnet workload restore
+      # portal-ai app image — the deployment image (aspnet + node + Claude Code/Copilot CLIs),
+      # layered on the base already in ACR. The base (memex-portal-ai-base) changes rarely and is
+      # rebuilt by the release path / runbook §1 (az acr build), NOT on every main merge.
+      # CIRun=true → continuous version 3.0.0-ci.<build> baked in; image tagged <sha> + moving `main`.
+      - name: Build + push portal-ai
+        run: >
+          dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
+          -c Release -r linux-x64 --no-self-contained -t:PublishContainer -p:PublishProfile=
+          -p:CIRun=true
+          -p:ContainerRegistry=${{ env.ACR }}
+          -p:ContainerRepository=memex-portal-ai
+          -p:ContainerImageTags="${{ steps.vars.outputs.sha }};main"
+          -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:latest
+      - name: Build + push migration
+        run: >
+          dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj
+          -c Release -r linux-x64 --no-self-contained -t:PublishContainer -p:PublishProfile=
+          -p:CIRun=true
+          -p:ContainerRegistry=${{ env.ACR }}
+          -p:ContainerRepository=memex-migration
+          -p:ContainerImageTags="${{ steps.vars.outputs.sha }};main"
+
+  # ───────────────────────────────── DEPLOY ──────────────────────────────────
+  # One leg per environment (namespace) on the shared private cluster. Each leg points the
+  # deployment at the freshly-pushed SHA tag and restarts — the documented code-update flow
+  # (kubectl set image + rollout restart + rollout status), NOT deploy.sh (env setup).
+  # fail-fast:false so one environment failing doesn't abort the rollout to the others.
+  deploy:
+    name: "Deploy ${{ matrix.ns }}"
+    needs: images
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        ns: [memex, atioz, memex-cloud]
+    # Map each namespace to a GitHub Environment so prod (memex-cloud) CAN be given a required-
+    # reviewer / wait-timer protection rule later without touching this file. No rule = auto-deploy.
+    environment: ${{ matrix.ns }}
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      # Private cluster → kubectl ONLY via `az aks command invoke`. $NS/$TAG are expanded by the
+      # runner shell here, so the resolved namespace + tag are baked into the command string the
+      # cluster runs. migration + portal are set + restarted together (matches AGENTS.md); we then
+      # WAIT on the portal rollout so an unhealthy image fails this job loudly instead of going green.
+      - name: Roll out to ${{ matrix.ns }}
+        env:
+          NS: ${{ matrix.ns }}
+          TAG: ${{ needs.images.outputs.tag }}
+        run: |
+          set -euo pipefail
+          az aks command invoke -g "$AKS_RG" -n "$AKS_CLUSTER" --command "
+            kubectl -n $NS set image deployment/memex-portal-deployment memex-portal=$ACR/memex-portal-ai:$TAG;
+            kubectl -n $NS set image deployment/memex-migration-deployment memex-migration=$ACR/memex-migration:$TAG;
+            kubectl -n $NS rollout restart deployment/memex-migration-deployment deployment/memex-portal-deployment;
+            kubectl -n $NS rollout status deployment/memex-portal-deployment --timeout=300s
+          "
