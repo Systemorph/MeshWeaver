@@ -37,6 +37,7 @@ using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.PostgreSql;
 using MeshWeaver.Hosting.Security;
+using MeshWeaver.Hosting.SignalR;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
@@ -635,7 +636,9 @@ public static class MemexConfiguration
                         .AddContentIndexSettingsTab();
                 })
                 // Add activity tracking to record user access patterns via ActivityLogBundler
-                .AddActivityTracking();
+                .AddActivityTracking()
+                // SignalR mesh transport — external participants (native clients) join over a WebSocket.
+                .AddSignalRHub();
         }
 
         /// <summary>
@@ -789,7 +792,10 @@ public static class MemexConfiguration
         app.UseMiddleware<VirtualUserMiddleware>();
         app.UseMiddleware<OnboardingMiddleware>();
 
-        //app.MapMeshWeaverSignalRHubs();
+        // SignalR mesh transport endpoint (/signalr) — external participants join the mesh.
+        // Gated by Features:SignalR (on by default); routes: signalr client ⇒ portal hub ⇒ rest of mesh.
+        if (features.SignalR)
+            app.MapMeshWeaverSignalRHubs();
 
         // Map MCP endpoint
         app.MapMeshMcp();
