@@ -1,0 +1,6 @@
+<!-- Insulates the MAUI client from the repo-root Directory.Build.props, which forces a single
+     <TargetFramework>net10.0</TargetFramework> (fighting MAUI's multi-targeting) and injects
+     net10.0-only vulnerable-transitive package pins. An empty file stops the walk-up so this
+     project keeps the MAUI SDK defaults. -->
+<Project>
+</Project>
