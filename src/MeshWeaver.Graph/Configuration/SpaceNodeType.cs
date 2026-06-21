@@ -236,6 +236,17 @@ public static class SpaceNodeType
                 return Observable.Empty<System.Reactive.Unit>();
             }
 
+            // System needs no grant (Permission.All). When a Space root is materialized under
+            // System impersonation — the static-repo import, onboarding, or the central partition
+            // bootstrap (MeshExtensions.EnsurePartitionRoot) — there is no per-creator grant to
+            // write: catalog read access comes from the partition's publicRead _Policy, not a
+            // spurious system-security AccessAssignment under {id}/_Access.
+            if (string.Equals(createdBy, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase))
+            {
+                logger?.LogDebug("Skipping creator-Admin grant for system-created Space at {Path}", createdNode.Path);
+                return Observable.Empty<System.Reactive.Unit>();
+            }
+
             logger?.LogInformation("Granting Admin role to {User} on Space {Path}", createdBy, createdNode.Path);
             var assignmentNode = new MeshNode($"{createdBy}_Access", $"{createdNode.Id}/_Access")
             {
