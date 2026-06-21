@@ -110,7 +110,12 @@ public class ClaudeCodeChatClient : IChatClient
         // letting the CLI fail later with a cryptic "Not logged in · Please run /login" →
         // ProcessException exit 1. (configDir is null only in single-user dev, where the CLI uses the
         // machine's own login — so we don't pre-empt there.)
-        if (!string.IsNullOrEmpty(configDir) && string.IsNullOrEmpty(oauthToken) && !HasCredentials(configDir))
+        // The token comes from the node-backed resolver (oauthToken); when its cache is cold after a
+        // reload / pod restart, fall back to the token persisted in .credentials.json on the shared
+        // config-dir volume — so we still set CLAUDE_CODE_OAUTH_TOKEN and authenticate instead of
+        // surfacing a spurious "Not logged in". (Sync file read; this is the off-hub SDK leaf.)
+        var effectiveToken = !string.IsNullOrEmpty(oauthToken) ? oauthToken : ReadCredentialsToken(configDir);
+        if (!string.IsNullOrEmpty(configDir) && string.IsNullOrEmpty(effectiveToken))
         {
             throw new AuthRequiredException(
                 Harnesses.ClaudeCode,
@@ -146,8 +151,8 @@ public class ClaudeCodeChatClient : IChatClient
             try { Directory.CreateDirectory(configDir); }
             catch (Exception ex) { logger?.LogWarning(ex, "Could not create CLAUDE_CONFIG_DIR {Dir}", configDir); }
         }
-        if (!string.IsNullOrEmpty(oauthToken))
-            env["CLAUDE_CODE_OAUTH_TOKEN"] = oauthToken;
+        if (!string.IsNullOrEmpty(effectiveToken))
+            env["CLAUDE_CODE_OAUTH_TOKEN"] = effectiveToken;
 
         var claudeOptions = new ClaudeAgentOptions { Env = env };
 
@@ -426,6 +431,39 @@ public class ClaudeCodeChatClient : IChatClient
         {
             return false;
         }
+    }
+
+    /// <summary>Reads the OAuth token back from <c>{configDir}/.credentials.json</c> (Claude shape
+    /// <c>claudeAiOauth.accessToken</c>, or any nested access-token key) — the persistent fallback
+    /// when the node-backed resolver cache is cold after a reload. Null on any miss.</summary>
+    private static string? ReadCredentialsToken(string? configDir)
+    {
+        if (string.IsNullOrEmpty(configDir)) return null;
+        try
+        {
+            var path = Path.Combine(configDir, ".credentials.json");
+            if (!File.Exists(path)) return null;
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+            return ExtractToken(doc.RootElement);
+        }
+        catch { return null; }
+    }
+
+    private static string? ExtractToken(System.Text.Json.JsonElement el)
+    {
+        foreach (var name in new[] { "accessToken", "access_token", "token", "oauthToken" })
+        {
+            if (el.ValueKind == System.Text.Json.JsonValueKind.Object && el.TryGetProperty(name, out var v)
+                && v.ValueKind == System.Text.Json.JsonValueKind.String && !string.IsNullOrEmpty(v.GetString()))
+                return v.GetString();
+        }
+        if (el.ValueKind == System.Text.Json.JsonValueKind.Object)
+            foreach (var prop in el.EnumerateObject())
+            {
+                var found = ExtractToken(prop.Value);
+                if (!string.IsNullOrEmpty(found)) return found;
+            }
+        return null;
     }
 
     private static readonly object PathLock = new();
