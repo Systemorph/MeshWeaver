@@ -9,6 +9,10 @@ public partial class App : Application
 
 	protected override Window CreateWindow(IActivationState? activationState)
 	{
-		return new Window(new MainPage()) { Title = "Memex.Client" };
+		// Two tabs: the native app (in-process Blazor — Voice/Mesh) and the full portal (WebView).
+		var root = new TabbedPage { Title = "Memex" };
+		root.Children.Add(new MainPage { Title = "App" });
+		root.Children.Add(new PortalPage());
+		return new Window(root) { Title = "Memex" };
 	}
 }
