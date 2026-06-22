@@ -113,18 +113,34 @@ public static class LayoutClientExtensions
         // Handle nullable value types
         var targetType = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
 
-        // Use Convert.ChangeType for flexible conversion
-        if (typeof(T).IsValueType)
+        // 🚨 This runs inside a Blazor BuildRenderTree (DataGridView.RenderPropertyColumn). A
+        // Convert.ChangeType / direct unbox cast THROWS on an unexpected runtime type
+        // (InvalidCastException / FormatException / OverflowException) — and a throw here escapes
+        // the render, tears down the Blazor circuit and BLANKS the page (the same failure class as
+        // the case-sensitive Enum.Parse crash fixed in the enum branch above). A bound column value
+        // that arrives as a different shape after a parameter switch (year/PK) must NEVER crash the
+        // render: convert defensively and fall back to default, logging the offending value at
+        // Debug for diagnosis. stream may be null on the pure unit-test path — log null-safely.
+        try
         {
-            // For nullable value types, convert to underlying type first
-            if (targetType != typeof(T))
+            if (typeof(T).IsValueType)
             {
-                var converted = Convert.ChangeType(value, targetType);
-                return (T?)converted;
+                // For nullable value types, convert to the underlying type first.
+                if (targetType != typeof(T))
+                    return (T?)Convert.ChangeType(value, targetType);
+                // Non-nullable value type: use the value directly when it is already T,
+                // otherwise coerce via ChangeType (a bare (T)value unbox throws on a mismatch).
+                return value is T typed ? typed : (T?)Convert.ChangeType(value, targetType);
             }
-            return (T?)value;
+            return (T?)Convert.ChangeType(value, targetType);
         }
-        return (T?)Convert.ChangeType(value, targetType);
+        catch (Exception ex)
+        {
+            stream?.Hub?.ServiceProvider?.GetService<ILoggerFactory>()
+                ?.CreateLogger("MeshWeaver.Layout.GetDataBoundValue")
+                .LogDebug(ex, "GetDataBoundValue<{Type}> could not convert value '{Value}' — using default", typeof(T).Name, value);
+            return default;
+        }
     }
     private static T? GetDataBoundValue<T>(this ISynchronizationStream<JsonElement> stream, string pointer, string? dataContext = null)
     {
