@@ -171,6 +171,7 @@ public static class DeleteLayoutArea
         string progressId,
         string backHref)
     {
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
         ctx.Host.Stream
             .GetDataStream<Dictionary<string, object?>>(dataId)
             .Take(1)
@@ -200,14 +201,22 @@ public static class DeleteLayoutArea
                             if (response.Message is DeleteNodeResponse { Success: true })
                             {
                                 ctx.Host.UpdateData(progressId, DeleteStatus.Done);
-                                // Navigate to the PARENT node — the node we were looking
-                                // at no longer exists, so its own Overview (backHref)
-                                // would land the user on a dead page. Top-level nodes
-                                // (no parent) go home. The bare node URL renders the
-                                // parent's default area (Mesh URL shape: /{meshpath}).
-                                var parentPath = GetParentPath(nodePath);
-                                var target = parentPath is null ? "/" : $"/{parentPath}";
-                                ctx.Host.UpdateArea(ctx.Area, new RedirectControl(target));
+                                // Redirect to the nearest ancestor that is an ACTUAL mesh node.
+                                // The node we were looking at no longer exists, and its immediate
+                                // parent PATH is frequently a virtual grouping (e.g. ".../Script")
+                                // with no node of its own — redirecting straight there would just
+                                // land the user on another "No node found" page. Resolve the closest
+                                // existing ancestor instead; a top-level node (none) goes home. The
+                                // bare node URL renders that node's default area (Mesh URL shape).
+                                ResolveNearestExistingAncestor(meshQuery, nodePath)
+                                    .Take(1)
+                                    .Timeout(TimeSpan.FromSeconds(10))
+                                    .Catch<string?, Exception>(_ => Observable.Return(GetParentPath(nodePath)))
+                                    .Subscribe(ancestor =>
+                                    {
+                                        var target = ancestor is null ? "/" : $"/{ancestor}";
+                                        ctx.Host.UpdateArea(ctx.Area, new RedirectControl(target));
+                                    });
                             }
                             else
                             {
@@ -268,5 +277,39 @@ public static class DeleteLayoutArea
     {
         var lastSlash = path.LastIndexOf('/');
         return lastSlash > 0 ? path[..lastSlash] : null;
+    }
+
+    /// <summary>
+    /// Resolves the nearest ANCESTOR of <paramref name="nodePath"/> that is an actual mesh node,
+    /// walking up the path nearest-first. The immediate parent PATH segment is frequently a virtual
+    /// grouping (e.g. <c>AgenticPension/Script</c>) that has children but no node of its own —
+    /// redirecting there after a delete would just land on another "No node found". Each candidate
+    /// is an existence QUERY (the eventually-consistent index is fine: ancestor existence is stable
+    /// and we never touch the just-deleted node), never a node-hub subscribe — a subscribe to a
+    /// missing node hangs until timeout. Emits the nearest existing ancestor, or <c>null</c> when
+    /// none exists (a top-level node → redirect home). Short-circuits: stops probing as soon as an
+    /// existing ancestor is found.
+    /// </summary>
+    internal static IObservable<string?> ResolveNearestExistingAncestor(IMeshService? meshQuery, string nodePath)
+    {
+        var immediateParent = GetParentPath(nodePath);
+        if (immediateParent is null)
+            return Observable.Return<string?>(null);            // top-level node → home
+        if (meshQuery is null)
+            return Observable.Return<string?>(immediateParent); // no query service → best-effort parent
+
+        var ancestors = new List<string>();
+        for (var p = immediateParent; p is not null; p = GetParentPath(p))
+            ancestors.Add(p);
+
+        return ancestors
+            .Select(ancestor => meshQuery
+                .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{ancestor}"))
+                .Take(1)
+                .Select(c => c.Items.Any(n => n.Path == ancestor) ? ancestor : null))
+            .Aggregate(
+                Observable.Return<string?>(null),
+                (acc, probe) => acc.SelectMany(found =>
+                    found is not null ? Observable.Return(found) : probe));
     }
 }
