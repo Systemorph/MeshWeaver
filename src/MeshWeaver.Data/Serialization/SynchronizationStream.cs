@@ -105,6 +105,17 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     private const string SystemUserId = "system-security";
 
     /// <summary>
+    /// The well-known System identity stamped on the FINAL-FALLBACK write of an
+    /// <see cref="StreamConfiguration{TStream}.RunsAsInfrastructure">infrastructure</see>
+    /// mirror stream (a data-source <see cref="EntityStore"/> store: <c>ds/Activity</c>,
+    /// <c>ds/&lt;partition&gt;</c>, …) when no live / creation / owner identity can be
+    /// resolved. Equivalent to <see cref="AccessService.ImpersonateAsSystem"/>'s context,
+    /// constructed inline because Data sits below Mesh.Contract in the project graph.
+    /// </summary>
+    private static readonly AccessContext InfrastructureContext =
+        new() { ObjectId = SystemUserId, Name = SystemUserId };
+
+    /// <summary>
     /// The real-user <see cref="AccessContext"/> captured ONCE on the thread that
     /// CONSTRUCTS (or first subscribes to) this stream — the circuit / SubscribeRequest
     /// handler thread, where <see cref="AccessService.Context"/> still identifies the
@@ -313,6 +324,20 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                     capturedContext = _creationContext = resolved;
             }
         }
+        // FINAL fallback for a genuine INFRASTRUCTURE mirror stream (a data-source EntityStore
+        // store: ds/Activity, ds/<partition>, …). By the time a change reaches the data-source
+        // mirror it is ALREADY AUTHORIZED — RLS was enforced at the user-facing write — and the
+        // store carries MANY nodes (different owners), so the owner-resolver above legitimately
+        // returns null. Such a deferred / cross-hub propagation whose live AsyncLocal context is
+        // gone must NOT post a context-less UpdateStreamRequest: the never-null PostPipeline guard
+        // fails it closed → Store.OnError → the stream's ReplaySubject is terminally faulted and
+        // every FUTURE subscriber replays only the error, never a Full (the blank-side-panel-until-
+        // reload bug). Stamp System — the SAME rule and fix as DataSourceWithStorage's persistence
+        // hub and VirtualDataSource's mirror writes. NOT real-user writes: a live / creation / owner
+        // context above always wins; this only fills the genuine no-user gap. Deliberately NOT cached
+        // into _creationContext (which stays real-user only, never System).
+        if (capturedContext is null && Configuration.RunsAsInfrastructure)
+            capturedContext = InfrastructureContext;
         hub.Post(
             new UpdateStreamRequest(update, exceptionCallback),
             opt => capturedContext is null ? opt : opt.WithAccessContext(capturedContext));
@@ -1264,6 +1289,23 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
 
     public StreamConfiguration<TStream> ReturnNullWhenNotPresent()
         => this with { NullReturn = true };
+
+    /// <summary>
+    /// Marks this stream as a genuine INFRASTRUCTURE mirror (a data-source <see cref="EntityStore"/>
+    /// store: <c>ds/Activity</c>, <c>ds/&lt;partition&gt;</c>, …). When set, a
+    /// <see cref="SynchronizationStream{TStream}.Update(System.Func{TStream,ChangeItem{TStream}},System.Action{System.Exception})"/>
+    /// whose live AsyncLocal context is gone AND for which no creation / owner identity can be
+    /// resolved stamps the well-known System identity on the resulting <c>UpdateStreamRequest</c>
+    /// instead of posting context-less and being failed closed by the never-null PostPipeline guard
+    /// (which would terminally fault the Store and poison every future subscriber). Identical rule to
+    /// <c>DataSourceWithStorage</c>'s persistence-as-System and <c>VirtualDataSource</c>'s mirror
+    /// writes; real-user writes are unaffected (a live identity always wins).
+    /// </summary>
+    internal bool RunsAsInfrastructure { get; init; }
+
+    /// <inheritdoc cref="RunsAsInfrastructure"/>
+    public StreamConfiguration<TStream> AsInfrastructure(bool value = true)
+        => this with { RunsAsInfrastructure = value };
 
     internal Func<ISynchronizationStream<TStream>, CancellationToken, Task<TStream>>? Initialization { get; init; }
 
