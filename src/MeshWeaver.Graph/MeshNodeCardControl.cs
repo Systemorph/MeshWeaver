@@ -29,12 +29,9 @@ public record MeshNodeCardControl(
         var nodePath = node?.Path ?? fallbackPath;
         var title = node?.Name ?? fallbackPath;
         var imageUrl = MeshNodeThumbnailControl.GetImageUrlForNode(node);
-        // Show a real one-line summary (the node's Description, or the markdown
-        // Abstract when content is still typed). Falls back to the NodeType so
-        // non-described nodes keep a meaningful label rather than a blank line.
-        var description = node?.Description
-            ?? (node?.Content as MarkdownContent)?.Abstract
-            ?? node?.NodeType;
+        // Databind the card subtitle to the node's Description (blank when unset) —
+        // no NodeType fallback, so the line reflects the real description, nothing else.
+        var description = node?.Description;
 
         return new MeshNodeCardControl(nodePath, title, description, imageUrl, itemArea, disableNavigation ? true : null);
     }
