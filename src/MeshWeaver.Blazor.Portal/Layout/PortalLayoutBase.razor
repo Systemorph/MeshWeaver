@@ -43,7 +43,7 @@
                                 }
                                 else
                                 {
-                                    <FluentMenuItem OnClick="@(() => HandleMenuItemClick(item))">
+                                    <FluentMenuItem OnClick="@(() => HandleMenuItemClick(item))" title="@(item.Tooltip ?? item.Label)">
                                         @if (!string.IsNullOrEmpty(item.Icon))
                                         {
                                             if (IsEmoji(item.Icon))
@@ -82,7 +82,7 @@
                                 }
                                 else
                                 {
-                                    <FluentMenuItem OnClick="@(() => HandleMenuItemClick(item))">
+                                    <FluentMenuItem OnClick="@(() => HandleMenuItemClick(item))" title="@(item.Tooltip ?? item.Label)">
                                         @if (!string.IsNullOrEmpty(item.Icon))
                                         {
                                             if (IsEmoji(item.Icon))
@@ -103,6 +103,40 @@
                             Title="Mesh menu" aria-label="Mesh menu"
                             OnClick="@ToggleMeshMenu">
                             <FluentIcon Value="@(new Icons.Regular.Size20.Grid())" Color="Color.FillInverse" />
+                        </FluentButton>
+
+                        @* AI menu — Threads / Models / Agents / Skills, each opens mesh search grouped by namespace *@
+                        <FluentMenu Anchor="ai-menu-anchor" Open="@isAiMenuOpen" OpenChanged="@OnAiMenuOpenChanged">
+                            @foreach (var menuItem in FlattenMenuItems(GetAiMenuItems()))
+                            {
+                                var item = menuItem;
+                                @if (item.Area == "_separator")
+                                {
+                                    <hr style="margin: 4px 8px; border: none; border-top: 1px solid var(--neutral-stroke-divider-rest);" />
+                                }
+                                else
+                                {
+                                    <FluentMenuItem OnClick="@(() => HandleMenuItemClick(item))" title="@(item.Tooltip ?? item.Label)">
+                                        @if (!string.IsNullOrEmpty(item.Icon))
+                                        {
+                                            if (IsEmoji(item.Icon))
+                                            {
+                                                <span style="margin-right: 8px;">@item.Icon</span>
+                                            }
+                                            else
+                                            {
+                                                <img src="@item.Icon" alt="" style="width: 16px; height: 16px; margin-right: 8px;" />
+                                            }
+                                        }
+                                        @item.Label
+                                    </FluentMenuItem>
+                                }
+                            }
+                        </FluentMenu>
+                        <FluentButton Id="ai-menu-anchor" Appearance="Appearance.Stealth" BackgroundColor="transparent"
+                            Title="AI" aria-label="AI menu"
+                            OnClick="@ToggleAiMenu">
+                            <FluentIcon Value="@(new Icons.Regular.Size20.Sparkle())" Color="Color.FillInverse" />
                         </FluentButton>
 
                         @* Settings — direct navigation *@

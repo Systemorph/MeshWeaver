@@ -15,6 +15,7 @@ namespace MeshWeaver.Mesh;
 /// <param name="Order">Sort order within the menu (lower = earlier)</param>
 /// <param name="Href">Optional absolute href — when set, navigates to this URL instead of constructing from Area</param>
 /// <param name="Children">Optional child menu items for nested/hierarchical menus</param>
+/// <param name="Tooltip">Optional hover tooltip; falls back to <paramref name="Label"/> when null</param>
 public record NodeMenuItemDefinition(
     string Label,
     string Area,
@@ -22,7 +23,8 @@ public record NodeMenuItemDefinition(
     Permission RequiredPermission = Permission.None,
     int Order = 0,
     string? Href = null,
-    IReadOnlyList<NodeMenuItemDefinition>? Children = null);
+    IReadOnlyList<NodeMenuItemDefinition>? Children = null,
+    string? Tooltip = null);
 
 /// <summary>
 /// Provider delegate that emits the current set of menu items as a reactive stream.

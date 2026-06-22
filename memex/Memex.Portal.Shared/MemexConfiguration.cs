@@ -616,12 +616,23 @@ public static class MemexConfiguration
                         .AddDefaultLayoutAreas()
                         .AddThreadsLayoutArea()
                         .AddApiTokensSettingsTab()
-                        .AddModelsSettingsTab()
-                        // Agents are user/space CONTENT (under {user}/Agent · {space}/Agent), not admin
-                        // config — surfaced on the user overview's namespace listing and created from chat
-                        // (the agent proactively offers a /skill). Settings is admin-only territory: models
-                        // + keys. (Agents tab removed; AgentsSettingsTab.cs retired.)
-                        .AddAiSettingsTab()
+                        // AI menu (top bar) — replaces the retired Models + AI Settings tabs. Each entry
+                        // opens mesh search grouped by namespace, so every tier (global / space / user)
+                        // where the concern is defined shows as its own section. Per-item configurable
+                        // (label / icon / order / tooltip / href); register more under the same AI context.
+                        .AddNodeMenuItems(NodeMenuItemsExtensions.AiMenuContext,
+                            new NodeMenuItemDefinition("Threads", "AiThreads", Icon: "/static/NodeTypeIcons/chat.svg", Order: 10,
+                                Href: "/search?q=nodeType%3AThread&groupBy=Namespace",
+                                Tooltip: "Conversation threads across every namespace"),
+                            new NodeMenuItemDefinition("Models", "AiModels", Icon: "/static/NodeTypeIcons/sparkle.svg", Order: 20,
+                                Href: "/search?q=nodeType%3AModelProvider%7CLanguageModel&groupBy=Namespace",
+                                Tooltip: "AI providers and their models"),
+                            new NodeMenuItemDefinition("Agents", "AiAgents", Icon: "/static/NodeTypeIcons/bot.svg", Order: 30,
+                                Href: "/search?q=nodeType%3AAgent&groupBy=Namespace",
+                                Tooltip: "AI agents — global, space, and user"),
+                            new NodeMenuItemDefinition("Skills", "AiSkills", Icon: "/static/NodeTypeIcons/rocket.svg", Order: 40,
+                                Href: "/search?q=nodeType%3ASkill&groupBy=Namespace",
+                                Tooltip: "Reusable skills"))
                         // Dedicated Admin menu (platform-wide GlobalSettings area), gated on root
                         // Permission.All: Invitations + Inbox.
                         .AddInvitationsSettingsTab()

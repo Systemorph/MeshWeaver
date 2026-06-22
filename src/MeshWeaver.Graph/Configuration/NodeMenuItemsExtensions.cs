@@ -37,6 +37,12 @@ public static class NodeMenuItemsExtensions
     /// <summary>Menu context name for mesh-level operations (Create, Import, Export subtree).</summary>
     public const string MeshMenuContext = "Mesh";
 
+    /// <summary>Menu context for AI concerns (Threads / Models / Agents / Skills). Injectable like any
+    /// other context — register an <see cref="INodeMenuProvider"/> with <c>Context = "AI"</c>, or call
+    /// <see cref="AddNodeMenuItems(MessageHubConfiguration, string, NodeMenuItemProvider[])"/> with this
+    /// context, to contribute more items (sorted by <see cref="NodeMenuItemDefinition.Order"/>).</summary>
+    public const string AiMenuContext = "AI";
+
     /// <summary>Shared empty slice — providers emit this (never <c>Observable.Empty</c>) when they contribute nothing.</summary>
     private static readonly IReadOnlyCollection<NodeMenuItemDefinition> EmptyItems = [];
 

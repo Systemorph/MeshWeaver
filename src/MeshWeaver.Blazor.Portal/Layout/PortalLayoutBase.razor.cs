@@ -65,16 +65,20 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
     private bool isNodeMenuOpen;
     private bool isMeshMenuOpen;
+    private bool isAiMenuOpen;
 
     // Menu context names (must match NodeMenuItemsExtensions.NodeMenuContext / MeshMenuContext).
     private const string NodeMenuContext = "Node";
     private const string MeshMenuContext = "Mesh";
+    private const string AiMenuContext = "AI";
 
     // Menu items per context from IMenuItemsProvider (populated by LayoutAreaView from $Menu:{context} streams)
     private IReadOnlyList<NodeMenuItemDefinition> _nodeMenuItems = [];
     private IReadOnlyList<NodeMenuItemDefinition> _meshMenuItems = [];
+    private IReadOnlyList<NodeMenuItemDefinition> _aiMenuItems = [];
     private IDisposable? _nodeMenuSubscription;
     private IDisposable? _meshMenuSubscription;
+    private IDisposable? _aiMenuSubscription;
 
 
     // Editable content collections
@@ -99,6 +103,11 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         _meshMenuSubscription = MenuItemsProvider.GetMenu(MeshMenuContext).Subscribe(items =>
         {
             _meshMenuItems = items;
+            InvokeAsync(StateHasChanged);
+        });
+        _aiMenuSubscription = MenuItemsProvider.GetMenu(AiMenuContext).Subscribe(items =>
+        {
+            _aiMenuItems = items;
             InvokeAsync(StateHasChanged);
         });
     }
@@ -161,6 +170,24 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         isMeshMenuOpen = open;
     }
 
+    private void ToggleAiMenu()
+    {
+        isAiMenuOpen = !isAiMenuOpen;
+    }
+
+    private void OnAiMenuOpenChanged(bool open)
+    {
+        isAiMenuOpen = open;
+    }
+
+    /// <summary>
+    /// AI menu items — aggregated reactively from the injectable "AI" menu context (default seed:
+    /// Threads / Models / Agents / Skills, each opening mesh search grouped by namespace). NOT a
+    /// hardcoded list: modules contribute via an <c>INodeMenuProvider</c> with <c>Context = "AI"</c>.
+    /// Populated like the Node / Mesh menus from <see cref="IMenuItemsProvider"/>.
+    /// </summary>
+    private IReadOnlyList<NodeMenuItemDefinition> GetAiMenuItems() => _aiMenuItems;
+
     /// <summary>
     /// Navigates to the Settings page — per-node Settings when on a node, Global Settings at the root.
     /// </summary>
@@ -195,6 +222,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     {
         isNodeMenuOpen = false;
         isMeshMenuOpen = false;
+        isAiMenuOpen = false;
         if (!string.IsNullOrEmpty(item.Href))
             NavigationManager.NavigateTo(item.Href);
         else
@@ -555,6 +583,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         _navContextSubscription?.Dispose();
         _nodeMenuSubscription?.Dispose();
         _meshMenuSubscription?.Dispose();
+        _aiMenuSubscription?.Dispose();
         dotNetRef?.Dispose();
         jsModule?.DisposeAsync();
     }
