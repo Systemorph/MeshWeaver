@@ -119,6 +119,61 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     /// <summary>
+    /// 🚨 Blast-radius regression (atioz 2026-06-22 "side-panel chat goes empty / stale until page
+    /// reload"). A fail-closed WRITE — an <c>UpdateStreamRequest</c> posted with no resolvable
+    /// AccessContext (the infra <c>ds/Activity</c> / <c>sync/…</c> continuation write) — must surface
+    /// ONLY to the writer's <c>exceptionCallback</c>. It must NOT terminally fault the shared READ
+    /// stream (the ReplaySubject-backed <c>Store</c> behind every <c>IMeshNodeStreamCache</c> handle):
+    /// once that faults, the ReplaySubject replays the error to every current AND future subscriber, so
+    /// the cached node/layout-area stream is poisoned for the whole circuit and the bound view stays
+    /// empty — until a full page reload builds a fresh cache. A WRITE failing must never tear down the
+    /// READ stream that all other components share.
+    /// </summary>
+    [HubFact]
+    public async Task FailedWrite_DoesNotPoisonTheSharedReadStream()
+    {
+        // USER posting identity so the never-null guard engages and the write fails closed.
+        var host = GetHost(c => ConfigureHost(c).WithPostingIdentity(PostingIdentity.User));
+        var workspace = host.GetWorkspace();
+        var accessService = host.ServiceProvider.GetRequiredService<AccessService>();
+
+        var collectionName = workspace.DataContext.GetTypeSource(typeof(MyData))!.CollectionName;
+
+        // A real user creates + reads the stream (the side-panel binding).
+        accessService.SetContext(new AccessContext { ObjectId = "alice", Name = "Alice" });
+        var stream = workspace.GetStream(new CollectionsReference(collectionName))!;
+
+        Exception? readerError = null;
+        using var sub = stream.Subscribe(_ => { }, ex => readerError = ex);
+
+        // Infra continuation write loses identity → fail-closed (the ds/Activity sync write that
+        // faulted on atioz: "hub=sync/… message=UpdateStreamRequest … no AccessContext").
+        accessService.SetContext(null);
+        accessService.SetCircuitContext(null);
+        stream.Update(_ => (ChangeItem<EntityStore>?)null, _ => { });
+
+        await Task.Delay(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+
+        readerError.Should().BeNull(
+            "a failed/fail-closed WRITE must surface to the writer's exceptionCallback — it must NOT " +
+            "terminally fault the shared READ stream, which poisons every current and future subscriber " +
+            "(the 'side-panel chat goes empty / stale until page reload' bug, atioz 2026-06-22).");
+
+        // A subscriber that binds AFTER the failed write (the post-submit side-panel re-bind) must
+        // still receive the current state — never a replayed fault from the poisoned ReplaySubject.
+        accessService.SetContext(new AccessContext { ObjectId = "alice", Name = "Alice" });
+        Exception? lateError = null;
+        var lateGotValue = false;
+        using var lateSub = stream.Subscribe(_ => lateGotValue = true, ex => lateError = ex);
+        await Task.Delay(TimeSpan.FromMilliseconds(500), TestContext.Current.CancellationToken);
+
+        lateError.Should().BeNull(
+            "a subscriber that binds after a prior failed write must not receive a replayed fault");
+        lateGotValue.Should().BeTrue(
+            "a late subscriber must receive the current stream state, not a poisoned/terminated stream");
+    }
+
+    /// <summary>
     /// THE central fix: a stream's <c>Update(...)</c> invoked from a DEFERRED/CONTINUATION
     /// path — where the live AsyncLocal AccessContext has gone null (a layout-area render
     /// emission, a watcher tick, an agent streaming hop) — must still post the
@@ -212,6 +267,57 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
         delegateRan.Should().BeFalse(
             "a hub-shaped creation principal must never be captured as the creation-context; " +
             "with no real user to restore, the never-null guard fails the delivery closed");
+    }
+
+    /// <summary>
+    /// THE ds/Activity blank-side-panel fix. A DATA-SOURCE EntityStore mirror stream
+    /// (Owner = <c>ds/&lt;Id&gt;</c>: ds/Activity, …) is genuine INFRASTRUCTURE: a change reaches
+    /// it only AFTER it was authorized at the user-facing write, and it holds MANY nodes (different
+    /// owners), so no single owner can be resolved. A deferred / cross-hub propagation whose live
+    /// AsyncLocal context is gone must therefore NOT post a context-less <c>UpdateStreamRequest</c>
+    /// that the never-null PostPipeline guard fails closed — that terminally faults the stream's
+    /// ReplaySubject Store, and the workspace then hands the poisoned handle to every future
+    /// subscriber (blank until a full page reload re-creates the cache). The mirror stamps the
+    /// well-known System identity on that final-fallback write instead — the same rule as
+    /// DataSourceWithStorage persistence + VirtualDataSource mirror writes.
+    /// <para>FAIL-BEFORE / PASS-AFTER: without the <c>AsInfrastructure</c> marking the post is
+    /// failed closed, the update delegate never runs, and the Store faults; with it the delegate
+    /// runs under <c>system-security</c> and the Store stays alive.</para>
+    /// </summary>
+    [HubFact]
+    public async Task DataSourceMirrorUpdate_NoResolvableUser_RunsAsSystem_DoesNotFaultStore()
+    {
+        // USER posting identity so the never-null guard actually engages — a System host would
+        // stamp system-security anyway and prove nothing.
+        var host = GetHost(c => ConfigureHost(c).WithPostingIdentity(PostingIdentity.User));
+        var workspace = host.GetWorkspace();
+        var accessService = host.ServiceProvider.GetRequiredService<AccessService>();
+
+        // The RAW data-source EntityStore mirror stream (NOT a reduced user-facing stream).
+        var dataSource = workspace.DataContext.GetDataSourceForType(typeof(MyData))!;
+        var stream = dataSource.GetStreamForPartition(null)!;
+
+        // Simulate the deferred/continuation write: live AsyncLocal + circuit context wiped (a render
+        // emission / watcher tick / cross-hub propagation runs on a scheduler thread). The mirror has
+        // no real-user creation context, and no IStreamOwnerResolver is registered here (MyData isn't a
+        // MeshNode), so every prior fallback yields null and only the infrastructure fallback remains.
+        accessService.SetContext(null);
+        accessService.SetCircuitContext(null);
+
+        // Capture the identity the update delegate runs UNDER — proves System was stamped and the
+        // post was accepted (without the fix the post fails closed and this never emits).
+        var seen = new System.Reactive.Subjects.ReplaySubject<string?>();
+        stream.Update(_ =>
+        {
+            seen.OnNext(accessService.Context?.ObjectId);
+            return (ChangeItem<EntityStore>?)null;
+        }, _ => { });
+
+        var seenId = await seen.Should().Within(5.Seconds()).Match(id => id == "system-security");
+        seenId.Should().Be(
+            "system-security",
+            "a context-less write to the infrastructure data-source mirror must be stamped System " +
+            "(persistence/mirror-as-System), not posted null-context and failed closed");
     }
 
     /// <summary>

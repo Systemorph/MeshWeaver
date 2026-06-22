@@ -202,13 +202,22 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
     {
         var reference = GetReference();
 
-
+        // 🚨 The data-source EntityStore stream is a genuine INFRASTRUCTURE mirror of the data
+        // source's collections (its Owner is ds/<Id>). Changes reach it AFTER being authorized at
+        // the user-facing write, and it holds MANY nodes (different owners), so a deferred/cross-hub
+        // propagation whose live AccessContext is gone has no single owner to attribute to. Mark it
+        // infrastructure so such a context-less Update stamps System rather than posting null-context
+        // and being failed closed by the never-null PostPipeline guard — which would terminally fault
+        // this stream's Store and poison every future subscriber (the ds/Activity blank-side-panel
+        // bug). Same rule as DataSourceWithStorage persistence + VirtualDataSource. REDUCED streams
+        // built off this one (the user-facing per-node / per-collection views) are NOT marked — they
+        // keep their own creation-context capture and fail closed on a genuine no-identity write.
         var stream = new SynchronizationStream<EntityStore>(
             identity,
             Hub,
             reference,
             Workspace.ReduceManager.ReduceTo<EntityStore>(),
-            config
+            c => (config?.Invoke(c) ?? c).AsInfrastructure()
        );
 
         return stream;
