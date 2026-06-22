@@ -535,6 +535,90 @@ public class NavigationServiceTest
 
     #endregion
 
+    #region Query String / Args Splitting Tests
+
+    [Fact]
+    public void SingleSegmentRouteWithQuery_IsPageRoute_NotResolvedAsNode()
+    {
+        // 🚨 Regression: the AI top-bar "Threads" / "Models" items navigate to
+        //   /search?q=nodeType%3AThread&groupBy=Namespace
+        // The whole URL (query included) used to be fed into path resolution, so the
+        // resolved address became the synthetic node `search?q=nodeType:Thread&...`, the
+        // `nodeType:Thread` token got permission-checked as a Thread node ("lacks Thread
+        // permission"), AND a GetDataRequest to that bogus hub hung >30s without opening its
+        // init gates. A single-segment route that carries query params is a Blazor PAGE route,
+        // never a mesh node: it must NOT be resolved/permission-checked/subscribed at all.
+        var service = CreateService();
+        // Stub the resolver to "succeed" for anything — the assertion is that it is NEVER called.
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(
+                new AddressResolution("search", null)));
+
+        service.Initialize();
+        // ProcessLocationChange runs synchronously off the path subject, so the page-route
+        // short-circuit has already emitted by the time this returns.
+        _navigationManager.SimulateLocationChanged("http://localhost/search?q=nodeType%3AThread&groupBy=Namespace");
+
+        // No node address: Context cleared, namespace cleared.
+        service.Context.Should().BeNull();
+        service.CurrentNamespace.Should().BeNull();
+        service.IsResolving.Should().BeFalse();
+
+        // The resolver was NEVER asked to resolve a page route — not the bare route and
+        // certainly not the query-laden URL.
+        _ = _pathResolver.DidNotReceive().ResolvePath(Arg.Any<string>());
+    }
+
+    [Fact]
+    public async Task RealNodeUrl_NoQuery_ResolvesAddressCorrectly_ArgsEmpty()
+    {
+        var service = CreateService();
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(null));
+        _pathResolver.ResolvePath("AgenticPension/Jahresrechnung")
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(
+                new AddressResolution("AgenticPension/Jahresrechnung", null)));
+
+        service.Initialize();
+        _navigationManager.SimulateLocationChanged("http://localhost/AgenticPension/Jahresrechnung");
+
+        var ctx = await service.NavigationContext.Should().Within(WaitTimeout)
+            .Match(c => c?.Path == "AgenticPension/Jahresrechnung");
+
+        ctx!.Address.ToString().Should().Be("AgenticPension/Jahresrechnung");
+        ctx.Namespace.Should().Be("AgenticPension/Jahresrechnung");
+        ctx.Args.Should().BeEmpty();
+        _ = _pathResolver.Received().ResolvePath("AgenticPension/Jahresrechnung");
+    }
+
+    [Fact]
+    public async Task NodeAreaUrl_WithQuery_ResolvesNodeAddress_QueryBecomesArgs()
+    {
+        // A node/area URL that carries a legitimate query parameter: the route (node+area)
+        // resolves to the node address; the query rides on Args, never on the address.
+        var service = CreateService();
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(null));
+        _pathResolver.ResolvePath("AgenticPension/Overview")
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(
+                new AddressResolution("AgenticPension", "Overview")));
+
+        service.Initialize();
+        _navigationManager.SimulateLocationChanged("http://localhost/AgenticPension/Overview?tab=summary&edit=true");
+
+        var ctx = await service.NavigationContext.Should().Within(WaitTimeout)
+            .Match(c => c?.Area == "Overview");
+
+        ctx!.Address.ToString().Should().Be("AgenticPension");
+        ctx.Path.Should().Be("AgenticPension/Overview");
+        ctx.Args["tab"].Should().Be("summary");
+        ctx.Args["edit"].Should().Be("true");
+        _ = _pathResolver.Received().ResolvePath("AgenticPension/Overview");
+        _ = _pathResolver.DidNotReceive().ResolvePath(Arg.Is<string>(p => p.Contains('?')));
+    }
+
+    #endregion
+
     #region Creatable Types Tests
 
     [Fact]

@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Runtime.CompilerServices;
 using MeshWeaver.Data;
@@ -288,10 +289,45 @@ internal class NavigationService : INavigationService
         return userId;
     }
 
-    private void ProcessLocationChange(string path)
+    private void ProcessLocationChange(string rawPath)
     {
         IsResolving = true;
-        _status.OnNext(NavigationStatus.LookingUp(path));
+
+        // 🚨 Split the navigation target into its three distinct parts before doing
+        // anything else: the ROUTE (the node-address part) and the ARGS (query string).
+        // A mesh node address is ALWAYS the bare path — never a query (see "Mesh URL
+        // Shape"). Feeding the raw URL (with ?query) into path resolution turned
+        // `/search?q=nodeType%3AThread&groupBy=Namespace` into the synthetic node
+        // address `search?q=nodeType:Thread&groupBy=Namespace`, whose `nodeType:Thread`
+        // token was then permission-checked as a Thread node ("lacks Thread permission").
+        // Only the route is resolved/permission-checked; the args ride on the context.
+        var target = NavigationTarget.Parse(rawPath);
+        var route = target.Path;
+        var args = target.Args;
+
+        // 🚨 A single-segment route that carries query parameters is a parametrized Blazor
+        // PAGE route (/search?q=…, /create?type=…, /login?returnUrl=…) — NEVER a mesh node.
+        // A node address is always the bare path and its areas/ids are path SEGMENTS, never
+        // query params (see "Mesh URL Shape"). Resolving such a route mints a synthetic
+        // partition-root hub at a bogus address (e.g. `search`) and then issues a
+        // SubscribeRequest/GetDataRequest to it that never opens its init gates
+        // [DataContextInit, MeshNodeInit] → the >30s deferred-request hang the user hit.
+        // It is ALSO how `/search?q=nodeType%3AThread&…` was permission-checked as a Thread
+        // node. A page route has NO node address: clear the context and stop — the page
+        // (Search/Create/Login) reads its own query via [SupplyParameterFromQuery].
+        if (!string.IsNullOrEmpty(route) && !route.Contains('/') && !args.IsEmpty)
+        {
+            _resolutionSubscription?.Dispose();
+            _notFoundWatchdog?.Dispose();
+            IsResolving = false;
+            Context = null;
+            CurrentNamespace = null;
+            _status.OnNext(NavigationStatus.Idle());
+            _navigationContext.OnNext(null);
+            return;
+        }
+
+        _status.OnNext(NavigationStatus.LookingUp(route));
 
         // Capture the requesting identity SYNCHRONOUSLY, here on the inbound-
         // activity thread where AccessService.CircuitContext is set. Reading it
@@ -314,13 +350,13 @@ internal class NavigationService : INavigationService
         // node being deleted) reflows into the navigation context. No retry
         // timer, no backoff array — the catalog change feed drives re-emit.
         var resolved = false;
-        _resolutionSubscription = _pathResolver.ResolvePath(path).Subscribe(resolution =>
+        _resolutionSubscription = _pathResolver.ResolvePath(route).Subscribe(resolution =>
         {
             if (resolution is null)
                 return; // wait for the catalog to learn about the path
             resolved = true;
             _notFoundWatchdog?.Dispose();
-            ProcessResolvedPath(path, resolution, userId);
+            ProcessResolvedPath(route, args, resolution, userId);
         });
 
         // Watchdog: if no resolution arrives within the cumulative retry budget,
@@ -332,16 +368,18 @@ internal class NavigationService : INavigationService
             .Subscribe(_ =>
             {
                 if (resolved) return;
-                if (_currentPathSnapshot != path) return; // user navigated away
+                // Stale-check against the raw path that was pushed onto _pathSubject
+                // (query included) — that is what _currentPathSnapshot mirrors.
+                if (_currentPathSnapshot != rawPath) return; // user navigated away
                 IsResolving = false;
                 Context = null;
                 CurrentNamespace = null;
-                _status.OnNext(NavigationStatus.NotFound(path));
+                _status.OnNext(NavigationStatus.NotFound(route));
                 _navigationContext.OnNext(null);
             });
     }
 
-    private void ProcessResolvedPath(string path, AddressResolution resolution, string userId)
+    private void ProcessResolvedPath(string route, ImmutableDictionary<string, string> args, AddressResolution resolution, string userId)
     {
         var (area, id) = ParseRemainder(resolution.Remainder);
         _status.OnNext(NavigationStatus.Redirecting(resolution.Prefix, area));
@@ -394,7 +432,7 @@ internal class NavigationService : INavigationService
                 Context = null;
                 CurrentNamespace = null;
                 _navigationContext.OnNext(null);
-                _status.OnNext(NavigationStatus.NotFound(path));
+                _status.OnNext(NavigationStatus.NotFound(route));
                 return;
             }
 
@@ -405,7 +443,7 @@ internal class NavigationService : INavigationService
                 Context = null;
                 CurrentNamespace = null;
                 _navigationContext.OnNext(null);
-                _status.OnNext(NavigationStatus.AccessDenied(path));
+                _status.OnNext(NavigationStatus.AccessDenied(route));
                 return;
             }
 
@@ -440,7 +478,8 @@ internal class NavigationService : INavigationService
 
             var context = new NavigationContext
             {
-                Path = path,
+                Path = route,
+                Args = args,
                 Resolution = resolution,
                 Area = area,
                 Id = id,
@@ -532,10 +571,28 @@ internal class NavigationService : INavigationService
                 {
                     try
                     {
-                        _hub.GetMeshNodeStream(prerenderedPath).Update(current => current with { PreRenderedHtml = html })
-                            .Subscribe(_ => { }, ex =>
-                                _hub.ServiceProvider.GetService<ILogger<NavigationService>>()
-                                    ?.LogWarning(ex, "Failed to persist PreRenderedHtml for {Path}", prerenderedPath));
+                        // 🚨 Persist the PreRendered HTML as SYSTEM, not as the navigating user.
+                        // This is a DERIVED-CACHE write (infrastructure), not a user edit — the
+                        // HTML is computed from the node's own MarkdownContent. Two reasons this
+                        // MUST impersonate System (the sanctioned cache-hydration case, see
+                        // AccessContextPropagation.md):
+                        //  1. It runs in a DEFERRED Rx continuation that fires AFTER the Blazor
+                        //     inbound activity completed, at which point CircuitAccessHandler has
+                        //     cleared the per-circuit AccessContext (its finally → SetCircuitContext
+                        //     (null)). So `AccessService.Context`/`CircuitContext` are BOTH null here
+                        //     and a user-identity write would fail closed ("no AccessContext").
+                        //  2. Doc/read-only nodes are Update-denied to ordinary users anyway; only
+                        //     System may write the cache field. ImpersonateAsSystem sets the
+                        //     AsyncLocal that the cold Update pipeline captures (CarryAccessContext).
+                        var accessService = _hub.ServiceProvider.GetService<AccessService>();
+                        using (accessService?.ImpersonateAsSystem()
+                               ?? System.Reactive.Disposables.Disposable.Empty)
+                        {
+                            _hub.GetMeshNodeStream(prerenderedPath).Update(current => current with { PreRenderedHtml = html })
+                                .Subscribe(_ => { }, ex =>
+                                    _hub.ServiceProvider.GetService<ILogger<NavigationService>>()
+                                        ?.LogWarning(ex, "Failed to persist PreRenderedHtml for {Path}", prerenderedPath));
+                        }
                     }
                     catch (Exception ex)
                     {
