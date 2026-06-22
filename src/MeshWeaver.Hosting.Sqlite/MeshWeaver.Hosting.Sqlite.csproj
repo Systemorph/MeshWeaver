@@ -6,6 +6,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+    <!-- For the shared persistence core wiring (AddPartitionedCoreAndWrapperServices,
+         RegisterMeshQueryCoreOnMeshHub) used by the registration extension. -->
+    <ProjectReference Include="..\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
   </ItemGroup>
 
 </Project>

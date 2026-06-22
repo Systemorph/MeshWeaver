@@ -89,6 +89,7 @@
     <Project Path="src/MeshWeaver.Hosting.AzureStorage/MeshWeaver.Hosting.AzureStorage.csproj" />
     <Project Path="src/MeshWeaver.Hosting.Cosmos/MeshWeaver.Hosting.Cosmos.csproj" />
     <Project Path="src/MeshWeaver.Hosting.PostgreSql/MeshWeaver.Hosting.PostgreSql.csproj" />
+    <Project Path="src/MeshWeaver.Hosting.Sqlite/MeshWeaver.Hosting.Sqlite.csproj" />
     <Project Path="src/MeshWeaver.Hosting.SignalR/MeshWeaver.Hosting.SignalR.csproj" />
     <Project Path="src/MeshWeaver.Hosting/MeshWeaver.Hosting.csproj" />
     <Project Path="src/MeshWeaver.Import/MeshWeaver.Import.csproj" />
@@ -149,6 +150,7 @@
     <Project Path="test/MeshWeaver.Markdown.Export.Test/MeshWeaver.Markdown.Export.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Cosmos.Test/MeshWeaver.Hosting.Cosmos.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.PostgreSql.Test/MeshWeaver.Hosting.PostgreSql.Test.csproj" />
+    <Project Path="test/MeshWeaver.Hosting.Sqlite.Test/MeshWeaver.Hosting.Sqlite.Test.csproj" />
     <Project Path="test/MeshWeaver.Auth.Test/MeshWeaver.Auth.Test.csproj" />
     <Project Path="test/MeshWeaver.FutuRe.Test/MeshWeaver.FutuRe.Test.csproj" />
     <Project Path="test/MeshWeaver.PensionFund.Test/MeshWeaver.PensionFund.Test.csproj" />

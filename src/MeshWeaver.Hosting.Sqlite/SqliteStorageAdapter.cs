@@ -31,7 +31,10 @@ public sealed class SqliteStorageAdapter : IStorageAdapter, IDisposable
     public SqliteStorageAdapter(string connectionString, IIoPool? ioPool = null)
     {
         _ioPool = ioPool ?? IoPool.Unbounded;
-        _connection = new SqliteConnection(connectionString);
+        // One dedicated connection held for the adapter's lifetime — pooling is pointless and would
+        // retain the file handle past Dispose (so the DB file can't be deleted/reopened cleanly).
+        var csb = new SqliteConnectionStringBuilder(connectionString) { Pooling = false };
+        _connection = new SqliteConnection(csb.ConnectionString);
         _connection.Open();
         EnsureSchema();
     }
