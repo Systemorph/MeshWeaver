@@ -38,4 +38,59 @@ public class SidePanelChatKeyingTest
         Assert.True(SidePanelChatKeying.ShouldRebuildControl("Acme/_Thread/t1", "Acme/_Thread/t2")); // different thread
         Assert.True(SidePanelChatKeying.ShouldRebuildControl("Acme/_Thread/t1", string.Empty)); // opened thread → new chat
     }
+
+    // ─── The "chat disappears" bug: OnNavigationContextChanged auto-hiding the side panel ───
+    //
+    // The side panel hosts the active chat. OnNavigationContextChanged enforces "a thread lives
+    // in EITHER the main view OR the side panel, never both" by hiding the panel when navigation
+    // lands on a thread node. The bug: it hid on ANY thread navigation while visible — including
+    // the thread the side panel IS showing, and brand-new side-panel chats — so the conversation
+    // the user is actively in vanished during normal chat → submit → navigate use.
+
+    private const string ThreadType = "Thread";     // ThreadNodeType.NodeType
+    private const string NonThreadType = "Markdown";
+
+    [Fact]
+    public void DoesNotHide_NewSidePanelChat_WhenNavigatingToAnyThread()
+    {
+        // Side panel holds a brand-new chat (no content path). The user submits it — which navigates /
+        // sets the panel to the freshly-created thread — or simply browses to some thread in the main
+        // view. The new-chat composer must NOT be yanked away. (Strong candidate: submit-in-side-panel.)
+        Assert.False(SidePanelChatKeying.ShouldHideSidePanelOnThreadNavigation(
+            ThreadType, "Acme/_Thread/t1", sidePanelContentPath: null, isSidePanelVisible: true));
+        Assert.False(SidePanelChatKeying.ShouldHideSidePanelOnThreadNavigation(
+            ThreadType, "Acme/_Thread/t1", sidePanelContentPath: string.Empty, isSidePanelVisible: true));
+    }
+
+    [Fact]
+    public void DoesNotHide_WhenNavigatedThreadIsTheOneOpenInTheSidePanel()
+    {
+        // The navigated thread IS the side-panel's current thread (e.g. the just-submitted thread the
+        // panel now shows, or expanding the side-panel thread). Same conversation → keep it open.
+        Assert.False(SidePanelChatKeying.ShouldHideSidePanelOnThreadNavigation(
+            ThreadType, "Acme/_Thread/t1", sidePanelContentPath: "Acme/_Thread/t1", isSidePanelVisible: true));
+        // Case-insensitive path match.
+        Assert.False(SidePanelChatKeying.ShouldHideSidePanelOnThreadNavigation(
+            ThreadType, "Acme/_Thread/T1", sidePanelContentPath: "acme/_thread/t1", isSidePanelVisible: true));
+    }
+
+    [Fact]
+    public void Hides_WhenOpeningADifferentThreadFullScreen()
+    {
+        // The side panel shows thread t1; the user opens a DIFFERENT thread t2 full-screen in the main
+        // view → enforce "never both": hide the panel. This is the ONLY case that should hide.
+        Assert.True(SidePanelChatKeying.ShouldHideSidePanelOnThreadNavigation(
+            ThreadType, "Acme/_Thread/t2", sidePanelContentPath: "Acme/_Thread/t1", isSidePanelVisible: true));
+    }
+
+    [Fact]
+    public void DoesNotHide_WhenPanelNotVisible_OrNavigatedNodeIsNotAThread()
+    {
+        // Panel already hidden → nothing to hide.
+        Assert.False(SidePanelChatKeying.ShouldHideSidePanelOnThreadNavigation(
+            ThreadType, "Acme/_Thread/t2", sidePanelContentPath: "Acme/_Thread/t1", isSidePanelVisible: false));
+        // Navigated to a non-thread node → the "never both threads" rule doesn't apply.
+        Assert.False(SidePanelChatKeying.ShouldHideSidePanelOnThreadNavigation(
+            NonThreadType, "Acme/Doc", sidePanelContentPath: "Acme/_Thread/t1", isSidePanelVisible: true));
+    }
 }
