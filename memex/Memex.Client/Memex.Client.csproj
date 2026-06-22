@@ -78,10 +78,10 @@
     <ItemGroup>
       <ProjectReference Include="..\..\src\MeshWeaver.Connection.SignalR\MeshWeaver.Connection.SignalR.csproj" />
       <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
-      <!-- Local-first mesh: this client hosts its own in-process monolith mesh on SQLite. -->
+      <!-- Local-first mesh: this client hosts its own in-process monolith mesh on SQLite.
+           (Hosting.Monolith brings MeshWeaver.Hosting transitively — AddRowLevelSecurity lives there.) -->
       <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
       <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Sqlite\MeshWeaver.Hosting.Sqlite.csproj" />
-      <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Security\MeshWeaver.Hosting.Security.csproj" />
       <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
     </ItemGroup>
 
