@@ -73,26 +73,28 @@ public class ModelProviderEmissionTest
         {
             var def = node.Content.Should().BeOfType<ModelDefinition>().Subject;
             def.Provider.Should().Be("Anthropic");
-            def.ProviderRef.Should().Be("_Provider/Anthropic");
+            def.ProviderRef.Should().Be("Admin/Provider/Anthropic");
             def.ApiKeySecretRef.Should().BeNull("LanguageModel nodes are publicly readable â€” no secrets here");
         });
     }
 
     /// <summary>
-    /// Empty config section (no ApiKey, Endpoint, or Models) emits neither
-    /// ModelProvider nor LanguageModel nodes.
+    /// Empty config section + a source with no bootstrap defaults STILL emits the
+    /// ModelProvider node (create-if-absent seed) but no LanguageModel children
+    /// (there are no model ids to seed).
     /// </summary>
     [Fact]
-    public void NoSignal_NoProviderNodeEmitted()
+    public void NoSignal_StillEmitsProviderNode_ButNoModels()
     {
-        // Empty config section + no api key + no endpoint = nothing to emit.
+        // Empty config + no DefaultModelIds → a bare provider node, no model children.
+        // The provider node is always emitted so the admin can configure it (create-if-absent).
         var nodes = MakeProvider(
             new Dictionary<string, string?>(),
             new LanguageModelCatalogSource("Anthropic", "Anthropic", 1))
             .GetStaticNodes()
             .ToList();
 
-        nodes.Should().NotContain(n => n.NodeType == ModelProviderNodeType.NodeType);
+        nodes.Should().ContainSingle(n => n.NodeType == ModelProviderNodeType.NodeType);
         nodes.Should().NotContain(n => n.NodeType == LanguageModelNodeType.NodeType);
     }
 

@@ -52,8 +52,8 @@ public class ChatClientCredentialResolverTest : AITestBase
     public async Task Resolve_ModelWithLegacyApiKeySecretRef_FallsThroughToModelNode()
     {
         var modelId = $"legacy-{Guid.NewGuid():N}";
-        // Place the LanguageModel under the canonical _Provider subtree â€”
-        // the resolver's subscription only watches _Provider/* (per
+        // Place the LanguageModel under the canonical Admin/Provider subtree —
+        // the resolver's subscription only watches Admin/Provider/* (per
         // AgentPickerProjection.BuildModelQueries' documented pattern).
         var modelNs = $"{ModelProviderNodeType.RootNamespace}/Anthropic";
         var modelPath = $"{modelNs}/{modelId}";

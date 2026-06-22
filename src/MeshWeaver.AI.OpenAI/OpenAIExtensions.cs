@@ -77,4 +77,39 @@ public static class OpenAIExtensions
         });
         return builder;
     }
+
+    /// <summary>
+    /// One-call registration of <b>OpenRouter</b> — the OpenAI-wire model
+    /// gateway at <c>https://openrouter.ai/api/v1</c>. Rides the same
+    /// <see cref="OpenAIChatClientAgentFactory"/> as direct OpenAI and the
+    /// generic OpenAICompatible provider (the factory owns the
+    /// <c>OpenRouter</c> provider stamp). Ships a system-default endpoint but
+    /// NO model ids — OpenRouter's catalog is huge and changes constantly, so
+    /// models are listed/added live (or seeded later as mesh data), never
+    /// hardcoded here. Requires an API key.
+    /// </summary>
+    public static TBuilder AddOpenRouter<TBuilder>(this TBuilder builder, string configSection = "OpenRouter")
+        where TBuilder : MeshBuilder
+    {
+        builder.AddLanguageModelCatalogSource(new LanguageModelCatalogSource(
+            SectionName: configSection,
+            ProviderName: "OpenRouter",
+            Order: 6,
+            DisplayLabel: "OpenRouter",
+            DefaultEndpoint: "https://openrouter.ai/api/v1",
+            DefaultModelIds: ImmutableArray<string>.Empty,   // auto-listed/added later — no hardcoded slugs
+            RequiresApiKey: true));
+        builder.ConfigureServices(services =>
+        {
+            // No BindConfiguration — same as AddOpenAICompatible: the endpoint
+            // (DefaultEndpoint above) and key come from the seeded ModelProvider
+            // node / mesh data, not an IOptions section. AddOptions alone
+            // guarantees IOptions<OpenAIConfiguration> resolves (empty) when
+            // AddOpenAI wasn't also called.
+            services.AddOptions<OpenAIConfiguration>();
+            services.TryAddEnumerable(ServiceDescriptor.Singleton<IChatClientFactory, OpenAIChatClientAgentFactory>());
+            return services;
+        });
+        return builder;
+    }
 }

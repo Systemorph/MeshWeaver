@@ -5,6 +5,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -114,6 +115,17 @@ public partial class ThreadTokenChip : ComponentBase, IDisposable
     }
 
     private void ToggleExpanded() => _expanded = !_expanded;
+
+    /// <summary>
+    /// Keyboard activation for the role="button" label (Enter / Space), so the
+    /// expand toggle stays accessible now that it renders as an inline metadata
+    /// span rather than a native button.
+    /// </summary>
+    private void OnLabelKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key is "Enter" or " " or "Spacebar")
+            ToggleExpanded();
+    }
 
     /// <summary>
     /// Compact token count: <c>&lt; 1000 → "950"</c>, <c>&lt; 1M → "1.2k"</c>

@@ -9,10 +9,8 @@ public partial class App : Application
 
 	protected override Window CreateWindow(IActivationState? activationState)
 	{
-		// Two tabs: the native app (in-process Blazor — Voice/Mesh) and the full portal (WebView).
-		var root = new TabbedPage { Title = "Memex" };
-		root.Children.Add(new MainPage { Title = "App" });
-		root.Children.Add(new PortalPage());
-		return new Window(root) { Title = "Memex" };
+		// Single BlazorWebView page. (A TabbedPage wrapper makes BlazorWebView render blank on
+		// several platforms, so the portal is opened in an in-app browser from a Blazor page instead.)
+		return new Window(new MainPage()) { Title = "Memex" };
 	}
 }

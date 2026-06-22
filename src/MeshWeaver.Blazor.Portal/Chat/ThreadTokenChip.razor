@@ -1,34 +1,35 @@
 @* Wire into ThreadChatView's progress area (e.g. inside `.thread-exec-bar` or the
    `.thread-chat-status-row`) with:  <ThreadTokenChip ThreadPath="@threadPath" />
-   — the context variable is the `threadPath` field on ThreadChatView. *@
+   — the context variable is the `threadPath` field on ThreadChatView. Renders as an
+   inline metadata item (its own leading "·" separator) so it shares the status row
+   with the harness · agent · model chips rather than dropping to a second line. *@
 @namespace MeshWeaver.Blazor.Portal.Chat
 
 @if (HasData)
 {
-    <div class="thread-token-chip" style="font-size: 0.8rem;">
-        <FluentButton Appearance="Appearance.Stealth"
-                      OnClick="ToggleExpanded"
-                      Title="Token usage — click for the per-model breakdown">
-            @ChipLabel
-        </FluentButton>
+    <span class="thread-token-chip">
+        <span class="thread-token-chip-head">
+            <span class="thread-token-chip-sep">·</span>
+            <span class="thread-token-chip-label"
+                  role="button"
+                  tabindex="0"
+                  title="Token usage — click for the per-model breakdown"
+                  @onclick="ToggleExpanded"
+                  @onkeydown="OnLabelKeyDown">@ChipLabel</span>
+        </span>
 
         @if (_expanded)
         {
-            <FluentStack Orientation="Orientation.Vertical"
-                         VerticalGap="2"
-                         Style="padding: 4px 8px;">
+            <span class="thread-token-chip-breakdown">
                 @foreach (var row in _rows)
                 {
-                    <FluentStack Orientation="Orientation.Horizontal"
-                                 HorizontalGap="12"
-                                 VerticalAlignment="VerticalAlignment.Center">
-                        <span style="flex: 1 1 auto; min-width: 120px; overflow: hidden; text-overflow: ellipsis;"
-                              title="@row.Model">@row.Model</span>
+                    <span class="thread-token-chip-row">
+                        <span class="thread-token-chip-model" title="@row.Model">@row.Model</span>
                         <span title="Input tokens">↑@FormatCompact(row.Input)</span>
                         <span title="Output tokens">↓@FormatCompact(row.Output)</span>
-                    </FluentStack>
+                    </span>
                 }
-            </FluentStack>
+            </span>
         }
-    </div>
+    </span>
 }

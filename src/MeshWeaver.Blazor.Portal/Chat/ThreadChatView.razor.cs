@@ -203,8 +203,17 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     // View mode state
     private ChatViewMode viewMode = ChatViewMode.Chat;
 
-    // Resume threads state
-    private MeshSearchControl? resumeSearchControl;
+    // Resume threads list — live-bound to the synced query surface (hub.GetQuery): the
+    // write-consistent, RLS-aware, snapshot stream the agent/model pickers also use
+    // (AgentPickerProjection). Every emission is the COMPLETE current set, so a thread UPDATE
+    // on submit re-emits the list with the thread still present. Replaces the
+    // MeshSearchView/IMeshService.Query binding, whose eventually-consistent delta feed
+    // re-queried the store per change and emitted a spurious Removed for a just-submitted thread
+    // before the write reached that read path — the "thread disappears from the list on submit;
+    // F5 restores it" drop.
+    private IReadOnlyList<MeshNode> resumeThreads = [];
+    private IDisposable? resumeSubscription;
+    private bool resumeLoading;
 
     // Agent/model lists — fed by AgentPickerProjection; consumed by the /agent and /model
     // slash commands + @-reference agent detection. The visible harness/agent/model SELECTION
@@ -238,9 +247,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private static string? LastSegment(string? path) =>
         string.IsNullOrEmpty(path) ? path : path.Split('/')[^1];
 
-    /// <summary>Compact token count for the thin thread status row (1234 → "1.2k").</summary>
-    private static string FormatTokens(int tokens) =>
-        tokens >= 1000 ? $"{tokens / 1000.0:0.#}k" : tokens.ToString();
+    // (The thin status row's cumulative token figure is rendered by the <ThreadTokenChip> component,
+    //  which reads the per-model TokenUsage satellites ({threadPath}/_Usage/*) reactively. The old
+    //  inline FormatTokens(int) helper read token state off the Thread node — that state moved onto the
+    //  satellites in 616b4e27f, leaving the helper orphaned, so it was removed.)
 
     // (Removed DefaultModelId / ModelTier:Standard — defaults are no longer hardcoded. The default
     //  model is the Order=-1 model resolved by AgentPickerProjection.ObserveDefaultComposer and
@@ -1745,23 +1755,47 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             ns = userId;
         }
 
-        var hiddenQuery = string.IsNullOrEmpty(ns)
+        var query = string.IsNullOrEmpty(ns)
             ? "nodeType:Thread sort:LastModified-desc"
             : $"nodeType:Thread namespace:{ns}/_Thread sort:LastModified-desc";
 
-        resumeSearchControl = Controls.MeshSearch
-            .WithHiddenQuery(hiddenQuery)
-            .WithPlaceholder("Search threads...")
-            .WithRenderMode(MeshSearchRenderMode.Flat)
-            .WithMaxColumns(1)
-            .WithDisableNavigation();
-
         viewMode = ChatViewMode.ResumeThreads;
+        resumeLoading = true;
+
+        // 🚨 Live synced surface (hub.GetQuery), NOT IMeshService.Query. GetQuery is the
+        // write-consistent, RLS-aware, snapshot stream backed by the IMeshNodeStreamCache — every
+        // emission is the COMPLETE current set, so a thread UPDATE on submit re-emits the whole
+        // list with the thread still present. The previous binding (MeshSearchView →
+        // IMeshService.Query) was the eventually-consistent delta feed: it re-queries the store
+        // per change and, before the submit write reached that read path, emitted a spurious
+        // Removed that dropped the just-used thread from the list until a full reload (F5). Same
+        // surface + pattern the agent/model pickers use (AgentPickerProjection.ObserveSnapshot).
+        resumeSubscription?.Dispose();
+        resumeSubscription = Hub.GetQuery($"resume-threads|{ns}", query)
+            .Subscribe(
+                snapshot => InvokeAsync(() =>
+                {
+                    if (_isDisposed) return;
+                    resumeThreads = snapshot
+                        .Where(n => !string.IsNullOrEmpty(n.Path)
+                            && string.Equals(n.NodeType, ThreadNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
+                        .OrderByDescending(n => n.LastModified)
+                        .ToList();
+                    resumeLoading = false;
+                    StateHasChanged();
+                }),
+                ex => InvokeAsync(() =>
+                {
+                    if (_isDisposed) return;
+                    Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] resume thread query failed", _instanceId);
+                    resumeThreads = [];
+                    resumeLoading = false;
+                    StateHasChanged();
+                }));
+
         StateHasChanged();
         return Task.CompletedTask;
     }
-
-    private MeshSearchControl? GetResumeSearchControl() => resumeSearchControl;
 
     private void SwitchToChatMode()
     {
@@ -2495,6 +2529,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         {
             _isDisposed = true;
             elapsedTicker?.Dispose();
+            resumeSubscription?.Dispose();
             _connectSub?.Dispose();
             _navContextSubscription?.Dispose();
             composerSubscription?.Dispose();

@@ -999,6 +999,10 @@
     align-items: center;
     gap: 6px;
     list-style: none;
+    /* Allow the flex children (notably the long query/path) to shrink within the
+       bubble instead of pushing past its right edge. */
+    min-width: 0;
+    overflow: hidden;
 }
 
 .thread-msg-tool-entry > summary::-webkit-details-marker { display: none; }
@@ -1016,6 +1020,18 @@
 .thread-msg-tool-action {
     color: var(--accent-fill-rest);
     text-decoration: none;
+}
+
+/* The query/path is the one variable-length item in the summary row — let it
+   take the remaining width and ellipsis-truncate so it never spills past the
+   message bubble. (Full text stays available via the title tooltip and the
+   expandable <details> args below.) */
+.thread-msg-tool-path {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .thread-msg-tool-action {

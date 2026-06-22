@@ -66,6 +66,10 @@ public static class SkillNodeType
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<SkillDefinition>())
+            // Nicely-formatted, markdown-rendered landing page (title + slash word + help text +
+            // SKILL.md body + a compact metadata table) — overrides the bland generic property
+            // overview. See SkillView.
+            .AddSkillView()
     };
 
     /// <summary>

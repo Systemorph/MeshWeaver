@@ -20,10 +20,30 @@
             <span style="font-weight: 600;">Threads</span>
         </div>
         <div class="resume-threads-list">
-            <MeshSearchView ViewModel="@GetResumeSearchControl()"
-                            OnNodeSelected="@OnSelectThread"
-                            SelectedPath="@threadPath"
-                            Area="resume-threads" />
+            @* Live-bound to hub.GetQuery (synced, write-consistent snapshot) — see
+               SwitchToResumeModeAsync. A thread UPDATE on submit re-emits the full set with the
+               thread present, so it never drops out of the list the way the old MeshSearchView/
+               IMeshService.Query binding did. *@
+            @if (resumeLoading)
+            {
+                <FluentProgressRing Style="width: 24px; height: 24px; margin: 16px auto;" />
+            }
+            else if (resumeThreads.Count == 0)
+            {
+                <div class="resume-thread-date" style="padding: 12px; text-align: center;">No threads yet</div>
+            }
+            else
+            {
+                @foreach (var thread in resumeThreads)
+                {
+                    <div class="resume-thread-item @(thread.Path == threadPath ? "resume-thread-item-active" : "")"
+                         @key="@thread.Path"
+                         @onclick="@(() => OnSelectThread(thread))">
+                        <div class="resume-thread-name">@(thread.Name ?? thread.Id)</div>
+                        <div class="resume-thread-date">@thread.LastModified.LocalDateTime.ToString("MMM d, HH:mm")</div>
+                    </div>
+                }
+            }
         </div>
     </div>
 }
@@ -179,7 +199,7 @@ else
                                                 @if (!string.IsNullOrEmpty(display.Path))
                                                 {
                                                     <text>&nbsp;</text>
-                                                    <a href="/@display.Path" class="thread-msg-tool-path" @onclick:stopPropagation>@display.Path</a>
+                                                    <a href="/@display.Path" class="thread-msg-tool-path" title="@display.Path" @onclick:stopPropagation>@display.Path</a>
                                                 }
                                                 @if (change is not null)
                                                 {
@@ -411,7 +431,8 @@ else
                 {
                     <span class="thread-chat-status-item" title="Model (/model to change)">✦ @LastSegment(boundModelPath)</span>
                 }
-                <span class="thread-chat-status-sep">·</span>
+                @* The token chip renders its own leading separator only when it has usage data,
+                   so it sits inline after the model chip on this same row (no dangling "·"). *@
                 <ThreadTokenChip ThreadPath="@threadPath" />
             </div>
         }

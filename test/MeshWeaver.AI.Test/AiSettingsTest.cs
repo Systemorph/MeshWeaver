@@ -56,7 +56,7 @@ public class AiSettingsTest
         {
             EnabledHarnesses = ImmutableArray.Create("MeshWeaver", "Claude Code"),
             AgentQueries = ImmutableArray.Create("namespace:Agent nodeType:Agent"),
-            ModelQueries = ImmutableArray.Create("namespace:_Provider nodeType:LanguageModel|ModelProvider scope:descendants"),
+            ModelQueries = ImmutableArray.Create("namespace:Admin/Provider nodeType:LanguageModel|ModelProvider scope:descendants"),
         };
         // Saved node sets only the harnesses — the query lists are empty.
         var node = new MeshNode(AiSettingsNodeType.NodeId, "rbuergi/_Memex")

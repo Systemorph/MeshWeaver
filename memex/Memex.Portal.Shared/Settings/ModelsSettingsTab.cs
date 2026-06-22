@@ -30,19 +30,36 @@ namespace Memex.Portal.Shared.Settings;
 /// Copilot) is a login status + Connect button that delegates to the CLI's native
 /// login, driven by <see cref="ConnectSessionManager"/>.</para>
 ///
-/// <para>Entries are stored as MeshNodes under the owner's namespace. Rendered with
-/// framework controls + markdown — no hand-built HTML.</para>
+/// <para>The SAME section UI renders twice: once for the viewer's OWN providers in
+/// their dotfile namespace (<c>{owner}/_Memex</c>), and once — gated on
+/// <c>hub.IsGlobalAdmin()</c> via <see cref="AdminMenuGate.IsPlatformAdmin"/> — for the
+/// shared PLATFORM catalog at <see cref="ModelProviderNodeType.RootNamespace"/>
+/// (<c>Admin/Provider</c>). It is the IDENTICAL add-provider card + configured-providers
+/// list — the only difference is the namespace prefix the writes target. The platform
+/// section's writes are stamped <see cref="SyncBehavior.ExcludeThisAndChildren"/> so the
+/// boot seeder (<see cref="BuiltInLanguageModelProvider"/>) create-if-absent seeds the
+/// catalog once and never reverts an admin edit. Adding / changing a model = the same
+/// fetch-and-tick flow; editing endpoint or key = delete + re-add (as the per-user GUI
+/// already works).</para>
+///
+/// <para>Entries are stored as MeshNodes. Rendered with framework controls +
+/// markdown — no hand-built HTML.</para>
 /// </summary>
 public static class ModelsSettingsTab
 {
     public const string TabId = "Models";
 
-    // ── data ids ──────────────────────────────────────────────────────────────
-    private const string FormId = "addProviderForm";    // { type, endpoint, apiKey, name, filter, manual }
-    private const string TypesId = "addProviderTypes";  // Option[]
-    private const string FetchedId = "fetchedModels";   // string[]
-    private const string SelId = "fetchedModelSel";     // Dictionary<string,bool> keyed by index
-    private const string ResultId = "modelProviderResult"; // markdown string
+    // Section scope keys — disambiguate the layout-area data ids so the per-owner and
+    // platform cards never share form / fetch / selection / status state.
+    private const string UserScope = "user";
+    private const string PlatformScope = "platform";
+
+    // ── scoped data ids ───────────────────────────────────────────────────────
+    private static string FormId(string scope) => $"addProviderForm:{scope}";    // { type, endpoint, apiKey, name, filter, manual }
+    private static string TypesId(string scope) => $"addProviderTypes:{scope}";   // Option[]
+    private static string FetchedId(string scope) => $"fetchedModels:{scope}";    // string[]
+    private static string SelId(string scope) => $"fetchedModelSel:{scope}";      // Dictionary<string,bool> keyed by index
+    private static string ResultId(string scope) => $"modelProviderResult:{scope}"; // markdown string
 
     private const int MaxCheckboxes = 250;
 
@@ -84,57 +101,123 @@ public static class ModelsSettingsTab
         var apiSources = allSources.Where(s => s.Kind == ProviderKind.Api).ToList();
         var cliSources = allSources.Where(s => s.Kind == ProviderKind.Cli).ToList();
         var byName = apiSources.ToDictionary(s => s.ProviderName, StringComparer.OrdinalIgnoreCase);
+        var sessionManager = host.Hub.ServiceProvider.GetService<ConnectSessionManager>();
+
+        // ── The viewer's OWN providers ({owner}/_Memex) ───────────────────────
+        stack = stack.WithView(BuildProviderSection(
+            host, UserScope, ownerPath, ModelProviderNodeType.UserNamespacePath(ownerPath),
+            isPlatform: false, apiSources, cliSources, byName, providerService, sessionManager, userId));
+
+        // ── Platform providers (Admin/Provider) — global admins only ──────────
+        // Reuses the SAME section UI, targeted at the Admin partition's shared catalog.
+        // Reactively gated on the viewer's Admin-scope grant (see AdminMenuGate): renders
+        // empty until the positive grant surfaces, never for a non-admin.
+        stack = stack.WithView((h, _) =>
+            AdminMenuGate.IsPlatformAdmin(h)
+                .Select(isAdmin => isAdmin
+                    ? (UiControl?)BuildProviderSection(
+                        h, PlatformScope, userId, ModelProviderNodeType.RootNamespace,
+                        isPlatform: true, apiSources, cliSources, byName, providerService, sessionManager, userId,
+                        sectionHeader: "Platform providers",
+                        sectionIntro:
+                            "Manage the shared platform model catalog at **`" + ModelProviderNodeType.RootNamespace +
+                            "`** — every user sees these models. Edits are sync-protected, so a redeploy never " +
+                            "reverts them. Visible to platform admins only.")
+                    : (UiControl?)Controls.Stack.WithWidth("100%")));
+
+        return stack;
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  One provider section — rendered for the owner ({owner}/_Memex) AND, when
+    //  the viewer is a global admin, for the platform catalog (Admin/Provider).
+    //  IDENTICAL controls; the platform variant only targets a different namespace
+    //  (writes go to Admin/Provider, stamped sync-excluded) and omits the per-user
+    //  CLI-connect + active-models picker (personal choices, not platform config).
+    // ════════════════════════════════════════════════════════════════════════
+
+    private static UiControl BuildProviderSection(
+        LayoutAreaHost host,
+        string scope,
+        string ownerPath,
+        string targetNamespace,
+        bool isPlatform,
+        IReadOnlyList<LanguageModelCatalogSource> apiSources,
+        IReadOnlyList<LanguageModelCatalogSource> cliSources,
+        IReadOnlyDictionary<string, LanguageModelCatalogSource> byName,
+        ModelProviderService providerService,
+        ConnectSessionManager? sessionManager,
+        string userId,
+        string? sectionHeader = null,
+        string? sectionIntro = null)
+    {
+        var sectionStyle = isPlatform
+            ? "width: 100%; gap: 8px; margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--neutral-stroke-rest);"
+            : "width: 100%; gap: 8px;";
+        var section = Controls.Stack.WithStyle(sectionStyle);
+
+        if (!string.IsNullOrEmpty(sectionHeader))
+            section = section.WithView(Controls.H2(sectionHeader));
+        if (!string.IsNullOrEmpty(sectionIntro))
+            section = section.WithView(Controls.Markdown(sectionIntro));
+
+        // The storage namespace passed to the service: null = the owner's _Memex (the
+        // service default), or the explicit platform namespace.
+        string? serviceNamespace = isPlatform ? targetNamespace : null;
 
         // ── Add a provider (API) ──────────────────────────────────────────────
         if (apiSources.Count > 0)
         {
-            stack = stack.WithView(BuildAddProviderCard(host, apiSources, byName, providerService, ownerPath));
+            section = section.WithView(BuildAddProviderCard(
+                host, scope, apiSources, byName, providerService, ownerPath, serviceNamespace));
 
             // Live result/status line.
-            stack = stack.WithView((h, _) =>
-                h.Stream.GetDataStream<string>(ResultId)
+            section = section.WithView((h, _) =>
+                h.Stream.GetDataStream<string>(ResultId(scope))
                     .Select(md => string.IsNullOrEmpty(md)
                         ? (UiControl?)Controls.Stack.WithWidth("100%")
                         : (UiControl?)Controls.Markdown(md))
                     .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
         }
 
-        // ── CLI providers — login status + connect ────────────────────────────
-        var sessionManager = host.Hub.ServiceProvider.GetService<ConnectSessionManager>();
-        if (cliSources.Count > 0)
+        // ── CLI providers — login status + connect (owner sections only) ──────
+        if (!isPlatform && cliSources.Count > 0)
         {
-            stack = stack.WithView(Controls.H3("CLI providers"));
-            stack = stack.WithView(Controls.Markdown("Log in with your subscription — no key, no model list."));
+            section = section.WithView(Controls.H3("CLI providers"));
+            section = section.WithView(Controls.Markdown("Log in with your subscription — no key, no model list."));
             foreach (var src in cliSources)
-                stack = stack.WithView(BuildCliCard(host, src, sessionManager, providerService, ownerPath, userId));
+                section = section.WithView(BuildCliCard(host, src, sessionManager, providerService, ownerPath, userId));
         }
 
         // ── Configured providers ──────────────────────────────────────────────
-        stack = stack.WithView(Controls.H3("Configured providers"));
-        stack = stack.WithView((h, _) =>
-            providerService.GetProvidersForOwner(ownerPath)
+        section = section.WithView(Controls.H3("Configured providers"));
+        section = section.WithView((h, _) =>
+            providerService.GetProvidersForOwner(ownerPath, serviceNamespace)
                 .Select(providers => providers.Count == 0
                     ? (UiControl?)Controls.Markdown("_No providers configured yet._")
-                    : BuildProviderList(providers, providerService)));
+                    : BuildProviderList(providers, providerService, scope)));
 
-        // ── Active models (provider selection) ────────────────────────────────
-        stack = stack.WithView(Controls.H3("Active models"));
-        stack = stack.WithView(Controls.Markdown(
-            "Choose which providers' models appear in your chat. Models an organisation shared " +
-            "with you work even though their key stays hidden."));
-        stack = stack.WithView((h, _) =>
+        // ── Active models (provider selection) — a per-user choice, owner sections only ──
+        if (!isPlatform)
         {
-            var ws = h.Hub.GetWorkspace();
-            var models = ws.GetQuery($"model-fanout:{ownerPath}", $"nodeType:{LanguageModelNodeType.NodeType}")
-                .Select(nodes => nodes
-                    .Where(n => string.Equals(n.NodeType, LanguageModelNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
-                    .ToList());
-            var selection = providerService.GetSelection(ownerPath).StartWith(ImmutableArray<string>.Empty);
-            return models.CombineLatest(selection, (modelNodes, selected) =>
-                (UiControl?)BuildModelSelectionList(modelNodes, selected, providerService, ownerPath));
-        });
+            section = section.WithView(Controls.H3("Active models"));
+            section = section.WithView(Controls.Markdown(
+                "Choose which providers' models appear in your chat. Models an organisation shared " +
+                "with you work even though their key stays hidden."));
+            section = section.WithView((h, _) =>
+            {
+                var ws = h.Hub.GetWorkspace();
+                var models = ws.GetQuery($"model-fanout:{ownerPath}", $"nodeType:{LanguageModelNodeType.NodeType}")
+                    .Select(nodes => nodes
+                        .Where(n => string.Equals(n.NodeType, LanguageModelNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
+                        .ToList());
+                var selection = providerService.GetSelection(ownerPath).StartWith(ImmutableArray<string>.Empty);
+                return models.CombineLatest(selection, (modelNodes, selected) =>
+                    (UiControl?)BuildModelSelectionList(modelNodes, selected, providerService, ownerPath, scope));
+            });
+        }
 
-        return stack;
+        return section;
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -143,14 +226,16 @@ public static class ModelsSettingsTab
 
     private static UiControl BuildAddProviderCard(
         LayoutAreaHost host,
+        string scope,
         IReadOnlyList<LanguageModelCatalogSource> apiSources,
         IReadOnlyDictionary<string, LanguageModelCatalogSource> byName,
         ModelProviderService providerService,
-        string ownerPath)
+        string ownerPath,
+        string? targetNamespace)
     {
         // Seed the form + option list + (empty) fetch state.
         var firstType = apiSources[0].ProviderName;
-        host.UpdateData(FormId, new Dictionary<string, object?>
+        host.UpdateData(FormId(scope), new Dictionary<string, object?>
         {
             ["type"] = firstType,
             ["endpoint"] = "",
@@ -159,13 +244,13 @@ public static class ModelsSettingsTab
             ["filter"] = "",
             ["manual"] = "",
         });
-        host.UpdateData(TypesId, apiSources
+        host.UpdateData(TypesId(scope), apiSources
             .Select(s => (Option)new Option<string>(s.ProviderName, s.EffectiveLabel))
             .ToArray());
-        host.UpdateData(FetchedId, Array.Empty<string>());
-        host.UpdateData(SelId, new Dictionary<string, bool>());
+        host.UpdateData(FetchedId(scope), Array.Empty<string>());
+        host.UpdateData(SelId(scope), new Dictionary<string, bool>());
 
-        var formPtr = LayoutAreaReference.GetDataPointer(FormId);
+        var formPtr = LayoutAreaReference.GetDataPointer(FormId(scope));
 
         var card = Controls.Stack.WithWidth("100%")
             .WithStyle("padding: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; gap: 12px; margin-bottom: 12px;");
@@ -178,7 +263,7 @@ public static class ModelsSettingsTab
 
         card = card.WithView(new SelectControl(
                 new JsonPointerReference("type"),
-                new JsonPointerReference(LayoutAreaReference.GetDataPointer(TypesId)))
+                new JsonPointerReference(LayoutAreaReference.GetDataPointer(TypesId(scope))))
             {
                 Label = "Provider type",
                 DataContext = formPtr,
@@ -209,7 +294,7 @@ public static class ModelsSettingsTab
 
         card = card.WithView(Controls.Button("Fetch models")
             .WithAppearance(Appearance.Accent)
-            .WithClickAction(ctx => { FetchModels(ctx, byName); return Task.CompletedTask; }));
+            .WithClickAction(ctx => { FetchModels(ctx, scope, byName); return Task.CompletedTask; }));
 
         // Filter + manual-add (static so they keep focus while the list re-renders).
         var tools = Controls.Stack.WithOrientation(Orientation.Horizontal)
@@ -229,28 +314,28 @@ public static class ModelsSettingsTab
         }.WithWidth("220px"));
         tools = tools.WithView(Controls.Button("Add id")
             .WithAppearance(Appearance.Outline)
-            .WithClickAction(ctx => { AddManualModel(ctx); return Task.CompletedTask; }));
+            .WithClickAction(ctx => { AddManualModel(ctx, scope); return Task.CompletedTask; }));
         card = card.WithView(tools);
 
         // Checkable model list — re-renders on fetched-models / filter change only.
         card = card.WithView((h, _) =>
         {
-            var fetched = h.Stream.GetDataStream<string[]>(FetchedId).StartWith(Array.Empty<string>());
-            var form = h.Stream.GetDataStream<Dictionary<string, object?>>(FormId)
+            var fetched = h.Stream.GetDataStream<string[]>(FetchedId(scope)).StartWith(Array.Empty<string>());
+            var form = h.Stream.GetDataStream<Dictionary<string, object?>>(FormId(scope))
                 .StartWith(new Dictionary<string, object?>());
             return fetched.CombineLatest(form, (ids, f) =>
-                (UiControl?)BuildModelChecklist(ids ?? Array.Empty<string>(),
+                (UiControl?)BuildModelChecklist(scope, ids ?? Array.Empty<string>(),
                     f?.GetValueOrDefault("filter")?.ToString() ?? ""));
         });
 
         card = card.WithView(Controls.Button("Save provider")
             .WithAppearance(Appearance.Accent)
-            .WithClickAction(ctx => { SaveProvider(ctx, byName, providerService, ownerPath); return Task.CompletedTask; }));
+            .WithClickAction(ctx => { SaveProvider(ctx, scope, byName, providerService, ownerPath, targetNamespace); return Task.CompletedTask; }));
 
         return card;
     }
 
-    private static UiControl BuildModelChecklist(string[] ids, string filter)
+    private static UiControl BuildModelChecklist(string scope, string[] ids, string filter)
     {
         if (ids.Length == 0)
             return Controls.Markdown("_No models yet — enter a base URL + key and click **Fetch models**._");
@@ -261,7 +346,7 @@ public static class ModelsSettingsTab
                 || x.id.Contains(filter, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        var selPtr = LayoutAreaReference.GetDataPointer(SelId);
+        var selPtr = LayoutAreaReference.GetDataPointer(SelId(scope));
         var list = Controls.Stack.WithWidth("100%")
             .WithStyle("max-height: 320px; overflow-y: auto; gap: 2px; padding: 8px; border: 1px solid var(--neutral-stroke-rest); border-radius: 6px;");
 
@@ -285,9 +370,9 @@ public static class ModelsSettingsTab
     }
 
     private static void FetchModels(
-        UiActionContext ctx, IReadOnlyDictionary<string, LanguageModelCatalogSource> byName)
+        UiActionContext ctx, string scope, IReadOnlyDictionary<string, LanguageModelCatalogSource> byName)
     {
-        ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(FormId).Take(1).Subscribe(form =>
+        ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(FormId(scope)).Take(1).Subscribe(form =>
         {
             var type = form?.GetValueOrDefault("type")?.ToString() ?? "";
             var endpoint = form?.GetValueOrDefault("endpoint")?.ToString()?.Trim();
@@ -297,23 +382,23 @@ public static class ModelsSettingsTab
 
             if (string.IsNullOrEmpty(apiKey))
             {
-                ctx.Host.UpdateData(ResultId, ErrorMd("An API key is required to fetch models."));
+                ctx.Host.UpdateData(ResultId(scope), ErrorMd("An API key is required to fetch models."));
                 return;
             }
 
             var lister = ctx.Host.Hub.ServiceProvider.GetService<ProviderModelLister>();
             if (lister is null)
             {
-                ctx.Host.UpdateData(ResultId, ErrorMd("Model fetching is not available in this deployment."));
+                ctx.Host.UpdateData(ResultId(scope), ErrorMd("Model fetching is not available in this deployment."));
                 return;
             }
 
-            ctx.Host.UpdateData(ResultId, PendingMd($"Fetching models from {type}…"));
+            ctx.Host.UpdateData(ResultId(scope), PendingMd($"Fetching models from {type}…"));
             lister.ListModels(effEndpoint, apiKey, type).Subscribe(
                 ids =>
                 {
-                    SeedFetched(ctx, ids.ToArray());
-                    ctx.Host.UpdateData(ResultId, SuccessMd(
+                    SeedFetched(ctx, scope, ids.ToArray());
+                    ctx.Host.UpdateData(ResultId(scope), SuccessMd(
                         $"Found {ids.Count} models — tick the ones to bring, then **Save provider**."));
                 },
                 ex =>
@@ -321,27 +406,27 @@ public static class ModelsSettingsTab
                     // Graceful fallback: show the catalog defaults so the user can still
                     // pick + add ids manually even when the provider has no /models endpoint.
                     var defaults = src?.EffectiveModelIds ?? ImmutableArray<string>.Empty;
-                    SeedFetched(ctx, defaults.ToArray());
-                    ctx.Host.UpdateData(ResultId, ErrorMd(
+                    SeedFetched(ctx, scope, defaults.ToArray());
+                    ctx.Host.UpdateData(ResultId(scope), ErrorMd(
                         $"Couldn't fetch models: {ex.Message} Showing defaults — you can also add ids manually."));
                 });
         });
     }
 
-    private static void SeedFetched(UiActionContext ctx, string[] ids)
+    private static void SeedFetched(UiActionContext ctx, string scope, string[] ids)
     {
         var sel = new Dictionary<string, bool>();
         for (var i = 0; i < ids.Length; i++) sel[i.ToString()] = false;
-        ctx.Host.UpdateData(SelId, sel);
-        ctx.Host.UpdateData(FetchedId, ids);
+        ctx.Host.UpdateData(SelId(scope), sel);
+        ctx.Host.UpdateData(FetchedId(scope), ids);
     }
 
-    private static void AddManualModel(UiActionContext ctx)
+    private static void AddManualModel(UiActionContext ctx, string scope)
     {
-        ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(FormId).Take(1)
+        ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(FormId(scope)).Take(1)
             .CombineLatest(
-                ctx.Host.Stream.GetDataStream<string[]>(FetchedId).Take(1).StartWith(Array.Empty<string>()),
-                ctx.Host.Stream.GetDataStream<Dictionary<string, bool>>(SelId).Take(1).StartWith(new Dictionary<string, bool>()),
+                ctx.Host.Stream.GetDataStream<string[]>(FetchedId(scope)).Take(1).StartWith(Array.Empty<string>()),
+                ctx.Host.Stream.GetDataStream<Dictionary<string, bool>>(SelId(scope)).Take(1).StartWith(new Dictionary<string, bool>()),
                 (form, ids, sel) => (form, ids: ids ?? Array.Empty<string>(), sel: sel ?? new Dictionary<string, bool>()))
             .Take(1)
             .Subscribe(t =>
@@ -350,29 +435,31 @@ public static class ModelsSettingsTab
                 if (string.IsNullOrEmpty(manual)) return;
                 if (t.ids.Contains(manual, StringComparer.OrdinalIgnoreCase))
                 {
-                    ctx.Host.UpdateData(ResultId, PendingMd($"{manual} is already in the list."));
+                    ctx.Host.UpdateData(ResultId(scope), PendingMd($"{manual} is already in the list."));
                     return;
                 }
                 var newIds = t.ids.Append(manual).ToArray();
                 var newSel = new Dictionary<string, bool>(t.sel) { [(newIds.Length - 1).ToString()] = true };
-                ctx.Host.UpdateData(SelId, newSel);
-                ctx.Host.UpdateData(FetchedId, newIds);
+                ctx.Host.UpdateData(SelId(scope), newSel);
+                ctx.Host.UpdateData(FetchedId(scope), newIds);
                 // Clear the manual field.
                 var form = new Dictionary<string, object?>(t.form ?? new Dictionary<string, object?>()) { ["manual"] = "" };
-                ctx.Host.UpdateData(FormId, form);
+                ctx.Host.UpdateData(FormId(scope), form);
             });
     }
 
     private static void SaveProvider(
         UiActionContext ctx,
+        string scope,
         IReadOnlyDictionary<string, LanguageModelCatalogSource> byName,
         ModelProviderService providerService,
-        string ownerPath)
+        string ownerPath,
+        string? targetNamespace)
     {
-        ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(FormId).Take(1)
+        ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(FormId(scope)).Take(1)
             .CombineLatest(
-                ctx.Host.Stream.GetDataStream<string[]>(FetchedId).Take(1).StartWith(Array.Empty<string>()),
-                ctx.Host.Stream.GetDataStream<Dictionary<string, bool>>(SelId).Take(1).StartWith(new Dictionary<string, bool>()),
+                ctx.Host.Stream.GetDataStream<string[]>(FetchedId(scope)).Take(1).StartWith(Array.Empty<string>()),
+                ctx.Host.Stream.GetDataStream<Dictionary<string, bool>>(SelId(scope)).Take(1).StartWith(new Dictionary<string, bool>()),
                 (form, ids, sel) => (form, ids: ids ?? Array.Empty<string>(), sel: sel ?? new Dictionary<string, bool>()))
             .Take(1)
             .Subscribe(t =>
@@ -390,33 +477,34 @@ public static class ModelsSettingsTab
 
                 if (string.IsNullOrEmpty(apiKey))
                 {
-                    ctx.Host.UpdateData(ResultId, ErrorMd("An API key is required."));
+                    ctx.Host.UpdateData(ResultId(scope), ErrorMd("An API key is required."));
                     return;
                 }
                 if (checkedIds.Count == 0)
                 {
-                    ctx.Host.UpdateData(ResultId, ErrorMd("Tick at least one model to bring."));
+                    ctx.Host.UpdateData(ResultId(scope), ErrorMd("Tick at least one model to bring."));
                     return;
                 }
                 if (string.Equals(type, "OpenAICompatible", StringComparison.OrdinalIgnoreCase)
                     && string.IsNullOrEmpty(effEndpoint))
                 {
-                    ctx.Host.UpdateData(ResultId, ErrorMd("Enter the base URL for an OpenAI-compatible provider."));
+                    ctx.Host.UpdateData(ResultId(scope), ErrorMd("Enter the base URL for an OpenAI-compatible provider."));
                     return;
                 }
 
                 var instanceId = DeriveInstanceId(type, name, effEndpoint);
-                ctx.Host.UpdateData(ResultId, PendingMd($"Saving {instanceId}…"));
+                ctx.Host.UpdateData(ResultId(scope), PendingMd($"Saving {instanceId}…"));
                 providerService.CreateProvider(
                         ownerPath, type, apiKey,
                         label: string.IsNullOrEmpty(name) ? null : name,
                         endpointOverride: effEndpoint,
                         modelIdsOverride: checkedIds,
-                        instanceId: instanceId)
+                        instanceId: instanceId,
+                        targetNamespace: targetNamespace)
                     .Subscribe(
-                        result => ctx.Host.UpdateData(ResultId, SuccessMd(
+                        result => ctx.Host.UpdateData(ResultId(scope), SuccessMd(
                             $"Saved **{instanceId}** — {result.ModelNodes.Count} model(s) ready.")),
-                        ex => ctx.Host.UpdateData(ResultId, ErrorMd(ex.Message)));
+                        ex => ctx.Host.UpdateData(ResultId(scope), ErrorMd(ex.Message)));
             });
     }
 
@@ -449,11 +537,11 @@ public static class ModelsSettingsTab
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  Configured providers + active-models selection
+    //  Configured providers + active-models / default-model management
     // ════════════════════════════════════════════════════════════════════════
 
     private static UiControl BuildProviderList(
-        IReadOnlyList<ProviderInfo> providers, ModelProviderService service)
+        IReadOnlyList<ProviderInfo> providers, ModelProviderService service, string scope)
     {
         var container = Controls.Stack.WithWidth("100%").WithStyle("gap: 8px;");
         foreach (var p in providers)
@@ -473,12 +561,12 @@ public static class ModelsSettingsTab
                 .WithAppearance(Appearance.Outline)
                 .WithClickAction(ctx =>
                 {
-                    ctx.Host.UpdateData(ResultId, PendingMd($"Deleting {captured.Label ?? captured.Provider}…"));
+                    ctx.Host.UpdateData(ResultId(scope), PendingMd($"Deleting {captured.Label ?? captured.Provider}…"));
                     service.DeleteProvider(captured.NodePath).Subscribe(
-                        ok => ctx.Host.UpdateData(ResultId, ok
+                        ok => ctx.Host.UpdateData(ResultId(scope), ok
                             ? SuccessMd($"Deleted {captured.Label ?? captured.Provider}.")
                             : ErrorMd($"Failed to delete {captured.NodePath}.")),
-                        ex => ctx.Host.UpdateData(ResultId, ErrorMd(ex.Message)));
+                        ex => ctx.Host.UpdateData(ResultId(scope), ErrorMd(ex.Message)));
                     return Task.CompletedTask;
                 }));
             container = container.WithView(row);
@@ -490,7 +578,8 @@ public static class ModelsSettingsTab
         IReadOnlyList<MeshNode> modelNodes,
         ImmutableArray<string> selected,
         ModelProviderService service,
-        string ownerPath)
+        string ownerPath,
+        string scope)
     {
         var byProvider = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var n in modelNodes)
@@ -532,10 +621,10 @@ public static class ModelsSettingsTab
                         if (capturedActive) set.Remove(capturedPath);
                         else if (!set.Contains(capturedPath)) set.Add(capturedPath);
                         service.SetSelection(ownerPath, set.ToImmutableArray()).Subscribe(
-                            ok => ctx.Host.UpdateData(ResultId, ok
+                            ok => ctx.Host.UpdateData(ResultId(scope), ok
                                 ? SuccessMd(capturedActive ? $"Removed {capturedPath}." : $"Added {capturedPath}.")
                                 : ErrorMd("Failed to update selection.")),
-                            ex => ctx.Host.UpdateData(ResultId, ErrorMd(ex.Message)));
+                            ex => ctx.Host.UpdateData(ResultId(scope), ErrorMd(ex.Message)));
                     });
                     return Task.CompletedTask;
                 }));
@@ -679,7 +768,7 @@ public static class ModelsSettingsTab
                     var code = data?.GetValueOrDefault("code")?.ToString()?.Trim() ?? "";
                     if (string.IsNullOrEmpty(code))
                     {
-                        host.UpdateData(ResultId, ErrorMd("Please paste the code shown."));
+                        host.UpdateData(ResultId(UserScope), ErrorMd("Please paste the code shown."));
                         return;
                     }
                     sessionManager.SubmitCode(ownerPath, provider, code).Subscribe(
@@ -706,7 +795,7 @@ public static class ModelsSettingsTab
                 var providerService = ctx.Host.Hub.ServiceProvider.GetRequiredService<ModelProviderService>();
                 providerService.DeleteProvider($"{ModelProviderNodeType.UserNamespacePath(ownerPath)}/{src.ProviderName}").Subscribe(
                     _ => ctx.Host.UpdateData(stateDataId, RenderCliBody(provider, src, stateDataId, sessionManager, ownerPath, userId)),
-                    ex => ctx.Host.UpdateData(ResultId, ErrorMd(ex.Message)));
+                    ex => ctx.Host.UpdateData(ResultId(UserScope), ErrorMd(ex.Message)));
                 return Task.CompletedTask;
             }));
         return body;

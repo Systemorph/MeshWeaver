@@ -525,64 +525,101 @@ internal static class ThreadSubmissionServer
         var dispatch = ThreadSubmission.PlanNextRound(thread);
         if (dispatch is null)
         {
+            // Roll the claim back so the next watcher tick can re-trigger.
+            // Rollback writes the thread node — `hub` here is parentHub (the
+            // thread hub), so its own GetMeshNodeStream is the OWN handle.
+            void RollClaimToIdle() =>
+                hub.GetWorkspace().GetMeshNodeStream().Update(n =>
+                {
+                    var t = n.ContentAs<MeshThread>(hub.JsonSerializerOptions, logger);
+                    // Existing node whose content can't be recovered → leave it alone, NEVER clobber.
+                    if (n.Content is not null && t is null)
+                        return n;
+                    t ??= new MeshThread();
+                    // 🚨 Roll back ONLY a stuck StartingExecution claim that found nothing
+                    // to dispatch. NEVER roll back an Executing round. The claim Status
+                    // oscillates and the _Exec round watcher can fire DispatchAfterClaim
+                    // more than once for one logical round; a duplicate fire reaches here
+                    // with dispatch==null AFTER the real commit already flipped
+                    // StartingExecution→Executing and drained PendingUserMessages. Blindly
+                    // forcing Idle there un-did the RUNNING round, so the next watcher tick
+                    // saw Idle + (still/again) pending and re-claimed the SAME input into a
+                    // fresh round — the re-dispatch loop (hundreds of response-cell creates,
+                    // round never settles: Resubmit_AfterExecution_DoesNotDeadlock under the
+                    // full Orleans sequence). Invariant: whenever pending exists the watcher
+                    // requests execution start, and once started we never silently undo it.
+                    return t.Status == ThreadExecutionStatus.StartingExecution
+                        ? n with { Content = t with { Status = ThreadExecutionStatus.Idle, ExecutionStartedAt = null } }
+                        : n;
+                }).Subscribe(
+                    _ => { },
+                    ex => logger?.LogWarning(ex,
+                        "[DispatchAfterClaim] rollback Update failed for {Path}", hub.Address.Path));
+
             // RESUME: an interrupted Executing round (InitializeThreadLifecycle
             // re-entered StartingExecution) has no NEW pending input but still
             // owns a response cell. Re-dispatch into that SAME cell rather than
             // rolling back — the user's question already streamed a partial
             // answer; we resume generating it.
+            //
+            // 🚨 ONLY resume a GENUINELY in-flight round — one whose response cell is still
+            // Streaming. A stale StartingExecution claim can replay an ActiveMessageId whose
+            // cell has since gone TERMINAL (Cancelled by ESC/Stop, Completed, or Error): e.g.
+            // after a Cancel with no follow-up pending, a replayed claim carries the old
+            // ActiveMessageId, PlanNextRound returns null (nothing pending), and a naive
+            // resume spins up a PHANTOM round into the dead cell — IsExecuting never clears
+            // (InboxToolIntegrationTest.Cancel_NoPendingMessages flake). So read the active
+            // cell: resume on Streaming, otherwise filter it out and roll the claim to Idle.
             if (thread.Status == ThreadExecutionStatus.StartingExecution
                 && !string.IsNullOrEmpty(thread.ActiveMessageId))
             {
-                logger?.LogInformation(
-                    "[DispatchAfterClaim] resuming interrupted round {ResponseId} for {Path}",
-                    thread.ActiveMessageId, hub.Address.Path);
+                var activeId = thread.ActiveMessageId!;
                 // No selection here: a resume has no pending message to read it from. The
                 // round's selection (agent/model/harness/context) is the persisted response
                 // cell's — ExecuteMessageAsync recovers it from the existing cell on resume.
                 var resumeDispatch = new RoundDispatch(
                     ImmutableList<string>.Empty,
-                    thread.ActiveMessageId!,
+                    activeId,
                     AgentName: null,
                     ModelName: null,
                     Harness: null,
                     ContextPath: null,
                     Attachments: null);
-                DispatchRound(hub, threadNode, resumeDispatch, logger, onFailure, isResume: true);
+                hub.GetWorkspace().GetMeshNodeStream($"{hub.Address.Path}/{activeId}")
+                    .Take(1).Timeout(TimeSpan.FromSeconds(5))
+                    .Subscribe(
+                        cellNode =>
+                        {
+                            var cell = cellNode?.ContentAs<ThreadMessage>(hub.JsonSerializerOptions, logger);
+                            if (cell is { Status: ThreadMessageStatus.Streaming })
+                            {
+                                logger?.LogInformation(
+                                    "[DispatchAfterClaim] resuming interrupted round {ResponseId} for {Path}",
+                                    activeId, hub.Address.Path);
+                                DispatchRound(hub, threadNode, resumeDispatch, logger, onFailure, isResume: true);
+                            }
+                            else
+                            {
+                                logger?.LogInformation(
+                                    "[DispatchAfterClaim] active cell {ResponseId} is {Status} (not in-flight) for {Path} — phantom resume filtered, rolling to Idle",
+                                    activeId, cell?.Status, hub.Address.Path);
+                                RollClaimToIdle();
+                            }
+                        },
+                        ex =>
+                        {
+                            logger?.LogWarning(ex,
+                                "[DispatchAfterClaim] active-cell read failed for {Path} — rolling to Idle",
+                                hub.Address.Path);
+                            RollClaimToIdle();
+                        });
                 return;
             }
 
             logger?.LogDebug(
                 "[DispatchAfterClaim] nothing to dispatch (post-claim race?) for {Path} — rolling status back to Idle",
                 hub.Address.Path);
-            // Roll the claim back so the next watcher tick can re-trigger.
-            // Rollback writes the thread node — `hub` here is parentHub (the
-            // thread hub), so its own GetMeshNodeStream is the OWN handle.
-            hub.GetWorkspace().GetMeshNodeStream().Update(n =>
-            {
-                var t = n.ContentAs<MeshThread>(hub.JsonSerializerOptions, logger);
-                // Existing node whose content can't be recovered → leave it alone, NEVER clobber.
-                if (n.Content is not null && t is null)
-                    return n;
-                t ??= new MeshThread();
-                // 🚨 Roll back ONLY a stuck StartingExecution claim that found nothing
-                // to dispatch. NEVER roll back an Executing round. The claim Status
-                // oscillates and the _Exec round watcher can fire DispatchAfterClaim
-                // more than once for one logical round; a duplicate fire reaches here
-                // with dispatch==null AFTER the real commit already flipped
-                // StartingExecution→Executing and drained PendingUserMessages. Blindly
-                // forcing Idle there un-did the RUNNING round, so the next watcher tick
-                // saw Idle + (still/again) pending and re-claimed the SAME input into a
-                // fresh round — the re-dispatch loop (hundreds of response-cell creates,
-                // round never settles: Resubmit_AfterExecution_DoesNotDeadlock under the
-                // full Orleans sequence). Invariant: whenever pending exists the watcher
-                // requests execution start, and once started we never silently undo it.
-                return t.Status == ThreadExecutionStatus.StartingExecution
-                    ? n with { Content = t with { Status = ThreadExecutionStatus.Idle, ExecutionStartedAt = null } }
-                    : n;
-            }).Subscribe(
-                _ => { },
-                ex => logger?.LogWarning(ex,
-                    "[DispatchAfterClaim] rollback Update failed for {Path}", hub.Address.Path));
+            RollClaimToIdle();
             return;
         }
         DispatchRound(hub, threadNode, dispatch, logger, onFailure);

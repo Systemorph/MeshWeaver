@@ -330,10 +330,10 @@ public static class AgentPickerProjection
     }
 
     /// <summary>
-    /// The model picker queries: the system <c>_Provider</c> catalog plus per-context / per-NodeType /
+    /// The model picker queries: the system <c>Admin/Provider</c> catalog plus per-context / per-NodeType /
     /// per-user subtrees and any user-selected provider subtree — all <c>nodeType:LanguageModel|ModelProvider</c>,
     /// varying only namespace + scope (the synced-collection all-Initial gating constraint). The
-    /// per-partition flat <c>/Model</c> registry is the next increment; credentials live in <c>_Provider</c>.
+    /// per-partition flat <c>/Model</c> registry is the next increment; credentials live in <c>Admin/Provider</c>.
     /// </summary>
     public static string[] BuildModelQueries(
         string? currentPath = null,
@@ -347,7 +347,7 @@ public static class AgentPickerProjection
             $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants",
         };
         // Skip reserved/rogue ROUTE partitions (login, welcome, settings, …): a reserved currentPath/
-        // nodeTypePath would make namespace:{login}/_Provider read the policy-less reserved partition and
+        // nodeTypePath would make namespace:{login}/Admin/Provider read the policy-less reserved partition and
         // fail the WHOLE model query with "lacks Read permission on 'login'" — the picker goes empty.
         // Mirrors BuildRegistryQuery's filter (the agent/skill queries already skip these).
         if (!string.IsNullOrEmpty(currentPath) && !IsReservedPartition(currentPath))

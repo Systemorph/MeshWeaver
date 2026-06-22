@@ -1,0 +1,68 @@
+/* The token-usage chip is an inline metadata item on the thread status row,
+   sitting after the harness · agent · model chips. The root is an inline-flex
+   COLUMN so the chip flows on the same horizontal line (wrapping only if the
+   row genuinely runs out of width), while the optional per-model breakdown
+   stacks BELOW the label when expanded. Mirrors the muted, 11px metadata look
+   of `.thread-chat-status-item`. */
+.thread-token-chip {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    min-width: 0;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--neutral-foreground-hint);
+    font-variant-numeric: tabular-nums;
+}
+
+.thread-token-chip-head {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    white-space: nowrap;
+}
+
+/* Same look as `.thread-chat-status-sep`. */
+.thread-token-chip-sep {
+    color: var(--neutral-stroke-rest);
+}
+
+.thread-token-chip-label {
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.thread-token-chip-label:hover {
+    color: var(--neutral-foreground-rest);
+    text-decoration: underline;
+}
+
+.thread-token-chip-label:focus-visible {
+    outline: 1px solid var(--accent-fill-rest);
+    outline-offset: 1px;
+    border-radius: 3px;
+}
+
+/* Per-model breakdown, indented under the label. */
+.thread-token-chip-breakdown {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 4px 0 2px 12px;
+}
+
+.thread-token-chip-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+}
+
+.thread-token-chip-model {
+    flex: 1 1 auto;
+    min-width: 120px;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

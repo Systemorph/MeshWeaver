@@ -81,9 +81,9 @@ public class ModelDiscoveryServiceTest : AITestBase
             .Should().Within(15.Seconds()).Match(s => s.Count >= 2);
 
         snapshot.Should().Contain(n => n.NodeType == ModelProviderNodeType.NodeType
-            && n.Path == $"{owner}/_Provider/Anthropic");
+            && n.Path == $"{owner}/Admin/Provider/Anthropic");
         snapshot.Should().Contain(n => n.NodeType == LanguageModelNodeType.NodeType
-            && n.Path == $"{owner}/_Provider/Anthropic/claude-opus-4-7");
+            && n.Path == $"{owner}/Admin/Provider/Anthropic/claude-opus-4-7");
     }
 
     [Fact]
@@ -101,9 +101,9 @@ public class ModelDiscoveryServiceTest : AITestBase
             .Should().Within(20.Seconds()).Match(s => s.Any(n => n.Provider() == "Anthropic")
                      && s.Any(n => n.Provider() == "OpenAI"));
 
-        snapshot.Should().Contain(n => n.Path == $"{child}/_Provider/OpenAI",
+        snapshot.Should().Contain(n => n.Path == $"{child}/Admin/Provider/OpenAI",
             "child node's own ModelProvider surfaces");
-        snapshot.Should().Contain(n => n.Path == $"{owner}/_Provider/Anthropic",
+        snapshot.Should().Contain(n => n.Path == $"{owner}/Admin/Provider/Anthropic",
             "ancestor org's ModelProvider is also unioned in");
     }
 
@@ -121,8 +121,8 @@ public class ModelDiscoveryServiceTest : AITestBase
             .Should().Within(20.Seconds()).Match(s => s.Any(n => n.Provider() == "Anthropic")
                      && s.Any(n => n.Provider() == "OpenAI"));
 
-        snapshot.Should().Contain(n => n.Path == $"{nodePath}/_Provider/Anthropic");
-        snapshot.Should().Contain(n => n.Path == $"{nodeTypePath}/_Provider/OpenAI");
+        snapshot.Should().Contain(n => n.Path == $"{nodePath}/Admin/Provider/Anthropic");
+        snapshot.Should().Contain(n => n.Path == $"{nodeTypePath}/Admin/Provider/OpenAI");
     }
 
     [Fact]

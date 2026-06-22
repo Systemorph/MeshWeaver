@@ -521,6 +521,7 @@ public static class MemexConfiguration
             if (features.Ai.Providers.AzureOpenAI) mb = mb.AddAzureOpenAI();
             if (features.Ai.Providers.OpenAI) mb = mb.AddOpenAI();
             if (features.Ai.Providers.OpenAICompatible) mb = mb.AddOpenAICompatible();
+            if (features.Ai.Providers.OpenRouter) mb = mb.AddOpenRouter();
             if (features.Ai.Clis.ClaudeCode) mb = mb.AddClaudeCode();   // catalog source (factory + config via services.AddClaudeCode)
             if (features.Ai.Clis.Copilot) mb = mb.AddCopilot();         // catalog source (factory + config via services.AddCopilot)
 

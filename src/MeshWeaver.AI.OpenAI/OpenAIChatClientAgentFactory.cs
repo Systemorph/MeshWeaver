@@ -42,7 +42,7 @@ public class OpenAIChatClientAgentFactory(
     /// model's resolved provider node, so the same factory serves any number of
     /// distinct gateways.
     /// </summary>
-    private static readonly string[] OwnedProviders = ["OpenAI", "OpenAICompatible"];
+    private static readonly string[] OwnedProviders = ["OpenAI", "OpenAICompatible", "OpenRouter"];
 
     /// <summary>
     /// Routes a model here when its <c>ModelProvider</c> declares a provider in

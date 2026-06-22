@@ -52,7 +52,7 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
 
     public IEnumerable<MeshNode> GetStaticNodes()
     {
-        // Stable de-dup: first registered source wins on Id collision —
+        // Stable de-dup: first registered source wins on model-Id collision —
         // matches the order callers register them via
         // AddLanguageModelCatalogSource.
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -60,10 +60,10 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
 
         foreach (var source in options.Sources)
         {
-            string[]? models;
+            string[]? configuredModels;
             try
             {
-                models = configuration
+                configuredModels = configuration
                     .GetSection($"{source.SectionName}:Models")
                     .Get<string[]>();
             }
@@ -75,12 +75,10 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                 continue;
             }
 
-            // Read driver config (Endpoint + ApiKey) from the same section
-            // the legacy IOptions<...Configuration> binding read from. Stamping
-            // these on the ModelDefinition makes the model MeshNode the source
-            // of truth for driver config — the factory reads them off the
-            // selected model instead of an out-of-band IOptions binding, and
-            // user-authored Model nodes can override the built-in defaults.
+            // Driver config (Endpoint + ApiKey) from the same section the legacy
+            // IOptions<...Configuration> binding read from. The endpoint falls back to
+            // the source's bootstrap DefaultEndpoint when config is empty; the ApiKey is
+            // NEVER seeded from code — it stays null until an admin sets it as mesh data.
             string? endpoint = null;
             string? apiKey = null;
             try
@@ -89,70 +87,47 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                 apiKey = configuration[$"{source.SectionName}:ApiKey"];
             }
             catch { /* malformed section — skip stamping */ }
+            endpoint ??= source.DefaultEndpoint;
 
-            // Parse IConfiguration into the canonical ModelProvider mesh node:
-            // every credential the system ships with becomes a node in the
-            // root catalog. ModelProvider is NOT WithPublicRead (no
-            // ConfigureNodeTypeAccess call) so only callers with
-            // Permission.Api on the root namespace see the ApiKey; ordinary
-            // user-context reads in their own partition see only their own
-            // (user-authored) ModelProvider rows. Publicly-visible LanguageModel
-            // siblings still carry NO key — that protection is intact.
-            var hasAnySignal = (models != null && models.Length > 0)
-                || !string.IsNullOrEmpty(endpoint)
-                || !string.IsNullOrEmpty(apiKey);
-            if (hasAnySignal)
+            // Model id list: config wins when present, else the source's bootstrap
+            // defaults. Empty for catalogs that are auto-listed/added later
+            // (OpenRouter, OpenAICompatible) — those ship a provider node with no children.
+            var models = (configuredModels is { Length: > 0 }
+                    ? configuredModels.Where(m => !string.IsNullOrWhiteSpace(m))
+                    : source.EffectiveModelIds.Where(m => !string.IsNullOrWhiteSpace(m)))
+                .ToImmutableArray();
+
+            // Always emit ONE ModelProvider node per source at Admin/Provider/{ProviderName},
+            // marked ExcludeThisAndChildren so the static importer CREATES it on first boot and
+            // NEVER overwrites it again — admin edits to endpoint/key/models survive redeploys
+            // (create-if-absent). This node is the source of truth for driver config: the factory
+            // reads endpoint/key off the selected model's resolved provider node. ModelProvider
+            // is NOT WithPublicRead, so only callers with Permission.Api see the ApiKey; the
+            // _Policy below opens public READ of the (key-less) LanguageModel children.
+            var providerConfig = new ModelProviderConfiguration
             {
-                var providerConfig = new ModelProviderConfiguration
-                {
-                    Provider = source.ProviderName,
-                    ApiKey = apiKey,
-                    Endpoint = endpoint,
-                    Label = source.ProviderName,
-                    CreatedAt = DateTimeOffset.UtcNow,
-                    Models = models is { Length: > 0 }
-                        ? models.Where(m => !string.IsNullOrWhiteSpace(m)).ToImmutableArray()
-                        : ImmutableArray<string>.Empty
-                };
-                emitted.Add(new MeshNode(source.ProviderName, ModelProviderNodeType.RootNamespace)
-                {
-                    NodeType = ModelProviderNodeType.NodeType,
-                    Name = source.ProviderName,
-                    Category = "Providers",
-                    Icon = "Key",
-                    Content = providerConfig
-                });
-            }
-
-            if (models == null || models.Length == 0)
+                Provider = source.ProviderName,
+                ApiKey = apiKey,
+                Endpoint = endpoint,
+                Label = source.ProviderName,
+                CreatedAt = DateTimeOffset.UtcNow,
+                Models = models
+            };
+            emitted.Add(new MeshNode(source.ProviderName, ModelProviderNodeType.RootNamespace)
             {
-                logger?.LogDebug(
-                    "BuiltInLanguageModelProvider: '{Section}:Models' empty — provider {Provider} contributes nothing",
-                    source.SectionName, source.ProviderName);
-                continue;
-            }
+                NodeType = ModelProviderNodeType.NodeType,
+                Name = source.ProviderName,
+                Category = "Providers",
+                Icon = "Key",
+                // create-if-absent: importer seeds it once, then admin owns it.
+                SyncBehavior = SyncBehavior.ExcludeThisAndChildren,
+                Content = providerConfig
+            });
 
-            // 🚦 Only surface a provider's models when it's actually CONFIGURED.
-            // Api providers (RequiresApiKey) need BOTH an Endpoint and an ApiKey in
-            // config; keyless/CLI providers (RequiresApiKey=false — Claude Code,
-            // Copilot) need neither. An unconfigured Api provider's Models[] is just a
-            // default catalog the deployment never wired up (e.g. an "Azure" section
-            // listing Claude ids with no Endpoint/ApiKey) — surfacing those puts
-            // selectable-but-unusable entries in the /model picker (the reported
-            // "Azure Claude shows even though nothing is configured" bug). The
-            // ModelProvider node above is STILL emitted so Settings → Models can render
-            // its configure form; only the selectable LanguageModel catalog entries are
-            // gated on having credentials.
-            var isConfigured = !source.RequiresApiKey
-                || (!string.IsNullOrEmpty(endpoint) && !string.IsNullOrEmpty(apiKey));
-            if (!isConfigured)
-            {
-                logger?.LogDebug(
-                    "BuiltInLanguageModelProvider: provider {Provider} not configured (Endpoint/ApiKey unset) — hiding its {Count} model(s) from the catalog until configured",
-                    source.ProviderName, models.Length);
-                continue;
-            }
-
+            // Emit a public, key-less LanguageModel child per model id at
+            // Admin/Provider/{ProviderName}/{modelId}. No credential gate — the child carries
+            // NO ApiKey (it's read-only/public) and the ExcludeThisAndChildren parent protects
+            // the whole subtree from overwrite AND prune. Children keep default SyncBehavior.
             foreach (var modelId in models)
             {
                 if (string.IsNullOrWhiteSpace(modelId)) continue;
@@ -164,17 +139,13 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                     DisplayName = modelId,
                     Provider = source.ProviderName,
                     Endpoint = endpoint,
-                    // ApiKey NEVER on a LanguageModel node — these are
-                    // WithPublicRead. The factory's IOptions fallback supplies
-                    // the system-default key for static catalog entries.
+                    // ApiKey NEVER on a LanguageModel node — these are publicly readable.
+                    // The factory resolves the key from the parent ModelProvider node.
                     ApiKeySecretRef = null,
-                    // Reference the static ModelProvider node emitted above.
-                    // Resolver follows this pointer; user-partition ModelProvider
-                    // nodes override via their own ProviderRef on child
-                    // LanguageModel nodes.
-                    ProviderRef = hasAnySignal
-                        ? $"{ModelProviderNodeType.RootNamespace}/{source.ProviderName}"
-                        : null,
+                    // Reference the static ModelProvider node emitted above. Resolver follows
+                    // this pointer; context-partition ModelProvider nodes override via their
+                    // own ProviderRef on child LanguageModel nodes.
+                    ProviderRef = $"{ModelProviderNodeType.RootNamespace}/{source.ProviderName}",
                     Order = source.Order,
                     // Seed the published default price (USD per 1M tokens) for known
                     // model ids so the token-cost summaries show a real cost out of
@@ -184,11 +155,10 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                     Currency = ModelPricing.Default(modelId)?.Currency
                 };
 
-                // Static LanguageModel nodes live UNDER their provider's
-                // satellite path: _Provider/{providerName}/{modelId}. Matches
-                // the user-partition layout ({userPath}/_Provider/{providerName}/{modelId})
-                // so the picker can use ONE namespace per query path —
-                // the documented shape for synced-collection multi-query
+                // Static LanguageModel nodes live UNDER their provider's satellite path:
+                // Admin/Provider/{providerName}/{modelId}. Matches the context-partition layout
+                // ({contextPath}/Admin/Provider/{providerName}/{modelId}) so the picker can use ONE
+                // namespace per query path — the documented shape for synced-collection multi-query
                 // (varying scope/path, same nodeType filter).
                 var modelNamespace = $"{ModelProviderNodeType.RootNamespace}/{source.ProviderName}";
                 emitted.Add(new MeshNode(modelId, modelNamespace)
@@ -202,43 +172,35 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
             }
         }
 
-        // Only seed the read-only access policy if we actually have models —
-        // an empty namespace with just a policy node is "crap" (user's
-        // word) that pollutes namespace:Model queries with nothing useful.
-        if (emitted.Count > 0)
+        // ALWAYS seed the read-only access policy for the catalog partition.
+        yield return new MeshNode("_Policy", ModelProviderNodeType.RootNamespace)
         {
-            // 🚨 Policy MUST be on ModelProviderNodeType.RootNamespace ("_Provider") — the partition the
-            // models actually live in (the modelNamespace above) AND the one the /model picker queries
-            // (BuiltInCommandProvider: "namespace:_Provider nodeType:LanguageModel scope:descendants").
-            // It was previously seeded on LanguageModelNodeType.RootNamespace ("Model") — a DIFFERENT,
-            // model-less partition — so the "_Provider" catalog had NO access policy at all and was
-            // unreadable under a real user's identity.
-            yield return new MeshNode("_Policy", ModelProviderNodeType.RootNamespace)
+            NodeType = "PartitionAccessPolicy",
+            Name = "Access Policy",
+            Content = new PartitionAccessPolicy
             {
-                NodeType = "PartitionAccessPolicy",
-                Name = "Access Policy",
-                Content = new PartitionAccessPolicy
-                {
-                    // 🚨 World-readable, exactly like the Agent + Harness catalogs
-                    // (BuiltInAgentProvider / BuiltInHarnessProvider both set PublicRead=true).
-                    // The /model picker queries `namespace:_Provider nodeType:LanguageModel` UNDER
-                    // the user's identity; without PublicRead the partition isn't readable, so RLS
-                    // filters out every model → empty picker even though the catalog is synced + Active.
-                    // This grant was MISSING here (the Agent catalog had it, which is why agents showed
-                    // and models didn't). Read-only: the model nodes carry NO ApiKey (it's gated
-                    // separately on ModelProvider via Permission.Api), so public READ of the catalog is safe.
-                    PublicRead = true,
-                    Create = false,
-                    Update = false,
-                    Delete = false,
-                    Comment = false,
-                    Thread = false
-                }
-            };
-        }
+                // 🚨 PublicRead grants every user READ of the catalog (the /model picker queries
+                // `namespace:Admin/Provider nodeType:LanguageModel` UNDER the user's identity;
+                // without PublicRead RLS filters out every model → empty picker). Read-only is
+                // safe: the LanguageModel children carry NO ApiKey (gated separately on
+                // ModelProvider via Permission.Api).
+                //
+                // Create/Update/Delete = true LIFT the partition cap so global admins (who hold
+                // Permission.All on the Admin partition) can WRITE provider nodes here. These flags
+                // are pure CEILINGS — they do NOT grant non-admins write: a non-admin has no
+                // underlying write grant on the Admin partition, so they stay read-only. This is
+                // what makes the providers admin-editable with no permission-code change.
+                PublicRead = true,
+                Create = true,
+                Update = true,
+                Delete = true,
+                Comment = false,
+                Thread = false
+            }
+        };
 
         logger?.LogDebug(
-            "BuiltInLanguageModelProvider: emitted {Count} Model nodes from {Sources} catalog source(s)",
+            "BuiltInLanguageModelProvider: emitted {Count} model-catalog nodes from {Sources} catalog source(s)",
             emitted.Count, options.Sources.Count);
 
         foreach (var node in emitted)

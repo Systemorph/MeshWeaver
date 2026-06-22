@@ -11,20 +11,20 @@ using Xunit;
 namespace MeshWeaver.AI.Test;
 
 /// <summary>
-/// Repro + contract for the two model-picker bugs (2026-06-14):
+/// Contract for the admin-managed platform catalog seeder + the /model selection path:
 /// <list type="number">
-///   <item><b>Bug 1 — unconfigured models show.</b> A config section that lists
-///   <c>Models[]</c> but has NO <c>Endpoint</c>/<c>ApiKey</c> is an un-wired default catalog
-///   (e.g. an "Azure" section listing Claude ids with no credentials). Its models must NOT
-///   enter the picker catalog — they're selectable-but-unusable. Only the ModelProvider node
-///   (for Settings → Models) is kept.</item>
-///   <item><b>Bug 2 — /model selection breaks.</b> A model selection must persist the model
-///   node's PATH onto the composer's ModelName (so the MeshNode picker resolves it), not the
-///   bare model id. <see cref="AgentPickerProjection.ToModelInfo"/> must carry <c>node.Path</c>.</item>
+///   <item><b>Always-seed catalog.</b> Each catalog source ALWAYS emits a <c>ModelProvider</c>
+///   node (create-if-absent, <c>ExcludeThisAndChildren</c>) plus a key-less, public
+///   <c>LanguageModel</c> child per model id — regardless of whether an Endpoint/ApiKey is wired
+///   in config. Keys/endpoints are set later as mesh data; the picker shows the catalog and the
+///   admin manages credentials. (This drops the older "hide unconfigured models" gate.)</item>
+///   <item><b>/model selection.</b> A model selection must persist the model node's PATH onto
+///   the composer's ModelName (so the MeshNode picker resolves it), not the bare model id.
+///   <see cref="AgentPickerProjection.ToModelInfo"/> must carry <c>node.Path</c>.</item>
 /// </list>
-/// Both are pure POCO units — no mesh — because the source of truth is
-/// <see cref="BuiltInLanguageModelProvider"/> (IConfiguration → catalog nodes) and the
-/// projection, not the distributed wiring.
+/// Pure POCO units — no mesh — because the source of truth is
+/// <see cref="BuiltInLanguageModelProvider"/> (IConfiguration + bootstrap defaults → catalog
+/// nodes) and the projection, not the distributed wiring.
 /// </summary>
 public class BuiltInLanguageModelProviderTest
 {
@@ -65,20 +65,22 @@ public class BuiltInLanguageModelProviderTest
     }
 
     [Fact]
-    public void UnconfiguredApiProvider_HidesModels_ButKeepsProviderNodeForSettings()
+    public void UnconfiguredApiProvider_StillEmitsModelsAndProviderNode()
     {
-        // Models listed (an un-wired default catalog) but NO Endpoint/ApiKey → not configured.
+        // Models listed but NO Endpoint/ApiKey. The catalog is admin-managed now: the key-less,
+        // public LanguageModel children are ALWAYS emitted (keys are set later as mesh data), and
+        // the ModelProvider node is always emitted create-if-absent. The old "hide unconfigured
+        // models" gate is gone.
         var provider = Build(new Dictionary<string, string?>
         {
             ["Azure:Models:0"] = "claude-sonnet-4",
         }, new LanguageModelCatalogSource("Azure", "Azure"));
 
-        ModelsOf(provider).Should().BeEmpty(
-            "an Api provider with no Endpoint/ApiKey is not configured — its models must not show in the /model picker (the 'Azure Claude with no config' bug)");
+        ModelsOf(provider).Select(n => n.Name).Should().Contain("claude-sonnet-4",
+            "the platform catalog always surfaces its models; the admin sets the key later as mesh data");
 
-        // The ModelProvider node IS still emitted so Settings → Models can render the configure form.
         ProvidersOf(provider).Select(n => n.Name).Should().Contain("Azure",
-            "the provider node must remain so the user can paste a key to configure it");
+            "the provider node is always emitted (create-if-absent) so the admin can configure it");
     }
 
     [Fact]
@@ -96,7 +98,7 @@ public class BuiltInLanguageModelProviderTest
     [Fact]
     public void ToModelInfo_CarriesNodePath_SoSelectionPersistsTheNodeIdentity()
     {
-        var node = new MeshNode("claude-sonnet-4", "_Provider/Azure")
+        var node = new MeshNode("claude-sonnet-4", "Admin/Provider/Azure")
         {
             NodeType = LanguageModelNodeType.NodeType,
             Name = "claude-sonnet-4",

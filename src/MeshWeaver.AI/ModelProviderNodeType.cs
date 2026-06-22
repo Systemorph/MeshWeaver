@@ -39,16 +39,20 @@ public static class ModelProviderNodeType
     public const string NodeType = "ModelProvider";
 
     /// <summary>
-    /// Conventional satellite-namespace segment for provider credential
-    /// nodes — mirrors <c>_Access</c>, <c>_Thread</c>, <c>_Comment</c>.
-    /// Organisation-shared providers live at <c>{orgPath}/_Provider/{providerName}</c>
-    /// and system defaults at the root <c>_Provider/{providerName}</c>. A user's
-    /// OWN providers live in their dotfile namespace instead —
+    /// Namespace the PLATFORM model catalog lives under — the Admin partition's
+    /// <c>Admin/Provider</c> sub-namespace (schema <c>admin</c>). System default
+    /// providers live at <c>Admin/Provider/{providerName}</c>; organisation-shared
+    /// providers at <c>{orgPath}/Admin/Provider/{providerName}</c>. A user's OWN
+    /// providers live in their dotfile namespace instead —
     /// <c>{userPath}/_Memex/{providerName}</c> (see <see cref="UserNamespace"/>).
     /// The picker / resolver query each owning path's subtree directly — no
     /// path-walk heuristics, no central registry.
+    ///
+    /// <para>NOT to be confused with the unrelated GitSync user-credential
+    /// <c>{user}/_Provider</c> namespace — that is GitHub OAuth credentials, a
+    /// different satellite owned by <c>MeshWeaver.GitSync</c>.</para>
     /// </summary>
-    public const string RootNamespace = "_Provider";
+    public const string RootNamespace = "Admin/Provider";
 
     /// <summary>
     /// Per-user satellite namespace for the user's OWN providers, models, and
@@ -59,9 +63,9 @@ public static class ModelProviderNodeType
     /// <c>{userPath}/_Memex/{providerName}/{modelId}</c>; the user's selection at
     /// <c>{userPath}/_Memex/_Selection</c>.
     ///
-    /// <para>Distinct from <see cref="RootNamespace"/> (<c>_Provider</c>), which
-    /// holds the SYSTEM catalog at root and org/context-SHARED providers at
-    /// <c>{orgPath}/_Provider/…</c>. A user's personal credentials are theirs,
+    /// <para>Distinct from <see cref="RootNamespace"/> (<c>Admin/Provider</c>), which
+    /// holds the SYSTEM catalog in the Admin partition and org/context-SHARED providers at
+    /// <c>{orgPath}/Admin/Provider/…</c>. A user's personal credentials are theirs,
     /// so they belong in their dotfile namespace, not a shared satellite. The
     /// picker / resolver union BOTH namespaces (see the model queries) so a user
     /// sees the system catalog, any shared providers, and their own.</para>
@@ -116,17 +120,17 @@ public static class ModelProviderNodeType
         builder.ConfigureHub(config => config
             .WithType<ModelProviderConfiguration>(nameof(ModelProviderConfiguration))
             .WithType<ModelProviderSelection>(nameof(ModelProviderSelection)));
-        // Mirror LanguageModelNodeType: the root <c>_Provider</c> namespace
+        // Mirror LanguageModelNodeType: the <c>Admin/Provider</c> namespace
         // gets a partition-storage provider so the routing core knows where
         // to find static ModelProvider nodes (the ones BuiltInLanguageModelProvider
-        // emits from IConfiguration). Without this, namespace:_Provider
+        // emits from IConfiguration). Without this, namespace:Admin/Provider
         // queries return nothing because no provider claims the partition.
-        // User-partition ModelProvider nodes (rbuergi/_Provider/Anthropic
+        // Context-partition ModelProvider nodes (rbuergi/Admin/Provider/Anthropic
         // etc.) route through their owning partition's storage adapter —
         // no extra wiring needed for those.
-        // The model catalog's provider/model CONTENT lives under the "_Provider" partition;
+        // The model catalog's provider/model CONTENT lives under the "Admin/Provider" namespace;
         // it is DB-synced together with "Model". When synced, skip the read-only in-memory
-        // provider so Postgres serves "_Provider" + accepts the import's writes. See AddAgentType.
+        // provider so Postgres serves "Admin/Provider" + accepts the import's writes. See AddAgentType.
         var dbSynced = serveFromPartition is not null
             && (serveFromPartition.Contains("Model") || serveFromPartition.Contains(RootNamespace));
         builder.ConfigureServices(services =>
@@ -163,7 +167,7 @@ public static class ModelProviderNodeType
         // CreateNodePermissionAttribute.GetPermissionForNodeType → Permission.Api.
         IsSatelliteType = false,
         // Creatable: an admin can author a ModelProvider node directly in a space
-        // (e.g. Systemorph/_Provider/AzureFoundry). Still hidden from search.
+        // (e.g. Systemorph/Admin/Provider/AzureFoundry). Still hidden from search.
         ExcludeFromContext = new HashSet<string> { "search" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
