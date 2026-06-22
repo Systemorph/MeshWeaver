@@ -128,6 +128,92 @@ public class ChatClientCredentialResolverTest : AITestBase
     }
 
     [Fact]
+    public async Task ResolveDefaultModelId_PicksLowestOrderResolvableModel_ForStaleSelectionFallback()
+    {
+        // Repro for the "thread 404s on a stale pinned model" bug: a thread/composer pinned to a
+        // model that no longer resolves must self-heal to the DEFAULT available model — the
+        // lowest-Order model in the live catalog whose credentials actually resolve. We seed two
+        // working models (Orders -1000 and 500) and assert the resolver picks the lower one, and that
+        // a deleted/non-existent selection resolves to Missing (the trigger for the fallback).
+        var root = ModelProviderNodeType.RootNamespace; // "Provider"
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+
+        // Default provider + model — lowest Order (the catalog default).
+        var defProviderPath = $"{root}/DefaultProv{suffix}";
+        await MeshService.CreateNode(new MeshNode($"DefaultProv{suffix}", root)
+        {
+            NodeType = ModelProviderNodeType.NodeType,
+            Name = "Default Provider",
+            State = MeshNodeState.Active,
+            Content = new ModelProviderConfiguration
+            {
+                Provider = $"DefaultProv{suffix}",
+                ApiKey = "sk-default-key",
+                Endpoint = "https://default.example/v1",
+            }
+        }).Should().Within(15.Seconds()).Emit();
+
+        var defaultModelId = $"default-model-{suffix}";
+        await MeshService.CreateNode(new MeshNode(defaultModelId, defProviderPath)
+        {
+            NodeType = LanguageModelNodeType.NodeType,
+            Name = defaultModelId,
+            Order = -1000,
+            State = MeshNodeState.Active,
+            Content = new ModelDefinition
+            {
+                Id = defaultModelId,
+                Provider = $"DefaultProv{suffix}",
+                ProviderRef = defProviderPath,
+            }
+        }).Should().Within(15.Seconds()).Emit();
+
+        // A second, higher-Order resolvable model — must NOT be chosen as the default.
+        var otherProviderPath = $"{root}/OtherProv{suffix}";
+        await MeshService.CreateNode(new MeshNode($"OtherProv{suffix}", root)
+        {
+            NodeType = ModelProviderNodeType.NodeType,
+            Name = "Other Provider",
+            State = MeshNodeState.Active,
+            Content = new ModelProviderConfiguration
+            {
+                Provider = $"OtherProv{suffix}",
+                ApiKey = "sk-other-key",
+                Endpoint = "https://other.example/v1",
+            }
+        }).Should().Within(15.Seconds()).Emit();
+
+        var otherModelId = $"other-model-{suffix}";
+        await MeshService.CreateNode(new MeshNode(otherModelId, otherProviderPath)
+        {
+            NodeType = LanguageModelNodeType.NodeType,
+            Name = otherModelId,
+            Order = 500,
+            State = MeshNodeState.Active,
+            Content = new ModelDefinition
+            {
+                Id = otherModelId,
+                Provider = $"OtherProv{suffix}",
+                ProviderRef = otherProviderPath,
+            }
+        }).Should().Within(15.Seconds()).Emit();
+
+        var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
+        resolver.EnsureSubscription();
+
+        // The lowest-Order model with working credentials is the catalog default — poll until warm.
+        var defaultId = await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .Select(_ => resolver.ResolveDefaultModelId())
+            .Should().Within(10.Seconds()).Match(id => id == defaultModelId);
+        defaultId.Should().Be(defaultModelId);
+
+        // A stale / deleted selection does NOT resolve — the trigger for the self-heal …
+        resolver.Resolve($"ghost-model-{Guid.NewGuid():N}").Should().Be(CredentialResolution.Missing);
+        // … and the default it falls back to DOES resolve (so the thread runs instead of 404-ing).
+        resolver.Resolve(defaultModelId).Should().NotBe(CredentialResolution.Missing);
+    }
+
+    [Fact]
     public async Task GetProviderForModel_LooksUpProviderStamp()
     {
         var modelId = $"pmodel-{Guid.NewGuid():N}";

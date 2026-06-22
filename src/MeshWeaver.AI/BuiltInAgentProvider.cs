@@ -99,6 +99,10 @@ public class BuiltInAgentProvider : IStaticNodeProvider
             Name = "Thread Namer",
             NodeType = "Agent",
             Order = 999,
+            // Custom inline SVG (same line-art style as the .md agents — viewBox 0 0 24 24,
+            // stroke currentColor) so it reads consistently with the rest of the catalog instead of
+            // falling back to the generic bot glyph. A name-tag/label fits the thread-naming role.
+            Icon = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M3.5 3.5h7l9.4 9.4a2 2 0 0 1 0 2.83l-4.17 4.17a2 2 0 0 1-2.83 0L3.5 10.5z\"/><circle cx=\"7.6\" cy=\"7.6\" r=\"1.3\" fill=\"currentColor\"/></svg>",
             Content = config
         };
     }

@@ -24,6 +24,7 @@ public class MeshNodeImageHelperTest
     [InlineData("Markdown", "/static/NodeTypeIcons/document.svg")]
     [InlineData("Code", "/static/NodeTypeIcons/code.svg")]
     [InlineData("Agent", "/static/NodeTypeIcons/bot.svg")]
+    [InlineData("Skill", "/static/NodeTypeIcons/sparkle.svg")] // skill instances read as their NodeType (sparkle)
     [InlineData("Thread", "/static/NodeTypeIcons/chat.svg")]
     [InlineData("User", "/static/NodeTypeIcons/person.svg")]
     [InlineData("Type/Code", "/static/NodeTypeIcons/code.svg")] // path form → matched on last segment
@@ -49,5 +50,14 @@ public class MeshNodeImageHelperTest
     {
         var node = new MeshNode("X", "ns") { NodeType = "Markdown", Icon = "🎯" };
         MeshNodeImageHelper.ResolveNodeIcon(node).Should().Be("🎯");
+    }
+
+    [Fact]
+    public void ResolveNodeIcon_TypelessNodeWithNoIcon_FallsBackToBox_NeverNull()
+    {
+        // A node with no icon AND no (mapped) NodeType must still resolve to an SVG so the card
+        // never renders the bare-initial (blue) placeholder. This is the issue-2 guarantee.
+        var node = new MeshNode("X", "ns");
+        MeshNodeImageHelper.ResolveNodeIcon(node).Should().Be("/static/NodeTypeIcons/box.svg");
     }
 }

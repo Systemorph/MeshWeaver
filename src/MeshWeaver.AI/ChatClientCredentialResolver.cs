@@ -215,6 +215,26 @@ public sealed class ChatClientCredentialResolver : IDisposable
     }
 
     /// <summary>
+    /// The DEFAULT model id to fall back to when a selected model no longer resolves — the
+    /// LOWEST-<see cref="MeshNode.Order"/> <c>LanguageModel</c> in the live catalog whose credentials
+    /// actually resolve (so the fallback is never ANOTHER broken model). Mirrors
+    /// <c>AgentPickerProjection.ObserveDefaultComposer</c>'s "lowest Order wins" rule, read from the
+    /// same warm snapshot this resolver already maintains. Returns <c>null</c> when no model in the
+    /// catalog resolves (e.g. a deployment whose models bypass the catalog entirely).
+    /// </summary>
+    public string? ResolveDefaultModelId()
+    {
+        var snapshot = ReadSnapshot();
+        return snapshot
+            .Where(n => string.Equals(n.NodeType, LanguageModelNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
+            .Select(n => (Order: n.Order ?? 0, Id: ExtractContent<ModelDefinition>(n.Content)?.Id))
+            .Where(x => !string.IsNullOrEmpty(x.Id))
+            .OrderBy(x => x.Order)
+            .Select(x => x.Id!)
+            .FirstOrDefault(id => Resolve(id) != CredentialResolution.Missing);
+    }
+
+    /// <summary>
     /// Resolve the per-user <b>Connect</b> token for a CLI harness — the user's OWN subscription
     /// token captured by the login (Connect) flow and stored, encrypted, as a <c>ModelProvider</c>
     /// node at <c>{UserNamespacePath(userPartition)}/{providerName}</c>

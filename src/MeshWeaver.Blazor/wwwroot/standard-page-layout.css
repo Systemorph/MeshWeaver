@@ -394,6 +394,43 @@ fluent-header,
     overflow: visible !important;
 }
 
+/* ── Catalog / search card grid — cards fill their grid cell ──────────────────
+   The grid cell, the wrapping <a>/<div>, and the <fluent-card> host are rendered by
+   DIFFERENT Blazor components (MeshSearchView → MeshNodeCardView → FluentCard), so a
+   component-scoped `.razor.css` rule never reaches the inner hosts — the CSS-isolation
+   b-* attribute is not applied across component boundaries (nor to a child-component's
+   host element). That is why the earlier `display:block;width:100%` on `.mesh-node-card`
+   in MeshNodeCardView.razor.css never landed. These GLOBAL (non-scoped) rules cross every
+   boundary, so each card tiles to the FULL cell width instead of shrinking to its content
+   (the cause of the gaps + overlapping titles). <fluent-card> defaults to
+   display:inline-block (content width) — force block fill; min-width:0 lets long titles
+   ellipsize instead of widening the auto-fill track. */
+.mesh-search-area-grid > * {
+    min-width: 0;
+}
+
+.mesh-search-area-grid > * > * {
+    /* the card wrapper is a flex item of the grid cell — grow to fill it. Absolutely-
+       positioned affordances (drill-down / delete) are NOT flex items, so this never
+       stretches them. */
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.mesh-search-area-grid .mesh-node-card,
+.mesh-search-area-grid .mesh-search-card {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    height: 100%;
+}
+
+.mesh-search-area-grid .mesh-node-card:hover,
+.mesh-search-area-grid .mesh-search-card:hover {
+    box-shadow: var(--elevation-shadow-card-active);
+}
+
 /* Global SVG icon mask — any element with --icon-url renders the SVG as a mask */
 [style*="--icon-url"] {
     -webkit-mask-image: var(--icon-url);

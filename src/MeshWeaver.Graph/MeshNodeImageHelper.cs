@@ -28,7 +28,15 @@ public static class MeshNodeImageHelper
     /// </summary>
     public static string? ResolveNodeIcon(MeshNode? node) =>
         node == null ? null
-            : ResolveContentPath(node.Icon, node.Path) ?? DefaultIconForNodeType(node.NodeType);
+            // Guarantee a resolved icon for ANY non-null node so a card / avatar NEVER falls back to
+            // the bare-initial (blue) placeholder: own Icon → NodeType default → a neutral box glyph
+            // (covers a typeless node, where DefaultIconForNodeType returns null).
+            : ResolveContentPath(node.Icon, node.Path)
+              ?? DefaultIconForNodeType(node.NodeType)
+              ?? $"/static/NodeTypeIcons/{NeutralNodeIcon}.svg";
+
+    /// <summary>The neutral glyph used when a node has no own icon and its NodeType has no mapping.</summary>
+    private const string NeutralNodeIcon = "box";
 
     /// <summary>
     /// A default icon for a node that carries none of its own, keyed by its NodeType (the type node's
@@ -48,7 +56,7 @@ public static class MeshNodeImageHelper
             "markdown" or "document" => "document",
             "code" => "code",
             "agent" or "harness" => "bot",
-            "languagemodel" or "aisettings" or "command" or "threadcomposer" => "sparkle",
+            "languagemodel" or "aisettings" or "command" or "threadcomposer" or "skill" => "sparkle",
             "modelprovider" => "key",
             "thread" => "chat",
             "threadmessage" => "message",

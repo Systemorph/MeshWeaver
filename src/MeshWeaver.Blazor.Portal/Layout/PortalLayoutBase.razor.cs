@@ -194,10 +194,32 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     private void NavigateToSettings()
     {
         var ns = NavigationService.CurrentNamespace;
-        var url = string.IsNullOrEmpty(ns)
-            ? $"/{GlobalSettingsLayoutArea.GlobalSettingsArea}"
-            : $"/{ns}/Settings";
-        NavigationManager.NavigateTo(url);
+        if (!string.IsNullOrEmpty(ns))
+        {
+            // Per-node settings — governed by the node's own RLS, not platform-admin gated.
+            NavigationManager.NavigateTo($"/{ns}/Settings");
+            return;
+        }
+
+        // Root → Global Settings is ADMIN-ONLY (Admin-partition Read). A non-admin circuit that
+        // subscribes to the GlobalSettings area gets a repeating "Access denied … lacks Read on
+        // 'GlobalSettings'" DeliveryFailure → bounded resubscribe storm. Gate the navigation on the
+        // canonical IsGlobalAdmin() predicate so a non-admin never issues that subscribe; route them
+        // to their own account page instead.
+        Hub.IsGlobalAdmin()
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Catch<bool, Exception>(_ => Observable.Return(false))
+            .Subscribe(isAdmin => InvokeAsync(() =>
+            {
+                if (isAdmin)
+                {
+                    NavigationManager.NavigateTo($"/{GlobalSettingsLayoutArea.GlobalSettingsArea}");
+                    return;
+                }
+                var userId = AccessService?.Context?.ObjectId;
+                NavigationManager.NavigateTo(string.IsNullOrEmpty(userId) ? "/" : $"/User/{userId}");
+            }));
     }
 
     /// <summary>

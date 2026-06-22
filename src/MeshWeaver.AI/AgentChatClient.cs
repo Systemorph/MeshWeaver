@@ -1426,6 +1426,13 @@ public class AgentChatClient : IAgentChat
         // if the new attempt succeeds.
         lastAgentCreationError = null;
 
+        // 🩹 Self-heal a stale / deleted pinned model. The composer can carry a model id that no
+        // longer resolves to a live LanguageModel (catalog refactor, deleted provider) — building a
+        // chat client for it 404s the WHOLE thread (atioz sglauser / rsalzmann threads). When the
+        // selected model doesn't resolve, fall back to the DEFAULT available model so the thread runs
+        // on the default instead of crashing.
+        ApplyStaleModelFallback();
+
         // Factory selection from the chat dropdown selection (currentModelName) — the
         // single source of truth for the model, independent of the agent. Selecting the
         // factory for that model ensures we don't try to serve, e.g., an OpenAI model on
@@ -1581,6 +1588,33 @@ public class AgentChatClient : IAgentChat
 
         agentsInitialized = true;
         logger.LogDebug("[AgentChatClient] Created {Count} agents", agents.Count);
+    }
+
+    /// <summary>
+    /// If the chat-selected model (<see cref="currentModelName"/>) no longer resolves to a live model
+    /// — deleted / refactored out of the catalog so its provider endpoint 404s — swap it for the
+    /// DEFAULT available model (lowest-Order resolvable model in the live catalog). Best-effort and
+    /// fully synchronous: reads the credential resolver's warm snapshot. No-ops when no resolver is
+    /// registered, the selected model already resolves, or no working default exists (so deployments
+    /// whose models bypass the catalog are unaffected).
+    /// </summary>
+    private void ApplyStaleModelFallback()
+    {
+        if (string.IsNullOrEmpty(currentModelName))
+            return;
+        var resolver = hub.ServiceProvider.GetService<ChatClientCredentialResolver>();
+        if (resolver is null)
+            return;
+        if (resolver.Resolve(currentModelName) != CredentialResolution.Missing)
+            return; // the selected model resolves — nothing to heal.
+        var fallback = resolver.ResolveDefaultModelId();
+        if (string.IsNullOrEmpty(fallback)
+            || string.Equals(fallback, currentModelName, StringComparison.OrdinalIgnoreCase))
+            return;
+        logger.LogWarning(
+            "[AgentChatClient] Selected model '{Stale}' does not resolve to a live model; "
+            + "falling back to default model '{Default}'.", currentModelName, fallback);
+        currentModelName = fallback;
     }
 
     /// <summary>

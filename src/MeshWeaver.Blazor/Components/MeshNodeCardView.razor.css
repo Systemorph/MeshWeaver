@@ -1,12 +1,10 @@
 .mesh-node-card {
-    /* FluentCard (<fluent-card>) defaults to inline-block / content width, so it shrinks to its
-       content and leaves the rest of the grid cell empty (the "gaps"). Force it to fill the cell. */
-    display: block;
-    width: 100%;
-    box-sizing: border-box;
-    height: 100%;
+    /* NOTE: <fluent-card> is a CHILD-component host, so this component's CSS-isolation (b-*)
+       attribute is NOT applied to it — the width/display rules below would NOT land here.
+       The card's "fill the grid cell" sizing therefore lives as a GLOBAL rule in
+       standard-page-layout.css (`.mesh-search-area-grid .mesh-node-card`). Keep cursor here;
+       it's harmless even if it doesn't reach the host. */
     cursor: pointer;
-    min-width: 0;
 }
 
 .mesh-node-card:hover {
