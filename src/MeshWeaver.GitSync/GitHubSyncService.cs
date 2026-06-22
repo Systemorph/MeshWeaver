@@ -235,6 +235,13 @@ public sealed class GitHubSyncService
         string repositoryUrl, string commitish, string newSpaceId, string newSpaceName,
         string? subdirectory, string userId)
     {
+        // Capture identity synchronously BEFORE the async credentials.Get hop — the SelectMany
+        // continuation runs without the AsyncLocal AccessContext, and the Space create below must run
+        // as the USER (so they become its admin). Re-assert it on the create's subscribe so
+        // meshService.CreateNode's own at-call capture picks it up. (Same async-boundary fix as
+        // UpdateConfig / EnsureConfigNode — the GitSync CI access-context flake.)
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var ctx = accessService?.Context ?? accessService?.CircuitContext;
         return credentials.Get(userId).Take(1).SelectMany(cred =>
         {
             if (cred?.AccessToken is not { Length: > 0 } token)
@@ -251,7 +258,10 @@ public sealed class GitHubSyncService
                 Content = new Space { Name = newSpaceName },
             };
             logger?.LogInformation("Importing {Repo}@{Ref} into new Space {Space}", repositoryUrl, commitish, newSpaceId);
-            return meshService.CreateNode(spaceNode)
+            var createSpace = accessService is null || ctx is null
+                ? meshService.CreateNode(spaceNode)
+                : Observable.Using(() => accessService.SwitchAccessContext(ctx), _ => meshService.CreateNode(spaceNode));
+            return createSpace
                 .SelectMany(_ => FetchAndImport(repositoryUrl, commitish, subdirectory, token, newSpaceId))
                 .Select(x => x.Result);
         });
@@ -405,6 +415,14 @@ public sealed class GitHubSyncService
     public IObservable<MeshNode> EnsureConfigNode(string spacePath)
     {
         var path = ConfigPath(spacePath);
+        // Capture identity synchronously BEFORE the async WatchConfigNode hop (same reason as
+        // UpdateConfig). meshService.CreateNode captures the AccessContext at its CALL — which here
+        // happens inside the SelectMany continuation, where the AsyncLocal has been dropped, so the
+        // Create is denied; the Catch below then degrades that denial into a 30s wait for a node that
+        // never lands (the GitSync EnsureConfigNode / Editing_a_field CI timeout). Re-assert the
+        // captured context on the create's subscribe so CreateNode's own capture picks it up.
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var ctx = accessService?.Context ?? accessService?.CircuitContext;
         return WatchConfigNode(spacePath).Take(1).SelectMany(existing =>
         {
             if (existing is not null) return Observable.Return(existing);
@@ -418,7 +436,10 @@ public sealed class GitHubSyncService
             };
             // CreateNode is create-only (rejects an existing node) — if a concurrent caller won the
             // race, fall back to reading the now-present node rather than surfacing the conflict.
-            return meshService.CreateNode(node)
+            var create = accessService is null || ctx is null
+                ? meshService.CreateNode(node)
+                : Observable.Using(() => accessService.SwitchAccessContext(ctx), _ => meshService.CreateNode(node));
+            return create
                 .Catch<MeshNode, Exception>(_ => WatchConfigNode(spacePath).Where(n => n is not null).Select(n => n!).Take(1));
         });
     }
@@ -443,7 +464,20 @@ public sealed class GitHubSyncService
 
     /// <summary>Read-modify-write a config field (current value from the synced query; null when absent).</summary>
     private IObservable<MeshNode> UpdateConfig(string spacePath, Func<GitHubSyncConfig, GitHubSyncConfig> update)
-        => ReadConfig(spacePath).SelectMany(current => WriteConfig(spacePath, update(current ?? new GitHubSyncConfig())));
+    {
+        // 🚨 Capture the caller's identity SYNCHRONOUSLY, here on the calling thread, BEFORE the
+        // ReadConfig hop. ReadConfig's SelectMany continuation can run on a pool thread where the
+        // AsyncLocal AccessContext has been dropped, so WriteConfig's CreateOrUpdateNodeRequest would
+        // post under a null/system identity and RLS denies Create on {space}/_GitSync. It passes
+        // locally only because ReadConfig completes synchronously when the config node is absent (the
+        // continuation stays on the caller thread); under CI load ReadConfig emits async and the
+        // context is lost — the GitSync-suite flake ("Access denied: Create permission required for
+        // '{space}/_GitSync'", + the dependent waits that then time out). Thread it explicitly to the
+        // write's post via WithAccessContext so it never depends on the AsyncLocal surviving the hop.
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var ctx = accessService?.Context ?? accessService?.CircuitContext;
+        return ReadConfig(spacePath).SelectMany(current => WriteConfig(spacePath, ctx, update(current ?? new GitHubSyncConfig())));
+    }
 
     /// <summary>
     /// Records the last-sync result by MERGING only <see cref="GitHubSyncConfig.LastSyncedAt"/> /
@@ -464,7 +498,7 @@ public sealed class GitHubSyncService
     /// <summary>Writes the FULL config (no read) — used by <see cref="SaveConfig"/> (a programmatic
     /// / test API). The GUI does NOT use this: it edits the node through the standard
     /// <c>MeshNodeContentEditorControl</c> which binds directly to the node stream.</summary>
-    private IObservable<MeshNode> WriteConfig(string spacePath, GitHubSyncConfig config)
+    private IObservable<MeshNode> WriteConfig(string spacePath, AccessContext? ctx, GitHubSyncConfig config)
     {
         var node = new MeshNode(ConfigId, spacePath)
         {
@@ -474,7 +508,11 @@ public sealed class GitHubSyncService
             MainNode = spacePath,
             Content = config,
         };
-        return hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node))
+        // Carry the caller's identity (captured in UpdateConfig before the async ReadConfig hop) on
+        // the create — otherwise RLS denies Create on {space}/_GitSync when the AsyncLocal is gone.
+        return hub.Observe<CreateOrUpdateNodeResponse>(
+                new CreateOrUpdateNodeRequest(node),
+                o => ctx is null ? o : o.WithAccessContext(ctx))
             .FirstAsync()
             .Select(d => d.Message)
             .SelectMany(resp => resp.Success
