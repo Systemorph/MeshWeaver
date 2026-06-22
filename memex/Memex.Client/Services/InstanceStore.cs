@@ -20,6 +20,10 @@ public sealed class MemexInstance
 public sealed class InstanceStore
 {
     private const string Key = "memex.instances";
+    private const string SeededKey = "memex.instances.seeded";
+
+    /// <summary>The public, shared memex — seeded as the default instance on first launch.</summary>
+    public const string PublicMemexUrl = "https://memex.meshweaver.cloud";
 
     public List<MemexInstance> Instances { get; private set; } = new();
 
@@ -31,6 +35,18 @@ public sealed class InstanceStore
         Instances = string.IsNullOrEmpty(json)
             ? new()
             : JsonSerializer.Deserialize<List<MemexInstance>>(json) ?? new();
+
+        // One-time seed of the public memex so the list isn't empty on first launch. Guarded by a
+        // flag so removing it doesn't bring it back on the next start.
+        if (!Preferences.Default.Get(SeededKey, false))
+        {
+            Preferences.Default.Set(SeededKey, true);
+            if (Instances.Count == 0)
+            {
+                Instances.Add(new MemexInstance { Name = "memex", Url = PublicMemexUrl });
+                Save();
+            }
+        }
     }
 
     public void Save() => Preferences.Default.Set(Key, JsonSerializer.Serialize(Instances));
