@@ -648,30 +648,31 @@ public partial class MeshSearchView : IDisposable
         return value;
     }
 
+    // No hardcoded property list: resolve {property} generically — first against the MeshNode's own
+    // properties by name (case-insensitive, so "namespace"/"Namespace" both work), then, if the node
+    // has no such property (or it is null), against the node's Content (e.g. group LanguageModels by
+    // their content "provider"). Works for any field; PascalCase/camelCase agnostic.
     private string? GetPropertyValue(MeshNode node, string property)
     {
-        return property switch
-        {
-            "Category" or "category" => node.Category,
-            "NodeType" or "nodeType" => node.NodeType,
-            "Name" or "name" => node.Name,
-            "Description" or "description" => null,
-            "Path" or "path" => node.Path,
-            "Id" or "id" => node.Id,
-            _ => GetContentProperty(node.Content, property)
-        };
+        if (string.IsNullOrEmpty(property)) return null;
+        var prop = typeof(MeshNode).GetProperty(property,
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance
+            | System.Reflection.BindingFlags.IgnoreCase);
+        if (prop != null && prop.GetIndexParameters().Length == 0 && prop.GetValue(node) is { } v)
+            return v.ToString();
+        return GetContentProperty(node.Content, property);
     }
 
     private string? GetContentProperty(object? content, string property)
     {
-        if (content == null) return null;
-        if (content is not JsonElement json) return null;
+        if (content == null || string.IsNullOrEmpty(property)) return null;
 
-        if (json.TryGetProperty(property, out var prop))
-            return GetJsonValue(prop);
-
-        if (property.Length > 0)
+        if (content is JsonElement json)
         {
+            if (json.ValueKind != JsonValueKind.Object) return null;
+            if (json.TryGetProperty(property, out var prop))
+                return GetJsonValue(prop);
+
             var camelCase = char.ToLowerInvariant(property[0]) + property.Substring(1);
             if (json.TryGetProperty(camelCase, out var camelProp))
                 return GetJsonValue(camelProp);
@@ -679,9 +680,15 @@ public partial class MeshSearchView : IDisposable
             var pascalCase = char.ToUpperInvariant(property[0]) + property.Substring(1);
             if (json.TryGetProperty(pascalCase, out var pascalProp))
                 return GetJsonValue(pascalProp);
+
+            return null;
         }
 
-        return null;
+        // Typed content record (e.g. ModelDefinition.Provider) — reflect by name, case-insensitive.
+        var cp = content.GetType().GetProperty(property,
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance
+            | System.Reflection.BindingFlags.IgnoreCase);
+        return cp != null && cp.GetIndexParameters().Length == 0 ? cp.GetValue(content)?.ToString() : null;
     }
 
     private string? GetJsonValue(JsonElement element)

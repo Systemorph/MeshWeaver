@@ -157,6 +157,7 @@ public sealed class ChatClientCredentialResolver : IDisposable
 
         var snapshot = ReadSnapshot();
         var def = FindModelDefinition(snapshot, modelId);
+        try { System.IO.File.AppendAllText(@"C:\tmp\claude\resolve-probe.log", $"{DateTime.Now:HH:mm:ss.fff} Resolve({modelId}) snap={snapshot.Count} paths=[{string.Join(";", snapshot.Select(n => n.Path + ":" + n.NodeType))}] def={(def == null ? "NULL" : $"id={def.Id},ref={def.ProviderRef},prov={def.Provider}")}\n"); } catch { }
         if (def == null)
             return CredentialResolution.Missing;
 
