@@ -33,6 +33,10 @@ public partial class MeshSearchView : IDisposable
     private List<MeshNode> _nodes = new();
     private GroupedSearchResult? _computedGroups;
     private IDisposable? _reactiveSubscription;
+    // Storm-resistant fold of the live result stream. Re-rendered only on STRUCTURAL changes
+    // (add/remove/reset), never on content-only Updated emissions from the unscoped cross-partition
+    // change feed the catalog search subscribes to. A new query installs a fresh accumulator.
+    private SearchResultAccumulator _resultAccumulator = new();
     private HashSet<string> _collapsedGroups = new();
     private HashSet<string> _expandedRowGroups = new();
     private string _lastBoundVisibleQuery = "";
@@ -405,48 +409,45 @@ public partial class MeshSearchView : IDisposable
     {
         _isLoading = true;
         StateHasChanged();
+        SubscribeToResultStream();
+    }
 
-        var query = BuildFullQuery();
-        // Subscribe to Query so the result set stays live as data changes.
-        // _reactiveSubscription holds the active subscription (set up in SubscribeToReactiveUpdates).
+    // ReactiveMode and the default (one-shot-style) mode are now the SAME storm-resistant
+    // subscription — the only difference was that the legacy LoadResults re-rendered on every
+    // change emission (including content-only Updated) while this path re-renders only on
+    // structural set changes. They are unified here so neither path can storm.
+    private void SubscribeToReactiveUpdates() => SubscribeToResultStream();
+
+    /// <summary>
+    /// Subscribes the live result stream and re-renders ONLY on structural changes. Every change
+    /// is folded through a fresh <see cref="SearchResultAccumulator"/>; a content-only
+    /// <see cref="QueryChangeType.Updated"/> from the unscoped, cross-partition catalog feed is a
+    /// no-op (result cards databind their own content via LayoutAreaView). This is the storm fix:
+    /// the old <c>LoadResults</c> ran the full grouping/sort + StateHasChanged on every emission,
+    /// so a busy mesh (every thread/agent/model content write across all partitions) turned the
+    /// catalog page into a re-render firehose.
+    /// </summary>
+    private void SubscribeToResultStream()
+    {
         _reactiveSubscription?.Dispose();
+        var accumulator = _resultAccumulator = new SearchResultAccumulator();
+        var query = BuildFullQuery();
         _reactiveSubscription = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Subscribe(
                 change =>
                 {
-                    var current = (IReadOnlyList<MeshNode>)_nodes;
-                    var merged = change.ChangeType switch
-                    {
-                        QueryChangeType.Initial or QueryChangeType.Reset => change.Items,
-                        QueryChangeType.Added => current.Concat(change.Items).ToList(),
-                        QueryChangeType.Updated => current
-                            .Select(n => change.Items.FirstOrDefault(c => c.Path == n.Path) ?? n)
-                            .ToList(),
-                        QueryChangeType.Removed => current
-                            .Where(n => !change.Items.Any(r => r.Path == n.Path))
-                            .ToList(),
-                        _ => current
-                    };
-
-                    if (BoundExcludeBasePath && !string.IsNullOrEmpty(BoundNamespace))
-                    {
-                        var basePath = BoundNamespace.Trim('/');
-                        merged = merged.Where(n => n.Path != basePath).ToList();
-                    }
-
-                    _nodes = merged.ToList();
-                    ResolveDeletePermissions(_nodes);
-
-                    if (ViewModel != null)
-                    {
-                        _computedGroups = ProcessResults(_nodes);
-                        InitializeCollapsedState(_computedGroups);
-                    }
-                    _isLoading = false;
-                    InvokeAsync(StateHasChanged);
+                    // A newer query superseded this subscription before its disposal raced through.
+                    if (!ReferenceEquals(accumulator, _resultAccumulator))
+                        return;
+                    // Structural change → rebuild + render; content-only Updated → skip (no storm).
+                    if (!accumulator.Apply(change))
+                        return;
+                    ApplyResults();
                 },
                 ex =>
                 {
+                    if (!ReferenceEquals(accumulator, _resultAccumulator))
+                        return;
                     var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()
                         ?.CreateLogger("MeshWeaver.MeshSearchView");
                     logger?.LogWarning(ex, "MeshSearchView query failed: {Query}", BuildFullQuery());
@@ -457,99 +458,29 @@ public partial class MeshSearchView : IDisposable
                 });
     }
 
-    private void SubscribeToReactiveUpdates()
+    /// <summary>
+    /// Rebuilds the visible node list (base-path excluded), the grouped result, and re-renders.
+    /// Called only when the accumulator reports a structural change — never per content update.
+    /// </summary>
+    private void ApplyResults()
     {
-        _reactiveSubscription?.Dispose();
-        var query = BuildFullQuery();
-        var request = MeshQueryRequest.FromQuery(query);
+        IEnumerable<MeshNode> visible = _resultAccumulator.Nodes;
+        if (BoundExcludeBasePath && !string.IsNullOrEmpty(BoundNamespace))
+        {
+            var basePath = BoundNamespace.Trim('/');
+            visible = visible.Where(n => n.Path != basePath);
+        }
 
-        // Track the current set of paths. MeshSearchView only cares about
-        // which nodes exist (structural changes), not their content.
-        // Individual cards handle their own content updates via LayoutAreaView.
-        var knownPaths = new HashSet<string>();
+        _nodes = visible.ToList();
+        ResolveDeletePermissions(_nodes);
 
-        _reactiveSubscription = MeshQuery.Query<MeshNode>(request)
-            .Subscribe(change =>
-            {
-                // Compute updated path set without touching _nodes yet.
-                HashSet<string> newPaths;
-                if (change.ChangeType == QueryChangeType.Initial ||
-                    change.ChangeType == QueryChangeType.Reset)
-                {
-                    newPaths = change.Items.Select(n => n.Path!).ToHashSet();
-                }
-                else if (change.ChangeType == QueryChangeType.Added)
-                {
-                    newPaths = new HashSet<string>(knownPaths);
-                    foreach (var item in change.Items)
-                        if (item.Path != null)
-                            newPaths.Add(item.Path);
-                }
-                else if (change.ChangeType == QueryChangeType.Removed)
-                {
-                    newPaths = new HashSet<string>(knownPaths);
-                    foreach (var item in change.Items)
-                        if (item.Path != null)
-                            newPaths.Remove(item.Path);
-                }
-                else
-                {
-                    // Updated — content changed but set of nodes didn't.
-                    return;
-                }
-
-                // Only re-render when the set of paths actually changed.
-                if (!_isLoading && knownPaths.SetEquals(newPaths))
-                    return;
-
-                knownPaths = newPaths;
-
-                InvokeAsync(() =>
-                {
-                    if (change.ChangeType == QueryChangeType.Initial ||
-                        change.ChangeType == QueryChangeType.Reset)
-                    {
-                        // Reset the list — dedupe by path in case the server's Initial
-                        // payload itself contains duplicates (UNION ALL across partitions
-                        // on the server side can surface the same path twice).
-                        var seen = new HashSet<string>();
-                        _nodes = new List<MeshNode>();
-                        foreach (var n in change.Items)
-                        {
-                            if (n.Path != null && seen.Add(n.Path))
-                                _nodes.Add(n);
-                        }
-                    }
-                    else if (change.ChangeType == QueryChangeType.Added)
-                    {
-                        // Only add items whose path isn't already present — otherwise a
-                        // reactive Added event that overlaps the current set doubles rows.
-                        var existing = new HashSet<string>(_nodes.Where(n => n.Path != null).Select(n => n.Path!));
-                        foreach (var n in change.Items)
-                        {
-                            if (n.Path != null && existing.Add(n.Path))
-                                _nodes.Add(n);
-                        }
-                    }
-                    else if (change.ChangeType == QueryChangeType.Removed)
-                    {
-                        var removedPaths = change.Items.Select(n => n.Path).ToHashSet();
-                        _nodes.RemoveAll(n => removedPaths.Contains(n.Path));
-                    }
-
-                    // Exclude base path if configured
-                    if (BoundExcludeBasePath && !string.IsNullOrEmpty(BoundNamespace))
-                    {
-                        var basePath = BoundNamespace.Trim('/');
-                        _nodes = _nodes.Where(n => n.Path != basePath).ToList();
-                    }
-
-                    ResolveDeletePermissions(_nodes);
-                    _computedGroups = ProcessResults(_nodes);
-                    _isLoading = false;
-                    StateHasChanged();
-                });
-            });
+        if (ViewModel != null)
+        {
+            _computedGroups = ProcessResults(_nodes);
+            InitializeCollapsedState(_computedGroups);
+        }
+        _isLoading = false;
+        InvokeAsync(StateHasChanged);
     }
 
     private GroupedSearchResult ProcessResults(List<MeshNode> nodes)
@@ -648,6 +579,33 @@ public partial class MeshSearchView : IDisposable
         return value;
     }
 
+    // Per-instance cache of resolved PropertyInfo, keyed by (declaring type, property name). The
+    // grouping/sort path calls GetPropertyValue per node, per group, per render; for a large
+    // unscoped result set the repeated typeof(MeshNode).GetProperty(...) reflection LOOKUP is a CPU
+    // hot path. We cache the lookup (NOT the value — GetValue still runs per node) so each resolve
+    // is O(1) after the first. Instance field, never static (NoStaticState rule): its lifetime is
+    // the component instance.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<(Type Type, string Property), System.Reflection.PropertyInfo?> _propertyInfoCache = new();
+
+    private System.Reflection.PropertyInfo? ResolveCachedProperty(Type type, string property) =>
+        _propertyInfoCache.GetOrAdd((type, property), static key =>
+        {
+            const System.Reflection.BindingFlags flags =
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance
+                | System.Reflection.BindingFlags.IgnoreCase;
+            try
+            {
+                return key.Type.GetProperty(key.Property, flags);
+            }
+            catch (System.Reflection.AmbiguousMatchException)
+            {
+                // Two case-insensitively-matching properties (a `new` member hiding a base one) —
+                // pick the first declared match instead of throwing, mirroring binder precedence.
+                return Array.Find(key.Type.GetProperties(flags),
+                    p => string.Equals(p.Name, key.Property, StringComparison.OrdinalIgnoreCase));
+            }
+        });
+
     // No hardcoded property list: resolve {property} generically — first against the MeshNode's own
     // properties by name (case-insensitive, so "namespace"/"Namespace" both work), then, if the node
     // has no such property (or it is null), against the node's Content (e.g. group LanguageModels by
@@ -655,9 +613,7 @@ public partial class MeshSearchView : IDisposable
     private string? GetPropertyValue(MeshNode node, string property)
     {
         if (string.IsNullOrEmpty(property)) return null;
-        var prop = typeof(MeshNode).GetProperty(property,
-            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance
-            | System.Reflection.BindingFlags.IgnoreCase);
+        var prop = ResolveCachedProperty(typeof(MeshNode), property);
         if (prop != null && prop.GetIndexParameters().Length == 0 && prop.GetValue(node) is { } v)
             return v.ToString();
         return GetContentProperty(node.Content, property);
@@ -684,10 +640,9 @@ public partial class MeshSearchView : IDisposable
             return null;
         }
 
-        // Typed content record (e.g. ModelDefinition.Provider) — reflect by name, case-insensitive.
-        var cp = content.GetType().GetProperty(property,
-            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance
-            | System.Reflection.BindingFlags.IgnoreCase);
+        // Typed content record (e.g. ModelDefinition.Provider) — reflect by name, case-insensitive
+        // (cached lookup; GetValue still runs per node).
+        var cp = ResolveCachedProperty(content.GetType(), property);
         return cp != null && cp.GetIndexParameters().Length == 0 ? cp.GetValue(content)?.ToString() : null;
     }
 
