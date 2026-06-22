@@ -455,8 +455,19 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             .Match(x => x is SplitterControl s && s.Areas.Count >= 2);
         var contentAreaId = ((SplitterControl)shell!).Areas.Last().Area.ToString()!;
 
-        var searchControl = (MeshSearchControl)(await stream
+        // The shell's content pane wraps the instance search in a breadcrumbs Stack for a NESTED
+        // NodeType (FutuRe/LineOfBusiness sits under FutuRe → BuildBreadcrumbs returns a trail), so the
+        // pane is a StackControl(breadcrumbs, MeshSearchControl); a top-level type renders the bare
+        // MeshSearchControl. Drill to the search either way.
+        var contentPane = await stream
             .GetControlStream(contentAreaId)
+            .Should().Within(50.Seconds())
+            .Match(x => x is MeshSearchControl || x is StackControl);
+        var searchAreaId = contentPane is StackControl stk
+            ? stk.Areas.Last().Area.ToString()!
+            : contentAreaId;
+        var searchControl = (MeshSearchControl)(await stream
+            .GetControlStream(searchAreaId)
             .Should().Within(50.Seconds())
             .Match(x => x is MeshSearchControl))!;
         searchControl.HiddenQuery.Should().NotBeNull("Search should have a hidden query");
@@ -500,8 +511,19 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             .Match(x => x is SplitterControl s && s.Areas.Count >= 2);
         var contentAreaId = ((SplitterControl)shell!).Areas.Last().Area.ToString()!;
 
-        var searchControl = (MeshSearchControl)(await stream
+        // The shell's content pane wraps the instance search in a breadcrumbs Stack for a NESTED
+        // NodeType (FutuRe/LineOfBusiness sits under FutuRe → BuildBreadcrumbs returns a trail), so the
+        // pane is a StackControl(breadcrumbs, MeshSearchControl); a top-level type renders the bare
+        // MeshSearchControl. Drill to the search either way.
+        var contentPane = await stream
             .GetControlStream(contentAreaId)
+            .Should().Within(50.Seconds())
+            .Match(x => x is MeshSearchControl || x is StackControl);
+        var searchAreaId = contentPane is StackControl stk
+            ? stk.Areas.Last().Area.ToString()!
+            : contentAreaId;
+        var searchControl = (MeshSearchControl)(await stream
+            .GetControlStream(searchAreaId)
             .Should().Within(50.Seconds())
             .Match(x => x is MeshSearchControl))!;
         searchControl.HiddenQuery.Should().NotBeNull("Search should have a hidden query");
