@@ -676,18 +676,32 @@ internal static class NodeTypeEnrichmentHelpers
             "EnrichWithNodeType: self-heal recompile #{Attempt} for {NodeType} — {Reason}",
             recompileAttempts + 1, nodeType, reason);
 
+        var enrichAccessService = meshHub.ServiceProvider.GetService<AccessService>();
         var typeStream = meshHub.GetWorkspace().GetMeshNodeStream(nodeType);
-        return typeStream
-            .Update(curr =>
-            {
-                if (curr.Content is NodeTypeDefinition cdef
-                    && cdef.CompilationStatus == CompilationStatus.Ok)
-                    return curr with
-                    {
-                        Content = cdef with { CompilationStatus = CompilationStatus.Pending }
-                    };
-                return curr;
-            })
+        // 🚨 The Ok→Pending flip is a framework-internal self-heal — it MUST run under SYSTEM
+        // identity, exactly like the sibling stale-Ok heal above and the compile watcher's compile
+        // dispatch. This cold cross-hub Update's side effect runs on the stream-emission thread,
+        // where the inbound AccessContext (the user who activated the instance) has been wiped by
+        // the reactive hops of the enrichment chain. Without the System scope the resulting
+        // PatchDataRequest posts a NULL AccessContext, fails closed at the sender, and the Pending
+        // flip never reaches the NodeType hub → the compile watcher never fires → the
+        // HasUsableBuild wait below never settles → the per-instance hub's HubReady never fires →
+        // Orleans deactivates it on the 30s callback timeout. That is the FrameworkStaleAssembly
+        // CI flake (it "passes locally" only because the inbound context survived more often there).
+        // Observable.Using holds the impersonation across the cold Update's Subscribe — a bare
+        // `using` would lapse before the emission-thread subscribe runs (see the sibling heal).
+        return Observable.Using(
+                () => AccessContextScope.AsSystem(enrichAccessService),
+                _ => typeStream.Update(curr =>
+                {
+                    if (curr.Content is NodeTypeDefinition cdef
+                        && cdef.CompilationStatus == CompilationStatus.Ok)
+                        return curr with
+                        {
+                            Content = cdef with { CompilationStatus = CompilationStatus.Pending }
+                        };
+                    return curr;
+                }))
             .Take(1)
             .SelectMany(_ => typeStream
                 .Where(typeNode =>
