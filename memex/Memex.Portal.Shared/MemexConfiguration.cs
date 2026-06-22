@@ -611,6 +611,25 @@ public static class MemexConfiguration
                     // (needed by FutuRe and other samples that store datacube.csv, etc.)
                     config = config.MapContentCollection("attachments", "storage", $"attachments/{nodePath}");
 
+                    // Shared large static assets (e.g. the on-device Whisper models the native client
+                    // downloads) live in a FileSystem content collection on the MeshWeaver space, backed
+                    // by a read-only AKS file-share mount (StaticAssets:Path). This is the framework-native
+                    // way — it gives the upload UI + get/list + content serving for free, and the native
+                    // VoiceModelCatalog downloads from the content URL (…/MeshWeaver/static/Speech/…). It's
+                    // a no-op when the mount isn't configured (local dev, tests).
+                    var staticAssetsMount = configuration["StaticAssets:Path"];
+                    if (!string.IsNullOrWhiteSpace(staticAssetsMount) && nodePath == "MeshWeaver")
+                        config = config.AddContentCollection(_ => new ContentCollectionConfig
+                        {
+                            Name = "static",
+                            SourceType = "FileSystem",
+                            BasePath = staticAssetsMount,
+                            Address = config.Address,
+                            IsEditable = true,
+                            ExposeInChildren = true,
+                            Settings = new Dictionary<string, string> { ["BasePath"] = staticAssetsMount },
+                        });
+
                     return config
                         .WithHeartBeatHandler() // silently ack heartbeats on every per-node hub
                         .AddDefaultLayoutAreas()

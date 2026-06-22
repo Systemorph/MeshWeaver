@@ -42,8 +42,11 @@ public sealed class VoiceModelCatalog
         Directory.CreateDirectory(modelsDirectory);
         (_fileName, _url) = model switch
         {
-            // The converted Flurin17 Swiss-German fine-tune — no public GGML, placed in ModelsDirectory.
-            WhisperModelSize.SwissGerman => ("ggml-swiss-german-turbo.bin", (string?)null),
+            // The converted Flurin17 Swiss-German fine-tune (no public GGML). Served from the MeshWeaver
+            // space's "static" FileSystem content collection (the AKS file-share mount), downloaded on
+            // first use like the others.
+            WhisperModelSize.SwissGerman => ("ggml-swiss-german-turbo-f16.bin",
+                "https://memex.meshweaver.cloud/MeshWeaver/static/Speech/ggml-swiss-german-turbo-f16.bin"),
             WhisperModelSize.LargeV3Turbo => ("ggml-large-v3-turbo.bin", GgmlBaseUrl + "ggml-large-v3-turbo.bin"),
             _ => ("ggml-base.bin", GgmlBaseUrl + "ggml-base.bin"),
         };
