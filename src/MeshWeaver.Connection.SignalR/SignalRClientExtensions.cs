@@ -24,12 +24,14 @@ namespace MeshWeaver.Connection.SignalR;
 /// </summary>
 public static class SignalRClientExtensions
 {
-    public static MessageHubConfiguration UseSignalRClient(
-        this MessageHubConfiguration config,
-        string url,
-        Func<Task<string?>>? accessTokenProvider = null,
-        Func<IHubConnectionBuilder, IHubConnectionBuilder>? configuration = null,
-        Address? remoteAddress = null)
+    /// <summary>
+    /// Sets up the SignalR participant INFRASTRUCTURE without connecting to anything: the connection
+    /// registry, the route handler, and this hub's own inbound stream. Connect to remote meshes AT
+    /// RUNTIME with <see cref="ConnectToMesh"/> — the bootstrap pattern "build the mesh, GetQuery the
+    /// instance nodes, then connect each". <see cref="UseSignalRClient"/> is this plus one build-time
+    /// connection.
+    /// </summary>
+    public static MessageHubConfiguration UseSignalRParticipant(this MessageHubConfiguration config)
         => config
             .WithServices(services =>
             {
@@ -39,18 +41,43 @@ public static class SignalRClientExtensions
             .AddMeshTypes()
             .WithInitialization(hub =>
             {
-                // Register this participant's own stream for inbound routing.
+                // Register this participant's own stream for inbound routing (once per hub).
                 var routing = hub.ServiceProvider.GetService<IRoutingService>();
                 if (routing is not null)
                     hub.RegisterForDisposal(routing.RegisterStream(hub));
-
-                // Open the connection now and register it keyed by the remote's address so the route can
-                // pick the right one per target. remoteAddress null = the single-remote default (one
-                // connection serves every remote target).
-                var connection = CreateHubConnectionAsync(url, accessTokenProvider, configuration, hub.ServiceProvider);
-                hub.ServiceProvider.GetRequiredService<SignalRRemoteConnections>().Add(remoteAddress, connection);
             })
             .WithRoutes(AddSignalRRoute);
+
+    /// <summary>Participant infrastructure + ONE build-time connection to <paramref name="url"/>.</summary>
+    public static MessageHubConfiguration UseSignalRClient(
+        this MessageHubConfiguration config,
+        string url,
+        Func<Task<string?>>? accessTokenProvider = null,
+        Func<IHubConnectionBuilder, IHubConnectionBuilder>? configuration = null,
+        Address? remoteAddress = null)
+        => config
+            .UseSignalRParticipant()
+            .WithInitialization(hub => hub.ConnectToMesh(url, accessTokenProvider, remoteAddress, configuration));
+
+    /// <summary>
+    /// Connect this hub to a remote mesh AT RUNTIME (after the hub is up): opens the SignalR connection
+    /// and registers it keyed by <paramref name="remoteAddress"/> so the route picks it per target.
+    /// Requires <see cref="UseSignalRParticipant"/> (or <see cref="UseSignalRClient"/>) to have set up
+    /// the registry + route. The connection disposes with the hub. This is what lets the bootstrap
+    /// read its <c>MemexInstance</c> nodes (<c>GetQuery</c>) and then dial each one — no build-time URL.
+    /// </summary>
+    public static void ConnectToMesh(
+        this IMessageHub hub,
+        string url,
+        Func<Task<string?>>? accessTokenProvider = null,
+        Address? remoteAddress = null,
+        Func<IHubConnectionBuilder, IHubConnectionBuilder>? configuration = null)
+    {
+        // Open the connection now (CreateHubConnectionAsync starts it) and register it keyed by the
+        // remote's address. remoteAddress null = the single-remote default (serves every remote target).
+        var connection = CreateHubConnectionAsync(url, accessTokenProvider, configuration, hub.ServiceProvider);
+        hub.ServiceProvider.GetRequiredService<SignalRRemoteConnections>().Add(remoteAddress, connection);
+    }
 
     private static async Task<HubConnection> CreateHubConnectionAsync(
         string url, Func<Task<string?>>? accessTokenProvider,
