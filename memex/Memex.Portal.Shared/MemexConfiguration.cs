@@ -638,7 +638,9 @@ public static class MemexConfiguration
                 // Add activity tracking to record user access patterns via ActivityLogBundler
                 .AddActivityTracking()
                 // SignalR mesh transport — external participants (native clients) join over a WebSocket.
-                .AddSignalRHub();
+                .AddSignalRHub()
+                // MemexClient node type — per-installation client config under {user}/Client/{id}.
+                .AddMemexClientType();
         }
 
         /// <summary>
