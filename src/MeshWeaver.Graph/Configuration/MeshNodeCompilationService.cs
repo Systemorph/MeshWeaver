@@ -1295,43 +1295,103 @@ internal class MeshNodeCompilationService(
     }
 
     /// <summary>
-    /// Compiles and emits assembly to a unique per-compile subdirectory.
-    /// Each compile writes to {cacheDir}/{nodeName}_{ticks_hex}/ so V1 and V2
-    /// DLLs coexist on disk without overwriting — no file-lock races, no hash
-    /// collisions in TryCreateReleaseNode.
+    /// Compiles and emits assembly to a unique per-compile subdirectory, then VERIFIES the
+    /// assembly actually landed on disk and re-emits when it did not. Each compile writes to
+    /// {cacheDir}/{nodeName}_{ticks_hex}/ so V1 and V2 DLLs coexist on disk without overwriting.
+    ///
+    /// <para>🩹 Self-heal: on container deployments the cache directory is an ephemeral
+    /// <c>/tmp/...</c>; a "successful" Roslyn emit can leave NO file on disk when the just-written
+    /// assembly is evicted before the next read. That used to poison the NodeType permanently with
+    /// a sticky "Compilation succeeded but DLL not found" error (atioz AgenticPension/Datenpunkt,
+    /// 2026-06-22) — the grain never recompiled. We now re-emit the lost artifact (a genuine compile
+    /// error is NOT retried) and, if it still cannot be persisted, surface a clear, loud failure
+    /// instead of a silent poison. See <see cref="EmitToDiskWithRetry"/>.</para>
     /// </summary>
-    private async Task<string> CompileToDiskAsync(CSharpCompilation compilation, string nodeName, string nodePath, CancellationToken ct)
+    private Task<string> CompileToDiskAsync(CSharpCompilation compilation, string nodeName, string nodePath, CancellationToken ct)
+        => Task.FromResult(EmitToDiskWithRetry(
+            cacheService.CacheDirectory, nodeName, DiskEmitAttempts, logger,
+            releaseDir =>
+            {
+                var dllPath = Path.Combine(releaseDir, $"{nodeName}.dll");
+                var pdbPath = Path.Combine(releaseDir, $"{nodeName}.pdb");
+                var xmlDocPath = Path.Combine(releaseDir, $"DynamicNode_{nodeName}.xml");
+
+                using (var dllStream = File.Create(dllPath))
+                using (var pdbStream = File.Create(pdbPath))
+                using (var xmlDocStream = File.Create(xmlDocPath))
+                {
+                    var emitOptions = new EmitOptions(
+                        debugInformationFormat: DebugInformationFormat.PortablePdb,
+                        pdbFilePath: pdbPath);
+
+                    var emitResult = compilation.Emit(
+                        dllStream, pdbStream, xmlDocumentationStream: xmlDocStream,
+                        options: emitOptions, cancellationToken: ct);
+
+                    if (!emitResult.Success)
+                    {
+                        // Deterministic compile error — propagates straight out of the retry loop.
+                        var errorMessage = FormatCompileFailure(nodePath, emitResult.Diagnostics);
+                        logger.LogError("{ErrorMessage}", errorMessage);
+                        throw new CompilationException(nodePath, errorMessage);
+                    }
+                }
+                // Streams flushed + closed here, before EmitToDiskWithRetry verifies the file.
+                return dllPath;
+            }));
+
+    /// <summary>
+    /// Number of times <see cref="EmitToDiskWithRetry"/> re-emits when a "successful" Roslyn
+    /// emit leaves no assembly on disk (ephemeral-cache eviction). Three attempts recover a
+    /// transient lost write while still failing fast on a genuinely unwritable cache directory.
+    /// </summary>
+    internal const int DiskEmitAttempts = 3;
+
+    /// <summary>
+    /// Emits to a fresh per-attempt subdirectory under <paramref name="cacheDirectory"/> and
+    /// confirms the assembly actually persisted, re-emitting up to <paramref name="maxAttempts"/>
+    /// times when the DLL is missing or empty afterward. <paramref name="emitToReleaseDir"/> runs
+    /// the real Roslyn emit into the supplied directory and returns the DLL path it wrote; it may
+    /// throw <see cref="CompilationException"/> for a genuine compile error, which propagates
+    /// immediately (NEVER retried — only a lost/empty artifact triggers a re-emit). Extracted and
+    /// <c>internal</c> so the lost-write self-heal is unit-testable without a real flaky filesystem.
+    /// </summary>
+    internal static string EmitToDiskWithRetry(
+        string cacheDirectory,
+        string nodeName,
+        int maxAttempts,
+        ILogger logger,
+        Func<string, string> emitToReleaseDir)
     {
-        var timestamp = DateTimeOffset.UtcNow.Ticks.ToString("x");
-        var releaseDir = Path.Combine(cacheService.CacheDirectory, $"{nodeName}_{timestamp}");
-        Directory.CreateDirectory(releaseDir);
-        var dllPath = Path.Combine(releaseDir, $"{nodeName}.dll");
-        var pdbPath = Path.Combine(releaseDir, $"{nodeName}.pdb");
-        var xmlDocPath = Path.Combine(releaseDir, $"DynamicNode_{nodeName}.xml");
-
-        await using var dllStream = File.Create(dllPath);
-        await using var pdbStream = File.Create(pdbPath);
-        await using var xmlDocStream = File.Create(xmlDocPath);
-
-        var emitOptions = new EmitOptions(
-            debugInformationFormat: DebugInformationFormat.PortablePdb,
-            pdbFilePath: pdbPath);
-
-        var emitResult = compilation.Emit(dllStream, pdbStream, xmlDocumentationStream: xmlDocStream, options: emitOptions, cancellationToken: ct);
-
-        if (!emitResult.Success)
+        string? lastDllPath = null;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            var errorMessage = FormatCompileFailure(nodePath, emitResult.Diagnostics);
-            logger.LogError("{ErrorMessage}", errorMessage);
-            throw new CompilationException(nodePath, errorMessage);
+            var timestamp = DateTimeOffset.UtcNow.Ticks.ToString("x");
+            var releaseDir = Path.Combine(cacheDirectory, $"{nodeName}_{timestamp}");
+            Directory.CreateDirectory(releaseDir);
+
+            // The real emit (a compile error throws straight through — see method remarks).
+            lastDllPath = emitToReleaseDir(releaseDir);
+
+            // Roslyn reported success — confirm the bytes are genuinely on disk. On an ephemeral
+            // cache directory the file can be evicted between emit and the next read.
+            if (File.Exists(lastDllPath) && new FileInfo(lastDllPath).Length > 0)
+                return lastDllPath;
+
+            logger.LogWarning(
+                "Emit for {NodeName} reported success but the assembly was missing or empty at " +
+                "{DllPath} after flush (attempt {Attempt}/{Max}); re-emitting.",
+                nodeName, lastDllPath, attempt, maxAttempts);
+
+            // Drop the empty/partial directory so the retry starts clean.
+            try { Directory.Delete(releaseDir, recursive: true); }
+            catch (Exception ex) { logger.LogDebug(ex, "Could not clean up empty release dir {ReleaseDir}", releaseDir); }
         }
 
-        // Close streams before returning the path
-        await dllStream.DisposeAsync();
-        await pdbStream.DisposeAsync();
-        await xmlDocStream.DisposeAsync();
-
-        return dllPath;
+        throw new CompilationException(nodeName,
+            $"Compilation succeeded but the emitted assembly for '{nodeName}' could not be persisted to " +
+            $"'{cacheDirectory}' after {maxAttempts} attempts (last target '{lastDllPath}'). The compilation " +
+            "host's cache directory may be read-only or evicting files.");
     }
 
     /// <summary>
