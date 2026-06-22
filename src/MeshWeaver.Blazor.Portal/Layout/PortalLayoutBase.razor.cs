@@ -504,15 +504,20 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     }
 
 
-    // Side panel content state
-    // Key derived from the primary path so the ThreadChatView is rebuilt (re-running
-    // OnInitialized, re-seeding the context attachment chip) when navigation moves
-    // to a different node. Without this, the ThreadChatView stays stuck on the
-    // InitialContext it was first rendered with.
-    private string sidePanelContentKey => $"newchat-{_currentNavContext?.PrimaryPath ?? string.Empty}";
+    // Side panel content state.
+    //
+    // 🚨 The side-panel chat's identity (its Blazor @key AND its cached control) is keyed
+    // ONLY on the stable content path — NEVER on the navigation context's PrimaryPath. A
+    // key that embeds PrimaryPath flips on every navigation, so Blazor tears down + recreates
+    // the ThreadChatView and DESTROYS the in-progress conversation (the recurring "lost the
+    // thread again" nuisance). The context-attachment chip is refreshed LIVE inside
+    // ThreadChatView via its NavigationService.NavigationContext subscription
+    // (OnNavigationContextChanged) — the component never needs rebuilding to reflect a
+    // navigation change. The keying/caching rules live in SidePanelChatKeying so the
+    // invariant is unit-testable without a render host.
+    private const string sidePanelContentKey = SidePanelChatKeying.NewChatKey;
     private ThreadChatControl? _cachedSidePanelControl;
     private string? _cachedContentPath;
-    private string? _cachedContextPath;
 
     private LayoutAreaControl? sidePanelViewModel;
     private string? resolvedSidePanelPath;
@@ -578,19 +583,22 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
     private ThreadChatControl GetSidePanelControl()
     {
-        var context = _currentNavContext;
-        var contextPath = context?.PrimaryPath;
         var contentPath = SidePanelState.ContentPath ?? string.Empty;
 
-        // Return cached instance if inputs haven't changed
+        // Return the cached control unless the CONTENT path changed. Navigation
+        // (PrimaryPath) is deliberately NOT a cache input: rebuilding on every node
+        // click would replace the ViewModel and re-bind the chat (and, combined with a
+        // PrimaryPath-keyed @key, tear it down entirely). The current navigation context
+        // only seeds the INITIAL attachment chip below; ThreadChatView then keeps the
+        // chip in sync via its own NavigationContext subscription — no rebuild needed.
         if (_cachedSidePanelControl != null
-            && _cachedContentPath == contentPath
-            && _cachedContextPath == contextPath)
+            && !SidePanelChatKeying.ShouldRebuildControl(_cachedContentPath, contentPath))
             return _cachedSidePanelControl;
 
+        var context = _currentNavContext;
+        var contextPath = context?.PrimaryPath;
         var contextDisplayName = context?.Node?.Name ?? context?.Node?.Id;
         _cachedContentPath = contentPath;
-        _cachedContextPath = contextPath;
         _cachedSidePanelControl = new ThreadChatControl()
             .WithThreadPath(contentPath)
             .WithInitialContext(contextPath ?? string.Empty)

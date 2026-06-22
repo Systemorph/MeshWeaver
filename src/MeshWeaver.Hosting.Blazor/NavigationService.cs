@@ -588,10 +588,19 @@ internal class NavigationService : INavigationService
                         using (accessService?.ImpersonateAsSystem()
                                ?? System.Reactive.Disposables.Disposable.Empty)
                         {
+                            // 🩹 This is a best-effort DERIVED-CACHE write — the PreRenderedHtml is
+                            // recomputed from the node's own MarkdownContent on the next load, so a
+                            // failure here is benign and must NEVER bubble out of this navigation.
+                            // A Markdown-typed node routes to a per-type schema (e.g. `markdown`) that
+                            // may not be provisioned, so the Update legitimately surfaces an Npgsql
+                            // 42P01 ("relation does not exist"). Swallow it at Debug (NOT Warning: it
+                            // is expected and would otherwise ship per-navigation noise to App
+                            // Insights). The onError keeps the cache miss from propagating; only THIS
+                            // cache write is swallowed — real data writes are untouched.
                             _hub.GetMeshNodeStream(prerenderedPath).Update(current => current with { PreRenderedHtml = html })
                                 .Subscribe(_ => { }, ex =>
                                     _hub.ServiceProvider.GetService<ILogger<NavigationService>>()
-                                        ?.LogWarning(ex, "Failed to persist PreRenderedHtml for {Path}", prerenderedPath));
+                                        ?.LogDebug(ex, "Skipped PreRenderedHtml cache persist for {Path} (best-effort; recomputed on next load)", prerenderedPath));
                         }
                     }
                     catch (Exception ex)
