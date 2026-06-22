@@ -1,13 +1,13 @@
 ---
 Name: NodeType Catalogs (shipping instances of a NodeType)
 Category: Architecture
-Description: How a partition that ships INSTANCES of a NodeType (Agent, Harness, Skill, Model) is rooted — the partition root is a single nodeType:NodeType node that links to the registered static C# definition, so the in-memory definition is dissociated from runtime serving and never collides with the partition root.
+Description: How a partition that ships INSTANCES of a NodeType (Agent, Harness, Skill, Provider) is rooted — the in-memory type definition is dissociated from runtime serving (a single nodeType:NodeType root that links to the static C# definition, or an IsDefinitionOnly type-def), so it never collides with the partition root and is never auto-persisted to a phantom schema.
 Icon: Box
 ---
 
 # NodeType Catalogs
 
-A **NodeType catalog** is a partition that ships **instances of one NodeType** with the build: `Agent` (the agent catalog), `Harness`, `Skill`, `Model`. The instances are authored content materialized into the partition by the [Static-Repo Import](/Doc/Architecture/StaticRepoImport) and **served from the database** at runtime — like every other partition.
+A **NodeType catalog** is a partition that ships **instances of a NodeType** with the build: `Agent` (the agent catalog), `Harness`, `Skill`, and `Provider` (the AI model/provider catalog — it ships two companion types, `ModelProvider` providers with `LanguageModel` models nested beneath them). The instances are authored content materialized into the partition by the [Static-Repo Import](/Doc/Architecture/StaticRepoImport) and **served from the database** at runtime — like every other partition. The built-in/config provider is then **only a sync source**: it materializes the catalog into the DB on boot, after which the DB is the catalog of record.
 
 This page defines how such a catalog is **rooted**. Get it wrong and the partition's bare address (`@Harness`) is claimed by *two* nodes; a `GetDataRequest` to it can never settle on one owner, the mesh **routing-loop guard** fires, the partition's data source (`ds/Harness`) faults, and every subscriber — the live picker binding plus the NodeType compile/sources/release watchers — dies with it. Symptom: *the harness selector disappears until refresh*.
 
@@ -35,7 +35,7 @@ Historically a NodeType catalog registered **two** nodes that landed on the **sa
 
 When `NodeType == RootNamespace == the partition name` (true for `Harness`, `Agent`, `Skill`), **both nodes occupy the bare partition path**. Once the DB root wins the address resolution, the runtime disagrees with itself: routing serves the DB node, but `MeshDataSource.WithMeshNodes`/`FindStaticNode`/`NodeTypeEnrichmentHelpers` still find the in-memory type-def at the same path. A `GetDataRequest` for the bare partition bounces between hubs, re-enters one already in its `RoutingPath`, and the **routing-loop guard** (`MessageService`) fails it → `ds/<Partition>` faults.
 
-`Model` only escaped this by accident: `LanguageModelNodeType.NodeType = "LanguageModel"` ≠ `RootNamespace = "Model"`, so its type-def (`@LanguageModel`) and root (`@Model`) never shared a path. **That exception is the proof** — the collision, not anything `Harness`-specific, is the defect. The unified rule above removes the collision for *every* catalog deterministically: there is only ever one node on the partition path.
+The model/provider catalog never had this exact collision, because its type discriminators (`ModelProvider`, `LanguageModel`) differ from its partition name (`Provider`) — so the type-defs (`@ModelProvider`, `@LanguageModel`) and the partition root (`@Provider`) never shared a path. **That non-collision is the proof** — the path clash, not anything `Harness`-specific, is the defect: when the discriminator and the partition name diverge, there's nothing to collide. But "no collision" is not the same as "served twice is fine": even without a path clash, an in-memory type-def left registered on the synced path gets auto-written by the per-node-hub persistence sampler to a phantom schema named after its lowercased discriminator (`modelprovider` / `languagemodel`) that is never provisioned → `42P01`. The fix for *both* failure modes is the same dissociation principle below.
 
 ## The principle: in-memory is dissociated from runtime
 
@@ -45,7 +45,12 @@ For a **DB-synced** partition, an in-memory static node definition is a **sync /
 - It **is** still consulted as a *definition* — the persisted `nodeType:NodeType` root links to it to obtain the C# `HubConfiguration` for enriching the catalog's instances.
 - It **is** still the *sync source* — the importer writes the persisted root + instances from it once per content-version.
 
-This is the same `dbSynced` boundary that already drops the in-memory **content/storage** providers (`AddHarnessType`/`AddAgentType` skip `IStaticNodeProvider` + `StaticNodePartitionStorageProvider` when the partition is synced); the rule extends that boundary to the **type-def node** so it stops squatting on the DB partition's path.
+This is the same `dbSynced` boundary that already drops the in-memory **content/storage** providers (`AddHarnessType`/`AddAgentType`/`AddModelProviderType`/`AddLanguageModelType` skip `IStaticNodeProvider` + `StaticNodePartitionStorageProvider` when the partition is synced); the rule extends that boundary to the **type-def node** so it stops squatting on the DB partition's path.
+
+There are two concrete ways to dissociate the in-memory type-def, and a catalog uses whichever its shape calls for:
+
+- **`nodeType:NodeType` root** — when the discriminator *equals* the partition name (`Harness`, `Agent`, `Skill`), the persisted root and the type-def must be **the same** node, so the root is a `nodeType:NodeType` node that links to the static C# type for its `HubConfiguration`. This is what removes the path collision.
+- **`IsDefinitionOnly = true`** — when the discriminator *differs* from the partition name (the `Provider` catalog's `ModelProvider` / `LanguageModel` / `ModelProviderSelection`), there is no root collision, but the type-def must still be dropped from runtime serving/persistence so the sampler doesn't write it to a phantom schema. `AddModelProviderType` / `AddLanguageModelType` register these defs with `IsDefinitionOnly = true` when `dbSynced` (exactly as `HarnessNodeType` does): the def still supplies its `HubConfiguration` **by name** (the catalog's instances enrich through it) and proves the type exists, but it is NOT served or persisted at its bare discriminator path (`@ModelProvider` / `@LanguageModel`). Postgres owns the real catalog under the top-level `Provider` partition.
 
 ## Collecting across namespaces (the registry)
 
@@ -85,7 +90,9 @@ Adding a new such catalog is then collision-free by construction — there is on
 
 ## Status / migration
 
-`Model`/`LanguageModel` already avoids the collision via a distinct discriminator. `Harness`, `Agent`, `Skill` are being migrated from the `Space`-root-plus-served-type-def shape to the unified `nodeType:NodeType` root above; the migration only rewrites the partition **root** (`nodeType:Space` → `nodeType:NodeType`) — instance nodes are unchanged.
+The `Provider` catalog (AI providers + models) is fully migrated: the built-in/config provider is a **sync source only** (`ModelStaticRepoSource` imports it into the top-level `Provider` partition on boot; the DB serves it thereafter), the `ModelProvider` / `LanguageModel` / `ModelProviderSelection` type-defs are registered `IsDefinitionOnly = true` when synced, and the catalog lives at `Provider/{provider}` (providers) with models nested at `Provider/{provider}/{model}`, plus a `Provider/_Policy` (`PublicRead`, lifted write caps). It moved here from the older `Admin/Provider` / `_Provider` satellite layout. Platform admins get standing write on the `Provider` partition via the `Provider/_Access` Admin grant seeded by `GlobalAdminSeed`; non-admins are read-only. See [Model Providers](/Doc/Architecture/ModelProviders).
+
+`Harness`, `Agent`, `Skill` are being migrated from the `Space`-root-plus-served-type-def shape to the unified `nodeType:NodeType` root above; the migration only rewrites the partition **root** (`nodeType:Space` → `nodeType:NodeType`) — instance nodes are unchanged.
 
 ## See also
 

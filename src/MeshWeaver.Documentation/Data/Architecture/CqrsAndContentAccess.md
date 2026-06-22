@@ -292,7 +292,7 @@ If a component needs to **react** to a set of MeshNodes (a list, a filter, a cat
 IObservable<IReadOnlyList<MeshNode>> stream = workspace.GetQuery(
     "stable-cache-id",
     "namespace:Agent nodeType:Agent",
-    "namespace:Model nodeType:LanguageModel");
+    "namespace:Provider nodeType:LanguageModel scope:descendants");
 
 stream.Subscribe(snapshot => …);
 ```

@@ -32,14 +32,14 @@ How to change what runs at **memex.systemorph.com**, from "instant, no redeploy"
 
 The model picker reads `ModelProvider` + `LanguageModel` mesh nodes. Create/patch them through the portal (MCP / Settings) and they take effect **immediately** — the data lives in Postgres, the running pod serves it, no deploy.
 
-- The shared DeepSeek tiers live at `Systemorph/_Provider/AzureFoundry` (+ children); the key is stored **encrypted** (`enc:v1:…`, AES-256-GCM) on that node, decrypted in-process at request time.
-- Per-user providers (e.g. Claude Code) live at `{user}/_Provider/…` and merge into the picker via the user's `_Provider/_Selection`.
+- The shared DeepSeek tiers live at `Systemorph/Provider/AzureFoundry` (+ children); the key is stored **encrypted** (`enc:v1:…`, AES-256-GCM) on that node, decrypted in-process at request time.
+- Per-user providers (e.g. Claude Code) live at `{user}/_Memex/…` and merge into the picker via the user's `{user}/_Memex/Selection`.
 
 **Best for:** adding/curating models, fixing an empty picker, per-user keys. **Limitation:** these are instance nodes in a space/user partition — not the *default* catalog served to every partition (that's Option B). The encrypted key depends on the master key staying constant (see [the caveat](#-the-master-key-caveat)).
 
 ## Option B — Default static catalog via Helm config (needs redeploy)
 
-`BuiltInLanguageModelProvider` materialises a **default, read-only** catalog at `_Provider/{provider}` + model children from config (`{Section}:Models` / `:Endpoint`), served to every partition. The tier→model map (`ModelTier:Heavy/Standard/Light/Utility`) also comes from config and is what agents resolve. The AKS overlay (`deploy/aks/values.aks.yaml`) sets:
+`BuiltInLanguageModelProvider` materialises a **default** catalog at `Provider/{provider}` + nested model children from config (`{Section}:Models` / `:Endpoint`) — imported into the top-level `Provider` partition on boot and served from the DB. The tier→model map (`ModelTier:Heavy/Standard/Light/Utility`) also comes from config and is what agents resolve. The AKS overlay (`deploy/aks/values.aks.yaml`) sets:
 
 ```text
 AzureFoundry__Endpoint = https://s-meshweaver.services.ai.azure.com/models
@@ -87,7 +87,7 @@ spec:
 
 ## Option D — Claude Code (per-user, Claude on your own subscription)
 
-Claude is **not** a shared org key. Each user connects the co-hosted **Claude Code** CLI under their own account in **Settings → Models → Connect**: the portal runs `claude setup-token` under `{ClaudeCode:ConfigDirRoot}/{userId}/.claude`, captures the token, and stores an encrypted `{user}/_Provider/ClaudeCode` provider that injects Claude into that user's picker.
+Claude is **not** a shared org key. Each user connects the co-hosted **Claude Code** CLI under their own account in **Settings → Models → Connect**: the portal runs `claude setup-token` under `{ClaudeCode:ConfigDirRoot}/{userId}/.claude`, captures the token, and stores an encrypted `{user}/_Memex/ClaudeCode` provider that injects Claude into that user's picker.
 
 - `claude setup-token` renders an Ink (terminal) UI that **needs a real PTY**; the login now runs under a pseudo-terminal (`script -qfc "claude setup-token" /dev/null`) when `ClaudeConnect:UsePseudoTerminal` is on (defaulted on for the Linux portal). This is a **code change** → ships via a new image (Option E).
 - Requires `ClaudeCode__ConfigDirRoot=/mnt/users` (set in the AKS overlay) and the `/mnt/users` RWX share (already mounted).
@@ -118,7 +118,7 @@ az aks command invoke -g memex-aks-rg -n memexaks-cluster \
 `ModelProvider.ApiKey` values are encrypted with `Ai:KeyProtection:MasterKey`. The running deployment already has a master key set **out-of-band** (not in the chart, not in the KVs above). Therefore:
 
 - The chart emits each AI secret key **only when non-empty** (`secrets.yaml` guards), so an empty value never overrides what's set out-of-band.
-- **Never** deploy a *different* `Ai:KeyProtection:MasterKey` — doing so makes every stored `enc:` provider key (including the live `Systemorph/_Provider/AzureFoundry` key) undecryptable. If you ever manage it via the chart/Key Vault, point it at the exact same value the deployment already uses.
+- **Never** deploy a *different* `Ai:KeyProtection:MasterKey` — doing so makes every stored `enc:` provider key (including the live `Systemorph/Provider/AzureFoundry` key) undecryptable. If you ever manage it via the chart/Key Vault, point it at the exact same value the deployment already uses.
 
 ## Quick chooser
 

@@ -21,7 +21,7 @@ var workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
 var collection = workspace.GetQuery(
     "my-cache-id",                      // any object — used as cache key
     "namespace:Agent nodeType:Agent",   // one or more query strings
-    "namespace:Model nodeType:LanguageModel");
+    "namespace:Provider nodeType:LanguageModel scope:descendants");
 
 collection.Subscribe(snapshot =>
 {
@@ -138,10 +138,11 @@ collection.Subscribe(snapshot =>
 // Single namespace, one type
 workspace.GetQuery("agents", "namespace:Agent nodeType:Agent");
 
-// Type alternation (agents OR models from any namespace)
-workspace.GetQuery("agents-and-models",
-    "namespace:Agent nodeType:Agent|LanguageModel",
-    "namespace:Model nodeType:Agent|LanguageModel");
+// Type alternation — one query matching multiple node types in the SAME namespace.
+// The Provider catalog genuinely holds both providers and their nested models;
+// agents are a SEPARATE top-level namespace (Agent), never nested under Provider.
+workspace.GetQuery("provider-catalog",
+    "namespace:Provider nodeType:ModelProvider|LanguageModel scope:descendants");
 
 // Per-partition registry in ONE query (the canonical agent shape): platform + space + user
 // /Agent namespaces, listed directly (exact membership, no graph walk).

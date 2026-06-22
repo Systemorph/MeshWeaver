@@ -236,19 +236,19 @@ Providers and models are mesh nodes discovered via a `nodeType:` fan-out query �
 
 ### Providers and models are nodes
 
-- A provider is a `ModelProvider` node; its models are child `LanguageModel` nodes.
-- Canonical path: `{space|user}/_Provider/{Provider}/{modelId}` — for example, `Systemorph/_Provider/AzureFoundry/gpt-5` or `rbuergi/_Provider/ClaudeCode`. `_Provider` is the satellite segment used consistently across code and tests.
-- The built-in system catalog at `_Provider/{provider}/{model}` is served as real, queryable `MeshNode`s by `StaticNodePartitionStorageProvider` (`BuiltInLanguageModelProvider`), so configuration values (`AzureFoundry:Models`) materialise as nodes — there is no parallel, non-mesh path.
+- A provider is a `ModelProvider` node; its models are child `LanguageModel` nodes nested beneath it.
+- Canonical path: the platform catalog at `Provider/{Provider}/{modelId}` (e.g. `Provider/AzureFoundry/gpt-5`), a space provider at `{space}/Provider/{Provider}/{modelId}` (e.g. `Systemorph/Provider/AzureFoundry/gpt-5`), and a user's own at `{user}/_Memex/{Provider}/{modelId}` (e.g. `rbuergi/_Memex/ClaudeCode`).
+- The built-in system catalog at `Provider/{provider}/{model}` is a **DB-synced [NodeType catalog](/Doc/Architecture/NodeTypeCatalogs)**: `BuiltInLanguageModelProvider` is the sync source, `ModelStaticRepoSource` imports it into the `Provider` partition on boot, and the DB serves it thereafter, so configuration values (`AzureFoundry:Models`) materialise as real, queryable `MeshNode`s — there is no parallel, non-mesh path.
 
 ### Provider-first, lazy model load
 
 The picker does not eager-load every model from every space. It operates in two steps:
 
-1. **List providers** — fan-out `nodeType:ModelProvider scope:descendants` over root `_Provider` and every space the user can read. Listing providers (not models) is cheap, making it safe to broaden across spaces without loading the full model universe.
+1. **List providers** — fan-out `nodeType:ModelProvider scope:descendants` over the `Provider` catalog and every space the user can read. Listing providers (not models) is cheap, making it safe to broaden across spaces without loading the full model universe.
 
-2. **Select a provider → load its models** — the provider's path is appended to `{user}/_Provider/_Selection.SelectedProviderPaths`; the selected-path query `namespace:{providerPath} nodeType:LanguageModel scope:selfAndDescendants` (`AgentPickerProjection`) loads just that provider's models.
+2. **Select a provider → load its models** — the provider's path is appended to `{user}/_Memex/Selection.SelectedProviderPaths`; the selected-path query `namespace:{providerPath} nodeType:LanguageModel scope:selfAndDescendants` (`AgentPickerProjection`) loads just that provider's models.
 
-`_Selection` is the per-user selection store. It is seeded empty at onboarding, so the `RoutingGrain NotFound: {user}/_Provider/_Selection` read no longer occurs against a missing node.
+`Selection` is the per-user selection store at `{user}/_Memex/Selection`. It is seeded empty at onboarding, so the `RoutingGrain NotFound: {user}/_Memex/Selection` read no longer occurs against a missing node.
 
 ### Empty state → Settings
 
@@ -256,7 +256,7 @@ When the provider fan-out returns nothing (no provider configured), the model pi
 
 ### Org-default provider
 
-An admin may pre-create an org provider node — `Systemorph/_Provider/AzureFoundry` with model children sourced from the `s-meshweaver` Foundry resource (endpoint `https://s-meshweaver.services.ai.azure.com/models`, key in Key Vault) — that every user with read access can select. This complements per-user BYO-key and Connect flows; it does not replace the empty-state link. `ModelProvider` is a **creatable** node type (search-hidden), so it can be authored in the UI by anyone with `Permission.Api`, not only through configuration.
+An admin may pre-create an org provider node — `Systemorph/Provider/AzureFoundry` with model children sourced from the `s-meshweaver` Foundry resource (endpoint `https://s-meshweaver.services.ai.azure.com/models`, key in Key Vault) — that every user with read access can select. This complements per-user BYO-key and Connect flows; it does not replace the empty-state link. `ModelProvider` is a **creatable** node type (search-hidden), so it can be authored in the UI by anyone with `Permission.Api`, not only through configuration.
 
 ### Managing a provider's models
 
