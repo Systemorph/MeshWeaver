@@ -12,7 +12,9 @@ public sealed class InstanceManagerPage : ContentPage
     private readonly InstanceStore _store;
     private readonly VerticalStackLayout _list;
     private readonly Entry _name = new() { Placeholder = "Name (optional)" };
-    private readonly Entry _url = new() { Placeholder = "https://memex.meshweaver.cloud", Keyboard = Keyboard.Url };
+    // Pre-filled with a real value (not a grey placeholder that looks filled but isn't) — the public
+    // memex is the default, so "Add instance" works on first tap.
+    private readonly Entry _url = new() { Text = "https://memex.meshweaver.cloud", Keyboard = Keyboard.Url };
 
     public InstanceManagerPage(InstanceStore store)
     {
