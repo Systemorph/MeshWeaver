@@ -269,14 +269,17 @@
 }
 
 
-/* CSS grid for all card layouts — container-responsive via auto-fill: each card has a fixed
+/* CSS grid for all card layouts — container-responsive via auto-FIT: each card has a fixed
    ~220px min width and the row fits as many as fit (e.g. 4 @ ~960px, 6 @ ~1400px, 8 @ ~1850px),
-   the 1fr absorbing the remainder so there is little wasted space and cards stay uniform width. */
+   the 1fr absorbing the remainder so cards stay uniform width. auto-fit (not auto-fill) collapses
+   empty trailing tracks, so when there are only a FEW items they stretch to fill the whole row
+   instead of leaving empty space on the right. Fewer per row as the container narrows; never
+   different sizes (every track is 1fr). */
 .mesh-search-area-grid {
     display: grid;
     gap: 8px;
     width: 100%;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 /* Ensure cards stretch to equal height within rows */
