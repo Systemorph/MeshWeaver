@@ -5,3 +5,4 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Monolith")]
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Test")]
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.PostgreSql.Test")]
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Sqlite.Test")]
