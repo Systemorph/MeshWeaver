@@ -28,6 +28,10 @@
     [SupplyParameterFromQuery(Name = "mode")]
     public string? Mode { get; set; }
 
+    /// <summary>Property to group results by in Grouped mode (e.g. "Namespace", "NodeType").</summary>
+    [SupplyParameterFromQuery(Name = "groupBy")]
+    public string? GroupBy { get; set; }
+
     /// <summary>Max items per section (default 50).</summary>
     [SupplyParameterFromQuery(Name = "limit")]
     public int? Limit { get; set; }
@@ -59,6 +63,9 @@
             _ => MeshSearchRenderMode.Grouped
         };
         control = control.WithRenderMode(renderMode);
+
+        if (!string.IsNullOrWhiteSpace(GroupBy))
+            control = control.WithGroupBy(GroupBy);
 
         searchControl = control;
     }
