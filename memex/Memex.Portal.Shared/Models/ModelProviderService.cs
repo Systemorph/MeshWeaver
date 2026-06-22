@@ -166,6 +166,16 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
         // 2. After commit, fan out N CreateNode calls for the LanguageModel children.
         //    The children reference the provider via ProviderRef.
         InvalidateCache(providerNamespace);
+        // Capture identity synchronously here (the caller thread). The model creates below run inside
+        // the provider-create SelectMany continuation, where the AsyncLocal AccessContext has been
+        // dropped — so meshService.CreateNode would capture a null/system identity and RLS denies
+        // Create on the model, which the .Catch then swallows to null. The provider node exists (the
+        // at-rest assertion passes) but the model never does, so ChatClientCredentialResolver.Resolve
+        // finds no model and polls an empty result until the test's 15s window elapses (the
+        // ProviderKeyEncryptionTest.ApiKey_IsCiphertextAtRest CI flake). Re-assert the captured
+        // identity on each model create's subscribe so CreateNode's own at-call capture picks it up.
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var ctx = accessService?.Context ?? accessService?.CircuitContext;
         return meshService.CreateNode(providerNode)
             .SelectMany(createdProvider =>
             {
@@ -193,7 +203,10 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
                             SyncBehavior = syncBehavior,
                             Content = modelDef,
                         };
-                        return meshService.CreateNode(modelNode)
+                        var createModel = accessService is null || ctx is null
+                            ? meshService.CreateNode(modelNode)
+                            : Observable.Using(() => accessService.SwitchAccessContext(ctx), _ => meshService.CreateNode(modelNode));
+                        return createModel
                             .Catch<MeshNode, Exception>(ex =>
                             {
                                 logger.LogWarning(ex, "Failed to create LanguageModel {ModelId} under {Path}", modelId, providerPath);
