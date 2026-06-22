@@ -2,19 +2,20 @@
 @using Memex.Client.Voice
 @using Memex.Client.Services
 @using MeshWeaver.Messaging
+@using Microsoft.Extensions.DependencyInjection
 @using Microsoft.Maui.Media
 @using Microsoft.Maui.Storage
 @inject AudioCaptureService Capture
 @inject VoiceService VoiceSvc
-@inject IMessageHub Hub
+@inject IServiceProvider Services
 @implements IDisposable
 
 <PageTitle>Voice</PageTitle>
 
-<h1>Voice — on-device Whisper → thread</h1>
+<h1>Voice — on-device Whisper</h1>
 
-<p>Speech is transcribed <strong>on this device</strong> (Whisper). The first utterance opens a new
-   thread; each one after feeds the thread's inbox. The agent's reply is spoken back.</p>
+<p>Speech is transcribed <strong>on this device</strong> (Whisper). If the mesh is connected, the
+   transcript opens/feeds a thread and the agent's reply is spoken back.</p>
 
 <details class="mb-3">
     <summary>Conversation</summary>
@@ -28,12 +29,6 @@
             <input class="form-control" @bind="_agent" placeholder="Assistant" />
         </div>
     </div>
-    @if (!string.IsNullOrEmpty(_threadPath))
-    {
-        <small class="text-muted d-block mt-1">Thread: <code>@_threadPath</code>
-            <button class="btn btn-link btn-sm p-0 ms-2" @onclick="NewConversation">new conversation</button>
-        </small>
-    }
 </details>
 
 <div class="mb-3">
@@ -50,15 +45,11 @@
 
 @if (!Capture.IsRecording)
 {
-    <button class="btn btn-primary" @onclick="StartAsync" disabled="@(_busy || !CanTalk)">● Record</button>
-    @if (!CanTalk)
-    {
-        <small class="text-muted ms-2">Set a thread namespace under “Conversation”.</small>
-    }
+    <button class="btn btn-primary" @onclick="StartAsync" disabled="@_busy">● Record</button>
 }
 else
 {
-    <button class="btn btn-danger" @onclick="StopAsync">■ Stop &amp; send</button>
+    <button class="btn btn-danger" @onclick="StopAsync">■ Stop &amp; transcribe</button>
 }
 
 @if (!string.IsNullOrEmpty(_status))
@@ -95,22 +86,16 @@ else
     private string? _reply;
     private IDisposable? _replySub;
 
-    private bool CanTalk => !string.IsNullOrWhiteSpace(_namespace);
+    // The participant hub is resolved SAFELY — if it can't build/connect (e.g. portal not reachable),
+    // on-device transcription still works; only the thread round-trip is unavailable.
+    private IMessageHub? _hub;
 
     protected override void OnInitialized()
     {
         _namespace = Preferences.Default.Get("thread.namespace", "");
         _agent = Preferences.Default.Get("thread.agent", "");
-    }
-
-    private void NewConversation()
-    {
-        _replySub?.Dispose();
-        _replySub = null;
-        _threadPath = null;
-        _reply = null;
-        _segments = null;
-        _status = null;
+        try { _hub = Services.GetService<IMessageHub>(); }
+        catch (Exception ex) { _status = $"(mesh unavailable: {ex.Message})"; }
     }
 
     private async Task StartAsync()
@@ -126,18 +111,22 @@ else
         try
         {
             var samples = await Capture.StopAsync();
-            if (samples.Length == 0)
-            {
-                _status = "No audio captured.";
-                return;
-            }
+            if (samples.Length == 0) { _status = "No audio captured."; return; }
 
             var progress = new Progress<string>(m => { _status = m; InvokeAsync(StateHasChanged); });
             _segments = await VoiceSvc.TranscribeAsync(samples, _language, progress);
             var text = string.Join(" ", _segments.Select(s => s.Text)).Trim();
-            if (text.Length == 0)
+            if (text.Length == 0) { _status = "Nothing recognised."; return; }
+
+            // On-device transcription succeeded. Sending to a thread is best-effort.
+            if (_hub is null)
             {
-                _status = "Nothing recognised.";
+                _status = $"Transcribed — {_segments.Count} segment(s). (Mesh not connected — transcription only.)";
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(_namespace))
+            {
+                _status = $"Transcribed — {_segments.Count} segment(s). (Set a namespace under “Conversation” to send to a thread.)";
                 return;
             }
 
@@ -145,7 +134,7 @@ else
             Preferences.Default.Set("thread.agent", _agent);
 
             _status = _threadPath is null ? "Opening thread…" : "Sent — agent is thinking…";
-            Hub.SpeakToThread(
+            _hub.SpeakToThread(
                 _threadPath, _namespace, text,
                 string.IsNullOrWhiteSpace(_agent) ? null : _agent,
                 onThreadOpened: path =>
@@ -168,8 +157,9 @@ else
 
     private void SubscribeReplies(string threadPath)
     {
+        if (_hub is null) return;
         _replySub?.Dispose();
-        _replySub = Hub.ObserveAssistantReplies(threadPath).Subscribe(
+        _replySub = _hub.ObserveAssistantReplies(threadPath).Subscribe(
             reply => InvokeAsync(async () =>
             {
                 _reply = reply;

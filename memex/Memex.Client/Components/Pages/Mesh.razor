@@ -1,7 +1,8 @@
 @page "/mesh"
 @using MeshWeaver.Messaging
+@using Microsoft.Extensions.DependencyInjection
 @using Microsoft.Maui.Storage
-@inject IMessageHub Hub
+@inject IServiceProvider Services
 
 <PageTitle>Mesh</PageTitle>
 
@@ -12,7 +13,7 @@
 
 <dl>
     <dt>Portal address</dt>
-    <dd><code>@Hub.Address</code></dd>
+    <dd><code>@(_address ?? "(mesh hub not available)")</code></dd>
     <dt>Transport</dt>
     <dd>SignalR (<code>/signalr</code>) — <code>signalr client ⇒ portal hub ⇒ rest of mesh</code></dd>
 </dl>
@@ -36,11 +37,15 @@
 @code {
     private string _token = "";
     private string? _status;
+    private string? _address;
 
     protected override async Task OnInitializedAsync()
     {
         try { _token = await SecureStorage.Default.GetAsync("mesh.token") ?? ""; }
         catch { /* SecureStorage unavailable on this platform */ }
+        // Resolve the participant hub safely — never let a failed build/connect blank the page.
+        try { _address = Services.GetService<IMessageHub>()?.Address?.ToString(); }
+        catch (Exception ex) { _status = $"Mesh hub unavailable: {ex.Message}"; }
     }
 
     private async Task SaveTokenAsync()

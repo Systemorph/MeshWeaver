@@ -111,6 +111,7 @@ public partial class LayoutAreaView
         MenuStream = null;
         NodeMenuStream = null;
         MeshMenuStream = null;
+        AiMenuStream = null;
         ProgressStream = null;
         await base.DisposeAsync();
     }
@@ -128,6 +129,7 @@ public partial class LayoutAreaView
         MenuStream = null;
         NodeMenuStream = null;
         MeshMenuStream = null;
+        AiMenuStream = null;
         ProgressStream = null;
     }
 
@@ -135,6 +137,7 @@ public partial class LayoutAreaView
     // a Blazor → Graph layer dependency.
     private const string NodeMenuContext = "Node";
     private const string MeshMenuContext = "Mesh";
+    private const string AiMenuContext = "AI";
 
     private void BindStream()
     {
@@ -173,6 +176,9 @@ public partial class LayoutAreaView
 
                 MeshMenuStream = SetupMenuAreaMonitoring(AreaStream!, MenuControl.GetMenuArea(MeshMenuContext));
                 MeshMenuStream?.RegisterForDisposal(MeshMenuStream.DistinctUntilChanged().Subscribe(el => OnMenuStreamChanged(el.Value, MeshMenuContext)));
+
+                AiMenuStream = SetupMenuAreaMonitoring(AreaStream!, MenuControl.GetMenuArea(AiMenuContext));
+                AiMenuStream?.RegisterForDisposal(AiMenuStream.DistinctUntilChanged().Subscribe(el => OnMenuStreamChanged(el.Value, AiMenuContext)));
             }
         }
     }
@@ -181,6 +187,7 @@ public partial class LayoutAreaView
     private ISynchronizationStream<JsonElement>? MenuStream { get; set; }
     private ISynchronizationStream<JsonElement>? NodeMenuStream { get; set; }
     private ISynchronizationStream<JsonElement>? MeshMenuStream { get; set; }
+    private ISynchronizationStream<JsonElement>? AiMenuStream { get; set; }
     private ISynchronizationStream<JsonElement>? ProgressStream { get; set; }
 
     /// <summary>
