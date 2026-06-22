@@ -115,7 +115,7 @@ public static class NodeMenuItemsExtensions
             var files = MeshNodeLayoutAreas.GetFilesMenuItem(menuPath, perms);
             if (files != null) items.Add(files);
 
-            items.Add(MeshNodeLayoutAreas.GetThreadsMenuItem(menuPath));
+            // Threads moved to the dedicated top-bar AI menu (AiMenuContext).
 
             var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
             var viewerId = accessService?.Context?.ObjectId

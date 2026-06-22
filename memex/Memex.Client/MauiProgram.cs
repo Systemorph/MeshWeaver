@@ -24,6 +24,9 @@ public static class MauiProgram
 
         builder.Services.AddMauiBlazorWebView();
 
+        // The native instance manager (start page) — the user's memex instances (base URL + token).
+        builder.Services.AddSingleton<InstanceStore>();
+
         // SignalR mesh participant: this client joins the mesh with one portal address per instance
         // and connects to the portal's /signalr endpoint. The hub is a lazy singleton — it connects on
         // first injection (e.g. when the Mesh page is opened). Interactive Blazor runs in-process; only
