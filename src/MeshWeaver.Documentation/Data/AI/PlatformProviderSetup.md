@@ -9,11 +9,11 @@ Icon: Key
 
 A fresh memex deployment has **no working chat until a platform AI provider is configured**. Providers and their models are **mesh nodes**, not `appsettings`/Helm values — so you configure them once, through the platform, and they survive every redeploy. This guide is the operator/first-run path.
 
-> The built-in/config provider (`BuiltInLanguageModelProvider`) is only a **sync source** — it may seed default provider/model nodes on first boot, but it can be **absent entirely**. The source of truth is the DB, under the [Provider catalog](../Architecture/ModelProviders). You never have to touch config to add or change a provider.
+> The built-in/config provider (`BuiltInLanguageModelProvider`) is only a **sync source** — it may seed default provider/model nodes on first boot, but it can be **absent entirely**. The source of truth is the DB, under the [Provider catalog](../../Architecture/ModelProviders). You never have to touch config to add or change a provider.
 
 ## What you are creating
 
-The provider catalog is a NodeType catalog under the top-level **`Provider`** partition — the same shape as `Agent` / `Skill` / `Harness` (see [NodeType Catalogs](../Architecture/NodeTypeCatalogs)):
+The provider catalog is a NodeType catalog under the top-level **`Provider`** partition — the same shape as `Agent` / `Skill` / `Harness` (see [NodeType Catalogs](../../Architecture/NodeTypeCatalogs)):
 
 ```
 @Provider                                  the catalog partition (Space)
@@ -42,7 +42,7 @@ You manage providers and models in the **mesh catalog** (the standard search/bro
 
 ### Listing models from a provider
 
-When the GUI lists a provider's available models, it calls the provider's `GET {baseUrl}/models` endpoint. That outbound HTTP call goes through `IIoPool` (never `Observable.FromAsync`) per [Controlled IO Pooling](../Architecture/ControlledIoPooling) — the same bounded, off-hub edge every external call uses.
+When the GUI lists a provider's available models, it calls the provider's `GET {baseUrl}/models` endpoint. That outbound HTTP call goes through `IIoPool` (never `Observable.FromAsync`) per [Controlled IO Pooling](../../Architecture/ControlledIoPooling) — the same bounded, off-hub edge every external call uses.
 
 ## During onboarding
 
@@ -59,7 +59,7 @@ These are **mesh nodes**, set per deployment through the catalog — not baked i
 
 ## See also
 
-- [Model Providers](../Architecture/ModelProviders) — the full data model + credential resolution
-- [Model Provider Setup](ModelProviderSetup) — provider/model node shapes
-- [NodeType Catalogs](../Architecture/NodeTypeCatalogs) — why the catalog is rooted the way it is
-- [Controlled IO Pooling](../Architecture/ControlledIoPooling) — how outbound provider API calls are bounded
+- [Model Providers](../../Architecture/ModelProviders) — the full data model + credential resolution
+- [Model Provider Setup](../ModelProviderSetup) — provider/model node shapes
+- [NodeType Catalogs](../../Architecture/NodeTypeCatalogs) — why the catalog is rooted the way it is
+- [Controlled IO Pooling](../../Architecture/ControlledIoPooling) — how outbound provider API calls are bounded
