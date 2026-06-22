@@ -371,11 +371,10 @@ public static class NodeTypeLayoutAreas
     private static IObservable<IReadOnlyList<(CodeQueryGroup Group, IReadOnlyList<MeshNode> Nodes)>> GetCodeGroupsStream(
         LayoutAreaHost host, bool tests)
     {
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
         return GetNodeStream(host)
             .Select(node =>
             {
-                if (node == null || meshQuery == null)
+                if (node == null)
                     return Observable.Return<IReadOnlyList<(CodeQueryGroup, IReadOnlyList<MeshNode>)>>([]);
                 var def = node.Content as NodeTypeDefinition;
                 var groups = tests
@@ -386,7 +385,7 @@ public static class NodeTypeLayoutAreas
                 if (groups.Count == 0)
                     return Observable.Return<IReadOnlyList<(CodeQueryGroup, IReadOnlyList<MeshNode>)>>([]);
                 var streams = groups.Select(g =>
-                    RunQueries(meshQuery, g.ExpandedQueries).Select(nodes => (Group: g, Nodes: nodes)));
+                    RunQueries(host, g.ExpandedQueries).Select(nodes => (Group: g, Nodes: nodes)));
                 return Observable.CombineLatest(streams)
                     .Select(list => (IReadOnlyList<(CodeQueryGroup, IReadOnlyList<MeshNode>)>)list.ToList());
             })
@@ -399,13 +398,16 @@ public static class NodeTypeLayoutAreas
     /// </summary>
     private static IObservable<IReadOnlyList<MeshNode>> QueryNodesStream(LayoutAreaHost host, string query)
     {
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
-        if (meshQuery == null)
-            return Observable.Return<IReadOnlyList<MeshNode>>([]);
         var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger(typeof(NodeTypeLayoutAreas));
-        return meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
-            .Select(change => (IReadOnlyList<MeshNode>)change.Items)
+        // 🚨 Live, access-carrying, shared-handle query — NOT IMeshService.Query(...).Take(1). The
+        // latter is the hand-woven trap from DebuggingMessageFlow/AsynchronousCalls: a Take(1) on a
+        // query that NEVER emits an Initial (a not-yet-provisioned partition, a cold descendant scope)
+        // hangs forever, so the Shell's side-menu CombineLatest never completes and the NodeType GUI
+        // shell never renders (the FutuRe/LineOfBusiness 50s render deadlock). GetQuery emits
+        // empty-on-absent and re-emits on change, so the menu always renders.
+        return host.Workspace.GetQuery(query, query)
+            .Select(nodes => (IReadOnlyList<MeshNode>)nodes.ToList())
             .Catch<IReadOnlyList<MeshNode>, Exception>(ex =>
             {
                 logger?.LogWarning(ex,
@@ -789,40 +791,31 @@ public static class NodeTypeLayoutAreas
     }
 
     /// <summary>
-    /// Runs a sequence of expanded queries via <see cref="IMeshService"/> and returns
-    /// the de-duplicated MeshNode results. Empty input → empty result, so the default
-    /// "no sources/tests yet" state still renders cleanly.
+    /// Runs a sequence of expanded queries via the LIVE <c>workspace.GetQuery</c> and returns the
+    /// de-duplicated MeshNode results. Empty input → empty result, so the default "no sources/tests
+    /// yet" state still renders cleanly.
     /// </summary>
-    // Reactive (no async/FromAsync): each query is already an IObservable; compose
-    // them subscribe-all-upfront via CombineLatest (per AsynchronousCalls.md) and
-    // fold the positional results into one deduped list. Each per-query stream
-    // Take(1)s its initial set and Catches to empty, so one bad query can't blank
-    // the list and CombineLatest still fires + completes once every query emitted.
+    // 🚨 GetQuery, NOT IMeshService.Query(...).Take(1): the latter HANGS when a query never emits an
+    // Initial (cold/unprovisioned scope), wedging the Shell's side-menu CombineLatest forever (the
+    // FutuRe/LineOfBusiness render deadlock). GetQuery is live, shared (one upstream per id), carries
+    // the subscriber's identity, and emits empty-on-absent — so the menu always renders. One shared
+    // handle for the whole expanded set (params queries); fold to a deduped list.
     private static IObservable<IReadOnlyList<MeshNode>> RunQueries(
-        IMeshService meshQuery,
+        LayoutAreaHost host,
         IEnumerable<string> queries)
     {
         var queryList = queries.ToList();
         if (queryList.Count == 0)
             return Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>());
 
-        var streams = queryList.Select(q =>
-            meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(q))
-                .Take(1)
-                .Select(c => (IReadOnlyList<MeshNode>)c.Items)
-                // A stray query syntax error in one entry shouldn't empty the whole list.
-                .Catch<IReadOnlyList<MeshNode>, Exception>(
-                    _ => Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>())));
-
-        return Observable.CombineLatest(streams)
-            .Select(lists =>
+        return host.Workspace.GetQuery("codegroup:" + string.Join("|", queryList), queryList.ToArray())
+            .Select(nodes =>
             {
                 var seen = new HashSet<string>(StringComparer.Ordinal);
                 var results = new List<MeshNode>();
-                foreach (var list in lists)
-                    foreach (var n in list)
-                        if (n?.Path is { Length: > 0 } p && seen.Add(p))
-                            results.Add(n);
+                foreach (var n in nodes)
+                    if (n?.Path is { Length: > 0 } p && seen.Add(p))
+                        results.Add(n);
                 return (IReadOnlyList<MeshNode>)results;
             });
     }
