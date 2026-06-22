@@ -18,7 +18,28 @@
        plain node page portal-wide (regression 7359ba42f, fixed 2026-06-12). *@
     @if (ViewModel is not null)
     {
-        <NamedAreaView Stream="@AreaStream" ViewModel="@NamedArea" Area="@NamedArea.GetArea()" Top="@Top" />
+        @* Per-area ErrorBoundary. A SYNCHRONOUS render-tree throw in this area's subtree that
+           originates above the per-control ErrorBoundary in DispatchView (e.g. a throw in
+           NamedAreaView's own render, or a parameter-change re-render that throws before reaching a
+           leaf control) is contained HERE and shown as an inline error in THIS area — it never
+           tears down the whole circuit / blanks the app. @key ties the boundary to the area
+           reference: a year/PK switch that changes the reference recreates the boundary fresh
+           (auto-recover), so the new parameter gets a clean render attempt; a repeated throw on the
+           new parameter shows the error again rather than spinning a retry loop. (Async stream
+           OnErrors are surfaced separately by the subscription onError handlers — an ErrorBoundary
+           only catches synchronous render/lifecycle throws.) *@
+        <ErrorBoundary @key="@($"{Address}|{ViewModel.Reference}")">
+            <ChildContent>
+                <NamedAreaView Stream="@AreaStream" ViewModel="@NamedArea" Area="@NamedArea.GetArea()" Top="@Top" />
+            </ChildContent>
+            <ErrorContent Context="areaError">
+                <div class="meshweaver-render-error"
+                     style="padding:0.75rem;border:1px solid var(--error,#d13438);border-radius:4px;background:rgba(209,52,56,0.08);color:var(--error,#d13438);font-size:0.875rem">
+                    <strong>This area failed to render.</strong>
+                    <div style="margin-top:0.25rem;white-space:pre-wrap;font-family:monospace">@areaError.Message</div>
+                </div>
+            </ErrorContent>
+        </ErrorBoundary>
     }
 </div>
 

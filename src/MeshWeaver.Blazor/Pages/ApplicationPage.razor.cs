@@ -7,6 +7,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor.Pages;
@@ -27,6 +28,9 @@ public partial class ApplicationPage : ComponentBase, IDisposable
 
     [Inject]
     private IMeshService MeshService { get; set; } = null!;
+
+    [Inject]
+    private Microsoft.Extensions.Logging.ILogger<ApplicationPage> Logger { get; set; } = null!;
 
     /// <summary>
     /// Current status of the page-lookup pipeline. Always set to a non-null
@@ -88,22 +92,29 @@ public partial class ApplicationPage : ComponentBase, IDisposable
         // OnNavigationContextChanged event. ReplaySubject(1) on the service side
         // emits the current value on subscribe, so this also picks up state set
         // before the page initialised.
-        _navContextSubscription = NavigationService.NavigationContext.Subscribe(context =>
-        {
-            _currentContext = context;
-            InvokeAsync(() =>
+        _navContextSubscription = NavigationService.NavigationContext.Subscribe(
+            context =>
             {
-                IsLoading = NavigationService.IsResolving;
-                UpdateFromContext();
-                StateHasChanged();
-            });
-        });
+                _currentContext = context;
+                InvokeAsync(() =>
+                {
+                    IsLoading = NavigationService.IsResolving;
+                    UpdateFromContext();
+                    StateHasChanged();
+                });
+            },
+            // A faulting page-level stream with no onError propagates UNHANDLED on the Rx
+            // scheduler and tears down the whole circuit (blank app). Log + leave the last-good
+            // state; a subsequent navigation re-establishes the subscription.
+            ex => Logger.LogWarning(ex, "NavigationContext subscription faulted"));
 
-        _statusSubscription = NavigationService.Status.Subscribe(status =>
-        {
-            Status = status;
-            _ = InvokeAsync(StateHasChanged);
-        });
+        _statusSubscription = NavigationService.Status.Subscribe(
+            status =>
+            {
+                Status = status;
+                _ = InvokeAsync(StateHasChanged);
+            },
+            ex => Logger.LogWarning(ex, "Navigation Status subscription faulted"));
     }
 
     protected override async Task OnParametersSetAsync()
@@ -116,11 +127,13 @@ public partial class ApplicationPage : ComponentBase, IDisposable
             {
                 MeshService.GetPreRenderedHtml(Path)
                     .Take(1)
-                    .Subscribe(html =>
-                    {
-                        PreRenderedHtml = html;
-                        _ = InvokeAsync(StateHasChanged);
-                    });
+                    .Subscribe(
+                        html =>
+                        {
+                            PreRenderedHtml = html;
+                            _ = InvokeAsync(StateHasChanged);
+                        },
+                        ex => Logger.LogWarning(ex, "GetPreRenderedHtml subscription faulted for {Path}", Path));
             }
             return;
         }

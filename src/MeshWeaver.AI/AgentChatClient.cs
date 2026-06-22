@@ -72,6 +72,17 @@ public class AgentChatClient : IAgentChat
     private string? lastAgentCreationError;
 
     /// <summary>
+    /// Set by <see cref="ApplyStaleModelFallback"/> when the chat-selected model no longer resolves
+    /// (deleted from the catalog / provider unconfigured — the case that used to 404 the whole
+    /// thread) and we transparently swap to the default model. Surfaced ONCE as a note prepended to
+    /// the next response so the model swap is VISIBLE to the user ("model X unavailable — using
+    /// default Y") instead of silently changing which model answered — then cleared. A genuinely
+    /// unrecoverable model failure (no working default) is surfaced separately by
+    /// <see cref="lastAgentCreationError"/> and the <c>ThreadExecution</c> error cell.
+    /// </summary>
+    private string? staleModelNotice;
+
+    /// <summary>
     /// Formats the no-agent failure into an APPROPRIATE chat output — never a crash.
     /// The common cause is "no model configured" (every agent skipped via the unconfigured
     /// catch-all factory); surface that with a clear, actionable hint plus the raw detail.
@@ -635,6 +646,14 @@ public class AgentChatClient : IAgentChat
 
         currentAgentName = agent.Name;
 
+        // Surface a transparent stale-model fallback (selected model 404'd → default stepped in)
+        // ONCE, so the swap is visible instead of silently changing which model answered.
+        if (staleModelNotice is { } modelNotice)
+        {
+            staleModelNotice = null;
+            yield return new ChatMessage(ChatRole.Assistant, modelNotice) { AuthorName = currentAgentName ?? "Assistant" };
+        }
+
         // Get or create thread for this agent
         var thread = await GetOrCreateThreadAsync(agent).ConfigureAwait(false);
 
@@ -757,6 +776,14 @@ public class AgentChatClient : IAgentChat
         }
 
         currentAgentName = agent.Name;
+
+        // Surface a transparent stale-model fallback ONCE (see GetResponseAsync) so the user sees
+        // the model swap rather than it changing silently underneath them.
+        if (staleModelNotice is { } modelNotice)
+        {
+            staleModelNotice = null;
+            yield return new ChatResponseUpdate(ChatRole.Assistant, modelNotice + "\n\n");
+        }
 
         // Get or create thread for this agent
         var thread = await GetOrCreateThreadAsync(agent).ConfigureAwait(false);
@@ -1611,10 +1638,17 @@ public class AgentChatClient : IAgentChat
         if (string.IsNullOrEmpty(fallback)
             || string.Equals(fallback, currentModelName, StringComparison.OrdinalIgnoreCase))
             return;
+        var stale = currentModelName;
         logger.LogWarning(
             "[AgentChatClient] Selected model '{Stale}' does not resolve to a live model; "
-            + "falling back to default model '{Default}'.", currentModelName, fallback);
+            + "falling back to default model '{Default}'.", stale, fallback);
         currentModelName = fallback;
+        // Surface the swap to the user (GetResponseAsync / GetStreamingResponseAsync emit it once).
+        // Without this the model silently changes under the user — they think their pinned model
+        // answered when it actually 404'd and the default stepped in.
+        staleModelNotice =
+            $"*The selected model `{stale}` is unavailable — it may have been removed from the catalog "
+            + $"or its provider is no longer configured. Using the default model `{fallback}` for this response.*";
     }
 
     /// <summary>

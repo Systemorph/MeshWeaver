@@ -153,7 +153,9 @@ public partial class LayoutAreaView
                 Logger.LogWarning("[LAV] BIND_STREAM_NULL area={Area} addr={Address} ref={Ref} — GetRemoteStream returned null",
                     Area, Address, ViewModel.Reference);
             DialogStream = SetupDialogAreaMonitoring(AreaStream!);
-            DialogStream?.RegisterForDisposal(DialogStream.DistinctUntilChanged().Subscribe(el => OnDialogStreamChanged(el.Value)));
+            DialogStream?.RegisterForDisposal(DialogStream.DistinctUntilChanged().Subscribe(
+                el => OnDialogStreamChanged(el.Value),
+                ex => OnReducedStreamError(ex, "dialog")));
 
             // Phase-aware loading label: bind the server-side progress item
             // ({ message, progress } in the EntityStore "data" collection — seeded
@@ -165,20 +167,30 @@ public partial class LayoutAreaView
             ProgressStream = AreaStream!.Reduce(
                 new JsonPointerReference(LayoutAreaReference.GetDataPointer(LayoutAreaHost.ProgressDataId)));
             ProgressStream?.RegisterForDisposal(ProgressStream.DistinctUntilChanged()
-                .Subscribe(el => OnProgressStreamChanged(el.Value)));
+                .Subscribe(
+                    el => OnProgressStreamChanged(el.Value),
+                    ex => OnReducedStreamError(ex, "progress")));
             if (Top)
             {
                 MenuStream = SetupMenuAreaMonitoring(AreaStream!, MenuControl.MenuArea);
-                MenuStream?.RegisterForDisposal(MenuStream.DistinctUntilChanged().Subscribe(el => OnMenuStreamChanged(el.Value, "")));
+                MenuStream?.RegisterForDisposal(MenuStream.DistinctUntilChanged().Subscribe(
+                    el => OnMenuStreamChanged(el.Value, ""),
+                    ex => OnReducedStreamError(ex, "menu")));
 
                 NodeMenuStream = SetupMenuAreaMonitoring(AreaStream!, MenuControl.GetMenuArea(NodeMenuContext));
-                NodeMenuStream?.RegisterForDisposal(NodeMenuStream.DistinctUntilChanged().Subscribe(el => OnMenuStreamChanged(el.Value, NodeMenuContext)));
+                NodeMenuStream?.RegisterForDisposal(NodeMenuStream.DistinctUntilChanged().Subscribe(
+                    el => OnMenuStreamChanged(el.Value, NodeMenuContext),
+                    ex => OnReducedStreamError(ex, "node-menu")));
 
                 MeshMenuStream = SetupMenuAreaMonitoring(AreaStream!, MenuControl.GetMenuArea(MeshMenuContext));
-                MeshMenuStream?.RegisterForDisposal(MeshMenuStream.DistinctUntilChanged().Subscribe(el => OnMenuStreamChanged(el.Value, MeshMenuContext)));
+                MeshMenuStream?.RegisterForDisposal(MeshMenuStream.DistinctUntilChanged().Subscribe(
+                    el => OnMenuStreamChanged(el.Value, MeshMenuContext),
+                    ex => OnReducedStreamError(ex, "mesh-menu")));
 
                 AiMenuStream = SetupMenuAreaMonitoring(AreaStream!, MenuControl.GetMenuArea(AiMenuContext));
-                AiMenuStream?.RegisterForDisposal(AiMenuStream.DistinctUntilChanged().Subscribe(el => OnMenuStreamChanged(el.Value, AiMenuContext)));
+                AiMenuStream?.RegisterForDisposal(AiMenuStream.DistinctUntilChanged().Subscribe(
+                    el => OnMenuStreamChanged(el.Value, AiMenuContext),
+                    ex => OnReducedStreamError(ex, "ai-menu")));
             }
         }
     }
@@ -189,6 +201,27 @@ public partial class LayoutAreaView
     private ISynchronizationStream<JsonElement>? MeshMenuStream { get; set; }
     private ISynchronizationStream<JsonElement>? AiMenuStream { get; set; }
     private ISynchronizationStream<JsonElement>? ProgressStream { get; set; }
+
+    /// <summary>
+    /// onError for the dialog/menu/progress streams reduced off <see cref="AreaStream"/>. These are
+    /// infra/display sidecars — the PRIMARY area-content error is surfaced visibly by
+    /// <see cref="NamedAreaView"/>'s control-stream onError. Without an onError here, a fault on the
+    /// reduced stream (e.g. a parameter-change re-bind that posts a context-less sync write →
+    /// PostPipeline fails closed → the stream OnErrors) propagates UNHANDLED on the Rx scheduler
+    /// thread and tears down the whole Blazor circuit — the "MW weg / page blanks on year/PK switch"
+    /// symptom. Log it (Debug for benign teardown, Warning otherwise) and leave the last-good display;
+    /// never let it blank the circuit. See Doc/GUI/DataBinding.md + Doc/Architecture/AccessContextPropagation.md.
+    /// </summary>
+    private void OnReducedStreamError(Exception error, string streamName)
+    {
+        if (IsViewDisposed || error is ObjectDisposedException)
+        {
+            Logger.LogDebug(error, "Suppressed teardown error in {Stream} stream for area {Area}", streamName, Area);
+            return;
+        }
+        Logger.LogWarning(error, "Error in {Stream} stream for area {Area} — keeping last-good display (not tearing down the circuit)",
+            streamName, Area);
+    }
 
     /// <summary>
     /// Applies a server-side progress-item change ({ message, progress }) to the

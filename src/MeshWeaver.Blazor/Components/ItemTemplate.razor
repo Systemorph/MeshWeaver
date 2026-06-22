@@ -1,4 +1,5 @@
 @using System.Reactive.Linq
+@using Microsoft.Extensions.Logging
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
 @inherits BlazorView<ItemTemplateControl, ItemTemplate>
 
@@ -32,11 +33,29 @@
         if (Stream is not null)
         {
             AddBinding(Stream.GetControlStream(ViewArea)
-                .Subscribe(v => InvokeAsync(() =>
-                {
-                    RenderedView = v;
-                    RequestStateChange();
-                })));
+                .Subscribe(
+                    v =>
+                    {
+                        if (IsViewDisposed) return;
+                        InvokeAsync(() =>
+                        {
+                            if (IsViewDisposed) return;
+                            RenderedView = v;
+                            RequestStateChange();
+                        });
+                    },
+                    // A faulting control stream with no onError propagates UNHANDLED on the Rx
+                    // scheduler and tears down the circuit (blank app). Log + keep the last-good
+                    // item view; teardown (ObjectDisposedException) is benign.
+                    ex =>
+                    {
+                        if (IsViewDisposed || ex is ObjectDisposedException)
+                        {
+                            Logger.LogDebug(ex, "Suppressed teardown error in item-template control stream for area {Area}", ViewArea);
+                            return;
+                        }
+                        Logger.LogWarning(ex, "Error in item-template control stream for area {Area} — keeping last-good view", ViewArea);
+                    }));
         }
     }
 
