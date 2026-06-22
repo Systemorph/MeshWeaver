@@ -1,4 +1,5 @@
 using MeshWeaver.Messaging;
+using Microsoft.AspNetCore.SignalR.Client;
 using Xunit;
 
 namespace MeshWeaver.Connection.SignalR.Test;
@@ -54,5 +55,23 @@ public class SignalRMultiRemoteSelectionTest
     {
         SignalRRemoteConnections.SelectIndex(Array.Empty<Address?>(), Portal("x")).Should().BeNull();
         SignalRRemoteConnections.SelectIndex(new Address?[] { Portal("x") }, null).Should().BeNull();
+    }
+
+    [Fact]
+    public void Runtime_added_connections_select_by_owning_remote()
+    {
+        // What ConnectToMesh does at runtime: Add(remote, connection); the route then Selects per target.
+        var registry = new SignalRRemoteConnections();
+        var a = Portal("memex");
+        var b = Portal("atioz");
+        Task<HubConnection> connA = new TaskCompletionSource<HubConnection>().Task; // placeholder; never awaited
+        Task<HubConnection> connB = new TaskCompletionSource<HubConnection>().Task;
+
+        registry.Add(a, connA);
+        registry.Add(b, connB);
+
+        registry.Select(NodeOn(a)).Should().BeSameAs(connA);
+        registry.Select(NodeOn(b)).Should().BeSameAs(connB);
+        registry.Select(NodeOn(Portal("other"))).Should().BeNull();
     }
 }
