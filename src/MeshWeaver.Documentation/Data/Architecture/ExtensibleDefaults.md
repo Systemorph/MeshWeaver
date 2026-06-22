@@ -23,7 +23,7 @@ Apply Extensible Defaults whenever a feature has:
 | Entity | NodeType | Root namespace | Static provider | Picker projection |
 |--------|----------|----------------|-----------------|-------------------|
 | Agent | `Agent` | `Agent` | `BuiltInAgentProvider` | `AgentPickerProjection.BuildAgentQueries` |
-| Language Model | `LanguageModel` | `Model` | `BuiltInModelProvider` | `AgentPickerProjection.BuildModelQueries` |
+| Model / Provider | `ModelProvider` + `LanguageModel` | `Provider` (models nested under their provider) | `BuiltInLanguageModelProvider` | `AgentPickerProjection.BuildModelQueries` |
 | Role | `Role` | `Role` | `RoleNodeType.BuiltInRolesProvider` | *(to follow Agent/Model)* |
 
 ---
@@ -102,7 +102,7 @@ Apply Extensible Defaults whenever a feature has:
 
 The union is computed by `MeshQueryEngine` inside a single `IMeshQueryCore.Query` call — see [Synced Query Data Source](/Doc/DataMesh/SyncedQueryDataSource) for the delta protocol. Static-provider nodes participate via `StaticNodeQueryProvider`, so a query against `namespace:Agent` returns built-in Agents without touching persistence.
 
-> **Agents use a per-partition registry, ONE query.** `AgentPickerProjection.BuildAgentQuery` emits a single `namespace:{user}/Agent|{space}/Agent|Agent nodeType:Agent` search. Agents live in a dedicated `/Agent` sub-namespace **per partition** — platform defaults in the bare `Agent` namespace, a space's own under `{space}/Agent`, a user's own under `{user}/Agent`. The `namespace:A|B|C` alternation (see [Query Syntax](/Doc/DataMesh/QuerySyntax) → "Multi-value `namespace:`") is a single `namespace IN (...)` **exact-membership** filter — no graph/ancestor walk. Models mirror this with `/Model` (credentials stay in `_Provider`). Roles still use the multi-query form shown above.
+> **Agents use a per-partition registry, ONE query.** `AgentPickerProjection.BuildAgentQuery` emits a single `namespace:{user}/Agent|{space}/Agent|Agent nodeType:Agent` search. Agents live in a dedicated `/Agent` sub-namespace **per partition** — platform defaults in the bare `Agent` namespace, a space's own under `{space}/Agent`, a user's own under `{user}/Agent`. The `namespace:A|B|C` alternation (see [Query Syntax](/Doc/DataMesh/QuerySyntax) → "Multi-value `namespace:`") is a single `namespace IN (...)` **exact-membership** filter — no graph/ancestor walk. The AI model/provider catalog mirrors this shape under the top-level `Provider` partition (providers hold the credentials; only `LanguageModel` models nest beneath their provider). Roles still use the multi-query form shown above.
 
 ---
 

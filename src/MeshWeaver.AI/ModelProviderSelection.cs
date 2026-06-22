@@ -5,7 +5,7 @@ namespace MeshWeaver.AI;
 /// <summary>
 /// A user's choice of which <c>ModelProvider</c> subtrees feed their chat model
 /// picker + credential resolution. Persisted as the content of a single node
-/// per user at <c>{userId}/_Memex/_Selection</c>
+/// per user at <c>{userId}/_Memex/Selection</c>
 /// (see <see cref="ModelProviderNodeType.SelectionNodeId"/>). Empty/absent ⇒
 /// the default set (root catalog + context + nodeType), i.e. existing behaviour.
 ///

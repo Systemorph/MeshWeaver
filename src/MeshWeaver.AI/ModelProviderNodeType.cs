@@ -65,7 +65,7 @@ public static class ModelProviderNodeType
     /// for per-user Memex defaults. User-owned provider /
     /// model nodes live at <c>{userPath}/_Memex/{providerName}</c> and
     /// <c>{userPath}/_Memex/{providerName}/{modelId}</c>; the user's selection at
-    /// <c>{userPath}/_Memex/_Selection</c>.
+    /// <c>{userPath}/_Memex/Selection</c>.
     ///
     /// <para>Distinct from <see cref="RootNamespace"/> (<c>Provider</c>), which
     /// holds the SYSTEM catalog in the top-level Provider partition and org/context-SHARED
@@ -78,10 +78,13 @@ public static class ModelProviderNodeType
 
     /// <summary>
     /// Node id for the per-user provider-selection node — the single node, at
-    /// <c>{userPath}/_Memex/_Selection</c>, whose content is a
+    /// <c>{userPath}/_Memex/Selection</c>, whose content is a
     /// <see cref="ModelProviderSelection"/>. See <see cref="SelectionPath"/>.
     /// </summary>
-    public const string SelectionNodeId = "_Selection";
+    // Naming rule: the parent _Memex is already a hidden folder (the "_" plays the role
+    // of a leading "." in Unix); hidden levels are NOT re-nested, so the child drops its
+    // own "_" — the path is {user}/_Memex/Selection, not {user}/_Memex/Selection.
+    public const string SelectionNodeId = "Selection";
 
     /// <summary>
     /// NodeType discriminator for the selection node — distinct from
@@ -93,7 +96,7 @@ public static class ModelProviderNodeType
 
     /// <summary>
     /// Path of the provider-selection node for an owner (user) path:
-    /// <c>{ownerPath}/_Memex/_Selection</c>.
+    /// <c>{ownerPath}/_Memex/Selection</c>.
     /// </summary>
     public static string SelectionPath(string ownerPath) =>
         $"{ownerPath}/{UserNamespace}/{SelectionNodeId}";
@@ -161,7 +164,7 @@ public static class ModelProviderNodeType
         builder.ConfigureServices(services =>
         {
             services.TryAddSingleton<BuiltInLanguageModelProvider>();
-            // Always generate a default (empty) {user}/_Memex/_Selection at User
+            // Always generate a default (empty) {user}/_Memex/Selection at User
             // onboarding so the chat picker's selection read RESOLVES instead of
             // generating a routing NotFound the GUI re-issues on a loop — the
             // resubscribe-storm that starved the circuit until unrelated
@@ -216,7 +219,7 @@ public static class ModelProviderNodeType
     };
 
     /// <summary>
-    /// Seeds the per-user default <c>{user}/_Memex/_Selection</c> node (an empty
+    /// Seeds the per-user default <c>{user}/_Memex/Selection</c> node (an empty
     /// <see cref="ModelProviderSelection"/>) when a <c>User</c> partition is created.
     /// Returned from <see cref="GetAdditionalNodes"/> so it persists directly alongside
     /// the user (no hub round-trip) — the "always generate the default state" step that

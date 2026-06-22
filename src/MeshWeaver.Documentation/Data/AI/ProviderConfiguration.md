@@ -119,9 +119,9 @@ Which model a conversation actually runs on resolves in this order (see `ChatCli
 
 ## How the Model Picker Is Populated
 
-The picker is **node-based**, not factory-based. `AgentPickerProjection` runs `nodeType:LanguageModel|ModelProvider` queries over the `_Provider` namespaces (system, the user's selected providers) and shows the resulting `LanguageModel` nodes, grouped by provider. Those nodes come from two places: the system catalog `BuiltInLanguageModelProvider` materialises from each `{Section}:Models` config list, and space/user `ModelProvider` nodes authored in the mesh.
+The picker is **node-based**, not factory-based. `AgentPickerProjection` runs `nodeType:LanguageModel|ModelProvider` queries over the platform `Provider` catalog, the context's `{path}/Provider` subtrees, and the user's own `{user}/_Memex` namespace, and shows the resulting `LanguageModel` nodes, grouped by provider. Those nodes come from two places: the system catalog `BuiltInLanguageModelProvider` materialises from each `{Section}:Models` config list (imported into the `Provider` partition on boot and served from the DB), and space/user `ModelProvider` nodes authored in the mesh.
 
-So an empty picker means **no provider/model nodes are visible to the user** — almost always because the deployment carries no `{Section}:Models` config signal (the classic Helm/AKS gap) or the user's `_Provider/_Selection` points at a provider that doesn't exist. The full diagnosis + fix is in **[Setting Up Model Providers → Troubleshooting](/Doc/AI/ModelProviderSetup#troubleshooting-an-empty-picker)**.
+So an empty picker means **no provider/model nodes are visible to the user** — almost always because the deployment carries no `{Section}:Models` config signal (the classic Helm/AKS gap) or the user's `{user}/_Memex/Selection` points at a provider that doesn't exist. The full diagnosis + fix is in **[Setting Up Model Providers → Troubleshooting](/Doc/AI/ModelProviderSetup#troubleshooting-an-empty-picker)**.
 
 > Don't try to mirror "everything the provider sells." List a short, curated set in `{Section}:Models` (the deployment's catalog) — the user picks from it in the composer.
 

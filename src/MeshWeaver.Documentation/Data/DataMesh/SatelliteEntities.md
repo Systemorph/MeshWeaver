@@ -98,6 +98,8 @@ var threadNode = new MeshNode(threadId, $"{contextPath}/_Thread")
 
 # Sub-Namespace Conventions
 
+> **Naming rule — `_` is a hidden folder.** A leading underscore on a path segment means "hidden / reserved sub-namespace" — the same role `.` plays in Unix (`.git`, `.config`). It marks a segment as framework-reserved (satellite metadata, or a dotfile-style namespace such as `_Memex` for a user's personal defaults), so it stays out of the normal content hierarchy. **Hidden levels are not nested:** a `_`-prefixed segment holds plain (non-`_`) children — write `{user}/_Memex/Selection`, not `{user}/_Memex/_Selection`; `Doc/MyDoc/_Comment/c1`, not `_Comment/_c1`.
+
 Each satellite type has a reserved sub-namespace prefix. The routing layer depends on these prefixes for both storage table selection and permission delegation.
 
 | Sub-Namespace | Node Type | Purpose |

@@ -29,24 +29,24 @@ Two companion node types carry everything a chat-client factory needs:
 
 | Node type | Holds | Path shape |
 |---|---|---|
-| `ModelProvider` | credentials shared by its models — `Endpoint`, `ApiKey` (encrypted at rest), `Label`, the model-id list | `{owner}/_Provider/{Provider}` |
-| `LanguageModel` | one model — `Id`, `Provider`, `ProviderRef` (→ its provider node), `ModelTier`, `Description` | `{owner}/_Provider/{Provider}/{modelId}` |
+| `ModelProvider` | credentials shared by its models — `Endpoint`, `ApiKey` (encrypted at rest), `Label`, the model-id list | `Provider/{Provider}` (platform) · `{user}/_Memex/{Provider}` (user) |
+| `LanguageModel` | one model — `Id`, `Provider`, `ProviderRef` (→ its provider node), `ModelTier`, `Description` | `{providerPath}/{modelId}` (nested under its provider) |
 
-`_Provider` is the satellite-namespace segment for these nodes — the same convention as `_Access`, `_Thread`, `_Comment`. A `LanguageModel` never stores a key; it points at its `ModelProvider` via `ProviderRef`, and the resolver follows that reference to fetch `Endpoint` + `ApiKey`.
+The platform catalog lives in the top-level **`Provider`** partition — a DB-synced [NodeType catalog](/Doc/Architecture/NodeTypeCatalogs), exactly like `Agent` / `Skill` / `Harness`. A user's **own** providers live in their dotfile namespace `{user}/_Memex/…`. A `LanguageModel` is always **nested under its provider** and never stores a key; it points at its `ModelProvider` via `ProviderRef`, and the resolver follows that reference to fetch `Endpoint` + `ApiKey`.
 
 ### Three layers, closest-wins
 
 The same two node types appear at three different owners. The credential resolver and picker union them; a user-owned provider overrides a space or system one of the same name.
 
 ```text
-_Provider/{Provider}                         ← SYSTEM catalog (from IConfiguration, read-only)
-{space}/_Provider/{Provider}                  ← SPACE / org provider (e.g. Systemorph/_Provider/AzureFoundry)
-{user}/_Provider/{Provider}                   ← USER bring-your-own-key provider
+Provider/{Provider}                          ← SYSTEM catalog (DB-synced top-level partition, read-only to non-admins)
+{space}/Provider/{Provider}                   ← SPACE / org provider (e.g. Systemorph/Provider/AzureFoundry)
+{user}/_Memex/{Provider}                      ← USER bring-your-own-key provider
 ```
 
-- **System** — materialised from `IConfiguration` by `BuiltInLanguageModelProvider` (see [Installation considerations](#installation-considerations)). No nodes are authored by hand.
+- **System** — imported into the `Provider` partition on boot by `ModelStaticRepoSource` from the `BuiltInLanguageModelProvider` catalog (config-derived; see [Installation considerations](#installation-considerations)), then served from the DB. No nodes are authored by hand; platform admins curate them through the mesh catalog UI.
 - **Space / org** — an admin authors a `ModelProvider` node in a space (e.g. `Systemorph`) so every user with read access to that space can select it. `ModelProvider` is a creatable type (gated by `Permission.Api`), so it can be authored in the UI or via MCP — see [Set up a space provider](#set-up-a-space-provider).
-- **User** — a user pastes their own key in Settings → Models, which writes `{user}/_Provider/{Provider}` with their encrypted key.
+- **User** — a user pastes their own key in Settings → Models, which writes `{user}/_Memex/{Provider}` with their encrypted key.
 
 ---
 
@@ -57,10 +57,10 @@ The chat picker is **provider-first**: it lists providers, and selecting one loa
 **1. Discover providers + the system catalog** — always run, no per-user state:
 
 ```text
-namespace:_Provider nodeType:LanguageModel|ModelProvider scope:descendants
+namespace:Provider nodeType:LanguageModel|ModelProvider scope:descendants
 ```
 
-**2. Load a selected provider's models** — one query per entry in the user's selection node `{user}/_Provider/_Selection`:
+**2. Load a selected provider's models** — one query per entry in the user's selection node `{user}/_Memex/Selection`:
 
 ```text
 namespace:{providerPath} nodeType:LanguageModel|ModelProvider scope:selfAndDescendants
@@ -70,11 +70,11 @@ So to give a user the Systemorph models, you do **not** copy nodes into their na
 
 | Node in the user's namespace | Content | Effect |
 |---|---|---|
-| `{user}/_Provider/_Selection` | `ModelProviderSelection { SelectedProviderPaths: ["Systemorph/_Provider/AzureFoundry"] }` | the picker runs `namespace:Systemorph/_Provider/AzureFoundry nodeType:LanguageModel scope:selfAndDescendants` and shows those three models |
+| `{user}/_Memex/Selection` | `ModelProviderSelection { SelectedProviderPaths: ["Systemorph/Provider/AzureFoundry"] }` | the picker runs `namespace:Systemorph/Provider/AzureFoundry nodeType:LanguageModel scope:selfAndDescendants` and shows those three models |
 
-The `_Selection` node is seeded empty at onboarding. Selecting a provider in Settings → Models appends its path to `SelectedProviderPaths`; you can also set it directly (admin/MCP) to pre-configure a user.
+The `Selection` node is seeded empty at onboarding. Selecting a provider in Settings → Models appends its path to `SelectedProviderPaths`; you can also set it directly (admin/MCP) to pre-configure a user.
 
-> **Common empty-picker cause:** a `_Selection` that points at a provider path that doesn't exist (e.g. `{user}/_Provider/AzureFoundry` when the user never created a personal provider). The query returns nothing and the dropdown is empty even though the system/space catalog is full. Fix: point the selection at a provider that exists, or create the provider it names.
+> **Common empty-picker cause:** a `Selection` that points at a provider path that doesn't exist (e.g. `{user}/_Memex/AzureFoundry` when the user never created a personal provider). The query returns nothing and the dropdown is empty even though the system/space catalog is full. Fix: point the selection at a provider that exists, or create the provider it names.
 
 ### Grouping models by provider
 
@@ -87,10 +87,10 @@ The discovery query returns **both** the `ModelProvider` nodes and their `Langua
 This is exactly how the shared **Azure AI Foundry (Systemorph)** provider was created. Author one `ModelProvider` node plus one `LanguageModel` child per model. Via MCP (or the equivalent `IMeshService.CreateNode`):
 
 ```jsonc
-// Systemorph/_Provider/AzureFoundry  — the provider node (holds the key + endpoint)
+// Systemorph/Provider/AzureFoundry  — the provider node (holds the key + endpoint)
 {
   "id": "AzureFoundry",
-  "namespace": "Systemorph/_Provider",
+  "namespace": "Systemorph/Provider",
   "name": "Azure AI Foundry (Systemorph)",
   "nodeType": "ModelProvider",
   "content": {
@@ -104,10 +104,10 @@ This is exactly how the shared **Azure AI Foundry (Systemorph)** provider was cr
 ```
 
 ```jsonc
-// Systemorph/_Provider/AzureFoundry/DeepSeek-V3-0324  — one child per model
+// Systemorph/Provider/AzureFoundry/DeepSeek-V3-0324  — one child per model
 {
   "id": "DeepSeek-V3-0324",
-  "namespace": "Systemorph/_Provider/AzureFoundry",
+  "namespace": "Systemorph/Provider/AzureFoundry",
   "name": "DeepSeek V3 — High",
   "nodeType": "LanguageModel",
   "content": {
@@ -115,7 +115,7 @@ This is exactly how the shared **Azure AI Foundry (Systemorph)** provider was cr
     "id": "DeepSeek-V3-0324",
     "displayName": "DeepSeek V3 (High)",
     "provider": "AzureFoundry",
-    "providerRef": "Systemorph/_Provider/AzureFoundry",
+    "providerRef": "Systemorph/Provider/AzureFoundry",
     "modelTier": "heavy",
     "order": 1
   }
@@ -131,14 +131,14 @@ The `model` ids must match models actually **deployed** in that Azure AI Foundry
 A `LanguageModel` node never carries a key. The resolver ([`ChatClientCredentialResolver`](/Doc/AI/ProviderConfiguration)) walks, top wins:
 
 1. the model's `ProviderRef` → that `ModelProvider` node's `ApiKey` / `Endpoint`;
-2. the conventional `_Provider/{Provider}` node;
+2. the conventional `Provider/{Provider}` node;
 3. legacy fields stamped on the model node;
 4. otherwise the factory's `IOptions<…Configuration>` binding (the system-default key from config).
 
 So there are two clean ways to supply the key:
 
-- **Shared org key** — set `ApiKey` + `Endpoint` on the space `ModelProvider` node (e.g. `Systemorph/_Provider/AzureFoundry`). The key is `enc:`-encrypted at rest and is read under a system identity for any user who has **Read** on the subtree (use-without-see) — the raw key never leaves the server. One key, every user in the space.
-- **Per-user key** — the user pastes their own key in **Settings → Models → Azure AI Foundry**, which writes `{user}/_Provider/{Provider}` with their encrypted key. A per-user provider overrides the org one of the same name.
+- **Shared org key** — set `ApiKey` + `Endpoint` on the space `ModelProvider` node (e.g. `Systemorph/Provider/AzureFoundry`). The key is `enc:`-encrypted at rest and is read under a system identity for any user who has **Read** on the subtree (use-without-see) — the raw key never leaves the server. One key, every user in the space.
+- **Per-user key** — the user pastes their own key in **Settings → Models → Azure AI Foundry**, which writes `{user}/_Memex/{Provider}` with their encrypted key. A per-user provider overrides the org one of the same name.
 
 > Never put a literal key in a `LanguageModel` node or in a doc/commit. The only sanctioned homes for the secret are the `ModelProvider.ApiKey` field (encrypted) and the deployment's secret store.
 
@@ -154,7 +154,7 @@ Whether the picker is empty or full on a fresh deployment is decided **here**, a
 
 ### The system catalog comes from configuration
 
-`BuiltInLanguageModelProvider` reads, per registered provider, `{Section}:Models`, `{Section}:Endpoint`, `{Section}:ApiKey` from `IConfiguration` and emits a read-only `ModelProvider` node (plus a `LanguageModel` per model id) under the root `_Provider` namespace. **It emits a node only when at least one of those has a value** ("any signal"). No config signal ⇒ no system nodes ⇒ empty picker.
+`BuiltInLanguageModelProvider` reads, per registered provider, `{Section}:Models`, `{Section}:Endpoint`, `{Section}:ApiKey` from `IConfiguration` and emits a `ModelProvider` node (plus a `LanguageModel` per model id) under the top-level `Provider` partition — these are then imported into the DB on boot by `ModelStaticRepoSource` and served from there. **It emits a node only when at least one of those has a value** ("any signal"). No config signal ⇒ no system nodes ⇒ empty picker.
 
 Each provider package self-registers its config section via `AddLanguageModelCatalogSource` inside its builder extension (`AddAnthropic`, `AddAzureFoundry`, `AddAzureOpenAI`, `AddOpenAI`, `AddClaudeCode`, `AddCopilot`), gated by the `Features:Ai:Providers:*` / `Features:Ai:Clis:*` flags. Registering the source is necessary but not sufficient — the matching config section must also carry values.
 
@@ -189,7 +189,7 @@ The Systemorph space ships three tiers, chosen to be **powerful but inexpensive 
 
 All three are deployed on the `s-meshweaver` Azure AI Foundry resource (verify with `az cognitiveservices account deployment list -n s-meshweaver -g rg-meshweaverai`). The tier → model mapping lives in `ModelTier:Heavy/Standard/Light/Utility` config (wired via the Helm overlay for the AKS deployment).
 
-> **Claude (Anthropic) works very well — noticeably stronger on the hardest agentic and coding tasks — but it comes at a price.** It is intentionally **not** wired as a shared org key. Each user connects **Claude Code** (the co-hosted CLI, `Features:Ai:Clis:ClaudeCode`) under their own account in **Settings → Models → Connect**, which stores a per-user `{user}/_Provider/ClaudeCode` provider and injects Claude into their picker on their own subscription.
+> **Claude (Anthropic) works very well — noticeably stronger on the hardest agentic and coding tasks — but it comes at a price.** It is intentionally **not** wired as a shared org key. Each user connects **Claude Code** (the co-hosted CLI, `Features:Ai:Clis:ClaudeCode`) under their own account in **Settings → Models → Connect**, which stores a per-user `{user}/_Memex/ClaudeCode` provider and injects Claude into their picker on their own subscription.
 
 `modelTier:` frontmatter is a strictly **optional hint** declared only by the built-in background micro-agents (notification triage, description/icon writing, thread naming) — it kicks in solely when no model was selected in the chat composer (the composer selection always wins), resolving through the `ModelTier__*` config. With no tier config the hint is inert. Keep the deployed tier mapping and the `Models[]` catalog in sync where you do configure it.
 
@@ -200,7 +200,7 @@ All three are deployed on the `s-meshweaver` Azure AI Foundry resource (verify w
 Work top-down — the first hit is usually the cause:
 
 1. **Are there any provider/model nodes?** `search nodeType:ModelProvider scope:descendants`. Empty ⇒ no system config signal (see [installation](#installation-considerations)) and no space/user provider authored.
-2. **Does the user's `_Selection` point at a provider that exists?** Read `{user}/_Provider/_Selection`; a path to a non-existent `ModelProvider` yields no models.
+2. **Does the user's `Selection` point at a provider that exists?** Read `{user}/_Memex/Selection`; a path to a non-existent `ModelProvider` yields no models.
 3. **Can the user read the space provider?** Org providers are visible only to users with Read on the space subtree.
 4. **Do the model ids exist in the resource?** A model node whose `Id` isn't deployed in the Azure resource shows in the picker but 404s at chat time — that is a *credential/deployment* problem, not a picker problem.
 5. **Logs** — grep the `MeshWeaver.AI.AgentPickerProjection` channel for `[AgentPicker]`: it logs the raw snapshot count and type breakdown, telling you whether the query returned 0 nodes or the projection dropped them.
