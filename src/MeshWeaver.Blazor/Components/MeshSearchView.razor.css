@@ -364,6 +364,79 @@
     border-color: var(--neutral-stroke-rest, #d1d1d1);
 }
 
+/* Keyboard focus on the result list — the highlight lives on the card, so suppress the
+   browser's default focus ring on the container itself. */
+.mesh-search-results:focus,
+.mesh-search-results:focus-visible {
+    outline: none;
+}
+
+/* Delete affordance — trash overlay on the card icon (top-left), mirroring the drill affordance
+   on the right. Subtle until card hover / keyboard selection; the inline confirm stays visible. */
+.mesh-search-delete,
+.mesh-search-delete-confirm {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    z-index: 3;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.mesh-search-delete {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background: var(--neutral-layer-2, rgba(0, 0, 0, 0.04));
+    color: var(--neutral-foreground-hint, #888);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s, color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.mesh-search-card-wrap:hover .mesh-search-delete,
+.mesh-search-card-selected .mesh-search-delete,
+.mesh-search-delete:focus-visible {
+    opacity: 1;
+}
+
+.mesh-search-delete:hover {
+    color: var(--error, #d32f2f);
+    background: var(--neutral-layer-1, #fff);
+    border-color: var(--error, #d32f2f);
+}
+
+/* Two-step confirm pair (check / dismiss) — always visible while armed. */
+.mesh-search-delete-confirm {
+    gap: 4px;
+    opacity: 1;
+}
+
+.mesh-search-delete-confirm button {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border-radius: 6px;
+    border: 1px solid var(--neutral-stroke-rest, #d1d1d1);
+    background: var(--neutral-layer-1, #fff);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.mesh-search-delete-yes {
+    color: var(--error, #d32f2f);
+    border-color: var(--error, #d32f2f) !important;
+}
+
+.mesh-search-delete-no {
+    color: var(--neutral-foreground-hint, #666);
+}
+
 /* Modern folder TILE for namespace sub-folders (browse mode). The outer element
    only positions the secondary drill-down anchor; the link is the clickable body. */
 .mesh-search-folder-tile {

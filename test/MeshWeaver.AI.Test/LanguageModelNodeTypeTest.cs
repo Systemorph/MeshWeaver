@@ -52,8 +52,8 @@ public class LanguageModelNodeTypeTest
 
         modelNodes.Should().HaveCount(3);
         // LanguageModel children now live under the parent ModelProvider's
-        // _Provider/{name} satellite path (mirrors the user-partition
-        // layout) â€” see ModelProviders.md for the path convention.
+        // Provider/{name} satellite path (mirrors the user-partition
+        // layout) — see ModelProviders.md for the path convention.
         var expectedNs = $"{ModelProviderNodeType.RootNamespace}/Azure Claude";
         modelNodes.Should().AllSatisfy(n =>
         {
@@ -109,25 +109,28 @@ public class LanguageModelNodeTypeTest
     }
 
     [Fact]
-    public void Provider_EmptyCatalog_EmitsNothing()
+    public void Provider_EmptyCatalog_EmitsOnlyAccessPolicy()
     {
-        // No catalog sources / no models in config = empty enumeration.
-        // Earlier behaviour seeded a read-only access policy unconditionally,
-        // which polluted `namespace:Model` queries with a single useless
-        // node when no models existed (the "crap" the user noticed).
+        // No catalog sources / no models in config = no provider/model CONTENT nodes. The
+        // PublicRead _Policy is still emitted unconditionally so the /model picker can read the
+        // (empty) Provider catalog under every user identity; it is a governance node that the
+        // picker queries (nodeType:LanguageModel|ModelProvider) filter out, so it pollutes nothing.
         var nodes = MakeProvider(new Dictionary<string, string?>())
             .GetStaticNodes()
             .ToList();
 
-        nodes.Should().BeEmpty();
+        nodes.Should().NotContain(n => n.NodeType == LanguageModelNodeType.NodeType
+            || n.NodeType == ModelProviderNodeType.NodeType);
+        nodes.Should().OnlyContain(n => n.NodeType == "PartitionAccessPolicy");
     }
 
     [Fact]
-    public void Provider_PolicyEmittedOnlyWhenModelsExist()
+    public void Provider_Policy_IsPublicRead_WithLiftedWriteCaps()
     {
-        // Provider seeds the read-only access policy IFF it actually has
-        // model nodes to govern. Bring-your-own model nodes belong at
-        // sibling paths anyway â€” they don't need the partition's policy.
+        // The Provider partition's _Policy is PublicRead (every user reads the catalog) with the
+        // write caps LIFTED (Create/Update/Delete = true) so platform admins can manage the shared
+        // providers/models. Caps are CEILINGS, not grants — non-admins hold no write role in the
+        // Provider hierarchy, so they stay read-only.
         var withModels = MakeProvider(
             new Dictionary<string, string?> { ["Anthropic:Models:0"] = "claude-sonnet-4-6" },
             new LanguageModelCatalogSource("Anthropic", "Azure Claude", 1));
@@ -136,9 +139,10 @@ public class LanguageModelNodeTypeTest
 
         var policy = nodes.Should().ContainSingle(n => n.NodeType == "PartitionAccessPolicy").Subject;
         var aap = policy.Content.Should().BeOfType<MeshWeaver.Mesh.Security.PartitionAccessPolicy>().Subject;
-        aap.Create.Should().BeFalse();
-        aap.Update.Should().BeFalse();
-        aap.Delete.Should().BeFalse();
+        aap.PublicRead.Should().BeTrue();
+        aap.Create.Should().BeTrue();
+        aap.Update.Should().BeTrue();
+        aap.Delete.Should().BeTrue();
         nodes.Should().Contain(n => n.NodeType == LanguageModelNodeType.NodeType);
     }
 

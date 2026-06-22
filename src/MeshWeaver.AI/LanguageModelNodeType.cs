@@ -47,16 +47,27 @@ public static class LanguageModelNodeType
         IReadOnlySet<string>? serveFromPartition = null)
         where TBuilder : MeshBuilder
     {
-        builder.AddMeshNodes(CreateMeshNode());
+        // DB-synced when the portal serves the model-catalog partition from the DB. The catalog now
+        // lives under the "Provider" partition (ModelProviderNodeType.RootNamespace); the legacy
+        // "Model" partition name is still honoured for backwards-compatible configs. On the synced
+        // path the read-only in-memory static provider is skipped (Postgres serves it) AND the
+        // in-memory LanguageModel type-def is registered DEFINITION-ONLY so the per-node-hub
+        // persistence sampler never auto-persists it to a phantom "languagemodel" schema (42P01).
+        // Mirrors HarnessNodeType / AddModelProviderType. See Doc/Architecture/NodeTypeCatalogs.md.
+        var dbSynced = serveFromPartition is not null
+            && (serveFromPartition.Contains("Model")
+                || serveFromPartition.Contains(ModelProviderNodeType.RootNamespace));
+
+        var typeDefinition = CreateMeshNode();
+        if (dbSynced)
+            typeDefinition = typeDefinition with { IsDefinitionOnly = true };
+        builder.AddMeshNodes(typeDefinition);
         builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         // Companion NodeType: ModelProvider holds the credentials shared by
         // all child LanguageModel nodes. Registered together so a deployment
         // calling AddLanguageModelType wires the entire data shape (the
         // ChatClientCredentialResolver depends on both being available).
         builder.AddModelProviderType(serveFromPartition);
-        // DB-synced "Model" partition (static-repo import) → skip the read-only in-memory static
-        // provider so Postgres serves the catalog + accepts the import's writes. See AddAgentType.
-        var dbSynced = serveFromPartition?.Contains("Model") == true;
         builder.ConfigureServices(services =>
         {
             services.TryAddSingleton<LanguageModelCatalogOptions>();
@@ -84,10 +95,10 @@ public static class LanguageModelNodeType
             // worked. Match the AgentProvider pattern so both follow the
             // same path.
             // 🚨 Gate the IStaticNodeProvider (feeds FindStaticNode) on !dbSynced, same as the
-            // partition provider below — leaving it registered while the "Model" partition is
-            // DB-synced made the importer's inner CreateNode see the built-in catalog/_Provider
-            // nodes as already-present and fail "Node already exists" (atioz 2026-06-11: Model
-            // imported 4 / failed 2, incl. Model/_Policy + _Provider/Anthropic). The
+            // partition provider below — leaving it registered while the model-catalog partition is
+            // DB-synced made the importer's inner CreateNode see the built-in catalog/Provider
+            // nodes as already-present and fail "Node already exists" (atioz 2026-06-11: imported
+            // 4 / failed 2, incl. Provider/_Policy + Provider/Anthropic). The
             // BuiltInLanguageModelProvider singleton stays (the import source wraps it); the
             // LanguageModel/ModelProvider NodeType defs stay via AddMeshNodes. See AddAgentType.
             if (!dbSynced)

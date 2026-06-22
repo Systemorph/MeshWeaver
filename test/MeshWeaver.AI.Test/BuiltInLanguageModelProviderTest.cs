@@ -98,7 +98,7 @@ public class BuiltInLanguageModelProviderTest
     [Fact]
     public void ToModelInfo_CarriesNodePath_SoSelectionPersistsTheNodeIdentity()
     {
-        var node = new MeshNode("claude-sonnet-4", "Admin/Provider/Azure")
+        var node = new MeshNode("claude-sonnet-4", "Provider/Azure")
         {
             NodeType = LanguageModelNodeType.NodeType,
             Name = "claude-sonnet-4",

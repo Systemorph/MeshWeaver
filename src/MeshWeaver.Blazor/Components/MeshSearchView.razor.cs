@@ -3,12 +3,14 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Reactive.Linq;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
 using MeshWeaver.Blazor.Components.Monaco;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Catalog;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Reactive;
 using Microsoft.Extensions.DependencyInjection;
@@ -38,6 +40,19 @@ public partial class MeshSearchView : IDisposable
     private bool _showSearchOptions;
     private string _editableHiddenQuery = "";
     private string? _overriddenHiddenQuery;
+
+    // ----- Delete affordance + keyboard navigation state -----
+    // Per-node delete permission (canonical hub.CheckPermission(path, Permission.Delete) snapshot).
+    // Absent / false ⇒ no trash affordance for that path (fail-closed).
+    private readonly Dictionary<string, bool> _canDeleteByPath =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _permissionRequested =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<IDisposable> _affordanceSubscriptions = new();
+    // The card whose trash is armed for confirmation (two-step delete; null = none armed).
+    private string? _pendingDeletePath;
+    // The keyboard-highlighted result path (Arrow Up/Down). Distinct from the SelectedPath param.
+    private string? _keyboardSelectedPath;
 
     [Inject]
     private IMeshService MeshQuery { get; set; } = default!;
@@ -420,6 +435,7 @@ public partial class MeshSearchView : IDisposable
                     }
 
                     _nodes = merged.ToList();
+                    ResolveDeletePermissions(_nodes);
 
                     if (ViewModel != null)
                     {
@@ -528,6 +544,7 @@ public partial class MeshSearchView : IDisposable
                         _nodes = _nodes.Where(n => n.Path != basePath).ToList();
                     }
 
+                    ResolveDeletePermissions(_nodes);
                     _computedGroups = ProcessResults(_nodes);
                     _isLoading = false;
                     StateHasChanged();
@@ -1104,6 +1121,7 @@ public partial class MeshSearchView : IDisposable
             {
                 var countMap = counts.ToImmutableDictionary(
                     c => c.Path, c => c.Count, StringComparer.OrdinalIgnoreCase);
+                ResolveDeletePermissions(nodes);
                 _treeLevels = _treeLevels.SetItem(
                     ns, new TreeLevel(false, NamespaceTreeBuilder.BuildLevel(ns, nodes, countMap)));
                 StateHasChanged();
@@ -1188,6 +1206,7 @@ public partial class MeshSearchView : IDisposable
                             return;
                     }
                     var items = NamespaceTreeBuilder.Build(root, resultNodes.Values.ToImmutableList());
+                    ResolveDeletePermissions(resultNodes.Values);
                     InvokeAsync(() =>
                     {
                         _treeSearchItems = items;
@@ -1393,6 +1412,202 @@ public partial class MeshSearchView : IDisposable
 
     #endregion
 
+    #region Delete affordance + keyboard navigation
+
+    /// <summary>True when the trash affordance may be shown for <paramref name="path"/>.</summary>
+    private bool CanDelete(string? path) =>
+        !string.IsNullOrEmpty(path)
+        && _canDeleteByPath.TryGetValue(path, out var ok)
+        && ok;
+
+    /// <summary>
+    /// Resolves the per-node delete permission for the given result nodes via the canonical
+    /// <c>hub.CheckPermission(path, Permission.Delete)</c> surface (the same gate
+    /// <see cref="MeshWeaver.Graph.DeleteLayoutArea"/> uses). Bounded snapshot — <c>Take(1)</c>
+    /// + <c>Timeout</c>, fail-closed to "no delete" so a stuck lookup never offers a trash we
+    /// cannot honour. Idempotent: each path is probed at most once per component instance.
+    /// Skipped entirely on a picker selection surface (no manage affordance there).
+    /// </summary>
+    private void ResolveDeletePermissions(IEnumerable<MeshNode> nodes)
+    {
+        if (OnNodeSelected.HasDelegate)
+            return;
+
+        foreach (var node in nodes)
+        {
+            var path = node.Path;
+            if (string.IsNullOrEmpty(path) || !_permissionRequested.Add(path))
+                continue;
+
+            var capturedPath = path;
+            var sub = Hub.CheckPermission(capturedPath, Permission.Delete)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(10))
+                .Catch((Exception _) => Observable.Return(false))
+                .Subscribe(canDelete => InvokeAsync(() =>
+                {
+                    _canDeleteByPath[capturedPath] = canDelete;
+                    StateHasChanged();
+                }));
+            _affordanceSubscriptions.Add(sub);
+        }
+    }
+
+    /// <summary>First click on the trash arms the inline confirm for that card.</summary>
+    private void RequestDelete(MeshNode node)
+    {
+        if (!CanDelete(node.Path))
+            return;
+        _pendingDeletePath = node.Path;
+        StateHasChanged();
+    }
+
+    /// <summary>Dismisses the armed confirm without deleting.</summary>
+    private void CancelDelete()
+    {
+        _pendingDeletePath = null;
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Confirms the delete and routes it through the framework (<c>IMeshService.DeleteNode</c>).
+    /// The live result subscription emits a <c>Removed</c> change and the card drops out of the
+    /// grid on its own — no manual reload. Cold observable, so we Subscribe (and surface errors).
+    /// </summary>
+    private void ConfirmDelete(MeshNode node)
+    {
+        var path = node.Path;
+        _pendingDeletePath = null;
+        if (string.IsNullOrEmpty(path) || !CanDelete(path))
+        {
+            StateHasChanged();
+            return;
+        }
+
+        _affordanceSubscriptions.Add(MeshQuery.DeleteNode(path).Subscribe(
+            _ => { },
+            ex =>
+            {
+                var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger("MeshWeaver.MeshSearchView");
+                logger?.LogWarning(ex, "MeshSearchView delete failed: {Path}", path);
+            }));
+
+        if (string.Equals(_keyboardSelectedPath, path, StringComparison.OrdinalIgnoreCase))
+            _keyboardSelectedPath = null;
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// The flat, in-render-order list of result cards the keyboard navigates — visible items of
+    /// the non-collapsed groups, respecting each group's row cap. Empty in tree / navigator /
+    /// picker modes (their browse surfaces are not keyboard-list navigable), so the handler no-ops.
+    /// </summary>
+    private List<MeshNode> GetNavigableNodes()
+    {
+        var result = new List<MeshNode>();
+        if (IsNamespaceTreeMode || IsGraphNavigatorMode || OnNodeSelected.HasDelegate)
+            return result;
+
+        foreach (var group in GetGroups())
+        {
+            if (_collapsedGroups.Contains(group.GroupKey))
+                continue;
+            var maxVisible = GetMaxVisibleItems(group.GroupKey);
+            IEnumerable<object> items = maxVisible.HasValue
+                ? group.Items.Take(maxVisible.Value)
+                : group.Items;
+            foreach (var item in items)
+                if (item is MeshNode node)
+                    result.Add(node);
+        }
+        return result;
+    }
+
+    /// <summary>preventDefault on the result list only where keyboard navigation is live, so the
+    /// browse modes (tree / navigator) and the picker keep their native key handling.</summary>
+    private bool ResultsPreventDefault =>
+        !IsNamespaceTreeMode && !IsGraphNavigatorMode && !OnNodeSelected.HasDelegate;
+
+    /// <summary>
+    /// Desktop keyboard interaction on the result list: ↑/↓ move the highlight (wrapping), Enter
+    /// opens the highlighted card (or confirms an armed delete), Delete/Backspace arm the gated
+    /// delete on the highlighted card, Escape cancels an armed delete or clears the highlight.
+    /// </summary>
+    private void OnResultsKeyDown(KeyboardEventArgs e)
+    {
+        var nav = GetNavigableNodes();
+        if (nav.Count == 0)
+            return;
+
+        var currentIndex = _keyboardSelectedPath is null
+            ? -1
+            : nav.FindIndex(n => string.Equals(n.Path, _keyboardSelectedPath, StringComparison.OrdinalIgnoreCase));
+
+        switch (e.Key)
+        {
+            case "ArrowDown":
+                _keyboardSelectedPath = nav[currentIndex < 0 ? 0 : (currentIndex + 1) % nav.Count].Path;
+                _pendingDeletePath = null;
+                StateHasChanged();
+                break;
+            case "ArrowUp":
+                _keyboardSelectedPath = nav[currentIndex < 0 ? nav.Count - 1 : (currentIndex - 1 + nav.Count) % nav.Count].Path;
+                _pendingDeletePath = null;
+                StateHasChanged();
+                break;
+            case "Enter":
+                if (_pendingDeletePath is not null)
+                {
+                    var pending = nav.FirstOrDefault(n =>
+                        string.Equals(n.Path, _pendingDeletePath, StringComparison.OrdinalIgnoreCase));
+                    if (pending is not null)
+                        ConfirmDelete(pending);
+                }
+                else if (currentIndex >= 0)
+                {
+                    OpenNode(nav[currentIndex]);
+                }
+                break;
+            case "Delete":
+            case "Backspace":
+                if (currentIndex >= 0 && CanDelete(nav[currentIndex].Path))
+                {
+                    _pendingDeletePath = nav[currentIndex].Path;
+                    StateHasChanged();
+                }
+                break;
+            case "Escape":
+                if (_pendingDeletePath is not null)
+                    _pendingDeletePath = null;
+                else
+                    _keyboardSelectedPath = null;
+                StateHasChanged();
+                break;
+        }
+    }
+
+    /// <summary>Opens a result card the same way a primary click would: select (picker), post the
+    /// click message (ClickMessageAddress), or navigate to the node's page.</summary>
+    private void OpenNode(MeshNode node)
+    {
+        if (OnNodeSelected.HasDelegate)
+        {
+            OnNodeSelected.InvokeAsync(node);
+            return;
+        }
+        var clickAddress = ViewModel?.ClickMessageAddress?.ToString();
+        if (!string.IsNullOrEmpty(clickAddress))
+        {
+            PostClickMessage(node, clickAddress);
+            return;
+        }
+        if (!string.IsNullOrEmpty(node.Path))
+            Navigation.NavigateTo($"/{node.Path}");
+    }
+
+    #endregion
+
     private void ToggleSearchOptions()
     {
         _showSearchOptions = !_showSearchOptions;
@@ -1419,5 +1634,8 @@ public partial class MeshSearchView : IDisposable
         _reactiveSubscription?.Dispose();
         DisposeTreeSubscriptions();
         _navSubscription?.Dispose();
+        foreach (var sub in _affordanceSubscriptions)
+            sub.Dispose();
+        _affordanceSubscriptions.Clear();
     }
 }

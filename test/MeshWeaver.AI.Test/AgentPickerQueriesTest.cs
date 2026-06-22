@@ -170,7 +170,7 @@ public class AgentPickerQueriesTest
     {
         var queries = AgentPickerProjection.BuildModelQueries();
         queries.Should().ContainSingle()
-            .Which.Should().Be("namespace:Admin/Provider nodeType:LanguageModel|ModelProvider scope:descendants");
+            .Which.Should().Be("namespace:Provider nodeType:LanguageModel|ModelProvider scope:descendants");
     }
 
     [Fact]
@@ -185,33 +185,33 @@ public class AgentPickerQueriesTest
     public void BuildModelQueries_WithSelectedProviders_AddsSelfAndDescendantsPerPath()
     {
         var queries = AgentPickerProjection.BuildModelQueries(
-            selectedProviderPaths: new[] { "acme/_Provider/Anthropic", "rbuergi/_Provider/OpenAI" });
+            selectedProviderPaths: new[] { "acme/Provider/Anthropic", "rbuergi/Provider/OpenAI" });
 
         // Root catalog query is always present.
-        queries.Should().Contain("namespace:Admin/Provider nodeType:LanguageModel|ModelProvider scope:descendants");
+        queries.Should().Contain("namespace:Provider nodeType:LanguageModel|ModelProvider scope:descendants");
         // One selfAndDescendants query per selected provider path (provider node + its models).
-        queries.Should().Contain("namespace:acme/_Provider/Anthropic nodeType:LanguageModel|ModelProvider scope:selfAndDescendants");
-        queries.Should().Contain("namespace:rbuergi/_Provider/OpenAI nodeType:LanguageModel|ModelProvider scope:selfAndDescendants");
+        queries.Should().Contain("namespace:acme/Provider/Anthropic nodeType:LanguageModel|ModelProvider scope:selfAndDescendants");
+        queries.Should().Contain("namespace:rbuergi/Provider/OpenAI nodeType:LanguageModel|ModelProvider scope:selfAndDescendants");
     }
 
     [Fact]
     public void BuildModelQueries_ReservedCurrentPath_IsSkipped()
     {
         // On the login page the resolved context is the rogue "login" ROUTE partition. Including it would
-        // make namespace:login/_Provider read the policy-less reserved partition and fail the WHOLE query
+        // make namespace:login/Provider read the policy-less reserved partition and fail the WHOLE query
         // with "lacks Read permission on 'login'" → empty model picker. Reserved partitions are filtered.
         var queries = AgentPickerProjection.BuildModelQueries(currentPath: "login", nodeTypePath: "welcome");
 
         queries.Should().ContainSingle("a reserved currentPath/nodeTypePath is skipped — only the platform catalog remains")
-            .Which.Should().Be("namespace:Admin/Provider nodeType:LanguageModel|ModelProvider scope:descendants");
+            .Which.Should().Be("namespace:Provider nodeType:LanguageModel|ModelProvider scope:descendants");
     }
 
     [Fact]
     public void BuildModelQueries_RealCurrentPath_IsIncluded()
     {
-        // A real (non-reserved) context partition still contributes its /Admin/Provider namespace.
+        // A real (non-reserved) context partition still contributes its /Provider namespace.
         var queries = AgentPickerProjection.BuildModelQueries(currentPath: "AgenticPension");
-        queries.Should().Contain("namespace:AgenticPension/Admin/Provider nodeType:LanguageModel|ModelProvider scope:descendants");
+        queries.Should().Contain("namespace:AgenticPension/Provider nodeType:LanguageModel|ModelProvider scope:descendants");
     }
 
     [Fact]
@@ -221,7 +221,7 @@ public class AgentPickerQueriesTest
         // differ across queries — every query must carry the same union filter.
         var queries = AgentPickerProjection.BuildModelQueries(
             currentPath: "ctx", nodeTypePath: "nt",
-            selectedProviderPaths: new[] { "acme/_Provider/Anthropic" });
+            selectedProviderPaths: new[] { "acme/Provider/Anthropic" });
 
         queries.Should().OnlyContain(q => q.Contains("nodeType:LanguageModel|ModelProvider"));
         queries.Should().HaveCount(4); // root + currentPath + nodeTypePath + 1 selection
@@ -231,7 +231,7 @@ public class AgentPickerQueriesTest
     public void BuildModelQueries_SkipsNullOrEmptySelectionEntries()
     {
         var queries = AgentPickerProjection.BuildModelQueries(
-            selectedProviderPaths: new[] { "acme/_Provider/Anthropic", "", null! });
+            selectedProviderPaths: new[] { "acme/Provider/Anthropic", "", null! });
         queries.Should().HaveCount(2); // root + the one non-empty selection
     }
 
@@ -243,7 +243,7 @@ public class AgentPickerQueriesTest
         // descendants query over it so they appear alongside the catalog.
         var queries = AgentPickerProjection.BuildModelQueries(userPath: "rbuergi");
 
-        queries.Should().Contain("namespace:Admin/Provider nodeType:LanguageModel|ModelProvider scope:descendants");
+        queries.Should().Contain("namespace:Provider nodeType:LanguageModel|ModelProvider scope:descendants");
         queries.Should().Contain($"namespace:{ModelProviderNodeType.UserNamespacePath("rbuergi")} nodeType:LanguageModel|ModelProvider scope:descendants");
         queries.Should().HaveCount(2); // root + user _Memex
     }

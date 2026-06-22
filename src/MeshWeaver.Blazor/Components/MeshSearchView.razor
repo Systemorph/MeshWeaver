@@ -61,7 +61,10 @@
         </div>
     }
 
-    <div class="mesh-search-results">
+    <div class="mesh-search-results" tabindex="0"
+         @onkeydown="OnResultsKeyDown"
+         @onkeydown:stopPropagation="true"
+         @onkeydown:preventDefault="ResultsPreventDefault">
         @if (IsNamespaceTreeMode)
         {
             @if (TreeHasSearchText)
@@ -243,37 +246,80 @@
         var cardControl = GetCardControl(node);
         var clickAddress = ViewModel?.ClickMessageAddress?.ToString();
         var drillArea = BoundDrillDownArea;
+        var isPicker = OnNodeSelected.HasDelegate;
         // Drill-down is only meaningful for browser navigation — when the card
         // selects (picker) or posts a click message, skip the secondary anchor.
         var showDrill = !string.IsNullOrEmpty(drillArea)
-            && !OnNodeSelected.HasDelegate
+            && !isPicker
             && string.IsNullOrEmpty(clickAddress);
+        // Trash affordance — manage surface only (never a picker selection) and only when the
+        // current user may delete this node (resolved via hub.CheckPermission(Permission.Delete)).
+        var showDelete = !isPicker && CanDelete(node.Path);
+        var isSelected = !isPicker
+            && !string.IsNullOrEmpty(_keyboardSelectedPath)
+            && string.Equals(node.Path, _keyboardSelectedPath, StringComparison.OrdinalIgnoreCase);
+        var wrapClass = isSelected
+            ? "mesh-search-card-wrap mesh-search-card-selected"
+            : "mesh-search-card-wrap";
 
-        if (OnNodeSelected.HasDelegate)
-        {
-            <div style="cursor: pointer;" @onclick="() => OnNodeSelected.InvokeAsync(node)">
+        <div class="@wrapClass">
+            @if (isPicker)
+            {
+                <div style="cursor: pointer;" @onclick="() => OnNodeSelected.InvokeAsync(node)">
+                    <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
+                </div>
+            }
+            else if (!string.IsNullOrEmpty(clickAddress))
+            {
+                <div style="cursor: pointer;" @onclick="() => PostClickMessage(node, clickAddress)">
+                    <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
+                </div>
+            }
+            else
+            {
                 <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
-            </div>
-        }
-        else if (!string.IsNullOrEmpty(clickAddress))
-        {
-            <div style="cursor: pointer;" @onclick="() => PostClickMessage(node, clickAddress)">
-                <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
-            </div>
-        }
-        else if (showDrill)
-        {
-            <div class="mesh-search-card-wrap">
-                <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
+            }
+
+            @if (showDrill)
+            {
                 <a class="mesh-search-drilldown" href="/@node.Path/@drillArea"
                    title="Drill down" @onclick:stopPropagation="true">
                     @DrillDownIcon
                 </a>
+            }
+            @if (showDelete)
+            {
+                @RenderDeleteAffordance(node)
+            }
+        </div>
+    };
+
+    /// <summary>
+    /// The delete affordance overlaid on the card's icon (top-left). First click arms a compact
+    /// inline confirm (check / dismiss); confirming routes through <see cref="ConfirmDelete"/>.
+    /// FluentUI icon buttons — no hand-rolled markup.
+    /// </summary>
+    private RenderFragment RenderDeleteAffordance(MeshNode node) => __builder =>
+    {
+        if (_pendingDeletePath == node.Path)
+        {
+            <div class="mesh-search-delete-confirm" @onclick:stopPropagation="true">
+                <button type="button" class="mesh-search-delete-yes" title="Confirm delete"
+                        @onclick="() => ConfirmDelete(node)" @onclick:stopPropagation="true">
+                    <FluentIcon Value="@(new Icons.Regular.Size16.Checkmark())" />
+                </button>
+                <button type="button" class="mesh-search-delete-no" title="Cancel"
+                        @onclick="CancelDelete" @onclick:stopPropagation="true">
+                    <FluentIcon Value="@(new Icons.Regular.Size16.Dismiss())" />
+                </button>
             </div>
         }
         else
         {
-            <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
+            <button type="button" class="mesh-search-delete" title="Delete"
+                    @onclick="() => RequestDelete(node)" @onclick:stopPropagation="true">
+                <FluentIcon Value="@(new Icons.Regular.Size16.Delete())" />
+            </button>
         }
     };
 

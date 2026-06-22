@@ -9,19 +9,22 @@ namespace MeshWeaver.AI;
 
 /// <summary>
 /// Mesh-node type for AI model provider credentials — companion to
-/// <see cref="LanguageModelNodeType"/>. One node per (user, provider) pair
-/// at <c>{userId}/Model/{providerName}</c>; LanguageModel nodes live as
-/// children under the provider's namespace.
+/// <see cref="LanguageModelNodeType"/>. Built-in/platform providers live at
+/// <c>Provider/{providerName}</c> (the top-level <c>Provider</c> catalog partition);
+/// a user's own providers live at <c>{userId}/_Memex/{providerName}</c>. LanguageModel
+/// nodes live as children under the provider's namespace.
 ///
 /// <para>Two surfaces feed this:</para>
 /// <list type="bullet">
 ///   <item><b>Static layer</b>: <see cref="BuiltInLanguageModelProvider"/>
 ///         emits one read-only <c>ModelProvider</c> per
 ///         <see cref="LanguageModelCatalogSource"/> at
-///         <c>Model/{providerName}</c>, stamped from the legacy
+///         <c>Provider/{providerName}</c>, stamped from the legacy
 ///         IConfiguration <c>{section}:ApiKey</c> / <c>{section}:Endpoint</c>
 ///         entries. Existing deployments that wire credentials via
-///         appsettings keep working unchanged.</item>
+///         appsettings keep working unchanged. On the DB-synced path this
+///         catalog is materialized into the <c>Provider</c> partition by
+///         <see cref="ModelStaticRepoSource"/> and served from the database.</item>
 ///   <item><b>User layer</b>: <c>ModelProviderService</c> creates
 ///         user-authored <c>ModelProvider</c> nodes in the user's partition
 ///         when they paste a key in the Models settings tab.</item>
@@ -29,9 +32,10 @@ namespace MeshWeaver.AI;
 ///
 /// <para>Owner-only by default — <see cref="CreateNodePermissionAttribute.GetPermissionForNodeType"/>
 /// maps <c>ModelProvider</c> to <see cref="MeshWeaver.Mesh.Security.Permission.Api"/>,
-/// the same permission that gates API tokens. The root <c>Model/</c>
-/// namespace ships with a read-only <c>_Policy</c> via the static provider,
-/// so user extensions must live in user namespaces.</para>
+/// the same permission that gates API tokens. The <c>Provider/</c> partition
+/// ships with a <c>_Policy</c> (PublicRead + lifted write caps) via the static
+/// provider, so platform admins can manage providers there while non-admins stay
+/// read-only.</para>
 /// </summary>
 public static class ModelProviderNodeType
 {
@@ -39,20 +43,20 @@ public static class ModelProviderNodeType
     public const string NodeType = "ModelProvider";
 
     /// <summary>
-    /// Namespace the PLATFORM model catalog lives under — the Admin partition's
-    /// <c>Admin/Provider</c> sub-namespace (schema <c>admin</c>). System default
-    /// providers live at <c>Admin/Provider/{providerName}</c>; organisation-shared
-    /// providers at <c>{orgPath}/Admin/Provider/{providerName}</c>. A user's OWN
-    /// providers live in their dotfile namespace instead —
-    /// <c>{userPath}/_Memex/{providerName}</c> (see <see cref="UserNamespace"/>).
-    /// The picker / resolver query each owning path's subtree directly — no
-    /// path-walk heuristics, no central registry.
+    /// Namespace the PLATFORM model catalog lives under — the top-level <c>Provider</c>
+    /// partition (a NodeType catalog, exactly like <c>Agent</c> / <c>Skill</c> / <c>Harness</c>;
+    /// see Doc/Architecture/NodeTypeCatalogs.md). System default providers live at
+    /// <c>Provider/{providerName}</c>; context/organisation-shared providers at
+    /// <c>{orgPath}/Provider/{providerName}</c>. A user's OWN providers live in their dotfile
+    /// namespace instead — <c>{userPath}/_Memex/{providerName}</c> (see <see cref="UserNamespace"/>).
+    /// The picker / resolver query each owning path's subtree directly — no path-walk heuristics,
+    /// no central registry.
     ///
     /// <para>NOT to be confused with the unrelated GitSync user-credential
     /// <c>{user}/_Provider</c> namespace — that is GitHub OAuth credentials, a
     /// different satellite owned by <c>MeshWeaver.GitSync</c>.</para>
     /// </summary>
-    public const string RootNamespace = "Admin/Provider";
+    public const string RootNamespace = "Provider";
 
     /// <summary>
     /// Per-user satellite namespace for the user's OWN providers, models, and
@@ -63,9 +67,9 @@ public static class ModelProviderNodeType
     /// <c>{userPath}/_Memex/{providerName}/{modelId}</c>; the user's selection at
     /// <c>{userPath}/_Memex/_Selection</c>.
     ///
-    /// <para>Distinct from <see cref="RootNamespace"/> (<c>Admin/Provider</c>), which
-    /// holds the SYSTEM catalog in the Admin partition and org/context-SHARED providers at
-    /// <c>{orgPath}/Admin/Provider/…</c>. A user's personal credentials are theirs,
+    /// <para>Distinct from <see cref="RootNamespace"/> (<c>Provider</c>), which
+    /// holds the SYSTEM catalog in the top-level Provider partition and org/context-SHARED
+    /// providers at <c>{orgPath}/Provider/…</c>. A user's personal credentials are theirs,
     /// so they belong in their dotfile namespace, not a shared satellite. The
     /// picker / resolver union BOTH namespaces (see the model queries) so a user
     /// sees the system catalog, any shared providers, and their own.</para>
@@ -113,26 +117,47 @@ public static class ModelProviderNodeType
         IReadOnlySet<string>? serveFromPartition = null)
         where TBuilder : MeshBuilder
     {
-        builder.AddMeshNodes(CreateMeshNode());
-        builder.AddMeshNodes(CreateSelectionMeshNode());
+        // The model catalog's provider/model CONTENT lives under the top-level "Provider" partition;
+        // it is DB-synced when the portal serves "Provider" (the legacy "Model" partition name is
+        // still honoured for backwards-compatible configs). When synced, skip the read-only in-memory
+        // provider so Postgres serves "Provider" + accepts the import's writes. See AddAgentType.
+        var dbSynced = serveFromPartition is not null
+            && (serveFromPartition.Contains("Model") || serveFromPartition.Contains(RootNamespace));
+
+        // On the DB-synced path the in-memory ModelProvider / ModelProviderSelection NodeType
+        // type-defs are registered DEFINITION-ONLY: they still supply the HubConfiguration delegate
+        // BY NAME (the catalog's instances enrich through it) and prove the type exists, but they are
+        // NOT served / persisted as the runtime node at their bare discriminator path
+        // (@ModelProvider / @ModelProviderSelection). Without IsDefinitionOnly the per-node-hub
+        // persistence sampler auto-writes the in-memory type-def, and the PG router routes that write
+        // by first path segment to a schema named after the lowercased discriminator
+        // (modelprovider / modelproviderselection) that is never provisioned → 42P01. The real catalog
+        // is owned by Postgres under the top-level Provider partition (the origin/built-in provider is
+        // only a sync SOURCE — imported to the DB on boot, then served from the DB). Mirrors
+        // HarnessNodeType.
+        // See Doc/Architecture/NodeTypeCatalogs.md.
+        var providerTypeDef = CreateMeshNode();
+        var selectionTypeDef = CreateSelectionMeshNode();
+        if (dbSynced)
+        {
+            providerTypeDef = providerTypeDef with { IsDefinitionOnly = true };
+            selectionTypeDef = selectionTypeDef with { IsDefinitionOnly = true };
+        }
+        builder.AddMeshNodes(providerTypeDef);
+        builder.AddMeshNodes(selectionTypeDef);
         builder.AddAutocompleteExcludedTypes(NodeType);
         builder.AddAutocompleteExcludedTypes(SelectionNodeType);
         builder.ConfigureHub(config => config
             .WithType<ModelProviderConfiguration>(nameof(ModelProviderConfiguration))
             .WithType<ModelProviderSelection>(nameof(ModelProviderSelection)));
-        // Mirror LanguageModelNodeType: the <c>Admin/Provider</c> namespace
+        // Mirror LanguageModelNodeType: the top-level <c>Provider</c> namespace
         // gets a partition-storage provider so the routing core knows where
         // to find static ModelProvider nodes (the ones BuiltInLanguageModelProvider
-        // emits from IConfiguration). Without this, namespace:Admin/Provider
+        // emits from IConfiguration). Without this, namespace:Provider
         // queries return nothing because no provider claims the partition.
-        // Context-partition ModelProvider nodes (rbuergi/Admin/Provider/Anthropic
+        // Context-partition ModelProvider nodes (rbuergi/Provider/Anthropic
         // etc.) route through their owning partition's storage adapter —
         // no extra wiring needed for those.
-        // The model catalog's provider/model CONTENT lives under the "Admin/Provider" namespace;
-        // it is DB-synced together with "Model". When synced, skip the read-only in-memory
-        // provider so Postgres serves "Admin/Provider" + accepts the import's writes. See AddAgentType.
-        var dbSynced = serveFromPartition is not null
-            && (serveFromPartition.Contains("Model") || serveFromPartition.Contains(RootNamespace));
         builder.ConfigureServices(services =>
         {
             services.TryAddSingleton<BuiltInLanguageModelProvider>();
@@ -167,7 +192,7 @@ public static class ModelProviderNodeType
         // CreateNodePermissionAttribute.GetPermissionForNodeType → Permission.Api.
         IsSatelliteType = false,
         // Creatable: an admin can author a ModelProvider node directly in a space
-        // (e.g. Systemorph/Admin/Provider/AzureFoundry). Still hidden from search.
+        // (e.g. Systemorph/Provider/AzureFoundry). Still hidden from search.
         ExcludeFromContext = new HashSet<string> { "search" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source

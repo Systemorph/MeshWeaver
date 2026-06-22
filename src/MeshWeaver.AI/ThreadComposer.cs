@@ -53,7 +53,7 @@ public record ThreadComposer
 
     /// <summary>Selected model node path (a <c>nodeType:LanguageModel</c> node).</summary>
     [Description("Model")]
-    [MeshNode("namespace:Admin/Provider nodeType:LanguageModel scope:descendants sort:order",
+    [MeshNode("namespace:Provider nodeType:LanguageModel scope:descendants sort:order",
         Layout = MeshNodePickerLayout.Thin, Open = MeshNodePickerOpenDirection.Up, DefaultToFirst = true)]
     public string? ModelName { get; init; }
 

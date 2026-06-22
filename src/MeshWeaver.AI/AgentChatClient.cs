@@ -1163,7 +1163,7 @@ public class AgentChatClient : IAgentChat
     {
         // Normalize at entry so satellite paths (e.g. "ACME/Project/_Thread/<slug>") collapse to
         // their main-node path before any downstream query/cache key uses them. The model may
-        // arrive as the picked node PATH ("_Provider/Anthropic/claude-…") — factories match the
+        // arrive as the picked node PATH ("Provider/Anthropic/claude-…") — factories match the
         // bare model id (last segment).
         contextPath = NormalizeContextPath(contextPath);
         currentModelName = SelectionId.IdOf(modelName);

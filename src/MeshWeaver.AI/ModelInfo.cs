@@ -11,7 +11,7 @@ public record ModelInfo
     public required string Name { get; init; }
 
     /// <summary>
-    /// The model MeshNode PATH (e.g. <c>_Provider/Anthropic/claude-…</c>). This is what a
+    /// The model MeshNode PATH (e.g. <c>Provider/Anthropic/claude-…</c>). This is what a
     /// selection persists onto the composer's <see cref="ThreadComposer.ModelName"/> — the
     /// node-picker identity, exactly like <c>AgentDisplayInfo.Path</c>. Null for a model that
     /// has no backing node (legacy factory entries — being eliminated).

@@ -59,7 +59,7 @@ public sealed class ModelDiscoveryService
     /// <summary>
     /// (a) Live snapshot of every <c>LanguageModel</c> + <c>ModelProvider</c>
     /// node declared directly under <paramref name="nodePath"/>'s
-    /// <c>_Provider</c> satellite subtree. Empty for nodes that haven't
+    /// <c>Provider</c> satellite subtree. Empty for nodes that haven't
     /// configured any provider.
     /// </summary>
     public IObservable<IReadOnlyList<MeshNode>> GetModelsAtNode(string nodePath)
@@ -128,8 +128,8 @@ public sealed class ModelDiscoveryService
     private static IEnumerable<string> EnumerateAncestors(string path)
     {
         // Yield the path itself, then every parent up to the root, then
-        // the root namespace sentinel "" (so static catalog at
-        // namespace=_Provider is always included).
+        // the root namespace sentinel "" (so the static catalog at
+        // namespace=Provider is always included).
         if (!string.IsNullOrEmpty(path))
         {
             yield return path;

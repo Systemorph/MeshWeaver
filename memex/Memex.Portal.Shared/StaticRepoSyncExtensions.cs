@@ -39,7 +39,9 @@ public static class StaticRepoSyncExtensions
                 services.AddSingleton<IStaticRepoSource, DocumentationStaticRepoSource>();
             if (serveFromPartition.Contains("Agent"))
                 services.AddSingleton<IStaticRepoSource, AgentStaticRepoSource>();
-            if (serveFromPartition.Contains("Model"))
+            // The model catalog (providers + models + policy) imports into the top-level "Provider"
+            // partition. Honour the legacy "Model" partition name too for backwards-compatible configs.
+            if (serveFromPartition.Contains("Provider") || serveFromPartition.Contains("Model"))
                 services.AddSingleton<IStaticRepoSource, ModelStaticRepoSource>();
             if (serveFromPartition.Contains("Harness"))
                 services.AddSingleton<IStaticRepoSource, HarnessStaticRepoSource>();

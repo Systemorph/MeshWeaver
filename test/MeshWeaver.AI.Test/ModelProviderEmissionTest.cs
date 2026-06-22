@@ -73,7 +73,7 @@ public class ModelProviderEmissionTest
         {
             var def = node.Content.Should().BeOfType<ModelDefinition>().Subject;
             def.Provider.Should().Be("Anthropic");
-            def.ProviderRef.Should().Be("Admin/Provider/Anthropic");
+            def.ProviderRef.Should().Be("Provider/Anthropic");
             def.ApiKeySecretRef.Should().BeNull("LanguageModel nodes are publicly readable â€” no secrets here");
         });
     }

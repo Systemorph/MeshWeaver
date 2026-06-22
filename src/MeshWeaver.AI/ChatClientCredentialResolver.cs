@@ -42,7 +42,7 @@ public record CredentialResolution(string? Endpoint, string? ApiKey, string Sour
 ///         and <c>ModelProviderService</c> stamp the reference when they
 ///         create the LanguageModel node.</item>
 ///   <item><b>Conventional fallback</b> at
-///         <c>Model/{ModelDefinition.Provider}</c> — covers legacy catalog
+///         <c>Provider/{ModelDefinition.Provider}</c> — covers legacy catalog
 ///         entries that didn't stamp <see cref="ModelDefinition.ProviderRef"/>.</item>
 ///   <item><b>Legacy ModelDefinition fields</b>
 ///         (<see cref="ModelDefinition.ApiKeySecretRef"/> /
@@ -54,7 +54,8 @@ public record CredentialResolution(string? Endpoint, string? ApiKey, string Sour
 ///
 /// <para>User-partition ModelProvider visibility: callers (notably
 /// <c>AgentChatClient</c>) invoke <see cref="WatchPartition"/> to widen the
-/// live query with <c>{userPartition}/_Provider/...</c> nodes. Without this
+/// live query with <c>{userPartition}/_Memex/...</c> + <c>{userPartition}/Provider/...</c>
+/// nodes. Without this
 /// only the root catalog is visible — sufficient for system-default
 /// deployments but blind to per-user BYO keys. Calls are idempotent per
 /// partition; they record which subtrees the next <see cref="Resolve"/>
@@ -168,7 +169,7 @@ public sealed class ChatClientCredentialResolver : IDisposable
             return new CredentialResolution(byRef!.Endpoint, Decrypt(byRef.ApiKey), $"providerRef:{def.ProviderRef}");
         }
 
-        // 2. Conventional fallback: Model/{Provider} in the root namespace.
+        // 2. Conventional fallback: Provider/{Provider} in the catalog namespace.
         if (!string.IsNullOrEmpty(def.Provider))
         {
             var conventional = $"{ModelProviderNodeType.RootNamespace}/{def.Provider}";
@@ -320,9 +321,9 @@ public sealed class ChatClientCredentialResolver : IDisposable
         };
         // Each watched partition is a USER partition (WatchPartition is called
         // with the resolving user's id). A user's own providers/models live in
-        // their dotfile namespace ({user}/_Memex/…); union the legacy _Provider
-        // subtree too so pre-existing data still resolves (many queries are fine
-        // — the synced collection unions them).
+        // their dotfile namespace ({user}/_Memex/…); union the context-partition
+        // {p}/Provider subtree too so org/space-shared providers still resolve
+        // (many queries are fine — the synced collection unions them).
         foreach (var p in partitions)
         {
             queries.Add($"namespace:{ModelProviderNodeType.UserNamespacePath(p)} nodeType:{typeFilter} scope:descendants");

@@ -89,11 +89,13 @@ data:
   # ---- Onboarding: invitation-only gate (first user always bootstraps) ------
   Features__Onboarding__InvitationOnly: "{{ .Values.config.memex_portal.Features__Onboarding__InvitationOnly | default "false" }}"
   # ---- Static-repo → DB sync: which partitions are materialized into + served from the DB
-  # (instead of the in-memory static provider). Default = Doc, Agent, Model. Override per-env by
-  # setting these keys (empty string disables a slot). See Doc/Architecture/StaticRepoImport.md.
+  # (instead of the in-memory static provider). Default = Doc, Agent, Provider, Harness, Skill.
+  # (The model catalog — providers + models + policy — imports into the top-level "Provider"
+  # partition; "Model" is kept as a legacy alias slot for backwards-compatible configs.) Override
+  # per-env by setting these keys (empty string disables a slot). See Doc/Architecture/StaticRepoImport.md.
   Features__StaticRepoSync__Partitions__0: "{{ .Values.config.memex_portal.Features__StaticRepoSync__Partitions__0 | default "Doc" }}"
   Features__StaticRepoSync__Partitions__1: "{{ .Values.config.memex_portal.Features__StaticRepoSync__Partitions__1 | default "Agent" }}"
-  Features__StaticRepoSync__Partitions__2: "{{ .Values.config.memex_portal.Features__StaticRepoSync__Partitions__2 | default "Model" }}"
+  Features__StaticRepoSync__Partitions__2: "{{ .Values.config.memex_portal.Features__StaticRepoSync__Partitions__2 | default "Provider" }}"
   Features__StaticRepoSync__Partitions__3: "{{ .Values.config.memex_portal.Features__StaticRepoSync__Partitions__3 | default "Harness" }}"
   Features__StaticRepoSync__Partitions__4: "{{ .Values.config.memex_portal.Features__StaticRepoSync__Partitions__4 | default "Skill" }}"
   # ---- System email (Microsoft Graph) — BIDIRECTIONAL. Outbound invitations + notifications

@@ -145,7 +145,7 @@ public static class AgentPickerProjection
 
     /// <summary>
     /// The signed-in user's HOME partition — the partition whose <c>{user}/Skill</c> (and
-    /// <c>{user}/Agent</c>, <c>{user}/_Provider</c>) namespaces the registry surfaces. Resolved from the
+    /// <c>{user}/Agent</c>, <c>{user}/_Memex</c>) namespaces the registry surfaces. Resolved from the
     /// hub/circuit identity, preferring the durable <see cref="AccessService.CircuitContext"/> then the
     /// per-request <see cref="AccessService.Context"/>; a leaked <c>system-security</c> or hub-shaped
     /// principal (<c>sync/</c>, <c>mesh/</c>, …) is filtered out — never a real user partition. Returns
@@ -269,7 +269,7 @@ public static class AgentPickerProjection
 
     /// <summary>
     /// 🚨 The EXACT pipeline the chat model combobox is bound to. The view subscribes to this; tests
-    /// subscribe to this. Models stay on the <c>_Provider</c> catalog shape (providers contain models
+    /// subscribe to this. Models stay on the <c>Provider</c> catalog shape (providers contain models
     /// + credentials) — the per-partition <c>/Model</c> registry is the next increment.
     /// </summary>
     public static IObservable<IReadOnlyList<ModelInfo>> ObserveModels(
@@ -330,10 +330,10 @@ public static class AgentPickerProjection
     }
 
     /// <summary>
-    /// The model picker queries: the system <c>Admin/Provider</c> catalog plus per-context / per-NodeType /
+    /// The model picker queries: the system <c>Provider</c> catalog plus per-context / per-NodeType /
     /// per-user subtrees and any user-selected provider subtree — all <c>nodeType:LanguageModel|ModelProvider</c>,
     /// varying only namespace + scope (the synced-collection all-Initial gating constraint). The
-    /// per-partition flat <c>/Model</c> registry is the next increment; credentials live in <c>Admin/Provider</c>.
+    /// per-partition flat <c>/Model</c> registry is the next increment; credentials live in <c>Provider</c>.
     /// </summary>
     public static string[] BuildModelQueries(
         string? currentPath = null,
@@ -347,7 +347,7 @@ public static class AgentPickerProjection
             $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants",
         };
         // Skip reserved/rogue ROUTE partitions (login, welcome, settings, …): a reserved currentPath/
-        // nodeTypePath would make namespace:{login}/Admin/Provider read the policy-less reserved partition and
+        // nodeTypePath would make namespace:{login}/Provider read the policy-less reserved partition and
         // fail the WHOLE model query with "lacks Read permission on 'login'" — the picker goes empty.
         // Mirrors BuildRegistryQuery's filter (the agent/skill queries already skip these).
         if (!string.IsNullOrEmpty(currentPath) && !IsReservedPartition(currentPath))

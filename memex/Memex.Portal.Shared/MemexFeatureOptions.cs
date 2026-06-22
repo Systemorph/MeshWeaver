@@ -54,15 +54,16 @@ public sealed record MemexFeatureOptions
 ///
 /// <para>Empty (default) = no sync: every partition keeps the in-memory static provider, no DB
 /// import — i.e. current behaviour, no regression. The default Helm deployment sets
-/// <c>["Doc","Agent","Model"]</c>. Gated, not global — the monolith (no Postgres) leaves this
-/// empty and keeps in-memory serving.</para>
+/// <c>["Doc","Agent","Provider","Harness","Skill"]</c>. Gated, not global — the monolith (no
+/// Postgres) leaves this empty and keeps in-memory serving.</para>
 /// </summary>
 public sealed record StaticRepoSyncFeatureOptions
 {
     /// <summary>
     /// Partition names to materialize into + serve from the DB (e.g. <c>"Doc"</c>, <c>"Agent"</c>,
-    /// <c>"Model"</c>). Matching is case-insensitive. <c>"Model"</c> also covers the model
-    /// catalog's <c>_Provider</c> content partition. Empty = no sync.
+    /// <c>"Provider"</c>). Matching is case-insensitive. <c>"Provider"</c> is the model catalog
+    /// (providers + models + policy); the legacy <c>"Model"</c> name is still honoured as an alias.
+    /// Empty = no sync.
     /// </summary>
     public string[] Partitions { get; init; } = [];
 

@@ -97,7 +97,7 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                     : source.EffectiveModelIds.Where(m => !string.IsNullOrWhiteSpace(m)))
                 .ToImmutableArray();
 
-            // Always emit ONE ModelProvider node per source at Admin/Provider/{ProviderName},
+            // Always emit ONE ModelProvider node per source at Provider/{ProviderName},
             // marked ExcludeThisAndChildren so the static importer CREATES it on first boot and
             // NEVER overwrites it again — admin edits to endpoint/key/models survive redeploys
             // (create-if-absent). This node is the source of truth for driver config: the factory
@@ -125,7 +125,7 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
             });
 
             // Emit a public, key-less LanguageModel child per model id at
-            // Admin/Provider/{ProviderName}/{modelId}. No credential gate — the child carries
+            // Provider/{ProviderName}/{modelId}. No credential gate — the child carries
             // NO ApiKey (it's read-only/public) and the ExcludeThisAndChildren parent protects
             // the whole subtree from overwrite AND prune. Children keep default SyncBehavior.
             foreach (var modelId in models)
@@ -156,8 +156,8 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                 };
 
                 // Static LanguageModel nodes live UNDER their provider's satellite path:
-                // Admin/Provider/{providerName}/{modelId}. Matches the context-partition layout
-                // ({contextPath}/Admin/Provider/{providerName}/{modelId}) so the picker can use ONE
+                // Provider/{providerName}/{modelId}. Matches the context-partition layout
+                // ({contextPath}/Provider/{providerName}/{modelId}) so the picker can use ONE
                 // namespace per query path — the documented shape for synced-collection multi-query
                 // (varying scope/path, same nodeType filter).
                 var modelNamespace = $"{ModelProviderNodeType.RootNamespace}/{source.ProviderName}";
@@ -180,16 +180,18 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
             Content = new PartitionAccessPolicy
             {
                 // 🚨 PublicRead grants every user READ of the catalog (the /model picker queries
-                // `namespace:Admin/Provider nodeType:LanguageModel` UNDER the user's identity;
+                // `namespace:Provider nodeType:LanguageModel` UNDER the user's identity;
                 // without PublicRead RLS filters out every model → empty picker). Read-only is
                 // safe: the LanguageModel children carry NO ApiKey (gated separately on
                 // ModelProvider via Permission.Api).
                 //
-                // Create/Update/Delete = true LIFT the partition cap so global admins (who hold
-                // Permission.All on the Admin partition) can WRITE provider nodes here. These flags
-                // are pure CEILINGS — they do NOT grant non-admins write: a non-admin has no
-                // underlying write grant on the Admin partition, so they stay read-only. This is
-                // what makes the providers admin-editable with no permission-code change.
+                // Create/Update/Delete = true LIFT the partition cap so platform admins can WRITE
+                // provider nodes here (managing the shared catalog — endpoints, keys, enabled
+                // models). These flags are pure CEILINGS — they do NOT grant non-admins write: a
+                // non-admin holds no write role anywhere in the Provider scope hierarchy, so they
+                // stay read-only. Platform admins get standing write via the Provider/_Access Admin
+                // grant seeded by GlobalAdminSeed (the Provider catalog is top-level, so the Admin-
+                // partition grant no longer covers it the way Admin/Provider once did).
                 PublicRead = true,
                 Create = true,
                 Update = true,

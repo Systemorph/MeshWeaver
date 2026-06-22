@@ -28,7 +28,7 @@ namespace MeshWeaver.AI.Test;
 ///
 /// <para>Configures one Anthropic catalog source so
 /// <see cref="BuiltInLanguageModelProvider"/> emits both LanguageModel
-/// (<c>Model/&lt;id&gt;</c>) and ModelProvider (<c>Admin/Provider/Anthropic</c>)
+/// (<c>Provider/Anthropic/&lt;id&gt;</c>) and ModelProvider (<c>Provider/Anthropic</c>)
 /// static nodes.</para>
 /// </summary>
 public class ModelNodeRepoRegistrationTest : AITestBase
@@ -70,15 +70,15 @@ public class ModelNodeRepoRegistrationTest : AITestBase
     [Fact]
     public async Task StaticLanguageModel_AccessibleViaGetMeshNodeStream()
     {
-        var node = await Workspace.GetMeshNodeStream("Admin/Provider/Anthropic/claude-opus-4-7")
+        var node = await Workspace.GetMeshNodeStream("Provider/Anthropic/claude-opus-4-7")
             .Should().Within(10.Seconds()).Match(n => n?.Content is ModelDefinition);
 
-        node.Should().NotBeNull("BuiltInLanguageModelProvider emits a LanguageModel child under Admin/Provider/{name}/{modelId}");
+        node.Should().NotBeNull("BuiltInLanguageModelProvider emits a LanguageModel child under Provider/{name}/{modelId}");
         node.NodeType.Should().Be(LanguageModelNodeType.NodeType);
         var def = node.Content.Should().BeOfType<ModelDefinition>().Subject;
         def.Id.Should().Be("claude-opus-4-7");
         def.Provider.Should().Be("Anthropic");
-        def.ProviderRef.Should().Be("Admin/Provider/Anthropic",
+        def.ProviderRef.Should().Be("Provider/Anthropic",
             "ProviderRef points at the parent ModelProvider so the resolver can chase the credential");
     }
 
@@ -86,12 +86,12 @@ public class ModelNodeRepoRegistrationTest : AITestBase
     public async Task StaticModelProvider_AccessibleViaGetMeshNodeStream()
     {
         // This is the registration the test in this file primarily proves
-        // is wired correctly: routing to the Admin/Provider partition resolves
+        // is wired correctly: routing to the Provider partition resolves
         // to the static node provider, NOT to a missing-partition error.
-        var node = await Workspace.GetMeshNodeStream("Admin/Provider/Anthropic")
+        var node = await Workspace.GetMeshNodeStream("Provider/Anthropic")
             .Should().Within(10.Seconds()).Match(n => n?.Content is ModelProviderConfiguration);
 
-        node.Should().NotBeNull("ModelProvider partition storage provider must serve namespace:Admin/Provider reads");
+        node.Should().NotBeNull("ModelProvider partition storage provider must serve namespace:Provider reads");
         node.NodeType.Should().Be(ModelProviderNodeType.NodeType);
         var cfg = node.Content.Should().BeOfType<ModelProviderConfiguration>().Subject;
         cfg.Provider.Should().Be("Anthropic");
@@ -106,7 +106,7 @@ public class ModelNodeRepoRegistrationTest : AITestBase
                 $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{ModelProviderNodeType.NodeType}")
             .Should().Within(10.Seconds()).Match(s => s.Any());
 
-        snapshot.Should().Contain(n => n.Path == "Admin/Provider/Anthropic"
+        snapshot.Should().Contain(n => n.Path == "Provider/Anthropic"
             && n.NodeType == ModelProviderNodeType.NodeType,
             "the synced query routes through every IMeshQueryProvider â€” static nodes must surface");
     }
@@ -118,7 +118,7 @@ public class ModelNodeRepoRegistrationTest : AITestBase
                 new MeshQueryRequest { Query = $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{ModelProviderNodeType.NodeType} scope:descendants" })
             .Should().Within(15.Seconds()).Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
-        results.Should().Contain(n => n.Path == "Admin/Provider/Anthropic");
+        results.Should().Contain(n => n.Path == "Provider/Anthropic");
     }
 
     [Fact]
@@ -130,7 +130,7 @@ public class ModelNodeRepoRegistrationTest : AITestBase
             .Should().Within(10.Seconds()).Match(s => s.Any(n => n.NodeType == LanguageModelNodeType.NodeType)
                      && s.Any(n => n.NodeType == ModelProviderNodeType.NodeType));
 
-        snapshot.Should().Contain(n => n.Path == "Admin/Provider/Anthropic/claude-opus-4-7");
-        snapshot.Should().Contain(n => n.Path == "Admin/Provider/Anthropic");
+        snapshot.Should().Contain(n => n.Path == "Provider/Anthropic/claude-opus-4-7");
+        snapshot.Should().Contain(n => n.Path == "Provider/Anthropic");
     }
 }

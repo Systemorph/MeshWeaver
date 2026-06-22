@@ -474,7 +474,7 @@ public static class MemexConfiguration
             // Static-repo → DB sync: partitions to materialize into + serve from the DB. For a
             // synced partition the read-only in-memory static provider is skipped (PG serves it)
             // and the import runs on boot. Empty (default) = in-memory serving everywhere, no
-            // import — no regression. Default Helm sets ["Doc","Agent","Model"].
+            // import — no regression. Default Helm sets ["Doc","Agent","Provider","Harness","Skill"].
             var syncPartitions = features.StaticRepoSync.Partitions
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             IReadOnlySet<string> serveFromPartition = syncPartitions;

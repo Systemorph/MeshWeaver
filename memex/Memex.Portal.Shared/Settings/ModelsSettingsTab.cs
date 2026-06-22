@@ -34,7 +34,7 @@ namespace Memex.Portal.Shared.Settings;
 /// their dotfile namespace (<c>{owner}/_Memex</c>), and once — gated on
 /// <c>hub.IsGlobalAdmin()</c> via <see cref="AdminMenuGate.IsPlatformAdmin"/> — for the
 /// shared PLATFORM catalog at <see cref="ModelProviderNodeType.RootNamespace"/>
-/// (<c>Admin/Provider</c>). It is the IDENTICAL add-provider card + configured-providers
+/// (<c>Provider</c>). It is the IDENTICAL add-provider card + configured-providers
 /// list — the only difference is the namespace prefix the writes target. The platform
 /// section's writes are stamped <see cref="SyncBehavior.ExcludeThisAndChildren"/> so the
 /// boot seeder (<see cref="BuiltInLanguageModelProvider"/>) create-if-absent seeds the
@@ -108,7 +108,7 @@ public static class ModelsSettingsTab
             host, UserScope, ownerPath, ModelProviderNodeType.UserNamespacePath(ownerPath),
             isPlatform: false, apiSources, cliSources, byName, providerService, sessionManager, userId));
 
-        // ── Platform providers (Admin/Provider) — global admins only ──────────
+        // ── Platform providers (Provider) — global admins only ──────────
         // Reuses the SAME section UI, targeted at the Admin partition's shared catalog.
         // Reactively gated on the viewer's Admin-scope grant (see AdminMenuGate): renders
         // empty until the positive grant surfaces, never for a non-admin.
@@ -130,9 +130,9 @@ public static class ModelsSettingsTab
 
     // ════════════════════════════════════════════════════════════════════════
     //  One provider section — rendered for the owner ({owner}/_Memex) AND, when
-    //  the viewer is a global admin, for the platform catalog (Admin/Provider).
+    //  the viewer is a global admin, for the platform catalog (Provider).
     //  IDENTICAL controls; the platform variant only targets a different namespace
-    //  (writes go to Admin/Provider, stamped sync-excluded) and omits the per-user
+    //  (writes go to Provider, stamped sync-excluded) and omits the per-user
     //  CLI-connect + active-models picker (personal choices, not platform config).
     // ════════════════════════════════════════════════════════════════════════
 

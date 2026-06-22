@@ -29,11 +29,11 @@ public class SkillNodeTypeTest
 
         var skills = nodes.Where(n => n.NodeType == SkillNodeType.NodeType).ToList();
         skills.Should().OnlyContain(n => n.Namespace == SkillNodeType.RootNamespace);
-        skills.Select(n => n.Id).OrderBy(x => x).Should().Equal("agent", "code", "create-space", "harness", "model");
+        skills.Select(n => n.Id).OrderBy(x => x).Should().Equal("agent", "code", "create-space", "harness", "maui", "model");
 
         var def = (SkillDefinition)skills.Single(n => n.Id == "model").Content!;
         def.Action!.Kind.Should().Be(SkillActionKind.Pick);
-        def.Action.Query.Should().Be("namespace:Admin/Provider nodeType:LanguageModel scope:descendants sort:order");
+        def.Action.Query.Should().Be("namespace:Provider nodeType:LanguageModel scope:descendants sort:order");
         def.Action.Field.Should().Be("modelName");
         def.Action.Title.Should().Be("Choose a model");
     }
@@ -42,7 +42,7 @@ public class SkillNodeTypeTest
     public void ProjectSkills_DedupesById_NearerContextOverridesGlobal()
     {
         // Global /model then a Space-defined /model — the later (nearer-in-query-order) wins by id.
-        var global = SkillNode("model", "global", "namespace:Admin/Provider nodeType:LanguageModel", "modelName", "Choose a model");
+        var global = SkillNode("model", "global", "namespace:Provider nodeType:LanguageModel", "modelName", "Choose a model");
         var spaceOverride = SkillNode("model", "space", "namespace:Acme/Models nodeType:LanguageModel", "modelName", "Acme models");
 
         var projected = SkillNodeType.ProjectSkills(new[] { global, spaceOverride }, Json);
