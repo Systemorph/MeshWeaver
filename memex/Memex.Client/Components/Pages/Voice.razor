@@ -34,7 +34,8 @@
 <div class="mb-3">
     <label class="form-label">Language</label>
     <select class="form-select" style="max-width: 24rem" @bind="_language" disabled="@_busy">
-        <option value="auto-de-en">Auto — German · English (Swiss German → German)</option>
+        <option value="auto-de-en-first">Auto — German/Swiss German/English first, then any</option>
+        <option value="auto-de-en">German · English only (Swiss German → German)</option>
         <option value="de">German / Swiss German → Standard German</option>
         <option value="en">English</option>
         <option value="auto">Auto — any language</option>
@@ -75,7 +76,7 @@ else
 }
 
 @code {
-    private string _language = "auto-de-en";
+    private string _language = "auto-de-en-first";
     private bool _busy;
     private string? _status;
     private IReadOnlyList<TranscriptSegment>? _segments;

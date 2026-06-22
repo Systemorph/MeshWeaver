@@ -7,10 +7,11 @@ namespace Memex.Client.Voice;
 public interface ISpeechTranscriber : IAsyncDisposable
 {
     /// <param name="language">A Whisper code ("de", "en", ...), <c>"auto"</c> (detect over all
-    /// languages), or <c>"auto-de-en"</c> — detect restricted to German/English so any Swiss German
-    /// dialect (incl. Bernese) reliably routes to German rather than a look-alike like Dutch.</param>
+    /// languages), <c>"auto-de-en"</c> (detect restricted to German/English — Swiss German → German),
+    /// or <c>"auto-de-en-first"</c> — PREFER German/Swiss German/English, but fall back to full
+    /// auto-detect for any other language (the default for a Swiss user who also speaks others).</param>
     IAsyncEnumerable<TranscriptSegment> TranscribeAsync(
-        float[] samples16kMono, string language = "auto", CancellationToken ct = default);
+        float[] samples16kMono, string language = "auto-de-en-first", CancellationToken ct = default);
 }
 
 /// <summary>
@@ -22,15 +23,28 @@ public sealed class WhisperTranscriber : ISpeechTranscriber
     /// <summary>Sentinel for "detect among German and English only" — Swiss German → German.</summary>
     public const string AutoGermanEnglish = "auto-de-en";
 
+    /// <summary>Sentinel for "prefer German/Swiss German/English, else full auto-detect".</summary>
+    public const string AutoPreferGermanEnglish = "auto-de-en-first";
+
+    /// <summary>How confidently the audio must read as German/English to pin it before falling back to
+    /// full auto-detect. Swiss German still reads as German well above this; a French/Italian sample
+    /// reads de/en low, so it falls through to auto.</summary>
+    private const float PreferThreshold = 0.5f;
+
     private readonly WhisperFactory _factory;
 
     public WhisperTranscriber(string modelPath) => _factory = WhisperFactory.FromPath(modelPath);
 
     public async IAsyncEnumerable<TranscriptSegment> TranscribeAsync(
-        float[] samples16kMono, string language = "auto",
+        float[] samples16kMono, string language = AutoPreferGermanEnglish,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var resolved = language == AutoGermanEnglish ? DetectGermanOrEnglish(samples16kMono) : language;
+        var resolved = language switch
+        {
+            AutoGermanEnglish => DetectGermanOrEnglish(samples16kMono),
+            AutoPreferGermanEnglish => DetectPreferGermanEnglish(samples16kMono),
+            _ => language,
+        };
 
         await using var processor = _factory.CreateBuilder()
             .WithLanguage(resolved)
@@ -50,6 +64,19 @@ public sealed class WhisperTranscriber : ISpeechTranscriber
         using var processor = _factory.CreateBuilder().WithLanguage("auto").Build();
         var (language, _) = processor.DetectLanguageWithProbability(samples, ["de", "en"]);
         return string.IsNullOrEmpty(language) ? "de" : language;
+    }
+
+    /// <summary>
+    /// PREFER German/Swiss German/English, then fall back to any language. Detects among de/en first
+    /// (Swiss German → de); if the audio confidently reads as one of them (≥ <see cref="PreferThreshold"/>)
+    /// it's pinned, otherwise it returns "auto" so Whisper detects the actual language (French, Italian,
+    /// any) during processing. Gives a Swiss user de/swiss-de/en by default without losing other tongues.
+    /// </summary>
+    private string DetectPreferGermanEnglish(float[] samples)
+    {
+        using var processor = _factory.CreateBuilder().WithLanguage("auto").Build();
+        var (preferred, probability) = processor.DetectLanguageWithProbability(samples, ["de", "en"]);
+        return !string.IsNullOrEmpty(preferred) && probability >= PreferThreshold ? preferred : "auto";
     }
 
     public ValueTask DisposeAsync()
