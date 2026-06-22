@@ -151,6 +151,7 @@
     <Project Path="test/MeshWeaver.Hosting.Cosmos.Test/MeshWeaver.Hosting.Cosmos.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.PostgreSql.Test/MeshWeaver.Hosting.PostgreSql.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Sqlite.Test/MeshWeaver.Hosting.Sqlite.Test.csproj" />
+    <Project Path="test/MeshWeaver.Connection.SignalR.Test/MeshWeaver.Connection.SignalR.Test.csproj" />
     <Project Path="test/MeshWeaver.Auth.Test/MeshWeaver.Auth.Test.csproj" />
     <Project Path="test/MeshWeaver.FutuRe.Test/MeshWeaver.FutuRe.Test.csproj" />
     <Project Path="test/MeshWeaver.PensionFund.Test/MeshWeaver.PensionFund.Test.csproj" />
