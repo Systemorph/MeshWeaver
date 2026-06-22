@@ -5,6 +5,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -86,6 +87,12 @@ public sealed class ChatClientCredentialResolver : IDisposable
     // subscription warms once, uninterrupted, and every later emission refreshes the cache.
     private volatile IReadOnlyList<MeshNode> cachedSnapshot = Array.Empty<MeshNode>();
     private IDisposable? snapshotSubscription;
+
+    // Single-flight guard for the on-miss authoritative read-through (TriggerAuthoritativeRefresh).
+    // A caller's poll loop (e.g. the chat factory retrying Resolve) can hit a miss many times per
+    // second; this ensures at most ONE source-of-truth re-read is in flight, so a miss can never storm
+    // the mesh with re-reads (the 2026-06-08-class failure mode we explicitly avoid).
+    private volatile bool refreshInFlight;
 
     public ChatClientCredentialResolver(IMessageHub hub)
     {
@@ -180,10 +187,46 @@ public sealed class ChatClientCredentialResolver : IDisposable
         if (string.IsNullOrEmpty(modelId)) return CredentialResolution.Missing;
 
         var snapshot = ReadSnapshot();
-        var def = FindModelDefinition(snapshot, modelId);
-        if (def == null)
-            return CredentialResolution.Missing;
 
+        // There can be MORE THAN ONE LanguageModel with the same id: a keyless ROOT catalog entry
+        // (registered from config via AgentPickerProjection/AddLanguageModelCatalogSource) AND the
+        // user's OWN provider node that carries the real key. Returning the FIRST match arbitrarily
+        // lets the keyless catalog entry SHADOW the user's keyed one — Resolve hands back a null ApiKey
+        // and the caller never gets a usable credential. Which duplicate sorts first in the merged
+        // snapshot is nondeterministic, hence the ProviderKeyEncryptionTest "~50%" flake. Walk EVERY
+        // candidate and prefer the one that actually yields a key.
+        var candidates = FindModelDefinitions(snapshot, modelId);
+        if (candidates.Count == 0)
+        {
+            // Not in the warm snapshot at all — consult the source of truth once (single-flight) so a
+            // subsequent Resolve sees it. CQRS cache-miss read-through, NOT a blind poll/timer.
+            TriggerAuthoritativeRefresh();
+            return CredentialResolution.Missing;
+        }
+
+        CredentialResolution? keyless = null;
+        foreach (var def in candidates)
+        {
+            var r = TryResolveForDefinition(snapshot, def);
+            if (r is null) continue;
+            if (!string.IsNullOrEmpty(r.ApiKey))
+                return r;          // a candidate that yields a real key always wins over a keyless one
+            keyless ??= r;         // remember an endpoint-only / keyless resolution as a last resort
+        }
+
+        // No candidate produced a key. The keyed (user) model may simply not be in the warm snapshot
+        // yet — read the source of truth once so a later Resolve picks it up (single-flight).
+        TriggerAuthoritativeRefresh();
+        return keyless ?? CredentialResolution.Missing;
+    }
+
+    /// <summary>
+    /// Walks the credential precedence chain (ProviderRef → conventional Provider/{name} → legacy
+    /// model-node fields) for ONE model definition. Returns <c>null</c> when this definition yields no
+    /// credential at all (so <see cref="Resolve"/> can try the next same-id candidate).
+    /// </summary>
+    private CredentialResolution? TryResolveForDefinition(IReadOnlyList<MeshNode> snapshot, ModelDefinition def)
+    {
         // 1. Explicit ProviderRef — the normal path.
         if (!string.IsNullOrEmpty(def.ProviderRef)
             && TryGetProvider(snapshot, def.ProviderRef, out var byRef)
@@ -211,7 +254,7 @@ public sealed class ChatClientCredentialResolver : IDisposable
             return new CredentialResolution(def.Endpoint, Decrypt(def.ApiKeySecretRef), "model-node");
         }
 
-        return CredentialResolution.Missing;
+        return null;
     }
 
     /// <summary>
@@ -391,6 +434,67 @@ public sealed class ChatClientCredentialResolver : IDisposable
         old?.Dispose();
     }
 
+    /// <summary>
+    /// One-shot authoritative re-read of the watched union on a Resolve MISS. Unlike the persistent
+    /// <see cref="RebuildSubscription"/> (which reads the RefCount-cached <c>GetQuery</c> — re-subscribing
+    /// to the SAME id replays the same stale snapshot, and a one-shot grab of it cancels its own
+    /// warm-up), this issues a fresh <see cref="IMeshService.Query{T}"/> — the raw live query that
+    /// re-executes against the store right now — and merges its current snapshot into
+    /// <see cref="cachedSnapshot"/>. By the time a miss happens the model's index/partition lag has
+    /// typically resolved, so this fresh read surfaces it; if it is still lagging, the next miss tries
+    /// again (single-flight, never concurrently). Read under SYSTEM (the per-user gate is enforced at
+    /// hand-out in <see cref="IsAllowedSharedAccess"/>).
+    /// </summary>
+    private void TriggerAuthoritativeRefresh()
+    {
+        if (disposed || refreshInFlight) return;
+        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService is null) return;
+        refreshInFlight = true;
+
+        ImmutableHashSet<string> partitions;
+        ImmutableHashSet<string> shared;
+        lock (gate)
+        {
+            partitions = watchedPartitions;
+            shared = sharedProviderPaths;
+        }
+
+        var queries = new List<string>(BuildModelQueries(partitions));
+        if (!shared.IsEmpty)
+        {
+            var typeFilter = $"{LanguageModelNodeType.NodeType}|{ModelProviderNodeType.NodeType}";
+            foreach (var path in shared)
+                queries.Add($"namespace:{path} nodeType:{typeFilter} scope:selfAndDescendants");
+        }
+
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var request = MeshQueryRequest.FromQueries(queries, WellKnownUsers.System);
+
+        Observable.Using(
+                () => accessService is null
+                    ? System.Reactive.Disposables.Disposable.Empty
+                    : accessService.ImpersonateAsSystem(),
+                _ => meshService.Query<MeshNode>(request))
+            .Where(c => c.Items is { Count: > 0 })
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Subscribe(
+                c => { MergeIntoSnapshot(c.Items!); refreshInFlight = false; },
+                _ => refreshInFlight = false);
+    }
+
+    /// <summary>Merges a fresh authoritative snapshot into <see cref="cachedSnapshot"/> (fresh wins per path).</summary>
+    private void MergeIntoSnapshot(IEnumerable<MeshNode> fresh)
+    {
+        var merged = new Dictionary<string, MeshNode>(StringComparer.Ordinal);
+        foreach (var n in cachedSnapshot)
+            if (n.Path != null) merged[n.Path] = n;
+        foreach (var n in fresh)
+            if (n.Path != null) merged[n.Path] = n;
+        cachedSnapshot = merged.Values.ToList();
+    }
+
     /// <summary>Dedupe-by-path merge of the base + shared snapshot lists (last write per path wins).</summary>
     private static IEnumerable<MeshNode> MergeByPath(IList<IEnumerable<MeshNode>> lists)
     {
@@ -441,6 +545,25 @@ public sealed class ChatClientCredentialResolver : IDisposable
                 return def;
         }
         return null;
+    }
+
+    /// <summary>
+    /// ALL model definitions in the snapshot matching <paramref name="modelId"/> — there can be several
+    /// (a keyless root catalog entry + the user's own keyed provider node share the same id). Callers
+    /// that need credentials must try each (see <see cref="Resolve"/>), not just the first.
+    /// </summary>
+    private List<ModelDefinition> FindModelDefinitions(IReadOnlyList<MeshNode> snapshot, string modelId)
+    {
+        var result = new List<ModelDefinition>();
+        foreach (var node in snapshot)
+        {
+            if (!string.Equals(node.NodeType, LanguageModelNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
+                continue;
+            var def = ExtractContent<ModelDefinition>(node.Content);
+            if (def != null && string.Equals(def.Id, modelId, StringComparison.OrdinalIgnoreCase))
+                result.Add(def);
+        }
+        return result;
     }
 
     private bool TryGetProvider(IReadOnlyList<MeshNode> snapshot, string providerPath, out ModelProviderConfiguration? cfg)
