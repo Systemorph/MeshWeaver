@@ -418,12 +418,15 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     {
         _currentNavContext = ctx;
 
-        // A thread lives in EITHER the main view OR the side panel, never both.
-        // When navigation puts a thread full-screen in the main view, close the
-        // side panel (mirrors MoveToMainPanel, which does the same explicitly).
+        // A thread lives in EITHER the main view OR the side panel, never both — but ONLY
+        // close the side panel when the user opened a DIFFERENT thread full-screen than the
+        // one already shown in the panel. Closing on the SAME thread (or on a brand-new
+        // side-panel chat) is what made the active side-panel conversation vanish during
+        // normal chat → submit → navigate use. The decision rule lives in SidePanelChatKeying
+        // so it is unit-testable without a render host.
         if (ctx?.Node != null
-            && ThreadNodeType.IsThreadNodeType(ctx.Node.NodeType)
-            && SidePanelState.IsVisible)
+            && SidePanelChatKeying.ShouldHideSidePanelOnThreadNavigation(
+                ctx.Node.NodeType, ctx.Node.Path, SidePanelState.ContentPath, SidePanelState.IsVisible))
         {
             SidePanelState.SetVisible(false);
         }

@@ -1,3 +1,5 @@
+using MeshWeaver.AI;
+
 namespace MeshWeaver.Blazor.Portal.Layout;
 
 /// <summary>
@@ -32,4 +34,37 @@ public static class SidePanelChatKeying
     /// </summary>
     public static bool ShouldRebuildControl(string? cachedContentPath, string currentContentPath)
         => !string.Equals(cachedContentPath, currentContentPath, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Decides whether navigating the MAIN view to a thread node should auto-close the side panel.
+    /// The rule "a thread lives in EITHER the main view OR the side panel, never both" must fire
+    /// ONLY when the user opens a <b>different</b> thread full-screen than the one already shown in
+    /// the side panel. It must NEVER fire when the side-panel chat IS the navigated thread, nor when
+    /// the side panel holds a brand-new chat (no content path) — otherwise the side-panel
+    /// conversation the user is actively in just vanishes (the recurring "chat disappears" bug).
+    /// </summary>
+    /// <param name="navNodeType">NodeType of the node the main view navigated to.</param>
+    /// <param name="navNodePath">Full path of the node the main view navigated to.</param>
+    /// <param name="sidePanelContentPath">The side panel's current content path (empty/null = new chat).</param>
+    /// <param name="isSidePanelVisible">Whether the side panel is currently visible.</param>
+    public static bool ShouldHideSidePanelOnThreadNavigation(
+        string? navNodeType, string? navNodePath, string? sidePanelContentPath, bool isSidePanelVisible)
+    {
+        // Nothing to hide if the panel is already closed.
+        if (!isSidePanelVisible)
+            return false;
+        // The rule only governs THREADS in the main view.
+        if (!ThreadNodeType.IsThreadNodeType(navNodeType))
+            return false;
+        // A brand-new side-panel chat (no content path) must NEVER be yanked away. This is the
+        // submit-in-side-panel flow (submitting sets the content path to the freshly-created thread)
+        // and the browse-while-composing flow — the recurring "chat disappears" report.
+        if (string.IsNullOrEmpty(sidePanelContentPath))
+            return false;
+        // The navigated thread IS the one already shown in the side panel — same conversation, keep it.
+        if (string.Equals(navNodePath, sidePanelContentPath, StringComparison.OrdinalIgnoreCase))
+            return false;
+        // A genuinely DIFFERENT thread opened full-screen in the main view → enforce "never both".
+        return true;
+    }
 }
