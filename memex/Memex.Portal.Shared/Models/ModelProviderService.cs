@@ -91,7 +91,7 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
     /// Storage namespace for the provider (and its LanguageModel children). When
     /// <c>null</c> (the default) the provider lands in the owner's dotfile namespace
     /// <c>{ownerPath}/_Memex</c> — the per-user "bring your own key" surface. When set
-    /// (e.g. <see cref="ModelProviderNodeType.RootNamespace"/> = <c>Admin/Provider</c>)
+    /// (e.g. <see cref="ModelProviderNodeType.RootNamespace"/> = <c>Provider</c>)
     /// the provider lands directly under that namespace — the PLATFORM catalog managed
     /// by global admins. Platform nodes are stamped
     /// <see cref="SyncBehavior.ExcludeThisAndChildren"/> so the boot seeder
@@ -127,7 +127,7 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
 
         // User-owned providers/models live in the owner's dotfile namespace
         // ({owner}/_Memex/{providerId}/{model}). Platform providers (targetNamespace set,
-        // e.g. Admin/Provider) live directly under that namespace and are sync-excluded so
+        // e.g. Provider) live directly under that namespace and are sync-excluded so
         // the boot seeder never clobbers admin edits. See ModelProviderNodeType.UserNamespace.
         var isPlatform = !string.IsNullOrWhiteSpace(targetNamespace);
         var providerNamespace = isPlatform
@@ -314,7 +314,7 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
             return Observable.Return((IReadOnlyList<ProviderInfo>)Array.Empty<ProviderInfo>());
 
         // Cache + query by the resolved STORAGE namespace so the per-user (_Memex) and
-        // platform (Admin/Provider) listings never collide on a shared cache key.
+        // platform (Provider) listings never collide on a shared cache key.
         var providerNamespace = string.IsNullOrWhiteSpace(targetNamespace)
             ? ModelProviderNodeType.UserNamespacePath(ownerPath)
             : targetNamespace!.Trim();

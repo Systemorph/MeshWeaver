@@ -40,29 +40,47 @@ public static class GlobalAdminSeed
         if (ids.Length == 0)
             return [];
 
-        var nodes = new MeshNode[ids.Length];
+        // Two grants per configured admin:
+        //   (1) Admin/_Access  — the canonical "global admin = admin on the Admin partition" grant
+        //       (scope "Admin"); this is what hub.IsGlobalAdmin() keys off.
+        //   (2) Provider/_Access — standing write on the top-level "Provider" model-catalog partition
+        //       so platform admins can manage the shared providers/models (endpoints, keys, enabled
+        //       models) through the standard mesh catalog UI. A global admin is NOT a data-superuser
+        //       (the Admin-scope grant does not cover other partitions), so the Provider catalog —
+        //       which moved from Admin/Provider to the top-level Provider partition — needs this
+        //       explicit grant; its _Policy lifts the write caps but caps are ceilings, not grants.
+        //       Non-admins hold no write role anywhere in the Provider hierarchy → they stay
+        //       read-only (the _Policy is PublicRead). See Doc/Architecture/NodeTypeCatalogs.md
+        //       and AccessControl.md.
+        var nodes = new MeshNode[ids.Length * 2];
         for (var i = 0; i < ids.Length; i++)
         {
             var userId = ids[i].Trim();
-            var assignment = new AccessAssignment
-            {
-                AccessObject = userId,
-                DisplayName = userId,
-                Roles = [new RoleAssignment { Role = "Admin" }],
-            };
-            // 🚨 Global admin = admin on the ADMIN PARTITION. The grant lives at
-            // namespace "Admin/_Access" (→ scope "Admin"); the global-admin
-            // short-circuit in PermissionEvaluator turns Permission.All at scope
-            // "Admin" into platform-superuser (All on every path). MainNode "" = the
-            // whole Admin scope. This IS the db-init seed for config-driven admins —
-            // a fresh DB with Auth:GlobalAdmins set comes up with each listed user
-            // already a platform admin. See Doc/Architecture/AccessControl.md.
-            nodes[i] = new MeshNode(userId + "_Access", "Admin/_Access")
+
+            nodes[i * 2] = new MeshNode(userId + "_Access", "Admin/_Access")
             {
                 NodeType = "AccessAssignment",
                 Name = $"{userId} — Admin",
-                Content = assignment,
+                Content = new AccessAssignment
+                {
+                    AccessObject = userId,
+                    DisplayName = userId,
+                    Roles = [new RoleAssignment { Role = "Admin" }],
+                },
                 MainNode = "",
+            };
+
+            nodes[i * 2 + 1] = new MeshNode(userId + "_Access", "Provider/_Access")
+            {
+                NodeType = "AccessAssignment",
+                Name = $"{userId} — Provider Admin",
+                Content = new AccessAssignment
+                {
+                    AccessObject = userId,
+                    DisplayName = userId,
+                    Roles = [new RoleAssignment { Role = "Admin" }],
+                },
+                MainNode = "Provider",
             };
         }
         return nodes;
