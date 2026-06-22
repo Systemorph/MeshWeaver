@@ -973,25 +973,37 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     var typeSource = new global::MeshWeaver.Graph.SyncedQueryMeshNodes(
                         cacheHub.GetWorkspace(), id, queries);
                     var updates = typeSource.StreamUpdates();
-                    // 🚨 Hydrate under the cache identity — IDENTICAL to the single-node GetStream
-                    // path (see the `SwitchAccessContext(MeshNodeCacheIdentity.Context)` around the
-                    // hydration Subscribe above). The .SubscribeOn(TaskPoolScheduler) below runs this
-                    // Defer + StreamUpdates' cross-hub SubscribeRequest on a POOL thread, where the
-                    // caller's AsyncLocal AccessContext has NOT flowed — so without an explicit
-                    // identity the SubscribeRequest posts a null/ambient AccessContext, the owning
-                    // partition's PostPipeline fails it CLOSED, and the synced query rides the 15s
-                    // deadlock-guard timeout before recovering (the ProviderKeyEncryptionTest /
-                    // ConnectStrategyTest "observable did not emit within 15s" flake — a freshly
-                    // provisioned partition under suite load). Observable.Using sets the cache
-                    // identity on THIS (pool) thread for the StreamUpdates subscription, exactly as
-                    // GetStream does for single-node hydration. Per-user RLS is still applied by the
-                    // options overload's wrapper, never here.
+                    // 🚨 Hold SYSTEM identity across this synced-query subscription — the SAME
+                    // pattern (and for the SAME reason) as ChatClientCredentialResolver
+                    // .RebuildSubscription. The .SubscribeOn(TaskPoolScheduler) below runs this
+                    // Defer + StreamUpdates' cross-hub SubscribeRequests on a POOL thread where the
+                    // caller's AsyncLocal AccessContext has NOT reliably flowed across the scheduler
+                    // hop. SubscribeRequest is [RequiresPermission(Read)] — NOT [SystemMessage]-exempt
+                    // — so a null-context one fails CLOSED at the owning partition, and the synced
+                    // query then rides the 15s deadlock-guard timeout before recovering (the
+                    // ProviderKeyEncryptionTest / ConnectStrategyTest "observable did not emit within
+                    // 15s" flake — a freshly-provisioned partition under suite load). Setting the
+                    // identity HERE, on the actual subscribe thread, guarantees coverage regardless of
+                    // whether the caller's own identity flowed through SubscribeOn.
+                    //
+                    // 🚨🚨 It MUST be ImpersonateAsSystem (system-security), NOT
+                    // SwitchAccessContext(MeshNodeCacheIdentity.Context). The cache hub is declared
+                    // WithPostingIdentity(System) (see the cacheHub config in the ctor), so its sync
+                    // sub-hubs already post as system-security. system-security therefore MATCHES the
+                    // hub's posting identity: setting it on the AsyncLocal is consistent with the
+                    // fallback (PostPipeline stamps the non-null Context, which equals what the System
+                    // fallback would have stamped) — there is no divergent identity anywhere on the
+                    // sync protocol. The previous code used cache/mesh-node-cache, a DIFFERENT
+                    // (Read-only) identity that diverged from the hub's System posting identity; that
+                    // divergence is what produced the constant DeliveryFailure storm on sync/<id>
+                    // (db15ff014, observed ~540/min in prod). The query reads as System regardless
+                    // (MeshQueryRequest carries WellKnownUsers.System and short-circuits the validator
+                    // chain); per-user RLS is re-applied at the consumer (the GetQuery options
+                    // overload's WrapWithPerUserRls), never here. See AccessContextPropagation.md.
                     var accessService = cacheHub.ServiceProvider.GetService<AccessService>();
                     return accessService is null
                         ? updates
-                        : Observable.Using(
-                            () => accessService.SwitchAccessContext(MeshNodeCacheIdentity.Context),
-                            _ => updates);
+                        : Observable.Using(() => accessService.ImpersonateAsSystem(), _ => updates);
                 })
                 .SubscribeOn(TaskPoolScheduler.Default)
                 .Replay(1)

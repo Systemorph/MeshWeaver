@@ -133,6 +133,51 @@ public class PostPipelineAccessContextTest(ITestOutputHelper output) : HubTestBa
     }
 
     /// <summary>
+    /// 🚨 REGRESSION GUARD for the db15ff014 sync storm (~540/min in prod).
+    ///
+    /// <para>The PostPipeline decision order
+    /// (<c>MessageHubConfiguration.UserServicePostPipeline</c>) is: (1) keep a pre-set
+    /// <c>delivery.AccessContext</c>; (2) ELSE stamp the ambient AsyncLocal
+    /// <c>AccessService.Context ?? CircuitContext</c> when non-null; (3) ELSE — only if STILL
+    /// null — apply the hub's <c>PostingIdentity.System</c> fallback (stamp system-security).
+    /// So a NON-NULL ambient AsyncLocal Context takes PRECEDENCE over a System hub's fallback.</para>
+    ///
+    /// <para>This is exactly why wrapping the MeshNodeStreamCache synced-query subscribe in
+    /// <c>SwitchAccessContext(MeshNodeCacheIdentity.Context)</c> (db15ff014) was harmful: the
+    /// cache hub is declared <c>WithPostingIdentity(System)</c>, so its sync sub-hubs already post
+    /// as system-security. Stamping a non-null Context that DIVERGES from that (the Read-only
+    /// <c>cache/mesh-node-cache</c>) takes precedence over the System fallback and seeds a
+    /// non-System identity onto the sync protocol — which manifested as the constant null-context
+    /// DeliveryFailure storm on <c>sync/&lt;id&gt;</c>. The fix keeps the subscribe-thread wrap but
+    /// uses <c>ImpersonateAsSystem</c> (system-security) — the SAME value the hub's System posting
+    /// identity would stamp — so the AsyncLocal-vs-fallback precedence shown here is harmless (it
+    /// resolves to the identical identity). This test pins the precedence so a DIVERGENT identity
+    /// is never re-introduced on that path.</para>
+    /// </summary>
+    [Fact]
+    public async Task System_hub_with_ambient_nonnull_context_stamps_that_context_not_system()
+    {
+        var meshHub = Mesh; // System posting identity (HubTestBase)
+        var access = meshHub.ServiceProvider.GetRequiredService<AccessService>();
+
+        IMessageDelivery<CaptureContextResponse> response;
+        // Same shape as the harmful wrap: a non-null AsyncLocal Context active across the post.
+        using (access.SwitchAccessContext(new AccessContext { ObjectId = "cache/mesh-node-cache" }))
+        {
+            response = await meshHub
+                .Observe(new CaptureContextRequest(), o => o.WithTarget(CreateHostAddress()))
+                .Should().Within(10.Seconds()).Emit();
+        }
+
+        response.Message.ObjectId.Should().Be("cache/mesh-node-cache",
+            because: "a non-null ambient AsyncLocal Context takes precedence over the hub's " +
+                     "System posting-identity fallback — so wrapping the cache's synced-query " +
+                     "subscribe in SwitchAccessContext(cacheIdentity) DEFEATS the cache hub's " +
+                     "System fallback (and leaks null across Rx hops → the db15ff014 storm). The " +
+                     "cache hub's System posting identity must be the sole attribution source.");
+    }
+
+    /// <summary>
     /// An explicit <see cref="AccessService.ImpersonateAsSystem"/> scope
     /// propagates the well-known <c>"system-security"</c> identity through
     /// PostPipeline. This is the canonical pattern for legitimate

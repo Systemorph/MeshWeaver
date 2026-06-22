@@ -329,10 +329,19 @@
     font-size: 0.85rem;
 }
 
-/* Card wrapper hosting the absolute "Drill down" affordance (top-right). */
+/* Card wrapper hosting the absolute "Drill down" affordance (top-right).
+   display:flex + column makes the IN-FLOW card (the <a> for a default fluent-card, OR the
+   LayoutAreaView host for an ItemArea card like the pinned/thumbnail cards) a flex item, so the
+   GLOBAL `.mesh-search-area-grid > * > * { flex:1 1 auto }` rule (standard-page-layout.css) can
+   actually stretch it to the full equal-width cell. Without flex here that rule was inert and
+   ItemArea cards (pinned / My Items / Latest Threads) rendered at content width — unequal. The
+   absolutely-positioned affordances (drill-down / delete) are out of flow, so they are NOT flex
+   items and are never stretched. */
 .mesh-search-card-wrap {
     position: relative;
     width: 100%;
+    display: flex;
+    flex-direction: column;
 }
 
 /* Secondary "Drill down" / "Search this node" affordance — subtle until hover. */
@@ -674,10 +683,14 @@
     padding: 24px 0;
 }
 
-/* TOP: a node card. The body opens the node; a drill symbol (containers only) re-roots here. */
+/* TOP: a node card. The body opens the node; a drill symbol (containers only) re-roots here.
+   flex column (same reason as .mesh-search-card-wrap) so the in-flow card stretches to the full
+   equal-width cell via the global fill rule, while the absolute drill affordance stays put. */
 .mesh-nav-card-wrap {
     position: relative;
     width: 100%;
+    display: flex;
+    flex-direction: column;
 }
 
 .mesh-nav-card-link {
