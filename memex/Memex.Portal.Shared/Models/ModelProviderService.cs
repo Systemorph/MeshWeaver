@@ -87,6 +87,17 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
     /// they never collide. For named providers (OpenAI, Anthropic) leave it null —
     /// one instance per type, keyed by the provider name.</para>
     /// </summary>
+    /// <param name="targetNamespace">
+    /// Storage namespace for the provider (and its LanguageModel children). When
+    /// <c>null</c> (the default) the provider lands in the owner's dotfile namespace
+    /// <c>{ownerPath}/_Memex</c> — the per-user "bring your own key" surface. When set
+    /// (e.g. <see cref="ModelProviderNodeType.RootNamespace"/> = <c>Admin/Provider</c>)
+    /// the provider lands directly under that namespace — the PLATFORM catalog managed
+    /// by global admins. Platform nodes are stamped
+    /// <see cref="SyncBehavior.ExcludeThisAndChildren"/> so the boot seeder
+    /// (<see cref="BuiltInLanguageModelProvider"/>) creates them once and never
+    /// overwrites admin edits (create-if-absent).
+    /// </param>
     public IObservable<ProviderCreationResult> CreateProvider(
         string ownerPath,
         string provider,
@@ -94,7 +105,8 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
         string? label = null,
         string? endpointOverride = null,
         IReadOnlyList<string>? modelIdsOverride = null,
-        string? instanceId = null)
+        string? instanceId = null,
+        string? targetNamespace = null)
     {
         if (string.IsNullOrEmpty(ownerPath))
             return Observable.Throw<ProviderCreationResult>(new ArgumentException("ownerPath required", nameof(ownerPath)));
@@ -114,10 +126,15 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
             ?? Array.Empty<string>();
 
         // User-owned providers/models live in the owner's dotfile namespace
-        // ({owner}/_Memex/{providerId}/{model}), NOT a shared _Provider satellite.
-        // See ModelProviderNodeType.UserNamespace.
-        var providerNamespace = ModelProviderNodeType.UserNamespacePath(ownerPath);
+        // ({owner}/_Memex/{providerId}/{model}). Platform providers (targetNamespace set,
+        // e.g. Admin/Provider) live directly under that namespace and are sync-excluded so
+        // the boot seeder never clobbers admin edits. See ModelProviderNodeType.UserNamespace.
+        var isPlatform = !string.IsNullOrWhiteSpace(targetNamespace);
+        var providerNamespace = isPlatform
+            ? targetNamespace!.Trim()
+            : ModelProviderNodeType.UserNamespacePath(ownerPath);
         var providerPath = $"{providerNamespace}/{providerId}";
+        var syncBehavior = isPlatform ? SyncBehavior.ExcludeThisAndChildren : SyncBehavior.Include;
 
         var providerConfig = new ModelProviderConfiguration
         {
@@ -135,17 +152,20 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
             NodeType = ModelProviderNodeType.NodeType,
             Name = providerConfig.Label,
             State = MeshNodeState.Active,
-            MainNode = ownerPath,
+            // Platform nodes match the BuiltInLanguageModelProvider shape (MainNode = own path);
+            // user nodes anchor to the owning user.
+            MainNode = isPlatform ? providerPath : ownerPath,
+            SyncBehavior = syncBehavior,
             Content = providerConfig,
         };
 
-        logger.LogInformation("Creating ModelProvider {ProviderId} (provider={Provider}) for owner {Owner} with {ModelCount} models, keyFp={KeyFp}",
-            providerId, provider, ownerPath, modelIds.Count, Fingerprint(apiKey));
+        logger.LogInformation("Creating ModelProvider {ProviderId} (provider={Provider}) at {Namespace} for owner {Owner} with {ModelCount} models, keyFp={KeyFp}",
+            providerId, provider, providerNamespace, ownerPath, modelIds.Count, Fingerprint(apiKey));
 
         // 1. Create the ModelProvider node.
         // 2. After commit, fan out N CreateNode calls for the LanguageModel children.
         //    The children reference the provider via ProviderRef.
-        InvalidateCache(ownerPath);
+        InvalidateCache(providerNamespace);
         return meshService.CreateNode(providerNode)
             .SelectMany(createdProvider =>
             {
@@ -169,7 +189,8 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
                             Name = modelId,
                             Category = "Models",
                             State = MeshNodeState.Active,
-                            MainNode = ownerPath,
+                            MainNode = isPlatform ? $"{providerPath}/{modelId}" : ownerPath,
+                            SyncBehavior = syncBehavior,
                             Content = modelDef,
                         };
                         return meshService.CreateNode(modelNode)
@@ -287,19 +308,24 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
     /// <see cref="Memex.Portal.Shared.Authentication.ApiTokenService.GetTokensForUser"/>
     /// — synced via <c>workspace.GetQuery</c>.
     /// </summary>
-    public IObservable<IReadOnlyList<ProviderInfo>> GetProvidersForOwner(string ownerPath)
+    public IObservable<IReadOnlyList<ProviderInfo>> GetProvidersForOwner(string ownerPath, string? targetNamespace = null)
     {
-        if (string.IsNullOrEmpty(ownerPath))
+        if (string.IsNullOrEmpty(ownerPath) && string.IsNullOrEmpty(targetNamespace))
             return Observable.Return((IReadOnlyList<ProviderInfo>)Array.Empty<ProviderInfo>());
 
-        if (cachedStreams.TryGetValue(ownerPath, out var entry) && entry.ExpiresAt > DateTimeOffset.UtcNow)
+        // Cache + query by the resolved STORAGE namespace so the per-user (_Memex) and
+        // platform (Admin/Provider) listings never collide on a shared cache key.
+        var providerNamespace = string.IsNullOrWhiteSpace(targetNamespace)
+            ? ModelProviderNodeType.UserNamespacePath(ownerPath)
+            : targetNamespace!.Trim();
+
+        if (cachedStreams.TryGetValue(providerNamespace, out var entry) && entry.ExpiresAt > DateTimeOffset.UtcNow)
             return entry.Stream;
 
         var workspace = hub.GetWorkspace();
-        var providerNamespace = ModelProviderNodeType.UserNamespacePath(ownerPath);
 
         var stream = workspace.GetQuery(
-                $"model-providers:{ownerPath}",
+                $"model-providers:{providerNamespace}",
                 $"namespace:{providerNamespace} nodeType:{ModelProviderNodeType.NodeType}")
             .Select(snapshot =>
             {
@@ -333,7 +359,7 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
             .Replay(1)
             .RefCount();
 
-        cachedStreams[ownerPath] = (stream, DateTimeOffset.UtcNow + CacheTtl);
+        cachedStreams[providerNamespace] = (stream, DateTimeOffset.UtcNow + CacheTtl);
         return stream;
     }
 

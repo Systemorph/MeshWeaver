@@ -148,7 +148,14 @@ public sealed record AiProviderFeatureOptions
     /// </summary>
     public bool OpenAICompatible { get; init; } = true;
 
-    public bool HasAny => Anthropic || AzureFoundry || AzureOpenAI || OpenAI || OpenAICompatible;
+    /// <summary>
+    /// OpenRouter — the OpenAI-wire model gateway at <c>https://openrouter.ai/api/v1</c>.
+    /// Ships a system-default endpoint but no model ids (auto-listed/added later as mesh
+    /// data). Requires an API key. Rides the OpenAI-compatible factory.
+    /// </summary>
+    public bool OpenRouter { get; init; } = true;
+
+    public bool HasAny => Anthropic || AzureFoundry || AzureOpenAI || OpenAI || OpenAICompatible || OpenRouter;
 }
 
 public sealed record AiCliFeatureOptions
