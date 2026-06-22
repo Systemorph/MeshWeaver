@@ -5,6 +5,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
+using Microsoft.AspNetCore.Http.Connections.Client;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -23,9 +24,10 @@ public static class SignalRClientExtensions
     public static MessageHubConfiguration UseSignalRClient(
         this MessageHubConfiguration config,
         string url,
+        Func<Task<string?>>? accessTokenProvider = null,
         Func<IHubConnectionBuilder, IHubConnectionBuilder>? configuration = null)
         => config
-            .WithServices(services => services.AddSingleton(sp => CreateHubConnectionAsync(url, configuration, sp)))
+            .WithServices(services => services.AddSingleton(sp => CreateHubConnectionAsync(url, accessTokenProvider, configuration, sp)))
             .AddMeshTypes()
             .WithInitialization(hub =>
             {
@@ -39,14 +41,21 @@ public static class SignalRClientExtensions
             .WithRoutes(AddSignalRRoute);
 
     private static async Task<HubConnection> CreateHubConnectionAsync(
-        string url, Func<IHubConnectionBuilder, IHubConnectionBuilder>? configuration, IServiceProvider sp)
+        string url, Func<Task<string?>>? accessTokenProvider,
+        Func<IHubConnectionBuilder, IHubConnectionBuilder>? configuration, IServiceProvider sp)
     {
         var hub = sp.GetRequiredService<IMessageHub>();
         var logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
             .CreateLogger(typeof(SignalRClientExtensions));
 
         var builder = new HubConnectionBuilder()
-            .WithUrl(url)
+            .WithUrl(url, options =>
+            {
+                // Per-user identity: the token is sent on every connect/reconnect; the server
+                // validates it and stamps the participant's writes with the user.
+                if (accessTokenProvider is not null)
+                    options.AccessTokenProvider = accessTokenProvider;
+            })
             .WithAutomaticReconnect();
         if (configuration is not null)
             builder = configuration(builder);

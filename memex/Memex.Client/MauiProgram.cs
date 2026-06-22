@@ -30,7 +30,11 @@ public static class MauiProgram
         // mesh data crosses the socket. TODO: stabilise the address id per install (Preferences).
         builder.Services.AddMessageHubs(
             AddressExtensions.CreatePortalAddress("memex-client"),
-            config => config.UseSignalRClient(PortalSignalRUrl));
+            config => config.UseSignalRClient(
+                PortalSignalRUrl,
+                // Per-user identity: the API token (entered on the Mesh page) is sent on every
+                // connect; the server validates it and writes carry the user. Read at connect time.
+                accessTokenProvider: () => SecureStorage.Default.GetAsync("mesh.token")));
 
         // On-device voice: mic capture + Whisper (whisper.cpp, runs locally incl. iOS Metal/GPU).
         // The model downloads to app data on first use. Transcript feeds the mesh participant.

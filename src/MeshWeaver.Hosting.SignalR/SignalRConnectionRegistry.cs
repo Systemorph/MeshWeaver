@@ -1,56 +1,126 @@
 using System.Collections.Concurrent;
+using System.Reactive;
+using System.Reactive.Linq;
 using System.Text.Json;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Hosting.SignalR;
 
 /// <summary>
-/// Mesh-scoped singleton that bridges the <see cref="IRoutingService"/> to connected SignalR
-/// clients. SignalR <see cref="Hub"/> instances are per-invocation, so the long-lived per-connection
-/// routes and the server→client push channel (<see cref="IHubContext{THub}"/>) live here, not on the
-/// Hub. State is instance-only (a <see cref="ConcurrentDictionary{TKey,TValue}"/>) — never static, so
-/// it dies with the mesh (see Doc/Architecture/NoStaticState).
+/// Mesh-scoped singleton that bridges the <see cref="IRoutingService"/> to connected SignalR clients,
+/// AND establishes each connection's identity. SignalR Hub instances are per-invocation, so the
+/// per-connection routes, push channel, and the validated <see cref="AccessContext"/> live here.
+/// State is instance-only — never static (see Doc/Architecture/NoStaticState).
 ///
-/// <para>The wire format is a JSON <b>string</b> serialized with the hub's own
-/// <see cref="IMessageHub.JsonSerializerOptions"/>, so the mesh's Address / IMessageDelivery converters
-/// round-trip independently of SignalR's negotiated protocol (and without disturbing the Blazor circuit's
-/// SignalR). The client mirrors this exactly.</para>
+/// <para><b>Identity</b>: a participant connects with a Bearer API token; the server validates it
+/// (the same <see cref="ValidateTokenRequest"/> the MCP/HTTP path uses) and remembers the resulting
+/// user. Every message the participant injects is re-stamped with that server-validated identity
+/// (<see cref="IMessageDelivery.SetAccessContext"/>) — the client's claimed context is never trusted.
+/// No token ⇒ <see cref="WellKnownUsers.Anonymous"/> (writes cleanly RLS-denied, never fail-closed).</para>
 /// </summary>
-public sealed class SignalRConnectionRegistry(
-    IMessageHub hub,
-    IRoutingService routingService,
-    IHubContext<SignalRConnectionHub> hubContext,
-    IoPoolRegistry? ioPools = null) : IDisposable
+public sealed class SignalRConnectionRegistry : IDisposable
 {
-    private readonly ConcurrentDictionary<string, IDisposable> routesByConnection = new();
+    private readonly IMessageHub hub;
+    private readonly IRoutingService routingService;
+    private readonly IHubContext<SignalRConnectionHub> hubContext;
+    private readonly AccessService accessService;
+    private readonly IIoPool ioPool;
 
-    // The server→client push is genuine socket IO: it must run OFF the routing/hub scheduler and be
-    // bounded. The Http IIoPool is that governor (never a bare async / Observable.FromAsync — see
-    // Doc/Architecture/ControlledIoPooling).
-    private readonly IIoPool ioPool = ioPools?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
+    public SignalRConnectionRegistry(
+        IMessageHub hub,
+        IRoutingService routingService,
+        IHubContext<SignalRConnectionHub> hubContext,
+        IoPoolRegistry? ioPools = null)
+    {
+        this.hub = hub;
+        this.routingService = routingService;
+        this.hubContext = hubContext;
+        accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        ioPool = ioPools?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
+    }
 
-    /// <summary>
-    /// Registers a route for the participant's mesh <paramref name="address"/> so every delivery the
-    /// mesh routes to that address is pushed down this SignalR connection. Replaces any prior route on
-    /// the same connection id.
-    /// </summary>
+    // Immutable write-once constant (NoStaticState permits static readonly constants).
+    private static readonly AccessContext Anonymous = new()
+    {
+        ObjectId = WellKnownUsers.Anonymous,
+        Name = WellKnownUsers.Anonymous,
+    };
+
+    private sealed record ConnectionState(AccessContext User, IDisposable? Route = null);
+    private readonly ConcurrentDictionary<string, ConnectionState> connections = new();
+
+    /// <summary>Validate the connection's Bearer token (if any) → remember the user for this connection.</summary>
+    public IObservable<Unit> Authenticate(string connectionId, string? rawToken)
+    {
+        if (string.IsNullOrWhiteSpace(rawToken)
+            || !rawToken.StartsWith(ValidateTokenRequest.TokenPrefix, StringComparison.Ordinal))
+        {
+            SetUser(connectionId, Anonymous);
+            return Observable.Return(Unit.Default);
+        }
+
+        var tokenAddress = new Address("ApiToken", ValidateTokenRequest.HashToken(rawToken)[..12]);
+        return Observable.Using(
+                // Token validation is the auth bootstrap — it runs BEFORE any identity exists, so it
+                // must run as System (Permission.All) or the never-null guard fail-closes the post.
+                () => accessService.ImpersonateAsSystem(),
+                _ => hub.Observe(new ValidateTokenRequest(rawToken), o => o.WithTarget(tokenAddress))
+                        .Select(d => d.Message as ValidateTokenResponse))
+            .Take(1)
+            .Select(resp =>
+            {
+                var user = resp is { Success: true }
+                           && !string.IsNullOrEmpty(resp.UserId)
+                           && resp.UserId.IndexOf('@') < 0
+                    ? new AccessContext
+                    {
+                        ObjectId = resp.UserId,        // mesh User.Id (partition key), never the email
+                        Name = resp.UserName ?? "",
+                        Email = resp.UserEmail!,
+                        Roles = resp.Roles,
+                        IsApiToken = true,
+                    }
+                    : Anonymous;
+                SetUser(connectionId, user);
+                return Unit.Default;
+            })
+            .Catch((Exception _) =>
+            {
+                SetUser(connectionId, Anonymous);
+                return Observable.Return(Unit.Default);
+            });
+    }
+
+    /// <summary>Register a route for the participant's address so mesh deliveries push down this socket.</summary>
     public void Connect(Address address, string connectionId)
     {
         var route = routingService.RegisterStream(address, (delivery, ct) => PushToClient(connectionId, delivery, ct));
-        if (routesByConnection.TryRemove(connectionId, out var existing))
-            existing.Dispose();
-        routesByConnection[connectionId] = route;
+        connections.AddOrUpdate(connectionId,
+            new ConnectionState(Anonymous, route),
+            (_, s) => { s.Route?.Dispose(); return s with { Route = route }; });
     }
 
-    /// <summary>Tears down the route for a dropped connection (called from <c>OnDisconnectedAsync</c>).</summary>
+    /// <summary>Inject a client message into the mesh, stamped with the connection's validated identity.</summary>
+    public void Deliver(string connectionId, IMessageDelivery delivery)
+    {
+        var user = connections.TryGetValue(connectionId, out var s) ? s.User : Anonymous;
+        using (accessService.SwitchAccessContext(user))
+            hub.DeliverMessage(delivery.SetAccessContext(user));
+    }
+
     public void Disconnect(string connectionId)
     {
-        if (routesByConnection.TryRemove(connectionId, out var route))
-            route.Dispose();
+        if (connections.TryRemove(connectionId, out var s))
+            s.Route?.Dispose();
     }
+
+    private void SetUser(string connectionId, AccessContext user) =>
+        connections.AddOrUpdate(connectionId, new ConnectionState(user), (_, s) => s with { User = user });
 
     private IObservable<IMessageDelivery> PushToClient(string connectionId, IMessageDelivery delivery, CancellationToken _) =>
         ioPool.Invoke(async ct =>
@@ -62,7 +132,7 @@ public sealed class SignalRConnectionRegistry(
 
     public void Dispose()
     {
-        foreach (var route in routesByConnection.Values)
-            route.Dispose();
+        foreach (var s in connections.Values)
+            s.Route?.Dispose();
     }
 }
