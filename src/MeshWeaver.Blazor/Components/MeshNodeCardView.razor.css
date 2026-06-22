@@ -1,8 +1,12 @@
 .mesh-node-card {
+    /* FluentCard (<fluent-card>) defaults to inline-block / content width, so it shrinks to its
+       content and leaves the rest of the grid cell empty (the "gaps"). Force it to fill the cell. */
+    display: block;
     width: 100%;
+    box-sizing: border-box;
     height: 100%;
     cursor: pointer;
-    min-width: 200px;
+    min-width: 0;
 }
 
 .mesh-node-card:hover {
