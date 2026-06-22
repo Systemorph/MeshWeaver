@@ -866,9 +866,17 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(50.Seconds())
-            .Match(x => x is not null);
+            .Match(x => x is MeshSearchControl || x is StackControl);
 
-        var searchControl = control.Should().BeOfType<MeshSearchControl>().Subject;
+        // A nested node (FutuRe/EuropeRe sits under FutuRe) renders its instance catalog wrapped in a
+        // breadcrumbs Stack — Stack(breadcrumbs, MeshSearchControl); a top-level node renders the bare
+        // MeshSearchControl. Drill to the search either way (consistent with the sibling Search tests).
+        var searchControl = control is StackControl stk
+            ? (MeshSearchControl)(await stream
+                .GetControlStream(stk.Areas.Last().Area.ToString()!)
+                .Should().Within(50.Seconds())
+                .Match(x => x is MeshSearchControl))!
+            : control.Should().BeOfType<MeshSearchControl>().Subject;
         var hiddenQuery = searchControl.HiddenQuery!.ToString()!;
         Output.WriteLine($"EuropeRe Search query: {hiddenQuery}");
 
