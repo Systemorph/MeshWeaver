@@ -77,6 +77,16 @@ public sealed class ChatClientCredentialResolver : IDisposable
 
     private bool disposed;
 
+    // Reactive snapshot. A PERSISTENT subscription to the watched GetQuery union keeps the latest
+    // LanguageModel + ModelProvider snapshot warm and cached, so Resolve reads a ready value instead
+    // of synchronously grabbing a COLD observable. The old per-call ReadLatest grab subscribed to the
+    // synced query and disposed inline — dropping the RefCount to 0 and CANCELLING the async warm-up
+    // before it completed, so under load the snapshot never populated within the caller's window
+    // (the ProviderKeyEncryptionTest "observable did not emit within 15s" CI flake). The persistent
+    // subscription warms once, uninterrupted, and every later emission refreshes the cache.
+    private volatile IReadOnlyList<MeshNode> cachedSnapshot = Array.Empty<MeshNode>();
+    private IDisposable? snapshotSubscription;
+
     public ChatClientCredentialResolver(IMessageHub hub)
     {
         this.hub = hub;
@@ -89,11 +99,11 @@ public sealed class ChatClientCredentialResolver : IDisposable
     }
 
     /// <summary>
-    /// No-op retained for API compatibility. The root catalog is always
-    /// included by every live read (see <see cref="BuildModelQueries"/> with
-    /// no context path), so there is no eager root subscription to start.
+    /// Establishes the persistent snapshot subscription for the root catalog (and any
+    /// partitions watched so far) so the cache is warming before the first <see cref="Resolve"/>.
+    /// Idempotent: re-subscribes to the current watched set.
     /// </summary>
-    public void EnsureSubscription() { }
+    public void EnsureSubscription() => RebuildSubscription();
 
     /// <summary>
     /// Widen subsequent <see cref="Resolve"/> reads to include ModelProvider +
@@ -105,8 +115,15 @@ public sealed class ChatClientCredentialResolver : IDisposable
     public IDisposable WatchPartition(string userPartition)
     {
         if (string.IsNullOrEmpty(userPartition)) return Disposable.Empty;
+        bool changed;
         lock (gate)
+        {
+            var prev = watchedPartitions;
             watchedPartitions = watchedPartitions.Add(userPartition);
+            changed = !ReferenceEquals(watchedPartitions, prev);
+        }
+        // Widen the persistent subscription to include the new partition's queries.
+        if (changed) RebuildSubscription();
         return Disposable.Empty;
     }
 
@@ -124,8 +141,15 @@ public sealed class ChatClientCredentialResolver : IDisposable
     {
         if (string.IsNullOrEmpty(providerPath) || string.IsNullOrEmpty(userId))
             return Disposable.Empty;
+        bool changed;
         lock (gate)
+        {
+            var prev = sharedProviderPaths;
             sharedProviderPaths = sharedProviderPaths.Add(providerPath);
+            changed = !ReferenceEquals(sharedProviderPaths, prev);
+        }
+        // Widen the persistent subscription to include the shared subtree (read under System).
+        if (changed) RebuildSubscription();
         return Disposable.Empty;
     }
 
@@ -157,7 +181,6 @@ public sealed class ChatClientCredentialResolver : IDisposable
 
         var snapshot = ReadSnapshot();
         var def = FindModelDefinition(snapshot, modelId);
-        try { var ctx = hub.ServiceProvider.GetService<AccessService>()?.Context; System.IO.File.AppendAllText(@"C:\tmp\claude\resolve-probe.log", $"{DateTime.Now:HH:mm:ss.fff} Resolve({modelId}) ctx={ctx?.ObjectId ?? "(null)"} watched=[{string.Join(",", watchedPartitions)}] snap={snapshot.Count} paths=[{string.Join(";", snapshot.Select(n => n.Path + ":" + n.NodeType))}] def={(def == null ? "NULL" : $"id={def.Id},ref={def.ProviderRef}")}\n"); } catch { }
         if (def == null)
             return CredentialResolution.Missing;
 
@@ -244,23 +267,42 @@ public sealed class ChatClientCredentialResolver : IDisposable
     {
         if (disposed) return;
         disposed = true;
+        IDisposable? sub;
         lock (gate)
         {
             watchedPartitions = ImmutableHashSet<string>.Empty;
             sharedProviderPaths = ImmutableHashSet.Create<string>(StringComparer.Ordinal);
+            sub = snapshotSubscription;
+            snapshotSubscription = null;
         }
+        sub?.Dispose();
     }
 
     /// <summary>
-    /// Reads the current LanguageModel + ModelProvider snapshot from the
-    /// workspace's synced-query cache. The query unions the root catalog, each
-    /// watched user partition, and each shared provider subtree. The shared
-    /// subtrees are read under a SYSTEM identity so an Api-gated provider node
-    /// surfaces (the per-user Read gate is enforced separately in
-    /// <see cref="IsAllowedSharedAccess"/>).
+    /// Returns the latest LanguageModel + ModelProvider snapshot, kept warm by the persistent
+    /// <see cref="RebuildSubscription"/> subscription — NO synchronous grab of a cold observable.
+    /// Lazily establishes the subscription if a caller resolves before any explicit
+    /// <see cref="EnsureSubscription"/>/<see cref="WatchPartition"/>.
     /// </summary>
     private IReadOnlyList<MeshNode> ReadSnapshot()
     {
+        if (snapshotSubscription is null) RebuildSubscription();
+        return cachedSnapshot;
+    }
+
+    /// <summary>
+    /// (Re)establishes the persistent snapshot subscription over the current watched partitions +
+    /// shared provider subtrees. The base query unions the root catalog + each watched user
+    /// partition; each shared subtree is read under a SYSTEM identity so an Api-gated provider node
+    /// surfaces (the per-user Read gate is enforced separately in <see cref="IsAllowedSharedAccess"/>).
+    /// <see cref="Observable.CombineLatest{T}(System.Collections.Generic.IEnumerable{IObservable{T}})"/>
+    /// merges all sources; every emission swaps <see cref="cachedSnapshot"/> atomically. Because the
+    /// subscription stays alive, the synced queries warm ONCE and uninterrupted — no per-call
+    /// subscribe/dispose that cancels the warm-up.
+    /// </summary>
+    private void RebuildSubscription()
+    {
+        if (disposed) return;
         ImmutableHashSet<string> partitions;
         ImmutableHashSet<string> shared;
         lock (gate)
@@ -270,37 +312,72 @@ public sealed class ChatClientCredentialResolver : IDisposable
         }
 
         var workspace = hub.GetWorkspace();
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
 
         // Root catalog + each watched user partition share one cache id; the
         // workspace caches the union by id (Replay(1).RefCount upstream).
         var baseQueries = BuildModelQueries(partitions);
         var baseId = "ChatClientCredentialResolver|" + string.Join(",", partitions.OrderBy(p => p, StringComparer.Ordinal));
-        var nodes = ReadLatest(workspace.GetQuery(baseId, baseQueries), Array.Empty<MeshNode>() as IEnumerable<MeshNode>);
-
-        if (shared.IsEmpty)
-            return nodes as IReadOnlyList<MeshNode> ?? nodes.ToList();
-
-        // Shared provider subtrees must be read under a system identity so the
-        // Api-gated provider node + its LanguageModel children are visible to
-        // the resolver process (the Read gate is enforced at hand-out time).
-        var accessService = hub.ServiceProvider.GetService<AccessService>();
-        var merged = new Dictionary<string, MeshNode>(StringComparer.Ordinal);
-        foreach (var n in nodes)
-            if (n.Path != null) merged[n.Path] = n;
-
-        var typeFilter = $"{LanguageModelNodeType.NodeType}|{ModelProviderNodeType.NodeType}";
-        foreach (var path in shared)
+        var sources = new List<IObservable<IEnumerable<MeshNode>>>
         {
-            var sharedQuery = $"namespace:{path} nodeType:{typeFilter} scope:selfAndDescendants";
-            var sharedObs = workspace.GetQuery($"ChatClientCredentialResolver.Shared|{path}", sharedQuery);
-            var asSystem = accessService is null
-                ? sharedObs
-                : Observable.Using(accessService.ImpersonateAsSystem, _ => sharedObs);
-            var sharedNodes = ReadLatest(asSystem, Array.Empty<MeshNode>() as IEnumerable<MeshNode>);
-            foreach (var n in sharedNodes)
-                if (n.Path != null) merged[n.Path] = n;
+            workspace.GetQuery(baseId, baseQueries)
+        };
+
+        // Shared provider subtrees: read so the Api-gated provider node + its LanguageModel children
+        // are visible to the resolver process (the per-user Read gate is enforced at hand-out time
+        // in IsAllowedSharedAccess). They are covered by the SYSTEM scope held over the whole
+        // subscription below, so no per-source impersonation is needed.
+        if (!shared.IsEmpty)
+        {
+            var typeFilter = $"{LanguageModelNodeType.NodeType}|{ModelProviderNodeType.NodeType}";
+            foreach (var path in shared)
+            {
+                var sharedQuery = $"namespace:{path} nodeType:{typeFilter} scope:selfAndDescendants";
+                sources.Add(workspace.GetQuery($"ChatClientCredentialResolver.Shared|{path}", sharedQuery));
+            }
         }
 
+        var combined = sources.Count == 1
+            ? sources[0]
+            : Observable.CombineLatest(sources).Select(MergeByPath);
+
+        // 🚨 Hold a SYSTEM identity across the ENTIRE subscription lifetime. The resolver is
+        // server-side infrastructure resolving credentials to inject into the chat client; its
+        // GetQuery union opens cross-hub synced-query subscriptions to the root catalog, the user's
+        // own partition, and shared subtrees. Those SubscribeRequests run on the synced query's
+        // scheduler — where the caller's AccessContext has been wiped by the Rx hop — so without an
+        // explicit identity they post a NULL AccessContext, the owning partition's PostPipeline fails
+        // them CLOSED, and the query rides the 15s deadlock-guard timeout before recovering: the
+        // ProviderKeyEncryptionTest / ConnectStrategyTest "observable did not emit within 15s" flake.
+        // Observable.Using keeps the impersonation alive for the whole subscription so every
+        // (re)subscribe carries System. Real security is enforced at hand-out time
+        // (IsAllowedSharedAccess for shared providers; the user's own partition is theirs to read).
+        var newSub = Observable.Using(
+                () => accessService is null
+                    ? System.Reactive.Disposables.Disposable.Empty
+                    : accessService.ImpersonateAsSystem(),
+                _ => combined)
+            .Subscribe(
+                nodes => cachedSnapshot = nodes as IReadOnlyList<MeshNode> ?? nodes.ToList(),
+                ex => logger?.LogWarning(ex,
+                    "ChatClientCredentialResolver snapshot stream faulted; cache retains last good snapshot"));
+
+        IDisposable? old;
+        lock (gate)
+        {
+            old = snapshotSubscription;
+            snapshotSubscription = newSub;
+        }
+        old?.Dispose();
+    }
+
+    /// <summary>Dedupe-by-path merge of the base + shared snapshot lists (last write per path wins).</summary>
+    private static IEnumerable<MeshNode> MergeByPath(IList<IEnumerable<MeshNode>> lists)
+    {
+        var merged = new Dictionary<string, MeshNode>(StringComparer.Ordinal);
+        foreach (var list in lists)
+            foreach (var n in list)
+                if (n.Path != null) merged[n.Path] = n;
         return merged.Values.ToList();
     }
 
