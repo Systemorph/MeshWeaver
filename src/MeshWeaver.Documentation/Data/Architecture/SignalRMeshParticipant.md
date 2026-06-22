@@ -128,6 +128,7 @@ A SignalR participant addressed with a **portal address** *is* a portal in the m
 
 ## Cross-references
 
+- [Data Binding in a MAUI Client](/Doc/GUI/DataBindingMaui) — how a participant binds to live node streams (`GetMeshNodeStream` / `stream.Update`); the `/maui` skill is the build guide.
 - [Message Based Communication](/Doc/Architecture/MessageBasedCommunication) — addresses, routing, request/response.
 - [Controlled I/O Pooling](/Doc/Architecture/ControlledIoPooling) — why the push/forward leaves go through `IIoPool`.
 - [MeshNodeStreamCache](/Doc/Architecture/MeshNodeStreamCache) — the shared per-path handle a participant subscribes to.

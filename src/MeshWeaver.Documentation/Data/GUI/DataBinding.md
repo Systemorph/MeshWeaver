@@ -7,6 +7,8 @@ Icon: /static/DocContent/GUI/DataBinding/icon.svg
 
 Data binding in MeshWeaver connects your data objects to UI controls reactively and bidirectionally. The server pushes updates to the GUI; user edits flow back to the server. The whole pipeline is **live** — when the underlying node changes anywhere in the mesh, every subscribed view re-renders without a page refresh.
 
+> **Native clients bind the same way.** A MAUI (or any external participant) client reads with `hub.GetMeshNodeStream(path)` and writes with `.Update(...)` — identical rule, just marshalled to the device UI thread over the SignalR participant socket. See [Data Binding in a MAUI Client](/Doc/GUI/DataBindingMaui).
+
 ```mermaid
 flowchart LR
     subgraph Server
