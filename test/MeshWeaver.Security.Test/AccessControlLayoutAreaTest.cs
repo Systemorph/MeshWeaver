@@ -274,13 +274,13 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
             .ToTask();
 
     /// <summary>
-    /// The + Add Assignment button must be rendered for an admin viewer.
-    /// Regression guard for the pre-fix bug where the role-based isAdmin probe
-    /// always evaluated false on the per-node hub (CircuitContext lives on a
-    /// different AccessService instance), silently hiding the button.
+    /// The inline add row must render for an admin viewer — a user picker plus a + Add button.
+    /// Regression guard for the pre-fix bug where the role-based isAdmin probe always evaluated
+    /// false on the per-node hub (CircuitContext lives on a different AccessService instance),
+    /// silently hiding the add controls.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task AccessControl_AdminViewer_RendersAddAssignmentButton()
+    public async Task AccessControl_AdminViewer_RendersInlineAddRow()
     {
         var client = GetClient();
         // DevLogin on the client hub so the SubscribeRequest's PostPipeline stamps
@@ -299,23 +299,27 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         var rootControl = await stream.GetControlStream(reference.Area!)
             .Should().Within(15.Seconds()).Match(c => c is StackControl s && s.Areas?.Count >= 4)!;
 
-        var buttons = await CollectControls<ButtonControl>(stream, rootControl, reference.Area!);
-        var addButton = buttons.FirstOrDefault(b =>
-            b.Control.Data?.ToString()?.Contains("Add Assignment", StringComparison.OrdinalIgnoreCase) == true);
+        // The inline add row renders a user picker scoped to root-namespace users…
+        var pickers = await CollectControls<MeshNodePickerControl>(stream, rootControl, reference.Area!);
+        var userPicker = pickers.Select(p => p.Control)
+            .FirstOrDefault(p => p.Queries?.Contains("namespace:\"\" nodeType:User") == true);
+        userPicker.Should().NotBeNull(
+            "the inline add row must render a user picker — broken if hub.CheckPermission(path, Permission.Delete) didn't surface the admin assignment");
 
-        addButton.Should().NotBe(default,
-            "the + Add Assignment button must render for an admin viewer — broken if hub.CheckPermission(path, Permission.Delete) didn't surface the admin assignment");
+        // …and a + Add button.
+        var buttons = await CollectControls<ButtonControl>(stream, rootControl, reference.Area!);
+        buttons.Select(b => b.Control.Data?.ToString())
+            .Should().Contain(d => d != null && d.Contains("Add", StringComparison.OrdinalIgnoreCase),
+                "the inline add row must render an Add button");
     }
 
     /// <summary>
-    /// Clicking the + Add Assignment button opens a dialog containing two
-    /// MeshNodePickerControls: one for the Subject (user or group) and one
-    /// for the Role. Verifies the exact queries assembled by the dialog so
-    /// regressions to the AccessAssignment [MeshNode] / [MeshNodeCollection]
-    /// attributes surface in tests rather than in the running UI.
+    /// The inline add row renders a user MeshNodePickerControl (root-namespace users) and a Role
+    /// SelectControl. Verifies the exact user query so regressions to the add field surface in
+    /// tests rather than in the running UI.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task AccessControl_AddAssignmentDialog_HasSubjectAndRolePickersWithExpectedQueries()
+    public async Task AccessControl_InlineAddRow_HasUserPickerAndRoleSelect()
     {
         var client = GetClient();
         TestUsers.DevLogin(client);
@@ -332,48 +336,17 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         var rootControl = await stream.GetControlStream(reference.Area!)
             .Should().Within(15.Seconds()).Match(c => c is StackControl s && s.Areas?.Count >= 4)!;
 
-        var buttons = await CollectControls<ButtonControl>(stream, rootControl, reference.Area!);
-        var (buttonArea, _) = buttons.First(b =>
-            b.Control.Data?.ToString()?.Contains("Add Assignment", StringComparison.OrdinalIgnoreCase) == true);
+        var pickers = await CollectControls<MeshNodePickerControl>(stream, rootControl, reference.Area!);
+        var userPicker = pickers.Select(p => p.Control)
+            .FirstOrDefault(p => string.Equals(p.Label?.ToString(), "Add user", StringComparison.Ordinal));
+        userPicker.Should().NotBeNull("the inline add row must render an 'Add user' picker");
+        userPicker!.Queries.Should().NotBeNull();
+        userPicker.Queries!.Should().Contain("namespace:\"\" nodeType:User",
+            "users live at the root namespace, so the add field must scope to namespace:\"\"");
 
-        // Fire the click — the host invokes ShowAddAssignmentDialog which posts
-        // the DialogControl into the $Dialog area.
-        client.Post(new ClickedEvent(buttonArea, stream.StreamId), o => o.WithTarget(nodeAddress));
-
-        var dialog = await stream.GetControlStream(DialogControl.DialogArea)
-            .Where(c => c is DialogControl)
-            .Should().Within(10.Seconds()).Emit();
-
-        var dialogControl = dialog.Should().BeOfType<DialogControl>().Which;
-        dialogControl.Title?.ToString().Should().Be("Add Assignment");
-
-        var pickers = await CollectControls<MeshNodePickerControl>(
-            stream, dialogControl, DialogControl.DialogArea);
-
-        pickers.Should().HaveCount(2,
-            "the dialog renders one picker for the subject (user/group) and one for the role");
-
-        var subjectPicker = pickers.Select(p => p.Control)
-            .FirstOrDefault(p => string.Equals(
-                p.Label?.ToString(),
-                "Subject (User or Group)",
-                StringComparison.Ordinal));
-        subjectPicker.Should().NotBeNull("subject picker must be present");
-        subjectPicker!.Required.Should().BeOfType<bool>().Which.Should().BeTrue();
-        subjectPicker.Queries.Should().NotBeNull();
-        subjectPicker.Queries!.Should().Contain("nodeType:User namespace:\"\"",
-            "users live at the root namespace post-v10, so the default query must scope to namespace:\"\"");
-        subjectPicker.Queries.Should().Contain($"nodeType:Group namespace:{NodePath} scope:subtree",
-            "groups defined at the current namespace or beneath should be selectable");
-
-        var rolePicker = pickers.Select(p => p.Control)
-            .FirstOrDefault(p => string.Equals(p.Label?.ToString(), "Role", StringComparison.Ordinal));
-        rolePicker.Should().NotBeNull("role picker must be present");
-        rolePicker!.Required.Should().BeOfType<bool>().Which.Should().BeTrue();
-        rolePicker.Queries.Should().NotBeNull();
-        rolePicker.Queries!.Should().Contain("nodeType:Role namespace:\"\"",
-            "default roles live at the root namespace and must always be selectable");
-        rolePicker.Queries.Should().Contain($"nodeType:Role namespace:{NodePath} scope:selfAndAncestors",
-            "roles defined at the current namespace and any ancestor namespace must be selectable");
+        var selects = await CollectControls<SelectControl>(stream, rootControl, reference.Area!);
+        var roleSelect = selects.Select(s => s.Control)
+            .FirstOrDefault(s => string.Equals(s.Label?.ToString(), "Role", StringComparison.Ordinal));
+        roleSelect.Should().NotBeNull("the inline add row must render a Role select (default Editor)");
     }
 }

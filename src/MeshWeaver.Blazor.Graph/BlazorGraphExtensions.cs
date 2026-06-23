@@ -18,12 +18,13 @@ public static class BlazorGraphExtensions
     {
         return configuration
             .WithTypes(typeof(MeshNodeEditorControl), typeof(MeshNodeThumbnailControl), typeof(MeshNodeCardControl),
-                typeof(MeshNodeContentEditorControl))
+                typeof(MeshNodeContentEditorControl), typeof(MeshNodeRoleEditorControl))
             .AddViews(registry => registry
                 .WithView<MeshNodeEditorControl, MeshNodeEditorView>()
                 .WithView<MeshNodeThumbnailControl, MeshNodeThumbnailView>()
                 .WithView<MeshNodeCardControl, MeshNodeCardView>()
-                .WithView<MeshNodeContentEditorControl, MeshNodeContentEditorView>())
+                .WithView<MeshNodeContentEditorControl, MeshNodeContentEditorView>()
+                .WithView<MeshNodeRoleEditorControl, MeshNodeRoleEditorView>())
             .AddMeshNavigation();  // Enable @ autocomplete in markdown editors
     }
 }

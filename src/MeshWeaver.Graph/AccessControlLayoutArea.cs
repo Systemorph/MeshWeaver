@@ -17,9 +17,11 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Graph;
 
 /// <summary>
-/// Layout area for managing access control on a mesh node.
-/// Inherited assignments are loaded via IMeshService from ancestor nodes (merged per person).
-/// Local assignments are rendered via MeshSearchControl with Thumbnail areas.
+/// Layout area for managing access control on a mesh node. The page shows two sections — direct
+/// assignments at the PARENT scope, and the editable assignments at the CURRENT scope — each driven
+/// by a live mesh query (<c>namespace:{path}/_Access nodeType:AccessAssignment</c>) rendered as clean
+/// rows via the AccessAssignment Thumbnail area. An inline add row (user picker + role select) creates
+/// new assignments; the partition policy lives in a collapsed Advanced section.
 /// </summary>
 public static class AccessControlLayoutArea
 {
@@ -28,30 +30,25 @@ public static class AccessControlLayoutArea
     /// </summary>
     public static IObservable<UiControl?> AccessControl(LayoutAreaHost host, RenderingContext _)
     {
-        var hubPath = host.Hub.Address.ToString();
+        var nodePath = host.Hub.Address.ToString();
         var rlsEnabled = host.Hub.Configuration.Get<EffectivePermissionsDelegate>() != null;
 
         if (!rlsEnabled)
         {
-            return Observable.Return<UiControl?>(
-                Controls.Stack.WithView(
-                    Controls.Html(
-                        "<p style=\"color: var(--warning-color);\">Row-Level Security is not enabled. " +
-                        "Add .AddRowLevelSecurity() to your mesh configuration.</p>")
-                )
-            );
+            return Observable.Return<UiControl?>(Controls.Stack
+                .WithStyle("padding: 24px;")
+                .WithView(Controls.Markdown(
+                    "> **Row-Level Security is not enabled.** Add `.AddRowLevelSecurity()` " +
+                    "to your mesh configuration to manage access here.")));
         }
 
-        // Admin check — reactive Delete-permission probe. Equivalent to the
-        // pre-refactor `permissions.HasFlag(Permission.Delete)` gate. Sourcing
-        // from AccessService.Context.Roles was unreliable on the per-node hub
-        // (CircuitContext lives on a different AccessService instance), so the
-        // + Add Assignment button silently never rendered.
-        var isAdminStream = host.Hub.CheckPermission(hubPath, Permission.Delete);
+        // Admin check — reactive Delete-permission probe (the manage-access gate). Sourcing
+        // from AccessService.Context.Roles is unreliable on the per-node hub (CircuitContext
+        // lives on a different AccessService instance), so probe effective permissions.
+        var isAdminStream = host.Hub.CheckPermission(nodePath, Permission.Delete);
 
-        // Try to get the hub's own MeshNode stream. If the reducer isn't registered
-        // (test or minimal hub configurations), fall through to a stream-less render
-        // so the page is never blocked on stream initialization.
+        // The node stream supplies only the section header name. If the reducer isn't registered
+        // (minimal hub configs) fall through to a name derived from the path.
         IObservable<ChangeItem<MeshNode>>? nodeStream = null;
         try
         {
@@ -63,29 +60,12 @@ public static class AccessControlLayoutArea
         }
 
         if (nodeStream is null)
-        {
-            return isAdminStream.Select(isAdmin => (UiControl?)BuildAccessControlPage(
-                host, node: null, hubPath, isAdmin,
-                inherited: [],
-                userNodeLookup: new Dictionary<string, MeshNode>(),
-                rlsEnabled,
-                activePolicy: null));
-        }
+            return isAdminStream.Select(isAdmin => (UiControl?)BuildPage(host, node: null, nodePath, isAdmin));
 
         return nodeStream.CombineLatest(isAdminStream, (change, isAdmin)
-                => (UiControl?)BuildAccessControlPage(
-                    host, change?.Value, hubPath, isAdmin,
-                    inherited: [],
-                    userNodeLookup: new Dictionary<string, MeshNode>(),
-                    rlsEnabled,
-                    activePolicy: null))
+                => (UiControl?)BuildPage(host, change?.Value, nodePath, isAdmin))
             .Catch<UiControl?, Exception>(_ => isAdminStream.Select(isAdmin =>
-                (UiControl?)BuildAccessControlPage(
-                    host, node: null, hubPath, isAdmin,
-                    inherited: [],
-                    userNodeLookup: new Dictionary<string, MeshNode>(),
-                    rlsEnabled,
-                    activePolicy: null)));
+                (UiControl?)BuildPage(host, node: null, nodePath, isAdmin)));
     }
 
     internal static AccessAssignment? DeserializeAssignment(MeshNode node)
@@ -97,138 +77,174 @@ public static class AccessControlLayoutArea
         return null;
     }
 
-    private static UiControl? BuildAccessControlPage(
-        LayoutAreaHost host,
-        MeshNode? node,
-        string nodePath,
-        bool isAdmin,
-        IReadOnlyList<(AccessAssignment Assignment, string SourcePath, MeshNode Node)> inherited,
-        Dictionary<string, MeshNode> userNodeLookup,
-        bool rlsEnabled,
-        PartitionAccessPolicy? activePolicy)
+    private static UiControl BuildPage(LayoutAreaHost host, MeshNode? node, string nodePath, bool isAdmin)
     {
-        var stack = Controls.Stack.WithStyle("padding: 24px; gap: 24px; width: 100%;");
+        var stack = Controls.Stack.WithStyle("padding: 24px; gap: 20px; width: 100%;");
 
-        // Header
-        var headerText = node?.Name ?? nodePath.Split('/').LastOrDefault() ?? nodePath;
-        stack = stack.WithView(Controls.H2($"Access Control - {headerText}"));
+        var currentName = node?.Name ?? nodePath.Split('/').LastOrDefault() ?? nodePath;
+        if (string.IsNullOrEmpty(currentName)) currentName = "Root";
 
-        // Policy Banner
-        if (activePolicy != null)
+        stack = stack.WithView(Controls.H2($"Access Control — {currentName}"));
+
+        // Parent section — the direct assignments at the parent scope. These rows render read-only
+        // unless the caller also manages the parent (their per-row effective permissions decide).
+        var parentPath = GetParentPath(nodePath);
+        if (parentPath != null)
         {
-            var allowed = FormatPermissions(activePolicy.GetPermissionCap());
-            var breakText = activePolicy.BreaksInheritance ? " Inheritance is broken." : "";
-            stack = stack.WithView(Controls.Html(
-                $"<div style=\"padding: 12px 16px; background: var(--neutral-fill-secondary-rest); border-left: 4px solid var(--accent-fill-rest); border-radius: 4px;\">" +
-                $"<strong>Partition Policy Active</strong> — Allowed: <strong>{allowed}</strong>.{breakText}</div>"));
+            var parentName = string.IsNullOrEmpty(parentPath)
+                ? "Root"
+                : parentPath.Split('/').LastOrDefault() ?? parentPath;
+            stack = stack
+                .WithView(Controls.H3($"Parent — {parentName}").WithStyle("margin: 8px 0 0 0;"))
+                .WithView(AccessList(parentPath));
         }
 
-        if (isAdmin && rlsEnabled)
-        {
-            var policyExists = activePolicy != null;
-            var buttonLabel = policyExists ? "Edit Policy" : "Set Policy";
-            var workspace = host.Hub.GetWorkspace();
-            var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-            var policyPath = string.IsNullOrEmpty(nodePath) ? "_Policy" : $"{nodePath}/_Policy";
+        // Current scope — the editable section.
+        stack = stack
+            .WithView(Controls.H3(currentName).WithStyle("margin: 8px 0 0 0;"))
+            .WithView(AccessList(nodePath));
 
-            stack = stack.WithView(Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap: 8px;")
-                .WithView(Controls.Button(buttonLabel)
-                    .WithAppearance(Appearance.Accent)
-                    .WithStyle("align-self: flex-start;")
-                    .WithClickAction((Action<UiActionContext>)(ctx => ShowSetPolicyDialog(ctx, nodePath, policyPath, policyExists, workspace, meshService, activePolicy))))
-                .WithView(policyExists
-                    ? Controls.Button("Remove Policy")
-                        .WithAppearance(Appearance.Neutral)
-                        .WithStyle("align-self: flex-start;")
-                        .WithClickAction((Action<UiActionContext>)(ctx =>
-                        {
-                            // Remove via the canonical per-path mesh-node handle — the
-                            // synchronization protocol propagates the cleared policy to
-                            // the owning per-node hub. (Cold observable: must Subscribe.)
-                            workspace.GetMeshNodeStream(policyPath)
-                                .Update(current => current with { Content = new PartitionAccessPolicy() })
-                                .Subscribe(_ => { }, _ => { /* surface via standard data-layer error path */ });
-                            ctx.Host.UpdateArea(DialogControl.DialogArea, null!);
-                        }))
-                    : (UiControl)Controls.Html("")));
-        }
-
-        // Section 1: Inherited Permissions (merged per person, using builder)
-        stack = stack.WithView(Controls.H3("Inherited Permissions").WithStyle("margin: 0;"));
-
-        if (inherited.Count == 0)
-        {
-            stack = stack.WithView(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No inherited permissions.</p>"));
-        }
-        else
-        {
-            stack = stack.WithView(BuildInheritedSection(inherited, userNodeLookup));
-        }
-
-        // Section 2: Local Assignments (reactive via MeshSearchControl with Thumbnail areas)
-        stack = stack.WithView(Controls.H3("Local Assignments").WithStyle("margin: 0;"));
-
-        stack = stack.WithView(Controls.MeshSearch
-            .WithHiddenQuery($"namespace:{nodePath}/_Access nodeType:AccessAssignment")
-            .WithPlaceholder("Search assignments...")
-            .WithItemArea(MeshNodeLayoutAreas.ThumbnailArea)
-            .WithMaxColumns(4)
-            .WithReactiveMode(true)
-            .WithDisableNavigation()
-            .WithStyle("width:100%;"));
-
-        // + button if admin
         if (isAdmin)
-        {
-            stack = stack.WithView(Controls.Button("+ Add Assignment")
-                .WithAppearance(Appearance.Accent)
-                .WithStyle("align-self: flex-start; margin-top: 8px;")
-                .WithClickAction((Action<UiActionContext>)(ctx => ShowAddAssignmentDialog(ctx, nodePath))));
-        }
+            stack = stack
+                .WithView(BuildAddRow(host, nodePath))
+                .WithView(BuildAdvancedSection(host, nodePath));
 
         return stack;
     }
 
-    /// <summary>
-    /// Builds the inherited section by merging assignments per person.
-    /// Uses the MeshNode from the ancestor query to get user icons.
-    /// </summary>
-    private static UiControl BuildInheritedSection(
-        IReadOnlyList<(AccessAssignment Assignment, string SourcePath, MeshNode Node)> inherited,
-        Dictionary<string, MeshNode> userNodeLookup)
+    /// <summary>The parent scope of a node path, or null when the node is the root.</summary>
+    private static string? GetParentPath(string nodePath)
     {
-        var merged = inherited
-            .GroupBy(x => x.Assignment.AccessObject)
-            .OrderBy(g => g.Key)
-            .Select(g =>
-            {
-                var first = g.First();
-                var mergedRoles = g
-                    .SelectMany(x =>
-                    {
-                        var source = string.IsNullOrEmpty(x.SourcePath) ? "Global" : x.SourcePath.Split('/').LastOrDefault() ?? x.SourcePath;
-                        return x.Assignment.Roles.Select(r => new RoleAssignment
-                        {
-                            Role = string.IsNullOrEmpty(r.Role) ? $"(no role) [{source}]" : $"{r.Role} [{source}]",
-                            Denied = r.Denied
-                        });
-                    })
-                    .ToList();
+        if (string.IsNullOrEmpty(nodePath)) return null;       // root: no parent
+        var idx = nodePath.LastIndexOf('/');
+        return idx < 0 ? string.Empty : nodePath[..idx];        // top-level node → parent is root ("")
+    }
 
-                return (Assignment: first.Assignment with { Roles = mergedRoles }, first.Node);
-            })
-            .ToList();
+    /// <summary>The <c>_Access</c> satellite namespace for a scope path.</summary>
+    private static string AccessNamespace(string path)
+        => string.IsNullOrEmpty(path) ? "_Access" : $"{path}/_Access";
 
-        var container = Controls.Stack.WithStyle("gap: 6px;");
-        foreach (var item in merged)
+    /// <summary>
+    /// A live, one-per-row list of the AccessAssignment nodes at <paramref name="path"/>, rendered via
+    /// the AccessAssignment Thumbnail area (person/group + node-bound role editors).
+    /// </summary>
+    private static UiControl AccessList(string path)
+        => Controls.MeshSearch
+            .WithHiddenQuery($"namespace:{AccessNamespace(path)} nodeType:AccessAssignment")
+            .WithShowSearchBox(false)
+            .WithReactiveMode(true)
+            .WithItemArea(MeshNodeLayoutAreas.ThumbnailArea)
+            .WithMaxColumns(1)
+            .WithDisableNavigation()
+            .WithStyle("width: 100%;");
+
+    /// <summary>
+    /// The inline add row: a user picker (root-namespace users) + a role select (default Editor) + an
+    /// Add button that creates the AccessAssignment node. The created assignment appears in the current
+    /// section automatically (reactive MeshSearch).
+    /// </summary>
+    private static UiControl BuildAddRow(LayoutAreaHost host, string nodePath)
+    {
+        var formId = $"add_access_{Guid.NewGuid().AsString()}";
+        host.UpdateData(formId, new Dictionary<string, object?>
         {
-            // Prefer user node (has avatar) over assignment node (may lack icon)
-            var userNode = userNodeLookup.GetValueOrDefault(item.Assignment.AccessObject);
-            var displayNode = userNode ?? item.Node;
-            container = container.WithView(AccessAssignmentControlBuilder.Build(
-                item.Assignment, node: displayNode, isEditable: false));
-        }
-        return container;
+            ["accessObject"] = "",
+            ["role"] = Role.Editor.Id
+        });
+        var dataContext = LayoutAreaReference.GetDataPointer(formId);
+
+        var userPicker = new MeshNodePickerControl(new JsonPointerReference("accessObject"))
+        {
+            Queries = ["namespace:\"\" nodeType:User"],
+            Label = "Add user",
+            DataContext = dataContext
+        }.WithStyle("flex: 1; min-width: 220px;");
+
+        var roleSelect = (new SelectControl(new JsonPointerReference("role"), Array.Empty<object>())
+                .WithOptions(new[] { Role.Admin.Id, Role.Editor.Id, Role.Viewer.Id, Role.Commenter.Id }))
+            with { Label = "Role", DataContext = dataContext };
+
+        var addButton = Controls.Button("+ Add")
+            .WithAppearance(Appearance.Accent)
+            .WithClickAction((Action<UiActionContext>)(ctx =>
+            {
+                ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+                    .Take(1)
+                    .Subscribe(form =>
+                    {
+                        var subject = form.GetValueOrDefault("accessObject")?.ToString()?.Trim();
+                        var role = form.GetValueOrDefault("role")?.ToString()?.Trim();
+                        if (string.IsNullOrEmpty(subject))
+                        {
+                            ShowValidationError(ctx, "Please select a **user**.");
+                            return;
+                        }
+                        if (string.IsNullOrEmpty(role)) role = Role.Editor.Id;
+                        CreateAssignment(ctx, nodePath, subject, role);
+                    });
+            }));
+
+        return Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("align-items: flex-end; gap: 12px; margin-top: 8px;")
+            .WithView(userPicker)
+            .WithView(roleSelect)
+            .WithView(addButton);
+    }
+
+    /// <summary>
+    /// Creates an AccessAssignment node for <paramref name="subject"/> with a single
+    /// <paramref name="role"/> (the bare role id — the value the permission evaluator resolves).
+    /// </summary>
+    private static void CreateAssignment(UiActionContext ctx, string nodePath, string subject, string role)
+    {
+        var subjectName = subject.Split('/').Last();
+        var newNode = new MeshNode($"{subjectName}_Access", AccessNamespace(nodePath))
+        {
+            NodeType = Configuration.AccessAssignmentNodeType.NodeType,
+            Name = $"{subjectName} Access",
+            MainNode = nodePath,
+            Content = new AccessAssignment
+            {
+                AccessObject = subject,
+                DisplayName = subjectName,
+                Roles = [new RoleAssignment { Role = role, Denied = false }]
+            }
+        };
+
+        var meshService = ctx.Host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        meshService.CreateNode(newNode).Subscribe(
+            _ => { },
+            ex =>
+            {
+                var dialog = Controls.Dialog(
+                    Controls.Markdown($"Failed to add: {ex.Message}"), "Error")
+                    .WithSize("S").WithClosable(true);
+                ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
+            });
+    }
+
+    /// <summary>
+    /// The collapsed-by-design Advanced section: the partition policy that caps the permissions
+    /// available to everyone at this scope and below.
+    /// </summary>
+    private static UiControl BuildAdvancedSection(LayoutAreaHost host, string nodePath)
+    {
+        var workspace = host.Hub.GetWorkspace();
+        var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var policyPath = string.IsNullOrEmpty(nodePath) ? "_Policy" : $"{nodePath}/_Policy";
+
+        return Controls.Stack
+            .WithStyle("gap: 8px; margin-top: 24px; padding-top: 16px; " +
+                       "border-top: 1px solid var(--neutral-stroke-divider-rest);")
+            .WithView(Controls.H3("Advanced").WithStyle("margin: 0;"))
+            .WithView(Controls.Markdown(
+                "Partition policy caps the permissions available to **everyone** at this scope and below."))
+            .WithView(Controls.Button("Set partition policy…")
+                .WithAppearance(Appearance.Neutral)
+                .WithStyle("align-self: flex-start;")
+                .WithClickAction((Action<UiActionContext>)(ctx =>
+                    ShowSetPolicyDialog(ctx, nodePath, policyPath, policyExists: false, workspace, meshService, existing: null))));
     }
 
     /// <summary>
@@ -368,19 +384,6 @@ public static class AccessControlLayoutArea
             "Validation Error"
         ).WithSize("S").WithClosable(true);
         ctx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-    }
-
-    private static string FormatPermissions(Permission permissions)
-    {
-        if (permissions == Permission.All) return "All";
-        if (permissions == Permission.None) return "None";
-        var names = new List<string>();
-        if (permissions.HasFlag(Permission.Read)) names.Add("Read");
-        if (permissions.HasFlag(Permission.Create)) names.Add("Create");
-        if (permissions.HasFlag(Permission.Update)) names.Add("Update");
-        if (permissions.HasFlag(Permission.Delete)) names.Add("Delete");
-        if (permissions.HasFlag(Permission.Comment)) names.Add("Comment");
-        return string.Join(", ", names);
     }
 
     private static void ShowSetPolicyDialog(

@@ -1,0 +1,32 @@
+@inherits BlazorView<MeshNodeRoleEditorControl, MeshNodeRoleEditorView>
+@using MeshWeaver.Graph
+@using Microsoft.FluentUI.AspNetCore.Components
+
+@if (!_loaded)
+{
+    <FluentProgressRing Style="width: 16px; height: 16px;" />
+}
+else if (!_hasRole)
+{
+    <span></span>
+}
+else if (CanEdit)
+{
+    <div style="display: flex; align-items: center; gap: 8px;">
+        <FluentSelect TOption="string"
+                      Items="@_options"
+                      OptionValue="@(o => o)"
+                      OptionText="@(o => o)"
+                      Value="@_role"
+                      ValueChanged="@OnRoleChanged"
+                      Style="min-width: 130px;" />
+        <FluentCheckbox Value="@_denied" ValueChanged="(bool v) => OnDeniedChanged(v)" Label="Deny" />
+    </div>
+}
+else
+{
+    <FluentLabel Typo="Microsoft.FluentUI.AspNetCore.Components.Typography.Body"
+                 Style="@(_denied ? "text-decoration: line-through; color: var(--error-foreground);" : "")">
+        @_role@(_denied ? " (denied)" : "")
+    </FluentLabel>
+}
