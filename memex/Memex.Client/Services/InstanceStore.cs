@@ -51,10 +51,15 @@ public sealed class InstanceStore
 
     public void Save() => Preferences.Default.Set(Key, JsonSerializer.Serialize(Instances));
 
-    public MemexInstance Add(string name, string url)
+    public MemexInstance Add(string name, string url, string? token = null)
     {
         url = Normalize(url);
-        var inst = new MemexInstance { Name = string.IsNullOrWhiteSpace(name) ? url : name.Trim(), Url = url };
+        var inst = new MemexInstance
+        {
+            Name = string.IsNullOrWhiteSpace(name) ? url : name.Trim(),
+            Url = url,
+            Token = string.IsNullOrWhiteSpace(token) ? null : token.Trim(),
+        };
         Instances.Add(inst);
         Save();
         return inst;
