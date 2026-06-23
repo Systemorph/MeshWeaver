@@ -27,7 +27,11 @@ namespace MeshWeaver.Blazor;
 
 public static class BlazorViewRegistry
 {
-    internal static MessageHubConfiguration AddBlazor(
+    // Public so non-Server hosts (e.g. the MAUI in-process portal) can wire the standard Blazor view
+    // registry on their hub directly. The Server path reaches it via MeshBuilder.AddBlazor; a Hybrid
+    // host that can't reference MeshWeaver.Hosting.Blazor (Microsoft.AspNetCore.App framework ref) calls
+    // this on its hub config instead.
+    public static MessageHubConfiguration AddBlazor(
         this MessageHubConfiguration config,
         Func<LayoutClientConfiguration, LayoutClientConfiguration>? configuration = null
     ) => config

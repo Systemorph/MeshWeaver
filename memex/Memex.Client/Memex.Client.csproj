@@ -83,6 +83,11 @@
       <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
       <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Sqlite\MeshWeaver.Hosting.Sqlite.csproj" />
       <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+      <!-- In-process portal: render the MeshWeaver portal (ApplicationPage → layout areas) in the
+           BlazorWebView, bound to the LOCAL hub. These are the portal Blazor RCLs. -->
+      <ProjectReference Include="..\..\src\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
+      <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Graph\MeshWeaver.Blazor.Graph.csproj" />
+      <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Radzen\MeshWeaver.Blazor.Radzen.csproj" />
     </ItemGroup>
 
 </Project>
