@@ -15,6 +15,9 @@ public sealed class InstanceManagerPage : ContentPage
     // Pre-filled with a real value (not a grey placeholder that looks filled but isn't) — the public
     // memex is the default, so "Add instance" works on first tap.
     private readonly Entry _url = new() { Text = "https://memex.meshweaver.cloud", Keyboard = Keyboard.Url };
+    // An API token authenticates the instance: the local mesh joins every authenticated instance as a
+    // participant, so the remote mesh can address this client. Generate one in Settings → API Tokens.
+    private readonly Entry _token = new() { Placeholder = "API token (mw_…) — optional", IsPassword = true };
 
     public InstanceManagerPage(InstanceStore store)
     {
@@ -39,10 +42,12 @@ public sealed class InstanceManagerPage : ContentPage
                     new Label { Text = "Add an instance", FontAttributes = FontAttributes.Bold },
                     _name,
                     _url,
+                    _token,
                     add,
                     new Label
                     {
-                        Text = "Enter the portal base URL. Open it and sign in with OAuth in the portal.",
+                        Text = "Base URL + an optional API token. With a token, the local mesh joins that "
+                             + "instance so it can be controlled from the remote mesh.",
                         FontSize = 12, TextColor = Colors.Gray
                     },
                 }
@@ -61,8 +66,9 @@ public sealed class InstanceManagerPage : ContentPage
     private void OnAdd(object? sender, EventArgs e)
     {
         if (string.IsNullOrWhiteSpace(_url.Text)) return;
-        _store.Add(_name.Text ?? "", _url.Text);
-        _name.Text = _url.Text = "";
+        _store.Add(_name.Text ?? "", _url.Text, _token.Text);
+        _name.Text = _token.Text = "";
+        _url.Text = "https://memex.meshweaver.cloud";
         Refresh();
     }
 
