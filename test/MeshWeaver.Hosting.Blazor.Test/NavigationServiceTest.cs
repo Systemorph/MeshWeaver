@@ -157,12 +157,25 @@ public class NavigationServiceTest
         _hubServiceProvider.GetService(typeof(AccessService)).Returns(anon);
     }
 
-    [Fact]
-    public async Task AnonymousVisitor_PrivateNode_EmitsAccessDenied()
+    /// <summary>
+    /// Waits until the mock NavigationManager has been redirected to a URL containing
+    /// <paramref name="fragment"/> (the anonymous gate's forceLoad NavigateTo is
+    /// synchronous, but poll briefly so the assertion is robust to any scheduling).
+    /// </summary>
+    private async Task WaitForRedirect(string fragment)
     {
-        // A logged-OUT visitor navigates to a node. The anonymous gate flips Status to
-        // AccessDenied so ApplicationPage's AuthorizeView renders RedirectToLogin —
-        // sending them to /login?returnUrl=<here> so login bounces them back afterward.
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (!_navigationManager.Uri.Contains(fragment, StringComparison.Ordinal)
+               && sw.Elapsed < WaitTimeout)
+            await Task.Delay(10);
+    }
+
+    [Fact]
+    public async Task AnonymousVisitor_PrivateNode_RedirectsToLogin()
+    {
+        // A logged-OUT visitor navigates to a node. The anonymous gate redirects them
+        // straight to /login?returnUrl=<here> (forceLoad) so login bounces them back
+        // afterward.
         MakeVisitorAnonymous();
 
         var service = CreateService();
@@ -173,19 +186,20 @@ public class NavigationServiceTest
         service.Initialize();
         _navigationManager.SimulateLocationChanged("http://localhost/Private/Space/Overview");
 
-        var status = await service.Status.Should().Within(WaitTimeout)
-            .Match(s => s.Phase == NavigationPhase.AccessDenied);
-        status.Phase.Should().Be(NavigationPhase.AccessDenied);
+        await WaitForRedirect("/login?returnUrl=");
+        _navigationManager.Uri.Should().Contain("/login?returnUrl=");
+        // returnUrl carries the page the visitor tried to open, so login can bounce back.
+        _navigationManager.Uri.Should().Contain(Uri.EscapeDataString("Private/Space/Overview"));
     }
 
     [Fact]
-    public async Task AnonymousVisitor_PublicNode_EmitsAccessDenied()
+    public async Task AnonymousVisitor_PublicNode_RedirectsToLogin()
     {
         // The fix: even a PublicRead page must NOT be shown to a logged-out visitor.
         // PathResolutionService resolves under a System bypass, so the public node still
-        // reaches the gate — which now denies it (→ RedirectToLogin) regardless of the
-        // node's public-read grant, instead of rendering its content to an anonymous
-        // browser. (Previously this resolved Ready, the reported bug.)
+        // reaches the gate — which now redirects to /login regardless of the node's
+        // public-read grant, instead of rendering its content to an anonymous browser.
+        // (Previously this resolved Ready, the reported bug.)
         MakeVisitorAnonymous();
 
         var service = CreateService();
@@ -196,9 +210,8 @@ public class NavigationServiceTest
         service.Initialize();
         _navigationManager.SimulateLocationChanged("http://localhost/Public/Welcome/Overview");
 
-        var status = await service.Status.Should().Within(WaitTimeout)
-            .Match(s => s.Phase == NavigationPhase.AccessDenied);
-        status.Phase.Should().Be(NavigationPhase.AccessDenied);
+        await WaitForRedirect("/login?returnUrl=");
+        _navigationManager.Uri.Should().Contain("/login?returnUrl=");
     }
 
     #endregion

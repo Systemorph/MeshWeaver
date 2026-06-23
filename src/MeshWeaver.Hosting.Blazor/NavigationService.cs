@@ -409,13 +409,22 @@ internal class NavigationService : INavigationService
 
         // Anonymous hard-gate: a logged-OUT visitor never sees application content —
         // not even a PublicRead node. PathResolutionService resolves under a System
-        // bypass, so EVERY existing mesh page (public or private) reaches here; we flip
-        // it to AccessDenied. ApplicationPage's <AuthorizeView><NotAuthorized> turns that
-        // into <RedirectToLogin>, which sends the visitor to /login?returnUrl=<this page>
-        // so that after signing in they land back on the page they originally requested.
-        // The portal requires authentication for ALL mesh content; "public access"
-        // governs what an AUTHENTICATED user without an explicit grant may read — NOT what
-        // an anonymous browser may see. userId is the EXPLICIT Anonymous well-known value
+        // bypass, so EVERY existing mesh page (public or private) reaches here. We
+        // redirect the visitor DIRECTLY to /login (forceLoad), carrying the current
+        // absolute URL as returnUrl so sign-in bounces them straight back to the page
+        // they tried to open.
+        //
+        // We navigate here instead of emitting AccessDenied and leaving ApplicationPage's
+        // <AuthorizeView><NotAuthorized><RedirectToLogin> to do it: that render-chain
+        // dependency didn't fire — the visitor just stayed on the page. A direct forceLoad
+        // navigation is unconditional, drops any half-built interactive circuit on the
+        // gated page, and 302s during prerender. The /login?returnUrl=… target is a page
+        // route (single segment + query) that ProcessLocationChange short-circuits, so
+        // this cannot loop.
+        //
+        // The portal requires authentication for ALL mesh content; "public access" governs
+        // what an AUTHENTICATED user without an explicit grant may read — NOT what an
+        // anonymous browser may see. userId is the EXPLICIT Anonymous well-known value
         // (ResolveCurrentUserId normalises logged-out + virtual visitors to it, captured
         // synchronously on the inbound-activity thread), so this never misreads an
         // authenticated visitor. AUTHENTICATED visitors are never gated here — their
@@ -427,7 +436,8 @@ internal class NavigationService : INavigationService
             Context = null;
             CurrentNamespace = null;
             _navigationContext.OnNext(null);
-            _status.OnNext(NavigationStatus.AccessDenied(route));
+            var returnUrl = Uri.EscapeDataString(_navigationManager.Uri);
+            _navigationManager.NavigateTo($"/login?returnUrl={returnUrl}", forceLoad: true);
             return;
         }
 
