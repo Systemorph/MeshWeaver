@@ -65,6 +65,12 @@ public partial class AreaPage : ComponentBase
 
             IsContentReady = false;
             InvokeAsync(StateHasChanged);
+        },
+        // A faulted resolver used to be unobserved, leaving the page blank with no signal. Surface it.
+        ex =>
+        {
+            PageTitle = "Error resolving page";
+            InvokeAsync(StateHasChanged);
         });
     }
 

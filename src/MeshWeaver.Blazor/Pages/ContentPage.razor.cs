@@ -109,6 +109,12 @@ public partial class ContentPage : ComponentBase, IDisposable
             ResolvedPath = remainderParts.Length > 1 ? string.Join("/", remainderParts.Skip(1)) : null;
             TargetAddress = (Address)resolution.Prefix;
             ContinueAfterResolve();
+        },
+        // A faulted resolver used to be unobserved, leaving the page on its spinner. Surface inline.
+        ex =>
+        {
+            ErrorMessage = $"Failed to resolve '{FullPath}': {ex.Message}";
+            InvokeAsync(StateHasChanged);
         });
     }
 
