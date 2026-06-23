@@ -1,12 +1,17 @@
+using System.Reactive.Linq;
 using Memex.Client.Services;
 using Memex.Client.Voice;
 using MeshWeaver.Connection.SignalR;
+using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Hosting.Sqlite;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.Configuration;
@@ -82,6 +87,13 @@ public static class MauiProgram
             .AddRowLevelSecurity()
             .AddGraph()
             .AddSpaceType()
+            // The connectable-mesh node type. Each remote mesh (and THIS instance) is a MemexInstance
+            // node; the bootstrap reads them via GetQuery and dials the authenticated remotes.
+            .AddMemexInstanceType()
+            // Single-user local mesh: the device-user (the phone's user) owns everything — a root-scope
+            // Admin grant — so every local write (seed, chat, edit) is permitted. Same shape as the
+            // portal's GlobalAdminSeed / TestUsers.PublicAdminAccess, scoped to the device user.
+            .AddMeshNodes(DeviceUserAdminGrant())
             .ConfigureServices(s => s.AddFileSystemAssemblyStore(Path.Combine(appData, "assembly-store")));
 
         // 🌐 Join every AUTHENTICATED instance from the list as a SignalR participant — any number of
@@ -101,8 +113,60 @@ public static class MauiProgram
 
         // Single device-user identity for every local operation (single-user local mesh).
         hub.ServiceProvider.GetRequiredService<AccessService>()
-            .SetCircuitContext(new AccessContext { ObjectId = "device-user", Name = "Device User" });
+            .SetCircuitContext(new AccessContext { ObjectId = DeviceUserId, Name = "Device User" });
+
+        // First-boot seed: ONE MemexInstance node represents THIS instance, named after the device.
+        // Idempotent — only written when absent. The onboarding step lets the user rename it.
+        SeedOwnInstance(hub);
 
         return hub;
+    }
+
+    private const string DeviceUserId = "device-user";
+
+    /// <summary>Root-scope Admin grant for the device user — they own the single-user local mesh.</summary>
+    private static MeshNode DeviceUserAdminGrant() =>
+        // Root scope lives at "_Access" (NOT "") so SecurityService recognises scope = "" (global) —
+        // see TestUsers.CreateAccessNode.
+        new(DeviceUserId + "_Access", "_Access")
+        {
+            NodeType = "AccessAssignment",
+            Name = "Device User — Admin",
+            Content = new AccessAssignment
+            {
+                AccessObject = DeviceUserId,
+                DisplayName = "Device User",
+                Roles = [new RoleAssignment { Role = "Admin" }],
+            },
+            MainNode = "",
+        };
+
+    /// <summary>
+    /// Seeds the "own instance" MemexInstance node (named after the device) when it's absent — the one
+    /// default entry every new app gets, representing the local mesh itself.
+    /// </summary>
+    private static void SeedOwnInstance(IMessageHub hub)
+    {
+        var deviceName = DeviceInfo.Current.Name;
+        if (string.IsNullOrWhiteSpace(deviceName))
+            deviceName = "My Memex";
+
+        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("LocalMeshSeed");
+
+        // Existence check via GetQuery (emits the current set — empty on a fresh mesh — immediately);
+        // GetMeshNodeStream(path) instead WAITS for a node to appear, so it can't detect absence.
+        hub.GetWorkspace().GetQuery("boot-own-instance", $"nodeType:{MemexInstanceNodeType.NodeType}")
+            .Take(1).Timeout(TimeSpan.FromSeconds(15))
+            .Where(existing => !existing.Any())
+            .SelectMany(_ => meshService.CreateNode(new MeshNode("local", MemexInstanceNodeType.Segment)
+            {
+                NodeType = MemexInstanceNodeType.NodeType,
+                Name = deviceName,
+                Content = new MemexInstanceContent { DisplayName = deviceName, MeshId = "local" },
+            }))
+            .Subscribe(
+                _ => logger?.LogInformation("Seeded own instance {Name}", deviceName),
+                ex => logger?.LogWarning(ex, "Failed to seed own MemexInstance node"));
     }
 }
