@@ -120,84 +120,52 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
     }
 
     [Fact(Timeout = 30000)]
-    public async Task Thumbnail_ClickRoleChip_TogglesStrikethrough()
+    public async Task Thumbnail_ClickRemoveUser_DeletesAssignment()
     {
         var assignment = new AccessAssignment
         {
-            AccessObject = "User/hank",
-            DisplayName = "Hank",
+            AccessObject = "User/jack",
+            DisplayName = "Jack",
             Roles = [new RoleAssignment { Role = "Editor", Denied = false }]
         };
-        await CreateAssignmentNode("hank-access", assignment);
+        await CreateAssignmentNode("jack-access", assignment);
 
         var client = GetClient();
-        var hostAddress = NodeAddress("hank-access");
+        var hostAddress = NodeAddress("jack-access");
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.ThumbnailArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             hostAddress, reference);
 
-        // Wait for initial render
-        var initialControl = await stream
+        // Row structure: [subject thumbnail] [rolesBlock] [✕ remove-user button]
+        var outerStack = (await stream
             .GetControlStream(reference.Area!)
             .Should().Within(10.Seconds())
-            .Match(x => x != null);
+            .Match(x => x is StackControl))!.Should().BeOfType<StackControl>().Subject;
 
-        var outerStack = initialControl.Should().BeOfType<StackControl>().Subject;
-
-        // Card structure: topRow (icon + name + "+" button), chipsRow (role buttons + × buttons)
         var outerAreas = outerStack.Areas.ToArray();
-        outerAreas.Length.Should().BeGreaterThanOrEqualTo(2, "should have topRow + chipsRow");
+        outerAreas.Length.Should().BeGreaterThanOrEqualTo(3,
+            "row has subject + rolesBlock + remove-user button for an admin");
 
-        // Get the chips row area
-        var chipsRowAreaName = outerAreas[1].Area?.ToString();
-        chipsRowAreaName.Should().NotBeNullOrEmpty("chipsRow area should have a name");
+        // The last area is the remove-user ✕ button.
+        var removeUserArea = outerAreas[^1].Area?.ToString();
+        removeUserArea.Should().NotBeNullOrEmpty();
 
-        var chipsRowControl = await stream
-            .GetControlStream(chipsRowAreaName!)
-            .Should().Within(5.Seconds())
-            .Match(x => x != null);
-
-        var chipsRow = chipsRowControl.Should().BeOfType<StackControl>().Subject;
-        var chipAreas = chipsRow.Areas.ToArray();
-        chipAreas.Should().NotBeEmpty("should have at least one role chip");
-
-        // First chip area is the role toggle button
-        var roleChipArea = chipAreas[0].Area?.ToString();
-        roleChipArea.Should().NotBeNullOrEmpty();
-
-        // Verify initial button exists and has no line-through
-        var initialChip = await stream
-            .GetControlStream(roleChipArea!)
-            .Should().Within(5.Seconds())
-            .Match(x => x != null);
-        initialChip.Should().BeOfType<ButtonControl>();
-        var initialStyle = ((ButtonControl)initialChip!).Style?.ToString() ?? "";
-        initialStyle.Should().NotContain("line-through", "initial state should NOT have strikethrough");
-
-        // Click the role chip to toggle denied
-        client.Post(new ClickedEvent(roleChipArea!, stream.StreamId),
+        client.Post(new ClickedEvent(removeUserArea!, stream.StreamId),
             o => o.WithTarget(hostAddress));
 
-        // Wait for re-render — button style should now have line-through
-        var updatedChip = await stream
-            .GetControlStream(roleChipArea!)
+        // Re-read authoritatively (Mesh.GetMeshNode round-trip) until the node is gone.
+        var deleted = await Observable.Interval(100.Milliseconds()).StartWith(0L)
+            .SelectMany(_ => Mesh.GetMeshNode($"{TestNamespace}/jack-access"))
             .Should().Within(10.Seconds())
-            .Match(c =>
-            {
-                if (c is not ButtonControl btn) return false;
-                var style = btn.Style?.ToString() ?? "";
-                return style.Contains("line-through");
-            });
+            .Match(n => n is null);
 
-        updatedChip.Should().NotBeNull("role chip should re-render with strikethrough after toggle");
-        var updatedStyle = ((ButtonControl)updatedChip!).Style?.ToString() ?? "";
-        updatedStyle.Should().Contain("line-through", "denied role should show strikethrough");
+        deleted.Should().BeNull("the whole assignment node should be deleted");
     }
 
     [Fact(Timeout = 30000)]
-    public async Task Thumbnail_ClickRemoveRole_RemovesChip()
+    public async Task Thumbnail_ClickRemoveRole_RemovesRole()
     {
         var assignment = new AccessAssignment
         {
@@ -219,42 +187,42 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             hostAddress, reference);
 
-        // Wait for initial render
-        var initialControl = await stream
+        // Row structure: [subject] [rolesBlock] [✕]. rolesBlock = [roleRow0] [roleRow1] [+ Add role].
+        // Each roleRow = [role editor] [× remove-role].
+        var outerStack = (await stream
             .GetControlStream(reference.Area!)
             .Should().Within(10.Seconds())
-            .Match(x => x != null);
+            .Match(x => x is StackControl))!.Should().BeOfType<StackControl>().Subject;
 
-        var outerStack = initialControl.Should().BeOfType<StackControl>().Subject;
         var outerAreas = outerStack.Areas.ToArray();
-        outerAreas.Length.Should().BeGreaterThanOrEqualTo(2);
+        outerAreas.Length.Should().BeGreaterThanOrEqualTo(2, "subject + rolesBlock");
 
-        // Get chips row
-        var chipsRowAreaName = outerAreas[1].Area?.ToString();
-        var chipsRowControl = await stream
-            .GetControlStream(chipsRowAreaName!)
+        var rolesBlockArea = outerAreas[1].Area?.ToString();
+        var rolesBlock = (await stream
+            .GetControlStream(rolesBlockArea!)
             .Should().Within(5.Seconds())
-            .Match(x => x != null);
+            .Match(x => x is StackControl))!.Should().BeOfType<StackControl>().Subject;
 
-        var chipsRow = chipsRowControl.Should().BeOfType<StackControl>().Subject;
-        var chipAreas = chipsRow.Areas.ToArray();
-        // With 2 roles: (role1, ×1, role2, ×2) = 4 areas
-        chipAreas.Length.Should().BeGreaterThanOrEqualTo(4, "should have 2 role chips + 2 × buttons");
+        var roleRows = rolesBlock.Areas.ToArray();
+        roleRows.Length.Should().BeGreaterThanOrEqualTo(2, "two role rows (+ an Add role button)");
 
-        // Click the × button for the first role (index 1)
-        var removeButtonArea = chipAreas[1].Area?.ToString();
-        removeButtonArea.Should().NotBeNullOrEmpty();
+        // First role row → its remove-role × button (the role editor is at index 0).
+        var roleRow0Area = roleRows[0].Area?.ToString();
+        var roleRow0 = (await stream
+            .GetControlStream(roleRow0Area!)
+            .Should().Within(5.Seconds())
+            .Match(x => x is StackControl))!.Should().BeOfType<StackControl>().Subject;
 
-        client.Post(new ClickedEvent(removeButtonArea!, stream.StreamId),
+        var roleRow0Areas = roleRow0.Areas.ToArray();
+        roleRow0Areas.Length.Should().BeGreaterThanOrEqualTo(2, "role editor + remove-role button");
+
+        var removeRoleArea = roleRow0Areas[1].Area?.ToString();
+        removeRoleArea.Should().NotBeNullOrEmpty();
+
+        client.Post(new ClickedEvent(removeRoleArea!, stream.StreamId),
             o => o.WithTarget(hostAddress));
 
-        // Re-read the node authoritatively until the role is removed. Each
-        // tick is a fresh per-node-hub round-trip (Mesh.GetMeshNode = the
-        // authoritative request/response read, always fresh) — the
-        // GetMeshNodeStream cache subscription proved unreliable here: the
-        // Where(...) never matched after the click, even though the per-node
-        // hub had committed the new state. The wait lives in the assertion;
-        // the predicate is the settle condition.
+        // Re-read authoritatively until the first role (Admin) is removed.
         var updatedNode = await Observable.Interval(100.Milliseconds()).StartWith(0L)
             .SelectMany(_ => Mesh.GetMeshNode($"{TestNamespace}/iris-access"))
             .Should().Within(10.Seconds())
@@ -264,7 +232,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
         var result = updatedNode!.Content as AccessAssignment;
         result.Should().NotBeNull();
         result!.Roles.Should().HaveCount(1);
-        result.Roles[0].Role.Should().Be("Editor", "Admin should have been removed");
+        result.Roles[0].Role.Should().Be("Editor", "Admin (index 0) should have been removed");
     }
 
     [Fact(Timeout = 30000)]
