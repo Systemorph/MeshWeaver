@@ -137,13 +137,25 @@ public class LanguageModelNodeTypeTest
 
         var nodes = withModels.GetStaticNodes().ToList();
 
-        var policy = nodes.Should().ContainSingle(n => n.NodeType == "PartitionAccessPolicy").Subject;
+        // The seeder emits a _Policy for the Provider partition AND one for the legacy Model
+        // partition (the picker / model resolution read `model` under the user's identity, so it
+        // also needs PublicRead — restored after the catalog refactor, atioz 2026-06-23). Target
+        // the Provider partition's policy specifically.
+        var policy = nodes.Should().ContainSingle(n => n.NodeType == "PartitionAccessPolicy"
+            && n.Namespace == ModelProviderNodeType.RootNamespace).Subject;
         var aap = policy.Content.Should().BeOfType<MeshWeaver.Mesh.Security.PartitionAccessPolicy>().Subject;
         aap.PublicRead.Should().BeTrue();
         aap.Create.Should().BeTrue();
         aap.Update.Should().BeTrue();
         aap.Delete.Should().BeTrue();
         nodes.Should().Contain(n => n.NodeType == LanguageModelNodeType.NodeType);
+
+        // The legacy Model partition also gets a PublicRead, lifted-caps policy so non-admins can
+        // READ models there (else GetDataRequest hub=model is denied → chat round crashes).
+        var modelPolicy = nodes.Should().ContainSingle(n => n.NodeType == "PartitionAccessPolicy"
+            && n.Namespace == LanguageModelNodeType.RootNamespace).Subject;
+        var modelAap = (MeshWeaver.Mesh.Security.PartitionAccessPolicy)modelPolicy.Content!;
+        modelAap.PublicRead.Should().BeTrue();
     }
 
     [Fact]
