@@ -350,33 +350,57 @@ internal class NavigationService : INavigationService
         // node being deleted) reflows into the navigation context. No retry
         // timer, no backoff array — the catalog change feed drives re-emit.
         var resolved = false;
-        _resolutionSubscription = _pathResolver.ResolvePath(route).Subscribe(resolution =>
-        {
-            if (resolution is null)
-                return; // wait for the catalog to learn about the path
-            resolved = true;
-            _notFoundWatchdog?.Dispose();
-            ProcessResolvedPath(route, args, resolution, userId);
-        });
 
-        // Watchdog: if no resolution arrives within the cumulative retry budget,
-        // flip to NotFound. Replaces the previous per-attempt Observable.Timer
-        // chain — same outer time budget, but the work happens through the live
-        // stream above instead of polling re-resolves.
-        var totalBudget = _retryDelays.Sum();
-        _notFoundWatchdog = Observable.Timer(TimeSpan.FromMilliseconds(totalBudget))
-            .Subscribe(_ =>
-            {
-                if (resolved) return;
-                // Stale-check against the raw path that was pushed onto _pathSubject
-                // (query included) — that is what _currentPathSnapshot mirrors.
-                if (_currentPathSnapshot != rawPath) return; // user navigated away
-                IsResolving = false;
-                Context = null;
-                CurrentNamespace = null;
-                _status.OnNext(NavigationStatus.NotFound(route));
-                _navigationContext.OnNext(null);
-            });
+        // Stale-checked NotFound settle — called once every probe across the full
+        // budget has come back empty (or the resolver errored). Reported only if the
+        // user is still on this path and nothing resolved in the meantime.
+        void SettleNotFound()
+        {
+            if (resolved) return;
+            // Stale-check against the raw path that was pushed onto _pathSubject
+            // (query included) — that is what _currentPathSnapshot mirrors.
+            if (_currentPathSnapshot != rawPath) return; // user navigated away
+            IsResolving = false;
+            Context = null;
+            CurrentNamespace = null;
+            _status.OnNext(NavigationStatus.NotFound(route));
+            _navigationContext.OnNext(null);
+        }
+
+        // 🚨 ResolvePath is a ONE-SHOT snapshot (PathResolutionService.Take(1)): a
+        // transient empty Initial during partition warm-up / NodeType compile emits
+        // null and COMPLETES — it does NOT re-emit when the catalog later learns the
+        // path. Subscribing once therefore settled that transient negative as a
+        // PERMANENT NotFound (Context=null) until a manual reload — the dead-page /
+        // "view at ``" symptom. So RE-ASK the resolver SEQUENTIALLY: probe; if empty
+        // and the schedule has another window, wait it and probe again; stop at the
+        // FIRST non-null resolution. The negative is never cached/settled while the
+        // budget is open — only an exhausted (all-empty) budget reports NotFound, and
+        // a resolved path fires no wasteful extra probes (sequential, not parallel).
+        IObservable<AddressResolution?> Probe(int attempt) =>
+            Observable.Defer(() => _pathResolver.ResolvePath(route))
+                .SelectMany(r =>
+                    r is not null || attempt >= _retryDelays.Length
+                        ? Observable.Return(r)
+                        : Observable.Timer(TimeSpan.FromMilliseconds(_retryDelays[attempt]))
+                            .SelectMany(_ => Probe(attempt + 1)));
+
+        _resolutionSubscription = Probe(0)
+            .Take(1)
+            .Subscribe(
+                resolution =>
+                {
+                    if (resolution is not null)
+                    {
+                        resolved = true;
+                        ProcessResolvedPath(route, args, resolution, userId);
+                    }
+                    else
+                    {
+                        SettleNotFound();
+                    }
+                },
+                _ => SettleNotFound());
     }
 
     private void ProcessResolvedPath(string route, ImmutableDictionary<string, string> args, AddressResolution resolution, string userId)

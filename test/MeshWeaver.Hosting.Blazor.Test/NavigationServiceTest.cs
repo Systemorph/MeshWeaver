@@ -392,6 +392,40 @@ public class NavigationServiceTest
     }
 
     [Fact]
+    public async Task OnLocationChanged_WhenFirstSnapshotEmptyThenResolves_RetriesAndResolves()
+    {
+        // 🚨 Regression (dead page / "view at ``"): ResolvePath is a ONE-SHOT
+        // Take(1) snapshot. During partition warm-up / NodeType compile the FIRST
+        // snapshot can be empty (null) for a path that DOES exist. The old code
+        // subscribed once and settled that transient negative as a PERMANENT
+        // NotFound (Context=null) — the page stayed dead until a manual reload. The
+        // fix re-ASKS the resolver across the retry budget, so a path that becomes
+        // resolvable on a LATER probe still lands. The negative is never cached.
+        var service = new NavigationService(
+            _navigationManager, _pathResolver, _hub, new[] { 5, 5, 5 });
+
+        // First probe: empty (catalog hasn't learned the path yet). Subsequent
+        // probes: the node is now present → resolves.
+        _pathResolver.ResolvePath("rbuergi/_Thread/hello-73ac")
+            .Returns(
+                System.Reactive.Linq.Observable.Return<AddressResolution?>(null),
+                System.Reactive.Linq.Observable.Return<AddressResolution?>(
+                    new AddressResolution("rbuergi/_Thread/hello-73ac", null)));
+
+        service.Initialize();
+        _navigationManager.SimulateLocationChanged("http://localhost/rbuergi/_Thread/hello-73ac");
+
+        // The transient first-empty must NOT settle as NotFound — a later probe resolves.
+        var ctx = await service.NavigationContext.Should().Within(WaitTimeout)
+            .Match(c => c?.Namespace == "rbuergi/_Thread/hello-73ac");
+        ctx.Should().NotBeNull();
+        service.Context!.Namespace.Should().Be("rbuergi/_Thread/hello-73ac");
+
+        // It re-asked the resolver rather than settling on the single one-shot null.
+        _ = _pathResolver.Received(2).ResolvePath("rbuergi/_Thread/hello-73ac");
+    }
+
+    [Fact]
     public async Task OnLocationChanged_ParsesRemainderIntoAreaAndId()
     {
         // Arrange
