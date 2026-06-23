@@ -6,6 +6,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.FluentUI.AspNetCore.Components;
@@ -31,6 +32,16 @@ public partial class ApplicationPage : ComponentBase, IDisposable
 
     [Inject]
     private Microsoft.Extensions.Logging.ILogger<ApplicationPage> Logger { get; set; } = null!;
+
+    /// <summary>
+    /// Auth state of the current visitor. Used to suppress the prerender HTML flash
+    /// for a logged-OUT visitor: the anonymous gate (NavigationService → AccessDenied →
+    /// RedirectToLogin) fires only once the circuit goes interactive, so without this
+    /// check a PublicRead node's cached HTML would be served during the static prerender
+    /// pass — the "public page shown to anonymous" symptom — before the redirect lands.
+    /// </summary>
+    [CascadingParameter]
+    private Task<AuthenticationState>? AuthState { get; set; }
 
     /// <summary>
     /// Current status of the page-lookup pipeline. Always set to a non-null
@@ -123,7 +134,10 @@ public partial class ApplicationPage : ComponentBase, IDisposable
         {
             // Prerender: subscribe once for the cached HTML; first emission wins.
             // Subscribe + Take(1) — no await on a hub-touching observable.
-            if (!string.IsNullOrEmpty(Path))
+            // Skip entirely for a logged-OUT visitor: serving a PublicRead node's
+            // cached HTML here would leak content before the interactive anonymous
+            // gate (NavigationService → AccessDenied → RedirectToLogin) redirects them.
+            if (!string.IsNullOrEmpty(Path) && await IsAuthenticatedAsync())
             {
                 MeshService.GetPreRenderedHtml(Path)
                     .Take(1)
@@ -153,6 +167,14 @@ public partial class ApplicationPage : ComponentBase, IDisposable
             StateHasChanged();
         }
     }
+
+    /// <summary>
+    /// True when the current visitor is logged in. Returns false when no auth-state
+    /// cascade is present (fail-closed: treat an unknown visitor as anonymous so the
+    /// prerender content gate is never silently bypassed).
+    /// </summary>
+    private async Task<bool> IsAuthenticatedAsync()
+        => AuthState is not null && (await AuthState).User.Identity?.IsAuthenticated == true;
 
     private async Task InitializeForCurrentPath()
     {

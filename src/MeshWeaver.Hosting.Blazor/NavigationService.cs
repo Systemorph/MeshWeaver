@@ -406,39 +406,39 @@ internal class NavigationService : INavigationService
     private void ProcessResolvedPath(string route, ImmutableDictionary<string, string> args, AddressResolution resolution, string userId)
     {
         var (area, id) = ParseRemainder(resolution.Remainder);
+
+        // Anonymous hard-gate: a logged-OUT visitor never sees application content —
+        // not even a PublicRead node. PathResolutionService resolves under a System
+        // bypass, so EVERY existing mesh page (public or private) reaches here; we flip
+        // it to AccessDenied. ApplicationPage's <AuthorizeView><NotAuthorized> turns that
+        // into <RedirectToLogin>, which sends the visitor to /login?returnUrl=<this page>
+        // so that after signing in they land back on the page they originally requested.
+        // The portal requires authentication for ALL mesh content; "public access"
+        // governs what an AUTHENTICATED user without an explicit grant may read — NOT what
+        // an anonymous browser may see. userId is the EXPLICIT Anonymous well-known value
+        // (ResolveCurrentUserId normalises logged-out + virtual visitors to it, captured
+        // synchronously on the inbound-activity thread), so this never misreads an
+        // authenticated visitor. AUTHENTICATED visitors are never gated here — their
+        // identity is trusted and the content stream enforces RLS, so gating them would
+        // re-introduce the 2026-05-21 identity-loss false-denial.
+        if (string.Equals(userId, WellKnownUsers.Anonymous, StringComparison.OrdinalIgnoreCase))
+        {
+            IsResolving = false;
+            Context = null;
+            CurrentNamespace = null;
+            _navigationContext.OnNext(null);
+            _status.OnNext(NavigationStatus.AccessDenied(route));
+            return;
+        }
+
         _status.OnNext(NavigationStatus.Redirecting(resolution.Prefix, area));
         _status.OnNext(NavigationStatus.Loading(resolution.Prefix));
-
-        var isAnonymous = string.Equals(userId, WellKnownUsers.Anonymous, StringComparison.OrdinalIgnoreCase);
 
         // Reactive load â€” Subscribe, never await (every async bit through a hub
         // round-trip is a deadlock surface; see Doc/Architecture/AsynchronousCalls.md).
         LoadNodeWithPreRenderedHtml(resolution)
-            // Anonymous read-gate: a logged-OUT visitor who resolves a node they
-            // cannot read is flipped to AccessDenied; ApplicationPage's
-            // AuthorizeView turns that into a redirect to /login (logging in may
-            // grant access). AUTHENTICATED visitors are never gated here — their
-            // identity is trusted and the content stream enforces RLS, so gating
-            // them would re-introduce the 2026-05-21 identity-loss false-denial.
-            // For the anonymous case the check runs for the EXPLICIT Anonymous id
-            // (immune to Rx-hop context loss): a PublicRead node returns Read on
-            // the fast static public-grant seed — no added latency; a private node
-            // returns None → redirect. Fail closed on timeout: an unresolved check
-            // sends the logged-out visitor to login (recoverable) rather than
-            // leaking a private node.
-            .SelectMany(node =>
-                node is null || !isAnonymous
-                    ? Observable.Return((Node: node, Allowed: true))
-                    : _hub.GetEffectivePermissions(resolution.Prefix, WellKnownUsers.Anonymous)
-                        .Select(p => p.HasFlag(Permission.Read))
-                        .Take(1)
-                        .Timeout(TimeSpan.FromSeconds(8))
-                        .Catch<bool, Exception>(_ => Observable.Return(false))
-                        .Select(allowed => (Node: (MeshNode?)node, Allowed: allowed)))
-            .Subscribe(result =>
+            .Subscribe(node =>
         {
-            var node = result.Node;
-
             // Null node after the load completes means one of: (a) the path
             // genuinely doesn't exist, (b) the user's Read permission was
             // filtered out at the RLS layer, or (c) the 15s timeout above
@@ -457,17 +457,6 @@ internal class NavigationService : INavigationService
                 CurrentNamespace = null;
                 _navigationContext.OnNext(null);
                 _status.OnNext(NavigationStatus.NotFound(route));
-                return;
-            }
-
-            // Anonymous visitor, node not readable → AccessDenied (→ login).
-            if (!result.Allowed)
-            {
-                IsResolving = false;
-                Context = null;
-                CurrentNamespace = null;
-                _navigationContext.OnNext(null);
-                _status.OnNext(NavigationStatus.AccessDenied(route));
                 return;
             }
 

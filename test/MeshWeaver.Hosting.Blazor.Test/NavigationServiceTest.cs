@@ -49,18 +49,19 @@ public class NavigationServiceTest
             .Returns(_creatableTypesProvider);
         _hubServiceProvider.GetService(typeof(IMeshQueryCore)).Returns(_meshQuery);
 
-        // NavigationService's anonymous read-gate (ProcessResolvedPath) runs for
-        // logged-out visitors (no AccessService on the circuit → Anonymous). Leave
-        // AccessService unstubbed (null): that keeps the gate active AND keeps
-        // TrackNavigationActivity skipping — it Posts a TrackActivityRequest only for
-        // a real user, and IMessageHub.Post on an NSubstitute hub auto-proxies the
-        // internal-membered IMessageDelivery, which throws TypeLoadException under
-        // Castle DynamicProxy in CI. The gate is satisfied with a real permissions
-        // delegate granting Read; AnonymousVisitor_DeniedNode overrides it with None
-        // to exercise the AccessDenied path.
-        _hub.Configuration.Returns(new MessageHubConfiguration(null, new Address("test", "nav"))
-            .Set<EffectivePermissionsDelegate>((_, _, _) =>
-                System.Reactive.Linq.Observable.Return(Permission.Read)));
+        // NavigationService's anonymous gate (ProcessResolvedPath) flips ANY logged-OUT
+        // visitor to AccessDenied (→ RedirectToLogin), so the default fixture must run as
+        // an AUTHENTICATED visitor for the resolution tests to reach a NavigationContext.
+        // We use the System identity: it is non-anonymous (clears the gate) AND
+        // TrackNavigationActivity short-circuits on WellKnownUsers.System before the
+        // _hub.Post — whose IMessageDelivery<T> return type Castle DynamicProxy cannot
+        // proxy (TypeLoadException in CI). The two anonymous tests override this with a
+        // virtual/empty context to exercise the gate.
+        var systemAccess = new AccessService();
+        systemAccess.SetCircuitContext(new AccessContext { ObjectId = WellKnownUsers.System, Name = "System" });
+        _hubServiceProvider.GetService(typeof(AccessService)).Returns(systemAccess);
+
+        _hub.Configuration.Returns(new MessageHubConfiguration(null, new Address("test", "nav")));
 
         // Default stub for IMeshQueryCore.Query — NavigationService now
         // requires a non-null MeshNode to settle Context (commit 8a6f76b10:
@@ -137,19 +138,32 @@ public class NavigationServiceTest
     // a stale Context assertion; the .Within(...) chains preserve that budget.
     private static readonly TimeSpan WaitTimeout = TimeSpan.FromSeconds(15);
 
-    #region Anonymous Read-Gate Tests
+    #region Anonymous Gate Tests
+
+    /// <summary>
+    /// Replaces the default System (authenticated) fixture identity with a logged-OUT
+    /// visitor: a virtual context resolves to <see cref="WellKnownUsers.Anonymous"/> in
+    /// NavigationService.ResolveCurrentUserId, so the anonymous gate engages.
+    /// </summary>
+    private void MakeVisitorAnonymous()
+    {
+        var anon = new AccessService();
+        anon.SetCircuitContext(new AccessContext
+        {
+            ObjectId = WellKnownUsers.Anonymous,
+            Name = "Guest",
+            IsVirtual = true
+        });
+        _hubServiceProvider.GetService(typeof(AccessService)).Returns(anon);
+    }
 
     [Fact]
-    public async Task AnonymousVisitor_DeniedNode_EmitsAccessDenied()
+    public async Task AnonymousVisitor_PrivateNode_EmitsAccessDenied()
     {
-        // A logged-OUT visitor (no AccessService on the circuit → Anonymous)
-        // navigates to a node they cannot read. The anonymous read-gate must flip
-        // Status to AccessDenied so ApplicationPage's AuthorizeView redirects them to
-        // /login — rather than showing chrome over an "Access Denied" content panel.
-        // RLS verdict for the Anonymous identity on this node: no Read.
-        _hub.Configuration.Returns(new MessageHubConfiguration(null, new Address("test", "nav"))
-            .Set<EffectivePermissionsDelegate>((_, _, _) =>
-                System.Reactive.Linq.Observable.Return(Permission.None)));
+        // A logged-OUT visitor navigates to a node. The anonymous gate flips Status to
+        // AccessDenied so ApplicationPage's AuthorizeView renders RedirectToLogin —
+        // sending them to /login?returnUrl=<here> so login bounces them back afterward.
+        MakeVisitorAnonymous();
 
         var service = CreateService();
         _pathResolver.ResolvePath(Arg.Any<string>())
@@ -165,14 +179,14 @@ public class NavigationServiceTest
     }
 
     [Fact]
-    public async Task AnonymousVisitor_PublicNode_ResolvesReady()
+    public async Task AnonymousVisitor_PublicNode_EmitsAccessDenied()
     {
-        // Same logged-out visitor (Anonymous), but the node grants Anonymous Read (a
-        // PublicRead page). The gate must let it through to a normal NavigationContext —
-        // the welcome page / public docs must never bounce an anonymous visitor to login.
-        _hub.Configuration.Returns(new MessageHubConfiguration(null, new Address("test", "nav"))
-            .Set<EffectivePermissionsDelegate>((_, _, _) =>
-                System.Reactive.Linq.Observable.Return(Permission.Read)));
+        // The fix: even a PublicRead page must NOT be shown to a logged-out visitor.
+        // PathResolutionService resolves under a System bypass, so the public node still
+        // reaches the gate — which now denies it (→ RedirectToLogin) regardless of the
+        // node's public-read grant, instead of rendering its content to an anonymous
+        // browser. (Previously this resolved Ready, the reported bug.)
+        MakeVisitorAnonymous();
 
         var service = CreateService();
         _pathResolver.ResolvePath(Arg.Any<string>())
@@ -182,9 +196,9 @@ public class NavigationServiceTest
         service.Initialize();
         _navigationManager.SimulateLocationChanged("http://localhost/Public/Welcome/Overview");
 
-        var ctx = await service.NavigationContext.Should().Within(WaitTimeout)
-            .Match(c => c?.Area == "Overview");
-        ctx.Should().NotBeNull();
+        var status = await service.Status.Should().Within(WaitTimeout)
+            .Match(s => s.Phase == NavigationPhase.AccessDenied);
+        status.Phase.Should().Be(NavigationPhase.AccessDenied);
     }
 
     #endregion
