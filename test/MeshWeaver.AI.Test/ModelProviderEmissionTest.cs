@@ -2,6 +2,7 @@
 using System.Linq;
 using MeshWeaver.AI;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using Microsoft.Extensions.Configuration;
 using Xunit;
 
@@ -45,6 +46,45 @@ public class ModelProviderEmissionTest
         cfg.Endpoint.Should().Be("https://api.anthropic.com/v1/messages");
         cfg.ApiKey.Should().Be("sk-system-secret",
             "config-supplied credentials live on the (non-public-read) ModelProvider node");
+    }
+
+    /// <summary>
+    /// 🚨 Regression (atioz 2026-06-23, non-admin chat crash): the catalog source must seed a
+    /// PublicRead <c>PartitionAccessPolicy</c> for BOTH catalog partitions — <c>Provider</c>
+    /// (ModelProvider) AND <c>Model</c> (LanguageModel). Chat / the model picker / model
+    /// resolution read the <c>Model</c> partition UNDER THE USER'S IDENTITY
+    /// (<c>GetDataRequest hub=model</c>); without a PublicRead policy there a non-admin is denied
+    /// "lacks Read permission on 'model'", which returns as a DeliveryFailureException and crashes
+    /// the chat round. The refactor dropped the Model policy, leaving only Provider's.
+    /// </summary>
+    [Fact]
+    public void Emits_PublicReadPolicy_ForBoth_Provider_And_Model_Partitions()
+    {
+        var nodes = MakeProvider(
+            new Dictionary<string, string?>
+            {
+                ["Anthropic:Models:0"] = "claude-opus-4-8",
+                ["Anthropic:Endpoint"] = "https://api.anthropic.com/v1/messages"
+            },
+            new LanguageModelCatalogSource("Anthropic", "Anthropic", 1))
+            .GetStaticNodes()
+            .ToList();
+
+        // Provider partition policy (pre-existing).
+        var providerPolicy = nodes.Should().ContainSingle(n =>
+            n.NodeType == "PartitionAccessPolicy" && n.Namespace == ModelProviderNodeType.RootNamespace).Subject;
+        providerPolicy.Content.Should().BeOfType<PartitionAccessPolicy>()
+            .Which.PublicRead.Should().BeTrue();
+
+        // Model partition policy (the chat-crash fix) — emitted whenever Model is a distinct partition.
+        if (!string.Equals(LanguageModelNodeType.RootNamespace, ModelProviderNodeType.RootNamespace, System.StringComparison.Ordinal))
+        {
+            var modelPolicy = nodes.Should().ContainSingle(n =>
+                n.NodeType == "PartitionAccessPolicy" && n.Namespace == LanguageModelNodeType.RootNamespace).Subject;
+            modelPolicy.Content.Should().BeOfType<PartitionAccessPolicy>()
+                .Which.PublicRead.Should().BeTrue(
+                "chat reads the Model/LanguageModel partition under the user's identity; without PublicRead a non-admin is denied 'lacks Read on model' and the round crashes");
+        }
     }
 
     /// <summary>

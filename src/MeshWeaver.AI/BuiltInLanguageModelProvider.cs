@@ -201,6 +201,31 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
             }
         };
 
+        // ALSO seed the read-only policy for the LanguageModel partition
+        // (LanguageModelNodeType.RootNamespace, lowercased to the `model` schema). Chat /
+        // the model picker / model resolution read this partition UNDER THE USER'S IDENTITY
+        // (e.g. GetDataRequest hub=model). Without a PublicRead policy a non-admin is denied
+        // "lacks Read permission on 'model'", which comes back as a DeliveryFailureException
+        // and crashes the chat round (atioz 2026-06-23, rsalzmann/Robert). The catalog source
+        // emitted only the Provider policy after the refactor; this restores the Model one.
+        // Read-only + same lifted write CEILINGS as Provider (admins manage; non-admins hold
+        // no write role here so they stay read-only).
+        if (!string.Equals(LanguageModelNodeType.RootNamespace, ModelProviderNodeType.RootNamespace, StringComparison.Ordinal))
+            yield return new MeshNode("_Policy", LanguageModelNodeType.RootNamespace)
+            {
+                NodeType = "PartitionAccessPolicy",
+                Name = "Access Policy",
+                Content = new PartitionAccessPolicy
+                {
+                    PublicRead = true,
+                    Create = true,
+                    Update = true,
+                    Delete = true,
+                    Comment = false,
+                    Thread = false
+                }
+            };
+
         logger?.LogDebug(
             "BuiltInLanguageModelProvider: emitted {Count} model-catalog nodes from {Sources} catalog source(s)",
             emitted.Count, options.Sources.Count);

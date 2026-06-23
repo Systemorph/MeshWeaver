@@ -651,7 +651,10 @@ public static class MemexConfiguration
                                 Tooltip: "AI agents — global, space, and user"),
                             new NodeMenuItemDefinition("Skills", "AiSkills", Icon: "/static/NodeTypeIcons/rocket.svg", Order: 40,
                                 Href: "/search?q=nodeType%3ASkill&groupBy=Namespace",
-                                Tooltip: "Reusable skills"))
+                                Tooltip: "Reusable skills"),
+                            new NodeMenuItemDefinition("Providers", "AiProviders", Icon: "/static/NodeTypeIcons/key.svg", Order: 25,
+                                Href: "/search?q=nodeType%3AModelProvider&groupBy=Namespace",
+                                Tooltip: "AI providers — endpoints + keys"))
                         // Dedicated Admin menu (platform-wide GlobalSettings area), gated on root
                         // Permission.All: Invitations + Inbox.
                         .AddInvitationsSettingsTab()
