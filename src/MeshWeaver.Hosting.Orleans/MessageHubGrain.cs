@@ -114,11 +114,29 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             // for routable paths; the mesh-node cache backs it up for dynamic / freshly-
             // created nodes that the path resolver hasn't indexed yet.
             var pathResolver = meshHub.ServiceProvider.GetRequiredService<IPathResolver>();
+            var accessService = meshHub.ServiceProvider.GetService<AccessService>();
+            // 🚨 Grain activation is INFRASTRUCTURE — reading the node to learn its
+            // HubConfiguration is NOT user-attributable; whichever user's message
+            // happened to trigger activation is irrelevant. Read under System so the
+            // mesh-node cache's per-subscriber RLS gate cannot deny a CROSS-USER node
+            // and fault the activation. Without this, with two users active a grain
+            // triggered by user A activating user B's node fails closed
+            // ("User 'A' lacks Read permission on 'B/…'") → the grain FAILS → the node
+            // wedges for its legitimate owner (the 2026-06-23 atioz cross-user "boom":
+            // sglauser's submit faulted activation of rbuergi/_Thread/…). The activated
+            // hub still enforces per-request RLS on the data it serves — ONLY the
+            // activation read is System. Defer so System is live at SUBSCRIBE time, when
+            // GetStream captures the ambient context eagerly (MeshNodeStreamCache.GetStreamRaw).
+            var cacheStream = Observable.Defer(() =>
+            {
+                using (accessService?.ImpersonateAsSystem())
+                    return streamCache.GetStream(addressPath, meshHub.JsonSerializerOptions);
+            });
             sourceStream = Observable.Merge(
                 pathResolver.ResolvePath(addressPath)
                     .Where(r => r is { Node: not null })
                     .Select(r => r!.Node!),
-                streamCache.GetStream(addressPath, meshHub.JsonSerializerOptions));
+                cacheStream);
         }
 
         // Non-blocking activation: subscribe to the source stream; when it emits a
