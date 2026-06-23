@@ -53,6 +53,18 @@ else
     @if (!ViewModel.HideEmptyState)
     {
         <div class="thread-chat-messages" @ref="messagesContainer">
+            @* Full-page hero header (title, context link, modified-nodes summary, Mark Done)
+               rendered as the FIRST item INSIDE the scroll so it scrolls away with the
+               conversation instead of being pinned above it. Side panel leaves ShowFullHeader
+               false → only the compact Header area below renders. *@
+            @if (ViewModel.ShowFullHeader)
+            {
+                var fullHeader = GetFullHeaderCell();
+                if (fullHeader != null)
+                {
+                    <LayoutAreaView @key="@($"fullhdr-{threadPath}")" ViewModel="@fullHeader" Stream="@Stream" Area="@($"fullhdr-{threadPath}")" />
+                }
+            }
             @{
                 var header = GetHeaderCell();
             }

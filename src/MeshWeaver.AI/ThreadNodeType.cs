@@ -81,6 +81,14 @@ public static class ThreadNodeType
     public const string HeaderArea = "Header";
 
     /// <summary>
+    /// Layout area for the full-page thread hero header (gradient title block, context
+    /// back-link, live message-count subtitle, Mark Done toggle). Rendered INSIDE the
+    /// scrollable message area by the full-page chat view so it scrolls away with the
+    /// conversation rather than staying pinned above it.
+    /// </summary>
+    public const string FullHeaderArea = "FullHeader";
+
+    /// <summary>
     /// Layout area showing the aggregated list of nodes modified across every
     /// message of the thread, with version-before / version-after, Diff link,
     /// per-row Revert, and a bulk "Revert All" action. Surfaced through the

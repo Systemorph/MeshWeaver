@@ -29,6 +29,15 @@ public record ThreadChatControl() : UiControl<ThreadChatControl>(ModuleSetup.Mod
     public bool HideEmptyState { get; init; }
 
     /// <summary>
+    /// When true, renders the full-page thread hero header (title, context back-link,
+    /// modified-nodes summary, Mark Done) as the FIRST item inside the scrollable
+    /// message area, so it scrolls away with the conversation instead of being pinned
+    /// above it. Set by the full-page <c>ThreadView</c>; left false for the side panel
+    /// (which shows the title in its own chrome).
+    /// </summary>
+    public bool ShowFullHeader { get; init; }
+
+    /// <summary>
     /// Data-bound thread view model (via JsonPointerReference).
     /// Contains ThreadPath, InitialContext, Messages — all thread state.
     /// Null when control is created directly (side panel, dashboard).
@@ -39,5 +48,6 @@ public record ThreadChatControl() : UiControl<ThreadChatControl>(ModuleSetup.Mod
     public ThreadChatControl WithInitialContext(string context) => this with { InitialContext = context };
     public ThreadChatControl WithInitialContextDisplayName(string displayName) => this with { InitialContextDisplayName = displayName };
     public ThreadChatControl WithHideEmptyState(bool hide = true) => this with { HideEmptyState = hide };
+    public ThreadChatControl WithShowFullHeader(bool show = true) => this with { ShowFullHeader = show };
     public ThreadChatControl WithThreadViewModel(object? threadViewModel) => this with { ThreadViewModel = threadViewModel };
 }

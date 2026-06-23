@@ -2490,6 +2490,24 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             .WithSpinnerType(SpinnerType.None);
     }
 
+    /// <summary>
+    /// Creates a LayoutAreaControl pointing to the thread's FullHeader layout area
+    /// (the gradient hero: title, context back-link, message-count subtitle, Mark Done).
+    /// Rendered as the first item inside the scrollable message area for the full-page
+    /// view (<see cref="ThreadChatControl.ShowFullHeader"/>) so it scrolls away with the
+    /// conversation. Null when the thread doesn't exist yet. <see cref="SpinnerType.None"/>
+    /// — the header is ancillary and must never block the chat with a skeleton.
+    /// </summary>
+    private LayoutAreaControl? GetFullHeaderCell()
+    {
+        if (string.IsNullOrEmpty(threadPath))
+            return null;
+        return new LayoutAreaControl(
+            threadPath,
+            new LayoutAreaReference(ThreadNodeType.FullHeaderArea))
+            .WithSpinnerType(SpinnerType.None);
+    }
+
     private static string TruncateText(string text, int maxLength)
     {
         if (string.IsNullOrEmpty(text) || text.Length <= maxLength)

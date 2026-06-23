@@ -49,6 +49,7 @@ public static class ThreadLayoutAreas
                 .WithView(ThreadNodeType.StreamingArea, StreamingView)
                 .WithView(ThreadNodeType.HistoryArea, HistoryView)
                 .WithView(ThreadNodeType.HeaderArea, HeaderView)
+                .WithView(ThreadNodeType.FullHeaderArea, FullHeaderView)
                 .WithView(ThreadNodeType.ChangesArea, ChangesAreaView)
                 // The thread's own composer selectors — binds Thread.Composer (the composer
                 // copied onto the thread at creation), same wiring as the composer node's area.
@@ -139,8 +140,11 @@ public static class ThreadLayoutAreas
 
     /// <summary>
     /// Renders the Thread area — the default view for threads.
-    /// Shows the thread title (observable, bound to meshNode.Name) and a
-    /// ThreadChatControl with data-bound Thread content.
+    /// Emits a ThreadChatControl with data-bound Thread content. The hero header
+    /// (title, context link, modified-nodes summary, Mark Done) is rendered by the
+    /// chat control INSIDE its scrollable message area (see <see cref="FullHeaderView"/>),
+    /// so it scrolls away with the conversation instead of staying pinned at the top —
+    /// hence <c>WithShowFullHeader()</c> rather than a sibling header above the chat.
     ///
     /// IMPORTANT: The ThreadChatControl is emitted ONCE. Thread content is pushed
     /// separately via host.UpdateData() and data-bound on the control to avoid
@@ -150,30 +154,37 @@ public static class ThreadLayoutAreas
     {
         var hubPath = host.Hub.Address.ToString();
 
-        // OWN MeshNode stream — drives the observable title and chat control context.
-        // Push ThreadViewModel to data section — contains all thread state for the Blazor view.
-        var vmStream = host.Workspace.GetMeshNodeStream().Select(node =>
-        {
-            var threadContent = node?.Content as MeshThread;
-            var contextPath = node?.MainNode != node?.Path ? node?.MainNode : hubPath;
-            var contextDisplayName = node?.MainNode != node?.Path
-                ? GetContextDisplayName(node!.MainNode) : GetThreadTitle(node);
-            return new ThreadViewModel
-            {
-                Messages = threadContent?.Messages ?? [],
-                ThreadPath = hubPath,
-                InitialContext = contextPath,
-                InitialContextDisplayName = contextDisplayName,
-                IsExecuting = threadContent?.IsExecuting ?? false,
-                ExecutionStatus = threadContent?.ExecutionStatus,
-                StreamingText = threadContent?.StreamingText,
-                StreamingToolCalls = threadContent?.StreamingToolCalls,
-                PendingMessageTexts = ExtractPendingTexts(threadContent),
-                ExecutionStartedAt = threadContent?.ExecutionStartedAt,
-                CreatedBy = node?.CreatedBy,
-            };
-        });
+        // OWN MeshNode stream — push ThreadViewModel to data section; contains all
+        // thread state for the Blazor view.
+        var vmStream = host.Workspace.GetMeshNodeStream().Select(node => BuildThreadViewModel(node, hubPath));
         host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));
+
+        // Static container — never rebuilt
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("flex: 1; min-height: 0; display: flex; flex-direction: column;")
+            .WithView(new ThreadChatControl()
+                .WithThreadViewModel(new JsonPointerReference(LayoutAreaReference.GetDataPointer(ThreadDataKey)))
+                .WithShowFullHeader()
+                .WithStyle("flex: 1; min-height: 0; overflow: hidden;"));
+    }
+
+    /// <summary>
+    /// The full-page thread hero header — gradient surface, big glowing chat icon,
+    /// inline-editable title + description, context back-link, live message-count
+    /// subtitle, and Mark Done / Reopen toggle. Rendered by the full-page chat view
+    /// as the FIRST item INSIDE the scrollable message area (gated by
+    /// <see cref="ThreadChatControl.ShowFullHeader"/>) so it scrolls away with the
+    /// conversation rather than being pinned above it. Self-contained: pushes its own
+    /// title / subtitle / contextLink / description data and binds them — same pattern
+    /// as <see cref="HeaderView"/>. The side panel does NOT request this area (its
+    /// title lives in the panel chrome).
+    /// </summary>
+    public static UiControl? FullHeaderView(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+
+        var vmStream = host.Workspace.GetMeshNodeStream().Select(node => BuildThreadViewModel(node, hubPath));
 
         // Push title to data section — data-bound, no observable control rebuild.
         var titleStream = host.Workspace.GetMeshNodeStream()
@@ -242,7 +253,7 @@ public static class ThreadLayoutAreas
             }));
 
         // Hero header: gradient surface, big glowing chat icon, title + live subtitle.
-        var header = Controls.Stack
+        return Controls.Stack
             .WithClass("thread-full-header")
             .WithWidth("100%")
             .WithStyle(
@@ -299,15 +310,33 @@ public static class ThreadLayoutAreas
                             .WithClickAction(_ =>
                                 h.Hub.MarkThreadDone(hubPath, !isDone));
                     })));
+    }
 
-        // Static container — never rebuilt
-        return Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("flex: 1; min-height: 0; display: flex; flex-direction: column;")
-            .WithView(header)
-            .WithView(new ThreadChatControl()
-                .WithThreadViewModel(new JsonPointerReference(LayoutAreaReference.GetDataPointer(ThreadDataKey)))
-                .WithStyle("flex: 1; min-height: 0; overflow: hidden;"));
+    /// <summary>
+    /// Builds the <see cref="ThreadViewModel"/> snapshot pushed to the data section
+    /// from the thread's own MeshNode. Shared by <see cref="ThreadView"/>,
+    /// <see cref="ThreadChatView"/>, and <see cref="FullHeaderView"/>.
+    /// </summary>
+    private static ThreadViewModel BuildThreadViewModel(MeshNode? node, string hubPath)
+    {
+        var threadContent = node?.Content as MeshThread;
+        var contextPath = node?.MainNode != node?.Path ? node?.MainNode : hubPath;
+        var contextDisplayName = node?.MainNode != node?.Path
+            ? GetContextDisplayName(node!.MainNode) : GetThreadTitle(node);
+        return new ThreadViewModel
+        {
+            Messages = threadContent?.Messages ?? [],
+            ThreadPath = hubPath,
+            InitialContext = contextPath,
+            InitialContextDisplayName = contextDisplayName,
+            IsExecuting = threadContent?.IsExecuting ?? false,
+            ExecutionStatus = threadContent?.ExecutionStatus,
+            StreamingText = threadContent?.StreamingText,
+            StreamingToolCalls = threadContent?.StreamingToolCalls,
+            PendingMessageTexts = ExtractPendingTexts(threadContent),
+            ExecutionStartedAt = threadContent?.ExecutionStartedAt,
+            CreatedBy = node?.CreatedBy,
+        };
     }
 
     /// <summary>
@@ -320,27 +349,7 @@ public static class ThreadLayoutAreas
         var hubPath = host.Hub.Address.ToString();
         var ownNodeStream = host.Workspace.GetMeshNodeStream();
 
-        var vmStream = ownNodeStream.Select(node =>
-        {
-            var threadContent = node?.Content as MeshThread;
-            var contextPath = node?.MainNode != node?.Path ? node?.MainNode : hubPath;
-            var contextDisplayName = node?.MainNode != node?.Path
-                ? GetContextDisplayName(node!.MainNode) : GetThreadTitle(node);
-            return new ThreadViewModel
-            {
-                Messages = threadContent?.Messages ?? [],
-                ThreadPath = hubPath,
-                InitialContext = contextPath,
-                InitialContextDisplayName = contextDisplayName,
-                IsExecuting = threadContent?.IsExecuting ?? false,
-                ExecutionStatus = threadContent?.ExecutionStatus,
-                StreamingText = threadContent?.StreamingText,
-                StreamingToolCalls = threadContent?.StreamingToolCalls,
-                PendingMessageTexts = ExtractPendingTexts(threadContent),
-                ExecutionStartedAt = threadContent?.ExecutionStartedAt,
-                CreatedBy = node?.CreatedBy,
-            };
-        });
+        var vmStream = ownNodeStream.Select(node => BuildThreadViewModel(node, hubPath));
         host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));
 
         // Push title to data section so the side panel header can read it.
