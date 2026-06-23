@@ -97,9 +97,17 @@ workspace.GetMeshNodeStream(path);   // routes through the cache
 
 In a multi-silo cluster each silo holds its own cache with its own handles. That is safe by construction: handles are *mirrors*, and only the **owning hub** (wherever it is activated) mutates authoritative state. A silo's local handle ships patches *to* the owner and receives the reconciled echoes *from* it — so two silos never disagree for longer than one round-trip.
 
-## Reads — access-gated, locally evaluated
+## Reads — upstream under System, subscribers gated individually
 
-The cache opens the upstream subscription under the system identity (infrastructure plumbing), but **each subscriber is gated by their own permissions**: at the `GetStream` seam the cache evaluates the current user's effective permissions on the path locally (`PermissionEvaluator` scope walk — "who can read the main node can read its satellites") and only forwards emissions when the result carries `Read`. Per-`(path, user)` results are cached for 30 s, so hot paths don't re-walk the scope hierarchy on every emission.
+There are **two identities on the read path, and they must never be mixed**:
+
+**1. The shared upstream ALWAYS opens under System — never a user.** The single `SubscribeRequest` per path is infrastructure: routing, NodeType activation, path-resolution, satellite enumeration and every view read through it, and none of them is attributable to a particular user. So the cache opens that upstream under a **system identity** and keeps it alive for the silo's lifetime. It MUST NOT capture the identity of whoever happened to trigger the first read.
+
+> 🚨 **A leaked user identity on the upstream wedges the node for everyone.** If an ambient `AccessContext` survives onto the upstream open (or onto a per-path sync hub's `BuildupAction`), RLS evaluates *that* user against the node. If the user lacks `Read`, the read throws `UnauthorizedAccessException` — and because it faults the **shared** stream / sync hub (not just that one subscriber), the hub goes to a **FAILED** state and the node wedges for **everyone, including its legitimate owner**. This is the 2026-06-23 atioz symptom: a co-active admin's MCP session leaked `rbuergi` onto the sync hub for `sglauser/_UserActivity/sglauser`; RLS denied `rbuergi`, the hub deferred its `SubscribeRequest` >30 s and FAILED, and `sglauser`'s activity page rendered nothing until a restart. **The fix is the rule above: the upstream / sync-hub `BuildupAction` opens under System regardless of the ambient context — `ImpersonateAsSystem`, not whatever is on `AccessService.Context`.**
+
+**2. Each subscriber is gated by ITS OWN `Read`, before the stream is returned.** At the `GetStream` seam the cache evaluates the *current subscriber's* effective permissions on the path locally (`PermissionEvaluator` scope walk — "who can read the main node can read its satellites") and returns the shared system stream only if the result carries `Read`. A subscriber that lacks `Read` gets an `UnauthorizedAccessException` on **its own** subscription — this denial is per-subscriber and **must not fault the shared upstream**. Per-`(path, user)` results cache for 30 s. Hub principals (`sync/`, `mesh/`, `node/`, …) and NodeType-definition paths are **not** users — they fall through to the system upstream rather than being gated (evaluating a hub address yields `Permission.None`, which would otherwise throw a spurious "user 'sync/…' lacks Read").
+
+**3. Writes are validated in the owning hub, not here.** The cache never gates writes. A `.Update(...)` ships a merge patch to the owner, whose `RlsNodeValidator` / `[RequiresPermission(Update)]` pipeline checks the **writer's** `Update` permission on its own single-threaded action block. Read-gating at the cache seam + write-validation at the owner are the two halves of access control on a node stream.
 
 ## Writes — a serial queue per path
 
