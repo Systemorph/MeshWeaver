@@ -1,0 +1,120 @@
+@page "/connect"
+@using System.Reactive.Linq
+@using Memex.Client.Services
+@using MeshWeaver.Data
+@using MeshWeaver.Graph
+@using MeshWeaver.Graph.Configuration
+@using MeshWeaver.Hosting
+@using MeshWeaver.Mesh
+@using MeshWeaver.Messaging
+@inject MeshConnector Connector
+@inject MeshOAuthClient OAuth
+@inject IMessageHub Hub
+@implements IDisposable
+
+<PageTitle>Meshes</PageTitle>
+
+<div class="container py-3" style="max-width: 720px;">
+    <h1 class="h3 mb-1">Meshes</h1>
+    <p class="text-muted">Your local mesh plus any remote meshes you've joined. Add one by URL and sign in
+        — OAuth obtains the token for you (no manual copy).</p>
+
+    <div class="card shadow-sm mb-3">
+        <ul class="list-group list-group-flush">
+            @if (_instances.Count == 0)
+            {
+                <li class="list-group-item text-muted">No meshes yet.</li>
+            }
+            @foreach (var n in _instances.OrderBy(n => n.Id != "local"))
+            {
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                    <span><strong>@n.Name</strong> <small class="text-muted ms-1">@n.Id</small></span>
+                    @if (n.Id == "local")
+                    {
+                        <span class="badge bg-secondary">this device</span>
+                    }
+                    else
+                    {
+                        <span class="badge bg-success">connected</span>
+                    }
+                </li>
+            }
+        </ul>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-header fw-semibold">Add a mesh</div>
+        <div class="card-body">
+            <div class="mb-2">
+                <label class="form-label">Portal URL</label>
+                <input class="form-control" @bind="_url" placeholder="https://memex.meshweaver.cloud" disabled="@_busy" />
+            </div>
+            <button class="btn btn-primary" @onclick="SignIn" disabled="@_busy">🔐 Sign in with OAuth</button>
+
+            <details class="mt-3">
+                <summary class="text-muted">Or paste an API token</summary>
+                <div class="input-group mt-2">
+                    <input class="form-control" type="password" @bind="_token" placeholder="API token" disabled="@_busy" />
+                    <button class="btn btn-outline-primary" @onclick="UseToken" disabled="@_busy">Connect</button>
+                </div>
+            </details>
+
+            @if (!string.IsNullOrEmpty(_status))
+            {
+                <p class="mt-2 mb-0"><em>@_status</em></p>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private string _url = "https://memex.meshweaver.cloud";
+    private string _token = "";
+    private string? _status;
+    private bool _busy;
+    private IReadOnlyCollection<MeshNode> _instances = Array.Empty<MeshNode>();
+    private IDisposable? _sub;
+
+    protected override void OnInitialized()
+    {
+        _sub = Hub.GetWorkspace()
+            .GetQuery("connect-list", $"nodeType:{MemexInstanceNodeType.NodeType}")
+            .Subscribe(nodes => InvokeAsync(() => { _instances = nodes.ToList(); StateHasChanged(); }));
+    }
+
+    private async Task SignIn()
+    {
+        if (string.IsNullOrWhiteSpace(_url)) { _status = "Enter a portal URL."; return; }
+        _busy = true;
+        _status = "Opening sign-in…";
+        try
+        {
+            var token = await OAuth.AuthenticateAsync(_url);
+            if (string.IsNullOrEmpty(token)) { _status = "Sign-in cancelled."; return; }
+            Connector.Connect(_url, token);
+            _status = "Connected.";
+        }
+        catch (Exception ex)
+        {
+            _status = $"Sign-in failed: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void UseToken()
+    {
+        if (string.IsNullOrWhiteSpace(_url) || string.IsNullOrWhiteSpace(_token))
+        {
+            _status = "Enter both a URL and a token.";
+            return;
+        }
+        Connector.Connect(_url, _token);
+        _status = "Connected.";
+        _token = "";
+    }
+
+    public void Dispose() => _sub?.Dispose();
+}

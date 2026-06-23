@@ -103,6 +103,11 @@ public static class MauiProgram
             sp.GetRequiredService<IMessageHub>().ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Compile)
                 ?? IoPool.Unbounded));
 
+        // Remote-mesh join: OAuth (WebAuthenticator + PKCE) obtains a token, then ConnectToMesh + a
+        // MemexInstance node so the next boot reconnects. See the /connect page.
+        builder.Services.AddSingleton<MeshOAuthClient>();
+        builder.Services.AddSingleton(sp => new MeshConnector(sp.GetRequiredService<IMessageHub>()));
+
 #if DEBUG
         builder.Services.AddBlazorWebViewDeveloperTools();
         builder.Logging.AddDebug();
