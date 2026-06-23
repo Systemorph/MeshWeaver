@@ -56,6 +56,9 @@ public static class ModelPricing
             ["claude-sonnet-4-6"] = new(3m, 15m, Usd),
             ["claude-sonnet-4-5"] = new(3m, 15m, Usd),
             ["claude-haiku-4-5"] = new(1m, 5m, Usd),
+            // The dated snapshot id AddAnthropic ships (Default() only de-prefixes by '/', so the
+            // bare-undated row above does NOT cover this) — keep in sync with AddAnthropic.
+            ["claude-haiku-4-5-20251001"] = new(1m, 5m, Usd),
             ["claude-fable-5"] = new(10m, 50m, Usd),
 
             // The models actually deployed on Azure AI Foundry (s-meshweaver, swedencentral) —
