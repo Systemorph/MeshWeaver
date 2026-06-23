@@ -311,9 +311,16 @@ internal static class ThreadExecution
     /// </summary>
     private static void SetThreadHubIdentity(IMessageHub hub)
     {
-        // One-shot read of the OWN thread node via GetDataRequest (posted to self) —
-        // true request/response, no SubscribeRequest+immediate-unsubscribe.
-        hub.GetMeshNode(hub.Address.ToString()).Subscribe(node =>
+        // Read the OWN thread node's FIRST loaded emission off the local reducer - NO GetDataRequest.
+        // A self-posted GetDataRequest on cold activation tripped the never-null AccessContext guard
+        // ("hub=Thread, GetDataRequest, target=Thread", reproduced by `get @Thread`). Filter on MeshThread
+        // content so we wait for the FULLY-LOADED node (with CreatedBy), exactly like
+        // InitializeThreadLifecycle below; taking the first merely-non-null emission could read a
+        // pre-content node, leave the owner unstamped, and wedge later writes (e.g. cancel not processed).
+        hub.GetWorkspace().GetMeshNodeStream()
+            .Where(n => n?.Content is MeshThread)
+            .Take(1)
+            .Subscribe(node =>
         {
             if (node is null) return;
             var createdBy = (node.Content as MeshThread)?.CreatedBy;
