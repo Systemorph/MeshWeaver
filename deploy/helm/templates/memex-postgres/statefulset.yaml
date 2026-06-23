@@ -31,9 +31,6 @@ spec:
             - name: "memex-pgdata"
               mountPath: "/var/lib/postgresql/data"
           imagePullPolicy: "IfNotPresent"
-      volumes:
-        - name: "memex-pgdata"
-          emptyDir: {}
   selector:
     matchLabels:
       app.kubernetes.io/name: "{{ .Chart.Name }}"
@@ -44,3 +41,11 @@ spec:
   updateStrategy:
     rollingUpdate: {}
     type: "RollingUpdate"
+  volumeClaimTemplates:
+    - metadata:
+        name: "memex-pgdata"
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi

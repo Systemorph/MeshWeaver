@@ -15,6 +15,16 @@ spec:
         app.kubernetes.io/component: "memex-portal"
         app.kubernetes.io/instance: "{{ .Release.Name }}"
     spec:
+      initContainers:
+        # Postgres and the portal start concurrently on a fresh install; the portal's hub
+        # init FAILS (and the host aborts) if Postgres isn't yet accepting connections.
+        # Gate startup on Postgres TCP readiness so the ordering is deterministic.
+        - name: "wait-for-postgres"
+          image: "busybox:1.36"
+          command:
+            - "sh"
+            - "-c"
+            - "until nc -z memex-postgres-service 5432; do echo 'waiting for postgres'; sleep 2; done"
       containers:
         - image: "ghcr.io/systemorph/memex-portal-ai:latest"
           name: "memex-portal"
