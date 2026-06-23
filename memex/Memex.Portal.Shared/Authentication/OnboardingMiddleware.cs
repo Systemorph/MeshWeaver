@@ -98,7 +98,17 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
 
         if (outcome == OnboardingOutcome.Redirect)
         {
-            context.Response.Redirect("/onboarding");
+            // Carry the page the user was trying to reach into the onboarding URL so
+            // the form can send them back there on completion — instead of dumping
+            // everyone on "/". The target is always THIS request's own path+query on
+            // this host, so it is inherently local (no open-redirect surface), and
+            // excluded paths (/onboarding, /login, assets, …) never reach here. A bare
+            // "/" carries no returnUrl — onboarding falls back to "/" anyway.
+            var target = $"{context.Request.Path}{context.Request.QueryString}";
+            var location = string.IsNullOrEmpty(target) || target == "/"
+                ? "/onboarding"
+                : $"/onboarding?returnUrl={Uri.EscapeDataString(target)}";
+            context.Response.Redirect(location);
             return;
         }
 

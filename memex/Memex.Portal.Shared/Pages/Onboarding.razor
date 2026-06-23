@@ -121,6 +121,13 @@ else
 }
 
 @code {
+    // The page the user was trying to reach before being bounced through
+    // auth/onboarding (set by OnboardingMiddleware / RedirectToLogin → login →
+    // OAuth callback → here). On completion we send them back there instead of
+    // dropping them on "/". Absent ⇒ fall back to "/".
+    [SupplyParameterFromQuery]
+    public string? ReturnUrl { get; set; }
+
     private OnboardingModel model = new();
     private bool isSaving;
     private bool emailReadOnly;
@@ -233,7 +240,7 @@ else
                 checkCompleted = true;
                 StateHasChanged();
                 // Client-side only, no forceLoad — preserves the resolved circuit.
-                Navigation.NavigateTo("/");
+                Navigation.NavigateTo(SafeReturnUrl());
             });
         }
         else
@@ -433,8 +440,26 @@ else
         {
             isSaving = false;
             StateHasChanged();
-            Navigation.NavigateTo("/", forceLoad: true);
+            Navigation.NavigateTo(SafeReturnUrl(), forceLoad: true);
         });
+    }
+
+    /// <summary>
+    /// The post-onboarding destination: the captured <see cref="ReturnUrl"/> when it is
+    /// a safe SAME-SITE relative path, otherwise "/". Rejects absolute and
+    /// protocol-relative ("//host", "/\host") URLs so a crafted returnUrl can't turn the
+    /// post-onboarding redirect into an open redirect off-site.
+    /// </summary>
+    private string SafeReturnUrl()
+    {
+        var url = ReturnUrl;
+        if (string.IsNullOrEmpty(url))
+            return "/";
+        if (url.StartsWith('/')
+            && !url.StartsWith("//", StringComparison.Ordinal)
+            && !url.StartsWith("/\\", StringComparison.Ordinal))
+            return url;
+        return "/";
     }
 
     private void OnOnboardingFailed(string username, Exception ex)

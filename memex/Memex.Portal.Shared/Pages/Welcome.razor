@@ -14,7 +14,7 @@
             MeshWeaver brings together documents, collaboration, and AI-powered assistance into one unified platform for your team.
         </p>
         <div class="mw-hero-actions">
-            <a class="mw-btn mw-btn-primary" href="/login">Sign In</a>
+            <a class="mw-btn mw-btn-primary" href="@LoginHref">Sign In</a>
             <a class="mw-btn mw-btn-secondary" href="#features">Learn More</a>
         </div>
     </div>
@@ -72,15 +72,34 @@
     <div class="mw-cta">
         <h2>Ready to Get Started?</h2>
         <p>Join your team on MeshWeaver and take your productivity to the next level.</p>
-        <a class="mw-btn mw-btn-cta" href="/login">Sign In Now</a>
+        <a class="mw-btn mw-btn-cta" href="@LoginHref">Sign In Now</a>
     </div>
 </div>
 
 @code {
+    // Preserve the page the visitor was heading for (if any) so the whole
+    // sign-in → onboarding chain can carry it through to the final redirect.
+    [SupplyParameterFromQuery]
+    public string? ReturnUrl { get; set; }
+
     [CascadingParameter]
     private Task<AuthenticationState>? AuthStateTask { get; set; }
 
     private bool isAuthenticated;
+
+    // Same-site relative returnUrl only — never an absolute/protocol-relative URL,
+    // so the sign-in links and the onboarding redirect can't be turned into open
+    // redirects via a crafted ?returnUrl.
+    private string? SafeReturnUrl =>
+        !string.IsNullOrEmpty(ReturnUrl)
+        && ReturnUrl.StartsWith('/')
+        && !ReturnUrl.StartsWith("//", StringComparison.Ordinal)
+        && !ReturnUrl.StartsWith("/\\", StringComparison.Ordinal)
+            ? ReturnUrl
+            : null;
+
+    private string LoginHref =>
+        SafeReturnUrl is { } r ? $"/login?returnUrl={Uri.EscapeDataString(r)}" : "/login";
 
     protected override async Task OnInitializedAsync()
     {
@@ -97,8 +116,12 @@
         {
             // Client-side navigation to /onboarding (no forceLoad) avoids
             // re-triggering the HTTP middleware pipeline which can cause redirect loops.
-            // Onboarding.razor handles already-onboarded users by redirecting to /.
-            Navigation.NavigateTo("/onboarding");
+            // Onboarding.razor handles already-onboarded users by redirecting to the
+            // returnUrl (or /). Carry the returnUrl through so the chain isn't lost here.
+            var target = SafeReturnUrl is { } r
+                ? $"/onboarding?returnUrl={Uri.EscapeDataString(r)}"
+                : "/onboarding";
+            Navigation.NavigateTo(target);
         }
         return Task.CompletedTask;
     }
