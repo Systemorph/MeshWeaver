@@ -371,6 +371,120 @@ public class InboxToolIntegrationTest : AITestBase
         final.PendingUserMessages.Should().BeEmpty();
     }
 
+    /// <summary>
+    /// HAMMER: flood a thread with a burst of submits while round 1 is still streaming
+    /// (the slow fake holds it ~5 s) so every follow-up lands in
+    /// <see cref="MeshThread.PendingUserMessages"/> under contention, then drains across
+    /// subsequent rounds. The invariant: <b>every submitted message is eventually ingested
+    /// and rendered — none is lost.</b>
+    ///
+    /// <para>🐞 KNOWN-FAILING repro (Skip) for the message-loss flake behind the CI reds
+    /// <see cref="Cancel_WithMultiplePending_RestartsAndDrainsAllInSubsequentRounds"/> and the
+    /// Orleans <c>RapidSubmits_PileUpAndAllIngest</c>. Submitting 12 → only 8–9 ingest; 3–4
+    /// vanish entirely (not pending, not ingested, not in Messages). ROOT CAUSE (proven by the
+    /// timeline this test dumps on failure): the cross-hub patch handler
+    /// <c>DataExtensions.ApplyJsonMergePatchAndUpdate</c> is a NON-ATOMIC read-modify-write — it
+    /// reads a <c>stream.Take(1)</c> snapshot of the reduced node stream (which LAGS the data
+    /// source), JSON-merges the patch, then commits the full merged node via a SEPARATE
+    /// <c>RequestChange</c>. Under concurrent writers (a burst of cross-mirror submit patches,
+    /// and owner own-writes through the data-source <c>EntityStore</c> stream) a stale-base commit
+    /// overwrites a sibling writer's just-added <c>PendingUserMessages</c> key. The
+    /// <c>ReconcileUserMessageIds</c> STOPGAP in <c>ThreadSubmission</c> exists only to paper over
+    /// this — it cannot recover a pending entry that was clobbered out of existence.
+    ///
+    /// <para>FIX (deferred — high blast radius on the core cross-hub write path, needs full CI
+    /// validation): make the patch apply atomically against live state, through the SAME
+    /// data-source stream the owner's own-writes (<c>MeshNodeStreamHandle.UpdateOwn</c>) use, so
+    /// patches and own-writes serialise on one queue. A partial attempt routing the merge through
+    /// the reduced stream's atomic <c>Update</c> fixed patch-vs-patch but NOT patch-vs-own-write
+    /// (different streams), so it was reverted. Remove this Skip once the handler is atomic.</para>
+    /// </summary>
+    [Fact(Timeout = 180_000, Skip = "KNOWN BUG: non-atomic cross-hub patch apply loses messages "
+        + "under concurrent submits — DataExtensions.ApplyJsonMergePatchAndUpdate must merge "
+        + "atomically through the data-source stream. See method remarks. Repro is real; unskip "
+        + "to verify the fix.")]
+    public async Task Hammer_ConcurrentSubmits_AllIngested_NoneLost()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var threadPath = await SeedEmptyThreadAsync(ct);
+        // Activate the thread hub (and its submission watcher) before the burst.
+        await GetThreadHubAsync(threadPath, ct);
+        var client = GetClient();
+
+        const int n = 12;
+        var texts = Enumerable.Range(0, n).Select(i => $"hammer-{i:D2}").ToArray();
+
+        // DIAGNOSTIC timeline: record every control-plane transition so a failure shows
+        // whether the lost message ever reached PendingUserMessages and where it vanished.
+        var timeline = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        using var recorder = Mesh.GetWorkspace().GetMeshNodeStream(threadPath)
+            .Select(node => node?.Content as MeshThread)
+            .Where(t => t is not null)
+            .Subscribe(t => timeline.Enqueue(
+                $"status={t!.Status} exec={t.IsExecuting} userIds={t.UserMessageIds.Count} "
+                + $"ingested={t.IngestedMessageIds.Count} "
+                + $"pending=[{string.Join(",", t.PendingUserMessages.Values.Select(m => m.Text).OrderBy(x => x))}] "
+                + $"msgs={t.Messages.Count}"));
+
+        // Round 1: submit the first and wait until it is genuinely executing
+        // (the slow fake holds it ~5 s). This opens the pile-up window: the owner
+        // is busy streaming while the burst lands.
+        client.SubmitMessage(
+            threadPath, texts[0],
+            modelName: "inbox-fake-slow", createdBy: "rbuergi@systemorph.com");
+        await WaitForThreadAsync(threadPath,
+            t => t.IsExecuting && t.IngestedMessageIds.Count >= 1, 15_000, ct);
+
+        // HAMMER: fire the remaining submits back-to-back with NO await between them
+        // (the real user-types-fast shape — same as RapidSubmits / Cancel_WithMultiplePending).
+        // Each cross-mirror write diffs off the SAME stale owner-confirmed snapshot while
+        // round 1 streams, so the non-atomic owner-side patch apply clobbers freshly-added
+        // pending entries — the message-loss flake. Sequential on ONE thread (not Parallel.For)
+        // so this repro matches the CI failure exactly and isn't conflated with the unrelated
+        // non-synchronized-Subject race a multi-threaded burst would also trip.
+        for (var i = 1; i < n; i++)
+            client.SubmitMessage(
+                threadPath, texts[i],
+                modelName: "inbox-fake-slow", createdBy: "rbuergi@systemorph.com");
+
+        // Settle: thread idle, every submission ingested, nothing left pending.
+        MeshThread final;
+        try
+        {
+            final = await WaitForThreadAsync(threadPath,
+                t => !t.IsExecuting
+                     && t.IngestedMessageIds.Count >= n
+                     && t.PendingUserMessages.IsEmpty,
+                150_000, ct);
+        }
+        catch
+        {
+            FileOutput.WriteLine($"=== HAMMER TIMELINE ({timeline.Count} transitions) ===");
+            foreach (var line in timeline) FileOutput.WriteLine(line);
+            throw;
+        }
+
+        final.IngestedMessageIds.Should().HaveCount(n, "every submitted message must be ingested — none lost");
+        final.UserMessageIds.Should().HaveCount(n, "no id may be clobbered out of UserMessageIds");
+        final.PendingUserMessages.Should().BeEmpty();
+
+        // Every submitted text survived as a rendered user cell (no silent loss).
+        var ingestedTexts = await final.UserMessageIds
+            .Select(id => ReadNode($"{threadPath}/{id}")
+                .Select(node => (node!.Content as ThreadMessage)?.Text)
+                .Where(text => !string.IsNullOrEmpty(text))
+                .Take(1))
+            .Merge()
+            .ToList()
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(30))
+            .ToTask(ct);
+
+        // Every submitted text round-trips into a user cell (none lost). The
+        // assertions fork takes JsonSerializerOptions for element comparison.
+        ingestedTexts.Should().BeEquivalentTo(texts, client.JsonSerializerOptions);
+    }
+
     // â”€â”€â”€ ViewModel projection â”€â”€â”€
 
     [Fact]
