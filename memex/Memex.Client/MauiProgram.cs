@@ -17,6 +17,7 @@ using MeshWeaver.Hosting.Sqlite;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -96,8 +97,11 @@ public static class MauiProgram
         builder.Services.AddSingleton<AudioCaptureService>();
         builder.Services.AddSingleton(_ => new VoiceModelCatalog(
             Path.Combine(FileSystem.AppDataDirectory, "models"), WhisperModelSize.SwissGerman));
+        // Inference runs on the local mesh's CPU IoPool — off the UI thread, bounded (ControlledIoPooling).
         builder.Services.AddSingleton(sp => new VoiceService(
-            sp.GetRequiredService<VoiceModelCatalog>()));
+            sp.GetRequiredService<VoiceModelCatalog>(),
+            sp.GetRequiredService<IMessageHub>().ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Compile)
+                ?? IoPool.Unbounded));
 
 #if DEBUG
         builder.Services.AddBlazorWebViewDeveloperTools();

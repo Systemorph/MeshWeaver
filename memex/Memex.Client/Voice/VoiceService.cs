@@ -1,33 +1,49 @@
+using System.Reactive.Linq;
+using MeshWeaver.Mesh.Threading;
+
 namespace Memex.Client.Voice;
 
 /// <summary>
 /// App-facing entry point: lazily ensures the Whisper model is present, builds the transcriber once,
-/// and transcribes 16 kHz mono audio on-device. Safe to register as a singleton.
+/// and transcribes 16 kHz mono audio on-device. Reactive — model download AND inference run on the
+/// <see cref="IIoPool"/> (off the UI thread, bounded), so subscribing never freezes the UI. Safe to
+/// register as a singleton.
 /// </summary>
 public sealed class VoiceService : IAsyncDisposable
 {
     private readonly VoiceModelCatalog _catalog;
+    private readonly IIoPool _pool;
     private WhisperTranscriber? _whisper;
 
-    public VoiceService(VoiceModelCatalog catalog) => _catalog = catalog;
+    public VoiceService(VoiceModelCatalog catalog, IIoPool pool)
+    {
+        _catalog = catalog;
+        _pool = pool;
+    }
 
     public bool Ready => _whisper is not null;
 
-    public async Task<IReadOnlyList<TranscriptSegment>> TranscribeAsync(
-        float[] samples16kMono, string language = "auto",
-        IProgress<string>? progress = null, CancellationToken ct = default)
-    {
-        if (_whisper is null)
-        {
-            await _catalog.EnsureAsync(progress, ct).ConfigureAwait(false);
-            _whisper = new WhisperTranscriber(_catalog.WhisperModelPath);
-        }
+    /// <summary>
+    /// Streams transcript segments for the given audio. The model is ensured (downloaded/placed) on the
+    /// pool on first use, then each segment is produced on the pool and pushed to the subscriber. Nothing
+    /// runs on the calling (UI) thread.
+    /// </summary>
+    /// <param name="progress">Transcription progress 0–100 (a real progress bar).</param>
+    /// <param name="status">Coarse status text (e.g. the one-time model download).</param>
+    public IObservable<TranscriptSegment> Transcribe(
+        float[] samples16kMono, string language,
+        IProgress<int>? progress = null, IProgress<string>? status = null)
+        => EnsureTranscriber(status)
+            .SelectMany(whisper => whisper.Transcribe(samples16kMono, language, progress));
 
-        var result = new List<TranscriptSegment>();
-        await foreach (var seg in _whisper.TranscribeAsync(samples16kMono, language, ct).ConfigureAwait(false))
-            result.Add(seg);
-        return result;
-    }
+    private IObservable<WhisperTranscriber> EnsureTranscriber(IProgress<string>? status) =>
+        _whisper is not null
+            ? Observable.Return(_whisper)
+            : _pool.Invoke(async ct =>
+            {
+                await _catalog.EnsureAsync(status, ct).ConfigureAwait(false);
+                return _whisper ??= new WhisperTranscriber(_catalog.WhisperModelPath, _pool);
+            });
 
     public async ValueTask DisposeAsync()
     {
