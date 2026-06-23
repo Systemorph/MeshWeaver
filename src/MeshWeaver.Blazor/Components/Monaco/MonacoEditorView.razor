@@ -764,12 +764,18 @@
             try
             {
                 await jsModule.InvokeVoidAsync("dispose", EditorId);
+                await jsModule.DisposeAsync();
             }
-            catch
+            catch (JSDisconnectedException)
             {
-                // Ignore errors during disposal
+                // Circuit already disconnected — JS interop during teardown is expected to fail and
+                // there is nothing to clean up client-side. Swallow so it never escapes as an
+                // "Unhandled exception in circuit" (the disposeAsync at :772 used to be outside the try).
             }
-            await jsModule.DisposeAsync();
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Error disposing Monaco editor JS module");
+            }
         }
         dotNetRef?.Dispose();
     }

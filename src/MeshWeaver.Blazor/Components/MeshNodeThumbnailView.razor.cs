@@ -50,11 +50,13 @@ public partial class MeshNodeThumbnailView
             .DistinctUntilChanged()
             .Subscribe(node =>
             {
+                if (IsViewDisposed) return;
                 Title = node.Name ?? NodePath;
                 var img = MeshNodeThumbnailControl.GetImageUrlForNode(node);
                 if (!string.IsNullOrEmpty(img)) ImageUrl = img;
                 InvokeAsync(StateHasChanged);
-            }));
+            },
+            ex => SurfaceError(ex, $"Loading thumbnail for {NodePath}")));
     }
 
     private void Navigate()

@@ -10,6 +10,7 @@ using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.FluentUI.AspNetCore.Components;
 using Microsoft.JSInterop;
@@ -27,6 +28,10 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     // stamp user-driven messages (ClickedEvent) so they don't lose identity crossing the sync-stream
     // boundary (Stream.Hub is the sync hub, whose AccessService has no user context).
     [Inject] protected AccessService AccessService { get; set; } = null!;
+    // The circuit's service provider — used to resolve the optional PortalErrorSink (modal surface) for
+    // SurfaceError. Resolved lazily (GetService, not [Inject]) because non-portal hosts (e.g. the MAUI
+    // client) don't register the sink.
+    [Inject] protected IServiceProvider Services { get; set; } = null!;
     protected IMessageHub Hub => PortalApplication.Hub;
     [Parameter] public required TViewModel ViewModel { get; set; } 
 
@@ -292,6 +297,51 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     protected void RequestStateChange()
     {
         StateHasChanged();
+    }
+
+    /// <summary>
+    /// The most recent ASYNC/stream fault surfaced on this view (null = none). A component MAY render it
+    /// inline (e.g. a small error banner). Render-time throws are handled separately by the DispatchView /
+    /// LayoutAreaView <c>ErrorBoundary</c>; this is for Rx <c>OnError</c> faults, which an ErrorBoundary
+    /// cannot see.
+    /// </summary>
+    protected Exception? SurfacedError { get; private set; }
+
+    /// <summary>
+    /// Canonical onError handler for view-component subscriptions. Surfaces an asynchronous/stream fault
+    /// BOTH as a modal (via the circuit's <see cref="PortalErrorSink"/>, when registered) AND inline (sets
+    /// <see cref="SurfacedError"/> + re-renders so a component can show it), and logs it. Benign teardown
+    /// faults (<see cref="ObjectDisposedException"/> / post-dispose) are logged at Debug and not surfaced.
+    /// <para>Use it INSTEAD of a no-arg <c>Subscribe(onNext)</c>: a subscription with no onError leaves the
+    /// fault unobserved, the binding never updates, and the view spins forever — the "gui just hangs"
+    /// symptom. Pass a short human context, e.g. <c>SurfaceError(ex, "Loading thread messages")</c>.</para>
+    /// </summary>
+    protected void SurfaceError(Exception ex, string context)
+    {
+        if (_viewDisposed || ex is ObjectDisposedException)
+        {
+            Logger.LogDebug(ex, "Suppressed teardown error: {Context} in Area {Area}", context, Area);
+            return;
+        }
+
+        Logger.LogError(ex, "{Context} in Area {Area}", context, Area);
+
+        // Modal surface — best-effort; the surfacing path must never throw back into the faulting
+        // subscription (which runs on an Rx scheduler thread).
+        try { Services.GetService<PortalErrorSink>()?.Report($"{context}: {ex.Message}"); }
+        catch (Exception sinkEx) { Logger.LogDebug(sinkEx, "PortalErrorSink.Report threw while surfacing {Context}", context); }
+
+        // Inline surface — set the field and re-render on the UI thread.
+        try
+        {
+            InvokeAsync(() =>
+            {
+                if (_viewDisposed) return;
+                SurfacedError = ex;
+                RequestStateChange();
+            });
+        }
+        catch (ObjectDisposedException) { /* renderer gone */ }
     }
 
     protected string SubArea(string area)

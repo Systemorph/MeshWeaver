@@ -43,10 +43,24 @@
     }
 </div>
 
-@* Render dialog if one is active *@
+@* Render dialog if one is active. Wrapped in its OWN ErrorBoundary: the dialog renders as a sibling
+   AFTER the per-area boundary above (it is not a child of it), so a synchronous render throw inside the
+   dialog subtree would otherwise escape every boundary and tear down the circuit. Contained here, a
+   broken dialog shows an inline error instead of blanking the app. *@
 @if (showDialog && currentDialog != null)
 {
-    <DialogView ViewModel="@currentDialog" Area="@DialogControl.DialogArea" Stream="@AreaStream" />
+    <ErrorBoundary>
+        <ChildContent>
+            <DialogView ViewModel="@currentDialog" Area="@DialogControl.DialogArea" Stream="@AreaStream" />
+        </ChildContent>
+        <ErrorContent Context="dialogError">
+            <div class="meshweaver-render-error"
+                 style="padding:0.75rem;border:1px solid var(--error,#d13438);border-radius:4px;background:rgba(209,52,56,0.08);color:var(--error,#d13438);font-size:0.875rem">
+                <strong>This dialog failed to render.</strong>
+                <div style="margin-top:0.25rem;white-space:pre-wrap;font-family:monospace">@dialogError.Message</div>
+            </div>
+        </ErrorContent>
+    </ErrorBoundary>
 }
 
 @code

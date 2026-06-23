@@ -5,6 +5,9 @@
 @using MeshWeaver.Mesh.Services.LanguageServer
 @using System.Text.Json
 @using System.Reactive.Linq
+@using Microsoft.Extensions.Logging
+@using Microsoft.Extensions.DependencyInjection
+@using MeshWeaver.Blazor.Infrastructure
 @implements IDisposable
 @inject IServiceProvider Services
 
@@ -112,6 +115,15 @@
                         InvokeAsync(StateHasChanged);
                         isUpdatingFromStream = false;
                     }
+                },
+                // No onError used to leave a faulted value stream silently un-updating the editor. This
+                // component is a plain ComponentBase (not BlazorView), so surface via the resolved logger +
+                // the circuit's PortalErrorSink modal (when present).
+                ex =>
+                {
+                    Services.GetService<ILoggerFactory>()?.CreateLogger<CodeEditorView>()
+                        .LogWarning(ex, "Editor value binding faulted");
+                    Services.GetService<PortalErrorSink>()?.Report($"Editor value: {ex.Message}");
                 });
             subscriptions.Add(subscription);
         }
@@ -198,8 +210,12 @@
             {
                 return element.Deserialize<T>();
             }
-            catch
+            catch (Exception ex)
             {
+                // Was a fully-silent `catch { return default; }`. This is a best-effort fallback
+                // conversion, so a failure is non-fatal — but log it (Debug) so it isn't invisible.
+                Services.GetService<ILoggerFactory>()?.CreateLogger<CodeEditorView>()
+                    .LogDebug(ex, "ResolveValue<{Type}> could not deserialize; using default", typeof(T).Name);
                 return default;
             }
         }

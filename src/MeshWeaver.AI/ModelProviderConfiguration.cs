@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.ComponentModel;
 
 namespace MeshWeaver.AI;
 
@@ -76,5 +77,12 @@ public record ModelProviderConfiguration
     /// the LanguageModel children, and gives the service a single source of
     /// truth for cascade-delete.
     /// </summary>
+    /// <remarks>
+    /// <see cref="BrowsableAttribute"/>(false): this is a denormalized snapshot for cascade-delete /
+    /// count display, NOT an inline-editable field. The generic property form (EditorExtensions) has no
+    /// control for an <c>IEnumerable&lt;string&gt;</c>, so without this it fell through to a string-bound
+    /// control and crashed the render with a JSON array→string conversion (the atioz Anthropic provider).
+    /// </remarks>
+    [Browsable(false)]
     public ImmutableArray<string> Models { get; init; } = ImmutableArray<string>.Empty;
 }

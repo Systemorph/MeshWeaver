@@ -153,7 +153,8 @@ public partial class CollaborativeMarkdownView
                             ProcessContent();
                             InvokeAsync(StateHasChanged);
                         }
-                    }));
+                    },
+                    ex => SurfaceError(ex, $"Loading document {BoundNodePath}")));
             }
             catch
             {
@@ -216,7 +217,8 @@ public partial class CollaborativeMarkdownView
                     n => ((Comment)n.Content!).MarkerId!,
                     n => n.Path);
                 InvokeAsync(StateHasChanged);
-            }));
+            },
+            ex => SurfaceError(ex, "Loading document comments")));
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -633,8 +635,17 @@ public partial class CollaborativeMarkdownView
     {
         if (jsModule != null)
         {
-            try { await jsModule.InvokeVoidAsync("dispose"); } catch { }
-            await jsModule.DisposeAsync();
+            try
+            {
+                await jsModule.InvokeVoidAsync("dispose");
+                await jsModule.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+                // Circuit already disconnected — JS teardown is best-effort. The DisposeAsync at :637
+                // used to be outside the try, escaping as "Unhandled exception in circuit".
+            }
+            catch { }
             jsModule = null;
         }
         dotNetRef?.Dispose();

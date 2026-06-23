@@ -193,7 +193,11 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
                     }
 
                     if (changed) InvokeAsync(StateHasChanged);
-                }));
+                },
+                // The surrounding try/catch only guards the SYNCHRONOUS subscribe setup; a later stream
+                // fault (e.g. the node stream OnError'ing under an AccessContext fault) would be unobserved
+                // and freeze this bubble. Surface it (log + modal + inline) via the base primitive.
+                ex => SurfaceError(ex, $"Loading message {ViewModel.NodePath}")));
         }
         catch (Exception ex)
         {

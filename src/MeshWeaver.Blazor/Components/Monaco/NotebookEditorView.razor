@@ -485,7 +485,15 @@
 
         if (jsModule != null)
         {
-            await jsModule.DisposeAsync();
+            try
+            {
+                await jsModule.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+                // Circuit already disconnected — JS teardown is expected to fail here; swallow so it
+                // never escapes as an "Unhandled exception in circuit".
+            }
         }
     }
 }

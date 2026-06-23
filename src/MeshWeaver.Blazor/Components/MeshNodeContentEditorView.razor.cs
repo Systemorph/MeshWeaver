@@ -48,7 +48,8 @@ public partial class MeshNodeContentEditorView
                 LoadValues(node!);
                 _loaded = true;
                 InvokeAsync(StateHasChanged);
-            }));
+            },
+            ex => SurfaceError(ex, $"Loading editor fields for {NodePath}")));
     }
 
     private void LoadValues(MeshNode node)

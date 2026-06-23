@@ -63,7 +63,14 @@ public partial class MeshNodeCollectionView : BlazorView<MeshNodeCollectionContr
                         _isLoading = false;
                         _ = InvokeAsync(StateHasChanged);
                     },
-                    _ => { });
+                    ex =>
+                    {
+                        // A faulted query stream used to be swallowed (`_ => { }`), leaving the view pinned
+                        // on the loading spinner forever. Clear loading so the (possibly empty) result
+                        // renders, and surface the fault (log + modal + inline) via the base primitive.
+                        _isLoading = false;
+                        SurfaceError(ex, $"Loading collection (query '{query}')");
+                    });
             _subscriptions.Add(sub);
         }
     }
