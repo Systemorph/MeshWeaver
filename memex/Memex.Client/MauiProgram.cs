@@ -32,6 +32,15 @@ public static class MauiProgram
 
     public static MauiApp CreateMauiApp()
     {
+#if WINDOWS
+        // Force the Vulkan GPU backend ahead of CPU for Whisper (Intel Arc / discrete GPUs). iOS/macOS
+        // keep Metal via the base runtime; Android tries Vulkan then CPU by default.
+        Whisper.net.LibraryLoader.RuntimeOptions.RuntimeLibraryOrder =
+        [
+            Whisper.net.LibraryLoader.RuntimeLibrary.Vulkan,
+            Whisper.net.LibraryLoader.RuntimeLibrary.Cpu,
+        ];
+#endif
         var builder = MauiApp.CreateBuilder();
         builder
             .UseMauiApp<App>()

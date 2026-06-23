@@ -73,6 +73,10 @@
         <PackageReference Include="Plugin.Maui.Audio" Version="4.0.0" />
         <PackageReference Include="Whisper.net" Version="1.9.1" />
         <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
+        <!-- GPU backend on Windows + Android (Intel Arc / discrete GPUs are Vulkan-capable). iOS/macOS
+             keep Metal from the base runtime. Whisper.net loads the GPU lib when present + available. -->
+        <PackageReference Include="Whisper.net.Runtime.Vulkan" Version="1.9.1"
+            Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows' or $([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'" />
     </ItemGroup>
 
     <ItemGroup>
