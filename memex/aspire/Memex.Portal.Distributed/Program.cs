@@ -122,8 +122,11 @@ else
             dsb.ConnectionStringBuilder.ConnectionIdleLifetime = 30;
         });
 
-// Disable dev login in the distributed deployment
-builder.Configuration["Authentication:EnableDevLogin"] = "false";
+// Disable dev login in the distributed deployment by default (prod-safety): a real
+// OAuth/OIDC provider is expected. A self-host / local deployment may opt in explicitly
+// with Authentication__EnableDevLogin=true (anything else still forces it off).
+if (builder.Configuration["Authentication:EnableDevLogin"] != "true")
+    builder.Configuration["Authentication:EnableDevLogin"] = "false";
 
 // Add web portal services
 builder.ConfigureMemexServices();

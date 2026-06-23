@@ -45,6 +45,12 @@ data:
   AzureFoundry__Models__0: "{{ .Values.config.memex_portal.AzureFoundry__Models__0 }}"
   AzureFoundry__Models__1: "{{ .Values.config.memex_portal.AzureFoundry__Models__1 }}"
   AzureFoundry__Models__2: "{{ .Values.config.memex_portal.AzureFoundry__Models__2 }}"
+  # ---- OpenAI-compatible provider (self-hosted / local: Ollama, vLLM, LM Studio, …) ----
+  # Generic OpenAI-wire endpoint. Set Endpoint + Models (+ ApiKey in secrets) to seed a
+  # provider + LanguageModel nodes pointing at any OpenAI-compatible gateway. Empty = inert.
+  OpenAICompatible__Endpoint: "{{ .Values.config.memex_portal.OpenAICompatible__Endpoint | default "" }}"
+  OpenAICompatible__Models__0: "{{ .Values.config.memex_portal.OpenAICompatible__Models__0 | default "" }}"
+  OpenAICompatible__Models__1: "{{ .Values.config.memex_portal.OpenAICompatible__Models__1 | default "" }}"
   # Tier → concrete model id (agents that declare ModelTier resolve through these).
   ModelTier__Heavy: "{{ .Values.config.memex_portal.ModelTier__Heavy }}"
   ModelTier__Standard: "{{ .Values.config.memex_portal.ModelTier__Standard }}"
@@ -88,6 +94,9 @@ data:
   Social__LinkedIn__ClientId: "{{ .Values.config.memex_portal.Social__LinkedIn__ClientId | default "" }}"
   # ---- Onboarding: invitation-only gate (first user always bootstraps) ------
   Features__Onboarding__InvitationOnly: "{{ .Values.config.memex_portal.Features__Onboarding__InvitationOnly | default "false" }}"
+  # One-shot first-admin bootstrap secret. Empty = endpoint disabled. Set it, POST
+  # /bootstrap/first-admin?secret=...&email=..., then clear it. (Self-host / local only.)
+  Bootstrap__Secret: "{{ .Values.config.memex_portal.Bootstrap__Secret | default "" }}"
   # ---- Static-repo → DB sync: which partitions are materialized into + served from the DB
   # (instead of the in-memory static provider). Default = Doc, Agent, Provider, Harness, Skill.
   # (The model catalog — providers + models + policy — imports into the top-level "Provider"
