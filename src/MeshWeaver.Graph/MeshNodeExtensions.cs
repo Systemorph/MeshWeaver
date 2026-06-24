@@ -175,40 +175,31 @@ public static class MeshNodeExtensions
         // workspace.GetMeshNodeStream is itself backed by the process-wide
         // IMeshNodeStreamCache (MeshNodeStreamCache.cs) — repeat tracks for the
         // same activity path reuse the warm handle without a second cache layer.
+        // Used ONLY to WRITE (stream.Update) the node when it already exists — never
+        // to probe an absent path (see the GetQuery read below).
         var stream = workspace.GetMeshNodeStream(activityPath);
 
-        // Read latest from the stream → fold into new record → write.
-        // The probe's two miss-modes:
-        //   1. Per-node hub doesn't exist yet (first-ever track for this path):
-        //      routing returns DeliveryFailureException("No node found at ...")
-        //      almost immediately — the SubscribeRequest fails fast.
-        //   2. Hub exists but hasn't emitted Initial within the probe window:
-        //      TimeoutException.
-        // Both mean "treat as first-time create". We catch any exception on the
-        // probe and route through to CreateNode.
+        // 🚨 Read existence via GetQuery (empty-on-absent), NEVER a point
+        // GetMeshNodeStream(path).Take(1) probe. On a FIRST-time track the activity node
+        // does not exist; a point-subscribe to that absent path routes to a RoutingGrain
+        // NotFound + SYNC_STREAM OnError. Because TrackLogin sits on the COLD-LOGIN hot path
+        // (every cold page load through UserContextMiddleware.TrackLogin), that failing
+        // subscribe re-storms the router. A GetQuery over the exact path returns an EMPTY set
+        // when the node is absent (the documented empty-on-absent behaviour) — no NotFound, no
+        // resubscribe, nothing to storm — and returns typed Content (deserialised through this
+        // hub's options) when present. Mirrors AiSettingsNodeType.EnsureExists / AgentChatClient's
+        // _Selection read.
         //
-        // Probe window was 2 s historically — a guess made before cache.GetStream
-        // surfaced DeliveryFailureException sub-second for missing paths (proved
-        // in test/MeshWeaver.Threading.Test/MissingSatelliteTest). For first-time
-        // tracks the probe NEVER emits — the missing path errors fast OR the
-        // 200 ms timeout trips, both routed to the same CreateNode fallback.
-        // Cut from 2 s to 200 ms: removes ~1.8 s from the cold-start activity
-        // path on the first-ever track per user, which sits on the critical
-        // path of every cold page load through UserContextMiddleware.TrackLogin.
-        //
-        // Known race: two concurrent tracks for the same path both see the
-        // miss probe and both attempt CreateNode → one wins, the other gets
-        // InvalidOperationException("Node already exists"). The CreateNode
-        // call below catches that race and falls through to a stream.Update
-        // so the second tracker's increment isn't lost.
-        stream.Take(1).Timeout(TimeSpan.FromMilliseconds(200))
-            .Catch<MeshNode, Exception>(ex =>
-            {
-                logger?.LogDebug(ex,
-                    "TrackActivity probe miss for {Path} ({Kind}) — treating as first-time create.",
-                    activityPath, ex.GetType().Name);
-                return Observable.Return<MeshNode>(null!);
-            })
+        // The increment is still folded onto the LIVE node inside the owner-serialised Update
+        // below (FoldOntoLive), so the query's eventual consistency only ever decides
+        // create-vs-update — never the AccessCount. The create-vs-update race (two concurrent
+        // tracks, or a query that lags a just-created node) is coalesced by the CreateNode catch
+        // below, which folds the increment in via stream.Update instead of throwing — no lost count.
+        workspace
+            .GetQuery($"UserActivity|{activityPath}", $"path:{activityPath} nodeType:UserActivity")
+            .Take(1)
+            .Select(nodes => nodes.FirstOrDefault(n =>
+                string.Equals(n.NodeType, "UserActivity", StringComparison.OrdinalIgnoreCase)))
             .SelectMany(existing =>
             {
                 var existingRecord = existing?.Content as UserActivityRecord;

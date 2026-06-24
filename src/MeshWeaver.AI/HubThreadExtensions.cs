@@ -82,6 +82,19 @@ public static class HubThreadExtensions
         if (!string.IsNullOrEmpty(mainNode))
             threadNode = threadNode with { MainNode = mainNode };
 
+        // 🚫 Fail fast on a top-level / ownerless thread. BuildThreadNode anchors a thread at
+        // {namespacePath}/_Thread/{id}; a top-level namespacePath collapses to a bare _Thread/{id}
+        // (empty owner) — there is no partition / per-node hub to route to, so the chat view + the
+        // submission watcher NotFound-storm the router (the Memex.Client voice bridge could anchor
+        // exactly this when handed an empty namespace). Validate the BUILT node against the same
+        // structural invariant the create boundary enforces, and route the error to onError — never
+        // post a doomed CreateNodeRequest. Reactive: no throw into the void.
+        if (ActivityNodeGuard.IsOwnerless(threadNode, out var ownerlessReason))
+        {
+            onError?.Invoke($"StartThread refused a top-level/ownerless thread: {ownerlessReason}");
+            return;
+        }
+
         // 🚫 Nothing-to-do: whitespace-only first message (e.g. the user ran a slash command —
         // the command text is CUT and what remains is empty). Create the thread (the composer
         // selection still carries onto it) but seed NO pending message — there is nothing to
@@ -185,6 +198,17 @@ public static class HubThreadExtensions
         if (string.IsNullOrEmpty(threadPath))
         {
             onError?.Invoke("SubmitMessage requires threadPath. Use StartThread for new threads.");
+            return;
+        }
+
+        // 🚫 Fail fast on a top-level / ownerless threadPath. A bare _Thread/{id} (empty owner) has
+        // no partition / per-node hub, so AppendUserInput's cross-hub write NotFound-storms the
+        // router. Validate the path against the same structural invariant the create boundary
+        // enforces (owned {owner}/_Thread/{id} and sub-thread paths pass; only the bare top-level
+        // shape is rejected).
+        if (ActivityNodeGuard.IsOwnerless(MeshNode.FromPath(threadPath), out var ownerlessReason))
+        {
+            onError?.Invoke($"SubmitMessage refused a top-level/ownerless threadPath: {ownerlessReason}");
             return;
         }
 

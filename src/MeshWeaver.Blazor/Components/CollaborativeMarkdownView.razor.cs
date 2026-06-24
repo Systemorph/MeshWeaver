@@ -36,6 +36,10 @@ public partial class CollaborativeMarkdownView
     private bool BoundCanComment;
     private bool BoundCanEdit;
 
+    // The document node's current hub version — stamped onto new comments and used to decide
+    // whether a comment's stored offsets are still valid or it must be re-anchored at render time.
+    private long _docVersion;
+
     // Current user info
     private string CurrentAuthor = "";
 
@@ -53,12 +57,16 @@ public partial class CollaborativeMarkdownView
     private bool _showPageCommentInput;
     private string _pageCommentText = "";
 
-    // Interactive markdown (kernel execution). The "kernel address" is now a
-    // per-view Activity MeshNode path (`{owner}/_Activity/markdown-{kernelId}`)
-    // — its hub hosts the kernel handlers via ActivityNodeType.HubConfiguration.
+    // Interactive markdown (kernel execution). The "kernel address" is a per-view
+    // Activity MeshNode path (`{userHome}/_Activity/markdown-{kernelId}`) — its hub
+    // hosts the kernel handlers via ActivityNodeType.HubConfiguration. 🚨 Anchored at
+    // the VIEWING USER's home partition (KernelOwnerPath), NOT the doc node being
+    // viewed: the code blocks execute AS the viewer, so the activity must live where
+    // the viewer can legitimately Create (creating it under a read-only doc partition
+    // was DENIED and the kernel hung — the bug this fixes).
     private readonly string _kernelId = Guid.NewGuid().AsString();
     private Address? _kernelAddress;
-    private Address KernelAddress => _kernelAddress ??= ResolveActivityAddress();
+    private Address KernelAddress => _kernelAddress ?? ResolveActivityAddress();
     private bool _codeSubmitted;
     // Flipped (via CreateActivityAndSubmit's onReady) once the per-view Activity is created + routable.
     // Gates the LIVE kernel-area embed in RenderContentHtml so the GUI never subscribes to a
@@ -68,12 +76,28 @@ public partial class CollaborativeMarkdownView
 
     private Address ResolveActivityAddress()
     {
-        var ownerPath = BoundNodePath ?? Stream?.Owner?.Path;
+        var ownerPath = KernelOwnerPath();
         var activityNamespace = string.IsNullOrEmpty(ownerPath)
             ? "_Activity"
             : $"{ownerPath}/_Activity";
-        return new Address($"{activityNamespace}/markdown-{_kernelId}");
+        var address = new Address($"{activityNamespace}/markdown-{_kernelId}");
+        // Memoise only once a real user home resolves. A prerender pass (no circuit user yet) would
+        // otherwise cache an ownerless `_Activity/markdown-{id}` and the deferred live embed would
+        // target it forever. Until a real owner is available we recompute cheaply on each call.
+        if (!string.IsNullOrEmpty(ownerPath))
+            _kernelAddress = address;
+        return address;
     }
+
+    // The viewing user's writable home partition — their AccessContext ObjectId (via the durable
+    // circuit user, ResolveCircuitUser). The per-view interactive-kernel Activity is anchored here,
+    // NOT under the (possibly read-only) doc node being viewed: the code blocks run AS this user, so
+    // the activity must live where they can Create. The viewer's OWN partition qualifies —
+    // RlsNodeValidator grants any write under `{userId}/…` and PermissionEvaluator auto-grants Admin
+    // at scope == userId. Null in SSR/prerender or when no real user is set (system/hub principals are
+    // filtered out by ResolveCircuitUser); the kernel result areas then render the non-subscribing
+    // "unavailable" notice instead of storming a path nobody can create.
+    private string? KernelOwnerPath() => ResolveCircuitUser()?.ObjectId;
 
     // Parsed data
     private string? _processedHtml;
@@ -147,16 +171,20 @@ public partial class CollaborativeMarkdownView
                 _cache = Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
                 AddBinding(Hub.GetMeshNodeStream(BoundNodePath)
                     .Where(node => node is not null)
-                    .Select(node => MarkdownOverviewLayoutArea.GetMarkdownContent(node))
-                    .DistinctUntilChanged()
-                    .Subscribe(content =>
+                    .Subscribe(node =>
                     {
-                        if (content != null && content != RawContent)
-                        {
+                        // Track the document version so new comments are stamped against it and the
+                        // render-time anchoring can tell "still valid" from "re-anchor needed".
+                        _docVersion = node!.Version;
+                        var content = MarkdownOverviewLayoutArea.GetMarkdownContent(node);
+                        var changed = content != RawContent;
+                        if (changed)
                             RawContent = content;
-                            ProcessContent();
+                        // Always re-run: ProcessContent is memoised on the decorated output, so a bare
+                        // version bump with no content/comment change is a cheap no-op.
+                        ProcessContent();
+                        if (changed)
                             InvokeAsync(StateHasChanged);
-                        }
                     },
                     ex => SurfaceError(ex, $"Loading document {BoundNodePath}")));
             }
@@ -220,6 +248,9 @@ public partial class CollaborativeMarkdownView
                 commentPaths = withMarker.ToDictionary(
                     n => ((Comment)n.Content!).MarkerId!,
                     n => n.Path);
+                // Comments are overlaid onto the rendered document from these satellites, so a change
+                // in the set must re-derive the inline highlights, not just the sidebar status.
+                ProcessContent();
                 InvokeAsync(StateHasChanged);
             },
             ex => SurfaceError(ex, "Loading document comments")));
@@ -256,16 +287,18 @@ public partial class CollaborativeMarkdownView
         if (!_codeSubmitted && _codeSubmissions is { Count: > 0 })
         {
             _codeSubmitted = true;
-            var ownerPath = BoundNodePath ?? Stream?.Owner?.Path;
+            var ownerPath = KernelOwnerPath();
             if (string.IsNullOrEmpty(ownerPath))
             {
-                // No owning node → no per-node hub to host the kernel. Do NOT create a bare
-                // `_Activity/markdown-*` activity (it would NotFound-storm the router). The result
+                // No resolvable viewing user (SSR/prerender, or an unauthenticated/system/hub
+                // principal) → nowhere the viewer can legitimately Create the kernel activity. Do NOT
+                // fall back to a bare `_Activity/markdown-*` (it would NotFound-storm the router) or to
+                // the read-only doc partition (the create is denied — the bug this fixes). The result
                 // areas were neutralised into a notice in ProcessContent; log and skip submission.
                 Hub.ServiceProvider.GetService<ILoggerFactory>()?
                     .CreateLogger("MarkdownExecution")
                     .LogWarning(
-                        "Collaborative markdown view {Kernel}: skipping interactive code execution — the view has no owning node.",
+                        "Collaborative markdown view {Kernel}: skipping interactive code execution — no resolvable viewing user to anchor the kernel activity.",
                         _kernelId);
                 return;
             }
@@ -292,7 +325,17 @@ public partial class CollaborativeMarkdownView
 
     private void ProcessContent()
     {
-        if (string.IsNullOrEmpty(RawContent))
+        // Overlay the inline comment highlights from the satellite nodes. Comments are NOT stored in
+        // the document text — each carries its own (Version, From/ToPosition, HighlightedText) and is
+        // re-anchored against the current text here, so the document is never mutated by commenting.
+        var commentsForRender = commentNodes.Values
+            .Where(c => !string.IsNullOrEmpty(c.MarkerId) && !string.IsNullOrEmpty(c.HighlightedText))
+            .ToArray();
+        var decorated = !string.IsNullOrEmpty(RawContent) && commentsForRender.Length > 0
+            ? CommentAnchoring.DecorateWithComments(RawContent, commentsForRender, _docVersion)
+            : RawContent;
+
+        if (string.IsNullOrEmpty(decorated))
         {
             _processedHtml = "";
             Annotations = new();
@@ -301,23 +344,22 @@ public partial class CollaborativeMarkdownView
             return;
         }
 
-        // Skip the parse when nothing observable to the rendered HTML changed.
-        // Filter changes route through OnCommentFilterChanged → StateHasChanged
-        // (no re-parse), but other lifecycle events can still call here.
-        if (RawContent == _lastRenderedContent
+        // Skip the parse when nothing observable to the rendered HTML changed. The memo key is the
+        // DECORATED content, so a change in the comment overlay (not just RawContent) re-parses.
+        if (decorated == _lastRenderedContent
             && CurrentViewMode == _lastRenderedMode
             && _processedHtml != null)
             return;
 
         // Extract annotations for the side panel
-        Annotations = AnnotationParser.ExtractAnnotations(RawContent);
+        Annotations = AnnotationParser.ExtractAnnotations(decorated);
 
         // Transform content based on view mode
         var content = CurrentViewMode switch
         {
-            "HideMarkup" => AnnotationMarkdownExtension.GetAcceptedContent(RawContent),
-            "Original" => AnnotationMarkdownExtension.GetRejectedContent(RawContent),
-            _ => RawContent
+            "HideMarkup" => AnnotationMarkdownExtension.GetAcceptedContent(decorated),
+            "Original" => AnnotationMarkdownExtension.GetRejectedContent(decorated),
+            _ => decorated
         };
 
         // Render markdown to HTML with annotation spans. NB: the kernel result-area placeholder is
@@ -327,7 +369,7 @@ public partial class CollaborativeMarkdownView
         // re-parsing. See RenderContentHtml + OnAfterRenderAsync.
         _processedHtml = RenderMarkdown(content);
 
-        _lastRenderedContent = RawContent;
+        _lastRenderedContent = decorated;
         _lastRenderedMode = CurrentViewMode;
     }
 
@@ -346,7 +388,7 @@ public partial class CollaborativeMarkdownView
         // until then, or a "no owner" notice. This gate prevents the subscribe-before-create storm.
         var html = _codeSubmissions is { Count: > 0 }
             ? MarkdownViewLogic.RenderKernelResultAreas(
-                _processedHtml, BoundNodePath ?? Stream?.Owner?.Path, _kernelReady, KernelAddress)
+                _processedHtml, KernelOwnerPath(), _kernelReady, KernelAddress)
             : _processedHtml;
 
         var renderer = new MarkdownHtmlRenderer(Mode, Stream);
@@ -517,7 +559,7 @@ public partial class CollaborativeMarkdownView
 
     private void SubmitSelectionComment()
     {
-        if (string.IsNullOrWhiteSpace(_pendingSelectionText) || string.IsNullOrEmpty(BoundHubAddress))
+        if (string.IsNullOrWhiteSpace(_pendingSelectionText) || string.IsNullOrEmpty(BoundNodePath))
             return;
 
         var selectedText = _pendingSelectionText;
@@ -530,37 +572,66 @@ public partial class CollaborativeMarkdownView
         _pendingStartFragment = "";
         _pendingEndFragment = "";
 
-        // Fire-and-forget: Post + RegisterCallback (never await — deadlocks in Orleans)
-        var delivery = Hub.Post(
-            new CreateCommentRequest
-            {
-                DocumentId = BoundNodePath ?? "",
-                SelectedText = selectedText,
-                StartFragment = startFragment,
-                EndFragment = endFragment,
-                CommentText = commentText,
-                Author = CurrentAuthor
-            },
-            o => o.WithTarget(new Address(BoundHubAddress)));
+        // Anchor the selection to the rendered text of the document at its current version. The
+        // comment carries its own (Version, From/ToPosition, HighlightedText) — the document text
+        // is never touched, so this works for Comment-only users and survives later edits.
+        var clean = MarkdownAnnotationParser.StripAllMarkers(RawContent ?? "");
+        var (from, to) = CommentAnchoring.FindRenderedRange(clean, startFragment, endFragment, selectedText);
+        var anchored = from >= 0 && to > from;
 
-        if (delivery != null)
+        var markerId = Guid.NewGuid().ToString("N")[..8];
+        var comment = new Comment
         {
-            Hub.Observe(delivery)
-                .Subscribe(
-                    response =>
-                    {
-                        if (response.Message is CreateCommentResponse { Success: false } resp)
-                        {
-                            var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Blazor.CollaborativeMarkdownView");
-                            logger?.LogWarning("[SubmitComment] FAILED: {Error}", resp.Error);
-                        }
-                    },
-                    ex =>
-                    {
-                        var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Blazor.CollaborativeMarkdownView");
-                        logger?.LogWarning(ex, "[SubmitComment] FAILED");
-                    });
-        }
+            Id = markerId,
+            PrimaryNodePath = BoundNodePath,
+            MarkerId = anchored ? markerId : null,
+            HighlightedText = anchored ? selectedText : null,
+            Author = CurrentAuthor,
+            Text = commentText,
+            CreatedAt = DateTimeOffset.UtcNow,
+            Status = CommentStatus.Active,
+            Version = anchored ? _docVersion : 0,
+            FromPosition = anchored ? from : -1,
+            ToPosition = anchored ? to : -1
+        };
+        CreateCommentNode(comment);
+    }
+
+    /// <summary>
+    /// Creates a comment satellite node via <see cref="IMeshService.CreateNode"/> — the canonical
+    /// mutation surface, no request/response. Optimistically projects the new comment so its inline
+    /// highlight appears immediately; the comment-status subscription reconciles the rest.
+    /// </summary>
+    private void CreateCommentNode(Comment comment)
+    {
+        var node = new MeshNode(comment.Id, $"{BoundNodePath}/{CommentsExtensions.CommentPartition}")
+        {
+            Name = string.IsNullOrEmpty(comment.Author) ? "Comment" : $"Comment by {comment.Author}",
+            NodeType = CommentNodeType.NodeType,
+            MainNode = BoundNodePath,
+            Content = comment
+        };
+
+        var meshService = Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        meshService.CreateNode(node).Subscribe(
+            _ =>
+            {
+                if (string.IsNullOrEmpty(comment.MarkerId))
+                    return;
+                // Optimistic overlay for instant feedback (copy-on-write so the comment-status
+                // subscription, which replaces the whole dictionary, can't be clobbered by us).
+                commentNodes = new Dictionary<string, Comment>(commentNodes) { [comment.MarkerId] = comment };
+                commentPaths = new Dictionary<string, string>(commentPaths) { [comment.MarkerId] = node.Path };
+                InvokeAsync(() =>
+                {
+                    if (IsViewDisposed) return;
+                    ProcessContent();
+                    StateHasChanged();
+                });
+            },
+            ex => Hub.ServiceProvider.GetService<ILoggerFactory>()
+                ?.CreateLogger("MeshWeaver.Blazor.CollaborativeMarkdownView")
+                .LogWarning(ex, "Comment create failed for {Path}", node.Path));
     }
 
     // Page-level comment (no text selection)
@@ -578,41 +649,24 @@ public partial class CollaborativeMarkdownView
 
     private void SubmitPageComment()
     {
-        if (string.IsNullOrWhiteSpace(_pageCommentText) || string.IsNullOrEmpty(BoundHubAddress))
+        if (string.IsNullOrWhiteSpace(_pageCommentText) || string.IsNullOrEmpty(BoundNodePath))
             return;
 
         var text = _pageCommentText;
         _showPageCommentInput = false;
         _pageCommentText = "";
 
-        // Fire-and-forget: Post + RegisterCallback (never await)
-        var delivery = Hub.Post(
-            new CreateCommentRequest
-            {
-                DocumentId = BoundNodePath ?? "",
-                CommentText = text,
-                Author = CurrentAuthor
-            },
-            o => o.WithTarget(new Address(BoundHubAddress)));
-
-        if (delivery != null)
+        // Page-level comment: no text anchor (no MarkerId / positions). Shown in the page comments
+        // section, not inline. Same canonical CreateNode surface.
+        CreateCommentNode(new Comment
         {
-            Hub.Observe(delivery)
-                .Subscribe(
-                    response =>
-                    {
-                        if (response.Message is CreateCommentResponse { Success: false } resp)
-                        {
-                            var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Blazor.CollaborativeMarkdownView");
-                            logger?.LogWarning("[SubmitPageComment] FAILED: {Error}", resp.Error);
-                        }
-                    },
-                    ex =>
-                    {
-                        var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Blazor.CollaborativeMarkdownView");
-                        logger?.LogWarning(ex, "[SubmitPageComment] FAILED");
-                    });
-        }
+            Id = Guid.NewGuid().ToString("N")[..8],
+            PrimaryNodePath = BoundNodePath,
+            Author = CurrentAuthor,
+            Text = text,
+            CreatedAt = DateTimeOffset.UtcNow,
+            Status = CommentStatus.Active
+        });
     }
 
     // Comment helpers

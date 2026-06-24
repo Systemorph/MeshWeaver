@@ -25,12 +25,17 @@ public partial class MarkdownView
     private readonly string _kernelId = Guid.NewGuid().AsString();
     private Address? _kernelAddress;
 
-    // The "kernel address" is now the per-view Activity path
-    // (`{owner}/_Activity/markdown-{kernelId}`). The Activity hub hosts the
+    // The "kernel address" is the per-view Activity path
+    // (`{userHome}/_Activity/markdown-{kernelId}`). The Activity hub hosts the
     // kernel handlers via `ActivityNodeType.HubConfiguration` +
-    // `AddKernelSubHubHandlers`. Replaces the legacy `kernel/*` standalone
-    // hub addressing — replies route through the standard MeshNode chain.
-    private Address KernelAddress => _kernelAddress ??= ResolveActivityAddress();
+    // `AddKernelSubHubHandlers`; replies route through the standard MeshNode chain.
+    // 🚨 Anchored at the VIEWING USER's home partition (KernelOwnerPath), NOT the
+    // doc node being viewed: the code blocks execute AS the viewer, so the activity
+    // must live where the viewer can legitimately Create (creating it under a
+    // read-only doc partition was DENIED and the kernel hung — the bug this fixes).
+    // Cached only once a real owner resolves (see ResolveActivityAddress) so a
+    // prerender pass never poisons it with an ownerless address.
+    private Address KernelAddress => _kernelAddress ?? ResolveActivityAddress();
 
     private bool _codeSubmitted;
 
@@ -54,12 +59,28 @@ public partial class MarkdownView
 
     private Address ResolveActivityAddress()
     {
-        var ownerPath = Stream?.Owner?.Path;
+        var ownerPath = KernelOwnerPath();
         var activityNamespace = string.IsNullOrEmpty(ownerPath)
             ? "_Activity"
             : $"{ownerPath}/_Activity";
-        return new Address($"{activityNamespace}/markdown-{_kernelId}");
+        var address = new Address($"{activityNamespace}/markdown-{_kernelId}");
+        // Memoise only once a real user home resolves. A prerender pass (no circuit user yet) would
+        // otherwise cache an ownerless `_Activity/markdown-{id}` and the deferred live embed would
+        // target it forever. Until a real owner is available we recompute cheaply on each call.
+        if (!string.IsNullOrEmpty(ownerPath))
+            _kernelAddress = address;
+        return address;
     }
+
+    // The viewing user's writable home partition — their AccessContext ObjectId (via the durable
+    // circuit user, ResolveCircuitUser). The per-view interactive-kernel Activity is anchored here,
+    // NOT under the (possibly read-only) doc node being viewed: the code blocks run AS this user, so
+    // the activity must live where they can Create. The viewer's OWN partition qualifies —
+    // RlsNodeValidator grants any write under `{userId}/…` and PermissionEvaluator auto-grants Admin
+    // at scope == userId. Null in SSR/prerender or when no real user is set (system/hub principals are
+    // filtered out by ResolveCircuitUser); the kernel result areas then render the non-subscribing
+    // "unavailable" notice instead of storming a path nobody can create.
+    private string? KernelOwnerPath() => ResolveCircuitUser()?.ObjectId;
 
     protected override void BindData()
     {
@@ -125,16 +146,18 @@ public partial class MarkdownView
         if (firstRender && !_codeSubmitted && CodeSubmissions is { Count: > 0 })
         {
             _codeSubmitted = true;
-            var ownerPath = Stream?.Owner?.Path;
+            var ownerPath = KernelOwnerPath();
             if (string.IsNullOrEmpty(ownerPath))
             {
-                // No owning node → no per-node hub to host the kernel. Do NOT create a bare
-                // `_Activity/markdown-*` activity (it would NotFound-storm the router). The result
+                // No resolvable viewing user (SSR/prerender, or an unauthenticated/system/hub
+                // principal) → nowhere the viewer can legitimately Create the kernel activity. Do NOT
+                // fall back to a bare `_Activity/markdown-*` (it would NotFound-storm the router) or to
+                // the read-only doc partition (the create is denied — the bug this fixes). The result
                 // areas were neutralised into a notice in BindData; just log and skip submission.
                 Hub.ServiceProvider.GetService<ILoggerFactory>()?
                     .CreateLogger("MarkdownExecution")
                     .LogWarning(
-                        "Markdown view {Kernel}: skipping interactive code execution — the view has no owning node (Stream.Owner is empty).",
+                        "Markdown view {Kernel}: skipping interactive code execution — no resolvable viewing user to anchor the kernel activity.",
                         _kernelId);
                 return;
             }
@@ -174,7 +197,7 @@ public partial class MarkdownView
         // until then, or a "no owner" notice when there's no hub to host the kernel. This is the gate
         // that prevents the subscribe-before-create NotFound storm.
         var html = CodeSubmissions is { Count: > 0 }
-            ? MarkdownViewLogic.RenderKernelResultAreas(Html, Stream?.Owner?.Path, _kernelReady, KernelAddress)
+            ? MarkdownViewLogic.RenderKernelResultAreas(Html, KernelOwnerPath(), _kernelReady, KernelAddress)
             : Html;
 
         var renderer = new MarkdownHtmlRenderer(Mode, Stream);

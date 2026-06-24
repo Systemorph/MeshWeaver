@@ -1,6 +1,11 @@
+using System.Collections.Immutable;
+using System.Reactive;
 using System.Reactive.Linq;
+using System.Reflection;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -44,6 +49,173 @@ public static class ShippedReleaseSeed
     [
         "Doc", "ACME", "FutuRe", "Northwind", "Cornerstone", "MeshWeaver"
     ];
+
+    // ═════════════════════════════════════════════════════════════════════
+    // Platform-startup anchor (Admin partition) — see AccessControl.md → "The
+    // Admin partition" and ActivityNodeGuard. Platform-startup activities must
+    // hang off a REAL node in the Admin partition (a node holding the installed
+    // platform version), never the top-level mesh hub (a bare _Activity/{id} has
+    // no partition hub to route to → the RoutingGrain NotFound-storms).
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// <summary>The Admin partition that holds platform-level data (schema <c>admin</c>, migration-provisioned).</summary>
+    public const string AdminPartition = "Admin";
+
+    /// <summary>Id of the platform-version node within the Admin partition.</summary>
+    public const string PlatformVersionId = "PlatformVersion";
+
+    /// <summary>Full path of the platform-version node: the canonical Admin-partition anchor for startup activities.</summary>
+    public const string PlatformVersionNodePath = $"{AdminPartition}/{PlatformVersionId}";
+
+    /// <summary>
+    /// The installed platform version — the entry assembly's
+    /// <see cref="AssemblyInformationalVersionAttribute"/> (set centrally from the
+    /// <c>PlatformVersion</c> MSBuild property; see <c>Directory.Build.props</c>), falling back to the
+    /// numeric assembly version, then <c>"unknown"</c>.
+    /// </summary>
+    public static string InstalledPlatformVersion
+    {
+        get
+        {
+            var asm = Assembly.GetEntryAssembly() ?? typeof(ShippedReleaseSeed).Assembly;
+            return asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+                ?? asm.GetName().Version?.ToString()
+                ?? "unknown";
+        }
+    }
+
+    /// <summary>
+    /// THE single robust startup entry point. Runs the existing shipped-release pre-build FIRST (the
+    /// critical, owned per-NodeType release path), THEN ensures the Admin platform-version anchor node
+    /// exists and records ONE owned platform-startup <c>Activity</c> under it
+    /// (<c>Admin/PlatformVersion/_Activity/{id}</c>) — never the top-level mesh hub. Errors after the
+    /// seed propagate to the caller's <c>onError</c> (logged), never swallowed. Composed entirely from
+    /// <c>IObservable</c>; the version-node ensure + activity record run under one System scope each.
+    /// </summary>
+    public static IObservable<Unit> RunPlatformStartup(
+        IMessageHub hub, IEnumerable<string> partitions, ILogger? logger = null)
+    {
+        var version = InstalledPlatformVersion;
+        var started = DateTime.UtcNow;
+        return SeedReleases(hub, partitions, logger)
+            .ToList()
+            .SelectMany(triggered =>
+                EnsurePlatformVersionNode(hub, version, logger)
+                    .SelectMany(_ => RecordStartupActivity(hub, version, started, triggered, logger)));
+    }
+
+    /// <summary>
+    /// Create-or-update the Admin-partition platform-version node (idempotent, reactive, as System).
+    /// Existence is read via <c>GetQuery</c> (empty-on-absent) — NEVER a point
+    /// <c>GetMeshNodeStream(path)</c> probe of the maybe-absent node, which would
+    /// NotFound-resubscribe-storm on a fresh DB. Mirrors <c>AiSettingsNodeType.EnsureExists</c>. The
+    /// node is a small <c>Markdown</c> page (a recognised, registered NodeType — no new type wiring)
+    /// recording the installed version; it is rewritten only when the version actually changes (a
+    /// redeploy), so re-boots at the same version are a no-op. Emits the node path.
+    /// </summary>
+    public static IObservable<string> EnsurePlatformVersionNode(
+        IMessageHub hub, string version, ILogger? logger = null)
+    {
+        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService is null)
+            return Observable.Return(PlatformVersionNodePath);
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var workspace = hub.GetWorkspace();
+        var body = $"# Platform version\n\nInstalled platform version: **{version}**";
+
+        MeshNode BuildNode() => new(PlatformVersionId, AdminPartition)
+        {
+            NodeType = "Markdown",
+            Name = "Platform Version",
+            State = MeshNodeState.Active,
+            Content = new MarkdownContent { Content = body },
+        };
+
+        return Observable.Using(
+            () => AccessContextScope.AsSystem(accessService),
+            _ => workspace
+                .GetQuery($"{PlatformVersionId}|{PlatformVersionNodePath}",
+                    $"path:{PlatformVersionNodePath} nodeType:Markdown")
+                .Take(1)
+                .SelectMany(nodes =>
+                {
+                    var existing = nodes.FirstOrDefault();
+                    if (existing is null)
+                    {
+                        logger?.LogInformation(
+                            "[PlatformStartup] creating Admin platform-version node {Path} (version {Version}).",
+                            PlatformVersionNodePath, version);
+                        return meshService.CreateNode(BuildNode())
+                            .Select(_ => PlatformVersionNodePath)
+                            // Idempotent: a concurrent first-writer (other replica) won the create race.
+                            .Catch<string, Exception>(ex => IsAlreadyExists(ex)
+                                ? Observable.Return(PlatformVersionNodePath)
+                                : Observable.Throw<string>(ex));
+                    }
+                    var currentBody = (existing.Content as MarkdownContent)?.Content;
+                    if (string.Equals(currentBody, body, StringComparison.Ordinal))
+                        return Observable.Return(PlatformVersionNodePath); // up to date — no-op
+                    logger?.LogInformation(
+                        "[PlatformStartup] updating Admin platform-version node {Path} to version {Version}.",
+                        PlatformVersionNodePath, version);
+                    return workspace.GetMeshNodeStream(PlatformVersionNodePath)
+                        .Update(n => n with { Content = new MarkdownContent { Content = body } })
+                        .Select(_ => PlatformVersionNodePath);
+                }));
+    }
+
+    /// <summary>
+    /// Records ONE owned <c>PlatformStartup</c> activity at
+    /// <c>{PlatformVersionNodePath}/_Activity/{id}</c> (created as System, terminal Status). The
+    /// activity is anchored under the real Admin platform-version node — never a bare top-level
+    /// <c>_Activity/{id}</c> — so it routes through the Admin partition and the create-boundary
+    /// ownerless guard admits it.
+    /// </summary>
+    private static IObservable<Unit> RecordStartupActivity(
+        IMessageHub hub, string version, DateTime started, IList<string> triggered, ILogger? logger)
+    {
+        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService is null)
+            return Observable.Return(Unit.Default);
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var actId = $"startup-{Guid.NewGuid().ToString("N")[..8]}";
+        var node = new MeshNode(actId, $"{PlatformVersionNodePath}/_Activity")
+        {
+            NodeType = "Activity",
+            Name = "Platform startup",
+            State = MeshNodeState.Active,
+            MainNode = PlatformVersionNodePath,
+            Content = new ActivityLog("PlatformStartup")
+            {
+                Id = actId,
+                HubPath = PlatformVersionNodePath,
+                Start = started,
+                End = DateTime.UtcNow,
+                Status = ActivityStatus.Succeeded,
+                Messages = ImmutableList.Create(
+                    new LogMessage($"Installed platform version: {version}", LogLevel.Information),
+                    new LogMessage(
+                        $"Pre-built shipped releases triggered for {triggered.Count} NodeType(s).",
+                        LogLevel.Information)),
+                AffectedPaths = triggered.ToImmutableList(),
+            }
+        };
+        logger?.LogInformation(
+            "[PlatformStartup] recording boot activity at {Path} (version {Version}, {Count} release(s)).",
+            node.Path, version, triggered.Count);
+        return Observable.Using(
+            () => AccessContextScope.AsSystem(accessService),
+            _ => meshService.CreateNode(node).Select(_ => Unit.Default));
+    }
+
+    /// <summary>True if the exception (or any inner) reports an "already exists" outcome — the idempotent-create success signal.</summary>
+    private static bool IsAlreadyExists(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException)
+            if (e.Message?.Contains("already exists", StringComparison.OrdinalIgnoreCase) == true)
+                return true;
+        return false;
+    }
 
     /// <summary>
     /// Trigger a System release for every un-built code NodeType under each of
@@ -135,9 +307,12 @@ public static class ShippedReleaseSeed
 }
 
 /// <summary>
-/// Boot hook that runs <see cref="ShippedReleaseSeed.SeedReleases"/> once the mesh is up.
-/// Mirrors <c>StaticRepoImportHostedService</c>: reactive, fire-and-forget, <c>SubscribeOn</c> the
-/// thread pool so it never re-enters the hub schedulers on the startup thread.
+/// The single platform-startup boot hook. Runs <see cref="ShippedReleaseSeed.RunPlatformStartup"/>
+/// once the mesh is up: pre-builds the shipped code-NodeType releases, ensures the Admin
+/// platform-version anchor node, and records the boot activity UNDER that node
+/// (<c>Admin/PlatformVersion/_Activity/{id}</c>) — never the top-level mesh hub. Reactive,
+/// fire-and-forget, <c>SubscribeOn</c> the thread pool so it never re-enters the hub schedulers on
+/// the startup thread (mirrors <c>StaticRepoImportHostedService</c>).
 /// </summary>
 public sealed class ShippedReleaseSeedHostedService(
     IMessageHub hub,
@@ -148,16 +323,18 @@ public sealed class ShippedReleaseSeedHostedService(
     public Task StartAsync(CancellationToken cancellationToken)
     {
         logger?.LogInformation(
-            "[ShippedReleaseSeed] pre-building shipped code-NodeType releases as System for {Partitions}.",
-            string.Join(", ", ShippedReleaseSeed.ShippedPartitions));
+            "[PlatformStartup] version={Version}; pre-building shipped code-NodeType releases as System for "
+            + "{Partitions} and recording the boot activity under {VersionNode}.",
+            ShippedReleaseSeed.InstalledPlatformVersion,
+            string.Join(", ", ShippedReleaseSeed.ShippedPartitions),
+            ShippedReleaseSeed.PlatformVersionNodePath);
         _subscription = ShippedReleaseSeed
-            .SeedReleases(hub, ShippedReleaseSeed.ShippedPartitions, logger)
+            .RunPlatformStartup(hub, ShippedReleaseSeed.ShippedPartitions, logger)
             .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default)
             .Subscribe(
-                path => logger?.LogInformation(
-                    "[ShippedReleaseSeed] release triggered for {Path}.", path),
-                ex => logger?.LogWarning(ex, "[ShippedReleaseSeed] seed failed."),
-                () => logger?.LogInformation("[ShippedReleaseSeed] seed complete."));
+                _ => { },
+                ex => logger?.LogWarning(ex, "[PlatformStartup] startup failed."),
+                () => logger?.LogInformation("[PlatformStartup] startup complete."));
         return Task.CompletedTask;
     }
 

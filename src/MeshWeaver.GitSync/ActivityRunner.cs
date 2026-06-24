@@ -77,6 +77,15 @@ public static class ActivityRunner
     {
         ArgumentNullException.ThrowIfNull(hub);
         ArgumentNullException.ThrowIfNull(command);
+        // 🚨 Explicit owner dependency: the activity is created at {partitionPath}/_Activity/{id} with
+        // MainNode = partitionPath, so partitionPath MUST be a real, routable owning node. An empty /
+        // whitespace partitionPath collapses to a bare _Activity/{id} (empty owner) — there is no
+        // partition / per-node hub to route to, so every poster/subscriber NotFound-storms the router.
+        // Fail fast here rather than relying solely on the create-before-execute order (STEP 1 below)
+        // + the create-boundary ownerless guard to reject it downstream; both are the backstop, but the
+        // precondition belongs at the entry point. A not-yet-provisioned (but non-empty) partition is
+        // fine — EnsurePartitionBootstrap on the CreateNode path provisions + roots it.
+        ArgumentException.ThrowIfNullOrWhiteSpace(partitionPath);
 
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var accessService = hub.ServiceProvider.GetService<AccessService>();

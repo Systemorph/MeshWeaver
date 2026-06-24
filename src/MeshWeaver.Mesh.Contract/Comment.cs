@@ -52,9 +52,35 @@ public record Comment
 
     /// <summary>
     /// The original text that was highlighted when the comment was created.
+    /// This is the anchor: when the document moves past <see cref="Version"/> the highlight
+    /// is recomputed by relocating this text, so the comment survives edits above it.
     /// </summary>
     [Browsable(false)]
     public string? HighlightedText { get; init; }
+
+    /// <summary>
+    /// The document <see cref="MeshNode.Version"/> the <see cref="FromPosition"/>/
+    /// <see cref="ToPosition"/> offsets were computed against. Comments are NOT stored inside the
+    /// document text; the inline highlight is re-derived at render time. While the document is
+    /// still at this version the stored offsets are authoritative; once it is ahead the comment is
+    /// re-anchored from <see cref="HighlightedText"/>. Zero for legacy/page-level comments.
+    /// </summary>
+    [Browsable(false)]
+    public long Version { get; init; }
+
+    /// <summary>
+    /// Start offset of the highlight in the rendered plain text of the document at
+    /// <see cref="Version"/>. <c>-1</c> when the comment has no inline anchor (page-level).
+    /// </summary>
+    [Browsable(false)]
+    public int FromPosition { get; init; } = -1;
+
+    /// <summary>
+    /// End offset (exclusive) of the highlight in the rendered plain text of the document at
+    /// <see cref="Version"/>. <c>-1</c> when the comment has no inline anchor (page-level).
+    /// </summary>
+    [Browsable(false)]
+    public int ToPosition { get; init; } = -1;
 
     /// <summary>
     /// Author of the comment (username or display name).
