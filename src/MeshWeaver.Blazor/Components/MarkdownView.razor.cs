@@ -33,6 +33,18 @@ public partial class MarkdownView
 
     private bool _codeSubmitted;
 
+    // Memoised parse — the parent re-renders this view on EVERY streaming tick with a fresh
+    // MarkdownControl whose text is usually identical (a completed chat bubble while a LATER
+    // cell streams). BlazorView.OnParametersSet re-runs BindData each time, so without this
+    // every unchanged bubble re-runs Markdig per tick — O(bubbles × ticks) server CPU that pegs
+    // the circuit and stutters Safari. Reuse the previous parse when (markdown, owner, nodePath)
+    // are unchanged; the streaming cell's text DOES change each tick, so it re-parses correctly.
+    private string? _memoMarkdown;
+    private string? _memoNodePath;
+    private string? _memoOwner;
+    private string? _memoHtml;
+    private IReadOnlyList<SubmitCodeRequest>? _memoCodeSubmissions;
+
     private Address ResolveActivityAddress()
     {
         var ownerPath = Stream?.Owner?.Path;
@@ -63,9 +75,25 @@ public partial class MarkdownView
 
         if (Html is null && !string.IsNullOrEmpty(markdown))
         {
-            var result = MarkdownViewLogic.Render(markdown, Stream?.Owner, nodePath);
-            Html = result.Html;
-            CodeSubmissions ??= result.CodeSubmissions;
+            var ownerKey = Stream?.Owner?.ToString();
+            if (markdown == _memoMarkdown && nodePath == _memoNodePath && ownerKey == _memoOwner
+                && _memoHtml is not null)
+            {
+                // Identical input → identical parse. Skip Markdig (see _memoMarkdown).
+                Html = _memoHtml;
+                CodeSubmissions ??= _memoCodeSubmissions;
+            }
+            else
+            {
+                var result = MarkdownViewLogic.Render(markdown, Stream?.Owner, nodePath);
+                Html = result.Html;
+                CodeSubmissions ??= result.CodeSubmissions;
+                _memoMarkdown = markdown;
+                _memoNodePath = nodePath;
+                _memoOwner = ownerKey;
+                _memoHtml = result.Html;
+                _memoCodeSubmissions = result.CodeSubmissions;
+            }
         }
         else if (CodeSubmissions is null
                  && Html is not null
