@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Layout.Test;
@@ -31,7 +32,9 @@ public class MauiViewDataPathTest(ITestOutputHelper output) : HubTestBase(output
                 Controls.Stack
                     .WithView(Controls.Label("Hello"), "Greeting")
                     .WithView(Controls.Markdown("# Title"), "Body")
-                    .WithView(Controls.Html("<b>hi</b>"), "Html"))));
+                    .WithView(Controls.Html("<b>hi</b>"), "Html")
+                    .WithView(Controls.DataGrid(new object[] { new { Name = "A" }, new { Name = "B" } })
+                        .WithColumn(new PropertyColumnControl<string> { Property = "name" }.WithTitle("Name")), "Grid"))));
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration).AddLayoutClient(d => d);
@@ -49,7 +52,7 @@ public class MauiViewDataPathTest(ITestOutputHelper output) : HubTestBase(output
             .Should().Within(5.Seconds()).Match(c => c is IContainerControl);
 
         var container = (IContainerControl)root!;
-        container.Areas.Should().HaveCount(3, "ContainerView iterates IContainerControl.Areas");
+        container.Areas.Should().HaveCount(4, "ContainerView iterates IContainerControl.Areas");
 
         // 2. Each child area resolves to its leaf control — exactly RenderArea(stream, named.Area) per child.
         var leaves = new List<UiControl>();
@@ -69,5 +72,8 @@ public class MauiViewDataPathTest(ITestOutputHelper output) : HubTestBase(output
             .Which.Markdown!.ToString().Should().Contain("Title");
         leaves.OfType<HtmlControl>().Should().ContainSingle()
             .Which.Data!.ToString().Should().Contain("hi");
+        // DataGridView consumes Columns + the rows in Data.
+        leaves.OfType<DataGridControl>().Should().ContainSingle()
+            .Which.Columns.Should().NotBeEmpty();
     }
 }

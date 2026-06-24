@@ -3,6 +3,7 @@ using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
+using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Maui.ApplicationModel;
@@ -139,6 +140,29 @@ public abstract class MauiView<TControl> : MauiView where TControl : UiControl
 }
 
 /// <summary>
+/// Base for two-way form controls (TextField/Checkbox/Switch/…): reads the bound value from the stream and
+/// writes native edits back via <c>UpdatePointer</c>. Echo-suppressed — a write triggered by our own
+/// programmatic set is ignored, so the stream's echo can't fight the user's typing (mirrors
+/// MeshWeaver.Blazor's FormComponentBase).
+/// </summary>
+public abstract class FormMauiView<TControl> : MauiView<TControl> where TControl : UiControl
+{
+    private bool _suppress;
+
+    /// <summary>Read the bound value into the native control, suppressing the write-back echo.</summary>
+    protected void BindValue<T>(object? boundValue, Action<T?> setNative)
+        => Bind<T>(boundValue, v => { _suppress = true; try { setNative(v); } finally { _suppress = false; } });
+
+    /// <summary>Write a native edit back to the bound pointer (no-op during a programmatic set).</summary>
+    protected void Write<T>(object? boundValue, T? value)
+    {
+        if (_suppress) return;
+        if (boundValue is JsonPointerReference reference && Stream is not null)
+            Stream.UpdatePointer(value, Control.DataContext, reference);
+    }
+}
+
+/// <summary>
 /// The public host: renders a mesh layout area (a control tree) as native MAUI. Subscribes to the LOCAL
 /// workspace's area stream and renders reactively. (Remote areas via <c>GetRemoteStream</c> come next wave.)
 /// </summary>
@@ -173,7 +197,14 @@ public static class MauiViewPackExtensions
         .Register<MarkdownControl, MarkdownView>()
         .Register<IconControl, IconView>()
         .Register<ProgressControl, ProgressView>()
-        .Register<NamedAreaControl, NamedAreaView>();
+        .Register<NamedAreaControl, NamedAreaView>()
+        // Two-way form controls.
+        .Register<TextFieldControl, TextFieldView>()
+        .Register<TextAreaControl, TextAreaView>()
+        .Register<CheckBoxControl, CheckBoxView>()
+        .Register<SwitchControl, SwitchView>()
+        // Tabular data.
+        .Register<DataGridControl, DataGridView>();
 }
 
 // ---- Wave 1 control views -------------------------------------------------------------------------
@@ -238,6 +269,105 @@ public sealed class IconView : MauiView<IconControl>
     private Label _label = null!;
     protected override View CreateView() => _label = new Label();
     protected override void Bind() => Bind<object>(Model.Data, v => _label.Text = v?.ToString() ?? "");
+}
+
+/// <summary>Tabular data → a header + rows (read-only this wave; sorting/virtualization later).</summary>
+public sealed class DataGridView : MauiView<DataGridControl>
+{
+    private VerticalStackLayout _root = null!;
+    private readonly List<PropertyColumnControl> _columns = new();
+
+    protected override View CreateView()
+    {
+        _columns.AddRange(Model.Columns.OfType<PropertyColumnControl>());
+        _root = new VerticalStackLayout { Spacing = 4 };
+        _root.Children.Add(Row(_columns.Select(c => c.Title?.ToString() ?? c.Property ?? "").ToArray(), bold: true));
+        return _root;
+    }
+
+    protected override void Bind() => Bind<JsonElement>(Model.Data, RenderRows);
+
+    private void RenderRows(JsonElement rows)
+    {
+        while (_root.Children.Count > 1) _root.Children.RemoveAt(1);   // keep the header row
+        if (rows.ValueKind != JsonValueKind.Array) return;
+        foreach (var row in rows.EnumerateArray())
+            _root.Children.Add(Row(_columns.Select(c => CellText(row, c.Property)).ToArray(), bold: false));
+    }
+
+    private static string CellText(JsonElement row, string? property)
+    {
+        if (property is null || property.Length == 0 || row.ValueKind != JsonValueKind.Object) return "";
+        var camel = char.ToLowerInvariant(property[0]) + property[1..];   // JSON is camelCase
+        if (row.TryGetProperty(camel, out var v) || row.TryGetProperty(property, out v))
+            return v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : v.ToString();
+        return "";
+    }
+
+    private static View Row(string[] cells, bool bold)
+    {
+        var h = new HorizontalStackLayout { Spacing = 12 };
+        foreach (var cell in cells)
+            h.Children.Add(new Label
+            {
+                Text = cell,
+                WidthRequest = 120,
+                FontAttributes = bold ? FontAttributes.Bold : FontAttributes.None,
+            });
+        return h;
+    }
+}
+
+/// <summary>Single-line text field → MAUI <see cref="Entry"/> (two-way).</summary>
+public sealed class TextFieldView : FormMauiView<TextFieldControl>
+{
+    private Entry _entry = null!;
+    protected override View CreateView()
+    {
+        _entry = new Entry();
+        _entry.TextChanged += (_, _) => Write(Model.Data, _entry.Text);
+        return _entry;
+    }
+    protected override void Bind() => BindValue<string>(Model.Data, v => _entry.Text = v ?? "");
+}
+
+/// <summary>Multi-line text area → MAUI <see cref="Editor"/> (two-way).</summary>
+public sealed class TextAreaView : FormMauiView<TextAreaControl>
+{
+    private Editor _editor = null!;
+    protected override View CreateView()
+    {
+        _editor = new Editor { AutoSize = EditorAutoSizeOption.TextChanges };
+        _editor.TextChanged += (_, _) => Write(Model.Data, _editor.Text);
+        return _editor;
+    }
+    protected override void Bind() => BindValue<string>(Model.Data, v => _editor.Text = v ?? "");
+}
+
+/// <summary>Boolean checkbox → MAUI <see cref="CheckBox"/> (two-way).</summary>
+public sealed class CheckBoxView : FormMauiView<CheckBoxControl>
+{
+    private CheckBox _cb = null!;
+    protected override View CreateView()
+    {
+        _cb = new CheckBox();
+        _cb.CheckedChanged += (_, _) => Write(Model.Data, _cb.IsChecked);
+        return _cb;
+    }
+    protected override void Bind() => BindValue<bool>(Model.Data, v => _cb.IsChecked = v);
+}
+
+/// <summary>Boolean toggle → MAUI <see cref="Switch"/> (two-way).</summary>
+public sealed class SwitchView : FormMauiView<SwitchControl>
+{
+    private Switch _sw = null!;
+    protected override View CreateView()
+    {
+        _sw = new Switch();
+        _sw.Toggled += (_, _) => Write(Model.Data, _sw.IsToggled);
+        return _sw;
+    }
+    protected override void Bind() => BindValue<bool>(Model.Data, v => _sw.IsToggled = v);
 }
 
 /// <summary>Progress (0–100) + message → MAUI <see cref="ProgressBar"/> with a caption.</summary>

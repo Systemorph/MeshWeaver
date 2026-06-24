@@ -28,7 +28,13 @@ public sealed class InstanceManagerPage : ContentPage
         _services = services;
         Title = "Memex";
 
-        // On-device voice (Whisper on the GPU + Apple Intelligence) — a native page.
+        // Native portal area (rendered by the MeshWeaver.Maui view pack) + on-device voice.
+        ToolbarItems.Add(new ToolbarItem
+        {
+            Text = "🏠 Home",
+            Command = new Command(async () =>
+                await Navigation.PushAsync(_services.GetRequiredService<LocalAreaPage>())),
+        });
         ToolbarItems.Add(new ToolbarItem
         {
             Text = "🎙 Voice",
