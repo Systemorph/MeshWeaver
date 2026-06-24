@@ -203,6 +203,7 @@ public static class MauiViewPackExtensions
         .Register<TextAreaControl, TextAreaView>()
         .Register<CheckBoxControl, CheckBoxView>()
         .Register<SwitchControl, SwitchView>()
+        .Register<SelectControl, SelectView>()
         // Tabular data.
         .Register<DataGridControl, DataGridView>()
         // Wave 2 — nav + badges.
@@ -393,6 +394,32 @@ public sealed class CheckBoxView : FormMauiView<CheckBoxControl>
         return _cb;
     }
     protected override void Bind() => BindValue<bool>(Model.Data, v => _cb.IsChecked = v);
+}
+
+/// <summary>Single-select dropdown → MAUI <see cref="Picker"/> (two-way; literal options this wave).</summary>
+public sealed class SelectView : FormMauiView<SelectControl>
+{
+    private Picker _picker = null!;
+    private List<Option> _options = new();
+
+    protected override View CreateView()
+    {
+        _picker = new Picker();
+        _options = (Model.Options as IEnumerable<Option>)?.ToList() ?? new();
+        foreach (var o in _options) _picker.Items.Add(o.Text);
+        _picker.SelectedIndexChanged += (_, _) =>
+        {
+            if (_picker.SelectedIndex >= 0 && _picker.SelectedIndex < _options.Count)
+                Write(Model.Data, _options[_picker.SelectedIndex].GetItem());
+        };
+        return _picker;
+    }
+
+    protected override void Bind() => BindValue<object>(Model.Data, v =>
+    {
+        var idx = _options.FindIndex(o => Equals(o.GetItem()?.ToString(), v?.ToString()));
+        if (idx >= 0) _picker.SelectedIndex = idx;
+    });
 }
 
 /// <summary>Boolean toggle → MAUI <see cref="Switch"/> (two-way).</summary>
