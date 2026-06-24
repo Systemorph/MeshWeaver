@@ -235,6 +235,20 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private string? boundModelPath;
     private IDisposable? composerSubscription;
     private IDisposable? composerDefaultsSubscription;
+    private IDisposable? modelsSubscription;
+
+    // Live model catalog (the EXACT AgentPickerProjection.ObserveModels pipeline the picker binds to),
+    // kept READ-ONLY: used only to (a) disable Send + surface a GUI message when the catalog is empty and
+    // (b) resolve an invalid bound selection to the top model AT SUBMIT TIME. It NEVER writes a node from
+    // a subscription callback — an earlier version did (WriteComposerSelection from the model snapshot),
+    // which patched a not-yet-present composer node and NotFound-stormed the hub into a wedge. _modelsLoaded
+    // distinguishes "not loaded yet" (don't gate Send) from "loaded and genuinely empty" (gate Send).
+    private IReadOnlyList<MeshWeaver.AI.ModelInfo> availableModels = System.Array.Empty<MeshWeaver.AI.ModelInfo>();
+    private bool _modelsLoaded;
+
+    /// <summary>True once the catalog has loaded and is empty — Send is disabled and the user is told to
+    /// configure a model. False while still loading, so Send is never falsely gated.</summary>
+    private bool HasNoModels => _modelsLoaded && availableModels.Count == 0;
 
     // ─── Composer binding target ───
     // Out of a thread: the per-user singleton composer NODE {userHome}/_Thread/ThreadComposer.
@@ -606,10 +620,62 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     private void InitializeAgentAndModelSelections()
     {
-        // The chat view loads NO model/harness lists: /agent, /model and /harness are generic
-        // node-pick commands that query the mesh on demand (OpenPicker). The only subscription
-        // kept is the agent snapshot, used for @-reference agent detection.
+        // /agent, /model and /harness are generic node-pick commands that query the mesh on demand
+        // (OpenPicker). Two READ-ONLY snapshot subscriptions are kept: the agent snapshot (for @-reference
+        // agent detection) and the model snapshot (to gate Send when empty + resolve the bound model at
+        // submit). Neither writes anything.
         SubscribeToAgentNodes();
+        SubscribeToModelNodes();
+    }
+
+    /// <summary>
+    /// READ-ONLY subscription to the live model catalog — the SAME <see cref="AgentPickerProjection.ObserveModels"/>
+    /// pipeline the /model picker binds to. Drives Send-gating (empty catalog → disable + message) and
+    /// submit-time model resolution. NEVER writes a node (a prior write-from-callback NotFound-stormed the
+    /// hub). A load error is logged, not surfaced, and leaves <c>_modelsLoaded</c> false so Send isn't
+    /// falsely gated.
+    /// </summary>
+    private void SubscribeToModelNodes()
+    {
+        modelsSubscription?.Dispose();
+        var workspace = Hub.ServiceProvider.GetService<IWorkspace>();
+        if (workspace == null)
+            return;
+        var picker = AgentPickerProjection.DerivePickerContext(_currentNavContext, initialContext);
+        modelsSubscription = AgentPickerProjection
+            .ObserveModels(workspace, Hub, picker.ContextPath, picker.NodeTypePath, userPath: _userHome)
+            .Subscribe(
+                models => InvokeAsync(() =>
+                {
+                    if (_isDisposed) return;
+                    availableModels = models;
+                    _modelsLoaded = true;
+                    StateHasChanged(); // refresh Send-gating + the "configure a model" hint
+                }),
+                ex => Logger.LogDebug(ex,
+                    "[ThreadChat:{InstanceId}] model list subscription error (Send not gated)", _instanceId));
+    }
+
+    /// <summary>
+    /// Resolves the model to actually submit with — guaranteeing it is never INVALID without ever writing a
+    /// node in the background. If the bound selection is present in the live catalog (or the catalog hasn't
+    /// loaded), it's used as-is; otherwise it falls back to the TOP (lowest-<c>Order</c>) model — the same
+    /// Order=-1 default the picker uses. The empty-catalog case never reaches here (Send is disabled).
+    /// </summary>
+    private string? ResolveSubmitModel(string? bound)
+    {
+        if (!_modelsLoaded || availableModels.Count == 0)
+            return bound; // unknown / none — leave as-is (the none case is blocked by Send-gating)
+        var isValid = !string.IsNullOrEmpty(bound) && availableModels.Any(m =>
+            string.Equals(m.Path, bound, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(LastSegment(m.Path), LastSegment(bound), StringComparison.OrdinalIgnoreCase));
+        if (isValid)
+            return bound;
+        return availableModels
+            .Where(m => !string.IsNullOrEmpty(m.Path))
+            .OrderBy(m => m.Order)
+            .Select(m => m.Path)
+            .FirstOrDefault() ?? bound;
     }
 
     // Agent nodes from the reactive query, keyed by node path — used ONLY for @-reference
@@ -735,6 +801,17 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 }
             }
 
+            // No usable model in the catalog → don't submit (the agent has nothing to run). Send is already
+            // disabled in the UI with a hint; this also guards the Enter/OnSubmit path. Slash commands have
+            // short-circuited above, so /model, /harness, /login etc. still work with an empty catalog.
+            if (HasNoModels)
+            {
+                lastCommandStatus = "No language model is available — add one in Settings → Language Models to chat.";
+                lastCommandStatusIsError = true;
+                StateHasChanged();
+                return;
+            }
+
             // Attempt to begin submission — rejects empty text and concurrent submissions
             if (!submissionHandler.TryBeginSubmit(userMessageText))
                 return;
@@ -785,6 +862,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 StateHasChanged();
             });
 
+            // Resolve the model to submit with — never an invalid/stale selection (a removed model like a
+            // deleted gpt-4o falls back to the top catalog model). Read-only: nothing is written here.
+            var modelForThread = ResolveSubmitModel(boundModelPath);
+
             if (string.IsNullOrEmpty(threadPath))
             {
                 showSubmissionProgress = true; // step 2: show progress in the composer immediately on submit
@@ -798,7 +879,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     namespacePath: ns,
                     userText: userMessageText!,
                     agentName: boundAgentPath,
-                    modelName: boundModelPath,
+                    modelName: modelForThread,
                     contextPath: safeContext,
                     attachments: capturedAttachments,
                     createdBy: createdBy,
@@ -808,7 +889,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     {
                         Harness = boundHarness,
                         AgentName = boundAgentPath,
-                        ModelName = boundModelPath,
+                        ModelName = modelForThread,
                         ContextPath = safeContext
                     },
                     onCreated: node =>
@@ -2638,6 +2719,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             composerSubscription?.Dispose();
             composerDefaultsSubscription?.Dispose();
             agentSubscription?.Dispose();
+            modelsSubscription?.Dispose();
             submissionHandler.Dispose();
             foreach (var sub in messageSubs.Values) sub.Dispose();
             messageSubs.Clear();
