@@ -36,7 +36,9 @@ public class MauiViewDataPathTest(ITestOutputHelper output) : HubTestBase(output
                     .WithView(Controls.DataGrid(new object[] { new { Name = "A" }, new { Name = "B" } })
                         .WithColumn(new PropertyColumnControl<string> { Property = "name" }.WithTitle("Name")), "Grid")
                     .WithView(new NavLinkControl("Home", null, "/home"), "Nav")
-                    .WithView(new BadgeControl("new"), "Badge"))));
+                    .WithView(new BadgeControl("new"), "Badge")
+                    .WithView(new SelectControl("a", new Option[]
+                        { new Option<string>("a", "Apple"), new Option<string>("b", "Banana") }), "Select"))));
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration).AddLayoutClient(d => d);
@@ -54,7 +56,7 @@ public class MauiViewDataPathTest(ITestOutputHelper output) : HubTestBase(output
             .Should().Within(5.Seconds()).Match(c => c is IContainerControl);
 
         var container = (IContainerControl)root!;
-        container.Areas.Should().HaveCount(6, "ContainerView iterates IContainerControl.Areas");
+        container.Areas.Should().HaveCount(7, "ContainerView iterates IContainerControl.Areas");
 
         // 2. Each child area resolves to its leaf control — exactly RenderArea(stream, named.Area) per child.
         var leaves = new List<UiControl>();
@@ -82,5 +84,8 @@ public class MauiViewDataPathTest(ITestOutputHelper output) : HubTestBase(output
             .Which.Title!.ToString().Should().Contain("Home");
         leaves.OfType<BadgeControl>().Should().ContainSingle()
             .Which.Data!.ToString().Should().Contain("new");
+        // SelectView reads the selected value (Data); options drive the Picker items.
+        leaves.OfType<SelectControl>().Should().ContainSingle()
+            .Which.Data!.ToString().Should().Contain("a");
     }
 }
