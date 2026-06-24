@@ -200,6 +200,9 @@ public static class ModelProviderNodeType
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<ModelProviderConfiguration>())
+            // Custom minimal detail: editable URL + write-only "Enter Key" button. Replaces the
+            // generic editor (which leaked the ApiKey in plaintext + showed Edit/Copy/Move/Delete).
+            .AddModelProviderViews()
     };
 
     /// <summary>
