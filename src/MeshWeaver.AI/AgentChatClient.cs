@@ -812,12 +812,22 @@ public class AgentChatClient : IAgentChat
         // queued during the in-flight turn. The tool drains
         // Thread.PendingUserMessages atomically and returns the texts so the
         // agent can fold them into the current response — see InboxTool.
-        tools.Add(InboxTool.CreateCheckInboxTool(hub, logger));
+        // 🚫 Mid-round inbox (check_inbox) is DISABLED. Follow-up messages typed while a
+        // round is in flight queue in MeshThread.PendingUserMessages and are ingested ONLY
+        // after the round finishes: ThreadSubmissionServer.InstallServerWatcher observes
+        // Status == Idle with pending messages and dispatches the next round. The mid-round
+        // check_inbox tool bridged a TaskCompletionSource onto the hub action-block scheduler
+        // (a hand-woven async gate — the very shape the actor model deadlocks on) to deliver
+        // messages inline; it's the suspected thread-deadlock/"thread disappears" source.
+        // Removed in favour of the simpler, race-free "ingest at the round boundary" model.
+        // To re-introduce mid-round steering, do it WITHOUT a TCS gate (a better design: a
+        // notification channel the round consumes reactively — see ThreadOperations.md).
         chatOptions.Tools = tools;
-        // Tools marked [HiddenTool] are internal plumbing (e.g. check_inbox's mid-round
-        // poll): their calls must not reach the chat UI as tool-call chrome nor the
-        // Information logs. Collect their names once; we drop the paired FunctionCallContent
-        // / FunctionResultContent below instead of forwarding them to ThreadExecution.
+        // Tools marked [HiddenTool] are internal plumbing: their calls must not reach the chat
+        // UI as tool-call chrome nor the Information logs. The filter stays generic; with the
+        // inbox disabled there are currently no hidden tools, so it is a no-op. Collect their
+        // names once; we drop the paired FunctionCallContent / FunctionResultContent below
+        // instead of forwarding them to ThreadExecution.
         var hiddenToolNames = tools
             .OfType<AIFunction>()
             .Where(Attributes.HiddenToolAttribute.IsHidden)
