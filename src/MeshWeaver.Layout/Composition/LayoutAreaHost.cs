@@ -199,7 +199,26 @@ public record LayoutAreaHost : IDisposable
             // generator-side UpdateData write (also a Stream.Update) ahead of its
             // control. A late/observable generator re-emitting keeps flowing through
             // the same path for the area's whole lifetime.
-            var renderSubscription = LayoutDefinition.Render(this, context, baseStore)
+            // A view generator that throws SYNCHRONOUSLY — before returning its observable,
+            // e.g. a compiled NodeType view whose Invoke faults on a cold agent — would
+            // otherwise propagate out of this init subscribe, error the init observable, and
+            // FAULT the stream. After that no error frame can be pushed and the client spins
+            // on an indefinite null (the LinkedInTelemetryImport 45 s render timeout, with the
+            // real cause buried in a log line). Catch it here and surface a visible error
+            // control through the normal render pipeline — the stream is still healthy, the
+            // base frame was emitted above — exactly as RenderObservable.Catch does for a
+            // generator whose OBSERVABLE (rather than its function body) errors.
+            IObservable<EntityStoreAndUpdates> renderObservable;
+            try
+            {
+                renderObservable = LayoutDefinition.Render(this, context, baseStore);
+            }
+            catch (Exception renderEx)
+            {
+                renderObservable = Observable.Return(RenderRenderingError(
+                    context, new EntityStoreAndUpdates(baseStore, [], Stream.StreamId), renderEx));
+            }
+            var renderSubscription = renderObservable
                 .Subscribe(PushRenderResult, FailRendering);
 
             // Tear down: dispose the render + milestone subscriptions and clear the
@@ -742,7 +761,7 @@ public record LayoutAreaHost : IDisposable
         var ret = DisposeExistingAreas(store, context);
         RegisterForDisposal(context.Parent?.Area ?? context.Area,
             generator.Invoke(this, context, ret.Store)
-                .Subscribe(c => UpdateArea(context, c), FailRendering)
+                .Subscribe(c => UpdateArea(context, c), ex => FailRendering(ex, context.Area))
         );
         return ret;
     }
@@ -756,13 +775,43 @@ public record LayoutAreaHost : IDisposable
         RegisterForDisposal(context.Parent?.Area ?? context.Area,
             FromViewBuilder(ct => asyncGenerator.Invoke(this, context, store, ct))
                 .Switch()
-                .Subscribe(c => UpdateArea(context, c), FailRendering));
+                .Subscribe(c => UpdateArea(context, c), ex => FailRendering(ex, context.Area)));
         return ret;
     }
 
-    private void FailRendering(Exception ex)
+    // Top-level render failures (the init observable's WithExceptionCallback and the
+    // main render subscription) surface on the area this host renders — Reference.Area.
+    private void FailRendering(Exception ex) => FailRendering(ex, Reference.Area);
+
+    /// <summary>
+    /// 🚨 A render fault is SURFACED, never swallowed. The previous body only
+    /// <c>LogWarning</c>'d and dropped the exception, so a view generator that threw left
+    /// the area with nothing but its empty "Building layout…" base frame — a subscriber
+    /// (the GUI, and the LinkedInTelemetryImport compile-guard test) then spun on an
+    /// indefinite <c>null</c> until its 45 s timeout, with the real cause buried in a log
+    /// line nobody reads. Instead we render a visible error control INTO the failed area
+    /// and clear the progress spinner, mirroring <see cref="LayoutDefinition.NotFound"/>'s
+    /// placeholder. The client gets a control carrying the exception type + message, so the
+    /// failure shows up on the GUI (and the test fails fast with the actual cause).
+    /// </summary>
+    private void FailRendering(Exception ex, string? area)
     {
-        logger.LogWarning(ex, "Rendering failed");
+        logger.LogWarning(ex, "Rendering failed for area {Area} on {Hub}", area ?? "(default)", Hub.Address);
+        if (string.IsNullOrEmpty(area))
+            return;
+
+        var errorControl = new MarkdownControl(
+            $"⚠️ **This area failed to render.**\n\n```\n{ex.Message}\n```");
+
+        Stream.Update(current =>
+        {
+            var store = (current ?? new EntityStore())
+                .Update(LayoutAreaReference.Areas, coll => coll.SetItem(area, errorControl))
+                // Stop the "Building layout…" spinner now the area has resolved (to an error).
+                .Update(LayoutAreaReference.Data,
+                    coll => coll.SetItem(ProgressDataId, new { message = "", progress = 100 }));
+            return new ChangeItem<EntityStore>(store, Stream.StreamId, Stream.Hub.Version);
+        }, updateEx => logger.LogWarning(updateEx, "Cannot surface render error for {Area}", area));
     }
 
     /// <summary>
@@ -848,7 +897,7 @@ public record LayoutAreaHost : IDisposable
         // (no await in hub-reachable code) and feed UpdateArea once it resolves.
         RegisterForDisposal(context.Parent?.Area ?? context.Area,
             FromViewBuilder(ct => generator.Invoke(this, context, ct))
-                .Subscribe(view => UpdateArea(context, view!), FailRendering));
+                .Subscribe(view => UpdateArea(context, view!), ex => FailRendering(ex, context.Area)));
         return ret;
     }
     internal EntityStoreAndUpdates RenderArea(
@@ -863,7 +912,7 @@ public record LayoutAreaHost : IDisposable
             generator
                 .Select(vd => FromViewBuilder(ct => vd.Invoke(this, context, ct)))
                 .Switch()
-                .Subscribe(view => UpdateArea(context, view!), FailRendering));
+                .Subscribe(view => UpdateArea(context, view!), ex => FailRendering(ex, context.Area)));
 
         return DisposeExistingAreas(store, context);
     }
@@ -896,7 +945,7 @@ public record LayoutAreaHost : IDisposable
                 .DistinctUntilChanged()
                 .Subscribe(
                     view => UpdateArea(context, view),
-                    FailRendering)
+                    ex => FailRendering(ex, context.Area))
         );
         return ret;
     }

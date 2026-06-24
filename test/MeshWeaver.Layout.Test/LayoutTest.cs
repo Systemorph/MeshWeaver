@@ -26,6 +26,17 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     private const string StaticView = nameof(StaticView);
     private const string RecursiveView = nameof(RecursiveView);
 
+    // A view whose generator throws SYNCHRONOUSLY when invoked — models the
+    // LinkedInTelemetryImport compiled view's Invoke throwing during render (the init
+    // observable then errors and routes to WithExceptionCallback).
+    private static IObservable<UiControl?> ThrowingSyncView(LayoutAreaHost host, RenderingContext ctx)
+        => throw new InvalidOperationException("BOOM_sync_render");
+
+    // A view whose generator returns an observable that ERRORS — models the post-init
+    // render subscription faulting.
+    private static IObservable<UiControl?> ThrowingObservableView(LayoutAreaHost host, RenderingContext ctx)
+        => Observable.Throw<UiControl?>(new InvalidOperationException("BOOM_async_render"));
+
     /// <summary>
     /// A pathologically deep, self-similar control tree (a single-child stack
     /// nested far beyond <c>LayoutAreaHost.MaxRenderDepth</c>) ending in a leaf
@@ -89,6 +100,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     .WithView(nameof(StartWithSubjectView), StartWithSubjectView)
                     .WithView(nameof(GatedProgressView), GatedProgressView)
                     .WithView(RecursiveView, BuildDeeplyNestedStack())
+                    .WithView(nameof(ThrowingSyncView), ThrowingSyncView)
+                    .WithView(nameof(ThrowingObservableView), ThrowingObservableView)
             );
     }
 
@@ -182,6 +195,46 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             "error instead of recursing until the server fail-fasts with a stack overflow");
         sawDeepLeaf.Should().BeFalse(
             "rendering must stop at the depth guard, before reaching the deeply-nested leaf");
+    }
+
+    /// <summary>
+    /// Regression guard: a view generator that throws must SURFACE a visible error on the
+    /// area, never leave a subscriber spinning on an indefinite null. Before the fix,
+    /// <c>LayoutAreaHost.FailRendering</c> only <c>LogWarning</c>'d and dropped the
+    /// exception, so a throwing view (e.g. the LinkedInTelemetryImport compile-guard's
+    /// Invoke faulting on a cold CI agent) left the area with only its empty "Building
+    /// layout…" base frame — the client/test then timed out after 45 s with the real cause
+    /// buried in a log line. Both the synchronous-throw path (routed via the init
+    /// observable's WithExceptionCallback) and the observable-error path (the render
+    /// subscription's error handler) must now render an error control carrying the cause.
+    /// </summary>
+    [HubFact]
+    public Task ThrowingSyncView_SurfacesError_InsteadOfIndefiniteNull()
+        => AssertThrowingViewSurfacesError(nameof(ThrowingSyncView), "BOOM_sync_render");
+
+    [HubFact]
+    public Task ThrowingObservableView_SurfacesError_InsteadOfIndefiniteNull()
+        => AssertThrowingViewSurfacesError(nameof(ThrowingObservableView), "BOOM_async_render");
+
+    private async Task AssertThrowingViewSurfacesError(string view, string expectedCause)
+    {
+        var reference = new LayoutAreaReference(view);
+        var workspace = GetClient().GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(),
+            reference
+        );
+
+        // The area must resolve to a control quickly (the fix surfaces the error
+        // immediately) — NOT spin on null until a timeout.
+        var control = await stream.GetControlStream(reference.Area!)
+            .Should().Within(10.Seconds()).Match(x => x is MarkdownControl);
+
+        var text = control.Should().BeOfType<MarkdownControl>().Subject.Markdown?.ToString() ?? string.Empty;
+        text.Should().Contain("failed to render",
+            "a faulted render must surface a visible error control on the area, not stay null");
+        text.Should().Contain(expectedCause,
+            "the surfaced error must carry the underlying exception message so the cause is visible");
     }
 
     private static async Task<UiControl?> ViewWithProgress(LayoutAreaHost area, RenderingContext ctx, CancellationToken ct)
