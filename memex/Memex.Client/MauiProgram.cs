@@ -136,6 +136,7 @@ public static class MauiProgram
         builder.Services.AddTransient<PortalShellPage>();
         builder.Services.AddTransient<VoiceView>();
         builder.Services.AddTransient<InstanceManagerView>();
+        builder.Services.AddTransient<ChatView>();
 
         // Minimalistic on-device logging: a size-capped rolling file + in-memory ring buffer — bounded
         // disk + memory, no dependencies, phone-safe. The provider is also a singleton (FileLoggerProvider)
