@@ -46,26 +46,25 @@ internal static class NodeTypeCompileActivityHandler
         // sources, writes assemblies and updates compile state on the parent
         // NodeType — all of which need to succeed regardless of which user (or
         // system path: startup, NodeType version bump, self-heal in
-        // EnrichWithNodeType) requested it. The compile body lives entirely
-        // under ImpersonateAsSystem so source reads and the terminal
-        // WriteToParent (status=Ok/Error + assembly path) are never blocked by
-        // the caller's per-node permissions.
+        // EnrichWithNodeType) requested it. The compile body runs under
+        // ImpersonateAsSystem so source reads and the terminal WriteToParent
+        // (status=Ok/Error + assembly path) are never blocked by the caller's
+        // per-node permissions.
         //
-        // The using-scope is on the handler's action-block thread; all child
-        // observables (CreateNode for the activity log, streamCache.Update for
-        // WriteToParent, IAssemblyStore.Put) Subscribe synchronously inside
-        // this scope, so AccessContextPropagation captures System for the
-        // entire chain.
-        var accessService = activityHub.ServiceProvider.GetService<AccessService>();
-        var systemScope = accessService?.ImpersonateAsSystem();
-        try
-        {
-            return HandleCore(activityHub, request, logger, parentPath, activityPath);
-        }
-        finally
-        {
-            systemScope?.Dispose();
-        }
+        // 🚨 The System scope MUST live for the whole REACTIVE COMPILE SUBSCRIPTION,
+        // not just this synchronous handler turn. A `using systemScope` here disposed
+        // it the instant HandleCore RETURNS (after subscribing the cold pipeline) — but
+        // the source-watcher reads, Roslyn compile and WriteToParent all run on LATER
+        // reactive continuations. On a ThreadPool-starved runner those deferred reads
+        // execute after the scope is gone, fall back to the ACTIVATING USER context, and
+        // the source read's owner-side CheckPermission self-cycles on the very grain
+        // that is mid-activation → the grain wedges, the compile settles Error, and the
+        // NodeType never reaches Ok (the bulk-only OrleansCompileActivityAccessTest /
+        // CrossSiloCompilation / FrameworkStaleAssembly flakes — "a grain wedged by the
+        // source-watcher self-CheckPermission cycle"). The scope now lives inside an
+        // Observable.Using wrapped around the pipeline in HandleCore, so it is held for
+        // the subscription's lifetime instead of this turn's.
+        return HandleCore(activityHub, request, logger, parentPath, activityPath);
     }
 
     private static IMessageDelivery HandleCore(
@@ -149,7 +148,19 @@ internal static class NodeTypeCompileActivityHandler
                     && d.CompilationStatus == CompilationStatus.Compiling)
                 .Take(1);
 
-        snapshotObservable
+        // 🚨 Hold ImpersonateAsSystem for the ENTIRE compile subscription (not just this
+        // synchronous turn). Observable.Using creates the scope on Subscribe and disposes it
+        // only when the pipeline completes/faults — so the deferred source-watcher reads, the
+        // Roslyn compile and the terminal WriteToParent all run under System even when a
+        // starved ThreadPool defers them past this handler's return. Without it those reads
+        // fall back to the activating user and self-deadlock on the source-watcher's own
+        // CheckPermission (see Handle). The inner reads/writes capture System via
+        // AccessContextPropagation at their subscribe point, which now sits inside this scope.
+        var compileAccessService = activityHub.ServiceProvider.GetService<AccessService>();
+        Observable.Using(
+            () => compileAccessService?.ImpersonateAsSystem()
+                  ?? (IDisposable)System.Reactive.Disposables.Disposable.Empty,
+            _ => snapshotObservable
             // Wait for the Compiling snapshot to land before invoking Roslyn.
             // This is the activity's own internal wait, NOT the trigger (the
             // caller already got RunCompileResponse(Dispatched: true) above), so
@@ -293,7 +304,7 @@ internal static class NodeTypeCompileActivityHandler
                         .Select(result => new CompileOutcome(result, null, pendingNode))
                         .Catch<CompileOutcome, Exception>(ex =>
                             Observable.Return(new CompileOutcome(null, ex, pendingNode))));
-            })
+            }))
             .Subscribe(
                 outcome =>
                 {
