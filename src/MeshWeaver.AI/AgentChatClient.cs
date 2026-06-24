@@ -814,6 +814,16 @@ public class AgentChatClient : IAgentChat
         // agent can fold them into the current response — see InboxTool.
         tools.Add(InboxTool.CreateCheckInboxTool(hub, logger));
         chatOptions.Tools = tools;
+        // Tools marked [HiddenTool] are internal plumbing (e.g. check_inbox's mid-round
+        // poll): their calls must not reach the chat UI as tool-call chrome nor the
+        // Information logs. Collect their names once; we drop the paired FunctionCallContent
+        // / FunctionResultContent below instead of forwarding them to ThreadExecution.
+        var hiddenToolNames = tools
+            .OfType<AIFunction>()
+            .Where(Attributes.HiddenToolAttribute.IsHidden)
+            .Select(f => f.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var hiddenCallIds = new HashSet<string>(StringComparer.Ordinal);
         // ConfigureAwait(false): keep the agent-stream iteration on the ThreadPool (the
         // IoPool's domain), never resuming on a captured hub/grain action-block scheduler.
         // This generator is consumed by ThreadExecution's round-streaming await foreach; a
@@ -828,6 +838,17 @@ public class AgentChatClient : IAgentChat
                 {
                     if (content is FunctionCallContent functionCall)
                     {
+                        // Hidden tool (e.g. check_inbox): swallow the call entirely — no log,
+                        // no UI tool-call chrome. Remember the CallId so the paired result is
+                        // suppressed too. The tool still executes inside FunctionInvokingChatClient
+                        // and its result still reaches the model; only the surfacing is dropped.
+                        if (hiddenToolNames.Contains(functionCall.Name))
+                        {
+                            if (functionCall.CallId is { Length: > 0 } hiddenCallId)
+                                hiddenCallIds.Add(hiddenCallId);
+                            continue;
+                        }
+
                         logger.LogInformation("Agent {AgentName} calling tool: {FunctionName}",
                             currentAgentName, functionCall.Name);
 
@@ -839,6 +860,11 @@ public class AgentChatClient : IAgentChat
                     }
                     else if (content is FunctionResultContent functionResult)
                     {
+                        // Suppress the result of a hidden tool call (see FunctionCallContent above).
+                        if (functionResult.CallId is { Length: > 0 } resultCallId
+                            && hiddenCallIds.Contains(resultCallId))
+                            continue;
+
                         logger.LogInformation("Agent {AgentName} received result from tool: {CallId}",
                             currentAgentName, functionResult.CallId);
 

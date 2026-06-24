@@ -189,7 +189,11 @@ public static class InboxTool
         // append the ids to MeshThread.Messages: a Message id without a satellite cell is a
         // dangling ref that re-triggers the exact missing-node NotFound storm this work fixes.
         return AIFunctionFactory.Create(
-            method: (CancellationToken ct) =>
+            // [HiddenTool]: check_inbox is internal plumbing — a high-frequency mid-round
+            // poll, not a user action. AgentChatClient reads this marker (via the AIFunction's
+            // UnderlyingMethod) and suppresses its tool-call chrome + logs so the chat UI
+            // doesn't flash "Calling check_inbox…" on every step. See HiddenToolAttribute.
+            method: [Attributes.HiddenTool] (CancellationToken ct) =>
             {
                 var access = threadHub.ServiceProvider.GetService<AccessService>();
                 // Capture the caller identity and re-seed it so the drain write carries it past any
