@@ -62,10 +62,25 @@ public sealed class MauiControlRenderer(MauiViewRegistry registry) : IMauiContro
     public View RenderArea(ISynchronizationStream<JsonElement> stream, string area)
     {
         var host = new ContentView();
-        var sub = stream.GetControlStream(area)
-            .Subscribe(ctrl => MainThread.BeginInvokeOnMainThread(() =>
-                host.Content = ctrl is UiControl c ? RenderControl(c, stream, area) : null));
-        host.Unloaded += (_, _) => sub.Dispose();   // tear the subscription down with the view
+        IDisposable? sub = null;
+
+        // Tie the area subscription to the host's Loaded/Unloaded lifecycle, re-subscribing each time it
+        // re-enters the visual tree. MAUI fires Unloaded SPURIOUSLY during nested-layout/handler changes
+        // (e.g. when the host sits inside the shell's content frame, several ContentViews deep) — disposing
+        // on Unloaded ALONE killed the subscription before the area's first control ever arrived, leaving a
+        // blank frame. GetControlStream replays the current control to a fresh subscriber, so re-subscribing
+        // on (re)Load restores the content. An immediate subscribe covers hosts that render before Loaded.
+        void Resubscribe()
+        {
+            sub?.Dispose();
+            sub = stream.GetControlStream(area)
+                .Subscribe(ctrl => MainThread.BeginInvokeOnMainThread(() =>
+                    host.Content = ctrl is UiControl c ? RenderControl(c, stream, area) : null));
+        }
+
+        Resubscribe();
+        host.Loaded += (_, _) => { if (sub is null) Resubscribe(); };
+        host.Unloaded += (_, _) => { sub?.Dispose(); sub = null; };
         return host;
     }
 }
@@ -217,8 +232,16 @@ public static class MauiViewPackExtensions
         .Register<CheckBoxControl, CheckBoxView>()
         .Register<SwitchControl, SwitchView>()
         .Register<SelectControl, SelectView>()
+        // Wave 2 — details forms: number / date / combobox / listbox.
+        .Register<NumberFieldControl, NumberFieldView>()
+        .Register<DateTimeControl, DateTimeView>()
+        .Register<ComboboxControl, ComboboxView>()
+        .Register<ListboxControl, ListboxView>()
         // Tabular data.
         .Register<DataGridControl, DataGridView>()
+        // Wave 2 — layout: a real grid + tabs (other containers fall back to ContainerView).
+        .Register<LayoutGridControl, LayoutGridView>()
+        .Register<TabsControl, TabsView>()
         // Wave 2 — nav + badges.
         .Register<BadgeControl, BadgeView>()
         .Register<NavLinkControl, NavLinkView>()
@@ -463,5 +486,139 @@ public sealed class ProgressView : MauiView<ProgressControl>
     {
         Bind<object>(Model.Message, v => _caption.Text = v?.ToString() ?? "");
         Bind<double>(Model.Progress, v => _bar.Progress = Math.Clamp(v / 100.0, 0, 1));
+    }
+}
+
+// ---- Wave 2 control views: details forms + layout ------------------------------------------------
+
+/// <summary>Numeric field → MAUI <see cref="Entry"/> with a numeric keyboard (two-way). Writes the parsed
+/// number back; non-numeric text is written verbatim so partial edits aren't lost.</summary>
+public sealed class NumberFieldView : FormMauiView<NumberFieldControl>
+{
+    private Entry _entry = null!;
+    protected override View CreateView()
+    {
+        _entry = new Entry { Keyboard = Keyboard.Numeric };
+        _entry.TextChanged += (_, _) =>
+        {
+            if (double.TryParse(_entry.Text, out var d)) Write<object>(Model.Data, d);
+            else if (string.IsNullOrEmpty(_entry.Text)) Write<object>(Model.Data, null);
+        };
+        return _entry;
+    }
+    protected override void Bind() => BindValue<object>(Model.Data, v => _entry.Text = v?.ToString() ?? "");
+}
+
+/// <summary>Date/time field → MAUI <see cref="DatePicker"/> (two-way).</summary>
+public sealed class DateTimeView : FormMauiView<DateTimeControl>
+{
+    private DatePicker _picker = null!;
+    protected override View CreateView()
+    {
+        _picker = new DatePicker();
+        _picker.DateSelected += (_, e) => Write<object>(Model.Data, e.NewDate);
+        return _picker;
+    }
+    // Bind via object to avoid the unconstrained-generic nullable-struct (DateTime?) ambiguity.
+    protected override void Bind() => BindValue<object>(Model.Data, v =>
+    {
+        if (v is DateTime d) _picker.Date = d;
+        else if (v is DateTimeOffset dto) _picker.Date = dto.DateTime;
+        else if (v is string s && DateTime.TryParse(s, out var p)) _picker.Date = p;
+    });
+}
+
+/// <summary>Combobox → MAUI <see cref="Picker"/> (two-way; native Picker has no free-type filter — a
+/// later Monaco/autocomplete wave can add that).</summary>
+public sealed class ComboboxView : FormMauiView<ComboboxControl>
+{
+    private Picker _picker = null!;
+    private List<Option> _options = new();
+    protected override View CreateView()
+    {
+        _picker = new Picker();
+        _options = (Model.Options as IEnumerable<Option>)?.ToList() ?? new();
+        foreach (var o in _options) _picker.Items.Add(o.Text);
+        _picker.SelectedIndexChanged += (_, _) =>
+        {
+            if (_picker.SelectedIndex >= 0 && _picker.SelectedIndex < _options.Count)
+                Write(Model.Data, _options[_picker.SelectedIndex].GetItem());
+        };
+        return _picker;
+    }
+    protected override void Bind() => BindValue<object>(Model.Data, v =>
+    {
+        var idx = _options.FindIndex(o => Equals(o.GetItem()?.ToString(), v?.ToString()));
+        if (idx >= 0) _picker.SelectedIndex = idx;
+    });
+}
+
+/// <summary>Listbox → MAUI <see cref="Picker"/> (two-way single-select this wave).</summary>
+public sealed class ListboxView : FormMauiView<ListboxControl>
+{
+    private Picker _picker = null!;
+    private List<Option> _options = new();
+    protected override View CreateView()
+    {
+        _picker = new Picker();
+        _options = (Model.Options as IEnumerable<Option>)?.ToList() ?? new();
+        foreach (var o in _options) _picker.Items.Add(o.Text);
+        _picker.SelectedIndexChanged += (_, _) =>
+        {
+            if (_picker.SelectedIndex >= 0 && _picker.SelectedIndex < _options.Count)
+                Write(Model.Data, _options[_picker.SelectedIndex].GetItem());
+        };
+        return _picker;
+    }
+    protected override void Bind() => BindValue<object>(Model.Data, v =>
+    {
+        var idx = _options.FindIndex(o => Equals(o.GetItem()?.ToString(), v?.ToString()));
+        if (idx >= 0) _picker.SelectedIndex = idx;
+    });
+}
+
+/// <summary>Layout grid → a wrapping MAUI <see cref="FlexLayout"/> of its child areas (a real flowing grid
+/// rather than the generic vertical stack the container fallback would give).</summary>
+public sealed class LayoutGridView : MauiView<LayoutGridControl>
+{
+    protected override View CreateView()
+    {
+        var flex = new FlexLayout
+        {
+            Wrap = Microsoft.Maui.Layouts.FlexWrap.Wrap,
+            AlignItems = Microsoft.Maui.Layouts.FlexAlignItems.Start,
+        };
+        if (Stream is not null && Control is IContainerControl container)
+            foreach (var named in container.Areas)
+            {
+                var child = Renderer.RenderArea(Stream, named.Area.ToString()!);
+                child.Margin = new Thickness(4);
+                flex.Children.Add(child);
+            }
+        return flex;
+    }
+}
+
+/// <summary>Tabs → a header button row + a content area that swaps to the selected tab's child area.</summary>
+public sealed class TabsView : MauiView<TabsControl>
+{
+    protected override View CreateView()
+    {
+        var headers = new HorizontalStackLayout { Spacing = 4 };
+        var content = new ContentView();
+        var areas = (Control as IContainerControl)?.Areas.ToList() ?? new();
+
+        foreach (var named in areas)
+        {
+            var area = named.Area.ToString()!;
+            var header = new Button { Text = named.Id?.ToString() ?? area, BackgroundColor = Colors.Transparent };
+            header.Clicked += (_, _) => { if (Stream is not null) content.Content = Renderer.RenderArea(Stream, area); };
+            headers.Children.Add(header);
+        }
+
+        if (areas.Count > 0 && Stream is not null)
+            content.Content = Renderer.RenderArea(Stream, areas[0].Area.ToString()!);
+
+        return new VerticalStackLayout { Spacing = 6, Children = { new ScrollView { Orientation = ScrollOrientation.Horizontal, Content = headers }, content } };
     }
 }
