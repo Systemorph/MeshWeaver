@@ -21,6 +21,8 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <EnableDefaultCssItems>false</EnableDefaultCssItems>
         <Nullable>enable</Nullable>
+        <!-- AudioCaptureService reads AVAudioPCMBuffer.FloatChannelData (float**) in the realtime tap. -->
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
         <!-- Enable XAML source generation for faster build times and improved performance.
              This generates C# code from XAML at compile time instead of runtime inflation.
@@ -114,5 +116,50 @@
            Microsoft.Maui.Controls views (replaces the Blazor RCLs — keeps the build AspNetCore-free). -->
       <ProjectReference Include="..\..\src\MeshWeaver.Maui\MeshWeaver.Maui.csproj" />
     </ItemGroup>
+
+    <!-- ╔══════════════════════════════════════════════════════════════════════════════════════════════╗
+         ║ Apple Intelligence native shim (iOS / MacCatalyst only)                                        ║
+         ╚══════════════════════════════════════════════════════════════════════════════════════════════╝
+         AppleIntelligenceChat.cs P/Invokes memex_ai_available/_respond/_free as [DllImport("__Internal")],
+         so those @_cdecl symbols must be statically linked INTO the app binary. The plain `dotnet build`
+         doesn't compile Swift, so we compile Platforms/{MacCatalyst,iOS}/AppleIntelligence.swift to a static
+         lib here and link it via <NativeReference>. LinkWithSwiftSystemLibraries pulls in the OS Swift
+         runtime (/usr/lib/swift) so the shim's stdlib symbols resolve. -->
+    <PropertyGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst' or $([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'">
+        <LinkWithSwiftSystemLibraries>true</LinkWithSwiftSystemLibraries>
+        <!-- BaseIntermediateOutputPath (obj/, gitignored) is set in SDK props; IntermediateOutputPath is
+             NOT yet set during csproj evaluation, so using it would drop the .a at the project root. -->
+        <_AppleAiShimLib>$(BaseIntermediateOutputPath)libmemexai.a</_AppleAiShimLib>
+        <_AppleAiShimSrc Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">Platforms\MacCatalyst\AppleIntelligence.swift</_AppleAiShimSrc>
+        <_AppleAiShimSrc Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'">Platforms\iOS\AppleIntelligence.swift</_AppleAiShimSrc>
+    </PropertyGroup>
+
+    <ItemGroup Condition="'$(_AppleAiShimLib)' != ''">
+        <NativeReference Include="$(_AppleAiShimLib)" Kind="Static" ForceLoad="true" />
+    </ItemGroup>
+
+    <Target Name="_CompileAppleAiShim"
+            Condition="'$(_AppleAiShimLib)' != ''"
+            BeforeTargets="CoreCompile;_LinkNativeExecutable;_CompileNativeExecutable"
+            Inputs="$(_AppleAiShimSrc)"
+            Outputs="$(_AppleAiShimLib)">
+        <PropertyGroup>
+            <_ShimArch Condition="$(RuntimeIdentifier.EndsWith('arm64'))">arm64</_ShimArch>
+            <_ShimArch Condition="$(RuntimeIdentifier.EndsWith('x64'))">x86_64</_ShimArch>
+            <_ShimMin>$(SupportedOSPlatformVersion)</_ShimMin>
+            <!-- MacCatalyst: macOS SDK, the …-macabi ABI variant. -->
+            <_ShimSdk Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">macosx</_ShimSdk>
+            <_ShimTriple Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">$(_ShimArch)-apple-ios$(_ShimMin)-macabi</_ShimTriple>
+            <!-- iOS device / simulator. -->
+            <_ShimSdk Condition="'$(RuntimeIdentifier)' == 'ios-arm64'">iphoneos</_ShimSdk>
+            <_ShimTriple Condition="'$(RuntimeIdentifier)' == 'ios-arm64'">$(_ShimArch)-apple-ios$(_ShimMin)</_ShimTriple>
+            <_ShimSdk Condition="$(RuntimeIdentifier.StartsWith('iossimulator'))">iphonesimulator</_ShimSdk>
+            <_ShimTriple Condition="$(RuntimeIdentifier.StartsWith('iossimulator'))">$(_ShimArch)-apple-ios$(_ShimMin)-simulator</_ShimTriple>
+        </PropertyGroup>
+        <MakeDir Directories="$(BaseIntermediateOutputPath)" />
+        <!-- Backticks (not $()) so MSBuild doesn't try to expand the shell sub-command as a property. -->
+        <Exec Command="xcrun swiftc -sdk `xcrun --sdk $(_ShimSdk) --show-sdk-path` -target $(_ShimTriple) -parse-as-library -O -emit-library -static -o &quot;$(_AppleAiShimLib)&quot; &quot;$(_AppleAiShimSrc)&quot;" />
+        <Message Importance="high" Text="Compiled Apple Intelligence shim → $(_AppleAiShimLib) ($(_ShimTriple))" />
+    </Target>
 
 </Project>

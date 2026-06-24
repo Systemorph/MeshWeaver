@@ -37,10 +37,16 @@ public sealed class FeatureFlags
     /// <summary>Compile-time default for a flag when the device has no stored value yet.</summary>
     private static bool DefaultOf(string key) => key switch
     {
-        // On the macOS client, run Whisper on the GPU (CoreML) by default — the Base model's encoder is
-        // publicly hosted, so it works out of the box; missing/failed → clean CPU fallback.
-        AppleGpu => OperatingSystem.IsMacCatalyst(),
-        SwissGerman => false,
+        // CoreML/ANE is OPT-IN. whisper.cpp's CoreML encoder triggers a first-run Apple Neural Engine
+        // compile that wedges on MacCatalyst (the ANE compile faults out-of-process and the synchronous
+        // model-load blocks forever — verified by stack sampling). Until that's resolved (ANE entitlements
+        // / a pre-compiled .mlmodelc), the default runs Whisper on the CPU, which is fast on Apple Silicon
+        // and reliable. Flip this flag on to try the GPU path. See OnDeviceVoice.md.
+        AppleGpu => false,
+        // On MacCatalyst the Swiss-German fine-tune (547 MB ggml) is BUNDLED in the app package, so it's
+        // the default there — loaded from the bundle, fully offline, no download. Elsewhere it stays off
+        // (the model isn't bundled on iOS/Android/Windows; those use the small Base model on first use).
+        SwissGerman => OperatingSystem.IsMacCatalyst(),
         _ => false,
     };
 
