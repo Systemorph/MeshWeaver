@@ -1,4 +1,5 @@
 ﻿using System.Linq.Expressions;
+using System.Reactive.Linq;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -408,6 +409,82 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
             userContext is not null
                 ? o.WithTarget(Stream.Owner).WithAccessContext(userContext)
                 : o.WithTarget(Stream.Owner));
+    }
+
+    // ─── Circuit-user re-establishment for DEFERRED mesh ops ───────────────────────
+    // Blazor's CircuitAccessHandler sets the user on the circuit AccessService only for the duration
+    // of an inbound activity, then NULLS it in finally. So any mesh read/write a view defers behind an
+    // Rx hop or InvokeAsync (a picker/skill query that subscribes on the synced-query scheduler, a
+    // .Update that runs after the activity returned) reads a NULL ambient AccessContext → the owning
+    // hub's PostPipeline fails closed → owner RLS denies ("Access denied" / empty registry). The DURABLE
+    // per-circuit identity lives on ICircuitContextAccessor.UserContext (cleared only on circuit close),
+    // so it survives the hop. These three helpers are the ONE place to re-establish it; every view uses
+    // them instead of re-deriving the user per call site. See AccessContextPropagation.md.
+
+    /// <summary>
+    /// The durable circuit user, usable from deferred (post-Rx-hop) callbacks. Prefers
+    /// <see cref="ICircuitContextAccessor.UserContext"/> (survives every hop), then the live
+    /// <see cref="AccessService.CircuitContext"/> / <see cref="AccessService.Context"/> AsyncLocals for
+    /// non-deferred callers. A leaked <c>system-security</c> / hub-shaped principal is rejected — never a
+    /// real user. Returns <see langword="null"/> outside a circuit (SSR / prerender) or when no user is set.
+    /// </summary>
+    protected AccessContext? ResolveCircuitUser()
+    {
+        var accessor = Services?.GetService<ICircuitContextAccessor>();
+        foreach (var candidate in new[] { accessor?.UserContext, AccessService?.CircuitContext, AccessService?.Context })
+            if (candidate is not null
+                && !string.IsNullOrEmpty(candidate.ObjectId)
+                && candidate.ObjectId != MeshWeaver.Mesh.Security.WellKnownUsers.System
+                && !AccessService.LooksLikeHubPrincipal(candidate.ObjectId))
+                return candidate;
+        return null;
+    }
+
+    /// <summary>
+    /// Runs <paramref name="source"/> with the durable circuit user (<see cref="ResolveCircuitUser"/>)
+    /// re-established on the HUB <see cref="AccessService"/> — the SAME instance <c>Hub.GetQuery</c> /
+    /// <c>Hub.GetMeshNodeStream(path).Update()</c> read to attribute reads/writes. The identity is
+    /// resolved and switched at SUBSCRIBE (inside the <c>Observable.Using</c> resource factory) and held
+    /// for the whole subscription, so the synced-query / IIoPool hops the source fans out across all
+    /// carry it. Use to wrap any mesh READ a view subscribes after an Rx hop (picker, skill, completions).
+    /// </summary>
+    protected IObservable<T> RunUnderCircuitUser<T>(IObservable<T> source)
+    {
+        var hubAccess = Hub.ServiceProvider.GetService<AccessService>();
+        return Observable.Using(
+            () =>
+            {
+                var user = ResolveCircuitUser();
+                return user is not null && hubAccess is not null
+                    ? hubAccess.SwitchAccessContext(user)
+                    : (IDisposable)System.Reactive.Disposables.Disposable.Empty;
+            },
+            _ => source);
+    }
+
+    /// <summary>
+    /// Writes the mesh node at <paramref name="path"/> under the durable circuit user. Use from deferred
+    /// callbacks (after an Rx hop / InvokeAsync) where the ambient AccessContext has been nulled — a bare
+    /// <c>GetMeshNodeStream(path).Update(...)</c> would capture <see langword="null"/> and the owner would
+    /// deny the write. <c>Update</c> captures <c>Context ?? CircuitContext</c> SYNCHRONOUSLY at the
+    /// <c>.Update(...)</c> call, so a synchronous <c>SwitchAccessContext</c> around it stamps the durable
+    /// user for that eager capture (an <c>Observable.Using</c> would run at Subscribe — too late).
+    /// </summary>
+    protected void UpdateMeshNodeAsCircuitUser(string path, Func<MeshNode, MeshNode> update, Action<Exception>? onError = null)
+    {
+        if (string.IsNullOrEmpty(path)) return;
+        var hubAccess = Hub.ServiceProvider.GetService<AccessService>();
+        var user = ResolveCircuitUser();
+        using var _ = user is not null && hubAccess is not null
+            ? hubAccess.SwitchAccessContext(user)
+            : (IDisposable)System.Reactive.Disposables.Disposable.Empty;
+        Hub.GetMeshNodeStream(path).Update(update).Subscribe(
+            _ => { },
+            ex =>
+            {
+                if (onError is not null) onError(ex);
+                else Logger.LogWarning(ex, "Mesh node update under circuit user failed for {Path}", path);
+            });
     }
 
 

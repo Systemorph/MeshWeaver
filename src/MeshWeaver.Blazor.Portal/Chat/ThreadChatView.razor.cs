@@ -409,51 +409,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         return null;
     }
 
-    /// <summary>
-    /// The DURABLE circuit user, usable from deferred (post-Rx-hop) callbacks. The slash-command
-    /// flows (skill resolve → picker → composer write) all run behind <c>ObserveSnapshot(...).Subscribe</c>
-    /// + <c>InvokeAsync</c> hops; by the time those fire, the Blazor inbound-activity finally has
-    /// nulled the circuit <see cref="AccessService"/>'s AsyncLocals (<see cref="AccessService.Context"/>
-    /// AND <see cref="AccessService.CircuitContext"/>), so reading them there yields null and the
-    /// query/write runs context-free → the owning hub's PostPipeline fails closed → RLS denies → the
-    /// "Access denied" the user sees on /agent /model. <see cref="MeshWeaver.Blazor.Infrastructure.ICircuitContextAccessor.UserContext"/>
-    /// is set once per circuit and cleared only on circuit close, so it survives every Rx hop. Falls
-    /// back to the live AsyncLocals for non-deferred callers; a leaked system/hub principal is rejected.
-    /// </summary>
-    private AccessContext? ResolveCircuitUser()
-    {
-        var accessor = Services.GetService<MeshWeaver.Blazor.Infrastructure.ICircuitContextAccessor>();
-        foreach (var candidate in new[] { accessor?.UserContext, AccessService?.CircuitContext, AccessService?.Context })
-            if (candidate is not null
-                && !string.IsNullOrEmpty(candidate.ObjectId)
-                && candidate.ObjectId != WellKnownUsers.System
-                && !AccessService.LooksLikeHubPrincipal(candidate.ObjectId))
-                return candidate;
-        return null;
-    }
-
-    /// <summary>
-    /// Runs <paramref name="source"/> with the durable circuit user (<see cref="ResolveCircuitUser"/>)
-    /// re-established on the HUB <see cref="AccessService"/> — the SAME instance <c>Hub.GetQuery</c> and
-    /// <c>Hub.GetMeshNodeStream(path).Update()</c> read to attribute reads/writes. The identity is
-    /// resolved and switched at SUBSCRIBE (inside the <c>Observable.Using</c>
-    /// resource factory) and held for the whole subscription, so the synced-query / IIoPool hops the
-    /// source fans out across all carry it. Mirrors <c>RunPicker</c>'s capture-and-re-establish, which is
-    /// the proven pattern for running a chat-composer mesh read/write under the right user after an Rx hop.
-    /// </summary>
-    private IObservable<T> RunUnderCircuitUser<T>(IObservable<T> source)
-    {
-        var hubAccess = Hub.ServiceProvider.GetService<AccessService>();
-        return Observable.Using(
-            () =>
-            {
-                var user = ResolveCircuitUser();
-                return user is not null && hubAccess is not null
-                    ? hubAccess.SwitchAccessContext(user)
-                    : (IDisposable)System.Reactive.Disposables.Disposable.Empty;
-            },
-            _ => source);
-    }
+    // ResolveCircuitUser() / RunUnderCircuitUser<T>() / UpdateMeshNodeAsCircuitUser(...) are inherited
+    // from BlazorView — the ONE place every circuit-scoped view re-establishes the durable circuit user
+    // for mesh reads/writes deferred behind an Rx hop (where the ambient AccessContext is nulled).
 
     /// <summary>
     /// Robust composer bring-up, run every time the chat opens / rebinds (<see cref="_templatePath"/>).
@@ -599,20 +557,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     {
         if (string.IsNullOrEmpty(_templatePath))
             return;
-        // 🚨 Re-establish the circuit user on the HUB AccessService that GetMeshNodeStream().Update()
-        // captures from. Reached from the slash-command picker AFTER two Rx hops (skill query → picker
-        // query → InvokeAsync), where the circuit AccessService's Context AND CircuitContext have both
-        // been nulled by the Blazor inbound-activity finally. Update captures `Context ?? CircuitContext`
-        // SYNCHRONOUSLY at the .Update(...) call, so without this it captures NULL → the patch posts
-        // context-less → PostPipeline fails closed → owner RLS denies → "Saving your selection: Access
-        // denied". The synchronous using stamps the durable user for that eager capture (an
-        // Observable.Using would run at Subscribe — too late, after Update already captured).
-        var hubAccess = Hub.ServiceProvider.GetService<AccessService>();
-        var writer = ResolveCircuitUser();
-        using var _writeAs = writer is not null && hubAccess is not null
-            ? hubAccess.SwitchAccessContext(writer)
-            : (IDisposable)System.Reactive.Disposables.Disposable.Empty;
-        Hub.GetMeshNodeStream(_templatePath).Update(node =>
+        // Reached from the slash-command picker AFTER Rx hops (skill query → picker query → InvokeAsync),
+        // where the circuit AccessService's Context AND CircuitContext have been nulled by the Blazor
+        // inbound-activity finally. UpdateMeshNodeAsCircuitUser re-establishes the DURABLE circuit user on
+        // the hub AccessService for Update's synchronous capture, so the composer write is attributed to
+        // the real user instead of null (→ "Saving your selection: Access denied").
+        UpdateMeshNodeAsCircuitUser(_templatePath, node =>
         {
             var existing = MeshWeaver.AI.ThreadComposerNodeType.ComposerOf(node, Hub.JsonSerializerOptions, Logger);
             if (node?.Content is not null && existing is null)
@@ -625,9 +575,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             };
             return MeshWeaver.AI.ThreadComposerNodeType.WithComposer(
                 node!, updated, Hub.JsonSerializerOptions, Logger);
-        }).Subscribe(
-            _ => { },
-            ex => SurfaceError(ex, "Saving your selection"));
+        }, ex => SurfaceError(ex, "Saving your selection"));
     }
 
     /// <summary>
