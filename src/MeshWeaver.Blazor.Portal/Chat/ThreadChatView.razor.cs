@@ -410,6 +410,52 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     }
 
     /// <summary>
+    /// The DURABLE circuit user, usable from deferred (post-Rx-hop) callbacks. The slash-command
+    /// flows (skill resolve → picker → composer write) all run behind <c>ObserveSnapshot(...).Subscribe</c>
+    /// + <c>InvokeAsync</c> hops; by the time those fire, the Blazor inbound-activity finally has
+    /// nulled the circuit <see cref="AccessService"/>'s AsyncLocals (<see cref="AccessService.Context"/>
+    /// AND <see cref="AccessService.CircuitContext"/>), so reading them there yields null and the
+    /// query/write runs context-free → the owning hub's PostPipeline fails closed → RLS denies → the
+    /// "Access denied" the user sees on /agent /model. <see cref="MeshWeaver.Blazor.Infrastructure.ICircuitContextAccessor.UserContext"/>
+    /// is set once per circuit and cleared only on circuit close, so it survives every Rx hop. Falls
+    /// back to the live AsyncLocals for non-deferred callers; a leaked system/hub principal is rejected.
+    /// </summary>
+    private AccessContext? ResolveCircuitUser()
+    {
+        var accessor = Services.GetService<MeshWeaver.Blazor.Infrastructure.ICircuitContextAccessor>();
+        foreach (var candidate in new[] { accessor?.UserContext, AccessService?.CircuitContext, AccessService?.Context })
+            if (candidate is not null
+                && !string.IsNullOrEmpty(candidate.ObjectId)
+                && candidate.ObjectId != WellKnownUsers.System
+                && !AccessService.LooksLikeHubPrincipal(candidate.ObjectId))
+                return candidate;
+        return null;
+    }
+
+    /// <summary>
+    /// Runs <paramref name="source"/> with the durable circuit user (<see cref="ResolveCircuitUser"/>)
+    /// re-established on the HUB <see cref="AccessService"/> — the SAME instance <c>Hub.GetQuery</c> and
+    /// <c>Hub.GetMeshNodeStream(path).Update()</c> read to attribute reads/writes. The identity is
+    /// resolved and switched at SUBSCRIBE (inside the <c>Observable.Using</c>
+    /// resource factory) and held for the whole subscription, so the synced-query / IIoPool hops the
+    /// source fans out across all carry it. Mirrors <c>RunPicker</c>'s capture-and-re-establish, which is
+    /// the proven pattern for running a chat-composer mesh read/write under the right user after an Rx hop.
+    /// </summary>
+    private IObservable<T> RunUnderCircuitUser<T>(IObservable<T> source)
+    {
+        var hubAccess = Hub.ServiceProvider.GetService<AccessService>();
+        return Observable.Using(
+            () =>
+            {
+                var user = ResolveCircuitUser();
+                return user is not null && hubAccess is not null
+                    ? hubAccess.SwitchAccessContext(user)
+                    : (IDisposable)System.Reactive.Disposables.Disposable.Empty;
+            },
+            _ => source);
+    }
+
+    /// <summary>
     /// Robust composer bring-up, run every time the chat opens / rebinds (<see cref="_templatePath"/>).
     /// The data-bound selectors area (embedded in the footer) needs the composer node to EXIST, so we
     /// reliably create it with default content if absent via <c>MeshQuery.CreateNode</c> (never clobbers
@@ -553,6 +599,19 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     {
         if (string.IsNullOrEmpty(_templatePath))
             return;
+        // 🚨 Re-establish the circuit user on the HUB AccessService that GetMeshNodeStream().Update()
+        // captures from. Reached from the slash-command picker AFTER two Rx hops (skill query → picker
+        // query → InvokeAsync), where the circuit AccessService's Context AND CircuitContext have both
+        // been nulled by the Blazor inbound-activity finally. Update captures `Context ?? CircuitContext`
+        // SYNCHRONOUSLY at the .Update(...) call, so without this it captures NULL → the patch posts
+        // context-less → PostPipeline fails closed → owner RLS denies → "Saving your selection: Access
+        // denied". The synchronous using stamps the durable user for that eager capture (an
+        // Observable.Using would run at Subscribe — too late, after Update already captured).
+        var hubAccess = Hub.ServiceProvider.GetService<AccessService>();
+        var writer = ResolveCircuitUser();
+        using var _writeAs = writer is not null && hubAccess is not null
+            ? hubAccess.SwitchAccessContext(writer)
+            : (IDisposable)System.Reactive.Disposables.Disposable.Empty;
         Hub.GetMeshNodeStream(_templatePath).Update(node =>
         {
             var existing = MeshWeaver.AI.ThreadComposerNodeType.ComposerOf(node, Hub.JsonSerializerOptions, Logger);
@@ -997,7 +1056,11 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         }
 
         var queries = MeshWeaver.AI.SkillNodeType.SkillQueries(initialContext, _userHome);
-        AgentPickerProjection.ObserveSnapshot(workspace, Hub, $"skills|{initialContext}|{_userHome}", queries)
+        // Run the skill-resolve read under the durable circuit user — this method is reached from
+        // SubmitMessageCore via InvokeAsync and the query fans out on the synced-query scheduler where
+        // the AsyncLocal context is gone; context-null here makes the /command either resolve nothing
+        // ("Unknown command") or surface skills the user can't read. RunUnderCircuitUser mirrors RunPicker.
+        RunUnderCircuitUser(AgentPickerProjection.ObserveSnapshot(workspace, Hub, $"skills|{initialContext}|{_userHome}", queries))
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(5))
             .Subscribe(
@@ -1332,20 +1395,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (workspace == null)
             return;
 
-        // 🚨 Capture the circuit USER NOW, on the circuit thread where CircuitContext is live.
-        // The picker query subscribes later (RunPicker → ObserveSnapshot), in the agent/model
-        // branch on the NavigationContext→InvokeAsync hop where the ambient AccessContext may be
-        // cleared or leaked. Running the synced query context-null makes WrapWithPerUserRls BYPASS
-        // → the combobox shows agents/models the user has no Read on (wrong access rights).
-        // RunPicker re-establishes THIS captured user at its subscribe so RLS filters correctly.
-        // Prefer the durable CircuitContext; reject a leaked system/hub principal (not a real user).
+        // 🚨 Resolve the circuit USER from the DURABLE per-circuit source. OpenPicker itself is reached
+        // AFTER the skill-resolve Rx hop (ResolveSkillNodeAndRun → ObserveSnapshot.Subscribe → InvokeAsync
+        // → RunSkill → OpenPicker), so the circuit AccessService's AsyncLocals (Context / CircuitContext)
+        // are ALREADY nulled here — capturing off them yields null and the picker query runs context-null
+        // → WrapWithPerUserRls BYPASS (combobox shows agents/models the user has no Read on) or DENY.
+        // ResolveCircuitUser reads ICircuitContextAccessor.UserContext, which survives every hop; RunPicker
+        // re-establishes it at the query's subscribe so RLS filters correctly.
         var accessService = Hub.ServiceProvider.GetService<AccessService>();
-        var ambientCtx = accessService?.CircuitContext ?? accessService?.Context;
-        var pickerUser = ambientCtx is not null
-            && !string.IsNullOrEmpty(ambientCtx.ObjectId)
-            && ambientCtx.ObjectId != WellKnownUsers.System
-            && !AccessService.LooksLikeHubPrincipal(ambientCtx.ObjectId)
-            ? ambientCtx : null;
+        var pickerUser = ResolveCircuitUser();
 
         var field = picker.ComposerField;
         var isAgent = string.Equals(field, nameof(MeshWeaver.AI.ThreadComposer.AgentName), StringComparison.OrdinalIgnoreCase);
@@ -2028,8 +2086,11 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     {
         // Slash-commands: route straight to the command catalog (nodeType:Command + the registry),
         // bypassing the @-oriented node-search orchestrator so a "/" query lists ONLY commands.
+        // RunUnderCircuitUser: this observable is subscribed from the GetAsyncCompletions JS-interop
+        // callback and fans out on the mesh-query scheduler — re-establish the user so the command /
+        // node list is RLS-correct (not context-null → bypass/deny).
         if (query?.StartsWith("/") == true)
-            return GetCommandCompletions(query);
+            return RunUnderCircuitUser(GetCommandCompletions(query));
 
         if (string.IsNullOrWhiteSpace(query) || !query.StartsWith("@"))
             return Observable.Return<IReadOnlyList<CompletionItem>>(Array.Empty<CompletionItem>());
@@ -2039,7 +2100,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         return Observable.Defer(() =>
         {
             SetCompletionsInflight(true);
-            return CompletionOrchestrator.GetCompletions(query, currentAddress)
+            return RunUnderCircuitUser(CompletionOrchestrator.GetCompletions(query, currentAddress)
                 .SelectMany(batch => batch.Items
                     .Select(item => AutocompleteToCompletion(item, batch.Category, batch.CategoryPriority)))
                 .ScanTopN(CompletionTopN, CompletionBySortKey)
@@ -2049,7 +2110,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     Logger.LogError(ex, "Error streaming completions for query: {Query}", query);
                     return Observable.Return<IReadOnlyList<CompletionItem>>(Array.Empty<CompletionItem>());
                 })
-                .Finally(() => SetCompletionsInflight(false));
+                .Finally(() => SetCompletionsInflight(false)));
         });
     }
 
