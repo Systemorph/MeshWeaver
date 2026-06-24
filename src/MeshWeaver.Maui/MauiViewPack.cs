@@ -163,14 +163,27 @@ public abstract class FormMauiView<TControl> : MauiView<TControl> where TControl
 }
 
 /// <summary>
-/// The public host: renders a mesh layout area (a control tree) as native MAUI. Subscribes to the LOCAL
-/// workspace's area stream and renders reactively. (Remote areas via <c>GetRemoteStream</c> come next wave.)
+/// The public host: renders a mesh layout area (a control tree) as native MAUI, reactively.
+/// <list type="bullet">
+/// <item>The <c>(workspace, reference)</c> ctor renders an area served by the LOCAL hub (e.g. a custom
+/// <c>AddLayout</c> area).</item>
+/// <item>The <c>(workspace, address, reference)</c> ctor renders a REMOTE area served at a node's
+/// <see cref="Address"/> — e.g. an <c>AddGraph</c> node area like <c>Overview</c> at the node's path —
+/// via <see cref="WorkspaceExtensions.GetRemoteStream{TReduced,TReference}"/>, exactly as the Blazor
+/// portal's <c>LayoutAreaView</c> does (<c>GetRemoteStream&lt;JsonElement, LayoutAreaReference&gt;(Address, Reference)</c>).</item>
+/// </list>
 /// </summary>
 public sealed class LayoutAreaView : ContentView
 {
     public LayoutAreaView(IWorkspace workspace, LayoutAreaReference reference, IMauiControlRenderer renderer)
     {
         var stream = workspace.GetStream(reference)!.Reduce(new JsonPointerReference("/"))!;
+        Content = renderer.RenderArea(stream, reference.Area);
+    }
+
+    public LayoutAreaView(IWorkspace workspace, Address address, LayoutAreaReference reference, IMauiControlRenderer renderer)
+    {
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference)!;
         Content = renderer.RenderArea(stream, reference.Area);
     }
 }
