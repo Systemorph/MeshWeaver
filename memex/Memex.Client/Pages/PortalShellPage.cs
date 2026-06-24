@@ -10,9 +10,8 @@ namespace Memex.Client.Pages;
 /// <summary>
 /// The app's browser-like shell: a single page with a title bar — [← back] [→ forward], the CURRENT
 /// instance name (tap → switch instance / connect a new one), 🏠 Home, 🎙 Voice — over a content frame.
-/// Navigation keeps a real history stack with both directions (back AND forward), unlike a page-stack pop
-/// that dumps you to the instance list. Content views (portal home, voice, instance switcher, node areas)
-/// are hosted in the frame; each history entry is a factory so back/forward rebuild the view.
+/// Navigation keeps a real history stack with both directions (back AND forward). Each history entry is a
+/// view factory; navigating rebuilds the view (a new navigation truncates forward history, like a browser).
 /// </summary>
 public sealed class PortalShellPage : ContentPage
 {
@@ -22,11 +21,12 @@ public sealed class PortalShellPage : ContentPage
 
     private readonly List<(string Title, Func<View> Build)> _history = new();
     private int _index = -1;
+    private bool _started;
 
     private readonly Button _back = new() { Text = "←", FontSize = 18, WidthRequest = 44, BackgroundColor = Colors.Transparent };
     private readonly Button _forward = new() { Text = "→", FontSize = 18, WidthRequest = 44, BackgroundColor = Colors.Transparent };
     private readonly Button _instance = new() { FontSize = 15, FontAttributes = FontAttributes.Bold, BackgroundColor = Colors.Transparent };
-    private readonly ContentView _frame = new();
+    private readonly ContentView _frame = new() { VerticalOptions = LayoutOptions.Fill, HorizontalOptions = LayoutOptions.Fill };
     private MemexInstance? _current;
 
     public PortalShellPage(IServiceProvider services, InstanceStore store, IMessageHub hub)
@@ -40,9 +40,11 @@ public sealed class PortalShellPage : ContentPage
         _back.Clicked += (_, _) => GoBack();
         _forward.Clicked += (_, _) => GoForward();
         _instance.Clicked += async (_, _) => await ShowInstanceSwitcherAsync();
-        var home = new Button { Text = "🏠", FontSize = 16, WidthRequest = 44, BackgroundColor = Colors.Transparent };
+        var home = new Button { Text = "🏠", FontSize = 16, WidthRequest = 40, BackgroundColor = Colors.Transparent };
         home.Clicked += (_, _) => NavigateHome();
-        var voice = new Button { Text = "🎙", FontSize = 16, WidthRequest = 44, BackgroundColor = Colors.Transparent };
+        var chat = new Button { Text = "💬", FontSize = 16, WidthRequest = 40, BackgroundColor = Colors.Transparent };
+        chat.Clicked += (_, _) => NavigateChat();
+        var voice = new Button { Text = "🎙", FontSize = 16, WidthRequest = 40, BackgroundColor = Colors.Transparent };
         voice.Clicked += (_, _) => NavigateVoice();
 
         var bar = new Grid
@@ -51,24 +53,38 @@ public sealed class PortalShellPage : ContentPage
             ColumnSpacing = 2,
             ColumnDefinitions =
             {
-                new(GridLength.Auto), new(GridLength.Auto), new(GridLength.Star), new(GridLength.Auto), new(GridLength.Auto),
+                new(GridLength.Auto), new(GridLength.Auto), new(GridLength.Star),
+                new(GridLength.Auto), new(GridLength.Auto), new(GridLength.Auto),
             },
         };
         bar.Add(_back, 0);
         bar.Add(_forward, 1);
         bar.Add(_instance, 2);
         bar.Add(home, 3);
-        bar.Add(voice, 4);
+        bar.Add(chat, 4);
+        bar.Add(voice, 5);
 
-        Content = new Grid
+        // A bordered bar over a filling content frame. Two rows: [bar Auto][frame Star].
+        var root = new Grid { RowSpacing = 0, RowDefinitions = { new(GridLength.Auto), new(GridLength.Star) } };
+        root.Add(new Border
         {
-            RowDefinitions = { new(GridLength.Auto), new(new GridLength(1, GridUnitType.Auto)), new(GridLength.Star) },
-            Children = { bar, new BoxView { HeightRequest = 1, Color = Colors.Gray, Opacity = 0.3 }, _frame },
-        };
-        Grid.SetRow(bar, 0);
-        Grid.SetRow((BoxView)((Grid)Content).Children[1], 1);
-        Grid.SetRow(_frame, 2);
+            Content = bar,
+            StrokeThickness = 0,
+            Stroke = Colors.Transparent,
+            Padding = 0,
+        }, 0, 0);
+        root.Add(_frame, 0, 1);
+        Content = root;
+    }
 
+    // Build the initial view once the page is actually appearing — creating the LayoutAreaView (and its
+    // stream subscription) during the constructor, before the page is in the visual tree, can land its
+    // async content set on a view that never displays.
+    protected override void OnAppearing()
+    {
+        base.OnAppearing();
+        if (_started) return;
+        _started = true;
         NavigateHome();
     }
 
@@ -98,16 +114,31 @@ public sealed class PortalShellPage : ContentPage
 
     // ── destinations ────────────────────────────────────────────────────────────────────────────────
     private void NavigateHome() => Navigate("Home", BuildPortalHome);
+    private void NavigateChat() => Navigate("Chat", () => _services.GetRequiredService<ChatView>());
     private void NavigateVoice() => Navigate("Voice", () => _services.GetRequiredService<VoiceView>());
 
     private View BuildPortalHome()
     {
         var workspace = _hub.GetWorkspace();
         var renderer = _hub.ServiceProvider.GetRequiredService<IMauiControlRenderer>();
+        // A native header (always visible if the frame renders) over the natively-rendered "home" area.
         return new ScrollView
         {
             Padding = 16,
-            Content = new LayoutAreaView(workspace, new LayoutAreaReference("home"), renderer),
+            VerticalOptions = LayoutOptions.Fill,
+            Content = new VerticalStackLayout
+            {
+                Spacing = 10,
+                Children =
+                {
+                    new Label
+                    {
+                        Text = $"📡 {_current?.Name ?? "Local"} — portal",
+                        FontSize = 18, FontAttributes = FontAttributes.Bold,
+                    },
+                    new LayoutAreaView(workspace, new LayoutAreaReference("home"), renderer),
+                },
+            },
         };
     }
 
