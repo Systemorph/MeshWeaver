@@ -111,7 +111,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // read clears the entry immediately. Consecutive failures grow the window
     // (StormBaseCooldown · 2^(n-1), capped at StormMaxCooldown); crossing
     // StormFailThreshold logs ONE "[STORM-BREAKER] suppressing" warning so the storm is
-    // visible in App Insights without the per-failure log flood.
+    // visible in Grafana/Loki without the per-failure log flood.
     private readonly ConcurrentDictionary<string, NegativeEntry> _negative = new();
     private sealed record NegativeEntry(Exception Error, int FailCount, DateTimeOffset OpenUntil);
     private static readonly TimeSpan StormBaseCooldown = TimeSpan.FromSeconds(2);

@@ -370,7 +370,7 @@ public static class PostgreSqlSchemaInitializer
     /// <c>RoutingPersistenceServiceCore.InitializeAsync</c> → MessageHub
     /// initialise gate never opens → SubscribeRequest hangs at the timeout
     /// → GUI sees Blazor SignalR session stuck — is exactly the prod
-    /// symptom App Insights flagged. The advisory lock keyed per schema
+    /// symptom surfaced in Grafana/Loki. The advisory lock keyed per schema
     /// lets distinct schemas init in parallel while same-schema init
     /// across silos serialises.
     /// </para>

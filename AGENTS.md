@@ -44,7 +44,7 @@ Before writing ANY UI/binding/persistence code, FIND the existing framework area
 
 ## 🚨🚨🚨 ABSOLUTE: Never change log levels in code for debug reasons
 
-**Editing `LogInformation` ↔ `LogDebug` ↔ `LogTrace` (or `appsettings.json` under `src/`) to dial verbosity up or down for a debugging session is FORBIDDEN.** Log levels in code reflect the production cost model — `Information` lines ship to App Insights and we pay per ingest. Changing them temporarily silently bleeds budget the next CI run.
+**Editing `LogInformation` ↔ `LogDebug` ↔ `LogTrace` (or `appsettings.json` under `src/`) to dial verbosity up or down for a debugging session is FORBIDDEN.** Log levels in code reflect the production cost model — `Information` lines ship to Loki (pod stdout → Promtail) and ingest/storage isn't free. Changing them temporarily silently bleeds budget the next CI run.
 
 To turn the volume up for debugging, **edit the appsettings.json in the test's `bin/Debug/net10.0/` (or the equivalent runtime config)** — `reloadOnChange: true` is wired so the level flips mid-run without a rebuild. The src-tree `appsettings.json` and every `Log*` call in `src/` is committed contract.
 

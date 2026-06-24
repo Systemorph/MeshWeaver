@@ -337,7 +337,7 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         //   * no `GetSchemasWithTableAsync` PG round-trip
         //   * single-element schema list straight to QueryAcrossSchemasAsync
         // The two skipped round-trips alone were costing 200-700 ms on cold
-        // page loads (visible in prod App Insights as serial `SELECT … FROM
+        // page loads (visible in Grafana/Loki as serial `SELECT … FROM
         // public.searchable_schemas` and `information_schema.tables` lookups
         // right before the actual UNION query). Trusts that satellite tables
         // exist in every partition that has primary `mesh_nodes` — if a row
