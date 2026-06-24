@@ -441,7 +441,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Tests the CreateCommentRequest handler end-to-end:
     ///   1. Send CreateCommentRequest to a markdown node's hub address
     ///   2. Handler creates a Comment MeshNode in _Comment partition, anchored to a rendered-text
-    ///      range (FromPosition/ToPosition + Version) — WITHOUT mutating the document text
+    ///      range (Start/Length + Version) — WITHOUT mutating the document text
     ///   3. Verify the comment node carries the anchor and the document is untouched
     /// </summary>
     [Fact(Timeout = 30000)]
@@ -475,7 +475,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"Response: MarkerId={capturedMarkerId}");
 
         // 3) Verify comment node via GetDataRequest — it carries the anchor (HighlightedText +
-        //    From/ToPosition + Version) instead of mutating the document with markers.
+        //    Start/Length + Version) instead of mutating the document with markers.
         var commentPath = $"{docPath}/{CommentsExtensions.CommentPartition}/{capturedMarkerId}";
         var commentNodeResponse = await client.Observe(new GetDataRequest(new EntityReference(nameof(MeshNode), capturedMarkerId!)), o => o.WithTarget(new Address(commentPath))).Should().Within(30.Seconds()).Emit();
         var commentNode = commentNodeResponse.Message.Data as MeshNode;
@@ -485,9 +485,10 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         comment.Author.Should().Be("TestAuthor");
         comment.MarkerId.Should().Be(capturedMarkerId);
         comment.HighlightedText.Should().Be("satellite entities");
-        comment.FromPosition.Should().BeGreaterThanOrEqualTo(0, "the selection should anchor to a rendered-text range");
-        comment.ToPosition.Should().BeGreaterThan(comment.FromPosition);
-        Output.WriteLine($"Comment node verified: {commentNode.Path} anchored at {comment.FromPosition}-{comment.ToPosition} v{comment.Version}");
+        comment.Start.Should().BeGreaterThanOrEqualTo(0, "the selection should anchor to a captured range");
+        comment.Length.Should().BeGreaterThan(0);
+        comment.AnchorText.Should().NotBeNullOrEmpty("the capture records the document text it was taken against");
+        Output.WriteLine($"Comment node verified: {commentNode.Path} anchored at {comment.Start}+{comment.Length} v{comment.Version}");
 
         // 4) The new comment must NOT be injected into the document text — it lives on the
         //    satellite. (The sample doc already carries illustrative markers, so assert on OUR id.)

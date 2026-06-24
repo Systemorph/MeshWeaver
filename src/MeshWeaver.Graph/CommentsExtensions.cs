@@ -65,14 +65,14 @@ public static class CommentsExtensions
     /// <summary>
     /// Handles CreateCommentRequest by anchoring the comment to the document WITHOUT mutating it:
     ///   1. Reads the current node once (for its content + <see cref="MeshNode.Version"/>)
-    ///   2. For a text selection, computes the rendered-text range (<see cref="Comment.FromPosition"/>/
-    ///      <see cref="Comment.ToPosition"/>) the comment anchors to and records it on the satellite
+    ///   2. For a text selection, captures the (<see cref="Comment.Start"/>/<see cref="Comment.Length"/>)
+    ///      range plus the anchor text the comment is taken against, and records it on the satellite
     ///   3. Creates the Comment MeshNode in the <c>_Comment</c> sub-partition via meshService.CreateNode
     ///   4. For a reply (parent is itself a Comment) appends the reply id to the parent's Replies list
     ///   5. Posts CreateCommentResponse once the node is created
     /// <para>
     /// The document text is never rewritten — the inline highlight is re-derived from the satellite
-    /// at render time (see <see cref="CommentAnchoring"/>). This is what lets a Comment-only user
+    /// at render time (see <see cref="CommentRendering"/>). This is what lets a Comment-only user
     /// (no document Update permission) comment, and removes the old "fragment didn't match →
     /// no-op Update hangs forever" failure. Never awaits; never uses persistence directly.
     /// </para>
@@ -109,17 +109,18 @@ public static class CommentsExtensions
                     var isReply = node?.Content is Comment;
                     var version = node?.Version ?? 0;
 
-                    // Anchor the selection to the rendered text of the document at this version.
-                    var from = -1;
-                    var to = -1;
+                    // Capture the selection as a (Start, Length) range in the document's clean text.
+                    var start = -1;
+                    var length = 0;
+                    string? anchorText = null;
                     if (hasTextSelection && !isReply
                         && node?.Content is MarkdownContent mdContent && !string.IsNullOrEmpty(mdContent.Content))
                     {
-                        var clean = MarkdownAnnotationParser.StripAllMarkers(mdContent.Content);
-                        (from, to) = CommentAnchoring.FindRenderedRange(
-                            clean, msg.StartFragment, msg.EndFragment, selectedText);
+                        anchorText = MarkdownAnnotationParser.StripAllMarkers(mdContent.Content);
+                        (start, length) = CommentRendering.Capture(
+                            anchorText, msg.StartFragment, msg.EndFragment, selectedText);
                     }
-                    var anchored = from >= 0 && to > from;
+                    var anchored = start >= 0 && length > 0;
 
                     var comment = new Comment
                     {
@@ -132,8 +133,9 @@ public static class CommentsExtensions
                         CreatedAt = DateTimeOffset.UtcNow,
                         Status = CommentStatus.Active,
                         Version = anchored ? version : 0,
-                        FromPosition = anchored ? from : -1,
-                        ToPosition = anchored ? to : -1
+                        Start = anchored ? start : -1,
+                        Length = anchored ? length : 0,
+                        AnchorText = anchored ? anchorText : null
                     };
                     var commentNode = new MeshNode(markerId, $"{nodePath}/{CommentPartition}")
                     {
@@ -144,8 +146,8 @@ public static class CommentsExtensions
                     };
 
                     logger?.LogInformation(
-                        "[CreateComment] Anchoring {Id} on {Path}: anchored={Anchored} pos={From}-{To} v={Version}",
-                        markerId, nodePath, anchored, from, to, version);
+                        "[CreateComment] Anchoring {Id} on {Path}: anchored={Anchored} pos={Start}+{Length} v={Version}",
+                        markerId, nodePath, anchored, start, length, version);
 
                     var create = meshService.CreateNode(commentNode);
 

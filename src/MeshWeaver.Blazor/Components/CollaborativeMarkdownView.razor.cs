@@ -120,24 +120,23 @@ public partial class CollaborativeMarkdownView
     private Dictionary<string, Comment> commentNodes = new();
     // Comment path cache (markerId -> MeshNode path), for resolve/delete operations
     private Dictionary<string, string> commentPaths = new();
+    // Comments resolved against the CURRENT text (effective ranges set), produced by ProcessContent.
+    private IReadOnlyList<Comment> _resolvedComments = Array.Empty<Comment>();
 
     private bool HasAnnotations => Annotations.Any(a => a.Type != AnnotationType.Comment);
 
-    private bool HasCommentAnnotations => Annotations.Any(a => a.Type == AnnotationType.Comment);
+    private bool HasCommentAnnotations => commentNodes.Count > 0;
 
-    private List<ParsedAnnotation> FilteredAnnotations => CurrentCommentFilter switch
+    // Comments shown in the side panel (anchored comments are sourced from the satellites, not from
+    // markers in the text). The status filter mirrors the dropdown.
+    private IReadOnlyList<Comment> SidebarComments => CurrentCommentFilter switch
     {
-        "None" => Annotations.Where(a => a.Type != AnnotationType.Comment).ToList(),
-        "All" => Annotations,
-        // "Unresolved" (default): show non-comment annotations + active comments only
-        _ => Annotations.Where(a =>
-            a.Type != AnnotationType.Comment ||
-            !commentNodes.TryGetValue(a.Id, out var comment) ||
-            comment.Status == CommentStatus.Active).ToList()
+        "None" => Array.Empty<Comment>(),
+        "All" => _resolvedComments,
+        _ => _resolvedComments.Where(c => c.Status == CommentStatus.Active).ToList()
     };
 
-    private bool HasSideAnnotations =>
-        CurrentViewMode == "Markup" && FilteredAnnotations.Count > 0;
+    private bool HasSideAnnotations => SidebarComments.Count > 0;
 
     private string ViewModeClass => CurrentViewMode switch
     {
@@ -325,15 +324,19 @@ public partial class CollaborativeMarkdownView
 
     private void ProcessContent()
     {
-        // Overlay the inline comment highlights from the satellite nodes. Comments are NOT stored in
-        // the document text — each carries its own (Version, From/ToPosition, HighlightedText) and is
-        // re-anchored against the current text here, so the document is never mutated by commenting.
+        // The document text is kept CLEAN. Comments are satellites carrying a captured range
+        // (Start/Length/Version/AnchorText); each is recomputed against the current clean text via
+        // the version delta and its highlight injected as a transient span for this render only.
+        var clean = MarkdownAnnotationParser.StripAllMarkers(RawContent ?? "");
         var commentsForRender = commentNodes.Values
             .Where(c => !string.IsNullOrEmpty(c.MarkerId) && !string.IsNullOrEmpty(c.HighlightedText))
             .ToArray();
-        var decorated = !string.IsNullOrEmpty(RawContent) && commentsForRender.Length > 0
-            ? CommentAnchoring.DecorateWithComments(RawContent, commentsForRender, _docVersion)
-            : RawContent;
+        _resolvedComments = commentsForRender.Length > 0
+            ? CommentRendering.ResolveAll(commentsForRender, clean, _docVersion)
+            : Array.Empty<Comment>();
+        var decorated = _resolvedComments.Count > 0
+            ? CommentRendering.DecorateInline(clean, _resolvedComments)
+            : clean;
 
         if (string.IsNullOrEmpty(decorated))
         {
@@ -572,12 +575,12 @@ public partial class CollaborativeMarkdownView
         _pendingStartFragment = "";
         _pendingEndFragment = "";
 
-        // Anchor the selection to the rendered text of the document at its current version. The
-        // comment carries its own (Version, From/ToPosition, HighlightedText) — the document text
-        // is never touched, so this works for Comment-only users and survives later edits.
+        // Capture the selection as a (Start, Length) range in the document's CLEAN text plus the
+        // anchor text and version. The document text is never touched — the highlight is recomputed
+        // from this capture at display time, so it works for Comment-only users and survives edits.
         var clean = MarkdownAnnotationParser.StripAllMarkers(RawContent ?? "");
-        var (from, to) = CommentAnchoring.FindRenderedRange(clean, startFragment, endFragment, selectedText);
-        var anchored = from >= 0 && to > from;
+        var (start, length) = CommentRendering.Capture(clean, startFragment, endFragment, selectedText);
+        var anchored = start >= 0 && length > 0;
 
         var markerId = Guid.NewGuid().ToString("N")[..8];
         var comment = new Comment
@@ -591,8 +594,9 @@ public partial class CollaborativeMarkdownView
             CreatedAt = DateTimeOffset.UtcNow,
             Status = CommentStatus.Active,
             Version = anchored ? _docVersion : 0,
-            FromPosition = anchored ? from : -1,
-            ToPosition = anchored ? to : -1
+            Start = anchored ? start : -1,
+            Length = anchored ? length : 0,
+            AnchorText = anchored ? clean : null
         };
         CreateCommentNode(comment);
     }
