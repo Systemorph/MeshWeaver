@@ -40,18 +40,18 @@ public static class MauiProgram
 #endif
 #if MACCATALYST
         // The macOS client (MacCatalyst) has NO Metal — Whisper.net builds whisper.cpp with GGML_METAL=OFF
-        // for this TFM — so CoreML (Apple GPU / Neural Engine) is the only GPU path. Gated behind the
-        // "apple-gpu" feature flag (off until the CoreML apple image is hosted — see OnDeviceVoice.md).
-        // When on, prefer CoreML over CPU; whisper auto-falls back to CPU if the encoder model is absent
-        // (the runtime is built WHISPER_COREML_ALLOW_FALLBACK=ON). Must be set before any WhisperFactory.
-        if (FeatureFlags.IsAppleGpuEnabled)
-        {
-            Whisper.net.LibraryLoader.RuntimeOptions.RuntimeLibraryOrder =
+        // for this TFM — so CoreML (Apple GPU / Neural Engine) is the only GPU path, behind the "apple-gpu"
+        // flag. That flag defaults OFF: the CoreML encoder triggers a first-run ANE compile that wedges the
+        // synchronous model-load on MacCatalyst (see FeatureFlags). So pick the runtime DETERMINISTICALLY —
+        // CoreML-first only when the flag is on, otherwise CPU-ONLY so no CoreML load is even attempted (the
+        // CoreML runtime package ships the CPU lib too, so [Cpu] resolves fine). Set before any WhisperFactory.
+        Whisper.net.LibraryLoader.RuntimeOptions.RuntimeLibraryOrder = FeatureFlags.IsAppleGpuEnabled
+            ?
             [
                 Whisper.net.LibraryLoader.RuntimeLibrary.CoreML,
                 Whisper.net.LibraryLoader.RuntimeLibrary.Cpu,
-            ];
-        }
+            ]
+            : [Whisper.net.LibraryLoader.RuntimeLibrary.Cpu];
 #endif
         var builder = MauiApp.CreateBuilder();
         builder

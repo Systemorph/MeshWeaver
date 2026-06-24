@@ -65,7 +65,7 @@ public sealed class VoicePage : ContentPage
         }
 
         _record.Text = "● Record";
-        _status.Text = "Transcribing on device…";
+        _status.Text = "Preparing…";
         var samples = await _capture.StopAsync();
         if (samples.Length == 0)
         {
@@ -77,8 +77,15 @@ public sealed class VoicePage : ContentPage
         var segments = new List<string>();
         var language = FeatureFlags.IsSwissGermanEnabled ? WhisperTranscriber.AutoPreferGermanEnglish : "en";
 
+        // Real feedback: the first run copies the bundled model out of the app package and loads it (a few
+        // seconds) BEFORE any audio is decoded — without this the UI would sit on one frozen line and look
+        // hung. status = coarse stage ("Model ready (bundled).", …); progress = 0–100 during transcription.
+        // Progress<T> marshals callbacks to the captured (UI) SynchronizationContext, so no MainThread hop.
+        var status = new Progress<string>(s => _status.Text = s);
+        var progress = new Progress<int>(p => _status.Text = $"Transcribing on device… {p}%");
+
         _sub?.Dispose();
-        _sub = _voice.Transcribe(samples, language).Subscribe(
+        _sub = _voice.Transcribe(samples, language, progress, status).Subscribe(
             seg => MainThread.BeginInvokeOnMainThread(() =>
             {
                 segments.Add(seg.Text);
