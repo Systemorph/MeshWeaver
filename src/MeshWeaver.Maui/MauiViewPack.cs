@@ -204,7 +204,11 @@ public static class MauiViewPackExtensions
         .Register<CheckBoxControl, CheckBoxView>()
         .Register<SwitchControl, SwitchView>()
         // Tabular data.
-        .Register<DataGridControl, DataGridView>();
+        .Register<DataGridControl, DataGridView>()
+        // Wave 2 — nav + badges.
+        .Register<BadgeControl, BadgeView>()
+        .Register<NavLinkControl, NavLinkView>()
+        .Register<MenuItemControl, MenuItemView>();
 }
 
 // ---- Wave 1 control views -------------------------------------------------------------------------
@@ -261,6 +265,40 @@ public sealed class MarkdownView : MauiView<MarkdownControl>
     private Label _label = null!;
     protected override View CreateView() => _label = new Label();
     protected override void Bind() => Bind<object>(Model.Markdown, v => _label.Text = v?.ToString() ?? "");
+}
+
+/// <summary>Badge → a pill-styled <see cref="Label"/> in a <see cref="Border"/>.</summary>
+public sealed class BadgeView : MauiView<BadgeControl>
+{
+    private Label _label = null!;
+    protected override View CreateView()
+    {
+        _label = new Label { Padding = new Thickness(8, 2), TextColor = Colors.White };
+        return new Border
+        {
+            BackgroundColor = Colors.SlateGray,
+            StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 10 },
+            Content = _label,
+            HorizontalOptions = LayoutOptions.Start,
+        };
+    }
+    protected override void Bind() => Bind<object>(Model.Data, v => _label.Text = v?.ToString() ?? "");
+}
+
+/// <summary>Navigation link → a MAUI <see cref="Button"/> (title; href navigation is a later wave).</summary>
+public sealed class NavLinkView : MauiView<NavLinkControl>
+{
+    private Button _button = null!;
+    protected override View CreateView() => _button = new Button { HorizontalOptions = LayoutOptions.Start };
+    protected override void Bind() => Bind<object>(Model.Title, v => _button.Text = v?.ToString() ?? "");
+}
+
+/// <summary>Menu item → a MAUI <see cref="Label"/> (title).</summary>
+public sealed class MenuItemView : MauiView<MenuItemControl>
+{
+    private Label _label = null!;
+    protected override View CreateView() => _label = new Label();
+    protected override void Bind() => Bind<object>(Model.Title, v => _label.Text = v?.ToString() ?? "");
 }
 
 /// <summary>Icon glyph/text → MAUI <see cref="Label"/>.</summary>
