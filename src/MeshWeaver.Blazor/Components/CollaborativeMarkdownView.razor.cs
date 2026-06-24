@@ -60,6 +60,10 @@ public partial class CollaborativeMarkdownView
     private Address? _kernelAddress;
     private Address KernelAddress => _kernelAddress ??= ResolveActivityAddress();
     private bool _codeSubmitted;
+    // Flipped (via CreateActivityAndSubmit's onReady) once the per-view Activity is created + routable.
+    // Gates the LIVE kernel-area embed in RenderContentHtml so the GUI never subscribes to a
+    // not-yet-created {owner}/_Activity/markdown-{id} (the subscribe-before-create NotFound storm).
+    private bool _kernelReady;
     private IReadOnlyCollection<SubmitCodeRequest>? _codeSubmissions;
 
     private Address ResolveActivityAddress()
@@ -252,11 +256,38 @@ public partial class CollaborativeMarkdownView
         if (!_codeSubmitted && _codeSubmissions is { Count: > 0 })
         {
             _codeSubmitted = true;
-            var meshService = Hub.ServiceProvider.GetRequiredService<IMeshService>();
             var ownerPath = BoundNodePath ?? Stream?.Owner?.Path;
+            if (string.IsNullOrEmpty(ownerPath))
+            {
+                // No owning node → no per-node hub to host the kernel. Do NOT create a bare
+                // `_Activity/markdown-*` activity (it would NotFound-storm the router). The result
+                // areas were neutralised into a notice in ProcessContent; log and skip submission.
+                Hub.ServiceProvider.GetService<ILoggerFactory>()?
+                    .CreateLogger("MarkdownExecution")
+                    .LogWarning(
+                        "Collaborative markdown view {Kernel}: skipping interactive code execution — the view has no owning node.",
+                        _kernelId);
+                return;
+            }
+            var meshService = Hub.ServiceProvider.GetRequiredService<IMeshService>();
             MarkdownViewLogic.CreateActivityAndSubmit(
-                Hub, meshService, KernelAddress, ownerPath, _kernelId, _codeSubmissions);
+                Hub, meshService, KernelAddress, ownerPath, _kernelId, _codeSubmissions,
+                onReady: OnKernelReady);
         }
+    }
+
+    // Invoked (off the Blazor renderer) once the per-view Activity is created + routable. Flip the
+    // gate and re-render so RenderContentHtml embeds the LIVE kernel area — the LayoutAreaView(s)
+    // then subscribe to an address that already exists (no NotFound storm).
+    private void OnKernelReady()
+    {
+        if (IsViewDisposed || _kernelReady) return;
+        InvokeAsync(() =>
+        {
+            if (IsViewDisposed) return;
+            _kernelReady = true;
+            StateHasChanged();
+        });
     }
 
     private void ProcessContent()
@@ -289,12 +320,12 @@ public partial class CollaborativeMarkdownView
             _ => RawContent
         };
 
-        // Render markdown to HTML with annotation spans
+        // Render markdown to HTML with annotation spans. NB: the kernel result-area placeholder is
+        // left UNRESOLVED here — the live (subscribing) vs. "starting" placeholder vs. "no owner"
+        // notice decision is made at RENDER time in RenderContentHtml (gated on _kernelReady), so
+        // flipping _kernelReady after the activity is routable re-renders with the live area without
+        // re-parsing. See RenderContentHtml + OnAfterRenderAsync.
         _processedHtml = RenderMarkdown(content);
-
-        // Replace kernel address placeholder with actual kernel address
-        if (_processedHtml != null && _codeSubmissions is { Count: > 0 })
-            _processedHtml = MarkdownViewLogic.ReplaceKernelPlaceholder(_processedHtml, KernelAddress);
 
         _lastRenderedContent = RawContent;
         _lastRenderedMode = CurrentViewMode;
@@ -310,9 +341,17 @@ public partial class CollaborativeMarkdownView
         if (string.IsNullOrEmpty(_processedHtml))
             return;
 
+        // Resolve the kernel result-area placeholder at render time: a live (subscribing) area only
+        // once the activity is routable (_kernelReady), a non-subscribing "starting" placeholder
+        // until then, or a "no owner" notice. This gate prevents the subscribe-before-create storm.
+        var html = _codeSubmissions is { Count: > 0 }
+            ? MarkdownViewLogic.RenderKernelResultAreas(
+                _processedHtml, BoundNodePath ?? Stream?.Owner?.Path, _kernelReady, KernelAddress)
+            : _processedHtml;
+
         var renderer = new MarkdownHtmlRenderer(Mode, Stream);
         renderer.ShowReferencesSection = true;
-        renderer.RenderHtml(builder, _processedHtml);
+        renderer.RenderHtml(builder, html);
     }
 
     private string RenderMarkdown(string content)

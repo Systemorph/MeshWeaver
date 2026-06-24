@@ -5,6 +5,7 @@ using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.AspNetCore.Components.Rendering;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Blazor.Components;
 
@@ -32,6 +33,12 @@ public partial class MarkdownView
     private Address KernelAddress => _kernelAddress ??= ResolveActivityAddress();
 
     private bool _codeSubmitted;
+
+    // Flipped (via CreateActivityAndSubmit's onReady) once the per-view Activity node is created and
+    // routable. Gates the LIVE kernel-area embed in RenderHtml: until it's true the kernel result
+    // areas render as a non-subscribing placeholder, so the GUI never subscribes to a not-yet-created
+    // {owner}/_Activity/markdown-{id} (the subscribe-before-create NotFound storm).
+    private bool _kernelReady;
 
     // Memoised parse — the parent re-renders this view on EVERY streaming tick with a fresh
     // MarkdownControl whose text is usually identical (a completed chat bubble while a LATER
@@ -104,8 +111,11 @@ public partial class MarkdownView
                 markdown, Stream?.Owner, nodePath);
         }
 
-        if (Html is not null && CodeSubmissions is { Count: > 0 })
-            Html = MarkdownViewLogic.ReplaceKernelPlaceholder(Html, KernelAddress);
+        // NB: the kernel result-area placeholder is left UNRESOLVED here. The decision of whether to
+        // embed a live (subscribing) area, a non-subscribing "starting" placeholder, or a "no owner"
+        // notice is made at RENDER time in RenderHtml (gated on _kernelReady), so flipping _kernelReady
+        // after the activity is routable simply re-renders with the live area — without re-running
+        // Markdig. See RenderHtml + OnAfterRenderAsync.
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -115,11 +125,38 @@ public partial class MarkdownView
         if (firstRender && !_codeSubmitted && CodeSubmissions is { Count: > 0 })
         {
             _codeSubmitted = true;
-            var meshService = Hub.ServiceProvider.GetRequiredService<IMeshService>();
             var ownerPath = Stream?.Owner?.Path;
+            if (string.IsNullOrEmpty(ownerPath))
+            {
+                // No owning node → no per-node hub to host the kernel. Do NOT create a bare
+                // `_Activity/markdown-*` activity (it would NotFound-storm the router). The result
+                // areas were neutralised into a notice in BindData; just log and skip submission.
+                Hub.ServiceProvider.GetService<ILoggerFactory>()?
+                    .CreateLogger("MarkdownExecution")
+                    .LogWarning(
+                        "Markdown view {Kernel}: skipping interactive code execution — the view has no owning node (Stream.Owner is empty).",
+                        _kernelId);
+                return;
+            }
+            var meshService = Hub.ServiceProvider.GetRequiredService<IMeshService>();
             MarkdownViewLogic.CreateActivityAndSubmit(
-                Hub, meshService, KernelAddress, ownerPath, _kernelId, CodeSubmissions);
+                Hub, meshService, KernelAddress, ownerPath, _kernelId, CodeSubmissions,
+                onReady: OnKernelReady);
         }
+    }
+
+    // Invoked (off the Blazor renderer) once the per-view Activity is created + routable. Flip the
+    // gate and re-render: RenderHtml now embeds the LIVE kernel area, so the LayoutAreaView(s)
+    // subscribe to an address that already exists — no NotFound storm.
+    private void OnKernelReady()
+    {
+        if (IsViewDisposed || _kernelReady) return;
+        InvokeAsync(() =>
+        {
+            if (IsViewDisposed) return;
+            _kernelReady = true;
+            StateHasChanged();
+        });
     }
 
     public override async ValueTask DisposeAsync()
@@ -132,8 +169,16 @@ public partial class MarkdownView
         if (Html is null)
             return;
 
+        // Resolve the kernel result-area placeholder at render time: a live (subscribing) area only
+        // once the activity is routable (_kernelReady), a non-subscribing "starting" placeholder
+        // until then, or a "no owner" notice when there's no hub to host the kernel. This is the gate
+        // that prevents the subscribe-before-create NotFound storm.
+        var html = CodeSubmissions is { Count: > 0 }
+            ? MarkdownViewLogic.RenderKernelResultAreas(Html, Stream?.Owner?.Path, _kernelReady, KernelAddress)
+            : Html;
+
         var renderer = new MarkdownHtmlRenderer(Mode, Stream);
         renderer.ShowReferencesSection = ShowReferencesSection;
-        renderer.RenderHtml(builder, Html);
+        renderer.RenderHtml(builder, html);
     }
 }
