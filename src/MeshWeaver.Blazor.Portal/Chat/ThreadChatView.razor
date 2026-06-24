@@ -123,10 +123,17 @@ else
                                     <span>@state.Timestamp.Value.ToString("HH:mm:ss")</span>
                                 }
                                 @* Stream duration:
-                                   • Status == Streaming → live (ticker-driven, "0:12")
-                                   • CompletedAt set     → frozen final ("1:23")
-                                   • Otherwise (legacy bubbles loaded without Status/CompletedAt) → omit. *@
-                                @if (state.Status == "Streaming" && state.Timestamp.HasValue)
+                                   • Live (ticker-driven, "0:12") ONLY while the THREAD is executing —
+                                     a cell can't be streaming once the thread is idle. Gating on
+                                     IsExecuting (not just the cell's Status string) is what STOPS the
+                                     clock when the round ends: if a cell's Status lags/sticks at
+                                     "Streaming" the bare-status check would tick forever.
+                                   • CompletedAt set → frozen final ("1:23"). The terminal completion
+                                     push always stamps CompletedAt, so an idle thread shows the frozen
+                                     duration here.
+                                   • Otherwise (legacy bubbles without Status/CompletedAt) → omit. *@
+                                @{ var isLiveStreaming = state.Status == "Streaming" && ThreadViewModel?.IsExecuting == true; }
+                                @if (isLiveStreaming && state.Timestamp.HasValue)
                                 {
                                     <span class="thread-msg-elapsed thread-msg-elapsed-live" title="Streaming...">@FormatElapsed(state.Timestamp)</span>
                                 }

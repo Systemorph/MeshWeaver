@@ -281,9 +281,13 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         SidePanelState.OnActionRequested += OnSidePanelAction;
 
         // 1-second ticker for elapsed-time chips on the exec bar, sub-thread cards,
-        // and per-bubble streaming chips. Only fires StateHasChanged when something's
-        // executing — silent on idle threads so we don't burn render cycles when
-        // there's nothing to update.
+        // and per-bubble streaming chips. Only fires StateHasChanged while the thread
+        // (or a sub-thread) is actually executing — silent on idle threads so we don't
+        // burn render cycles when there's nothing to update. We deliberately do NOT key
+        // off a cell's Status == "Streaming": a cell whose status lags/sticks at
+        // "Streaming" after the round ends would keep the ticker (and the clock) alive
+        // forever. IsExecuting is the authoritative "still running" signal, and the
+        // per-bubble live clock is gated on it too (see ThreadChatView.razor).
         elapsedTicker = System.Reactive.Linq.Observable
             .Interval(TimeSpan.FromSeconds(1))
             .Subscribe(_ =>
@@ -291,8 +295,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 if (_isDisposed) return;
                 var anyExecuting =
                     ThreadViewModel?.IsExecuting == true
-                    || delegationHeaders.Values.Any(h => h.IsExecuting)
-                    || messageStates.Values.Any(s => s.Status == "Streaming");
+                    || delegationHeaders.Values.Any(h => h.IsExecuting);
                 if (anyExecuting)
                     InvokeAsync(StateHasChanged);
             });
