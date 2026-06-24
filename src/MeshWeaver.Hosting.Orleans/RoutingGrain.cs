@@ -1,3 +1,4 @@
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using MeshWeaver.Connection.Orleans;
@@ -150,40 +151,17 @@ internal class RoutingGrain(
 
                 logger.LogDebug("[ROUTE] Delivering {MessageType} to grain {GrainKey}", delivery.Message?.GetType().Name ?? "(null)", grainKey);
                 RoutingGrainTrace.Write($"RoutingGrain.RouteMessage GRAIN_CALL id={delivery.Id} grainKey={grainKey}");
-                var grain = grainFactory.GetGrain<IMessageHubGrain>(grainKey);
-                grain.DeliverMessage(delivery).ContinueWith(t =>
-                {
-                    if (t.IsFaulted)
-                    {
-                        RoutingGrainTrace.Write($"RoutingGrain.RouteMessage GRAIN_CALL_FAULT id={delivery.Id} grainKey={grainKey} ex={t.Exception?.InnerException?.Message ?? t.Exception?.Message}");
-                        logger.LogWarning(t.Exception, "[ROUTE] Grain {GrainKey} threw for {MessageType} → stream fallback",
-                            grainKey, delivery.Message?.GetType().Name ?? "(null)");
-                        var stream = streamProvider.GetStream<IMessageDelivery>(addressPath);
-                        stream.OnNextAsync(delivery).ContinueWith(_ => { }, TaskScheduler.Default);
-                    }
-                    else if (t.IsCompletedSuccessfully)
-                    {
-                        RoutingGrainTrace.Write($"RoutingGrain.RouteMessage GRAIN_CALL_OK id={delivery.Id} grainKey={grainKey} state={t.Result.State}");
-                        if (t.Result.State == MessageDeliveryState.Failed)
-                        {
-                            // The owning grain resolved but could NOT service the delivery
-                            // (unmaterializable / unregistered node type, failed activation,
-                            // access denial surfaced as a failed activation). Previously this
-                            // state was logged and dropped → the caller's callback parked
-                            // forever and the GUI re-issued → storm. Surface it as a
-                            // DeliveryFailure so the caller gets a fast, deterministic OnError.
-                            var failMsg = t.Result.Properties.TryGetValue("Error", out var errObj) && errObj is string errStr
-                                ? errStr
-                                : $"Delivery to '{addressPath}' failed at its owning hub.";
-                            logger.LogWarning("[ROUTE] Grain {GrainKey} returned Failed for {MessageType}: {Error}",
-                                grainKey, delivery.Message?.GetType().Name ?? "(null)", failMsg);
-                            PostFailureToSender(failMsg, ErrorType.Failed);
-                        }
-                        else
-                            logger.LogDebug("[ROUTE] Grain {GrainKey} returned state={State} for {MessageType}",
-                                grainKey, t.Result.State, delivery.Message?.GetType().Name ?? "(null)");
-                    }
-                }, TaskScheduler.Default);
+                // 🚨 Deliver with a TRANSIENT-rejection retry. A node grain that is mid-DeactivateOnIdle
+                // rejects the call with OrleansMessageRejectionException ("invalid activation"); each retry
+                // re-resolves the grain so Orleans activates a FRESH instance and the message lands on the
+                // reactivated hub. Previously this single call dead-ended on a transient fault: the fault
+                // branch pushed the delivery onto a memory stream that has NO subscriber (per-node grain
+                // hubs aren't stream-registered — those return at the StreamRoutedAddressTypes check above),
+                // so the SubscribeRequest never got a response, the cache hub timed out after 60 s, and the
+                // node wedged on "Subscribing to {path}…" until a portal restart (atioz 2026-06-24).
+                DeliverToGrainWithRetry(
+                    () => grainFactory.GetGrain<IMessageHubGrain>(grainKey).DeliverMessage(delivery),
+                    grainKey, addressPath, delivery.Id, PostFailureToSender, logger);
             },
             ex =>
             {
@@ -209,4 +187,105 @@ internal class RoutingGrain(
         }
         return address;
     }
+
+    /// <summary>
+    /// Delivers to the resolved node-hub grain, RETRYING on a TRANSIENT Orleans rejection so a grain
+    /// that is mid-<c>DeactivateOnIdle</c> (which answers <see cref="global::Orleans.Runtime.OrleansMessageRejectionException"/>
+    /// "invalid activation") gets re-delivered to a FRESH activation rather than dead-ending. Each retry
+    /// re-subscribes the cold <paramref name="grainCall"/>, which re-resolves the grain → Orleans creates a
+    /// new instance once the prior one finished its bounded (≤5 s) deactivation. The default retry window
+    /// (~10 s) outlasts that deactivation yet finishes well inside the caller's 60 s SubscribeRequest
+    /// timeout, so the request succeeds and the <c>MeshNodeStreamCache</c> never caches a faulted entry —
+    /// the atioz "Subscribing to {path}…" wedge.
+    ///
+    /// <para>On a NON-transient grain fault, or once transient retries are exhausted, NACKs the sender via
+    /// <paramref name="postFailureToSender"/> so its <c>Observe(...)</c> fires a fast, deterministic
+    /// <c>OnError</c> — never a silent drop the caller waits 60 s on. Fire-and-forget (the chain self-completes
+    /// within the bounded window); <paramref name="backoff"/> / <paramref name="scheduler"/> are seams for
+    /// deterministic tests.</para>
+    /// </summary>
+    internal static IDisposable DeliverToGrainWithRetry(
+        Func<Task<IMessageDelivery>> grainCall,
+        string grainKey,
+        string addressPath,
+        string deliveryId,
+        Action<string, ErrorType> postFailureToSender,
+        ILogger logger,
+        int maxRetries = 6,
+        Func<int, TimeSpan>? backoff = null,
+        IScheduler? scheduler = null)
+    {
+        return DeliverToGrainObservable(grainCall, grainKey, deliveryId, logger, maxRetries, backoff, scheduler)
+            .Subscribe(
+                result =>
+                {
+                    RoutingGrainTrace.Write($"RoutingGrain.RouteMessage GRAIN_CALL_OK id={deliveryId} grainKey={grainKey} state={result.State}");
+                    if (result.State == MessageDeliveryState.Failed)
+                    {
+                        // The owning grain resolved but could NOT service the delivery (unmaterializable /
+                        // unregistered node type, failed activation, access denial). Surface as a
+                        // DeliveryFailure so the caller gets a fast, deterministic OnError instead of parking.
+                        var failMsg = result.Properties.TryGetValue("Error", out var errObj) && errObj is string errStr
+                            ? errStr
+                            : $"Delivery to '{addressPath}' failed at its owning hub.";
+                        logger.LogWarning("[ROUTE] Grain {GrainKey} returned Failed: {Error}", grainKey, failMsg);
+                        postFailureToSender(failMsg, ErrorType.Failed);
+                    }
+                },
+                ex =>
+                {
+                    RoutingGrainTrace.Write($"RoutingGrain.RouteMessage GRAIN_CALL_FAULT id={deliveryId} grainKey={grainKey} ex={ex.Message}");
+                    logger.LogWarning(ex,
+                        "[ROUTE] Grain {GrainKey} delivery failed after transient retries (or a non-transient fault) → NACK sender",
+                        grainKey);
+                    postFailureToSender($"Delivery to '{addressPath}' failed: {ex.Message}", ErrorType.Failed);
+                });
+    }
+
+    /// <summary>
+    /// The cold, awaitable retry observable underlying <see cref="DeliverToGrainWithRetry"/> — a single
+    /// grain delivery that re-invokes <paramref name="grainCall"/> on each TRANSIENT rejection (so Orleans
+    /// activates a fresh instance), throws the last exception once retries are exhausted / on a non-transient
+    /// fault, and otherwise emits the grain's result. Split out so tests can <c>await … .ToTask()</c> it
+    /// deterministically.
+    /// </summary>
+    internal static IObservable<IMessageDelivery> DeliverToGrainObservable(
+        Func<Task<IMessageDelivery>> grainCall,
+        string grainKey,
+        string deliveryId,
+        ILogger logger,
+        int maxRetries = 6,
+        Func<int, TimeSpan>? backoff = null,
+        IScheduler? scheduler = null)
+    {
+        var sch = scheduler ?? Scheduler.Default;
+        var delay = backoff ?? (attempt => TimeSpan.FromMilliseconds(Math.Min(250 * Math.Pow(2, attempt), 3_000)));
+
+        // Defer keeps grainCall COLD so every RetryWhen re-subscribe re-invokes it (fresh grain
+        // reference → fresh activation). Never Observable.FromAsync — see AsynchronousCalls.md.
+        return Observable.Defer(() => grainCall().ToObservable())
+            .RetryWhen(errors => errors
+                .Select((ex, i) => (Exception: ex, Attempt: i))
+                .SelectMany(t =>
+                {
+                    if (t.Attempt >= maxRetries || !IsTransientFailure(t.Exception))
+                        return Observable.Throw<long>(t.Exception);
+                    var d = delay(t.Attempt);
+                    RoutingGrainTrace.Write($"RoutingGrain.RouteMessage GRAIN_CALL_RETRY id={deliveryId} grainKey={grainKey} attempt={t.Attempt + 1} delayMs={d.TotalMilliseconds}");
+                    logger.LogDebug(t.Exception,
+                        "[ROUTE] Transient grain rejection delivering to {GrainKey} (likely mid-deactivation), attempt {Attempt}/{Max}, retrying in {Delay}ms",
+                        grainKey, t.Attempt + 1, maxRetries, d.TotalMilliseconds);
+                    return Observable.Timer(d, sch);
+                }));
+    }
+
+    /// <summary>
+    /// A failure that should be RETRIED because a later attempt is likely to succeed — chiefly an Orleans
+    /// rejection from a grain that is mid-<c>DeactivateOnIdle</c> ("invalid activation. Rejecting now"),
+    /// plus the usual transport-level timeouts. Mirrors <c>OrleansRoutingService.IsTransientFailure</c>.
+    /// </summary>
+    internal static bool IsTransientFailure(Exception ex) =>
+        ex is TimeoutException
+            or global::Orleans.Runtime.OrleansMessageRejectionException
+        || (ex.InnerException != null && IsTransientFailure(ex.InnerException));
 }
