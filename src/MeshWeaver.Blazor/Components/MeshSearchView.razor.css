@@ -73,6 +73,104 @@
     background: var(--neutral-fill-hover, #f0f0f0);
 }
 
+/* ----- Discreet view-options bar (group-by combobox + display menu) ----- */
+.mesh-search-viewbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    min-height: 28px;
+}
+
+.mesh-search-viewbar-spacer {
+    flex: 1;
+}
+
+.mesh-search-viewbar-field {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.mesh-search-viewbar-label {
+    font-size: 12px;
+    color: var(--neutral-foreground-hint, #666);
+}
+
+.mesh-search-groupby {
+    font-size: 13px;
+    padding: 3px 24px 3px 8px;
+    height: 28px;
+    border: 1px solid var(--neutral-stroke-rest, #d1d1d1);
+    border-radius: 4px;
+    background: var(--neutral-layer-1, #fff);
+    color: var(--neutral-foreground-rest);
+    cursor: pointer;
+}
+
+.mesh-search-groupby:hover {
+    border-color: var(--accent-fill-rest, #0078d4);
+}
+
+.mesh-search-viewbar-menu-wrap {
+    position: relative;
+}
+
+.mesh-search-viewbar-menu-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    height: 28px;
+    width: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--neutral-foreground-rest);
+    opacity: 0.6;
+}
+
+.mesh-search-viewbar-menu-btn:hover {
+    opacity: 1;
+    background: var(--neutral-fill-hover, #f0f0f0);
+    border-color: var(--neutral-stroke-rest, #d1d1d1);
+}
+
+.mesh-search-viewbar-menu {
+    position: absolute;
+    top: 32px;
+    right: 0;
+    z-index: 20;
+    min-width: 160px;
+    padding: 6px;
+    background: var(--neutral-layer-1, #fff);
+    border: 1px solid var(--neutral-stroke-rest, #d1d1d1);
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.mesh-search-viewbar-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    font-size: 13px;
+    color: var(--neutral-foreground-rest);
+    cursor: pointer;
+}
+
+.mesh-search-viewbar-toggle:hover {
+    background: var(--neutral-fill-hover, #f0f0f0);
+}
+
+.mesh-search-viewbar-toggle input {
+    cursor: pointer;
+}
+
 .mesh-search-options-panel {
     margin-bottom: 12px;
     padding: 10px 14px;

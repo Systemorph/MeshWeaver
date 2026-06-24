@@ -61,6 +61,41 @@
         </div>
     }
 
+    @if (BoundShowViewOptions && SelectorEligible)
+    {
+        <div class="mesh-search-viewbar">
+            <label class="mesh-search-viewbar-field">
+                <span class="mesh-search-viewbar-label">Group by</span>
+                <select class="mesh-search-groupby" @bind="GroupBySelection">
+                    @foreach (var opt in GroupByOptions)
+                    {
+                        <option value="@opt.Value">@opt.Label</option>
+                    }
+                </select>
+            </label>
+            <div class="mesh-search-viewbar-spacer"></div>
+            <div class="mesh-search-viewbar-menu-wrap">
+                <button type="button" class="mesh-search-viewbar-menu-btn" title="Display options"
+                        @onclick="ToggleViewMenu">
+                    <FluentIcon Value="@(new Icons.Regular.Size16.Options())" />
+                </button>
+                @if (_showViewMenu)
+                {
+                    <div class="mesh-search-viewbar-menu">
+                        <label class="mesh-search-viewbar-toggle">
+                            <input type="checkbox" checked="@BoundShowSearchBox" @onchange="ToggleShowSearchBox" />
+                            <span>Search bar</span>
+                        </label>
+                        <label class="mesh-search-viewbar-toggle">
+                            <input type="checkbox" checked="@EffectiveShowCounts" @onchange="ToggleShowCounts" />
+                            <span>Section counts</span>
+                        </label>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+
     <div class="mesh-search-results" tabindex="0"
          @onkeydown="OnResultsKeyDown"
          @onkeydown:stopPropagation="true"
@@ -167,7 +202,7 @@
             {
                 var isCollapsed = _collapsedGroups.Contains(group.GroupKey);
                 var showCollapsible = (BoundSections?.Collapsible ?? true) && !skipHeaders;
-                var showCounts = BoundSections?.ShowCounts ?? true;
+                var showCounts = EffectiveShowCounts;
                 var headerLabel = showCounts ? $"{group.Label} ({group.TotalCount})" : group.Label;
                 var groupKey = group.GroupKey;
 
@@ -375,7 +410,7 @@
     {
         var folders = items.OfType<NamespaceTreeFolder>().ToList();
         var leaves = items.OfType<NamespaceTreeLeaf>().ToList();
-        var showCounts = BoundSections?.ShowCounts ?? true;
+        var showCounts = EffectiveShowCounts;
 
         @if (lazy)
         {

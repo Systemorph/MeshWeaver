@@ -45,6 +45,8 @@
             .WithPlaceholder("Search... (e.g. nodeType:Thread, namespace:ACME scope:descendants)")
             .WithSectionCounts(true)
             .WithCollapsibleSections(true)
+            .WithMaxColumns(4)
+            .WithViewOptions(true)
             .WithItemLimit(Limit ?? 50);
 
         var hiddenQuery = HiddenQueries != null
@@ -59,8 +61,15 @@
         var renderMode = Mode?.ToLowerInvariant() switch
         {
             "flat" => MeshSearchRenderMode.Flat,
+            "grouped" => MeshSearchRenderMode.Grouped,
             "hierarchical" => MeshSearchRenderMode.Hierarchical,
-            _ => MeshSearchRenderMode.Grouped
+            "namespacetree" => MeshSearchRenderMode.NamespaceTree,
+            "graphnavigator" => MeshSearchRenderMode.GraphNavigator,
+            // No explicit mode → google-like flat relevance list, unless the caller asked
+            // to group by a property (e.g. the top-bar links use ?groupBy=Namespace).
+            _ => string.IsNullOrWhiteSpace(GroupBy)
+                ? MeshSearchRenderMode.Flat
+                : MeshSearchRenderMode.Grouped
         };
         control = control.WithRenderMode(renderMode);
 

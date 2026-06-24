@@ -45,6 +45,24 @@ public partial class MeshSearchView : IDisposable
     private string _editableHiddenQuery = "";
     private string? _overriddenHiddenQuery;
 
+    // ----- Discreet view-options bar (group-by combobox + show/hide menu) -----
+    // null  ⇒ no selector choice yet → derive from the ViewModel's render mode.
+    // ""    ⇒ None (Flat, relevance order). Non-empty ⇒ group by that property (Grouped mode).
+    private string? _viewGroupBy;
+    private bool _showViewMenu;
+    // Runtime show/hide overrides from the display menu (null ⇒ use the ViewModel value).
+    private bool? _showSearchBoxOverride;
+    private bool? _showCountsOverride;
+
+    // Immutable constant lookup — the grouping options offered by the combobox. Empty value = None.
+    private static readonly (string Value, string Label)[] GroupByOptions =
+    {
+        ("", "None"),
+        ("NodeType", "Type"),
+        ("Namespace", "Namespace"),
+        ("Category", "Category"),
+    };
+
     // ----- Delete affordance + keyboard navigation state -----
     // Per-node delete permission (canonical hub.CheckPermission(path, Permission.Delete) snapshot).
     // Absent / false ⇒ no trash affordance for that path (fail-closed).
@@ -99,6 +117,8 @@ public partial class MeshSearchView : IDisposable
     {
         get
         {
+            // Runtime override from the display-options menu wins over the ViewModel.
+            if (_showSearchBoxOverride is bool ov) return ov;
             if (ViewModel?.ShowSearchBox is bool show) return show;
             if (ViewModel?.ShowSearchBox is JsonElement je)
             {
@@ -173,6 +193,91 @@ public partial class MeshSearchView : IDisposable
     // Config objects
     private SectionConfig? BoundSections => ViewModel?.Sections;
     private GridConfig BoundGrid => ViewModel?.Grid ?? new GridConfig();
+
+    // ----- View-options bar -----
+
+    /// <summary>Opt-in: render the discreet group-by combobox + display menu above the results.</summary>
+    private bool BoundShowViewOptions
+    {
+        get
+        {
+            if (ViewModel?.ShowViewOptions is bool b) return b;
+            if (ViewModel?.ShowViewOptions is JsonElement je)
+                return je.ValueKind == JsonValueKind.True;
+            return false;
+        }
+    }
+
+    /// <summary>The combobox only toggles Flat ↔ Grouped; the tree / navigator modes manage their
+    /// own browse surface, so the selector is hidden there.</summary>
+    private bool SelectorEligible =>
+        BoundRenderMode is MeshSearchRenderMode.Flat or MeshSearchRenderMode.Grouped;
+
+    /// <summary>
+    /// The render mode after applying the combobox choice: None ⇒ Flat, a property ⇒ Grouped.
+    /// Falls back to the ViewModel's render mode when the user hasn't touched the selector
+    /// (or when the mode isn't selector-eligible).
+    /// </summary>
+    private MeshSearchRenderMode EffectiveRenderMode
+    {
+        get
+        {
+            if (!SelectorEligible || _viewGroupBy is null)
+                return BoundRenderMode;
+            return string.IsNullOrEmpty(_viewGroupBy)
+                ? MeshSearchRenderMode.Flat
+                : MeshSearchRenderMode.Grouped;
+        }
+    }
+
+    /// <summary>The property to group by in Grouped mode — combobox choice first, then the ViewModel,
+    /// then NodeType as the default bucket.</summary>
+    private string EffectiveGroupBy
+    {
+        get
+        {
+            if (!string.IsNullOrEmpty(_viewGroupBy)) return _viewGroupBy!;
+            var configured = ViewModel?.Grouping?.GroupByProperty;
+            return string.IsNullOrEmpty(configured) ? "NodeType" : configured!;
+        }
+    }
+
+    /// <summary>Two-way bound value of the group-by combobox. Setting it re-groups in place
+    /// (no re-query — the same nodes are re-bucketed).</summary>
+    private string GroupBySelection
+    {
+        get
+        {
+            if (_viewGroupBy is not null) return _viewGroupBy;
+            if (BoundRenderMode == MeshSearchRenderMode.Grouped)
+                return ViewModel?.Grouping?.GroupByProperty ?? "NodeType";
+            return ""; // Flat ⇒ None
+        }
+        set
+        {
+            _viewGroupBy = value ?? "";
+            // Switching grouping shouldn't leave everything collapsed from a previous grouping.
+            _collapsedGroups.Clear();
+            if (ViewModel != null && !IsPrecomputedMode)
+                _computedGroups = ProcessResults(_nodes);
+        }
+    }
+
+    /// <summary>Section counts after applying the display-menu override.</summary>
+    private bool EffectiveShowCounts =>
+        _showCountsOverride ?? (BoundSections?.ShowCounts ?? true);
+
+    private void ToggleViewMenu() => _showViewMenu = !_showViewMenu;
+
+    private void ToggleShowSearchBox(ChangeEventArgs e) =>
+        _showSearchBoxOverride = e.Value is bool b
+            ? b
+            : bool.TryParse(e.Value?.ToString(), out var p) && p;
+
+    private void ToggleShowCounts(ChangeEventArgs e) =>
+        _showCountsOverride = e.Value is bool b
+            ? b
+            : bool.TryParse(e.Value?.ToString(), out var p) && p;
 
     /// <summary>
     /// "Show all" href — auto-generated from the query when ItemLimit is set.
@@ -485,15 +590,40 @@ public partial class MeshSearchView : IDisposable
 
     private GroupedSearchResult ProcessResults(List<MeshNode> nodes)
     {
-        var grouping = ViewModel?.Grouping;
         var sections = ViewModel?.Sections;
         var sorting = ViewModel?.Sorting;
 
         var sortedNodes = ApplySorting(nodes, sorting);
 
-        var groupByProperty = grouping?.GroupByProperty;
-        if (string.IsNullOrEmpty(groupByProperty))
-            groupByProperty = "NodeType";
+        // Flat (the default for the /search page): a single google-like list ordered by
+        // relevance — NO NodeType bucketing. The query aggregator already emits the Initial
+        // frame sorted by Score desc and ApplySorting preserves that order, so this one group
+        // is the relevance ranking. groups.Count == 1 ⇒ the view skips the header and renders
+        // a single card grid.
+        if (EffectiveRenderMode == MeshSearchRenderMode.Flat)
+        {
+            var flatItems = sections?.ItemLimit is int flim && flim > 0
+                ? sortedNodes.Take(flim).ToList()
+                : sortedNodes;
+            return new GroupedSearchResult
+            {
+                Groups = new List<SearchResultGroup>
+                {
+                    new()
+                    {
+                        GroupKey = "",
+                        Label = "",
+                        Order = 0,
+                        IsExpanded = true,
+                        Items = flatItems.Cast<object>().ToList(),
+                        TotalCount = sortedNodes.Count
+                    }
+                },
+                TotalItems = sortedNodes.Count
+            };
+        }
+
+        var groupByProperty = EffectiveGroupBy;
 
         var groups = sortedNodes
             // When grouping by Category, fall back to NodeType for nodes that don't
@@ -551,6 +681,12 @@ public partial class MeshSearchView : IDisposable
             // (e.g. source:accessed sort:LastModified-desc should keep access-time order).
             var query = BuildFullQuery();
             if (query.Contains("sort:", StringComparison.OrdinalIgnoreCase))
+                return nodes;
+            // Flat results for a text query arrive already ranked by relevance (Score desc,
+            // set by the query aggregator's ClipMergedInitial). Keep that ranking instead of
+            // re-sorting by Order/Name, which would throw the relevance away.
+            if (EffectiveRenderMode == MeshSearchRenderMode.Flat
+                && !string.IsNullOrWhiteSpace(_currentValue))
                 return nodes;
             return nodes.OrderBy(n => n.Order).ThenBy(n => n.Name).ToList();
         }
