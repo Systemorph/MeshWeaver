@@ -1,11 +1,14 @@
 using System;
+using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -132,4 +135,90 @@ public class OrleansBrokenNodeTypeAccessTest(ITestOutputHelper output)
         failureException.Failure.NodeTypePath.Should().Be(typePath,
             "the NACK must name the broken NodeType so the caller can act on it");
     }
+
+    /// <summary>
+    /// 🚨 The GUI path: opening an instance of a NON-COMPILING NodeType subscribes to its layout area
+    /// (<c>GetRemoteStream&lt;JsonElement, LayoutAreaReference&gt;</c> — the same SubscribeRequest the
+    /// portal issues). It MUST surface a terminal signal within budget — an <c>OnError</c> carrying the
+    /// compilation failure, or an error-overlay data emission — and NEVER spin forever on
+    /// "Subscribing to {path}…" (the atioz 2026-06 wedge: a non-compiling NodeType under
+    /// <c>AgenticPension/Statement</c>). The bounded <c>Timeout</c> turns a wedge into a loud
+    /// <see cref="TimeoutException"/> (RED) while the bug is live; a surfaced compile error is GREEN.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task Subscribe_ToLayoutAreaOf_NonCompilingNodeTypeInstance_SurfacesError_NotWedge()
+    {
+        var ct = new CancellationTokenSource(110.Seconds()).Token;
+        var client = GetClient($"broken-sub-{Guid.NewGuid():N}");
+
+        var typeId = $"OrleansBrokenSub{Guid.NewGuid():N}";
+        var typePath = $"type/{typeId}";
+
+        var meshService = SiloMesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await meshService.CreateNode(MeshNode.FromPath(typePath) with
+        {
+            Name = typeId,
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Description = "Deliberately non-compiling NodeType (Orleans subscribe wedge).",
+                Configuration = "config => this is not valid C# at all ((("
+            }
+        }).FirstAsync().ToTask(ct);
+
+        await SiloMesh.GetWorkspace().GetMeshNodeStream(typePath)
+            .Where(n => n?.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Error)
+            .FirstAsync()
+            .Timeout(90.Seconds())
+            .ToTask(ct);
+        Output.WriteLine("NodeType compile settled at Error.");
+
+        var instancePath = $"{typePath}/broken-sub-instance";
+        await meshService.CreateNode(MeshNode.FromPath(instancePath) with
+        {
+            Name = "broken-sub-instance",
+            NodeType = typePath,
+            State = MeshNodeState.Active
+        }).FirstAsync().ToTask(ct);
+        Output.WriteLine("Instance created.");
+
+        // THE GUI PATH — subscribe to a layout area on the broken instance.
+        var workspace = client.GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(instancePath), new LayoutAreaReference("Overview"));
+
+        // The COMPILE ERROR must actually SURFACE into the Overview area: either an OnError carrying a
+        // CompilationFailed DeliveryFailure, or a data emission whose rendered content includes the
+        // compilation-error overlay (BuildCompilationErrorMarkdown's guidance text). Progress
+        // placeholders ("Building layout…", "Rendering Overview… awaiting first data") and the empty
+        // $Menu area do NOT count — only the actual error content does. While the wedge is live the
+        // Overview never renders the overlay → the bounded Timeout makes the hang a loud
+        // TimeoutException (RED). GREEN = the compile error is visible on the page.
+        var notification = await stream
+            .Materialize()
+            .Where(n => n.Kind == NotificationKind.OnError
+                || (n.Kind == NotificationKind.OnNext && RendersCompilationError(n.Value.Value)))
+            .FirstAsync()
+            .Timeout(45.Seconds())
+            .ToTask(ct);
+
+        Output.WriteLine($"Notification: {notification.Kind} " +
+            (notification.Kind == NotificationKind.OnError
+                ? notification.Exception!.Message
+                : "compile-error overlay rendered"));
+
+        if (notification.Kind == NotificationKind.OnError)
+            notification.Exception.Should().BeOfType<DeliveryFailureException>()
+                .Which.Failure.ErrorType.Should().Be(ErrorType.CompilationFailed);
+        else
+            notification.Kind.Should().Be(NotificationKind.OnNext); // content already asserted by the filter
+    }
+
+    /// <summary>True when the layout-area EntityStore has rendered the compilation-error overlay —
+    /// i.e. the <c>BuildCompilationErrorMarkdown</c> guidance text is present in the serialized store,
+    /// not merely some unrelated area (the empty <c>$Menu</c>) or a progress placeholder.</summary>
+    private static bool RendersCompilationError(JsonElement entityStore) =>
+        entityStore.ValueKind == JsonValueKind.Object
+        && entityStore.GetRawText().Contains("Fix the source code", StringComparison.Ordinal);
 }
