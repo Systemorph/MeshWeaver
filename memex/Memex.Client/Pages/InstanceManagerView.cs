@@ -78,20 +78,30 @@ public sealed class InstanceManagerView : ContentView
         {
             var inst = instance;
 
-            var open = new Button { Text = inst.Name, HorizontalOptions = LayoutOptions.Fill };
+            var open = new Button
+            {
+                Text = inst.IsLocal ? $"{inst.Name}  (this device)" : inst.Name,
+                HorizontalOptions = LayoutOptions.Fill,
+            };
             open.Clicked += (_, _) => OnOpen?.Invoke(inst);
-
-            var del = new Button { Text = "✕", WidthRequest = 44 };
-            del.Clicked += (_, _) => { _store.Remove(inst); Refresh(); };
 
             var row = new Grid { ColumnSpacing = 8, ColumnDefinitions = { new(GridLength.Star), new(GridLength.Auto) } };
             row.Add(open, 0);
-            row.Add(del, 1);
+
+            // The Local (in-process) mesh is the app's own — not removable; remote instances get a ✕.
+            if (!inst.IsLocal)
+            {
+                var del = new Button { Text = "✕", WidthRequest = 44 };
+                del.Clicked += (_, _) => { _store.Remove(inst); Refresh(); };
+                row.Add(del, 1);
+            }
 
             _list.Add(row);
             _list.Add(new Label
             {
-                Text = inst.IsAuthenticated ? inst.Url : $"{inst.Url}  (not signed in)",
+                Text = inst.IsLocal
+                    ? "in-process · monolith mesh on SQLite (default)"
+                    : inst.IsAuthenticated ? inst.Url : $"{inst.Url}  (not signed in)",
                 FontSize = 11,
                 TextColor = Colors.Gray
             });

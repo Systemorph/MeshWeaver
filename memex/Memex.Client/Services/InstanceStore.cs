@@ -9,7 +9,13 @@ public sealed class MemexInstance
     public string Name { get; set; } = "";
     public string Url { get; set; } = "";
     public string? Token { get; set; }
-    public bool IsAuthenticated => !string.IsNullOrEmpty(Token);
+
+    /// <summary>True for THIS app's own in-process monolith mesh on SQLite (the default instance — no URL,
+    /// no sign-in; rendered natively against the local hub). False for remote (HTTP) memex instances.</summary>
+    public bool IsLocal { get; set; }
+
+    /// <summary>Local is always ready; a remote instance needs an OAuth-minted token.</summary>
+    public bool IsAuthenticated => IsLocal || !string.IsNullOrEmpty(Token);
 }
 
 /// <summary>
@@ -22,10 +28,16 @@ public sealed class InstanceStore
     private const string Key = "memex.instances";
     private const string SeededKey = "memex.instances.seeded";
 
-    /// <summary>The public, shared memex — seeded as the default instance on first launch.</summary>
+    /// <summary>Display name of the default in-process monolith/SQLite instance.</summary>
+    public const string LocalName = "Local";
+
+    /// <summary>The public, shared memex — seeded as an additional instance on first launch.</summary>
     public const string PublicMemexUrl = "https://memex.meshweaver.cloud";
 
     public List<MemexInstance> Instances { get; private set; } = new();
+
+    /// <summary>The default in-process monolith/SQLite mesh — always present, always first.</summary>
+    public MemexInstance Local => Instances.First(i => i.IsLocal);
 
     public InstanceStore() => Load();
 
@@ -36,12 +48,22 @@ public sealed class InstanceStore
             ? new()
             : JsonSerializer.Deserialize<List<MemexInstance>>(json) ?? new();
 
-        // One-time seed of the public memex so the list isn't empty on first launch. Guarded by a
-        // flag so removing it doesn't bring it back on the next start.
+        // The app's OWN in-process monolith mesh on SQLite is ALWAYS present as the default "Local"
+        // instance (no URL, no sign-in — it IS this app's mesh), and always first. Inserted here so it
+        // exists on every launch (incl. older saved lists that predate it) and after the user removes
+        // everything else. The portal renders against it by default.
+        if (!Instances.Any(i => i.IsLocal))
+        {
+            Instances.Insert(0, new MemexInstance { Name = LocalName, IsLocal = true });
+            Save();
+        }
+
+        // One-time seed of the public memex as an additional, connectable instance. Guarded by a flag so
+        // removing it doesn't bring it back on the next start.
         if (!Preferences.Default.Get(SeededKey, false))
         {
             Preferences.Default.Set(SeededKey, true);
-            if (Instances.Count == 0)
+            if (!Instances.Any(i => i.Url == PublicMemexUrl))
             {
                 Instances.Add(new MemexInstance { Name = "memex", Url = PublicMemexUrl });
                 Save();
@@ -67,6 +89,7 @@ public sealed class InstanceStore
 
     public void Remove(MemexInstance inst)
     {
+        if (inst.IsLocal) return;   // the in-process Local mesh is the app's own — never removable.
         Instances.Remove(inst);
         Save();
     }
