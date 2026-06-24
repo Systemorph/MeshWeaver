@@ -29,7 +29,7 @@ public record PostOptions(Address Sender)
             // A response IS attributed to the caller who made the request —
             // not to the hub that's now generating it. Without this, every
             // handler that posts via `o.ResponseFor(request)` had to manually
-            // re-stamp the user identity, and most didn't — Prod App Insights
+            // re-stamp the user identity, and most didn't — prod logs (Loki)
             // (2026-05-21) showed dozens of "hub=Thread, message=GetDataResponse
             // posted with no AccessContext" warnings + PostPipeline fail-closed
             // dropping them. The request's AccessContext is the authoritative

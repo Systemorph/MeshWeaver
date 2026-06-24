@@ -130,7 +130,7 @@ internal static class NodeTypeCompilationHelpers
         // to be on the inbound delivery — typically NOT a user with Create on
         // the partition. The kickoff therefore drove an endless "try to create
         // activity → denied → inline fallback → next activation reruns" loop
-        // visible in App Insights as a steady stream of "lacks Create" denials.
+        // visible in Loki as a steady stream of "lacks Create" denials.
         //
         // Compile is now an EXPLICITLY user-triggered operation:
         //   - User clicks the Compile button in NodeType's Overview panel

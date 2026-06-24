@@ -86,7 +86,7 @@ public static class GitHubConnectEndpoints
             // Recover the originating page (and CSRF state) from the cookie FIRST, so every failure
             // below redirects the user BACK to the GitHub Sync tab WITH a visible reason — never a
             // silent bounce to the home page. (Errors are also logged at Warning so they surface in
-            // Loki / App Insights, not just the GUI.)
+            // Loki, not just the GUI.)
             string cookieState = "", returnPath = "/";
             if (http.Request.Cookies.TryGetValue(StateCookieName, out var cookie) && !string.IsNullOrEmpty(cookie))
             {

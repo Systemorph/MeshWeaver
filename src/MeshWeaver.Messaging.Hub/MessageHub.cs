@@ -632,7 +632,7 @@ public sealed class MessageHub : IMessageHub
 
     /// <summary>
     /// Threshold above which per-message dispatch latency is reported at
-    /// <see cref="LogLevel.Information"/> so it surfaces in App Insights without
+    /// <see cref="LogLevel.Information"/> so it surfaces in Grafana/Loki without
     /// LogLevel.Trace flooding. Tuned so chat / layout / routing hops only log
     /// when something is genuinely slow.
     /// </summary>

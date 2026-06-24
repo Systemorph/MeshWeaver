@@ -434,9 +434,10 @@ you need named, centrally-managed shares.
 ## Observability — OpenTelemetry across the cluster → Azure Files archive
 
 A single **OpenTelemetry Collector DaemonSet** captures telemetry for the whole
-cluster and archives it to a mounted **Azure Files** share — no per-GB App
-Insights ingest. (This repo bills App Insights per ingest, so an in-cluster file
-archive is the cost-conscious default for a self-hosted deployment.)
+cluster and archives it to a mounted **Azure Files** share — no per-GB
+managed-telemetry ingest cost. (A self-hosted in-cluster file archive is the
+cost-conscious default for a self-hosted deployment, avoiding the per-GB ingest
+charges of a managed PaaS observability service.)
 
 ```
   every node:                                            Azure Files (RWX)
@@ -514,8 +515,8 @@ az storage file download-batch \
 - **Rotation** is per-node-file: 100 MB × 10 backups ⇒ ~1 GB/node retained, then
   oldest rolls off. Bump `max_backups` / the `otel-logs` PVC size for longer
   retention; add an Azure Files lifecycle/cleanup CronJob for time-based pruning.
-- **Cost**: a flat Azure Files share (≈€0.06/GB-month Standard) vs. per-GB App
-  Insights ingest — the archive is the cheap default for self-hosting.
+- **Cost**: a flat Azure Files share (≈€0.06/GB-month Standard) vs. per-GB
+  managed-telemetry ingest — the archive is the cheap default for self-hosting.
 - **Azure Table storage has NO native OTel Collector exporter** — Azure **Files**
   (the `file` exporter over a mounted SMB share) is the chosen sink. For richer
   query/alerting at scale, swap the `file` exporter for either:

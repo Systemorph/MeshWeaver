@@ -219,7 +219,7 @@ internal static class NodeTypeEnrichmentHelpers
                 // root cause behind the operator-visible "compilation error"
                 // overlay: every per-instance hub of an unsettled NodeType
                 // logged nothing while clients saw "no Overview". Warning
-                // makes the cause visible in App Insights at production
+                // makes the cause visible in Grafana/Loki at production
                 // log levels.
                 logger?.LogWarning(ex,
                     "EnrichWithNodeType slow path for '{NodeType}' faulted ({ExceptionType}) — applying compilation-error overlay for '{InstancePath}'",

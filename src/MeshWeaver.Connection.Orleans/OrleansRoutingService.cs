@@ -127,7 +127,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
 
     /// <summary>
     /// Threshold above which a cross-grain Orleans dispatch is reported at
-    /// <see cref="LogLevel.Information"/> so it shows up in App Insights without
+    /// <see cref="LogLevel.Information"/> so it shows up in Grafana/Loki without
     /// having to enable trace logging in prod. Tuned for "user perceives lag"
     /// — sub-second hops stay quiet.
     /// </summary>

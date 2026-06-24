@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 using MeshWeaver.Layout;
 
 namespace MeshWeaver.Mesh;
