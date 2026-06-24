@@ -4,6 +4,7 @@ using Memex.Client.Services;
 using Memex.Client.Voice;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
+using MeshWeaver.Layout;
 using MeshWeaver.Maui;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -94,7 +95,13 @@ public static class MauiProgram
             // AspNetCore.App, so the build targets maccatalyst/iOS.
             .ConfigureHub(hub => hub
                 .AddMaui()
-                .AddMeshTypes())
+                .AddMeshTypes()
+                // A demo local area rendered natively by LocalAreaPage (proves the MAUI view pack).
+                .AddLayout(layout => layout.WithView("home", (_, _) => Observable.Return<MeshWeaver.Layout.UiControl>(
+                    MeshWeaver.Layout.Controls.Stack
+                        .WithView(MeshWeaver.Layout.Controls.Label("Welcome to Memex"), "title")
+                        .WithView(MeshWeaver.Layout.Controls.Markdown(
+                            "This portal is rendered **natively** with MAUI — no Blazor, no WebView."), "intro")))))
             .ConfigureServices(s => s.AddFileSystemAssemblyStore(Path.Combine(appData, "assembly-store")));
 
         builder.Services.AddSingleton(meshBuilder.BuildHub);
@@ -131,6 +138,7 @@ public static class MauiProgram
         builder.Services.AddSingleton<InstanceStore>();
         builder.Services.AddTransient<InstanceManagerPage>();
         builder.Services.AddTransient<VoicePage>();
+        builder.Services.AddTransient<LocalAreaPage>();
 
         // Minimalistic on-device logging: a size-capped rolling file + in-memory ring buffer — bounded
         // disk + memory, no dependencies, phone-safe. The provider is also a singleton (FileLoggerProvider)
