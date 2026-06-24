@@ -1340,20 +1340,35 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
                 if (!string.IsNullOrEmpty(picker.SearchTerm))
                 {
-                    // Exact name/last-segment match → switch immediately, no visible picker.
-                    var exact = nodes.FirstOrDefault(n => PickerNodeMatches(n, picker.SearchTerm, exact: true));
+                    // Exact name/last-segment match on a SELECTABLE node → switch immediately.
+                    // Group-title nodes (a model provider) are never a selection target.
+                    var exact = nodes.FirstOrDefault(n =>
+                        !IsPickerHeaderNode(n) && PickerNodeMatches(n, picker.SearchTerm, exact: true));
                     if (exact != null)
                     {
                         SelectFromPicker(picker, exact);
                         return;
                     }
-                    // Otherwise pre-filter the list to the term.
-                    nodes = nodes.Where(n => PickerNodeMatches(n, picker.SearchTerm!, exact: false)).ToList();
+                    // Pre-filter selectable nodes to the term, keeping each surviving node's group
+                    // title (a provider whose models all filtered out drops together with them).
+                    var keepGroups = nodes
+                        .Where(n => !IsPickerHeaderNode(n) && PickerNodeMatches(n, picker.SearchTerm!, exact: false))
+                        .Select(n => ParentPath(n.Path))
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    nodes = nodes.Where(n => IsPickerHeaderNode(n)
+                        ? keepGroups.Contains(n.Path)
+                        : PickerNodeMatches(n, picker.SearchTerm!, exact: false)).ToList();
                 }
+
+                // Group selectable nodes under their non-selectable title (model providers → their
+                // nested models). No titles present (the /agent, /harness pickers) → the flat
+                // Order/Name list above stays as-is.
+                if (nodes.Any(IsPickerHeaderNode))
+                    nodes = ArrangePickerGroups(nodes);
 
                 pendingPicker = picker;
                 pickerNodes = nodes;
-                _pickerHighlight = 0;
+                _pickerHighlight = FirstSelectablePickerIndex(); // skip a leading group title
                 _focusPickerOnRender = true; // move focus off Monaco onto the widget so ↑/↓ reach it
                 lastCommandStatus = null;
                 StateHasChanged();
@@ -1373,15 +1388,16 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         switch (e.Key)
         {
             case "ArrowDown":
-                _pickerHighlight = (_pickerHighlight + 1) % pickerNodes.Count;
+                _pickerHighlight = NextSelectablePickerIndex(_pickerHighlight, +1);
                 StateHasChanged();
                 break;
             case "ArrowUp":
-                _pickerHighlight = (_pickerHighlight - 1 + pickerNodes.Count) % pickerNodes.Count;
+                _pickerHighlight = NextSelectablePickerIndex(_pickerHighlight, -1);
                 StateHasChanged();
                 break;
             case "Enter":
-                if (_pickerHighlight >= 0 && _pickerHighlight < pickerNodes.Count)
+                if (_pickerHighlight >= 0 && _pickerHighlight < pickerNodes.Count
+                    && !IsPickerHeaderNode(pickerNodes[_pickerHighlight]))
                     SelectFromPicker(pendingPicker, pickerNodes[_pickerHighlight]);
                 break;
             case "Escape":
@@ -1397,6 +1413,63 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         return exact
             ? name.Equals(term, StringComparison.OrdinalIgnoreCase) || seg.Equals(term, StringComparison.OrdinalIgnoreCase)
             : name.Contains(term, StringComparison.OrdinalIgnoreCase) || seg.Contains(term, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// A picker node that is a non-selectable GROUP TITLE rather than a selection target —
+    /// currently a model provider (<c>ModelProvider</c>): the /model picker lists each provider
+    /// as a heading with its models underneath. Other pickers (/agent, /harness) have no such
+    /// nodes, so every entry stays selectable. Selecting a provider would write a provider PATH
+    /// into the model field (a non-model selection) — exactly the bug this prevents.
+    /// </summary>
+    private static bool IsPickerHeaderNode(MeshNode node) =>
+        string.Equals(node.NodeType, ModelProviderNodeType.NodeType, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Parent path (everything before the last '/') — a nested model's provider path.</summary>
+    private static string ParentPath(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return "";
+        var i = path.LastIndexOf('/');
+        return i <= 0 ? path : path[..i];
+    }
+
+    /// <summary>
+    /// Orders selectable nodes under their group title. A title's path is the group key; a nested
+    /// model's key is its parent path (== its provider's path), so each title is immediately
+    /// followed by its own models (title first, then models by Order then Name).
+    /// </summary>
+    private static List<MeshNode> ArrangePickerGroups(List<MeshNode> nodes) =>
+        nodes
+            .OrderBy(n => IsPickerHeaderNode(n) ? n.Path : ParentPath(n.Path), StringComparer.OrdinalIgnoreCase)
+            .ThenBy(n => IsPickerHeaderNode(n) ? 0 : 1)
+            .ThenBy(n => n.Order ?? 0)
+            .ThenBy(n => n.Name ?? n.Id, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    /// <summary>First selectable (non-title) index, or -1 when the list is titles-only / empty.</summary>
+    private int FirstSelectablePickerIndex()
+    {
+        for (var i = 0; i < pickerNodes.Count; i++)
+            if (!IsPickerHeaderNode(pickerNodes[i]))
+                return i;
+        return -1;
+    }
+
+    /// <summary>
+    /// Next selectable index from <paramref name="from"/> in direction <paramref name="dir"/> (±1),
+    /// wrapping and skipping group titles. Returns <paramref name="from"/> when no other selectable
+    /// node exists.
+    /// </summary>
+    private int NextSelectablePickerIndex(int from, int dir)
+    {
+        if (pickerNodes.Count == 0) return -1;
+        for (var step = 1; step <= pickerNodes.Count; step++)
+        {
+            var i = ((from + dir * step) % pickerNodes.Count + pickerNodes.Count) % pickerNodes.Count;
+            if (!IsPickerHeaderNode(pickerNodes[i]))
+                return i;
+        }
+        return from;
     }
 
     /// <summary>Writes the selected node's PATH onto the picker's composer field and dismisses.</summary>

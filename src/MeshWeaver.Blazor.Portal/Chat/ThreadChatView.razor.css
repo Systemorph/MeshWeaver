@@ -585,6 +585,43 @@
     font-size: 0.85rem;
 }
 
+/* Non-selectable group title (e.g. a model provider): a quiet heading above its
+   selectable items. Not a button — no hover/cursor, dimmed + uppercase so it reads
+   as a section label rather than a choice. */
+.thread-chat-widget-group {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px 2px;
+    color: var(--neutral-foreground-hint);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    cursor: default;
+    user-select: none;
+}
+
+.thread-chat-widget-group:not(:first-child) {
+    margin-top: 4px;
+    border-top: 1px solid var(--neutral-stroke-divider-rest);
+}
+
+.thread-chat-widget-group-icon {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 auto;
+    opacity: 0.8;
+}
+
+.thread-chat-widget-group-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 /* Attachment chips moved below the send button — they're inputs to the
    next message, not state about the current one, so they belong at the
    bottom of the dialog where the user is actively composing. */

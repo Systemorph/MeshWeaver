@@ -469,32 +469,52 @@ else
                     @for (var i = 0; i < pickerNodes.Count; i++)
                     {
                         var node = pickerNodes[i];
-                        var isActive = i == _pickerHighlight;
-                        <button class="thread-chat-widget-item @(isActive ? "thread-chat-widget-item--active" : "")"
-                                @onclick="@(() => SelectFromPicker(picker, node))">
-                            @if (!string.IsNullOrEmpty(node.Icon))
-                            {
-                                @if (node.Icon.TrimStart().StartsWith("<"))
+                        @if (IsPickerHeaderNode(node))
+                        {
+                            @* Non-selectable group title (e.g. a model provider). Its models
+                               render as selectable items underneath. *@
+                            <div class="thread-chat-widget-group">
+                                @if (!string.IsNullOrEmpty(node.Icon) && !node.Icon.TrimStart().StartsWith("<"))
                                 {
-                                    <span class="thread-chat-widget-item-icon">@((MarkupString)node.Icon)</span>
+                                    <img class="thread-chat-widget-group-icon" src="@node.Icon" alt="" />
                                 }
-                                else
+                                <span class="thread-chat-widget-group-name">@(node.Name ?? LastSegment(node.Path))</span>
+                            </div>
+                        }
+                        else
+                        {
+                            var isActive = i == _pickerHighlight;
+                            <button class="thread-chat-widget-item @(isActive ? "thread-chat-widget-item--active" : "")"
+                                    @onclick="@(() => SelectFromPicker(picker, node))">
+                                @if (!string.IsNullOrEmpty(node.Icon))
                                 {
-                                    <img class="thread-chat-widget-item-icon" src="@node.Icon" alt="" />
+                                    @if (node.Icon.TrimStart().StartsWith("<"))
+                                    {
+                                        <span class="thread-chat-widget-item-icon">@((MarkupString)node.Icon)</span>
+                                    }
+                                    else
+                                    {
+                                        <img class="thread-chat-widget-item-icon" src="@node.Icon" alt="" />
+                                    }
                                 }
-                            }
-                            <span class="thread-chat-widget-item-text">
-                                <span class="thread-chat-widget-item-name">@(node.Name ?? node.Id)</span>
-                                @if (!string.IsNullOrEmpty(node.Description))
-                                {
-                                    <span class="thread-chat-widget-item-desc">@node.Description</span>
-                                }
-                            </span>
-                        </button>
+                                <span class="thread-chat-widget-item-text">
+                                    <span class="thread-chat-widget-item-name">@(node.Name ?? node.Id)</span>
+                                    @if (!string.IsNullOrEmpty(node.Description))
+                                    {
+                                        <span class="thread-chat-widget-item-desc">@node.Description</span>
+                                    }
+                                </span>
+                            </button>
+                        }
                     }
                     @if (pickerNodes.Count == 0)
                     {
                         <div class="thread-chat-widget-empty">Nothing to pick.</div>
+                    }
+                    else if (_pickerHighlight < 0)
+                    {
+                        @* Titles only, nothing selectable — e.g. providers present but no models. *@
+                        <div class="thread-chat-widget-empty">No models available to select.</div>
                     }
                 </div>
             </div>
