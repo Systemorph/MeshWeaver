@@ -418,16 +418,23 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>
-    /// Latest threads — shows the current user's threads across all partitions.
-    /// Filters by content.CreatedBy to find only threads created by this user.
+    /// Latest threads — the threads in the viewer's OWN partition. Scoped to the
+    /// partition (<paramref name="nodeOwnerId"/>) rather than fanning out across
+    /// every partition: the query reads "namespace startsWith {partition} AND
+    /// endsWith _Thread". A cross-partition <c>namespace:*/_Thread</c> fan-out
+    /// resolves to the <c>threads</c> satellite in EVERY searchable schema (a
+    /// UNION over all partitions) — slow, unbounded, and the kind of query that
+    /// can wedge the portal; staying on our own partition avoids that entirely.
     /// </summary>
     private static UiControl BuildLatestThreads(string nodePath, string nodeOwnerId)
     {
         return Controls.MeshSearch
             .WithTitle("Latest Threads")
-            // -content.status:Done hides threads the user explicitly marked
+            // {partition}/*_Thread → namespace ILIKE '{partition}/%_Thread': anchored to
+            // this partition (no sibling-partition bleed), ending in _Thread (the thread
+            // satellite). -content.status:Done hides threads the user explicitly marked
             // finished. Type `content.status:Done` in the search box to surface them.
-            .WithHiddenQuery($"nodeType:Thread namespace:*/_Thread content.createdBy:{nodeOwnerId} -content.status:Done sort:LastModified-desc")
+            .WithHiddenQuery($"nodeType:Thread namespace:{nodeOwnerId}/*_Thread -content.status:Done sort:LastModified-desc")
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithCollapsibleSections(false)
             .WithSectionCounts(false)
