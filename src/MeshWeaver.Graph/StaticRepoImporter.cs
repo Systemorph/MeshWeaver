@@ -170,10 +170,18 @@ public static class StaticRepoImporter
                 });
 
                 // Ensure a marker exists for every current source partition (idempotent upsert).
+                // 🚨 The marker is a NESTED bookkeeping node under Admin/_SourceOwnedCatalogs/{p}, NOT a
+                // partition root. It MUST NOT be a partition-owning NodeType (Space): a node whose type
+                // has OwnsPartition=true is a partition root and OwnsPartitionProvisioningValidator
+                // rejects it under any namespace ("A 'Space' owns its partition, so it must be top-level"
+                // — InvalidPath). With NodeType=Space every marker write was rejected (Agent, Skill,
+                // Provider, Doc, Harness), so the reconcile could never persist its ownership markers →
+                // previouslyOwned read back EMPTY every run. Use the plain Markdown content type (matches
+                // the MarkdownContent below, owns no partition) so the nested marker is valid.
                 var markers = currentSourcePartitions.Select(p =>
                     Upsert(hub, new MeshNode(p, SourceOwnedRegistryNamespace)
                     {
-                        NodeType = SpaceNodeTypeName,
+                        NodeType = MarkdownNodeTypeName,
                         Name = p,
                         State = MeshNodeState.Active,
                         Content = new MarkdownContent { Content = $"Source-owned catalog marker for `{p}`." }
@@ -291,10 +299,38 @@ public static class StaticRepoImporter
                 var existing = change.Items.FirstOrDefault();
                 if (existing?.Content is ActivityLog { Status: ActivityStatus.Succeeded })
                 {
+                    // 🚨 Self-heal the CRITICAL governance even when the content fingerprint matches and
+                    // we skip the bulk re-import. The partition ROOT + its access governance (the
+                    // read-only _Policy — e.g. the Harness/Agent/Skill/Provider PublicRead) MUST exist
+                    // on every boot: if they were dropped after a prior successful import (a
+                    // cross-partition prune, a manual delete, a botched migration), the content-skip
+                    // would otherwise leave the partition UNREADABLE FOREVER — the "user 'rbuergi' lacks
+                    // Read permission on 'harness'" composer denial, where the fingerprint says "done"
+                    // so the missing _Policy never comes back. EnsureRoot + the _Policy upsert are
+                    // idempotent (no-op when already present); best-effort so a self-heal hiccup can
+                    // never fail the import.
+                    var governance = nodes
+                        .Where(n => n.NodeType == "PartitionAccessPolicy"
+                                    || n.Segments.Skip(1).Any(seg => seg.StartsWith('_')))
+                        .ToArray();
                     logger?.LogInformation(
-                        "[StaticRepoImport] {Partition} already at {Fingerprint} — skipping.",
-                        source.Partition, fingerprint);
-                    return Observable.Return(new StaticRepoImportResult(source.Partition, fingerprint, "Skipped"));
+                        "[StaticRepoImport] {Partition} already at {Fingerprint} — content skipped; re-ensuring root + {Count} governance node(s).",
+                        source.Partition, fingerprint, governance.Length);
+                    return EnsureRoot(hub, source, root, activityPath, logger)
+                        .SelectMany(_ => governance.Length == 0
+                            ? Observable.Return(0)
+                            : governance
+                                .Select(g => Upsert(hub, Materialize(g))
+                                    .Catch<int, Exception>(_ => Observable.Return(0)))
+                                .ToObservable().Merge(BatchSize).Sum())
+                        .Select(_ => new StaticRepoImportResult(source.Partition, fingerprint, "Skipped"))
+                        .Catch<StaticRepoImportResult, Exception>(ex =>
+                        {
+                            logger?.LogWarning(ex,
+                                "[StaticRepoImport] {Partition}: governance self-heal failed (continuing skipped).",
+                                source.Partition);
+                            return Observable.Return(new StaticRepoImportResult(source.Partition, fingerprint, "Skipped"));
+                        });
                 }
 
                 var activityNode = new MeshNode(activityId, activityNamespace)
@@ -543,6 +579,10 @@ public static class StaticRepoImporter
 
     /// <summary>The <c>Space</c> node type — referenced by name to avoid a portal-assembly dependency.</summary>
     private const string SpaceNodeTypeName = "Space";
+
+    /// <summary>The <c>Markdown</c> node type — referenced by name; used for the source-owned-catalog
+    /// bookkeeping markers, which are NESTED nodes and so must NOT be a partition-owning type.</summary>
+    private const string MarkdownNodeTypeName = "Markdown";
 
     /// <summary>
     /// Provisions each partition's storage (PG schema + satellite tables) via the standard
