@@ -23,6 +23,13 @@ data:
   Graph__Storage__Type: "{{ .Values.config.memex_portal.Graph__Storage__Type }}"
   Graph__Storage__BasePath: "{{ .Values.config.memex_portal.Graph__Storage__BasePath }}"
   Mcp__BaseUrl: "{{ .Values.config.memex_portal.Mcp__BaseUrl }}"
+  # ---- Instance identity (tab title + favicon badge) — optional -------------
+  # When InstanceName is set, the browser tab title becomes that name and the
+  # favicon becomes a distinct colored badge (instance initial), so Local / Test /
+  # Prod tabs are obvious at a glance. Empty (prod) = default Memex branding.
+  # InstanceColor is the badge fill (hex, e.g. "#f59e0b"); empty = amber default.
+  Portal__InstanceName: "{{ .Values.config.memex_portal.Portal__InstanceName | default "" }}"
+  Portal__InstanceColor: "{{ .Values.config.memex_portal.Portal__InstanceColor | default "" }}"
   # ---- Embeddings (vector search + content indexing) — optional -------------
   # With Endpoint + ApiKey (secret, in secrets.yaml) set, the portal registers the embedding
   # provider: search-bar queries hit the HNSW vector index AND the content-indexing pipeline
