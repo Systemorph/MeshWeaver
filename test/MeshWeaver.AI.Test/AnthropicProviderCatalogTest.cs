@@ -1,6 +1,7 @@
 #pragma warning disable CS1591
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using MeshWeaver.AI;
 using MeshWeaver.AI.AzureFoundry;
@@ -21,8 +22,10 @@ namespace MeshWeaver.AI.Test;
 ///   <item><see cref="AddAnthropic"/> registers a single "Anthropic" BYO-key catalog source with the
 ///   direct <c>api.anthropic.com</c> endpoint and the current Claude model ids.</item>
 ///   <item><see cref="BuiltInLanguageModelProvider"/> materialises that source into a
-///   <c>ModelProvider</c> node + one key-less, public <c>LanguageModel</c> child per Claude id —
-///   the catalog the picker shows and the admin keys later (matching the mesh nodes created at
+///   <c>ModelProvider</c> node (always — so an admin can add a key) plus, ONCE a key is
+///   configured, one key-less public <c>LanguageModel</c> child per Claude id. A key-requiring
+///   provider seeds NO catalog models until a key exists, so the picker is never polluted with
+///   un-selectable phantom models (matching the mesh nodes created at
 ///   <c>{user}/_Memex/Anthropic</c>).</item>
 ///   <item>the <see cref="AzureClaudeChatClientAgentFactory"/> routes those ids (Supports), and
 ///   each id has a built-in price row so cost shows.</item>
@@ -61,35 +64,59 @@ public class AnthropicProviderCatalogTest : AITestBase
         src.EffectiveModelIds.Should().Equal(ExpectedClaudeModels);
     }
 
-    [Fact]
-    public void BuiltInCatalog_EmitsAnthropicProvider_AndOneKeylessLanguageModelPerClaudeId()
+    private static LanguageModelCatalogOptions OptsFor(LanguageModelCatalogSource src)
     {
-        // Drive the REAL Anthropic source (from AddAnthropic) through the seeder with an EMPTY
-        // config so no `Anthropic:Models` override applies → the code defaults are what we assert.
         var opts = new LanguageModelCatalogOptions();
-        opts.Add(AnthropicSource());
-        var nodes = new BuiltInLanguageModelProvider(new ConfigurationBuilder().Build(), opts)
-            .GetStaticNodes().ToList();
+        opts.Add(src);
+        return opts;
+    }
 
-        // Exactly one ModelProvider node for Anthropic, key-less (the admin sets the key later).
-        var providerNodes = nodes
+    [Fact]
+    public void BuiltInCatalog_EmitsAnthropicProvider_AndKeylessClaudeModels_OnlyOnceKeyed()
+    {
+        // Anthropic is a key-requiring (BYO-key) provider. Per the
+        // BuiltInLanguageModelProvider policy ("don't seed unusable models without a key"),
+        // it ALWAYS emits its ModelProvider node (so an admin can add a key), but its Claude
+        // catalog children are seeded ONLY once a key is configured — until then the picker
+        // is not polluted with un-selectable phantom models.
+        var src = AnthropicSource();
+
+        // 1. No key configured → provider node is emitted, but NO catalog children yet.
+        var keyless = new BuiltInLanguageModelProvider(new ConfigurationBuilder().Build(), OptsFor(src))
+            .GetStaticNodes().ToList();
+        keyless.Where(n => n.NodeType == ModelProviderNodeType.NodeType && n.Name == "Anthropic")
+            .Should().ContainSingle("the provider node is always emitted so an admin can add a key");
+        keyless.Where(n => n.NodeType == LanguageModelNodeType.NodeType
+                           && (n.Content as ModelDefinition)?.Provider == "Anthropic")
+            .Should().BeEmpty("a key-requiring provider seeds no catalog models until a key exists");
+
+        // 2. With a key configured → the full Claude catalog materialises as key-less, public
+        //    LanguageModel children (the factory resolves the key from the parent provider node).
+        var keyedConfig = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{src.SectionName}:ApiKey"] = "sk-test-key",
+            })
+            .Build();
+        var keyed = new BuiltInLanguageModelProvider(keyedConfig, OptsFor(src)).GetStaticNodes().ToList();
+
+        var providerNodes = keyed
             .Where(n => n.NodeType == ModelProviderNodeType.NodeType && n.Name == "Anthropic")
             .ToList();
         providerNodes.Should().ContainSingle();
         var cfg = (ModelProviderConfiguration)providerNodes[0].Content!;
         cfg.Provider.Should().Be("Anthropic");
         cfg.Endpoint.Should().Be("https://api.anthropic.com/v1/messages");
-        cfg.ApiKey.Should().BeNullOrEmpty("the catalog node is key-less — credentials are set later as mesh data");
 
-        // One LanguageModel child per Claude id, all pointing at the Anthropic provider, key-less.
-        var models = nodes
+        var models = keyed
             .Where(n => n.NodeType == LanguageModelNodeType.NodeType
                         && (n.Content as ModelDefinition)?.Provider == "Anthropic")
             .Select(n => (ModelDefinition)n.Content!)
             .ToList();
         models.Select(m => m.Id).OrderBy(x => x)
             .Should().Equal(ExpectedClaudeModels.OrderBy(x => x));
-        models.Should().OnlyContain(m => string.IsNullOrEmpty(m.ApiKeySecretRef));
+        models.Should().OnlyContain(m => string.IsNullOrEmpty(m.ApiKeySecretRef),
+            "LanguageModel children are public/key-less — the key lives only on the parent ModelProvider node");
     }
 
     [Fact]
