@@ -392,12 +392,21 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 hydrationSub = ((IObservable<MeshNode>)handle).Subscribe(synced);
             }
             // Storm-breaker bookkeeping: a lightweight second observer on the SAME
-            // ReplaySubject (opens NO additional upstream). First value ⇒ clear any
-            // negative-cache entry (the node resolved); terminal error ⇒ record the
-            // failure + backoff window via RecordNegative. Composed with hydrationSub
-            // so both tear down together on eviction / mesh disposal.
+            // ReplaySubject (opens NO additional upstream). A node that actually
+            // RESOLVED (non-null) ⇒ clear any negative-cache entry; terminal error ⇒
+            // record the failure + grow the backoff via RecordNegative. Composed with
+            // hydrationSub so both tear down together on eviction / mesh disposal.
+            //
+            // 🚨 Clear ONLY on a non-null resolution. A missing-node read can emit a
+            // transient null/empty snapshot BEFORE its NotFound OnError; counting that
+            // null as "resolved" wiped the negative entry every re-probe, so the next
+            // OnError's FailCount reset to 1 and the backoff never grew past the 2 s
+            // base — the path re-probed every ~2–4 s forever instead of decaying to the
+            // 5 min cap (the atioz `_Activity` / missing-node NotFound resubscribe storm
+            // that saturated the action block and tripped the liveness probe). A real
+            // resolution is a non-null node; nothing else clears the breaker.
             var bookkeeping = inner.AsObservable().Subscribe(
-                _node => _negative.TryRemove(p, out _),
+                node => { if (node is not null) _negative.TryRemove(p, out _); },
                 ex => RecordNegative(p, ex));
             var disposal = new System.Reactive.Disposables.CompositeDisposable(hydrationSub, bookkeeping);
             // Store the disposal on the Entry so the mesh hub's pre-Quiescing
