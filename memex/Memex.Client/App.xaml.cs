@@ -13,8 +13,10 @@ public partial class App : Application
         InitializeComponent();
     }
 
-    // Native MAUI shell: the instance manager is the landing page (no BlazorWebView). The in-process local
-    // portal renders natively via the MeshWeaver.Maui view pack (LayoutAreaView), wired into a page next wave.
+    // Native MAUI shell: a browser-like PortalShellPage (its own back/forward history + an instance switcher
+    // in the title bar) over a content frame. The in-process local portal renders natively via the
+    // MeshWeaver.Maui view pack (LayoutAreaView) — no BlazorWebView. The shell IS the navigator, so it's the
+    // window root directly (no NavigationPage wrapper).
     protected override Window CreateWindow(IActivationState? activationState)
-        => new Window(new NavigationPage(_services.GetRequiredService<InstanceManagerPage>())) { Title = "Memex" };
+        => new Window(_services.GetRequiredService<PortalShellPage>()) { Title = "Memex" };
 }

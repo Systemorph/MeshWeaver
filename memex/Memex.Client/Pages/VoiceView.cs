@@ -7,12 +7,13 @@ using Microsoft.Maui.Media;
 namespace Memex.Client.Pages;
 
 /// <summary>
-/// Native on-device voice: record → Whisper transcription (on the GPU where available) → if Apple
-/// Intelligence is available, an on-device reply is generated and spoken back. The native MAUI replacement
-/// for the old Blazor Voice page; uses the same services (<see cref="VoiceService"/>,
+/// Native on-device voice as a hostable <see cref="ContentView"/> (lives inside the browser-like
+/// <see cref="PortalShellPage"/> content frame): record → Whisper transcription (on the GPU where
+/// available) → if Apple Intelligence is available, an on-device reply is generated and spoken back in
+/// the detected language. Uses the same services (<see cref="VoiceService"/>,
 /// <see cref="AudioCaptureService"/>, <see cref="IOnDeviceChat"/>).
 /// </summary>
-public sealed class VoicePage : ContentPage
+public sealed class VoiceView : ContentView
 {
     private readonly AudioCaptureService _capture;
     private readonly VoiceService _voice;
@@ -25,12 +26,11 @@ public sealed class VoicePage : ContentPage
     private readonly Label _reply = new() { IsVisible = false, TextColor = Colors.RoyalBlue };
     private IDisposable? _sub;
 
-    public VoicePage(AudioCaptureService capture, VoiceService voice, IOnDeviceChat ai)
+    public VoiceView(AudioCaptureService capture, VoiceService voice, IOnDeviceChat ai)
     {
         _capture = capture;
         _voice = voice;
         _ai = ai;
-        Title = "Voice";
         _record.Clicked += OnRecordClicked;
 
         Content = new ScrollView
