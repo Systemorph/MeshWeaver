@@ -520,8 +520,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     boundModelPath = c.ModelName;
                     StateHasChanged();
                 }),
-                ex => Logger.LogDebug(ex,
-                    "[ThreadChat:{InstanceId}] composer projection errored for {Path}", _instanceId, path));
+                ex => SurfaceError(ex, "Loading the composer"));
         StateHasChanged();
     }
 
@@ -552,8 +551,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 node!, updated, Hub.JsonSerializerOptions, Logger);
         }).Subscribe(
             _ => { },
-            ex => Logger.LogDebug(ex,
-                "[ThreadChat:{InstanceId}] composer selection write failed for {Path}", _instanceId, _templatePath));
+            ex => SurfaceError(ex, "Saving your selection"));
     }
 
     /// <summary>
@@ -767,6 +765,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             {
                 if (_isDisposed) return;
                 Logger.LogWarning("[ThreadChat:{InstanceId}] Submit failed: {Error}", _instanceId, err);
+                // SURFACE the submit failure (modal) instead of just clearing the spinner — a silent
+                // reset is the "message vanished, no idea why" symptom.
+                Services.GetService<MeshWeaver.Blazor.Infrastructure.PortalErrorSink>()
+                    ?.Report($"Couldn't send your message: {err}");
                 showSubmissionProgress = false;
                 lastSubmittedText = null;
                 submissionHandler.ForceRelease();
