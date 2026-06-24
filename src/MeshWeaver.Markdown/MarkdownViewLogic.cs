@@ -7,6 +7,8 @@ using MeshWeaver.Kernel;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Markdown;
 
@@ -221,6 +223,7 @@ public static class MarkdownViewLogic
         var activityNamespace = string.IsNullOrEmpty(ownerPath)
             ? "_Activity"
             : $"{ownerPath}/_Activity";
+        var activityPath = $"{activityNamespace}/markdown-{kernelId}";
         var activityNode = new MeshNode($"markdown-{kernelId}", activityNamespace)
         {
             Name = $"Markdown view {kernelId[..Math.Min(8, kernelId.Length)]}",
@@ -235,15 +238,24 @@ public static class MarkdownViewLogic
             }
         };
 
-        meshService.CreateNode(activityNode).Subscribe(
-            _ => SubmitCode(senderHub, activityAddress, submissions),
-            _ =>
-            {
-                // Swallow — the activity didn't materialise, so SubmitCodeRequest
-                // would route to a non-existent grain. The caller (MarkdownView)
-                // has no UX for "kernel unavailable"; surface via logging upstream
-                // if needed.
-            });
+        var logger = senderHub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MarkdownExecution");
+
+        // Create the per-view Activity node, then WAIT until it is actually ROUTABLE before posting the
+        // submissions. CreateNode completing means the node is PERSISTED — NOT that its per-node Activity hub
+        // is registered with the router yet. Posting SubmitCodeRequest in that gap routes to a non-existent
+        // address ("No node found at …/_Activity/markdown-…"). The node's own stream is served BY that hub,
+        // so its first emission proves the hub is live and routable. The create/routing error is SURFACED,
+        // never swallowed (a swallowed kernel-unavailable was the old bug; see RoutingServiceBase NotFound).
+        meshService.CreateNode(activityNode)
+            .SelectMany(_ => senderHub.GetMeshNodeStream(activityPath)
+                .Where(node => node is not null)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(15)))
+            .Subscribe(
+                _ => SubmitCode(senderHub, activityAddress, submissions),
+                ex => logger?.LogWarning(ex,
+                    "Markdown kernel activity {Path} did not become routable; code submissions not posted",
+                    activityPath));
     }
 
     private static IReadOnlyList<SubmitCodeRequest>? ExtractSubmissions(MarkdownDocument document)
