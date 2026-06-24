@@ -88,7 +88,7 @@ public static class MeshNodeBindingExtensions
     /// </summary>
     public static void Write(
         IMessageHub hub, ILogger logger, string nodePath, bool bindContent, string? subPath,
-        JsonPointerReference reference, object? value)
+        JsonPointerReference reference, object? value, Action<Exception>? onError = null)
     {
         var options = hub.JsonSerializerOptions;
         var valueNode = value is null ? null : JsonSerializer.SerializeToNode(value, options);
@@ -114,8 +114,14 @@ public static class MeshNodeBindingExtensions
             })
             .Subscribe(
                 _ => { },
-                ex => logger.LogWarning(ex,
-                    "MeshNodeBinding: write failed for {Path} field {Field}", nodePath, pointer));
+                ex =>
+                {
+                    logger.LogWarning(ex,
+                        "MeshNodeBinding: write failed for {Path} field {Field}", nodePath, pointer);
+                    // Surface to the caller (the Blazor view pops a modal) instead of swallowing —
+                    // a swallowed combobox/selection write is the silent "screen disappears on select".
+                    onError?.Invoke(ex);
+                });
     }
 
     /// <summary>Joins an optional content sub-path (e.g. <c>"composer"</c>) with a field pointer

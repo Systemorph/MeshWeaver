@@ -152,7 +152,8 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
                                     Logger.LogError(ex, "Error scheduling node-bound property update in Area {area}", Area);
                                 }
                             },
-                            ex => Logger.LogError(ex, "Node-bound binding faulted for '{pointer}' in Area {area}", reference.Pointer, Area)));
+                            ex => SurfaceError(ex,
+                                $"Loading '{reference.Pointer}'" + (string.IsNullOrEmpty(Area) ? "" : $" in area '{Area}'"))));
                     }
                     else if (Model is not null && !reference.Pointer.StartsWith('/'))
                     {
@@ -207,9 +208,13 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
                                         Logger.LogDebug(ex, "Suppressed teardown error binding '{pointer}' in Area {area}", reference.Pointer, Area);
                                         return;
                                     }
-                                    Logger.LogWarning(ex,
-                                        "Data binding for '{pointer}' in Area {area} faulted — rendering default so the control does not hang",
-                                        reference.Pointer, Area);
+                                    // SURFACE the fault to the user (modal + inline) — a silent blank is the
+                                    // chat-disappear symptom the user flagged. SurfaceError logs at Error,
+                                    // pops the PortalErrorModal, and sets SurfacedError for inline display;
+                                    // it suppresses teardown (ObjectDisposedException) itself. We STILL render
+                                    // the default below so the control draws instead of spinning.
+                                    SurfaceError(ex,
+                                        $"Loading '{reference.Pointer}'" + (string.IsNullOrEmpty(Area) ? "" : $" in area '{Area}'"));
                                     try
                                     {
                                         InvokeAsync(() =>
@@ -355,7 +360,8 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         if (LayoutAreaReference.TryParseMeshNodeDataContext(DataContext) is { } meshNode
             && !reference.Pointer.StartsWith('/'))
         {
-            MeshNodeBindingExtensions.Write(Hub, Logger, meshNode.NodePath, meshNode.BindContent, meshNode.SubPath, reference, value);
+            MeshNodeBindingExtensions.Write(Hub, Logger, meshNode.NodePath, meshNode.BindContent, meshNode.SubPath, reference, value,
+                onError: ex => SurfaceError(ex, $"Saving '{reference.Pointer}'"));
             return;
         }
 
