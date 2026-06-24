@@ -85,6 +85,21 @@ The client ships the **same** mesh setup everywhere; only the JIT-dependent feat
 
 Threading note: iOS forbids `fork()` (→ no Postgres) and JIT (→ no Roslyn), but **threads are fine** — the actor hubs, `IIoPool`, and Rx all run. See [Controlled IO Pooling](/Doc/Architecture/ControlledIoPooling) and [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls).
 
+## Rendering the portal natively (`MeshWeaver.Maui`) — the reduce-`ChangeType` contract
+
+The MAUI client renders layout-area control trees with the **native view pack** `MeshWeaver.Maui` (the AspNetCore-free counterpart of `MeshWeaver.Blazor` — a `BlazorWebView` drags in `Microsoft.AspNetCore.App`, which has no maccatalyst/iOS runtime pack → `NETSDK1082`). `AddMaui()` = `AddLayoutClient()` + a `MauiViewRegistry`/`IMauiControlRenderer`; a `LayoutAreaView` reads a local area exactly like the Blazor one: `workspace.GetStream(reference).Reduce(new JsonPointerReference("/")).GetControlStream(area)`.
+
+🚨 **A local reduced stream MUST preserve the source `ChangeType`.** The layout render path delivers an area's generator-produced control as a **`Full`** snapshot (empty `Updates`); `GetControlStream`/`GetStream<UiControl>` re-evaluates its pointer only on `first || ChangeType==Full || a matching Update`. `StandardReducers.ReduceEntityStoreTo(JsonPointerReference)` used to **hardcode `ChangeType.Patch`**, turning the `Full` into a `Patch` with empty `Updates` → a control produced *after* a single-subscribe reader's first frame was dropped forever (`GetControlStream` returned `null`). The remote owner→client sync labels snapshots `Full`, so the two-hub path was immune; the single-hub local reduce violated the contract. **Fixed by preserving `current.ChangeType`** (`StandardReducers.cs`). Blazor masked the latent bug by re-subscribing each render pass; MAUI's `RenderArea` subscribes once, so it hit it deterministically.
+
+## AccessContext on the local-first client — carried, never lost
+
+Application writes from the client (a button click, a chat submit) run **off** a hub-handler turn, so `AccessService.Context` (the request-scoped AsyncLocal) is null on that thread. The client still attributes every write to the device user because:
+
+- `MauiProgram` calls `accessService.SetCircuitContext(deviceUser)` once at boot. `SetCircuitContext` also writes the **non-AsyncLocal** `persistentCircuitContext` fallback, so `AccessService.CircuitContext` returns the device user on *every* thread/await — there is no Blazor circuit to set the AsyncLocal per inbound activity.
+- Every framework write primitive (`IMeshService.CreateNode`, `MeshNodeStreamHandle.Update`, and therefore `hub.SubmitMessage`/`StartThread`) wraps its cold observable with `CarryAccessContext`, which captures `Context ?? CircuitContext` eagerly and re-stamps it on each emission (see [Access Context Propagation](/Doc/Architecture/AccessContextPropagation)). On the client that capture resolves to the device user via the `CircuitContext` fallback.
+
+**The rule:** submit through the framework primitives (`hub.SubmitMessage` / `StartThread` / `stream.Update`) — never a bespoke `hub.Post`/wire message from UI code. A bespoke post off a UI thread has no ambient context and is **failed closed** by the PostPipeline (no identity, no delivery). The native Monaco chat composer reads its text via the WebView and forwards through `hub.SubmitMessage`, so the user's identity rides along.
+
 ## See also
 
 - [SignalR Mesh Participant](/Doc/Architecture/SignalRMeshParticipant) — the transport this builds on.
