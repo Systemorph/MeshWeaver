@@ -136,13 +136,12 @@ config:
     ClaudeCode__ConfigDirRoot: "/mnt/users"
     # ---- OpenTelemetry: export to the in-cluster OTel Collector -------------
     # ServiceDefaults.AddOpenTelemetryExporters() calls UseOtlpExporter() when
-    # OTEL_EXPORTER_OTLP_ENDPOINT is set — UNLESS APPLICATIONINSIGHTS_CONNECTION_STRING
-    # is also set (Azure Monitor wins). So to ship traces/logs/metrics to the
-    # collector instead of App Insights, set this AND leave the App Insights
-    # connection string unset. The collector Service (manifests/observability/
-    # otel-collector.yaml) listens on 4317 (gRPC) / 4318 (HTTP). UseOtlpExporter
-    # defaults to gRPC, so the :4317 endpoint is correct; OTEL_EXPORTER_OTLP_PROTOCOL
-    # is set explicitly for clarity.
+    # OTEL_EXPORTER_OTLP_ENDPOINT is set — this is the only telemetry path
+    # (Azure Application Insights has been discontinued; observability is the
+    # Prometheus / Grafana / Loki stack). The collector Service
+    # (manifests/observability/otel-collector.yaml) listens on 4317 (gRPC) /
+    # 4318 (HTTP). UseOtlpExporter defaults to gRPC, so the :4317 endpoint is
+    # correct; OTEL_EXPORTER_OTLP_PROTOCOL is set explicitly for clarity.
     OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
     OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
     # ---- Sign-in: Systemorph AAD as HOME tenant + Google + LinkedIn ---------

@@ -1,5 +1,4 @@
 using Azure.Provisioning.AppContainers;
-using Azure.Provisioning.ApplicationInsights;
 using Memex.AppHost;
 using Microsoft.Extensions.Hosting;
 
@@ -219,17 +218,11 @@ var orleansTables = orleansStorage.AddTables("orleans-clustering");
 var orleans = builder.AddOrleans("memex-mesh")
     .WithClustering(orleansTables);
 
-// --- Application Insights (skipped in pure local mode — no Azure subscription needed) ---
-var appInsights = useLocalDb
-    ? null
-    : builder.AddAzureApplicationInsights("appinsights")
-        .ConfigureInfrastructure(infra =>
-        {
-            var component = infra.GetProvisionableResources()
-                .OfType<Azure.Provisioning.ApplicationInsights.ApplicationInsightsComponent>()
-                .Single();
-            component.Location = new Azure.Core.AzureLocation("swedencentral");
-        });
+// --- Observability ---
+// Telemetry ships to the Prometheus / Grafana / Loki stack via OTLP (the OTel
+// Collector endpoint is injected through OTEL_EXPORTER_OTLP_ENDPOINT in each env's
+// deploy config). App logs reach Loki out-of-band via Promtail scraping pod stdout.
+// No Azure Application Insights resource is provisioned.
 
 // --- Database Migration ---
 var dbMigration = builder
@@ -242,11 +235,6 @@ var dbMigration = builder
 // not vector-indexed.
 if (embeddingKey is not null)
     dbMigration.WithEnvironment("Embedding__ApiKey", embeddingKey);
-
-if (appInsights is not null)
-{
-    dbMigration.WithReference(appInsights).WaitFor(appInsights);
-}
 
 // --- Portal (co-hosted Orleans silo + web) ---
 var portal = builder
@@ -370,9 +358,6 @@ if (linkedinClientSecret is not null)
     portal.WithEnvironment("Social__LinkedIn__ClientId", LinkedInClientId);
     portal.WithEnvironment("Social__LinkedIn__ClientSecret", linkedinClientSecret);
 }
-
-if (appInsights is not null)
-    portal = portal.WithReference(appInsights);
 
 // --- Azure Blob Storage ---
 // Two blob containers share the `memexblobs` storage account:

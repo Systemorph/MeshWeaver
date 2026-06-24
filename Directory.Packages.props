@@ -16,7 +16,6 @@
     <PackageVersion Include="Aspire.Hosting.PostgreSQL" Version="13.4.5" />
     <PackageVersion Include="Aspire.Hosting.Azure.PostgreSQL" Version="13.4.5" />
     <PackageVersion Include="Aspire.Hosting.Azure.AppContainers" Version="13.4.5" />
-    <PackageVersion Include="Aspire.Hosting.Azure.ApplicationInsights" Version="13.4.5" />
     <PackageVersion Include="Aspire.Hosting.Azure.KeyVault" Version="13.4.5" />
     <PackageVersion Include="Aspire.Hosting.Orleans" Version="13.4.5" />
     <PackageVersion Include="Aspire.Microsoft.Azure.Cosmos" Version="13.4.5" />
@@ -29,7 +28,6 @@
     <PackageVersion Include="Azure.Core" Version="1.55.0" />
     <PackageVersion Include="Azure.Data.Tables" Version="12.11.0" />
     <PackageVersion Include="Azure.Identity" Version="1.21.0" />
-    <PackageVersion Include="Azure.Monitor.OpenTelemetry.AspNetCore" Version="1.5.0" />
     <PackageVersion Include="Azure.Provisioning.Storage" Version="1.1.2" />
     <PackageVersion Include="Azure.Search.Documents" Version="11.7.0" />
     <PackageVersion Include="Azure.Security.KeyVault.Secrets" Version="4.10.0" />
@@ -91,7 +89,6 @@
     <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="10.0.7" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.UserSecrets" Version="10.0.7" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.7" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.ApplicationInsights" Version="2.23.0" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Configuration" Version="10.0.7" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.7" />
     <PackageVersion Include="Microsoft.Graph" Version="6.1.0" />
