@@ -115,8 +115,51 @@ public sealed class VoicePage : ContentPage
                 _reply.Text = reply;
                 _reply.IsVisible = true;
                 _status.Text = "Reply (on-device).";
-                await TextToSpeech.Default.SpeakAsync(reply);
+                await SpeakInDetectedLanguageAsync(reply, text);
             }));
         }
+    }
+
+    /// <summary>
+    /// Speaks <paramref name="reply"/> in a voice whose language matches the reply (Swiss-German replies
+    /// read as Standard German → a German voice; English → an English voice). Falls back to the input's
+    /// language, then to the system default voice. Without this, TTS always used the device's default
+    /// locale, so a German answer was spoken by an English voice.
+    /// </summary>
+    private static async Task SpeakInDetectedLanguageAsync(string reply, string inputFallback)
+    {
+        var lang = DetectLanguage(reply) ?? DetectLanguage(inputFallback);
+        Locale? locale = null;
+        if (!string.IsNullOrEmpty(lang))
+        {
+            var locales = await TextToSpeech.Default.GetLocalesAsync();
+            // Match "de" against Locale.Language "de" or "de-DE"; prefer an exact language match.
+            locale = locales.FirstOrDefault(l => string.Equals(l.Language, lang, StringComparison.OrdinalIgnoreCase))
+                  ?? locales.FirstOrDefault(l => l.Language?.StartsWith(lang + "-", StringComparison.OrdinalIgnoreCase) == true);
+        }
+        await TextToSpeech.Default.SpeakAsync(reply, locale is null ? null : new SpeechOptions { Locale = locale });
+    }
+
+    /// <summary>Detects the dominant language of <paramref name="text"/> as a BCP-47 code ("de", "en", …)
+    /// via Apple's NaturalLanguage framework; null when undetermined or off Apple platforms.</summary>
+    private static string? DetectLanguage(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+#if IOS || MACCATALYST
+        var recognizer = new NaturalLanguage.NLLanguageRecognizer();
+        recognizer.Process(text);
+        // Map the detected NLLanguage to a BCP-47 code for TTS locale matching (Swiss German → "de").
+        return recognizer.DominantLanguage switch
+        {
+            NaturalLanguage.NLLanguage.German => "de",
+            NaturalLanguage.NLLanguage.English => "en",
+            NaturalLanguage.NLLanguage.French => "fr",
+            NaturalLanguage.NLLanguage.Italian => "it",
+            NaturalLanguage.NLLanguage.Spanish => "es",
+            _ => null,
+        };
+#else
+        return null;
+#endif
     }
 }

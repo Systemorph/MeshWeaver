@@ -96,12 +96,9 @@ public static class MauiProgram
             .ConfigureHub(hub => hub
                 .AddMaui()
                 .AddMeshTypes()
-                // A demo local area rendered natively by LocalAreaPage (proves the MAUI view pack).
-                .AddLayout(layout => layout.WithView("home", (_, _) => Observable.Return<MeshWeaver.Layout.UiControl>(
-                    MeshWeaver.Layout.Controls.Stack
-                        .WithView(MeshWeaver.Layout.Controls.Label("Welcome to Memex"), "title")
-                        .WithView(MeshWeaver.Layout.Controls.Markdown(
-                            "This portal is rendered **natively** with MAUI — no Blazor, no WebView."), "intro")))))
+                // The local "home" portal area — an intro + a live DataGrid of the mesh's real nodes,
+                // rendered natively by the MAUI view pack from the in-process SQLite mesh (see LocalPortal).
+                .AddLayout(layout => layout.WithView("home", LocalPortal.Home)))
             .ConfigureServices(s => s.AddFileSystemAssemblyStore(Path.Combine(appData, "assembly-store")));
 
         builder.Services.AddSingleton(meshBuilder.BuildHub);
