@@ -7,6 +7,7 @@ using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Maui.ApplicationModel;
 using Microsoft.Maui.Controls;
@@ -63,7 +64,19 @@ public sealed class MauiControlRenderer(MauiViewRegistry registry) : IMauiContro
 
     public View RenderArea(ISynchronizationStream<JsonElement> stream, string area)
     {
-        var host = new ContentView();
+        // A spinner until the area emits its first control (replaced on emission). Also gives the host a
+        // non-zero desired size, so the region is visible while resolving rather than collapsing to nothing.
+        var host = new ContentView
+        {
+            Content = new ActivityIndicator
+            {
+                IsRunning = true,
+                HeightRequest = 24,
+                HorizontalOptions = LayoutOptions.Center,
+                VerticalOptions = LayoutOptions.Center,
+                Margin = new Thickness(0, 12),
+            },
+        };
         IDisposable? sub = null;
 
         // Tie the area subscription to the host's Loaded/Unloaded lifecycle, re-subscribing each time it
@@ -72,17 +85,16 @@ public sealed class MauiControlRenderer(MauiViewRegistry registry) : IMauiContro
         // on Unloaded ALONE killed the subscription before the area's first control ever arrived, leaving a
         // blank frame. GetControlStream replays the current control to a fresh subscriber, so re-subscribing
         // on (re)Load restores the content. An immediate subscribe covers hosts that render before Loaded.
-        void Resubscribe()
+        // Subscribe ONCE and stay subscribed — GetControlStream delivers an area's generator-produced
+        // control on a later Full frame, so a subscription torn down on a spurious Unloaded (the old churn)
+        // missed it. Dispose only when the host is finally removed AND not re-added (deferred check).
+        sub = stream.GetControlStream(area)
+            .Subscribe(ctrl => MainThread.BeginInvokeOnMainThread(() =>
+                host.Content = ctrl is UiControl c ? RenderControl(c, stream, area) : null));
+        host.Unloaded += (_, _) => MainThread.BeginInvokeOnMainThread(() =>
         {
-            sub?.Dispose();
-            sub = stream.GetControlStream(area)
-                .Subscribe(ctrl => MainThread.BeginInvokeOnMainThread(() =>
-                    host.Content = ctrl is UiControl c ? RenderControl(c, stream, area) : null));
-        }
-
-        Resubscribe();
-        host.Loaded += (_, _) => { if (sub is null) Resubscribe(); };
-        host.Unloaded += (_, _) => { sub?.Dispose(); sub = null; };
+            if (host.Parent is null) { sub?.Dispose(); sub = null; }   // only if it didn't get re-parented
+        });
         return host;
     }
 }
@@ -192,6 +204,8 @@ public abstract class FormMauiView<TControl> : MauiView<TControl> where TControl
 /// </summary>
 public sealed class LayoutAreaView : ContentView
 {
+    // Local area: GetStream(ref).Reduce("/") — exactly the Blazor LayoutAreaView's isLocal branch. (The
+    // address ctor below is for a remote node's area via GetRemoteStream.)
     public LayoutAreaView(IWorkspace workspace, LayoutAreaReference reference, IMauiControlRenderer renderer)
     {
         var stream = workspace.GetStream(reference)!.Reduce(new JsonPointerReference("/"))!;

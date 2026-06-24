@@ -1,9 +1,13 @@
+using System.Reactive.Linq;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Maui;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Memex.Client.Services;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Maui.Controls.Shapes;
 
 namespace Memex.Client.Pages;
 
@@ -117,30 +121,11 @@ public sealed class PortalShellPage : ContentPage
     private void NavigateChat() => Navigate("Chat", () => _services.GetRequiredService<ChatView>());
     private void NavigateVoice() => Navigate("Voice", () => _services.GetRequiredService<VoiceView>());
 
-    private View BuildPortalHome()
-    {
-        var workspace = _hub.GetWorkspace();
-        var renderer = _hub.ServiceProvider.GetRequiredService<IMauiControlRenderer>();
-        // A native header (always visible if the frame renders) over the natively-rendered "home" area.
-        return new ScrollView
-        {
-            Padding = 16,
-            VerticalOptions = LayoutOptions.Fill,
-            Content = new VerticalStackLayout
-            {
-                Spacing = 10,
-                Children =
-                {
-                    new Label
-                    {
-                        Text = $"📡 {_current?.Name ?? "Local"} — portal",
-                        FontSize = 18, FontAttributes = FontAttributes.Bold,
-                    },
-                    new LayoutAreaView(workspace, new LayoutAreaReference("home"), renderer),
-                },
-            },
-        };
-    }
+    // The home is a native rendition of the web portal's User Activity dashboard (welcome banner + tabs +
+    // node-card grid), driven by the same GetQuery queries. Built natively because the layout-area pipeline
+    // doesn't yet deliver the area's control to the MAUI view pack (under investigation); the view pack +
+    // its controls (forms, picker, catalog, Monaco chat) remain for node areas / once that's fixed.
+    private View BuildPortalHome() => new ActivityDashboardView(_hub, $"{_current?.Name ?? "your local"} mesh");
 
     private View BuildInstanceManager()
     {
