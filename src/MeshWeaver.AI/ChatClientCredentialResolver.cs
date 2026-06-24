@@ -94,6 +94,14 @@ public sealed class ChatClientCredentialResolver : IDisposable
     // the mesh with re-reads (the 2026-06-08-class failure mode we explicitly avoid).
     private volatile bool refreshInFlight;
 
+    // The in-flight authoritative-refresh subscription. Its `.Timeout(10s)` schedules a TimerQueue
+    // timer whose closure captures THIS resolver → hub → MeshService → MessageHub. Left untracked, that
+    // timer is a live GC root that pins the WHOLE mesh for up to 10s after Dispose() — the
+    // MeshHubDisposalLeakTest "mesh hub survived disposal … TimerQueue timer" leak, and the sustained
+    // memory pressure (every disposed-but-still-rooted mesh lingers) behind the suite-wide GC-stall
+    // timeouts. Tracked here and torn down in Dispose() so disposal collapses that window to zero.
+    private IDisposable? refreshSubscription;
+
     public ChatClientCredentialResolver(IMessageHub hub)
     {
         this.hub = hub;
@@ -331,14 +339,20 @@ public sealed class ChatClientCredentialResolver : IDisposable
         if (disposed) return;
         disposed = true;
         IDisposable? sub;
+        IDisposable? refresh;
         lock (gate)
         {
             watchedPartitions = ImmutableHashSet<string>.Empty;
             sharedProviderPaths = ImmutableHashSet.Create<string>(StringComparer.Ordinal);
             sub = snapshotSubscription;
             snapshotSubscription = null;
+            refresh = refreshSubscription;
+            refreshSubscription = null;
         }
         sub?.Dispose();
+        // Kill any in-flight authoritative refresh: its .Timeout(10s) timer otherwise keeps this
+        // resolver (and the whole mesh hub it references) GC-rooted until the timer fires.
+        refresh?.Dispose();
     }
 
     /// <summary>
@@ -471,7 +485,7 @@ public sealed class ChatClientCredentialResolver : IDisposable
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var request = MeshQueryRequest.FromQueries(queries, WellKnownUsers.System);
 
-        Observable.Using(
+        var sub = Observable.Using(
                 () => accessService is null
                     ? System.Reactive.Disposables.Disposable.Empty
                     : accessService.ImpersonateAsSystem(),
@@ -482,6 +496,21 @@ public sealed class ChatClientCredentialResolver : IDisposable
             .Subscribe(
                 c => { MergeIntoSnapshot(c.Items!); refreshInFlight = false; },
                 _ => refreshInFlight = false);
+
+        // Track the subscription so Dispose() tears down its .Timeout timer immediately. Single-flight
+        // means at most one is ever live; dispose any prior (completed → no-op) before storing. If we
+        // were disposed while subscribing, drop it now so the timer can't outlive the mesh.
+        lock (gate)
+        {
+            if (disposed)
+            {
+                refreshInFlight = false;
+                sub.Dispose();
+                return;
+            }
+            refreshSubscription?.Dispose();
+            refreshSubscription = sub;
+        }
     }
 
     /// <summary>Merges a fresh authoritative snapshot into <see cref="cachedSnapshot"/> (fresh wins per path).</summary>
