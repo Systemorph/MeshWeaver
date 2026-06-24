@@ -142,6 +142,108 @@ public static class MarkdownViewLogic
     }
 
     /// <summary>
+    /// Resolves the executable-code-block result-area placeholders for RENDER, gating the LIVE
+    /// (subscribing) embed on the per-view Activity being created + routable. This is the single
+    /// decision the Blazor views call at render time; it has three states:
+    /// <list type="bullet">
+    ///   <item><b>No owner</b> → <see cref="DisableKernelPlaceholder"/>: a static notice, never a
+    ///   subscription (there is no per-node hub to host the kernel).</item>
+    ///   <item><b>Owned but <paramref name="kernelReady"/> = false</b> → <see cref="PendingKernelPlaceholder"/>:
+    ///   a static, NON-subscribing "starting" notice.</item>
+    ///   <item><b>Owned and <paramref name="kernelReady"/> = true</b> → <see cref="ReplaceKernelPlaceholder"/>:
+    ///   the live <c>data-address</c> the Blazor renderer turns into a LayoutAreaControl that
+    ///   subscribes to the kernel area and renders results.</item>
+    /// </list>
+    ///
+    /// <para>🚨 <b>Why the gate.</b> Each executable block renders a
+    /// <c>&lt;div class='layout-area' data-address='__KERNEL_ADDRESS__' …&gt;</c>. Embedding the LIVE
+    /// address mounts one <c>LayoutAreaView</c> per block, each subscribing — via
+    /// <c>Workspace.GetRemoteStream&lt;JsonElement,LayoutAreaReference&gt;</c>, which BYPASSES the
+    /// <c>MeshNodeStreamCache</c> storm-breaker — to <c>{owner}/_Activity/markdown-{id}</c>. If that
+    /// embed happens at first render (as it used to), every subscriber races
+    /// <see cref="CreateActivityAndSubmit"/> and hits the activity BEFORE it exists → a
+    /// <c>[ROUTE] NotFound</c> burst (measured ~59× on <c>Doc/DataMesh/InteractiveMarkdown</c>: one
+    /// subscriber per executable block, re-opened across the prerender→interactive transition). So the
+    /// live area is embedded ONLY once the activity is routable — the view flips
+    /// <paramref name="kernelReady"/> from <see cref="CreateActivityAndSubmit"/>'s <c>onReady</c>
+    /// callback and re-renders. Until then the user SEES a non-subscribing placeholder.</para>
+    /// </summary>
+    public static string RenderKernelResultAreas(
+        string? html, string? ownerPath, bool kernelReady, Address kernelAddress)
+    {
+        if (string.IsNullOrEmpty(html))
+            return html ?? string.Empty;
+
+        if (string.IsNullOrEmpty(ownerPath))
+            return DisableKernelPlaceholder(html);
+
+        return kernelReady
+            ? ReplaceKernelPlaceholder(html, kernelAddress)
+            : PendingKernelPlaceholder(html);
+    }
+
+    /// <summary>
+    /// Neutralises the executable-code-block result areas when the view has NO owning node, so
+    /// interactive code does NOT storm the router. Each executable block renders a
+    /// <c>&lt;div class='layout-area' data-address='__KERNEL_ADDRESS__' …&gt;</c> that the Blazor
+    /// renderer turns into a live LayoutAreaControl subscribing to the kernel address. Without an
+    /// owner the only address we could embed is a bare <c>_Activity/markdown-{id}</c> — an
+    /// ownerless path that NotFound-storms (the same defect <see cref="ActivityNodeGuard"/> blocks
+    /// at create time). Instead we replace each kernel area div with a static, non-subscribing
+    /// notice so the user SEES that execution is unavailable here, and the renderer never opens a
+    /// subscription to a phantom address (an empty <c>data-address</c> is skipped by
+    /// <c>MarkdownHtmlRenderer.RenderLayoutArea</c>; the regex below removes the whole div).
+    /// </summary>
+    public static string DisableKernelPlaceholder(string html)
+    {
+        const string notice =
+            "<div class=\"markdown-kernel-disabled\" style=\"border:1px solid var(--neutral-stroke-rest,#d0d0d0);" +
+            "background:var(--neutral-layer-2,#f5f5f5);color:var(--neutral-foreground-hint,#666);" +
+            "padding:8px 12px;border-radius:4px;margin:8px 0;font-size:13px;\">" +
+            "Interactive code execution is unavailable here — this view has no owning node to host the kernel." +
+            "</div>";
+        return ReplaceKernelAreaDivs(html, notice);
+    }
+
+    /// <summary>
+    /// Replaces the executable-code-block result areas with a static, NON-subscribing "starting"
+    /// notice while the per-view Activity is being created + brought online. This is the gap the
+    /// subscribe-before-create storm used to live in: until <see cref="CreateActivityAndSubmit"/>
+    /// reports the activity routable (its <c>onReady</c> callback flips the view's <c>kernelReady</c>
+    /// flag), the kernel area carries NO <c>data-address</c>, so the Blazor renderer mounts no
+    /// <c>LayoutAreaView</c> and opens no subscription to the not-yet-created
+    /// <c>{owner}/_Activity/markdown-{id}</c>. The notice keeps the absent case VISIBLE rather than
+    /// blank, and once the activity is routable the view re-renders with the live area embedded.
+    /// </summary>
+    public static string PendingKernelPlaceholder(string html)
+    {
+        const string notice =
+            "<div class=\"markdown-kernel-pending\" style=\"border:1px solid var(--neutral-stroke-rest,#d0d0d0);" +
+            "background:var(--neutral-layer-2,#f5f5f5);color:var(--neutral-foreground-hint,#666);" +
+            "padding:8px 12px;border-radius:4px;margin:8px 0;font-size:13px;\">" +
+            "Starting interactive kernel…" +
+            "</div>";
+        return ReplaceKernelAreaDivs(html, notice);
+    }
+
+    /// <summary>
+    /// Replaces every kernel result-area div (identified by the placeholder address) with
+    /// <paramref name="replacement"/>. The div is emitted single-line by
+    /// <c>LayoutAreaMarkdownRenderer.GetLayoutAreaDiv</c>, so a targeted, non-greedy match is exact
+    /// and never touches other layout-area divs. No-ops when the placeholder is absent.
+    /// </summary>
+    private static string ReplaceKernelAreaDivs(string html, string replacement)
+    {
+        if (string.IsNullOrEmpty(html)) return html;
+        if (!html.Contains(ExecutableCodeBlockRenderer.KernelAddressPlaceholder)) return html;
+
+        var pattern = "<div class='layout-area' data-address='"
+            + System.Text.RegularExpressions.Regex.Escape(ExecutableCodeBlockRenderer.KernelAddressPlaceholder)
+            + "'[^>]*></div>";
+        return System.Text.RegularExpressions.Regex.Replace(html, pattern, replacement);
+    }
+
+    /// <summary>
     /// Submits each code block to the target hub <em>in order</em>, waiting for
     /// the previous submission's <see cref="SubmitCodeResponse"/> before posting
     /// the next. Required for blocks that share REPL state: e.g. block #1 sets
@@ -212,13 +314,21 @@ public static class MarkdownViewLogic
     /// submissions are NOT posted — the error surfaces via the standard
     /// observable path.</para>
     /// </summary>
+    /// <param name="onReady">Invoked ONCE, on the create/subscribe thread, the moment the per-view
+    /// Activity node has been created AND become routable — i.e. it is now safe for the GUI to embed
+    /// the live kernel area and subscribe. The Blazor views pass a callback that flips their
+    /// <c>kernelReady</c> flag and re-renders, so the <c>LayoutAreaView</c> subscription is opened
+    /// only AFTER the activity exists (closing the subscribe-before-create race — see
+    /// <see cref="RenderKernelResultAreas"/>). Never fires if the activity fails to become routable;
+    /// the view then keeps showing the non-subscribing "starting" placeholder.</param>
     public static void CreateActivityAndSubmit(
         IMessageHub senderHub,
         IMeshService meshService,
         Address activityAddress,
         string? ownerPath,
         string kernelId,
-        IReadOnlyCollection<SubmitCodeRequest> submissions)
+        IReadOnlyCollection<SubmitCodeRequest> submissions,
+        Action? onReady = null)
     {
         var activityNamespace = string.IsNullOrEmpty(ownerPath)
             ? "_Activity"
@@ -238,6 +348,14 @@ public static class MarkdownViewLogic
             }
         };
 
+        // 🚨 Fail fast at the SOURCE. An empty owner produces a bare `_Activity/markdown-{id}` —
+        // a top-level / ownerless activity with no per-node hub to route to, so the kernel
+        // SubmitCodeRequest below and every progress subscriber NotFound-storm the router. The
+        // markdown views must never call this without a real owner (they gate on owner and render
+        // a notice instead — see DisableKernelPlaceholder); this throw is the backstop that turns
+        // any future ownerless caller into a loud, hunt-friendly exception rather than a storm.
+        ActivityNodeGuard.EnsureOwned(activityNode);
+
         var logger = senderHub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MarkdownExecution");
 
         // Create the per-view Activity node, then WAIT until it is actually ROUTABLE before posting the
@@ -252,7 +370,15 @@ public static class MarkdownViewLogic
                 .Take(1)
                 .Timeout(TimeSpan.FromSeconds(15)))
             .Subscribe(
-                _ => SubmitCode(senderHub, activityAddress, submissions),
+                _ =>
+                {
+                    // The activity is now routable. Signal the GUI it is safe to embed the live
+                    // kernel area + subscribe (closing the subscribe-before-create race) BEFORE
+                    // posting the submissions; the area stream replays current state to the late
+                    // subscriber, so ordering vs. SubmitCode is not load-bearing.
+                    onReady?.Invoke();
+                    SubmitCode(senderHub, activityAddress, submissions);
+                },
                 ex => logger?.LogWarning(ex,
                     "Markdown kernel activity {Path} did not become routable; code submissions not posted",
                     activityPath));
