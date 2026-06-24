@@ -14,16 +14,25 @@
        SYNCHRONOUSLY on the editor instance in our own JS module (initEditor) instead and
        push the value to HandleContentChanged — no async event-listener race, no
        editor.GetValue() round-trip. See Doc/Architecture/AsynchronousCalls.md. *@
-    <StandaloneCodeEditor @ref="editor"
-                          Id="@EditorId"
-                          ConstructionOptions="GetEditorOptions"
-                          OnDidInit="OnEditorInit"
-                          CssClass="monaco-editor-view" />
+    @* Render the editor ONLY after Monaco's async AMD bundle has loaded. BlazorMonaco's
+       StandaloneCodeEditor calls monaco.editor.create on first render; doing that before
+       the 3.6MB bundle finishes crashes the circuit. Gating per-editor (instead of hard-
+       gating Blazor.start on Monaco in App.razor) lets the circuit go interactive
+       immediately — the Safari "empty page while Monaco loads/stalls" fix. *@
+    @if (monacoReady)
+    {
+        <StandaloneCodeEditor @ref="editor"
+                              Id="@EditorId"
+                              ConstructionOptions="GetEditorOptions"
+                              OnDidInit="OnEditorInit"
+                              CssClass="monaco-editor-view" />
+    }
 </div>
 
 @code {
     private StandaloneCodeEditor? editor;
     private string EditorId = $"monaco-editor-{Guid.NewGuid():N}";
+    private bool monacoReady = false;
     private bool isInitialized = false;
     private IJSObjectReference? jsModule;
     private DotNetObjectReference<MonacoEditorView>? dotNetRef;
@@ -208,8 +217,9 @@
         lastSetValue = Value ?? ""; // Track initial value
         dotNetRef = DotNetObjectReference.Create(this);
 
-        // Load custom JS module for placeholder and agent completion
-        jsModule = await JSRuntime.InvokeAsync<IJSObjectReference>("import",
+        // Custom JS module for placeholder and agent completion — already imported in
+        // OnAfterRenderAsync(firstRender) to gate on Monaco readiness; reuse it if present.
+        jsModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>("import",
             "./_content/MeshWeaver.Blazor/Components/Monaco/MonacoEditorView.razor.js");
 
         if (jsModule != null)
@@ -714,6 +724,31 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (firstRender && !monacoReady)
+        {
+            // Import the JS module up front (it used to be deferred to OnEditorInit) so we
+            // can await Monaco readiness BEFORE <StandaloneCodeEditor> renders. Until Monaco's
+            // async AMD bundle is loaded, rendering the editor would crash the circuit. The
+            // circuit itself is no longer gated on Monaco (App.razor starts Blazor immediately),
+            // so a slow/stalled Monaco load leaves only this editor on a placeholder — never the
+            // whole page blank (the Safari empty-page fix).
+            try
+            {
+                jsModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>("import",
+                    "./_content/MeshWeaver.Blazor/Components/Monaco/MonacoEditorView.razor.js");
+                monacoReady = await jsModule.InvokeAsync<bool>("waitForMonaco");
+            }
+            catch (JSException ex)
+            {
+                // No host-provided window.monacoReady (or interop unavailable): fall back to the
+                // legacy assumption that Monaco is present and render the editor anyway.
+                Logger.LogDebug(ex, "waitForMonaco unavailable; rendering editor without the readiness gate");
+                monacoReady = true;
+            }
+            StateHasChanged();
+            return;
+        }
+
         if (!pendingParameterUpdate || !isInitialized || editor == null || jsModule == null)
         {
             return;

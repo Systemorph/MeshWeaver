@@ -2,13 +2,9 @@ using System.Reactive.Linq;
 using Autofac.Extensions.DependencyInjection;
 using Memex.Client.Services;
 using Memex.Client.Voice;
-using MeshWeaver.Blazor;
-using MeshWeaver.Blazor.Graph;
-using MeshWeaver.Blazor.Infrastructure;
-using MeshWeaver.Blazor.Radzen;
-using MeshWeaver.Blazor.Services;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
+using MeshWeaver.Maui;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
@@ -19,9 +15,9 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
+using Memex.Client.Pages;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.FluentUI.AspNetCore.Components;
 using Plugin.Maui.Audio;
 
 namespace Memex.Client;
@@ -33,13 +29,28 @@ public static class MauiProgram
     public static MauiApp CreateMauiApp()
     {
 #if WINDOWS
-        // Force the Vulkan GPU backend ahead of CPU for Whisper (Intel Arc / discrete GPUs). iOS/macOS
-        // keep Metal via the base runtime; Android tries Vulkan then CPU by default.
+        // Force the Vulkan GPU backend ahead of CPU for Whisper (Intel Arc / discrete GPUs). The iOS
+        // device keeps Metal via the base runtime; Android tries Vulkan then CPU by default.
         Whisper.net.LibraryLoader.RuntimeOptions.RuntimeLibraryOrder =
         [
             Whisper.net.LibraryLoader.RuntimeLibrary.Vulkan,
             Whisper.net.LibraryLoader.RuntimeLibrary.Cpu,
         ];
+#endif
+#if MACCATALYST
+        // The macOS client (MacCatalyst) has NO Metal — Whisper.net builds whisper.cpp with GGML_METAL=OFF
+        // for this TFM — so CoreML (Apple GPU / Neural Engine) is the only GPU path. Gated behind the
+        // "apple-gpu" feature flag (off until the CoreML apple image is hosted — see OnDeviceVoice.md).
+        // When on, prefer CoreML over CPU; whisper auto-falls back to CPU if the encoder model is absent
+        // (the runtime is built WHISPER_COREML_ALLOW_FALLBACK=ON). Must be set before any WhisperFactory.
+        if (FeatureFlags.IsAppleGpuEnabled)
+        {
+            Whisper.net.LibraryLoader.RuntimeOptions.RuntimeLibraryOrder =
+            [
+                Whisper.net.LibraryLoader.RuntimeLibrary.CoreML,
+                Whisper.net.LibraryLoader.RuntimeLibrary.Cpu,
+            ];
+        }
 #endif
         var builder = MauiApp.CreateBuilder();
         builder
@@ -48,8 +59,6 @@ public static class MauiProgram
             {
                 fonts.AddFont("OpenSans-Regular.ttf", "OpenSansRegular");
             });
-
-        builder.Services.AddMauiBlazorWebView();
 
         // 🌐 LOCAL-FIRST: this client hosts its OWN in-process monolith mesh ("local") on SQLite, and
         // renders the MeshWeaver portal directly against it. The mesh needs an Autofac container
@@ -77,35 +86,34 @@ public static class MauiProgram
             .AddMemexInstanceType()
             // Single-user local mesh: the device-user (the phone's user) owns everything (root Admin).
             .AddMeshNodes(DeviceUserAdminGrant())
-            // The portal Blazor component services — the MAUI-safe subset of Hosting.Blazor's AddBlazor
-            // (that assembly takes a FrameworkReference to Microsoft.AspNetCore.App, unusable from MAUI).
-            // Skipped: the Server-only CircuitHandler/CircuitAccessHandler + AddMeshMcp. NavigationService
-            // is replaced by the Hybrid HybridNavigationService (the server one needs NavigationManager
-            // from the Server assembly).
+            // Content service (file collections) — non-Blazor; the mesh + native UI use it.
             .ConfigureServices(services => services
-                .AddContentService()
-                .AddFluentUIComponents()
-                .AddSingleton<UserIdentityCache>()
-                .AddScoped<ICircuitContextAccessor, CircuitContextAccessor>()
-                .AddScoped<PortalApplication>()
-                .AddScoped<PortalErrorSink>()
-                .AddScoped<INavigationService, HybridNavigationService>()
-                .AddScoped<IMenuItemsProvider, MenuItemsProvider>())
-            // Hub-side: the layout client + view packs (map layout-area controls → Blazor components).
+                .AddContentService())
+            // Hub-side: the layout client + the NATIVE MAUI view pack (maps layout-area controls → native
+            // Microsoft.Maui.Controls views). Replaces AddBlazor()/AddGraphViews()/AddRadzenDataGrid() — no
+            // AspNetCore.App, so the build targets maccatalyst/iOS.
             .ConfigureHub(hub => hub
-                .AddBlazor()
-                .AddMeshTypes()
-                .AddGraphViews()
-                .AddRadzenDataGrid())
+                .AddMaui()
+                .AddMeshTypes())
             .ConfigureServices(s => s.AddFileSystemAssemblyStore(Path.Combine(appData, "assembly-store")));
 
         builder.Services.AddSingleton(meshBuilder.BuildHub);
 
-        // On-device voice: mic capture + Whisper (whisper.cpp, runs locally incl. iOS Metal/GPU).
+        // Device-persisted feature flags (e.g. the macOS "apple-gpu" CoreML path).
+        builder.Services.AddSingleton<FeatureFlags>();
+
+        // On-device voice: mic capture + Whisper (whisper.cpp). Runs on the GPU where available —
+        // Metal on the iOS device, Vulkan on Windows/Android, CoreML on macOS (the "apple-gpu" flag).
         builder.Services.AddSingleton<IAudioManager>(AudioManager.Current);
         builder.Services.AddSingleton<AudioCaptureService>();
+        // Voice model: the small multilingual Base model (English default, other languages from the same
+        // download) ships by default; the large Swiss-German fine-tune is opt-in via the "swiss-german"
+        // flag (a 547 MB ggml + ~1.2 GB CoreML apple image on macOS). The CoreML apple image for the
+        // SELECTED model is provisioned only on macOS when the apple-gpu flag is on (best-effort → CPU).
+        var voiceModel = FeatureFlags.IsSwissGermanEnabled ? WhisperModelSize.SwissGerman : WhisperModelSize.Base;
         builder.Services.AddSingleton(_ => new VoiceModelCatalog(
-            Path.Combine(FileSystem.AppDataDirectory, "models"), WhisperModelSize.SwissGerman));
+            Path.Combine(FileSystem.AppDataDirectory, "models"), voiceModel,
+            provisionAppleImage: OperatingSystem.IsMacCatalyst() && FeatureFlags.IsAppleGpuEnabled));
         // Inference runs on the local mesh's CPU IoPool — off the UI thread, bounded (ControlledIoPooling).
         builder.Services.AddSingleton(sp => new VoiceService(
             sp.GetRequiredService<VoiceModelCatalog>(),
@@ -117,8 +125,27 @@ public static class MauiProgram
         builder.Services.AddSingleton<MeshOAuthClient>();
         builder.Services.AddSingleton(sp => new MeshConnector(sp.GetRequiredService<IMessageHub>()));
 
+        // Native shell: the instance manager (add/open memex instances) is the landing page; opening one
+        // shows its portal in PortalHostPage. (The in-process local portal renders natively via the
+        // MeshWeaver.Maui LayoutAreaView — wired into a page in the next wave.)
+        builder.Services.AddSingleton<InstanceStore>();
+        builder.Services.AddTransient<InstanceManagerPage>();
+        builder.Services.AddTransient<VoicePage>();
+
+        // Minimalistic on-device logging: a size-capped rolling file + in-memory ring buffer — bounded
+        // disk + memory, no dependencies, phone-safe. The provider is also a singleton (FileLoggerProvider)
+        // so an in-app diagnostics view can read its Recent lines.
+        builder.Logging.AddDeviceFileLogger(
+            Path.Combine(FileSystem.AppDataDirectory, "logs", "memex.log"));
+
+        // On-device text AI: Apple Intelligence (Foundation Models) on iPhone + Apple-silicon Macs — we
+        // ship NO LLM (only the Swiss-German Whisper model). Elsewhere it reports unavailable (the app
+        // falls back to the connected mesh). Lean: the OS provides the model. Runs on the IoPool.
+        builder.Services.AddSingleton<IOnDeviceChat>(sp => OnDeviceChat.Create(
+            sp.GetRequiredService<IMessageHub>().ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Compile)
+                ?? IoPool.Unbounded));
+
 #if DEBUG
-        builder.Services.AddBlazorWebViewDeveloperTools();
         builder.Logging.AddDebug();
 #endif
 

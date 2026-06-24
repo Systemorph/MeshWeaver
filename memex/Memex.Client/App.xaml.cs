@@ -1,15 +1,20 @@
+using Memex.Client.Pages;
+using Microsoft.Extensions.DependencyInjection;
+
 namespace Memex.Client;
 
 public partial class App : Application
 {
-    public App()
+    private readonly IServiceProvider _services;
+
+    public App(IServiceProvider services)
     {
+        _services = services;
         InitializeComponent();
     }
 
-    // Local-first: the app IS the portal, rendered in-process against the local mesh. The single
-    // BlazorWebView page hosts the MeshWeaver portal (ApplicationPage → layout areas); instance
-    // management lives inside the mesh (MemexInstance nodes), not a native shell.
+    // Native MAUI shell: the instance manager is the landing page (no BlazorWebView). The in-process local
+    // portal renders natively via the MeshWeaver.Maui view pack (LayoutAreaView), wired into a page next wave.
     protected override Window CreateWindow(IActivationState? activationState)
-        => new Window(new MainPage()) { Title = "Memex" };
+        => new Window(new NavigationPage(_services.GetRequiredService<InstanceManagerPage>())) { Title = "Memex" };
 }

@@ -231,6 +231,22 @@ function debounce(fn, delay) {
     document.head.appendChild(style);
 })();
 
+// Resolves once Monaco's async AMD bundle has loaded, so the component can defer
+// rendering <StandaloneCodeEditor> (BlazorMonaco's create() touches the global
+// `monaco`) until it's safe. The host (App.razor) exposes window.monacoReady — a
+// Promise that settles when `require(['vs/editor/editor.main'])` completes. We treat
+// BOTH success and failure as "done": a failed/stalled Monaco load must NOT block the
+// editor forever (BlazorMonaco surfaces its own error if monaco is genuinely missing),
+// and it must never block the rest of the now-decoupled Blazor circuit. Hosts that
+// preload Monaco synchronously (no window.monacoReady) resolve immediately.
+export function waitForMonaco() {
+    const ready = window.monacoReady;
+    if (ready && typeof ready.then === 'function') {
+        return ready.then(() => true, () => true);
+    }
+    return true;
+}
+
 export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = false, showLineNumbers = false) {
     const container = document.getElementById(editorId);
     if (!container) {

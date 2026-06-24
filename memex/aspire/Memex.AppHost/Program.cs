@@ -1,5 +1,6 @@
 using Azure.Provisioning.AppContainers;
 using Azure.Provisioning.ApplicationInsights;
+using Memex.AppHost;
 using Microsoft.Extensions.Hosting;
 
 var builder = DistributedApplication.CreateBuilder(args);
@@ -458,6 +459,12 @@ else
 // a hard-coded localhost default). Aspire substitutes the actual allocated
 // URL at container/process start — works the same in prod/test/local.
 portal.WithEnvironment("Mcp__BaseUrl", portal.GetEndpoint("https"));
+
+// Mac dev-box local-cluster extras — opt-in (`--observability true`, `--localai true`), local mode only.
+// LGTM observability (Grafana/Loki/Tempo/Prometheus via an OTel Collector) + native-Ollama Qwen.
+// See Memex.AppHost/MemexLocalStack.cs and Doc/Architecture/MacLocalStack.
+if (useLocalDb)
+    builder.AddMacLocalStack(portal, dbMigration);
 
 var app = builder.Build();
 app.Run();

@@ -1,0 +1,5 @@
+<!-- Insulates this MAUI library from the repo-root Directory.Build.props (which forces a single
+     <TargetFramework>net10.0</TargetFramework>, fighting MAUI's multi-targeting). Empty file stops the
+     walk-up so MeshWeaver.Maui keeps the MAUI SDK defaults. Mirrors memex/Memex.Client. -->
+<Project>
+</Project>

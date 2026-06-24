@@ -1,0 +1,30 @@
+# Grafana datasource provisioning — Loki (logs), Tempo (traces), Prometheus (metrics).
+# Mounted at /etc/grafana/provisioning/datasources; Grafana auto-loads on boot. Local dev only.
+apiVersion: 1
+
+datasources:
+  - name: Loki
+    type: loki
+    uid: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      # Click a log line's trace_id → jump to the trace in Tempo.
+      derivedFields:
+        - datasourceUid: tempo
+          matcherRegex: '"trace_id":"(\w+)"'
+          name: TraceID
+          url: '$${__value.raw}'
+
+  - name: Tempo
+    type: tempo
+    uid: tempo
+    access: proxy
+    url: http://tempo:3200
+
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true

@@ -10,6 +10,18 @@ ollama:
     enabled: false
     host: ""        # cluster host-gateway IP of the host running Ollama
     port: 11434
+# ---- Portal Ingress (TLS via an ingress controller) -----------------------
+# Off by default (cloud envs wire ingress/TLS their own way). A self-host overlay
+# enables it with a hostname + a pre-created TLS secret. The proxy-*-timeout
+# annotations keep the Blazor Server SignalR circuit (WebSocket) alive.
+ingress:
+  enabled: false
+  className: "nginx"
+  host: ""          # e.g. memex.localtest.me (resolves to 127.0.0.1)
+  tlsSecret: ""     # name of a kubernetes.io/tls secret in this namespace
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
 secrets:
   memex_postgres:
     memex_postgres_password: ""

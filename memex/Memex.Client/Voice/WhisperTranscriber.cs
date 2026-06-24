@@ -19,10 +19,13 @@ public interface ISpeechTranscriber : IAsyncDisposable
 }
 
 /// <summary>
-/// On-device Whisper (whisper.cpp via Whisper.net) from a local GGML model. Runs fully on the device —
-/// Whisper.net ships native libs for iOS (incl. Metal/GPU), Android, macOS, and Windows. All inference
-/// is routed through <see cref="IIoPool"/>: the language-detect pass via <c>InvokeBlocking</c> (CPU) and
-/// the transcription via <c>InvokeStream</c> (the <c>ProcessAsync</c> enumerable). See
+/// On-device Whisper (whisper.cpp via Whisper.net) from a local GGML model. Runs fully on the device, on
+/// the GPU where the platform's Whisper.net runtime provides one: Metal on the iOS device, Vulkan on
+/// Windows/Android, and CoreML (Apple GPU / Neural Engine) on MacCatalyst when the "apple image" encoder
+/// is present (the MacCatalyst build has no Metal). <see cref="WhisperFactoryOptions.UseGpu"/> is set so
+/// the GGML backend uses the GPU when one is compiled in; CoreML is selected by the runtime independently.
+/// All inference is routed through <see cref="IIoPool"/>: the language-detect pass via <c>InvokeBlocking</c>
+/// (CPU) and the transcription via <c>InvokeStream</c> (the <c>ProcessAsync</c> enumerable). See
 /// <c>Doc/Architecture/ControlledIoPooling.md</c>.
 /// </summary>
 public sealed class WhisperTranscriber : ISpeechTranscriber
@@ -50,7 +53,7 @@ public sealed class WhisperTranscriber : ISpeechTranscriber
 
     public WhisperTranscriber(string modelPath, IIoPool pool)
     {
-        _factory = WhisperFactory.FromPath(modelPath);
+        _factory = WhisperFactory.FromPath(modelPath, new WhisperFactoryOptions { UseGpu = true });
         _pool = pool;
     }
 
