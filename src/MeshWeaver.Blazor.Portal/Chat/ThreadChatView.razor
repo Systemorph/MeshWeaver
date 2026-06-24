@@ -653,8 +653,11 @@ else
                 }
                 else
                 {
+                    @* Submit is disabled until the thread is idle — the mid-round inbox is off, so
+                       follow-ups are ingested only after the current round finishes. Esc cancels. *@
                     <FluentButton Appearance="FluentAppearance.Accent" OnClick="SendMessage"
-                                  Disabled="@(string.IsNullOrWhiteSpace(MessageText))" Title="Send">
+                                  Disabled="@(string.IsNullOrWhiteSpace(MessageText) || ThreadViewModel?.IsExecuting == true)"
+                                  Title="@(ThreadViewModel?.IsExecuting == true ? "Waiting for the current response to finish… (Esc to stop)" : "Send")">
                         <FluentIcon Value="@(new Icons.Regular.Size20.Send())" Color="Color.Neutral" />
                     </FluentButton>
                 }

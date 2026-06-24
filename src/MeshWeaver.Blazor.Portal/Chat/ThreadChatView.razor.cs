@@ -673,6 +673,13 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (_isDisposed)
             return;
 
+        // 🚫 Submit is gated on the thread being IDLE. The mid-round inbox is disabled —
+        // follow-ups are ingested only after the current round finishes — so we don't accept
+        // a submit while executing. The Send button is disabled too (see the footer); this
+        // guards the Enter-key path. Esc still cancels the in-flight round.
+        if (ThreadViewModel?.IsExecuting == true)
+            return;
+
         // No await in the click path — dispatch to Blazor render context and return void.
         // All Hub operations use Post + RegisterCallback; all IMeshService operations
         // use IObservable + Subscribe. No awaits on hub-backed calls anywhere in this chain.
