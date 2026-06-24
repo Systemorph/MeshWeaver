@@ -62,6 +62,10 @@ When a child is created, the handler appends its ID to the parent list via `work
 
 A comment is top-level when its namespace ends with `_Comment` (e.g. `Doc/MyDoc/_Comment`). A reply's namespace is the parent comment's path (e.g. `Doc/MyDoc/_Comment/c1`). No parent load is required — the shape of the path is the signal.
 
+### Comments are anchored, NOT injected into the document
+
+A text-range comment is **never** written into the document's markdown. The `Comment` satellite carries its own anchor — `Version` (the document `MeshNode.Version` the offsets were computed against), `FromPosition`/`ToPosition` (offsets into the document's **rendered plain text**), and `HighlightedText`. The inline highlight is re-derived at render time by `CommentAnchoring.DecorateWithComments`: while the document is still at the comment's `Version` the stored offsets are used verbatim; once it has moved ahead the comment is **re-anchored** by relocating `HighlightedText` (nearest the old offset). This decouples commenting from the document — a `Comment`-only user (no document `Update` permission) can comment, and edits above a comment don't strand its highlight. (Tracked changes — `insert`/`delete` — DO still embed `<!--…-->` markers in the document text; only comments moved off it.)
+
 ---
 
 ## Handler Pattern: Synchronous, Reactive, Error-Safe
@@ -303,14 +307,14 @@ public class MyClientConfigurator : IHostConfigurator
 
 ### Verification via `GetRemoteStream`
 
-Subscribe to the node's workspace stream **before** triggering the operation, then reactively wait for the expected state to appear.
+Subscribe to the node's workspace stream **before** triggering the operation, then reactively wait for the expected state to appear. This applies to operations that mutate the document text — e.g. a **tracked change**, which embeds `<!--insert:…-->`/`<!--delete:…-->` markers:
 
 ```csharp
 // 0) Subscribe BEFORE sending the request — never after
 var markersAppeared = workspace.GetRemoteStream<MeshNode>(docAddress)
     .Select(nodes => nodes?.FirstOrDefault(n => n.Path == docPath))
     .Select(node => (node?.Content as MarkdownContent)?.Content ?? "")
-    .Where(content => content.Contains($"<!--comment:{markerId}"))
+    .Where(content => content.Contains($"<!--insert:{markerId}"))
     .FirstAsync()
     .ToTask(ct);
 
@@ -320,6 +324,8 @@ var response = await client.AwaitResponse(request, o => o.WithTarget(address), c
 // 2) Wait for the stream to reflect the change
 var updatedContent = await markersAppeared;
 ```
+
+**Comments are different**: they do not change the document text, so don't wait on the doc stream. Verify the `Comment` satellite node instead — assert it carries the anchor (`HighlightedText`, `FromPosition`/`ToPosition`, `Version`) via `GetDataRequest` below.
 
 ### Verification via `GetDataRequest`
 
@@ -351,13 +357,13 @@ private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, Ca
 1.  Deploy Orleans cluster with domain types registered on silo AND client
 2.  Create client hub, register for streaming
 3.  Ping target grain to activate it
-4.  Subscribe to markdown stream via GetRemoteStream (before sending request)
-5.  Send CreateCommentRequest
-6.  Assert CreateCommentResponse.Success == true
-7.  Await markdown stream to contain comment markers
-8.  GetDataRequest on comment path to verify Comment content
-9.  (Optional) Subscribe to comment layout area to verify rendering
-10. (Optional) Send reply CreateCommentRequest, verify via stream
+4.  Send CreateCommentRequest (or create the Comment node directly via meshService.CreateNode)
+5.  Assert CreateCommentResponse.Success == true
+6.  GetDataRequest on comment path → verify Comment content AND its anchor
+    (HighlightedText, FromPosition/ToPosition, Version)
+7.  Assert the document text was NOT mutated (no `<!--comment:{markerId}` injected)
+8.  (Optional) Subscribe to comment layout area to verify the highlight renders
+9.  (Optional) Send reply CreateCommentRequest, verify the parent's Replies list grew
 ```
 
 ---

@@ -250,6 +250,25 @@ public static class MeshExtensions
             return request.Processed();
         }
 
+        // 0c. Structural fail-fast: an Activity MeshNode must NEVER be anchored at a top-level /
+        // ownerless path. A bare `_Activity/{id}` (empty owner, MainNode="") — or any `_Activity`
+        // folder with no owning node before it — has no per-node hub to route to, so every poster
+        // (SubmitCodeRequest / DataChangeRequest) and every subscriber (the GUI progress panels)
+        // NotFound-storms the router (the atioz `_Activity/import-*` / `_Activity/compile-*` storm).
+        // Reject at the create boundary — loudly, at the source — instead of letting the phantom
+        // escape downstream. Runs BEFORE EnsurePartitionBootstrap + the validators (and BEFORE the
+        // System bypass inside those validators) because this is a STRUCTURAL invariant that holds
+        // for every identity, including System-driven compile/import/startup activities. Covers all
+        // creators: CreateNode AND CreateOrUpdateNode (whose inner create funnels through here).
+        if (ActivityNodeGuard.IsOwnerless(node, out var ownerlessReason))
+        {
+            logger.LogError("[CreateNode] REFUSED ownerless Activity {Path}: {Reason}", node.Path, ownerlessReason);
+            hub.Post(
+                CreateNodeResponse.Fail(ownerlessReason, NodeCreationRejectionReason.InvalidPath),
+                o => o.ResponseFor(request));
+            return request.Processed();
+        }
+
         // 1. Read existing — persistence first (catalog.GetNode auto-creates from templates),
         //    then fall back to the in-memory config. persistence.GetNode is already
         //    IObservable so we don't need to wrap it in Observable.FromAsync.

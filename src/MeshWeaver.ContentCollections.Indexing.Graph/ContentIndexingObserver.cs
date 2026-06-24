@@ -156,9 +156,22 @@ public sealed class ContentIndexingObserver : IContentUploadObserver
     {
         ArgumentNullException.ThrowIfNull(collectionPaths);
 
-        // Root the re-index-all activity at the partition of the first collection (they typically share
-        // one). A single activity reports the whole sweep so the user watches one progress feed.
-        var partition = collectionPaths.Count > 0 ? PartitionOf(collectionPaths.First()) : hub.Address.ToString();
+        // 🚨 Owner routability: the activity is anchored at {partition}/_Activity/{id}, so {partition}
+        // MUST be a real, routable owning node. With NO collections there is nothing to index AND no
+        // partition to derive — the old fallback anchored the activity at hub.Address.ToString() (the
+        // top-level mesh-hub address), which is a NON-routable owner for a satellite: every poster /
+        // subscriber would NotFound-storm the router (the exact ownerless defect the create boundary
+        // now rejects). Skip with a logged warning instead. With collections, PartitionOf derives the
+        // owning node of the (validated {node}/{collection}-shaped) collection path — always a real,
+        // routable partition root.
+        if (collectionPaths.Count == 0)
+        {
+            logger.LogWarning(
+                "ReindexAll called with no collections — nothing to index; skipping (refusing to anchor "
+                + "the re-index activity under the non-routable mesh-hub address '{Address}').", hub.Address);
+            return Observable.Empty<string>();
+        }
+        var partition = PartitionOf(collectionPaths.First());
 
         return ContentIndexingActivity.Run(
             hub,

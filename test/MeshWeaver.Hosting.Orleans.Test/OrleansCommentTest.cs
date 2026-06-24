@@ -100,11 +100,11 @@ public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
 
     /// <summary>
     /// Full end-to-end test through Orleans:
-    /// 0) Subscribe to markdown stream
+    /// 0) Activate the grain
     /// 1) Send CreateCommentRequest
     /// 2) Verify response
-    /// 3) Wait for markers to appear in markdown stream
-    /// 4) Verify comment node content via GetDataRequest
+    /// 3) Verify comment node carries the anchor (HighlightedText + From/ToPosition + Version)
+    /// 4) Verify the document text was NOT mutated (comments live on the satellite, not the doc)
     /// </summary>
     [Fact(Timeout = 60000)]
     public async Task CreateComment_ThroughOrleans()
@@ -143,14 +143,18 @@ public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
         comment.Author.Should().Be("TestAuthor");
         comment.MarkerId.Should().Be(commentResponse.MarkerId);
         comment.HighlightedText.Should().Be("satellite entities");
-        Output.WriteLine($"Comment node verified: {commentPath}");
+        comment.FromPosition.Should().BeGreaterThanOrEqualTo(0, "the selection should anchor to a rendered-text range");
+        comment.ToPosition.Should().BeGreaterThan(comment.FromPosition);
+        Output.WriteLine($"Comment node verified: {commentPath} anchored at {comment.FromPosition}-{comment.ToPosition} v{comment.Version}");
 
-        // 4) Verify markers in markdown via GetDataRequest on the doc node
+        // 4) The new comment must NOT be injected into the document text — it is anchored on the
+        //    satellite and the highlight is re-derived at render time. (The sample doc already
+        //    carries illustrative markers, so assert on OUR marker id specifically.)
         var mdContent = await GetHubContentAsync<MarkdownContent>(client, DocPath, ct);
         mdContent.Should().NotBeNull();
-        mdContent!.Content.Should().Contain($"<!--comment:{commentResponse.MarkerId}",
-            "Markers should be in the markdown content");
-        Output.WriteLine("Markdown markers verified via GetDataRequest.");
+        mdContent!.Content.Should().NotContain($"<!--comment:{commentResponse.MarkerId}",
+            "the new comment is anchored on the satellite, not injected into the document text");
+        Output.WriteLine("Document text confirmed un-mutated by the new comment via GetDataRequest.");
     }
 
     /// <summary>
