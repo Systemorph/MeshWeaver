@@ -132,6 +132,6 @@ If migration crashed mid-run, you'll see the `Unhandled exception` at the bottom
 | Database | `memex` |
 | Auth | Azure AD only (password disabled) |
 | Tenant | `3a01d7ac-3330-444d-942d-975eb491b5d6` |
-| App Insights | `appinsights-d272wxvys4nvo` (same RG; for portal logs) |
+| Logs | Loki (via Promtail scraping pod stdout); metrics/traces via OTLP → Prometheus/Grafana |
 
 For test cluster, swap `prod-memex` → `test-memex` and discover the FQDN with the `az postgres flexible-server list` command above.

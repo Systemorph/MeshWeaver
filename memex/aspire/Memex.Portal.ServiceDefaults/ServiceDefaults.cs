@@ -1,4 +1,3 @@
-using Azure.Monitor.OpenTelemetry.AspNetCore;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.DependencyInjection;
@@ -74,15 +73,13 @@ public static class ServiceDefaults
 
     private static void AddOpenTelemetryExporters(this IHostApplicationBuilder builder)
     {
+        // Observability ships to the Prometheus / Grafana / Loki (LGTM) stack via OTLP.
+        // Metrics/traces export to the OTel Collector when OTEL_EXPORTER_OTLP_ENDPOINT is
+        // configured (local Colima k3s + AKS both set it). Logs reach Loki out-of-band via
+        // Promtail scraping pod stdout — no app wiring needed here.
         var useOtlp = !string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]);
-        var useAzureMonitor = !string.IsNullOrWhiteSpace(
-            builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]);
 
-        if (useAzureMonitor)
-        {
-            builder.Services.AddOpenTelemetry().UseAzureMonitor();
-        }
-        else if (useOtlp)
+        if (useOtlp)
         {
             builder.Services.AddOpenTelemetry().UseOtlpExporter();
         }

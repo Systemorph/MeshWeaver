@@ -468,17 +468,16 @@ archive is the cost-conscious default for a self-hosted deployment.)
 
 ```csharp
 var useOtlp = !string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]);
-var useAzureMonitor = !string.IsNullOrWhiteSpace(builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]);
-if (useAzureMonitor)   builder.Services.AddOpenTelemetry().UseAzureMonitor();
-else if (useOtlp)      builder.Services.AddOpenTelemetry().UseOtlpExporter();
+if (useOtlp)      builder.Services.AddOpenTelemetry().UseOtlpExporter();
 ```
 
-So setting **`OTEL_EXPORTER_OTLP_ENDPOINT`** turns on the OTLP exporter — **but
-only if `APPLICATIONINSIGHTS_CONNECTION_STRING` is unset** (Azure Monitor wins).
-`values.aks.yaml` sets `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317`
-and `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` and does **not** set the App Insights
-connection string, so the portal exports to the in-cluster collector. (To go back
-to App Insights, set the connection string and the OTLP env is ignored.)
+So setting **`OTEL_EXPORTER_OTLP_ENDPOINT`** turns on the OTLP exporter — the only
+telemetry path (Azure Application Insights has been discontinued; observability is
+the Prometheus / Grafana / Loki stack). `values.aks.yaml` sets
+`OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317` and
+`OTEL_EXPORTER_OTLP_PROTOCOL=grpc`, so the portal exports metrics/traces to the
+in-cluster collector. Application logs reach Loki out-of-band via Promtail
+scraping pod stdout (no app wiring).
 
 ### Apply it
 
