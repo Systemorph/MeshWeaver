@@ -1,46 +1,27 @@
 using Memex.Client.Services;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Memex.Client.Pages;
 
 /// <summary>
-/// The app's start page: a native management GUI for memex instances. The user adds an instance by
-/// base URL (then authenticates via OAuth — wired separately), removes instances, and opens one —
-/// which loads that portal (memex-primary) in <see cref="PortalHostPage"/>.
+/// The instance switcher/manager as a hostable <see cref="ContentView"/> inside <see cref="PortalShellPage"/>:
+/// add an instance by base URL (+ optional API token), remove one, or open one (which the shell makes the
+/// current instance). The shell's title-bar instance button navigates here for "connect new"; the per-row
+/// open button invokes <see cref="OnOpen"/>.
 /// </summary>
-public sealed class InstanceManagerPage : ContentPage
+public sealed class InstanceManagerView : ContentView
 {
     private readonly InstanceStore _store;
     private readonly VerticalStackLayout _list;
     private readonly Entry _name = new() { Placeholder = "Name (optional)" };
-    // Pre-filled with a real value (not a grey placeholder that looks filled but isn't) — the public
-    // memex is the default, so "Add instance" works on first tap.
-    private readonly Entry _url = new() { Text = "https://memex.meshweaver.cloud", Keyboard = Keyboard.Url };
-    // An API token authenticates the instance: the local mesh joins every authenticated instance as a
-    // participant, so the remote mesh can address this client. Generate one in Settings → API Tokens.
+    private readonly Entry _url = new() { Text = InstanceStore.PublicMemexUrl, Keyboard = Keyboard.Url };
     private readonly Entry _token = new() { Placeholder = "API token (mw_…) — optional", IsPassword = true };
 
-    private readonly IServiceProvider _services;
+    /// <summary>Invoked when the user opens an instance — the shell makes it current and shows its portal.</summary>
+    public Action<MemexInstance>? OnOpen { get; set; }
 
-    public InstanceManagerPage(InstanceStore store, IServiceProvider services)
+    public InstanceManagerView(InstanceStore store)
     {
         _store = store;
-        _services = services;
-        Title = "Memex";
-
-        // Native portal area (rendered by the MeshWeaver.Maui view pack) + on-device voice.
-        ToolbarItems.Add(new ToolbarItem
-        {
-            Text = "🏠 Home",
-            Command = new Command(async () =>
-                await Navigation.PushAsync(_services.GetRequiredService<LocalAreaPage>())),
-        });
-        ToolbarItems.Add(new ToolbarItem
-        {
-            Text = "🎙 Voice",
-            Command = new Command(async () =>
-                await Navigation.PushAsync(_services.GetRequiredService<VoicePage>())),
-        });
 
         _list = new VerticalStackLayout { Spacing = 8 };
         var add = new Button { Text = "Add instance" };
@@ -75,18 +56,12 @@ public sealed class InstanceManagerPage : ContentPage
         Refresh();
     }
 
-    protected override void OnAppearing()
-    {
-        base.OnAppearing();
-        Refresh(); // reflect token/auth changes made while inside an instance
-    }
-
     private void OnAdd(object? sender, EventArgs e)
     {
         if (string.IsNullOrWhiteSpace(_url.Text)) return;
         _store.Add(_name.Text ?? "", _url.Text, _token.Text);
         _name.Text = _token.Text = "";
-        _url.Text = "https://memex.meshweaver.cloud";
+        _url.Text = InstanceStore.PublicMemexUrl;
         Refresh();
     }
 
@@ -104,7 +79,7 @@ public sealed class InstanceManagerPage : ContentPage
             var inst = instance;
 
             var open = new Button { Text = inst.Name, HorizontalOptions = LayoutOptions.Fill };
-            open.Clicked += async (_, _) => await Navigation.PushAsync(new PortalHostPage(_store, inst));
+            open.Clicked += (_, _) => OnOpen?.Invoke(inst);
 
             var del = new Button { Text = "✕", WidthRequest = 44 };
             del.Clicked += (_, _) => { _store.Remove(inst); Refresh(); };

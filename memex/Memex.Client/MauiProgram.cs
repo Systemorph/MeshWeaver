@@ -129,13 +129,13 @@ public static class MauiProgram
         builder.Services.AddSingleton<MeshOAuthClient>();
         builder.Services.AddSingleton(sp => new MeshConnector(sp.GetRequiredService<IMessageHub>()));
 
-        // Native shell: the instance manager (add/open memex instances) is the landing page; opening one
-        // shows its portal in PortalHostPage. (The in-process local portal renders natively via the
-        // MeshWeaver.Maui LayoutAreaView — wired into a page in the next wave.)
+        // Native browser-like shell: PortalShellPage (back/forward history + instance switcher in the title)
+        // hosts content views — the in-process local portal (rendered natively via the MeshWeaver.Maui
+        // LayoutAreaView), on-device voice, and the instance manager.
         builder.Services.AddSingleton<InstanceStore>();
-        builder.Services.AddTransient<InstanceManagerPage>();
-        builder.Services.AddTransient<VoicePage>();
-        builder.Services.AddTransient<LocalAreaPage>();
+        builder.Services.AddTransient<PortalShellPage>();
+        builder.Services.AddTransient<VoiceView>();
+        builder.Services.AddTransient<InstanceManagerView>();
 
         // Minimalistic on-device logging: a size-capped rolling file + in-memory ring buffer — bounded
         // disk + memory, no dependencies, phone-safe. The provider is also a singleton (FileLoggerProvider)
