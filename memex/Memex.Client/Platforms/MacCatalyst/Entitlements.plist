@@ -9,6 +9,9 @@
         <!-- When App Sandbox is enabled, this value is required to open outgoing network connections. -->
         <key>com.apple.security.network.client</key>
         <true/>
+        <!-- On-device voice: the App Sandbox requires this to capture from the microphone. -->
+        <key>com.apple.security.device.audio-input</key>
+        <true/>
     </dict>
 </plist>
 

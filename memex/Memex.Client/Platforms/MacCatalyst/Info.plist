@@ -11,6 +11,9 @@
     <!-- Please consult https://developer.apple.com/documentation/bundleresources/information_property_list/lsapplicationcategorytype -->
     <!-- <key>LSApplicationCategoryType</key> -->
     <!-- <string>public.app-category.YOUR-CATEGORY-HERE</string> -->
+    <!-- On-device voice transcription needs the microphone (mirrors Platforms/iOS/Info.plist). -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Memex transcribes your voice on-device so you can talk to agents.</string>
     <key>UIDeviceFamily</key>
     <array>
         <integer>2</integer>

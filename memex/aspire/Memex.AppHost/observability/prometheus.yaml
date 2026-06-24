@@ -1,0 +1,5 @@
+# Prometheus — receives metrics via remote-write from the OTel Collector (no scrape targets needed).
+# Started with --web.enable-remote-write-receiver (see the AppHost args). Local dev only.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s

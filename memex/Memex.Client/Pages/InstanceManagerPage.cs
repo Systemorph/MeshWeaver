@@ -1,4 +1,5 @@
 using Memex.Client.Services;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Memex.Client.Pages;
 
@@ -19,10 +20,21 @@ public sealed class InstanceManagerPage : ContentPage
     // participant, so the remote mesh can address this client. Generate one in Settings → API Tokens.
     private readonly Entry _token = new() { Placeholder = "API token (mw_…) — optional", IsPassword = true };
 
-    public InstanceManagerPage(InstanceStore store)
+    private readonly IServiceProvider _services;
+
+    public InstanceManagerPage(InstanceStore store, IServiceProvider services)
     {
         _store = store;
+        _services = services;
         Title = "Memex";
+
+        // On-device voice (Whisper on the GPU + Apple Intelligence) — a native page.
+        ToolbarItems.Add(new ToolbarItem
+        {
+            Text = "🎙 Voice",
+            Command = new Command(async () =>
+                await Navigation.PushAsync(_services.GetRequiredService<VoicePage>())),
+        });
 
         _list = new VerticalStackLayout { Spacing = 8 };
         var add = new Button { Text = "Add instance" };

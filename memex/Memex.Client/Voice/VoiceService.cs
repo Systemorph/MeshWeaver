@@ -23,6 +23,11 @@ public sealed class VoiceService : IAsyncDisposable
 
     public bool Ready => _whisper is not null;
 
+    /// <summary>The Whisper native runtime actually loaded — e.g. <c>CoreML</c> (Mac GPU/Neural Engine),
+    /// <c>Vulkan</c> (Windows/Android GPU), or <c>Cpu</c>. Populated once the first transcription has loaded
+    /// the native library; lets the UI show which backend is in use (proof the GPU path engaged).</summary>
+    public string Engine => Whisper.net.LibraryLoader.RuntimeOptions.LoadedLibrary?.ToString() ?? "(not loaded)";
+
     /// <summary>
     /// Streams transcript segments for the given audio. The model is ensured (downloaded/placed) on the
     /// pool on first use, then each segment is produced on the pool and pushed to the subscriber. Nothing

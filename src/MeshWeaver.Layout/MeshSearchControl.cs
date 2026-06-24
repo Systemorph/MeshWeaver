@@ -96,6 +96,15 @@ public record MeshSearchControl()
     public object? ShowSearchBox { get; init; }
 
     /// <summary>
+    /// Whether to show the discreet view-options bar above the results (default false).
+    /// When true, a small "Group by" combobox (None / Type / Namespace / Category) and a
+    /// display menu (show/hide the search bar and section counts) are rendered. Opt-in so
+    /// the many embedded usages of the search control are unaffected. Only meaningful for
+    /// the Flat and Grouped render modes.
+    /// </summary>
+    public object? ShowViewOptions { get; init; }
+
+    /// <summary>
     /// Whether to exclude the base path node from results (default true).
     /// When true, the node at the namespace path itself is not shown.
     /// </summary>
@@ -209,6 +218,7 @@ public record MeshSearchControl()
     public MeshSearchControl WithRenderMode(MeshSearchRenderMode mode) => this with { RenderMode = mode };
     public MeshSearchControl WithMaxColumns(int columns) => this with { MaxColumns = columns };
     public MeshSearchControl WithShowSearchBox(bool show) => this with { ShowSearchBox = show };
+    public MeshSearchControl WithViewOptions(bool show = true) => this with { ShowViewOptions = show };
     public MeshSearchControl WithExcludeBasePath(bool exclude) => this with { ExcludeBasePath = exclude };
     public MeshSearchControl WithLiveSearch(bool live) => this with { LiveSearch = live };
 
