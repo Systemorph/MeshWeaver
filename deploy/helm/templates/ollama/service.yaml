@@ -1,0 +1,41 @@
+{{- if .Values.ollama.external.enabled }}
+# ---- External Ollama, fronted by an in-cluster Service ---------------------
+# A host-native Ollama (e.g. macOS Metal GPU — Docker/k8s on macOS has no GPU
+# passthrough, so Ollama must run on the host) exposed to the cluster as a
+# selector-less Service + a manual Endpoints object pointing at the host gateway
+# (host:port). The portal then addresses it by stable name (http://ollama:{port}/v1)
+# instead of a brittle host-gateway IP baked into config. Enabled only by a local
+# overlay; the neutral chart keeps this off so cloud deploys are unaffected.
+---
+apiVersion: "v1"
+kind: "Service"
+metadata:
+  name: "ollama"
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "ollama"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+spec:
+  type: "ClusterIP"
+  ports:
+    - name: "http"
+      protocol: "TCP"
+      port: {{ .Values.ollama.external.port }}
+      targetPort: {{ .Values.ollama.external.port }}
+---
+apiVersion: "v1"
+kind: "Endpoints"
+metadata:
+  name: "ollama"
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "ollama"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+subsets:
+  - addresses:
+      - ip: {{ .Values.ollama.external.host | quote }}
+    ports:
+      - name: "http"
+        protocol: "TCP"
+        port: {{ .Values.ollama.external.port }}
+{{- end }}

@@ -1,4 +1,15 @@
 parameters: {}
+# ---- External Ollama (local self-host) ------------------------------------
+# Front a host-native Ollama with an in-cluster Service so the portal addresses
+# it by name (http://ollama:11434/v1) instead of a host-gateway IP. On macOS the
+# GPU is reachable only from host processes (Docker/k8s have no Metal passthrough),
+# so Ollama runs on the host and `host` is the cluster's host gateway (Colima:
+# 192.168.5.2). Disabled by default (neutral chart); a local overlay turns it on.
+ollama:
+  external:
+    enabled: false
+    host: ""        # cluster host-gateway IP of the host running Ollama
+    port: 11434
 secrets:
   memex_postgres:
     memex_postgres_password: ""
