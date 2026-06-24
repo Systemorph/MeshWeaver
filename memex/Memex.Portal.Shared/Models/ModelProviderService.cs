@@ -440,7 +440,10 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
             .Catch<bool, Exception>(ex =>
             {
                 logger.LogWarning(ex, "SetSelection failed for {Owner}", ownerPath);
-                return Observable.Return(false);
+                // PROPAGATE the real cause (e.g. 42P01 "modelproviderselection.mesh_nodes does not
+                // exist") instead of collapsing to a bare `false` — the caller's onError arm then
+                // surfaces the actual message instead of a generic "Failed to update selection."
+                return Observable.Throw<bool>(ex);
             });
     }
 
