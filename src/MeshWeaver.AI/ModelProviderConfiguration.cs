@@ -45,6 +45,14 @@ public record ModelProviderConfiguration
     /// <c>x-api-key</c> / <c>Authorization: Bearer</c>. Null for keyless
     /// providers (Copilot uses OAuth, ClaudeCode runs a local binary).
     /// </summary>
+    /// <remarks>
+    /// <see cref="BrowsableAttribute"/>(false): SECRET — this is the platform's provider key. It MUST
+    /// NEVER be rendered on the GUI (the generic property grid showed it in plaintext = a key leak).
+    /// On the GUI the key is WRITE-ONLY: set via the masked Settings → Models card (Password input) or a
+    /// write-only "Set key" form; it is never displayed or read back. The value still serializes for the
+    /// runtime factory / persistence — only the GUI editor surface is suppressed.
+    /// </remarks>
+    [Browsable(false)]
     public string? ApiKey { get; init; }
 
     /// <summary>
@@ -54,6 +62,11 @@ public record ModelProviderConfiguration
     /// <c>/mcp</c> AS THE USER. Stored here (never on the Azure Files share) so it survives across
     /// portal replicas via Postgres. Null until the user connects a co-hosted CLI provider.
     /// </summary>
+    /// <remarks>
+    /// <see cref="BrowsableAttribute"/>(false): SECRET — same rule as <see cref="ApiKey"/>. Never render
+    /// on the GUI; write-only.
+    /// </remarks>
+    [Browsable(false)]
     public string? McpApiKey { get; init; }
 
     /// <summary>
