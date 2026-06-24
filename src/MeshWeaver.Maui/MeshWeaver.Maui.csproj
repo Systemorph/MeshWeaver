@@ -30,6 +30,8 @@
         <!-- Blazor-agnostic framework layers — control models + fluent DSL + the layout-area streams.
              None of these reference Microsoft.AspNetCore.App. -->
         <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
+        <!-- The query-driven controls (MeshNodePicker, MeshSearch catalog) use hub.GetQuery + MeshNode. -->
+        <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
     </ItemGroup>
 
 </Project>

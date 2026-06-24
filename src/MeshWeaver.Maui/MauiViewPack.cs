@@ -1,9 +1,11 @@
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.DataGrid;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Maui.ApplicationModel;
@@ -242,6 +244,9 @@ public static class MauiViewPackExtensions
         // Wave 2 — layout: a real grid + tabs (other containers fall back to ContainerView).
         .Register<LayoutGridControl, LayoutGridView>()
         .Register<TabsControl, TabsView>()
+        // Wave 2 — query-driven: mesh node picker + catalog search.
+        .Register<MeshNodePickerControl, MeshNodePickerView>()
+        .Register<MeshSearchControl, MeshSearchView>()
         // Wave 2 — nav + badges.
         .Register<BadgeControl, BadgeView>()
         .Register<NavLinkControl, NavLinkView>()
@@ -620,5 +625,126 @@ public sealed class TabsView : MauiView<TabsControl>
             content.Content = Renderer.RenderArea(Stream, areas[0].Area.ToString()!);
 
         return new VerticalStackLayout { Spacing = 6, Children = { new ScrollView { Orientation = ScrollOrientation.Horizontal, Content = headers }, content } };
+    }
+}
+
+// ---- Wave 2 control views: query-driven (mesh node picker + catalog) ------------------------------
+
+/// <summary>
+/// Mesh node picker → a search box + a live result list (queried via <c>hub.GetQuery</c>); picking a row
+/// writes the node's PATH back to the bound pointer. Mirrors the Blazor MeshNodePickerView's behaviour
+/// (search appended to each of the control's queries; results de-duplicated by path), natively.
+/// </summary>
+public sealed class MeshNodePickerView : FormMauiView<MeshNodePickerControl>
+{
+    private Entry _search = null!;
+    private VerticalStackLayout _results = null!;
+    private Label _selected = null!;
+    private IDisposable? _searchSub;
+
+    protected override View CreateView()
+    {
+        _selected = new Label { FontSize = 12, TextColor = Colors.Gray };
+        _search = new Entry { Placeholder = Model.Placeholder?.ToString() ?? "Search nodes…" };
+        _search.TextChanged += (_, _) => RunSearch(_search.Text);
+        _results = new VerticalStackLayout { Spacing = 2 };
+        RunSearch(null);   // initial candidates
+        return new VerticalStackLayout { Spacing = 4, Children = { _selected, _search, _results } };
+    }
+
+    protected override void Bind() =>
+        BindValue<object>(Model.Data, v => _selected.Text = v is null ? "(no node selected)" : $"selected: {v}");
+
+    private void RunSearch(string? text)
+    {
+        if (Stream is null) return;
+        var baseQueries = Model.Queries is { Length: > 0 } q ? q : new[] { "" };
+        var queries = baseQueries
+            .Select(b => string.IsNullOrWhiteSpace(text) ? b : $"{b} {text}".Trim())
+            .ToArray();
+
+        _searchSub?.Dispose();   // drop the previous search; no accumulation
+        _searchSub = Stream.Hub.GetQuery("picker:" + string.Join("|", queries), queries)
+            .Take(1)
+            .Subscribe(nodes => MainThread.BeginInvokeOnMainThread(() => RenderResults(nodes)));
+        Disposables.Add(_searchSub);
+    }
+
+    private void RenderResults(IEnumerable<MeshNode> nodes)
+    {
+        _results.Children.Clear();
+        var max = int.TryParse(Model.MaxResults?.ToString(), out var m) ? m : 20;
+        foreach (var node in nodes.DistinctBy(n => n.Path).Take(max))
+        {
+            var n = node;
+            var btn = new Button { Text = n.Name ?? n.Path, HorizontalOptions = LayoutOptions.Fill };
+            btn.Clicked += (_, _) => { Write<object>(Model.Data, n.Path); _selected.Text = $"selected: {n.Path}"; };
+            _results.Children.Add(btn);
+        }
+    }
+}
+
+/// <summary>
+/// Catalog / mesh-node search → a search box (the <c>VisibleQuery</c>) fused with the always-applied
+/// <c>HiddenQuery</c>, queried via <c>hub.GetQuery</c> and rendered as a list of node cards. The native
+/// counterpart of the Blazor MeshSearchView (thumbnail grid); drill-down navigation is a later wave.
+/// </summary>
+public sealed class MeshSearchView : MauiView<MeshSearchControl>
+{
+    private Entry _search = null!;
+    private VerticalStackLayout _results = null!;
+    private string _hidden = "";
+    private IDisposable? _searchSub;
+
+    protected override View CreateView()
+    {
+        _results = new VerticalStackLayout { Spacing = 4 };
+        _search = new Entry { Placeholder = Model.Placeholder?.ToString() ?? "Search…" };
+        _search.TextChanged += (_, _) => RunSearch();
+        return new VerticalStackLayout { Spacing = 8, Children = { _search, _results } };
+    }
+
+    protected override void Bind()
+    {
+        Bind<object>(Model.HiddenQuery, v => { _hidden = v?.ToString() ?? ""; RunSearch(); });
+        Bind<object>(Model.VisibleQuery, v =>
+        {
+            if (v is not null && string.IsNullOrEmpty(_search.Text)) _search.Text = v.ToString();
+        });
+    }
+
+    private void RunSearch()
+    {
+        if (Stream is null) return;
+        var parts = new[] { _hidden, _search?.Text }.Where(s => !string.IsNullOrWhiteSpace(s));
+        var query = string.Join(" ", parts).Trim();
+        if (query.Length == 0) { _results.Children.Clear(); return; }
+
+        _searchSub?.Dispose();
+        _searchSub = Stream.Hub.GetQuery("search:" + query, query)
+            .Take(1)
+            .Subscribe(nodes => MainThread.BeginInvokeOnMainThread(() => RenderResults(nodes)));
+        Disposables.Add(_searchSub);
+    }
+
+    private void RenderResults(IEnumerable<MeshNode> nodes)
+    {
+        _results.Children.Clear();
+        foreach (var node in nodes.Take(50))
+            _results.Children.Add(new Border
+            {
+                Padding = 8,
+                StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 6 },
+                Stroke = Colors.Gray,
+                StrokeThickness = 1,
+                Content = new VerticalStackLayout
+                {
+                    Children =
+                    {
+                        new Label { Text = node.Name ?? node.Path, FontAttributes = FontAttributes.Bold },
+                        new Label { Text = node.NodeType ?? "", FontSize = 11, TextColor = Colors.Gray },
+                    },
+                },
+            });
     }
 }
