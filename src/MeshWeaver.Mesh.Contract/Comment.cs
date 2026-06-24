@@ -52,36 +52,65 @@ public record Comment
     public string? MarkerId { get; init; }
 
     /// <summary>
-    /// The original text that was highlighted when the comment was created.
-    /// This is the anchor: when the document moves past <see cref="Version"/> the highlight
-    /// is recomputed by relocating this text, so the comment survives edits above it.
+    /// The exact text that was highlighted when the comment was created. Kept for display (the quote
+    /// shown on the card) and as a sanity check / fallback when re-anchoring.
     /// </summary>
     [Browsable(false)]
     public string? HighlightedText { get; init; }
 
     /// <summary>
-    /// The document <see cref="MeshNode.Version"/> the <see cref="FromPosition"/>/
-    /// <see cref="ToPosition"/> offsets were computed against. Comments are NOT stored inside the
-    /// document text; the inline highlight is re-derived at render time. While the document is
-    /// still at this version the stored offsets are authoritative; once it is ahead the comment is
-    /// re-anchored from <see cref="HighlightedText"/>. Zero for legacy/page-level comments.
+    /// The document <see cref="MeshNode.Version"/> the capture (<see cref="Start"/>/<see cref="Length"/>/
+    /// <see cref="AnchorText"/>) was taken against. The comment is NOT stored inside the document text;
+    /// the inline highlight is re-derived. While the document is still at this version the captured
+    /// offsets are exact; once it is ahead the range is recomputed by diffing <see cref="AnchorText"/>
+    /// against the current text (see AnchorMath). Zero for page-level comments.
     /// </summary>
     [Browsable(false)]
     public long Version { get; init; }
 
     /// <summary>
-    /// Start offset of the highlight in the rendered plain text of the document at
-    /// <see cref="Version"/>. <c>-1</c> when the comment has no inline anchor (page-level).
+    /// Start offset of the highlight in the document's clean text at <see cref="Version"/>.
+    /// <c>-1</c> when the comment has no inline anchor (page-level).
     /// </summary>
     [Browsable(false)]
-    public int FromPosition { get; init; } = -1;
+    public int Start { get; init; } = -1;
 
     /// <summary>
-    /// End offset (exclusive) of the highlight in the rendered plain text of the document at
-    /// <see cref="Version"/>. <c>-1</c> when the comment has no inline anchor (page-level).
+    /// Length (in characters) of the highlight at <see cref="Version"/>.
     /// </summary>
     [Browsable(false)]
-    public int ToPosition { get; init; } = -1;
+    public int Length { get; init; }
+
+    /// <summary>
+    /// The document's clean text at <see cref="Version"/> — the "anchor" the capture was taken
+    /// against. Diffed against the current text to recompute the effective range when the document
+    /// has moved on. Null for page-level comments.
+    /// </summary>
+    [Browsable(false)]
+    public string? AnchorText { get; init; }
+
+    /// <summary>
+    /// Effective start of the highlight in the CURRENT document text, recomputed at display time.
+    /// Not persisted — derived from the capture via the version delta. <c>-1</c> when not resolved.
+    /// </summary>
+    [Browsable(false)]
+    [JsonIgnore]
+    public int EffectiveStart { get; init; } = -1;
+
+    /// <summary>
+    /// Effective end (exclusive) of the highlight in the CURRENT document text. Not persisted.
+    /// </summary>
+    [Browsable(false)]
+    [JsonIgnore]
+    public int EffectiveEnd { get; init; } = -1;
+
+    /// <summary>
+    /// The document version the <see cref="EffectiveStart"/>/<see cref="EffectiveEnd"/> were resolved
+    /// against (the current version at display time). Not persisted.
+    /// </summary>
+    [Browsable(false)]
+    [JsonIgnore]
+    public long EffectiveVersion { get; init; }
 
     /// <summary>
     /// Author of the comment (username or display name).

@@ -103,7 +103,7 @@ public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
     /// 0) Activate the grain
     /// 1) Send CreateCommentRequest
     /// 2) Verify response
-    /// 3) Verify comment node carries the anchor (HighlightedText + From/ToPosition + Version)
+    /// 3) Verify comment node carries the anchor (HighlightedText + Start/Length + Version)
     /// 4) Verify the document text was NOT mutated (comments live on the satellite, not the doc)
     /// </summary>
     [Fact(Timeout = 60000)]
@@ -143,9 +143,9 @@ public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
         comment.Author.Should().Be("TestAuthor");
         comment.MarkerId.Should().Be(commentResponse.MarkerId);
         comment.HighlightedText.Should().Be("satellite entities");
-        comment.FromPosition.Should().BeGreaterThanOrEqualTo(0, "the selection should anchor to a rendered-text range");
-        comment.ToPosition.Should().BeGreaterThan(comment.FromPosition);
-        Output.WriteLine($"Comment node verified: {commentPath} anchored at {comment.FromPosition}-{comment.ToPosition} v{comment.Version}");
+        comment.Start.Should().BeGreaterThanOrEqualTo(0, "the selection should anchor to a captured range");
+        comment.Length.Should().BeGreaterThan(0);
+        Output.WriteLine($"Comment node verified: {commentPath} anchored at {comment.Start}+{comment.Length} v{comment.Version}");
 
         // 4) The new comment must NOT be injected into the document text — it is anchored on the
         //    satellite and the highlight is re-derived at render time. (The sample doc already
