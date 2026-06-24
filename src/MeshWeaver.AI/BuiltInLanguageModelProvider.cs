@@ -89,12 +89,19 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
             catch { /* malformed section — skip stamping */ }
             endpoint ??= source.DefaultEndpoint;
 
-            // Model id list: config wins when present, else the source's bootstrap
-            // defaults. Empty for catalogs that are auto-listed/added later
-            // (OpenRouter, OpenAICompatible) — those ship a provider node with no children.
+            // Model id list: explicitly-configured Models[] always win (the operator asked
+            // for them). Otherwise fall back to the source's bootstrap defaults — but ONLY
+            // when the provider is actually usable. A RequiresApiKey source with no key
+            // configured would seed UNUSABLE default models (e.g. OpenAI's gpt-4o/gpt-4o-mini
+            // with no OpenAI:ApiKey) that pollute the picker as un-selectable/invalid entries.
+            // The provider node itself is still emitted below (create-if-absent) so an admin
+            // can add a key later; we just don't seed its phantom models until then.
+            var bootstrapDefaults = (source.RequiresApiKey && string.IsNullOrWhiteSpace(apiKey))
+                ? ImmutableArray<string>.Empty
+                : source.EffectiveModelIds;
             var models = (configuredModels is { Length: > 0 }
                     ? configuredModels.Where(m => !string.IsNullOrWhiteSpace(m))
-                    : source.EffectiveModelIds.Where(m => !string.IsNullOrWhiteSpace(m)))
+                    : bootstrapDefaults.Where(m => !string.IsNullOrWhiteSpace(m)))
                 .ToImmutableArray();
 
             // Always emit ONE ModelProvider node per source at Provider/{ProviderName},
