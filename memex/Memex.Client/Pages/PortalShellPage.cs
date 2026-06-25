@@ -119,16 +119,27 @@ public sealed class PortalShellPage : ContentPage
         var chatToggle = RoundIcon("💬");
         chatToggle.Clicked += (_, _) => ToggleChat();
 
+        // A "?" inside the search box → the full query-syntax doc, so users can learn the search/catalog syntax.
+        var searchHelp = new Button
+        {
+            Text = "?", FontSize = 14, FontAttributes = FontAttributes.Bold,
+            WidthRequest = 28, HeightRequest = 28, CornerRadius = 14, Padding = 0,
+            BackgroundColor = Colors.Transparent, TextColor = Colors.Gray,
+        };
+        searchHelp.Clicked += (_, _) => NavigateToNode("Doc/DataMesh/QuerySyntax", "Query syntax", "Overview");
+        var searchContent = new Grid { ColumnDefinitions = { new(GridLength.Star), new(GridLength.Auto) } };
+        searchContent.Add(_search, 0);
+        searchContent.Add(searchHelp, 1);
         var searchBox = new Border
         {
             StrokeThickness = 1,
             Stroke = Color.FromArgb(BorderColor),
             BackgroundColor = Color.FromArgb("#1C1C1E"),
-            Padding = new Thickness(12, 0),
+            Padding = new Thickness(12, 0, 2, 0),
             Margin = new Thickness(6, 0),
             StrokeShape = new RoundRectangle { CornerRadius = 17 },
             HeightRequest = 34,
-            Content = _search,
+            Content = searchContent,
             HorizontalOptions = LayoutOptions.Fill,
         };
 

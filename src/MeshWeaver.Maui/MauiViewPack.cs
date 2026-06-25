@@ -91,8 +91,19 @@ public sealed class MauiControlRenderer(MauiViewRegistry registry) : IMauiContro
         // control on a later Full frame, so a subscription torn down on a spurious Unloaded (the old churn)
         // missed it. Dispose only when the host is finally removed AND not re-added (deferred check).
         sub = stream.GetControlStream(area)
-            .Subscribe(ctrl => MainThread.BeginInvokeOnMainThread(() =>
-                host.Content = ctrl is UiControl c ? RenderControl(c, stream, area) : null));
+            // Don't spin forever: if an area's control never arrives, surface WHY (timeout) instead of an
+            // eternal spinner — so an unresolvable nested/remote area is diagnosable, not a mystery.
+            .Timeout(TimeSpan.FromSeconds(15))
+            .Subscribe(
+                ctrl => MainThread.BeginInvokeOnMainThread(() =>
+                    host.Content = ctrl is UiControl c ? RenderControl(c, stream, area) : null),
+                ex => MainThread.BeginInvokeOnMainThread(() =>
+                    host.Content = new Label
+                    {
+                        Text = $"⚠ area '{area}' didn't resolve — {ex.GetType().Name}",
+                        TextColor = Colors.OrangeRed, FontSize = 11, Margin = new Thickness(8),
+                        LineBreakMode = LineBreakMode.WordWrap,
+                    }));
         host.Unloaded += (_, _) => MainThread.BeginInvokeOnMainThread(() =>
         {
             if (host.Parent is null) { sub?.Dispose(); sub = null; }   // only if it didn't get re-parented
