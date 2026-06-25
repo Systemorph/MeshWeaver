@@ -185,8 +185,17 @@ public sealed class PortalShellPage : ContentPage
         base.OnAppearing();
         if (_started) return;
         _started = true;
-        // Apply the resolved UI zoom across the whole app (Device→User→Space→System cascade).
-        _zoomSub = _prefs.ApplyTo(this);
+        // Zoom the CONTENT FRAME only — scaling the whole page (ApplyTo) pushes the right-side title-bar
+        // menus off-screen. The content grows; the chrome stays full-width so every menu stays reachable.
+        _zoomSub = _prefs.Resolved
+            .Select(p => p.ZoomLevel)
+            .DistinctUntilChanged()
+            .Subscribe(zoom => MainThread.BeginInvokeOnMainThread(() =>
+            {
+                _frame.AnchorX = 0;
+                _frame.AnchorY = 0;
+                _frame.Scale = zoom;
+            }));
         // The shell renders whatever the navigation service says is "where we are", and reloads the menus.
         _nav.Current.Subscribe(loc => MainThread.BeginInvokeOnMainThread(() => Render(loc)));
         NavigateHome();
