@@ -74,13 +74,17 @@ internal class MeshNodeCompilationService(
                 return await asyncWork();
         }));
 
-    // Synchronous heavy work (assembly load + reflection). Run it on the ThreadPool via
-    // Task.Run(Func<T>) DIRECTLY — no Task.FromResult(syncWork()) wrap. syncWork ran on the
-    // pool either way (it was invoked inside the async lambda), so the completed-Task wrapper
-    // was pure ceremony. Task.Run(Func<T>) schedules the sync delegate on TaskScheduler.Default
-    // with the same no-gate / no-captured-scheduler guarantees the async overload relies on.
+    // Synchronous heavy work (Roslyn Emit + assembly load + reflection). Run it on a
+    // DEDICATED long-running thread via CompileThread.Run — NOT the ThreadPool. A Roslyn Emit
+    // is multi-second, CPU-bound, synchronous work; on Task.Run it pins a ThreadPool worker
+    // thread for its whole duration, and a burst of compiles starves the reactive continuations
+    // (which also run on the ThreadPool, growing only ~1-2 threads/s) that deliver every
+    // cross-hub response — the bulk-only "different test times out each run" flake class. The
+    // dedicated thread keeps the compile's CPU off the pool the actor/reactive scheduler needs.
+    // Same no-gate / no-captured-scheduler / ExecutionContext-flows (AccessService identity)
+    // guarantees as Task.Run — see CompileThread.
     private IObservable<T> OnThreadPool<T>(Func<T> syncWork)
-        => OnThreadPoolCore(() => Task.Run(() =>
+        => OnThreadPoolCore(() => CompileThread.Run(() =>
         {
             var accessService = hub.ServiceProvider.GetService<AccessService>();
             using (accessService?.ImpersonateAsSystem())
