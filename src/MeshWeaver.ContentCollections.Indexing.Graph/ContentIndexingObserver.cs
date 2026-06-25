@@ -177,24 +177,39 @@ public sealed class ContentIndexingObserver : IContentUploadObserver
             hub,
             partition,
             $"Re-index {collectionPaths.Count} collection(s)",
-            // One collection at a time (Concat) keeps the progress log ordered; the command completes
-            // with a single Unit once every collection has been walked.
+            // One collection at a time (Concat) keeps the progress log ordered. Each collection emits
+            // its count of FAILED files (per-file errors are isolated below, so every file is still
+            // attempted). The counts roll up: a non-zero total fails the WHOLE activity so its terminal
+            // Status reflects reality (and the activity-failure → admin notification fires), while the
+            // per-file errors stay in the log. A clean run completes with a single Unit.
             ctx => collectionPaths
                 .Select(c => ReindexCollection(c, ctx))
                 .ToObservable()
                 .Concat()
-                .DefaultIfEmpty(Unit.Default)
-                .TakeLast(1),
+                .Aggregate(0, (total, failed) => total + failed)
+                .SelectMany(failed => failed == 0
+                    ? Observable.Return(Unit.Default)
+                    : Observable.Throw<Unit>(new InvalidOperationException(
+                        $"Content re-index completed with {failed} failed file(s) — see the activity "
+                        + "log for the per-file errors."))),
             onActivityCreated);
     }
 
-    private IObservable<Unit> ReindexCollection(string collectionPath, ContentIndexingActivityContext ctx) =>
+    /// <summary>
+    /// Walks one collection and indexes every file, emitting the number of files that FAILED. Per-file
+    /// errors are isolated (logged + counted), so a single corrupt/unparseable file (e.g. a PDF whose
+    /// trailer PdfPig can't locate) never aborts the rest of the walk — but the count rolls up so the
+    /// owning activity ends Failed when any file failed. Cancellation is NOT a per-file failure: it
+    /// propagates so the activity terminates Cancelled.
+    /// </summary>
+    private IObservable<int> ReindexCollection(string collectionPath, ContentIndexingActivityContext ctx) =>
         Observable.Defer(() =>
         {
             ctx.Log($"Scanning collection '{collectionPath}'.");
             return RegisterCollection(collectionPath).SelectMany(contentService => EnumerateFiles(contentService, collectionPath, ctx.CancellationToken)
                 // Sequentially index each file (Concat): each IndexFile leaf takes its own pool slots;
                 // serialising the walk keeps the activity log ordered and embed concurrency bounded.
+                // Each file emits its failure count (0 = indexed/skipped/no-text, 1 = failed).
                 .Select(filePath => Observable.Defer(() =>
                 {
                     ctx.CancellationToken.ThrowIfCancellationRequested();
@@ -202,21 +217,27 @@ public sealed class ContentIndexingObserver : IContentUploadObserver
                         .SelectMany(bytes =>
                         {
                             if (bytes is null)
-                                return Observable.Return(Unit.Default);
+                                return Observable.Return(0);
                             var fileName = System.IO.Path.GetFileName(filePath);
                             return indexingService.IndexFile(collectionPath, filePath, fileName, bytes)
                                 .Take(1)
                                 .Select(result =>
                                 {
                                     ctx.Log($"'{filePath}': {result.Status} ({result.ChunkCount} chunk(s)).");
-                                    return Unit.Default;
-                                });
+                                    return 0;
+                                })
+                                // Per-file isolation: log + count the failure and CONTINUE the walk.
+                                // Cancellation is re-thrown so it aborts the activity (Cancelled), never
+                                // counted as a content failure.
+                                .Catch<int, Exception>(ex => ex is OperationCanceledException
+                                    ? Observable.Throw<int>(ex)
+                                    : Observable.Return(1).Do(_ =>
+                                        ctx.Log($"'{filePath}': FAILED — {ex.Message}", LogLevel.Error)));
                         });
                 }))
                 .Concat()
-                .DefaultIfEmpty(Unit.Default)
-                .TakeLast(1)
-                .Do(_ => ctx.Log($"Collection '{collectionPath}' done.")));
+                .Aggregate(0, (failed, fileFailures) => failed + fileFailures)
+                .Do(failed => ctx.Log($"Collection '{collectionPath}' done ({failed} failed).")));
         });
 
     /// <summary>

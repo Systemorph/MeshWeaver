@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -141,8 +142,15 @@ internal static class ContentIndexingActivity
                             logger?.LogWarning(ex, "Indexing activity {Path} {Outcome}", activityPath,
                                 cancelled ? "cancelled" : "failed");
                             return Finish(workspace, accessService, owner, activityPath,
-                                cancelled ? ActivityStatus.Cancelled : ActivityStatus.Failed,
-                                cancelled ? "Cancelled." : ex.Message, logger);
+                                    cancelled ? ActivityStatus.Cancelled : ActivityStatus.Failed,
+                                    cancelled ? "Cancelled." : ex.Message, logger)
+                                // A genuine failure (not a user cancel) is surfaced to platform
+                                // admins — the graceful sink for an infrastructure failure. Best
+                                // effort: never re-throws, so it cannot turn one failed activity
+                                // into a second failure. See the /storm + /async skills.
+                                .SelectMany(_ => cancelled
+                                    ? Observable.Return(Unit.Default)
+                                    : NotifyAdminsOfFailure(hub, accessService, activityPath, ex.Message, logger));
                         })
                         .Finally(() =>
                         {
@@ -215,5 +223,43 @@ internal static class ContentIndexingActivity
                 };
             }).Select(_ => Unit.Default);
         }
+    }
+
+    /// <summary>
+    /// On an indexing activity ending Failed, emits ONE notification anchored under the
+    /// <c>Admin</c> partition (PermissionEvaluator.AdminScope) so every platform admin — and only
+    /// they, via RLS on the Admin partition — sees it in their bell; the bell navigates to the
+    /// failed activity. Emitted as <b>System</b> (infrastructure identity, so the write does not
+    /// depend on the failed round's user context surviving the reactive hop). Best-effort: a
+    /// notify error is logged and absorbed here — this IS the graceful sink, so it must never throw
+    /// (a thrown notify would turn one failed activity into a second failure / a retry). Mirrors
+    /// NodeTypeCompileParkRegistry.EmitFailureNotification.
+    /// </summary>
+    private static IObservable<Unit> NotifyAdminsOfFailure(
+        IMessageHub hub, AccessService? accessService, string activityPath, string error, ILogger? logger)
+    {
+        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService is null)
+            return Observable.Return(Unit.Default);
+
+        // ImpersonateAsSystem is set when CreateNotification CALLS CreateNode (the write primitive
+        // snapshots the ambient AccessContext at call time and carries it through the later
+        // Subscribe — see AccessContextPropagation.md), so the cold write still runs as System.
+        using (accessService?.ImpersonateAsSystem())
+            return NotificationService.CreateNotification(
+                    meshService,
+                    "Admin",
+                    "Content indexing failed",
+                    $"The indexing activity '{activityPath}' ended in failure: {error}",
+                    NotificationType.General,
+                    targetNodePath: activityPath,
+                    createdBy: "system")
+                .Select(_ => Unit.Default)
+                .Catch<Unit, Exception>(ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "Failed to emit admin notification for failed indexing activity {Path}", activityPath);
+                    return Observable.Return(Unit.Default);
+                });
     }
 }
