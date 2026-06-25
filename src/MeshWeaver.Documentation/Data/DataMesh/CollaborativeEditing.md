@@ -10,17 +10,18 @@ Work together on documents in real time — comment on passages, propose edits a
 ---
 
 ## How It Works: Annotations as Satellite Entities
-<svg viewBox="0 0 760 340" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+
+<svg viewBox="0 0 760 360" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
       <polygon points="0 0, 10 3.5, 0 7" fill="currentColor" fill-opacity=".55"/>
     </marker>
   </defs>
-  <rect x="10" y="10" width="740" height="320" rx="12" fill="none" stroke="currentColor" stroke-opacity=".15" stroke-width="1"/>
-  <text x="380" y="32" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="11" font-weight="bold" letter-spacing="1">ANNOTATION ARCHITECTURE &amp; LOAD–EDIT–SAVE PIPELINE</text>
+  <rect x="10" y="10" width="740" height="340" rx="12" fill="none" stroke="currentColor" stroke-opacity=".15" stroke-width="1"/>
+  <text x="380" y="32" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="11" font-weight="bold" letter-spacing="1">CLEAN DOCUMENT + POSITION-ANCHORED SATELLITES</text>
   <rect x="300" y="48" width="160" height="56" rx="10" fill="#1e88e5"/>
   <text x="380" y="72" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">Document Node</text>
-  <text x="380" y="91" text-anchor="middle" fill="#fff" font-size="11">(Markdown + inline markers)</text>
+  <text x="380" y="91" text-anchor="middle" fill="#fff" font-size="11">clean markdown — no markers</text>
   <line x1="200" y1="76" x2="298" y2="76" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#arrow)"/>
   <line x1="462" y1="76" x2="558" y2="76" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#arrow)"/>
   <rect x="40" y="48" width="160" height="56" rx="10" fill="#5c6bc0"/>
@@ -29,55 +30,51 @@ Work together on documents in real time — comment on passages, propose edits a
   <rect x="560" y="48" width="160" height="56" rx="10" fill="#8e24aa"/>
   <text x="640" y="72" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">_Tracking</text>
   <text x="640" y="91" text-anchor="middle" fill="#fff" font-size="11">TrackedChange satellite</text>
-  <line x1="120" y1="104" x2="120" y2="144" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" stroke-dasharray="5,3"/>
-  <line x1="640" y1="104" x2="640" y2="144" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" stroke-dasharray="5,3"/>
-  <text x="120" y="138" text-anchor="middle" fill="currentColor" fill-opacity=".45" font-size="10">MarkerId links to marker</text>
-  <text x="640" y="138" text-anchor="middle" fill="currentColor" fill-opacity=".45" font-size="10">MarkerId links to marker</text>
-  <line x1="380" y1="104" x2="380" y2="164" stroke="currentColor" stroke-opacity=".35" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="395" y="138" fill="currentColor" fill-opacity=".45" font-size="10">pipeline</text>
-  <rect x="42" y="168" width="155" height="52" rx="8" fill="#26a69a"/>
-  <text x="120" y="190" text-anchor="middle" fill="#fff" font-weight="bold">1. Load</text>
-  <text x="120" y="208" text-anchor="middle" fill="#fff" font-size="11">Read markdown + markers</text>
-  <rect x="222" y="168" width="155" height="52" rx="8" fill="#43a047"/>
-  <text x="300" y="190" text-anchor="middle" fill="#fff" font-weight="bold">2. Separate</text>
-  <text x="300" y="208" text-anchor="middle" fill="#fff" font-size="11">Strip markers → clean text</text>
-  <rect x="402" y="168" width="155" height="52" rx="8" fill="#f57c00"/>
-  <text x="480" y="190" text-anchor="middle" fill="#fff" font-weight="bold">3. Edit</text>
-  <text x="480" y="208" text-anchor="middle" fill="#fff" font-size="11">User edits; overlays render</text>
-  <rect x="582" y="168" width="155" height="52" rx="8" fill="#e53935"/>
-  <text x="660" y="190" text-anchor="middle" fill="#fff" font-weight="bold">4. Save</text>
-  <text x="660" y="208" text-anchor="middle" fill="#fff" font-size="11">Shift positions + Reassemble</text>
-  <line x1="197" y1="194" x2="220" y2="194" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <line x1="377" y1="194" x2="400" y2="194" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <line x1="557" y1="194" x2="580" y2="194" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="120" y="254" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="11">storage</text>
-  <text x="300" y="254" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="11">AnnotationSyncService</text>
-  <text x="480" y="254" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="11">auto-save 500 ms throttle</text>
-  <text x="660" y="254" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="11">ComputePositionShifts()</text>
-  <line x1="660" y1="220" x2="660" y2="276" stroke="currentColor" stroke-opacity=".3" stroke-width="1.2" stroke-dasharray="4,3"/>
-  <line x1="660" y1="276" x2="42" y2="276" stroke="currentColor" stroke-opacity=".3" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
-  <text x="380" y="293" text-anchor="middle" fill="currentColor" fill-opacity=".4" font-size="10">markers re-injected → saved back to Document Node</text>
-  <line x1="42" y1="276" x2="42" y2="220" stroke="currentColor" stroke-opacity=".3" stroke-width="1.2" stroke-dasharray="4,3"/>
+  <text x="120" y="124" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="10">captures start, length,</text>
+  <text x="120" y="138" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="10">version, anchor text</text>
+  <text x="640" y="124" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="10">+ original / suggested text</text>
+  <text x="640" y="138" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="10">(insert / delete / replace)</text>
+  <line x1="380" y1="104" x2="380" y2="158" stroke="currentColor" stroke-opacity=".35" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="392" y="135" fill="currentColor" fill-opacity=".45" font-size="10">at render</text>
+  <rect x="40" y="162" width="170" height="52" rx="8" fill="#26a69a"/>
+  <text x="125" y="184" text-anchor="middle" fill="#fff" font-weight="bold">anchor text @ v3</text>
+  <text x="125" y="202" text-anchor="middle" fill="#fff" font-size="11">the text when captured</text>
+  <rect x="232" y="162" width="170" height="52" rx="8" fill="#43a047"/>
+  <text x="317" y="184" text-anchor="middle" fill="#fff" font-weight="bold">current text @ v7</text>
+  <text x="317" y="202" text-anchor="middle" fill="#fff" font-size="11">the document now</text>
+  <rect x="424" y="162" width="150" height="52" rx="8" fill="#f57c00"/>
+  <text x="499" y="184" text-anchor="middle" fill="#fff" font-weight="bold">diff (version delta)</text>
+  <text x="499" y="202" text-anchor="middle" fill="#fff" font-size="11">map the offsets</text>
+  <rect x="596" y="162" width="124" height="52" rx="8" fill="#e53935"/>
+  <text x="658" y="184" text-anchor="middle" fill="#fff" font-weight="bold">effective range</text>
+  <text x="658" y="202" text-anchor="middle" fill="#fff" font-size="11">in the live text</text>
+  <line x1="210" y1="188" x2="230" y2="188" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="402" y1="188" x2="422" y2="188" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="574" y1="188" x2="594" y2="188" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="380" y="252" text-anchor="middle" fill="currentColor" fill-opacity=".55" font-size="11">The highlight (comment) or the inline diff (change) is rendered at the effective range —</text>
+  <text x="380" y="270" text-anchor="middle" fill="currentColor" fill-opacity=".55" font-size="11">a transient overlay for that one render. The stored document is never modified.</text>
+  <text x="380" y="300" text-anchor="middle" fill="currentColor" fill-opacity=".45" font-size="10">Accepting a change applies its text to the document; rejecting just drops the satellite.</text>
 </svg>
-*Annotation satellite entities live beside the document; the four-step pipeline separates markers from editable text and reassembles them on save.*
+*The document text stays clean. Each annotation captures the character range it covers (plus the document version and the text at that version); the live highlight or diff is recomputed at render time.*
 
-MeshWeaver stores annotations **beside** the document, not inside it. Every comment or tracked change is a satellite entity living in a dedicated partition next to the document node:
+MeshWeaver stores annotations **beside** the document, never inside it. Every comment or tracked change is a satellite entity living in a dedicated partition next to the document node:
 
 | Annotation type | Partition | Extension class |
 |---|---|---|
 | Comment | `_Comment` | `CommentsExtensions` |
 | Tracked change | `_Tracking` | `AnnotationExtensions` |
 
-The markdown source itself holds lightweight **inline markers** (`text`) as the authoritative record of which text range an annotation covers. Positions are always *derived* from those markers at load time — they are never stored on the entities.
+The document's markdown is kept **clean** — nothing is woven into it. Each annotation records, on the satellite, the character range it covers (`Start`/`Length`), the document **version** that range was captured against, and the document **text** at that version (the *anchor*). The inline highlight or diff is never persisted in the document; it is re-derived every time the document is rendered.
 
-### The load–edit–save cycle
+### Capturing and recomputing positions
 
-Every time a document is opened or saved, the system runs a three-step pipeline:
+There is no "strip markers / reassemble" round-trip and no marker is ever written into the source. Instead:
 
-1. **Load** — read markdown including inline markers.
-2. **Separate** — `AnnotationSyncService.Separate()` strips the markers to produce clean editable text plus ephemeral position ranges.
-3. **Edit** — the user edits clean text; annotations render as overlays without cluttering the editor.
-4. **Save** — `ComputePositionShifts()` detects the edit zone, shifts annotation positions accordingly, and `Reassemble()` re-injects markers before writing back. This runs inside the existing 500 ms auto-save throttle.
+1. **Capture** — when you comment or suggest, the satellite records `Start`, `Length`, `Version`, and `AnchorText` (the clean document text at that version) — plus the highlighted/affected text.
+2. **Recompute** — when the document is displayed, each annotation's **effective range** is computed against the current text. If the document is still at the captured version, the stored offsets are used directly; if it has moved on, the engine **diffs** the anchor text against the current text and maps the offsets through that diff (a `diff_xIndex`-style position map). This is exposed as `EffectiveStart` / `EffectiveEnd` / `EffectiveVersion`.
+3. **Overlay** — the comment highlight, or the tracked-change diff, is injected as a transient span for that render only.
+
+Because the range is recomputed from the actual edit delta, an annotation follows its text when content is inserted or deleted above it — without the document ever carrying annotation state.
 
 ### Annotation entity reference
 
@@ -85,7 +82,9 @@ Every time a document is opened or saved, the system runs a three-step pipeline:
 
 | Field | Purpose |
 |---|---|
-| `MarkerId` | Links to the inline marker in the markdown source |
+| `Start` / `Length` | The captured character range in the document's clean text |
+| `Version` / `AnchorText` | The document version + text the range was captured against |
+| `EffectiveStart` / `EffectiveEnd` | The range recomputed for the current text (not persisted) |
 | `HighlightedText` | The originally selected text |
 | `Status` | `Active` or `Resolved` |
 | `PrimaryNodePath` | Document path used for permission delegation |
@@ -94,7 +93,9 @@ Every time a document is opened or saved, the system runs a three-step pipeline:
 
 | Field | Purpose |
 |---|---|
-| `ChangeType` | `Insertion` or `Deletion` |
+| `ChangeType` | `Insertion`, `Deletion`, or `Replacement` |
+| `Start` / `Length` / `Version` / `AnchorText` | The captured range + anchor (as above) |
+| `OriginalText` / `NewText` | The text being removed/replaced, and the suggested text |
 | `Status` | `Pending`, `Accepted`, or `Rejected` |
 | `PrimaryNodePath` | Document path used for permission delegation |
 
@@ -104,7 +105,7 @@ Both types have `IsSatelliteType = true`.
 
 ## Adding Comments
 
-Select any passage and click **Comment** in the toolbar. The system creates a `Comment` entity whose `MarkerId` links it to the inline marker that now wraps your selection.
+Select any passage and click **Comment**. A `Comment` satellite is created that captures the selected range, the document version, and the anchor text — the document itself is untouched, so commenting works even without edit access. The highlight is rendered inline from the satellite.
 
 > Comments without a selected range attach to the bottom of the page.
 
@@ -112,29 +113,29 @@ Select any passage and click **Comment** in the toolbar. The system creates a `C
 
 > MeshWeaver is a powerful platform for building collaborative applications. It provides real-time synchronization and conflict-free editing.
 
-In the above example three comment markers are embedded in the source:
+A reviewer might attach comments to:
 
-- `c1` — "powerful platform" flagged for more specific metrics
-- `c2` — "collaborative applications" tagged with a request for examples
-- `c3` — "conflict-free editing" questioned about the underlying technology
+- "powerful platform" — flag for more specific metrics
+- "collaborative applications" — request examples
+- "conflict-free editing" — ask about the underlying technology
 
 ---
 
 ## Making Suggestions (Track Changes)
 
-**Suggest Edit** lets you propose changes without altering the document directly. A `TrackedChange` entity is created; reviewers can accept or reject each suggestion individually — or all at once.
+**Suggest Edit** lets you propose changes without altering the document directly. A `TrackedChange` satellite is created (an insertion, deletion, or replacement); reviewers can accept or reject each suggestion individually — or all at once. The suggestion is shown as an inline **diff** computed from the satellite.
 
 ### Suggested additions
 
-Proposed new text gets a green underline.
+Proposed new text shows as a green-underlined insertion.
 
 > The quarterly report shows significant growth of 25% in user engagement.
 
 ### Suggested deletions
 
-Text proposed for removal gets a . The original text stays visible until the suggestion is decided.
+Text proposed for removal shows struck through. The original text stays visible until the suggestion is decided.
 
-> Please review the  documentation before the meeting.
+> Please review the outdated documentation before the meeting.
 
 ### Combined example
 
@@ -150,36 +151,32 @@ Text proposed for removal gets a . The original text stays visible until the sug
 
 ### Accepting a change
 
-Click the **checkmark** next to a suggestion:
+Click the **checkmark** next to a suggestion — the suggested text is applied to the document at the change's current effective range, and the satellite is dropped.
 
-- **Accept insertion** — the suggested text becomes permanent; `TrackedChange.Status` → `Accepted`.
-- **Accept deletion** — the marked text is removed; `TrackedChange.Status` → `Accepted`.
+- **Accept insertion** — the suggested text is inserted into the document.
+- **Accept deletion** — the marked text is removed.
+- **Accept replacement** — the old text is swapped for the new.
 
 ### Rejecting a change
 
-Click the **X** next to a suggestion:
-
-- **Reject insertion** — the suggested text is discarded; `TrackedChange.Status` → `Rejected`.
-- **Reject deletion** — the original text is restored; `TrackedChange.Status` → `Rejected`.
+Click the **X** next to a suggestion — the satellite is dropped and the document is left exactly as it was.
 
 ### Bulk review
 
-Use the toolbar **Accept All** and **Reject All** buttons to resolve every pending suggestion in one step.
+Use **Accept All** / **Reject All** to resolve every pending suggestion in one step.
 
 ---
 
 ## Position Tracking Under Edits
 
-When a user types between two annotations, MeshWeaver automatically recomputes all positions so nothing drifts:
+When the document is edited above or around an annotation, its highlight follows the text — without any stored position drifting, because positions are recomputed from the edit delta:
 
-1. `AnnotationSyncService.Separate()` parses markers into clean text and ephemeral position ranges on load.
-2. `ComputePositionShifts()` detects the **edit zone** by diffing the old and new clean text.
-3. Annotations **before** the edit zone keep their positions unchanged.
-4. Annotations **after** the edit zone shift by the content-length delta.
-5. Annotations **within** the edit zone are clamped to the nearest boundary.
-6. `Reassemble()` re-injects markers at their new positions before saving.
+1. Each annotation captured `Start`/`Length` against a known `Version` and `AnchorText`.
+2. At display, if the document has advanced past that version, the engine diffs `AnchorText` against the current text.
+3. Offsets **before** an edit map unchanged; offsets **after** shift by the net length delta; an edit **inside** the range grows or shrinks it; if the anchored text is gone the annotation is dropped from the inline view.
+4. The result is the `EffectiveStart`/`EffectiveEnd` used for that render.
 
-Because positions are always re-derived from markers, there is no stored position state to go stale.
+This is a pure, deterministic text operation — the same engine drives both comment highlights and the tracked-change diff, and it is covered by an extensive unit-test suite.
 
 ---
 
@@ -189,8 +186,7 @@ Multiple editors work on the same document without conflicts:
 
 - Each collaborator's suggestions are **colour-coded** by author.
 - Comments show the **author name and timestamp**.
-- Changes sync automatically within the auto-save window.
-- Annotation entities update **reactively** for every connected editor.
+- Annotation satellites update **reactively** for every connected editor.
 
 ### Example — team review session
 
