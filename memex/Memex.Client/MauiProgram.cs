@@ -17,6 +17,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Memex.Client.Pages;
+using Memex.Client.Prefs;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Plugin.Maui.Audio;
@@ -91,6 +92,9 @@ public static class MauiProgram
             .AddSpaceType()
             // Connectable-mesh node type; THIS instance is a MemexInstance node too.
             .AddMemexInstanceType()
+            // Layered application preferences (Device → User → Space → System cascade) + UI zoom.
+            // Registers the AppPreferences node type, the IPreferencesService singleton, and SettingsPage.
+            .AddPreferences()
             // Content service (file collections) — non-Blazor; the mesh + native UI use it.
             .ConfigureServices(services => services
                 .AddContentService())
