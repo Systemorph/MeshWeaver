@@ -138,6 +138,8 @@ public static class MauiProgram
         // LayoutAreaView), on-device voice, and the instance manager.
         builder.Services.AddSingleton<InstanceStore>();
         builder.Services.AddSingleton<DeviceOnboarding>();
+        // The single source of truth for "where we are" — drives the content frame AND the top-bar menu.
+        builder.Services.AddSingleton<NavigationService>();
         builder.Services.AddTransient<OnboardingPage>();
         builder.Services.AddTransient<PortalShellPage>();
         builder.Services.AddTransient<VoiceView>();

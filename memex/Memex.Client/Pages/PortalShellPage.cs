@@ -20,14 +20,14 @@ namespace Memex.Client.Pages;
 /// </summary>
 public sealed class PortalShellPage : ContentPage
 {
-    private sealed record NavEntry(string Title, Func<View> Build, string? NodePath, string Area);
+    // The User node's default area (UserActivityLayoutAreas.ActivityArea) — home renders device-user/Activity.
+    private const string UserActivityArea = "Activity";
 
     private readonly IServiceProvider _services;
     private readonly InstanceStore _store;
     private readonly IMessageHub _hub;
+    private readonly NavigationService _nav;
 
-    private readonly List<NavEntry> _history = new();
-    private int _index = -1;
     private bool _started;
 
     private readonly Button _back = NavButton("←", 18);
@@ -46,19 +46,20 @@ public sealed class PortalShellPage : ContentPage
     private Border _chatColumn = null!;
     private MemexInstance? _current;
 
-    public PortalShellPage(IServiceProvider services, InstanceStore store, IMessageHub hub)
+    public PortalShellPage(IServiceProvider services, InstanceStore store, IMessageHub hub, NavigationService nav)
     {
         _services = services;
         _store = store;
         _hub = hub;
+        _nav = nav;
         _current = store.Instances.FirstOrDefault();
         Title = "Memex";
 
         // ── top bar ──────────────────────────────────────────────────────────────────────────────────
         var home = NavButton("🏠", 16);
         home.Clicked += (_, _) => NavigateHome();
-        _back.Clicked += (_, _) => GoBack();
-        _forward.Clicked += (_, _) => GoForward();
+        _back.Clicked += (_, _) => _nav.GoBack();
+        _forward.Clicked += (_, _) => _nav.GoForward();
         _instance.Clicked += async (_, _) => await ShowInstanceSwitcherAsync();
         _search.Completed += (_, _) => RunSearch();
         _menuOverflow.Clicked += async (_, _) => await ShowMenuSheetAsync();
@@ -135,6 +136,8 @@ public sealed class PortalShellPage : ContentPage
         base.OnAppearing();
         if (_started) return;
         _started = true;
+        // The shell renders whatever the navigation service says is "where we are", and reloads the menu.
+        _nav.Current.Subscribe(loc => MainThread.BeginInvokeOnMainThread(() => Render(loc)));
         NavigateHome();
     }
 
@@ -143,31 +146,22 @@ public sealed class PortalShellPage : ContentPage
 
     // ── navigation history (the content area) ─────────────────────────────────────────────────────────
     private void Navigate(string title, Func<View> build, string? nodePath = null, string area = "Overview")
-    {
-        if (_index < _history.Count - 1)
-            _history.RemoveRange(_index + 1, _history.Count - 1 - _index);
-        _history.Add(new NavEntry(title, build, nodePath, area));
-        _index = _history.Count - 1;
-        Render();
-    }
+        => _nav.Navigate(new NavLocation(title, nodePath, area, build));
 
-    private void GoBack() { if (_index > 0) { _index--; Render(); } }
-    private void GoForward() { if (_index < _history.Count - 1) { _index++; Render(); } }
-
-    private void Render()
+    private void Render(NavLocation? location)
     {
-        var entry = _history[_index];
-        _frame.Content = entry.Build();
-        _back.IsEnabled = _index > 0;
-        _forward.IsEnabled = _index < _history.Count - 1;
+        if (location is null) return;
+        _frame.Content = location.Build();
+        _back.IsEnabled = _nav.CanGoBack;
+        _forward.IsEnabled = _nav.CanGoForward;
         _back.Opacity = _back.IsEnabled ? 1 : 0.35;
         _forward.Opacity = _forward.IsEnabled ? 1 : 0.35;
         _instance.Text = $"{_current?.Name ?? "Local"} ▾";
-        RefreshMenu(entry);
+        RefreshMenu(location);
     }
 
     // ── platform node menu (from hub.GetMenu — NOT hardcoded) ─────────────────────────────────────────
-    private void RefreshMenu(NavEntry entry)
+    private void RefreshMenu(NavLocation entry)
     {
         _menuSub?.Dispose();
         _menuSub = null;
@@ -236,19 +230,13 @@ public sealed class PortalShellPage : ContentPage
     }
 
     // ── destinations ────────────────────────────────────────────────────────────────────────────────
-    private void NavigateHome() => Navigate("Home", BuildPortalHome);
+    // Home = the user's own Activity area, served by the platform at the user node (device-user/Activity) —
+    // a real node area, so the platform node menu loads in the top bar. Not a hand-rolled dashboard.
+    private void NavigateHome()
+        => NavigateToNode(DeviceOnboarding.DeviceUserId, "Home", UserActivityArea);
 
     private void NavigateToNode(string nodePath, string title, string area)
         => Navigate(title, () => new NodeAreaView(_hub, nodePath, area), nodePath, area);
-
-    private View BuildPortalHome()
-    {
-        var userName = _hub.ServiceProvider.GetService<AccessService>()?.CircuitContext?.Name ?? "you";
-        return new ActivityDashboardView(_hub, userName, $"{_current?.Name ?? "your local"} mesh")
-        {
-            OnNodeSelected = node => NavigateToNode(node.Path, node.Name ?? node.Path, "Overview"),
-        };
-    }
 
     private void RunSearch()
     {
