@@ -386,9 +386,12 @@ public sealed class PortalShellPage : ContentPage
     private static View? BuildIcon(string? icon)
     {
         if (string.IsNullOrEmpty(icon)) return null;
-        // SVG URL / absolute path → image; otherwise an emoji/text glyph.
+        // 🚨 URL / absolute-path icons (e.g. /static/NodeTypeIcons/*.svg) are SERVER assets — the local
+        // client has no HTTP host, so loading them as a network Image throws ("not connected to internet")
+        // and crashes the popup. Skip them; the label carries the meaning. Only emoji / short text glyphs
+        // render (they need no network).
         if (icon.StartsWith("http", StringComparison.OrdinalIgnoreCase) || icon.StartsWith('/'))
-            return new Image { Source = icon, WidthRequest = 18, HeightRequest = 18, VerticalOptions = LayoutOptions.Center };
+            return null;
         return new Label { Text = icon, FontSize = 15, VerticalOptions = LayoutOptions.Center };
     }
 
