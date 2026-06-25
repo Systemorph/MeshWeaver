@@ -177,6 +177,20 @@ public static class LayoutExtensions
         synchronizationItems.GetStream<UiControl>(JsonPointer
             .Parse(LayoutAreaReference.GetControlPointer(area)));
 
+    /// <summary>
+    /// Strongly-typed control-stream variant: deserializes the control at <paramref name="area"/>'s
+    /// pointer directly to <typeparamref name="T"/> — the way a renderer reads a sidecar control slot
+    /// such as <c>$Menu:{context}</c> (a <c>MenuControl</c>) or <c>$Dialog</c> (a <c>DialogControl</c>),
+    /// instead of the polymorphic <see cref="UiControl"/> base. Yields <c>null</c> while the slot is
+    /// absent. Re-emits on every (re-)snapshot, like <see cref="GetControlStream"/>.
+    /// </summary>
+    public static IObservable<T?> GetControlStream<T>(
+        this ISynchronizationStream<JsonElement> synchronizationItems,
+        string area
+    ) where T : class =>
+        synchronizationItems.GetStream<T>(JsonPointer
+            .Parse(LayoutAreaReference.GetControlPointer(area)));
+
     public static IObservable<T> GetStream<T>(
         this ISynchronizationStream<JsonElement> stream,
         JsonPointer referencePointer

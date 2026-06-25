@@ -232,9 +232,21 @@ Menu items navigate to their declared `Area` by appending it to the current path
 
 ## MenuControl and the Entity Store
 
-`MenuControl` is stored at `$Menu` in the entity store, following the same pattern as `DialogControl` at `$Dialog`. It wraps an `IReadOnlyList<NodeMenuItemDefinition>` that may contain hierarchical items with children.
+`MenuControl` is stored at `$Menu` (and `$Menu:{context}` for named contexts) in the entity store, following the same pattern as `DialogControl` at `$Dialog`. It wraps an `IReadOnlyList<NodeMenuItemDefinition>` that may contain hierarchical items with children.
 
-The `LayoutAreaView` component monitors the `$Menu` slot and publishes items to `IMenuItemsProvider`, which `PortalLayoutBase` subscribes to for rendering.
+## Reading the menu — `GetMenu` (the read API)
+
+Because the menu lives **in the layout-area stream**, reading it is the same reactive stream tech as `hub.GetQuery` / `GetControlStream` — there is **no renderer-specific menu reader to replicate**. `MeshWeaver.Mesh.MenuStreamExtensions` exposes one common, renderer-agnostic surface (in `MeshWeaver.Mesh.Contract`):
+
+```csharp
+// On a layout-area stream you already hold (e.g. inside a view):
+areaStream.GetMenu("Node")                       // IObservable<IReadOnlyList<NodeMenuItemDefinition>>
+
+// Hub / workspace shorthand — opens the node's area stream (shared via the remote-stream cache):
+hub.GetMenu((Address)nodePath, new LayoutAreaReference("Overview"), "Node")
+```
+
+`GetMenu(context)` reads `$Menu:{context}` off the stream (`context: null` → the root `$Menu`) and re-emits whenever the node hub re-renders the menu — e.g. a runtime `AccessAssignment` grants a role. **Both renderers consume this one API**: the native MAUI shell subscribes to `hub.GetMenu(...)` to render the node's actions in its top bar; the Blazor `LayoutAreaView` subscribes to `AreaStream.GetMenu(context)` and forwards items to `IMenuItemsProvider` (a per-circuit scoped bridge to `PortalLayoutBase`, **not** a menu store — and never `static`, which would bleed across users/circuits). The menu *providers* themselves stay where they belong: stateless, idempotently-registered (`TryAddEnumerable`) reactive lambdas on the hub configuration (`AddNodeMenuItems` / `AddDefaultMeshMenu`).
 
 ---
 
