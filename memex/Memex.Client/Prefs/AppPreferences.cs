@@ -20,8 +20,9 @@ public record AppPreferences
     /// </summary>
     public double? ZoomLevel { get; init; }
 
-    /// <summary>Hard-coded fallback used when no layer supplies a zoom — 100%.</summary>
-    public const double DefaultZoom = 1.0;
+    /// <summary>Hard-coded fallback used when no layer supplies a zoom. Native MAUI control fonts read
+    /// small on desktop MacCatalyst, so the app starts enlarged (140%); the user can dial it via Settings.</summary>
+    public const double DefaultZoom = 1.4;
 
     /// <summary>Smallest sensible zoom (80%).</summary>
     public const double MinZoom = 0.8;
