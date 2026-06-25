@@ -131,7 +131,9 @@ public sealed class NodeCardListView : ContentView, IDisposable
         };
         card.GestureRecognizers.Add(new TapGestureRecognizer { Command = new Command(() => onSelected?.Invoke(node)) });
         // Roughly 2–3 cards per row.
-        FlexLayout.SetBasis(card, new FlexBasis(0.31f, true));
+        // Fixed-width cards wrap cleanly in the FlexLayout (a percentage basis ignored the margins and
+        // produced ragged rows). The FlexLayout reflows them to the available width.
+        card.WidthRequest = 250;
         return card;
     }
 

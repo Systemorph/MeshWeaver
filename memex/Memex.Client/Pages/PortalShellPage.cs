@@ -485,6 +485,8 @@ public sealed class PortalShellPage : ContentPage
         {
             OnNodeSelected = node => NavigateToNode(node.Path, node.Name ?? node.Path, "Overview"),
             OnThreadCreated = node => NavigateToNode(node.Path, node.Name ?? "Thread", "Overview"),
+            // "New thread" → a full-screen chat composer (the same ChatView the side panel hosts).
+            OnNewThread = () => Navigate("New thread", () => _services.GetRequiredService<ChatView>()),
         };
 
     private void NavigateToNode(string nodePath, string title, string area)

@@ -41,6 +41,9 @@ public sealed class ActivityDashboardView : ContentView
     /// <summary>Raised when a thread is created (composer / "New thread") — the shell opens it.</summary>
     public Action<MeshNode>? OnThreadCreated { get; set; }
 
+    /// <summary>Raised by the "New thread" button — the shell opens an empty chat composer full-screen.</summary>
+    public Action? OnNewThread { get; set; }
+
     public ActivityDashboardView(IMessageHub hub, string userName, string instanceName)
     {
         _hub = hub;
@@ -132,8 +135,7 @@ public sealed class ActivityDashboardView : ContentView
         };
         // Open a thread immediately (visible effect); the user then types into it. Focusing the composer
         // alone reads as "no effect" on desktop (no soft keyboard), so create + open.
-        btn.Clicked += (_, _) => _hub.StartThread(DeviceOnboarding.DeviceUserId, "New thread",
-            onCreated: node => MainThread.BeginInvokeOnMainThread(() => OnThreadCreated?.Invoke(node)));
+        btn.Clicked += (_, _) => OnNewThread?.Invoke();
         return new VerticalStackLayout
         {
             Spacing = 10, Padding = new Thickness(4, 20),
