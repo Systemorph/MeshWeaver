@@ -84,11 +84,6 @@
         <PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />
         <PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="10.0.0" />
         <PackageReference Include="Plugin.Maui.Audio" Version="4.0.0" />
-        <!-- DevExpress .NET MAUI controls (free, no revenue cap) — native menus/popups/drawer for the
-             responsive portal shell. (Controls pulls in Core + CollectionView.) -->
-        <PackageReference Include="DevExpress.Maui.Core" Version="26.1.3" />
-        <PackageReference Include="DevExpress.Maui.CollectionView" Version="26.1.3" />
-        <PackageReference Include="DevExpress.Maui.Controls" Version="26.1.3" />
         <PackageReference Include="Whisper.net" Version="1.9.1" />
         <!-- Base CPU/Metal runtime for every target EXCEPT MacCatalyst. On MacCatalyst the CoreML runtime
              below ships its own (self-contained) native libs — both reference the same static libwhisper.a

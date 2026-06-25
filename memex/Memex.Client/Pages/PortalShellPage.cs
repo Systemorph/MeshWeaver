@@ -1,6 +1,5 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
-using DevExpress.Maui.Controls;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
@@ -10,7 +9,6 @@ using Memex.Client.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Maui.ApplicationModel;
 using Microsoft.Maui.Controls.Shapes;
-using Placement = DevExpress.Maui.Core.Placement;
 
 namespace Memex.Client.Pages;
 
@@ -23,8 +21,8 @@ namespace Memex.Client.Pages;
 /// (<b>Node</b> 🧊, <b>Mesh</b> ▦, <b>AI</b> ✨) come live from <c>hub.GetMenu(path, area, context)</c>
 /// (re-emitting on permission change); the app menus (<b>Settings</b> ⚙, <b>User</b> 👤) come from
 /// <see cref="IClientMenuProvider"/>s. All five render through the SAME DevExpress
-/// <see cref="DXPopup"/> mechanism — a native popup anchored to each round button, its rows tappable
-/// (icon + label), nested <c>Children</c> expanding inline.</para>
+/// native <c>DisplayActionSheet</c> mechanism (dependency-free, works fully offline), nested
+/// <c>Children</c> opening a sub-sheet.</para>
 ///
 /// <para><b>Responsive</b>: wide (≥ <see cref="NarrowThreshold"/> px) shows the menu buttons inline;
 /// narrow collapses them behind a hamburger (☰) that opens a single drawer popup listing every context's
@@ -90,7 +88,6 @@ public sealed class PortalShellPage : ContentPage
 
     private readonly ContentView _frame = new() { VerticalOptions = LayoutOptions.Fill, HorizontalOptions = LayoutOptions.Fill };
     private readonly Border _chatColumn;
-    private DXPopup? _openPopup;   // the currently-open menu/drawer popup (closed before opening another)
 
     public PortalShellPage(
         IServiceProvider services, IMessageHub hub, NavigationService nav, IPreferencesService prefs,
@@ -268,152 +265,68 @@ public sealed class PortalShellPage : ContentPage
         {
             // Narrow: everything (Node/Mesh/AI/Settings/User) behind one "☰" drawer — the mobile split.
             var hamburger = RoundIcon("☰");
-            hamburger.Clicked += (_, _) => ShowDrawer(hamburger);
+            hamburger.Clicked += async (_, _) => await ShowDrawerSheetAsync();
             _menuBar.Children.Add(hamburger);
             return;
         }
-        // Wide: one round button per context that currently has items; tap opens its native popup.
+        // Wide: one round button per context that currently has items; tap opens its native action sheet.
         foreach (var (context, glyph) in MenuContexts)
         {
             var items = ItemsFor(context);
             if (items.Count == 0) continue;
             var button = RoundIcon(glyph);
-            // Node/Mesh popups show the current node name as a header (mirrors the Blazor portal).
-            var header = context is NodeMenuContext or MeshMenuContext ? _currentNodeTitle : null;
-            button.Clicked += (_, _) => ShowContextPopup(button, header, items);
+            var ctx = context;
+            var ctxItems = items;
+            button.Clicked += async (_, _) => await ShowContextSheetAsync(ctx, ctxItems);
             _menuBar.Children.Add(button);
         }
     }
 
-    // ── native DevExpress popups ───────────────────────────────────────────────────────────────────────
+    // ── native menus (DisplayActionSheet — no dependency, works fully offline) ────────────────────────────
 
-    /// <summary>A fresh menu popup: a floating, dismiss-on-outside-tap card placed below its anchor.</summary>
-    private static DXPopup NewPopup() => new()
-    {
-        Placement = Placement.Bottom,
-        AllowScrim = true,
-        CloseOnScrimTap = true,
-        AllowShadow = true,
-        BackgroundColor = Colors.Transparent,   // the rounded inner Border paints the card surface
-    };
-
-    /// <summary>One context's menu: an anchored popup whose rows are the provider/platform items.</summary>
-    private void ShowContextPopup(View anchor, string? header, IReadOnlyList<NodeMenuItemDefinition> items)
+    /// <summary>One context's menu as a native action sheet of its items.</summary>
+    private async Task ShowContextSheetAsync(string title, IReadOnlyList<NodeMenuItemDefinition> items)
     {
         if (items.Count == 0) return;
-        _openPopup?.Close();
-        var popup = NewPopup();
-        var stack = new VerticalStackLayout();
-        if (!string.IsNullOrEmpty(header))
-        {
-            stack.Children.Add(SectionHeader(header!));
-            stack.Children.Add(Divider());
-        }
-        foreach (var item in items)
-            stack.Children.Add(BuildRow(item, popup, depth: 0));
-        popup.Content = Surface(stack, width: 270);
-        _openPopup = popup;
-        popup.Show(anchor);
+        var labels = items.Select(LabelFor).ToArray();
+        var pick = await DisplayActionSheet(title, "Cancel", null, labels);
+        var chosen = items.FirstOrDefault(i => LabelFor(i) == pick);
+        if (chosen is not null) await InvokeItemAsync(chosen);
     }
 
-    /// <summary>The narrow-mode drawer: a single popup listing EVERY context's items under section headers.</summary>
-    private void ShowDrawer(View anchor)
+    /// <summary>Narrow-mode drawer: pick a context, then its items.</summary>
+    private async Task ShowDrawerSheetAsync()
     {
-        _openPopup?.Close();
-        var popup = NewPopup();
-        var stack = new VerticalStackLayout();
-        var first = true;
-        foreach (var (context, glyph) in MenuContexts)
-        {
-            var items = ItemsFor(context);
-            if (items.Count == 0) continue;
-            if (!first) stack.Children.Add(Divider());
-            first = false;
-            stack.Children.Add(SectionHeader($"{glyph}  {context}"));
-            foreach (var item in items)
-                stack.Children.Add(BuildRow(item, popup, depth: 0));
-        }
-        popup.Content = Surface(stack, width: 300);
-        _openPopup = popup;
-        popup.Show(anchor);
+        var contexts = MenuContexts.Where(c => ItemsFor(c.Context).Count > 0).ToArray();
+        if (contexts.Length == 0) return;
+        var labels = contexts.Select(c => $"{c.Glyph}  {c.Context}").ToArray();
+        var pick = await DisplayActionSheet("Menu", "Cancel", null, labels);
+        var chosen = contexts.FirstOrDefault(c => $"{c.Glyph}  {c.Context}" == pick);
+        if (chosen.Context is not null)
+            await ShowContextSheetAsync(chosen.Context, ItemsFor(chosen.Context));
     }
 
-    /// <summary>Builds a tappable menu row; rows with <c>Children</c> toggle an inline (indented) expander.</summary>
-    private View BuildRow(NodeMenuItemDefinition item, DXPopup popup, int depth)
+    /// <summary>Leaf item → navigate; item with <c>Children</c> → a nested action sheet.</summary>
+    private async Task InvokeItemAsync(NodeMenuItemDefinition item)
     {
-        if (item.Area == "_separator")
-            return Divider();
-
-        var row = new Grid
+        if (item.Children is { Count: > 0 } children)
         {
-            Padding = new Thickness(12 + depth * 16, 10, 12, 10),
-            ColumnSpacing = 8,
-            ColumnDefinitions = { new(GridLength.Auto), new(GridLength.Star), new(GridLength.Auto) },
-        };
-        var icon = BuildIcon(item.Icon);
-        if (icon is not null) row.Add(icon, 0);
-        row.Add(new Label { Text = item.Label, TextColor = Colors.White, FontSize = 15, VerticalOptions = LayoutOptions.Center }, 1);
-
-        var hasChildren = item.Children is { Count: > 0 };
-        var container = new VerticalStackLayout { Children = { row } };
-
-        if (hasChildren)
-        {
-            var chevron = new Label { Text = "›", TextColor = Colors.Gray, FontSize = 18, VerticalOptions = LayoutOptions.Center };
-            row.Add(chevron, 2);
-            var children = new VerticalStackLayout { IsVisible = false };
-            foreach (var child in item.Children!)
-                children.Children.Add(BuildRow(child, popup, depth + 1));
-            container.Children.Add(children);
-
-            var tap = new TapGestureRecognizer();
-            tap.Tapped += (_, _) =>
-            {
-                children.IsVisible = !children.IsVisible;
-                chevron.Text = children.IsVisible ? "⌄" : "›";
-            };
-            row.GestureRecognizers.Add(tap);
+            var labels = children.Select(LabelFor).ToArray();
+            var pick = await DisplayActionSheet(item.Label, "Cancel", null, labels);
+            var chosen = children.FirstOrDefault(c => LabelFor(c) == pick);
+            if (chosen is not null) await InvokeItemAsync(chosen);
+            return;
         }
-        else
-        {
-            var tap = new TapGestureRecognizer();
-            tap.Tapped += (_, _) => { popup.Close(); InvokeItem(item); };
-            row.GestureRecognizers.Add(tap);
-        }
-        return container;
+        InvokeItem(item);
     }
 
-    private static View? BuildIcon(string? icon)
-    {
-        if (string.IsNullOrEmpty(icon)) return null;
-        // 🚨 URL / absolute-path icons (e.g. /static/NodeTypeIcons/*.svg) are SERVER assets — the local
-        // client has no HTTP host, so loading them as a network Image throws ("not connected to internet")
-        // and crashes the popup. Skip them; the label carries the meaning. Only emoji / short text glyphs
-        // render (they need no network).
-        if (icon.StartsWith("http", StringComparison.OrdinalIgnoreCase) || icon.StartsWith('/'))
-            return null;
-        return new Label { Text = icon, FontSize = 15, VerticalOptions = LayoutOptions.Center };
-    }
-
-    /// <summary>The opaque, rounded card the popup paints — wraps the scrollable rows.</summary>
-    private static Border Surface(View content, double width) => new()
-    {
-        BackgroundColor = Color.FromArgb(SurfaceBg),
-        Stroke = Color.FromArgb(BorderColor),
-        StrokeThickness = 1,
-        StrokeShape = new RoundRectangle { CornerRadius = 12 },
-        WidthRequest = width,
-        Content = new ScrollView { MaximumHeightRequest = 480, Content = content },
-    };
-
-    private static Label SectionHeader(string text) => new()
-    {
-        Text = text, FontSize = 12, FontAttributes = FontAttributes.Bold,
-        TextColor = Colors.Gray, Padding = new Thickness(12, 10, 12, 4),
-        LineBreakMode = LineBreakMode.TailTruncation,
-    };
-
-    private static BoxView Divider() => new() { HeightRequest = 1, Color = Color.FromArgb(BorderColor), Margin = new Thickness(8, 4) };
+    /// <summary>Prefix the label with an emoji/text glyph; skip server SVG-path icons (can't load offline).</summary>
+    private static string LabelFor(NodeMenuItemDefinition item) =>
+        string.IsNullOrEmpty(item.Icon)
+        || item.Icon.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+        || item.Icon.StartsWith('/')
+            ? item.Label
+            : $"{item.Icon}  {item.Label}";
 
     // ── action mapping (Children handled in BuildRow; this fires for leaf items only) ───────────────────
     private void InvokeItem(NodeMenuItemDefinition item)
