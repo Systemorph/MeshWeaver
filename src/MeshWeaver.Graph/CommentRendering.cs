@@ -1,6 +1,6 @@
 using MeshWeaver.Markdown;
-using MeshWeaver.Markdown.Collaboration;
 using MeshWeaver.Mesh;
+using AnchorMath = MeshWeaver.Markdown.Collaboration.AnchorMath;
 
 namespace MeshWeaver.Graph;
 
@@ -85,29 +85,10 @@ public static class CommentRendering
 
     /// <summary>
     /// Injects a highlight <c>&lt;span class="comment-highlight"&gt;</c> into <paramref name="cleanContent"/>
-    /// at each resolved comment's effective range. The spans exist only for this render — the stored
-    /// document is never modified. Comments must already be resolved (call <see cref="ResolveEffective"/>).
+    /// at each resolved comment's effective range (comments only — see
+    /// <see cref="CollaborativeRenderer.Decorate"/> to overlay comments and tracked changes together).
+    /// The spans exist only for this render. Comments must already be resolved.
     /// </summary>
     public static string DecorateInline(string cleanContent, IReadOnlyCollection<Comment> resolved)
-    {
-        if (string.IsNullOrEmpty(cleanContent) || resolved.Count == 0)
-            return cleanContent ?? "";
-
-        // The inline span only needs the id (class + data-comment-id) — author/date/quote live on the
-        // sidebar card, so the highlight stays minimal: <span class="comment-highlight" data-comment-id="…">.
-        var spans = resolved
-            .Where(c => !string.IsNullOrEmpty(c.MarkerId)
-                        && c.EffectiveStart >= 0 && c.EffectiveEnd > c.EffectiveStart
-                        && c.EffectiveStart <= cleanContent.Length)
-            .Select(c => new AnnotationSpanInfo
-            {
-                Id = c.MarkerId!,
-                Type = "comment",
-                Position = c.EffectiveStart,
-                Length = Math.Min(c.EffectiveEnd, cleanContent.Length) - c.EffectiveStart
-            })
-            .ToList();
-
-        return AnnotationMarkdownExtension.InjectAnnotationSpans(cleanContent, spans);
-    }
+        => CollaborativeRenderer.Decorate(cleanContent, resolved, Array.Empty<TrackedChange>());
 }

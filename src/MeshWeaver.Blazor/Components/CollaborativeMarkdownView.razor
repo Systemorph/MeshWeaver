@@ -7,23 +7,10 @@
 @inherits BlazorView<CollaborativeMarkdownControl, CollaborativeMarkdownView>
 
 <div class="collab-md-container @ViewModeClass" data-theme="@Mode.ToString().ToLower()" @ref="containerRef">
-    @* View mode toolbar — only shown when document has annotations *@
+    @* Toolbar — comment filter + accept/reject-all, shown when there are comments or pending changes *@
     @if (HasAnnotations || HasCommentAnnotations)
     {
         <div class="collab-md-toolbar">
-            @if (HasAnnotations)
-            {
-                <FluentSelect TOption="string"
-                              Value="@CurrentViewMode"
-                              ValueChanged="@OnViewModeChanged"
-                              Label="View"
-                              Style="min-width: 140px;">
-                    <FluentOption Value="Markup">Markup</FluentOption>
-                    <FluentOption Value="HideMarkup">Hide Markup</FluentOption>
-                    <FluentOption Value="Original">Original</FluentOption>
-                </FluentSelect>
-            }
-
             @if (HasCommentAnnotations)
             {
                 <FluentSelect TOption="string"
@@ -83,6 +70,39 @@
                         @if (!string.IsNullOrEmpty(comment.Text))
                         {
                             <div class="comment-text">@comment.Text</div>
+                        }
+                    </div>
+                }
+
+                @* Tracked-change cards — the git-diff review with accept/reject *@
+                @foreach (var change in SidebarChanges)
+                {
+                    var id = change.MarkerId!;
+                    <div class="annotation-card annotation-for-@id annotation-type-@change.ChangeType.ToString().ToLowerInvariant() @(activeAnnotationId == id ? "active" : "")"
+                         @onclick="() => HighlightAnnotation(id)">
+                        <div class="collab-md-card-header">
+                            <div class="collab-md-card-meta">
+                                @if (!string.IsNullOrEmpty(change.Author))
+                                {
+                                    <span class="collab-md-author">@change.Author</span>
+                                }
+                                <span class="collab-md-time">@ChangeLabel(change.ChangeType) · @FormatTimeAgo(change.CreatedAt)</span>
+                            </div>
+                            @if (BoundCanEdit)
+                            {
+                                <div class="collab-md-card-actions">
+                                    <button class="btn-accept" title="Accept" @onclick="() => OnAcceptChange(id)" @onclick:stopPropagation="true">✓</button>
+                                    <button class="btn-reject" title="Reject" @onclick="() => OnRejectChange(id)" @onclick:stopPropagation="true">✗</button>
+                                </div>
+                            }
+                        </div>
+                        @if (!string.IsNullOrEmpty(change.OriginalText))
+                        {
+                            <div class="collab-md-quote quote-delete">"@Truncate(change.OriginalText, 60)"</div>
+                        }
+                        @if (!string.IsNullOrEmpty(change.NewText))
+                        {
+                            <div class="collab-md-quote quote-insert">"@Truncate(change.NewText, 60)"</div>
                         }
                     </div>
                 }

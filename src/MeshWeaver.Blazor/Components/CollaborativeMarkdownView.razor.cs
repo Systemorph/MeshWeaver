@@ -16,6 +16,9 @@ using Microsoft.JSInterop;
 using System.Reactive.Linq;
 using MeshWeaver.Markdown.Collaboration;
 using AnnotationType = MeshWeaver.Markdown.AnnotationType;
+using TrackedChange = MeshWeaver.Mesh.TrackedChange;
+using TrackedChangeType = MeshWeaver.Mesh.TrackedChangeType;
+using TrackedChangeStatus = MeshWeaver.Mesh.TrackedChangeStatus;
 
 namespace MeshWeaver.Blazor.Components;
 
@@ -123,7 +126,14 @@ public partial class CollaborativeMarkdownView
     // Comments resolved against the CURRENT text (effective ranges set), produced by ProcessContent.
     private IReadOnlyList<Comment> _resolvedComments = Array.Empty<Comment>();
 
-    private bool HasAnnotations => Annotations.Any(a => a.Type != AnnotationType.Comment);
+    // Tracked-change satellites (markerId -> change / path), populated by the _Tracking subscription.
+    private Dictionary<string, TrackedChange> changeNodes = new();
+    private Dictionary<string, string> changePaths = new();
+    // Changes resolved against the CURRENT text (effective ranges set), produced by ProcessContent.
+    private IReadOnlyList<TrackedChange> _resolvedChanges = Array.Empty<TrackedChange>();
+
+    // Pending tracked changes drive the diff view + Accept All / Reject All.
+    private bool HasAnnotations => changeNodes.Values.Any(c => c.Status == TrackedChangeStatus.Pending);
 
     private bool HasCommentAnnotations => commentNodes.Count > 0;
 
@@ -136,7 +146,11 @@ public partial class CollaborativeMarkdownView
         _ => _resolvedComments.Where(c => c.Status == CommentStatus.Active).ToList()
     };
 
-    private bool HasSideAnnotations => SidebarComments.Count > 0;
+    // Pending tracked changes shown as cards in the side panel.
+    private IReadOnlyList<TrackedChange> SidebarChanges =>
+        _resolvedChanges.Where(c => c.Status == TrackedChangeStatus.Pending).ToList();
+
+    private bool HasSideAnnotations => SidebarComments.Count > 0 || SidebarChanges.Count > 0;
 
     private string ViewModeClass => CurrentViewMode switch
     {
@@ -201,8 +215,58 @@ public partial class CollaborativeMarkdownView
 
         // Subscribe to comment nodes to track resolved/active status for filtering
         SubscribeToCommentStatuses();
+        SubscribeToChanges();
 
         ProcessContent();
+    }
+
+    private void SubscribeToChanges()
+    {
+        if (string.IsNullOrEmpty(BoundNodePath))
+            return;
+
+        var meshQuery = Hub.ServiceProvider.GetService<IMeshService>();
+        if (meshQuery == null)
+            return;
+
+        var query = MeshQueryRequest.FromQuery(
+            $"namespace:{BoundNodePath}/{AnnotationExtensions.TrackingPartition} nodeType:{MeshWeaver.Graph.Configuration.TrackedChangeNodeType.NodeType}");
+
+        AddBinding(meshQuery.Query<MeshNode>(query)
+            .Scan(new List<MeshNode>(), (list, change) =>
+            {
+                if (change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset)
+                    return change.Items.ToList();
+                foreach (var item in change.Items)
+                {
+                    if (change.ChangeType == QueryChangeType.Added)
+                        list.Add(item);
+                    else if (change.ChangeType == QueryChangeType.Removed)
+                        list.RemoveAll(n => n.Path == item.Path);
+                    else if (change.ChangeType == QueryChangeType.Updated)
+                    {
+                        list.RemoveAll(n => n.Path == item.Path);
+                        list.Add(item);
+                    }
+                }
+                return list;
+            })
+            .Subscribe(list =>
+            {
+                var withMarker = list
+                    .Where(n => n.Content is TrackedChange c && !string.IsNullOrEmpty(c.MarkerId))
+                    .DistinctBy(n => ((TrackedChange)n.Content!).MarkerId!);
+                changeNodes = withMarker.ToDictionary(
+                    n => ((TrackedChange)n.Content!).MarkerId!,
+                    n => (TrackedChange)n.Content!);
+                changePaths = withMarker.ToDictionary(
+                    n => ((TrackedChange)n.Content!).MarkerId!,
+                    n => n.Path);
+                // Tracked changes are overlaid as a diff view from these satellites — re-derive.
+                ProcessContent();
+                InvokeAsync(StateHasChanged);
+            },
+            ex => SurfaceError(ex, "Loading document changes")));
     }
 
     private void SubscribeToCommentStatuses()
@@ -324,9 +388,10 @@ public partial class CollaborativeMarkdownView
 
     private void ProcessContent()
     {
-        // The document text is kept CLEAN. Comments are satellites carrying a captured range
-        // (Start/Length/Version/AnchorText); each is recomputed against the current clean text via
-        // the version delta and its highlight injected as a transient span for this render only.
+        // The document text is kept CLEAN. Comments and tracked changes are satellites carrying a
+        // captured range (Start/Length/Version/AnchorText); each is recomputed against the current
+        // clean text via the version delta and overlaid as a transient span for this render only —
+        // comments as highlights, changes as a git-diff view (insertions/deletions/replacements).
         var clean = MarkdownAnnotationParser.StripAllMarkers(RawContent ?? "");
         var commentsForRender = commentNodes.Values
             .Where(c => !string.IsNullOrEmpty(c.MarkerId) && !string.IsNullOrEmpty(c.HighlightedText))
@@ -334,8 +399,14 @@ public partial class CollaborativeMarkdownView
         _resolvedComments = commentsForRender.Length > 0
             ? CommentRendering.ResolveAll(commentsForRender, clean, _docVersion)
             : Array.Empty<Comment>();
-        var decorated = _resolvedComments.Count > 0
-            ? CommentRendering.DecorateInline(clean, _resolvedComments)
+        var changesForRender = changeNodes.Values
+            .Where(c => !string.IsNullOrEmpty(c.MarkerId))
+            .ToArray();
+        _resolvedChanges = changesForRender.Length > 0
+            ? ChangeRendering.ResolveAll(changesForRender, clean, _docVersion)
+            : Array.Empty<TrackedChange>();
+        var decorated = _resolvedComments.Count > 0 || _resolvedChanges.Any(c => c.Status == TrackedChangeStatus.Pending)
+            ? CollaborativeRenderer.Decorate(clean, _resolvedComments, _resolvedChanges)
             : clean;
 
         if (string.IsNullOrEmpty(decorated))
@@ -435,42 +506,63 @@ public partial class CollaborativeMarkdownView
         StateHasChanged();
     }
 
-    // Accept/Reject individual changes
-    private async Task OnAcceptChange(string changeId)
+    // Accept/Reject individual changes — operate on the satellites. Accept applies the suggested
+    // text to the document at the change's effective range and drops the satellite; Reject just drops
+    // the satellite (the document is left unchanged).
+    private void OnAcceptChange(string changeId)
     {
-        var newContent = AnnotationMarkdownExtension.AcceptChange(RawContent, changeId);
-        var previousContent = RawContent;
-        UpdateContentLocally(newContent);
-        if (!await PostContentUpdateAsync(newContent))
-            RevertContent(previousContent);
+        if (!changeNodes.TryGetValue(changeId, out var change))
+            return;
+        var clean = MarkdownAnnotationParser.StripAllMarkers(RawContent ?? "");
+        var resolved = ChangeRendering.ResolveEffective(change, clean, _docVersion);
+        var newClean = ChangeRendering.Apply(clean, resolved);
+        ApplyDocContent(newClean, () => DeleteChangeNode(changeId));
     }
 
-    private async Task OnRejectChange(string changeId)
+    private void OnRejectChange(string changeId) => DeleteChangeNode(changeId);
+
+    // Accept/Reject all pending changes
+    private void OnAcceptAll()
     {
-        var newContent = AnnotationMarkdownExtension.RejectChange(RawContent, changeId);
-        var previousContent = RawContent;
-        UpdateContentLocally(newContent);
-        if (!await PostContentUpdateAsync(newContent))
-            RevertContent(previousContent);
+        var pending = changeNodes.Values.Where(c => c.Status == TrackedChangeStatus.Pending).ToList();
+        if (pending.Count == 0)
+            return;
+        var clean = MarkdownAnnotationParser.StripAllMarkers(RawContent ?? "");
+        var newClean = ChangeRendering.ApplyAll(clean, pending, _docVersion);
+        ApplyDocContent(newClean, () =>
+        {
+            foreach (var c in pending)
+                if (c.MarkerId is { } id) DeleteChangeNode(id);
+        });
     }
 
-    // Accept/Reject all
-    private async Task OnAcceptAll()
+    private void OnRejectAll()
     {
-        var newContent = AnnotationMarkdownExtension.GetAcceptedContent(RawContent);
-        var previousContent = RawContent;
-        UpdateContentLocally(newContent);
-        if (!await PostContentUpdateAsync(newContent))
-            RevertContent(previousContent);
+        foreach (var c in changeNodes.Values.Where(c => c.Status == TrackedChangeStatus.Pending).ToList())
+            if (c.MarkerId is { } id) DeleteChangeNode(id);
     }
 
-    private async Task OnRejectAll()
+    // Write the document's clean content through the shared stream, then run onApplied (drop the
+    // accepted satellite(s)). The doc node keeps its other fields (Name/Authors/Tags/...).
+    private void ApplyDocContent(string newClean, Action onApplied)
     {
-        var newContent = AnnotationMarkdownExtension.GetRejectedContent(RawContent);
-        var previousContent = RawContent;
-        UpdateContentLocally(newContent);
-        if (!await PostContentUpdateAsync(newContent))
-            RevertContent(previousContent);
+        if (string.IsNullOrEmpty(BoundNodePath))
+            return;
+        Hub.GetMeshNodeStream(BoundNodePath).Update(node =>
+                node.Content is MarkdownContent md
+                    ? node with { Content = md with { Content = newClean } }
+                    : node)
+            .Subscribe(
+                _ => onApplied(),
+                ex => Hub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger("MeshWeaver.Blazor.CollaborativeMarkdownView")
+                    .LogWarning(ex, "Accept-change content update failed for {Path}", BoundNodePath));
+    }
+
+    private void DeleteChangeNode(string changeId)
+    {
+        if (changePaths.TryGetValue(changeId, out var path))
+            Hub.ServiceProvider.GetService<IMeshService>()?.DeleteNode(path).Subscribe(_ => { }, _ => { });
     }
 
     /// <summary>
@@ -672,6 +764,14 @@ public partial class CollaborativeMarkdownView
             Status = CommentStatus.Active
         });
     }
+
+    private static string ChangeLabel(TrackedChangeType type) => type switch
+    {
+        TrackedChangeType.Insertion => "Insertion",
+        TrackedChangeType.Deletion => "Deletion",
+        TrackedChangeType.Replacement => "Replacement",
+        _ => "Change"
+    };
 
     // Comment helpers
     private Comment? GetCommentData(string markerId) =>
