@@ -38,6 +38,18 @@ E2E_LAUNCH=1 dotnet test test/MeshWeaver.Portal.E2E.Test
 If neither `E2E_BASE_URL` nor `E2E_LAUNCH` is set, every test is **skipped** (so the project is safe
 to leave in the repo without affecting CI).
 
+## Where do I see results?
+
+- **Terminal** — `dotnet test` prints the per-test outcome and a `Passed!/Failed!/Skipped!` summary.
+- **TRX file** — every run writes `test/MeshWeaver.Portal.E2E.Test/TestResults/_<machine>_<utc>.trx`
+  (per-test outcome + captured stdout). Open it in an IDE, or `dotnet test --logger "console;verbosity=detailed"`.
+- **Watch it live** — add `E2E_HEADED=1` to open a visible, slow-motion browser:
+  ```bash
+  E2E_BASE_URL=https://localhost:7122 E2E_HEADED=1 dotnet test test/MeshWeaver.Portal.E2E.Test
+  ```
+- **Video of each test** — written to `test/MeshWeaver.Portal.E2E.Test/bin/Debug/net10.0/TestResults/videos/*.webm`.
+- **Step through** — `PWDEBUG=1 dotnet test …` opens the Playwright Inspector to run a test action-by-action.
+
 ## What the tests cover
 
 - `DocPage_RendersCollaborativeMarkdown_WhenAuthenticated` — DevLogin works, the doc route renders the
