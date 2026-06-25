@@ -1,5 +1,6 @@
 using System.Reactive.Linq;
 using Autofac.Extensions.DependencyInjection;
+using DevExpress.Maui;
 using Memex.Client.Services;
 using Memex.Client.Voice;
 using MeshWeaver.ContentCollections;
@@ -58,6 +59,9 @@ public static class MauiProgram
         var builder = MauiApp.CreateBuilder();
         builder
             .UseMauiApp<App>()
+            .UseDevExpress()                 // native menus/popups/drawer for the responsive portal shell
+            .UseDevExpressCollectionView()
+            .UseDevExpressControls()
             .ConfigureFonts(fonts =>
             {
                 fonts.AddFont("OpenSans-Regular.ttf", "OpenSansRegular");
