@@ -5,6 +5,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.DataGrid;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
@@ -316,23 +317,86 @@ public sealed class ButtonView : MauiView<ButtonControl>
     protected override void Bind() => Bind<object>(Model.Data, v => _button.Text = v?.ToString() ?? "");
 }
 
-/// <summary>Pre-rendered HTML/text → MAUI <see cref="Label"/> (rich HTML rendering is a later wave). </summary>
-public sealed class HtmlView : MauiView<HtmlControl>
+/// <summary>
+/// Wraps body HTML in a minimal, dark, system-sans document for rendering in a MAUI <see cref="WebView"/>.
+/// The sans-serif font stack fixes the serif-titles complaint (MAUI's HTML→<see cref="Label"/> renderer
+/// fell back to a serif face for headings); the transparent background + light text match the dark app
+/// shell. A plain <see cref="WebView"/> + <see cref="HtmlWebViewSource"/> (NOT a BlazorWebView) keeps the
+/// maccatalyst/iOS build free of the Microsoft.AspNetCore.App shared framework.
+/// </summary>
+internal static class MauiHtmlDocument
 {
-    private Label _label = null!;
-    // TextType.Html so an HtmlControl's markup renders as formatted text (the platform's "Welcome back"
-    // banner etc.) instead of showing raw <div …> source. MAUI maps this to the platform HTML→text
-    // renderer; inline CSS is largely ignored but tags/entities resolve.
-    protected override View CreateView() => _label = new Label { TextType = TextType.Html };
-    protected override void Bind() => Bind<object>(Model.Data, v => _label.Text = v?.ToString() ?? "");
+    public static HtmlWebViewSource ForBody(string bodyHtml) => new() { Html = Wrap(bodyHtml) };
+
+    // $$"""…""" raw interpolation: single { } are LITERAL CSS braces; {{bodyHtml}} is the one interpolation.
+    private static string Wrap(string bodyHtml) => $$"""
+        <!DOCTYPE html>
+        <html><head><meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+          html,body{margin:0;padding:0;background:transparent;color:#e0e0e0;
+            font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+            font-size:15px;line-height:1.5;-webkit-text-size-adjust:100%;}
+          body{padding:8px;}
+          h1,h2,h3,h4,h5,h6{font-family:inherit;font-weight:600;line-height:1.25;}
+          a{color:#4ea1ff;}
+          code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+          pre{background:rgba(255,255,255,0.06);padding:8px;border-radius:6px;overflow-x:auto;}
+          table{border-collapse:collapse;}
+          th,td{border:1px solid rgba(255,255,255,0.2);padding:4px 8px;}
+          img{max-width:100%;height:auto;}
+        </style></head>
+        <body>{{bodyHtml}}</body></html>
+        """;
 }
 
-/// <summary>Markdown → MAUI <see cref="Label"/> (raw this wave; Markdig formatting is a later wave).</summary>
+/// <summary>
+/// Pre-rendered HTML → a MAUI <see cref="WebView"/> (NOT a serif <see cref="Label"/>). Same dark, system-sans
+/// document shell as <see cref="MarkdownView"/>, so HTML banners render with real layout + sans headings
+/// instead of the Label HTML renderer's serif fallback.
+/// </summary>
+public sealed class HtmlView : MauiView<HtmlControl>
+{
+    private WebView _web = null!;
+    protected override View CreateView() =>
+        _web = new WebView { HeightRequest = 120, BackgroundColor = Colors.Transparent };
+    protected override void Bind() =>
+        Bind<object>(Model.Data, v => _web.Source = MauiHtmlDocument.ForBody(v?.ToString() ?? ""));
+}
+
+/// <summary>
+/// Markdown → real HTML via the OFFICIAL MeshWeaver generator — the same Markdig pipeline the Blazor portal
+/// builds (<see cref="MarkdownExtensions.CreateMarkdownPipeline"/>, including the <c>@@</c>/<c>@</c>
+/// layout-area extension) — rendered in a plain MAUI <see cref="WebView"/>. The <c>@@path</c> operator emits
+/// a layout-area element (via <c>LayoutAreaMarkdownRenderer</c>) rather than the literal <c>@@path</c> text,
+/// markdown is formatted (links/tables/emoji), and headings render sans (fixing the serif-titles complaint).
+/// NOT a BlazorWebView → no Microsoft.AspNetCore.App in the maccatalyst build. Markdown→HTML is a pure
+/// synchronous call; the WebView mutation runs on the UI thread (Bind marshals via MainThread).
+/// </summary>
 public sealed class MarkdownView : MauiView<MarkdownControl>
 {
-    private Label _label = null!;
-    protected override View CreateView() => _label = new Label();
-    protected override void Bind() => Bind<object>(Model.Markdown, v => _label.Text = v?.ToString() ?? "");
+    private WebView _web = null!;
+    private string? _nodePath;
+
+    protected override View CreateView()
+    {
+        // Relative @@ embeds resolve against the authoring node's path (mirrors MarkdownView.razor.cs).
+        _nodePath = Model.NodePath;
+        return _web = new WebView { HeightRequest = 240, BackgroundColor = Colors.Transparent };
+    }
+
+    protected override void Bind() =>
+        Bind<object>(Model.Markdown, v => _web.Source = Render(v?.ToString() ?? ""));
+
+    private HtmlWebViewSource Render(string markdown)
+    {
+        // The official cached, immutable pipeline. collection is null (no static-asset href rewriting on the
+        // native client); currentNodePath threads the relative-@@-embed base path. Markdig.Markdown.ToHtml is
+        // the same call MarkdownViewLogic.Render makes server-side.
+        var pipeline = MarkdownExtensions.CreateMarkdownPipeline(collection: null, currentNodePath: _nodePath);
+        var html = Markdig.Markdown.ToHtml(markdown, pipeline);
+        return MauiHtmlDocument.ForBody(html);
+    }
 }
 
 /// <summary>Badge → a pill-styled <see cref="Label"/> in a <see cref="Border"/>.</summary>

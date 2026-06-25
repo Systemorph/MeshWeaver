@@ -32,6 +32,12 @@
         <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
         <!-- The query-driven controls (MeshNodePicker, MeshSearch catalog) use hub.GetQuery + MeshNode. -->
         <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+        <!-- The OFFICIAL MeshWeaver markdown generator — the SAME Markdig pipeline the Blazor portal
+             builds (MarkdownExtensions.CreateMarkdownPipeline, incl. the @@/@ layout-area extension), so
+             MarkdownControl + HtmlControl render real HTML in a WebView. Contract/kernel-level deps only
+             (Markdig + Data.Contract + Kernel + Mesh.Contract) — NO Microsoft.AspNetCore.App, so the
+             maccatalyst/iOS build stays AspNetCore-free. -->
+        <ProjectReference Include="..\MeshWeaver.Markdown\MeshWeaver.Markdown.csproj" />
     </ItemGroup>
 
 </Project>
