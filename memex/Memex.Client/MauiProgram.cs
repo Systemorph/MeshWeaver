@@ -158,10 +158,14 @@ public static class MauiProgram
         var app = builder.Build();
 
         // The hub is now resolved from the shared MAUI/Autofac container. Stamp the device-user identity
-        // (single-user local mesh) and seed the first-boot data.
+        // (single-user local mesh, no login) and seed the first-boot data. ObjectId stays the stable
+        // "device-user" (the root-Admin grant is keyed to it); the display Name takes the OS account name,
+        // so greetings/attributions show the real person. Remote instances still authenticate via OAuth.
         var hub = app.Services.GetRequiredService<IMessageHub>();
+        var osName = Environment.UserName;
+        if (string.IsNullOrWhiteSpace(osName)) osName = "Device User";
         hub.ServiceProvider.GetRequiredService<AccessService>()
-            .SetCircuitContext(new AccessContext { ObjectId = DeviceUserId, Name = "Device User" });
+            .SetCircuitContext(new AccessContext { ObjectId = DeviceUserId, Name = osName });
         SeedOwnInstance(hub);
 
         return app;
