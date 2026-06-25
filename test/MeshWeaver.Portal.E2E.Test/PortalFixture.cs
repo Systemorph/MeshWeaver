@@ -100,6 +100,38 @@ public sealed class PortalFixture : IAsyncLifetime
         return context;
     }
 
+    /// <summary>
+    /// Mints an API bearer token for the DevLogin user (cookie-authorized <c>POST /api/tokens</c>),
+    /// used to seed mesh content the UI can't create itself (e.g. a tracked change, which has no GUI
+    /// creation path — only the AI suggests edits).
+    /// </summary>
+    public async Task<string> MintTokenAsync(IBrowserContext context)
+    {
+        var resp = await context.APIRequest.PostAsync($"{BaseUrl}/api/tokens", new APIRequestContextOptions
+        {
+            DataObject = new { Label = "e2e", ExpiresInDays = 1 }
+        });
+        if ((int)resp.Status >= 400)
+            throw new InvalidOperationException($"Minting an API token failed ({resp.Status}).");
+        var json = await resp.JsonAsync();
+        return json!.Value.GetProperty("rawToken").GetString()!;
+    }
+
+    /// <summary>Creates a mesh node via <c>POST /api/mesh/create</c> (Bearer auth).</summary>
+    public async Task CreateNodeAsync(IBrowserContext context, string token, string nodeJson)
+    {
+        var resp = await context.APIRequest.PostAsync($"{BaseUrl}/api/mesh/create", new APIRequestContextOptions
+        {
+            Headers = new Dictionary<string, string> { ["authorization"] = $"Bearer {token}" },
+            DataObject = new { Node = nodeJson }
+        });
+        var body = await resp.TextAsync();
+        if ((int)resp.Status >= 400
+            || body.Contains("Invalid", StringComparison.OrdinalIgnoreCase)
+            || body.Contains("Error creating", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Seeding node failed ({resp.Status}): {body}");
+    }
+
     private static Process? TryLaunchPortal(string url)
     {
         var root = FindRepoRoot();

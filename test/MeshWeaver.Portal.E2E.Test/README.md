@@ -44,6 +44,15 @@ to leave in the repo without affecting CI).
   collaborative markdown view (smoke test).
 - `Comment_AddViaSelection_ShowsInlineHighlightAndSidebarCard` — select text → floating **Comment**
   button → dialog → submit → the highlight appears **inline** (`.comment-highlight`) and a sidebar
-  card (`.annotation-card`) carries the comment text; then deletes it to keep re-runs clean.
+  card carries the comment text; then deletes it to keep re-runs clean.
+- `Comment_Reply_AddsAReplyUnderThePageComment` — add a page comment, open its **Reply** box (a Monaco
+  editor), type, Create, and see the reply appear.
+- `Change_Accept_AppliesTheSuggestionToTheDocument` / `Change_Reject_DropsTheSuggestion…` — tracked
+  changes have no GUI creation path, so the test **seeds** an insertion suggestion via the REST API
+  (`POST /api/mesh/create` with a token minted from the DevLogin session), then drives the sidebar
+  **Accept** / **Reject** buttons and asserts the document is (or is not) changed.
 
-Reply and accept/reject flows can be added the same way; the comment flow is the template.
+> Notes for the first live run: the reply test drives a **Monaco** editor and the change tests seed a
+> node via the API — if a selector or the seed JSON needs a tweak for your build, those are the two to
+> watch. The underlying logic is also covered headlessly by the C# suite (`AnchorMath`,
+> `CommentRendering`, `ChangeRendering`, and the suggest-edit / reply integration tests).
