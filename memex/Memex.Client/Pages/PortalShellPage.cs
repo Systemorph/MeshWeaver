@@ -477,10 +477,15 @@ public sealed class PortalShellPage : ContentPage
     private void NavigateHome()
         => Navigate("Home", BuildHome, DeviceOnboarding.DeviceUserId, UserActivityArea);
 
-    // Home renders the REAL framework Activity area (markdown banner + fluent catalog + composer) via the
-    // MAUI view pack — only the view pack is tech-specific; the layout itself is shared framework code.
+    // Home = the native dashboard. The shared framework Activity area is the goal, but the MAUI view pack
+    // can't yet resolve its nested/remote layout areas ("area Activity didn't resolve"), so until that
+    // rendering gap is fixed the native view is what actually works (catalog + composer + New, diagnosable).
     private View BuildHome()
-        => new NodeAreaView(_hub, DeviceOnboarding.DeviceUserId, UserActivityArea);
+        => new ActivityDashboardView(_hub, DeviceOnboarding.FullNameGuess(), "your mesh")
+        {
+            OnNodeSelected = node => NavigateToNode(node.Path, node.Name ?? node.Path, "Overview"),
+            OnThreadCreated = node => NavigateToNode(node.Path, node.Name ?? "Thread", "Overview"),
+        };
 
     private void NavigateToNode(string nodePath, string title, string area)
         => Navigate(title, () => new NodeAreaView(_hub, nodePath, area), nodePath, area);
