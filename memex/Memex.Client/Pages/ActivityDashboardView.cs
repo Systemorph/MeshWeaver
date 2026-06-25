@@ -34,7 +34,7 @@ public sealed class ActivityDashboardView : ContentView
     /// <summary>Raised when a node card is tapped — the shell navigates to that node's area.</summary>
     public Action<MeshNode>? OnNodeSelected { get; set; }
 
-    public ActivityDashboardView(IMessageHub hub, string instanceName)
+    public ActivityDashboardView(IMessageHub hub, string userName, string instanceName)
     {
         _hub = hub;
 
@@ -43,8 +43,8 @@ public sealed class ActivityDashboardView : ContentView
             Spacing = 2,
             Children =
             {
-                new Label { Text = $"Welcome back", FontSize = 26, FontAttributes = FontAttributes.Bold },
-                new Label { Text = $"Here's what's happening across {instanceName}", FontSize = 13, TextColor = Colors.Gray },
+                new Label { Text = $"Welcome back, {userName}", FontSize = 26, FontAttributes = FontAttributes.Bold },
+                new Label { Text = $"Signed in as {userName} · {instanceName}", FontSize = 13, TextColor = Colors.Gray },
             },
         };
 
