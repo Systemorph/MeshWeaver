@@ -274,12 +274,21 @@ public sealed class ContainerView : MauiView
 {
     protected override View CreateView()
     {
-        var layout = new VerticalStackLayout { Spacing = 8 };
+        // Honor StackControl orientation — a horizontal Stack (e.g. a tab bar / button row) must lay its
+        // children left-to-right, not stacked vertically. Default + non-Stack containers stay vertical.
+        var horizontal = Control is StackControl stack && IsHorizontal(stack.Skin);
+        Microsoft.Maui.Controls.Layout layout = horizontal
+            ? new HorizontalStackLayout { Spacing = 8 }
+            : new VerticalStackLayout { Spacing = 8 };
         if (Stream is not null && Control is IContainerControl container)
             foreach (var named in container.Areas)
                 layout.Children.Add(Renderer.RenderArea(Stream, named.Area.ToString()!));
         return layout;
     }
+
+    // Orientation rides the skin as object? (an enum at author time, a JSON string after stream round-trip).
+    private static bool IsHorizontal(LayoutStackSkin? skin) =>
+        skin?.Orientation?.ToString()?.Contains("Horizontal", StringComparison.OrdinalIgnoreCase) == true;
 }
 
 /// <summary>A reference to a sibling area → renders that area.</summary>
