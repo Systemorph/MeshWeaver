@@ -22,19 +22,15 @@ public static class UserActivityLayoutAreas
 
     private const string ThinScrollbar = "scrollbar-width: thin; scrollbar-color: rgba(128,128,128,0.3) transparent;";
 
-    // Catalog tab state — the selected tab name is held in the host data stream
-    // (same local-UI-state pattern as CommentLayoutAreas). Clicking a tab button
-    // writes the name; the content pane observes the key and swaps the MeshSearch.
-    private const string CatalogTabStateKey = "ownerCatalogTab";
+    // Catalog tab labels. Each maps to a labelled MeshSearch in the fluent catalog (see
+    // BuildCatalog); the declaration order there is the tab order. Threads first → it is the
+    // default (first) tab shown on load. Pinned is NOT a tab; it has its own always-visible band
+    // above the tabs (see BuildOwnerDashboard).
     private const string TabThreads = "Threads";
     private const string TabSpaces = "Spaces";
     private const string TabMyItems = "My Items";
     private const string TabLastRead = "Last Read";
     private const string TabLastEdited = "Last Edited";
-    // Threads first → it is the default tab shown on load. Spaces second so the user can see
-    // (and explicitly create) the spaces they belong to. Pinned is NOT a tab; it has its own
-    // always-visible section above the tab bar (see BuildOwnerDashboard).
-    private static readonly string[] CatalogTabs = { TabThreads, TabSpaces, TabMyItems, TabLastRead, TabLastEdited };
 
     /// <summary>
     /// Adds the Activity view to the User node's layout.
@@ -151,127 +147,106 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>
-    /// Personal dashboard shown to the node owner — a welcome banner, an always-visible
-    /// Pinned section, a catalog with tab toggles (Threads / My Items / Last Read /
-    /// Last Edited, Threads default), and the chat input pinned to the bottom.
+    /// Personal dashboard shown to the node owner — a DECLARATIVE vertical stack of framework
+    /// controls (so it renders identically in the Blazor portal AND the native MAUI view pack):
+    /// (a) a Markdown welcome banner, (b) the always-visible Pinned band, (c) the fluent catalog
+    /// (a skinned <see cref="TabsControl"/> of labelled <see cref="MeshSearchControl"/>s — Threads /
+    /// Spaces / My Items / Last Read / Last Edited, Threads first), and (d) the chat composer pinned
+    /// at the bottom. No <c>Controls.Html</c>, no CSS-flex height hacks, and no host-data tab-toggle
+    /// state — the TabsControl owns tab switching.
     /// </summary>
     private static UiControl BuildOwnerDashboard(LayoutAreaHost host, string nodePath, string ownerName, string nodeOwnerId, MeshNode? ownerNode)
     {
-        // Outer shell: flex column, fills the available main area (height managed by CSS grid)
+        // Plain vertical stack with a gap — no flex/height CSS the native pack can't honor.
         var dashboard = Controls.Stack
             .WithWidth("100%")
-            // min-width: 0 + max-width: 100% + border-box → the dashboard shrinks WITH the main
-            // splitter pane when the chat side panel opens (the pane width is the 100% reference),
-            // instead of overflowing it. Every inner band repeats the same three so nothing pushes wider.
-            .WithStyle("display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; max-width: 100%; box-sizing: border-box; overflow: hidden;");
+            .WithVerticalGap(16);
 
-        // Welcome banner
-        dashboard = dashboard.WithView(Controls.Html(
-            $"<div style=\"flex-shrink: 0; padding: 20px 24px 12px 24px;\">" +
-            $"<div style=\"font-size: 1.6rem; font-weight: 700; letter-spacing: -0.02em;\">" +
-            $"Welcome back, {EscapeHtml(ownerName)}</div>" +
-            $"<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-top: 2px;\">Here's what's happening across your workspace</div>" +
-            "</div>"));
+        // (a) Welcome banner — Markdown, NOT a hand-built HTML string.
+        dashboard = dashboard.WithView(Controls.Markdown(
+            $"### Welcome back, {ownerName}\n\nYou can ask the agent to customize your home screen."));
 
-        // Pinned section — its own band ABOVE the tabs, always visible (when the owner has pins).
+        // (b) Pinned band — its own always-visible section above the tabs (when the owner has pins).
         var pinned = BuildPinnedItems(ownerNode);
         if (pinned != null)
-            dashboard = dashboard.WithView(Controls.Stack
-                .WithWidth("100%")
-                .WithStyle("flex-shrink: 0; min-width: 0; box-sizing: border-box; padding: 0 24px 8px 24px;")
-                .WithView(pinned));
+            dashboard = dashboard.WithView(pinned);
 
-        // Catalog region: a fixed tab bar over a swappable content pane. The
-        // selected tab lives in the host data stream so a button click re-emits
-        // both the bar (active styling) and the content (which MeshSearch shows).
-        var catalog = Controls.Stack
-            .WithWidth("100%")
-            // box-sizing: border-box → the 24px L/R padding is INSIDE the 100% width (not added
-            // to it), so the catalog + the MeshSearch inside don't overflow the area by 48px.
-            // min-width: 0 lets this flex child shrink below its content's intrinsic width.
-            .WithStyle("display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; box-sizing: border-box; overflow: hidden; padding: 0 24px;");
+        // (c) The fluent catalog — the declarative TabsControl + MeshSearches.
+        dashboard = dashboard.WithView(BuildCatalog(nodePath, nodeOwnerId));
 
-        // Init-once seed of the default tab — heap-captured so it survives the
-        // per-subscription re-evaluation of the view-definition lambda.
-        var initialized = new[] { false };
-
-        catalog = catalog.WithView((h, _) =>
-        {
-            if (!initialized[0])
-            {
-                h.UpdateData(CatalogTabStateKey, TabThreads);
-                initialized[0] = true;
-            }
-            return h.Stream.GetDataStream<string>(CatalogTabStateKey)
-                .DistinctUntilChanged()
-                .Select(selected => BuildCatalogTabBar(selected ?? TabThreads));
-        });
-
-        catalog = catalog.WithView((h, _) =>
-            h.Stream.GetDataStream<string>(CatalogTabStateKey)
-                .DistinctUntilChanged()
-                .Select(selected => BuildCatalogContent(selected ?? TabThreads, nodePath, nodeOwnerId)));
-
-        dashboard = dashboard.WithView(catalog);
+        // (d) Chat composer pinned at the bottom — the EXISTING data-bound composer area embedded as
+        // a layout area (the same area the chat side panel uses). Declared by PATH because
+        // MeshWeaver.Graph cannot reference MeshWeaver.AI, which owns ThreadComposer.
+        dashboard = dashboard.WithView(Controls.LayoutArea(ComposerPath(nodeOwnerId), string.Empty));
 
         return dashboard;
     }
 
     /// <summary>
-    /// Horizontal row of tab toggle buttons. The active tab is rendered with an
-    /// accent appearance; clicking any tab writes its name to the catalog state key.
+    /// The fluent catalog: a skinned <see cref="TabsControl"/> whose tabs are labelled
+    /// <see cref="MeshSearchControl"/>s, declared via <c>WithMeshSearch</c>. Each tab maps a
+    /// label + scoped query (and create/empty-state) from what used to be the per-tab
+    /// <c>Build*</c> helpers — now folded into the declarative builder. The TabsControl owns tab
+    /// switching, so there is no host-data tab-state and no CSS-flex toggling.
     /// </summary>
-    private static UiControl BuildCatalogTabBar(string selected)
-    {
-        var bar = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithHorizontalGap(4)
-            .WithStyle("flex-shrink: 0; align-items: center; padding: 4px 0 12px 0; border-bottom: 1px solid var(--neutral-stroke-rest);");
-
-        foreach (var tab in CatalogTabs)
-        {
-            var captured = tab; // bind per-iteration for the click closure
-            var isActive = string.Equals(tab, selected, StringComparison.Ordinal);
-            bar = bar.WithView(Controls.Button(captured)
-                .WithAppearance(isActive ? Appearance.Accent : Appearance.Stealth)
-                .WithStyle(isActive
-                    ? "font-weight: 600;"
-                    : "font-weight: 400; color: var(--neutral-foreground-hint);")
-                .WithClickAction(ctx =>
-                {
-                    ctx.Host.UpdateData(CatalogTabStateKey, captured);
-                    return Task.CompletedTask;
-                }));
-        }
-
-        return bar;
-    }
+    private static UiControl BuildCatalog(string nodePath, string nodeOwnerId)
+        => Controls.Tabs
+            // Threads — the viewer's OWN partition only ({owner}/*_Thread → no cross-partition
+            // fan-out that can wedge the portal). -content.status:Done hides finished threads.
+            .WithMeshSearch(TabThreads,
+                @namespace: $"{nodeOwnerId}/*_Thread",
+                nodeType: "Thread",
+                query: "-content.status:Done sort:LastModified-desc",
+                createNodeType: "Thread",
+                createNamespace: nodePath,
+                configure: s => s
+                    .WithRenderMode(MeshSearchRenderMode.Flat)
+                    .WithCollapsibleSections(false).WithSectionCounts(false)
+                    .WithItemLimit(50).WithMaxRows(2).WithMaxColumns(4).WithReactiveMode(true))
+            // Spaces the user can read. New space → the standard top-level create form (Space's
+            // DefaultNamespace is "" → top-level, the only sanctioned way to make a new partition).
+            .WithMeshSearch(TabSpaces,
+                nodeType: "Space",
+                query: "is:main sort:LastModified-desc",
+                configure: s => s
+                    .WithShowSearchBox(false).WithShowEmptyMessage(true)
+                    .WithRenderMode(MeshSearchRenderMode.Flat)
+                    .WithCollapsibleSections(false).WithSectionCounts(false)
+                    .WithMaxColumns(4).WithItemLimit(50).WithMaxRows(3).WithReactiveMode(true)
+                    .WithCreateHref("/create?type=Space"))
+            // My Items — the owner's own partition (rbuergi.* post-v10), grouped by type.
+            .WithMeshSearch(TabMyItems,
+                @namespace: nodeOwnerId,
+                query: "is:main context:search sort:LastModified-desc",
+                configure: s => s
+                    .WithShowEmptyMessage(true).WithRenderMode(MeshSearchRenderMode.Grouped)
+                    .WithSortBy("LastModified", ascending: false).WithSectionCounts(true)
+                    .WithItemLimit(50).WithMaxRows(3).WithMaxColumns(4)
+                    .WithCollapsibleSections(true).WithReactiveMode(true)
+                    .WithCreateHref($"/create?type=Markdown&namespace={Uri.EscapeDataString(nodeOwnerId)}"))
+            // Last Read — recently accessed nodes (excluding this dashboard node itself).
+            .WithMeshSearch(TabLastRead,
+                query: $"source:accessed scope:subtree is:main sort:LastModified-desc -path:{nodePath}",
+                configure: s => s
+                    .WithShowSearchBox(false).WithShowEmptyMessage(true)
+                    .WithRenderMode(MeshSearchRenderMode.Flat)
+                    .WithCollapsibleSections(false).WithSectionCounts(false)
+                    .WithMaxColumns(1).WithItemLimit(20).WithMaxRows(4).WithReactiveMode(true))
+            // Last Edited — the activity feed (main content nodes with recent changes).
+            .WithMeshSearch(TabLastEdited,
+                query: "source:activity scope:subtree is:main sort:LastModified-desc",
+                configure: s => s
+                    .WithShowSearchBox(false).WithRenderMode(MeshSearchRenderMode.Flat)
+                    .WithCollapsibleSections(false).WithSectionCounts(false)
+                    .WithMaxColumns(2).WithItemLimit(50).WithMaxRows(4).WithReactiveMode(true));
 
     /// <summary>
-    /// Maps the selected tab to its existing MeshSearch builder, wrapped in a scrolling pane.
-    /// Threads is the default (shown on load). Pinned is not a tab — it has its own section.
+    /// Path of the per-user chat-input (composer) node: <c>{owner}/_Thread/ThreadComposer</c> —
+    /// mirrors <c>MeshWeaver.AI.ThreadComposerNodeType.PathFor(owner)</c>. Spelled by literal here
+    /// because <c>MeshWeaver.Graph</c> cannot depend on <c>MeshWeaver.AI</c> (AI references Graph).
+    /// The node is seeded for every user at onboarding, so the embedded composer area always resolves.
     /// </summary>
-    private static UiControl BuildCatalogContent(string selected, string nodePath, string nodeOwnerId)
-    {
-        var pane = Controls.Stack
-            .WithWidth("100%")
-            // min-width: 0 + max-width: 100% + overflow-x: hidden → the MeshSearch grid inside is
-            // bounded by the pane width and never spills past it, even when the side panel narrows the area.
-            .WithStyle("flex: 1; min-height: 0; min-width: 0; max-width: 100%; box-sizing: border-box; overflow-y: auto; overflow-x: hidden; padding-top: 12px; " + ThinScrollbar);
-
-        UiControl content = selected switch
-        {
-            TabSpaces => BuildSpaces(),
-            // My Items live in the user's own partition (rbuergi.* post-v10), not
-            // under the User/-prefixed dashboard path — pass nodeOwnerId.
-            TabMyItems => BuildChildren(nodeOwnerId),
-            TabLastRead => BuildRecentActivity(nodePath),
-            TabLastEdited => BuildActivityFeed(),
-            _ => BuildLatestThreads(nodePath, nodeOwnerId), // Threads + default
-        };
-
-        return pane.WithView(content);
-    }
+    private static string ComposerPath(string nodeOwnerId) => $"{nodeOwnerId}/_Thread/ThreadComposer";
 
     /// <summary>
     /// Public profile shown to visitors — UserProfileControl (rendered by Blazor)
@@ -351,25 +326,6 @@ public static class UserActivityLayoutAreas
 
 
     /// <summary>
-    /// Activity timeline — shows main content nodes with recent changes.
-    /// source:activity JOINs with Activity satellites and orders by most recent activity.
-    /// </summary>
-    private static UiControl BuildActivityFeed()
-    {
-        return Controls.MeshSearch
-            .WithTitle("Activity Feed")
-            .WithHiddenQuery("source:activity scope:subtree is:main sort:LastModified-desc")
-            .WithShowSearchBox(false)
-            .WithRenderMode(MeshSearchRenderMode.Flat)
-            .WithCollapsibleSections(false)
-            .WithSectionCounts(false)
-            .WithMaxColumns(2)
-            .WithItemLimit(50)
-            .WithMaxRows(4)
-            .WithReactiveMode(true);
-    }
-
-    /// <summary>
     /// Pinned items — compact cards of everything in the owner's <see cref="User.PinnedPaths"/>.
     /// Each card is rendered via <see cref="PinLayoutArea.PinnedThumbnailArea"/>, which overlays
     /// an unpin icon so owners can remove items inline. Returns <c>null</c> when nothing is pinned.
@@ -397,106 +353,4 @@ public static class UserActivityLayoutAreas
             .WithReactiveMode(true);
     }
 
-    /// <summary>
-    /// Recently Viewed panel — compact card grid, max 10 items, fixed height with scroll.
-    /// Resolves full MeshNode for each item to get proper icon/thumbnail.
-    /// </summary>
-    private static UiControl BuildRecentActivity(string nodePath)
-    {
-        return Controls.MeshSearch
-            .WithTitle("Recently Viewed")
-            .WithHiddenQuery($"source:accessed scope:subtree is:main sort:LastModified-desc -path:{nodePath}")
-            .WithShowSearchBox(false)
-            .WithShowEmptyMessage(true)
-            .WithRenderMode(MeshSearchRenderMode.Flat)
-            .WithCollapsibleSections(false)
-            .WithSectionCounts(false)
-            .WithMaxColumns(1)
-            .WithItemLimit(20)
-            .WithMaxRows(4)
-            .WithReactiveMode(true);
-    }
-
-    /// <summary>
-    /// Latest threads — the threads in the viewer's OWN partition. Scoped to the
-    /// partition (<paramref name="nodeOwnerId"/>) rather than fanning out across
-    /// every partition: the query reads "namespace startsWith {partition} AND
-    /// endsWith _Thread". A cross-partition <c>namespace:*/_Thread</c> fan-out
-    /// resolves to the <c>threads</c> satellite in EVERY searchable schema (a
-    /// UNION over all partitions) — slow, unbounded, and the kind of query that
-    /// can wedge the portal; staying on our own partition avoids that entirely.
-    /// </summary>
-    private static UiControl BuildLatestThreads(string nodePath, string nodeOwnerId)
-    {
-        return Controls.MeshSearch
-            .WithTitle("Latest Threads")
-            // {partition}/*_Thread → namespace ILIKE '{partition}/%_Thread': anchored to
-            // this partition (no sibling-partition bleed), ending in _Thread (the thread
-            // satellite). -content.status:Done hides threads the user explicitly marked
-            // finished. Type `content.status:Done` in the search box to surface them.
-            .WithHiddenQuery($"nodeType:Thread namespace:{nodeOwnerId}/*_Thread -content.status:Done sort:LastModified-desc")
-            .WithRenderMode(MeshSearchRenderMode.Flat)
-            .WithCollapsibleSections(false)
-            .WithSectionCounts(false)
-            .WithItemLimit(50)
-            .WithMaxRows(2)
-            .WithMaxColumns(4)
-            .WithReactiveMode(true)
-            .WithCreateNodeType("Thread")
-            .WithCreateNamespace(nodePath);
-    }
-
-    /// <summary>
-    /// Spaces the user belongs to — every <c>Space</c> node the viewer can read (the
-    /// SecurityService filters the query to the partitions they have access to). The
-    /// "New space" affordance routes to the standard create form pre-set to
-    /// <c>type=Space</c>; because <c>Space</c>'s <c>NodeTypeDefinition.DefaultNamespace</c>
-    /// is empty, the node is created top-level, which is the ONLY sanctioned way to make a
-    /// new partition — <see cref="MeshWeaver.Mesh.Services.IPartitionStorageProvider"/>
-    /// schemas are never created implicitly by an arbitrary write (see
-    /// <c>PartitionWriteGuardValidator</c>). Creating the Space runs
-    /// <c>SpaceTopLevelValidator</c> (provisions the schema) + <c>SpacePostCreationHandler</c>
-    /// (registers the partition, grants the creator Admin).
-    /// </summary>
-    private static UiControl BuildSpaces()
-    {
-        return Controls.MeshSearch
-            .WithTitle("Spaces")
-            .WithHiddenQuery("nodeType:Space is:main sort:LastModified-desc")
-            .WithShowSearchBox(false)
-            .WithShowEmptyMessage(true)
-            .WithRenderMode(MeshSearchRenderMode.Flat)
-            .WithCollapsibleSections(false)
-            .WithSectionCounts(false)
-            .WithMaxColumns(4)
-            .WithItemLimit(50)
-            .WithMaxRows(3)
-            .WithReactiveMode(true)
-            // Explicit, top-level Space creation only — never implicit. type=Space resolves
-            // DefaultNamespace="" → the create form submits a top-level node.
-            .WithCreateHref("/create?type=Space");
-    }
-
-    /// <summary>
-    /// Child nodes — shows sub-nodes grouped by type, like the standard Children view.
-    /// </summary>
-    private static UiControl BuildChildren(string nodePath)
-    {
-        return Controls.MeshSearch
-            .WithTitle("My Items")
-            .WithHiddenQuery($"namespace:{nodePath} is:main context:search sort:LastModified-desc")
-            .WithShowEmptyMessage(true)
-            .WithRenderMode(MeshSearchRenderMode.Grouped)
-            .WithSortBy("LastModified", ascending: false)
-            .WithSectionCounts(true)
-            .WithItemLimit(50)
-            .WithMaxRows(3)
-            .WithMaxColumns(4)
-            .WithCollapsibleSections(true)
-            .WithReactiveMode(true)
-            .WithCreateHref($"/create?type=Markdown&namespace={Uri.EscapeDataString(nodePath)}");
-    }
-
-    private static string EscapeHtml(string? text)
-        => System.Net.WebUtility.HtmlEncode(text ?? "");
 }

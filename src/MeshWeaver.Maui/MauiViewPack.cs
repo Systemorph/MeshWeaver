@@ -7,6 +7,7 @@ using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
@@ -262,6 +263,8 @@ public static class MauiViewPackExtensions
         // Wave 2 — query-driven: mesh node picker + catalog search.
         .Register<MeshNodePickerControl, MeshNodePickerView>()
         .Register<MeshSearchControl, MeshSearchView>()
+        // Embedded remote area (e.g. the home page's bottom chat composer) → the existing LayoutAreaView.
+        .Register<LayoutAreaControl, LayoutAreaControlView>()
         // Wave 2 — nav + badges.
         .Register<BadgeControl, BadgeView>()
         .Register<NavLinkControl, NavLinkView>()
@@ -694,7 +697,12 @@ public sealed class LayoutGridView : MauiView<LayoutGridControl>
     }
 }
 
-/// <summary>Tabs → a header button row + a content area that swaps to the selected tab's child area.</summary>
+/// <summary>
+/// Tabs → a header button row (the tab "title menu") over a content area that swaps to the selected
+/// tab's child area. The tab labels come from each child area's <see cref="TabSkin"/> (the canonical
+/// label the skinned <see cref="TabsControl"/> attaches), and the active tab is highlighted. The first
+/// tab is selected on build, so the catalog shows content immediately (no eternal spinner).
+/// </summary>
 public sealed class TabsView : MauiView<TabsControl>
 {
     protected override View CreateView()
@@ -702,19 +710,68 @@ public sealed class TabsView : MauiView<TabsControl>
         var headers = new HorizontalStackLayout { Spacing = 4 };
         var content = new ContentView();
         var areas = (Control as IContainerControl)?.Areas.ToList() ?? new();
+        var buttons = new List<Button>();
 
-        foreach (var named in areas)
+        void Select(int idx)
         {
-            var area = named.Area.ToString()!;
-            var header = new Button { Text = named.Id?.ToString() ?? area, BackgroundColor = Colors.Transparent };
-            header.Clicked += (_, _) => { if (Stream is not null) content.Content = Renderer.RenderArea(Stream, area); };
+            if (Stream is null || idx < 0 || idx >= areas.Count) return;
+            content.Content = Renderer.RenderArea(Stream, areas[idx].Area.ToString()!);
+            for (var i = 0; i < buttons.Count; i++)
+            {
+                var active = i == idx;
+                buttons[i].FontAttributes = active ? FontAttributes.Bold : FontAttributes.None;
+                buttons[i].TextColor = active ? Colors.RoyalBlue : Colors.Gray;
+            }
+        }
+
+        for (var i = 0; i < areas.Count; i++)
+        {
+            var idx = i;
+            var header = new Button
+            {
+                Text = TabLabel(areas[i]),
+                BackgroundColor = Colors.Transparent,
+                Padding = new Thickness(8, 4),
+            };
+            header.Clicked += (_, _) => Select(idx);
+            buttons.Add(header);
             headers.Children.Add(header);
         }
 
-        if (areas.Count > 0 && Stream is not null)
-            content.Content = Renderer.RenderArea(Stream, areas[0].Area.ToString()!);
+        if (areas.Count > 0) Select(0);
 
-        return new VerticalStackLayout { Spacing = 6, Children = { new ScrollView { Orientation = ScrollOrientation.Horizontal, Content = headers }, content } };
+        return new VerticalStackLayout
+        {
+            Spacing = 6,
+            Children = { new ScrollView { Orientation = ScrollOrientation.Horizontal, Content = headers }, content },
+        };
+    }
+
+    // The tab label is the area's TabSkin label (what TabsControl.CreateItemSkin attaches and the
+    // Blazor tab menu reads). Fall back to the area Id, then the area path, so a label always shows.
+    private static string TabLabel(NamedAreaControl area)
+        => area.Skins.OfType<TabSkin>().FirstOrDefault()?.Label?.ToString()
+           ?? area.Id?.ToString()
+           ?? area.Area?.ToString()
+           ?? "";
+}
+
+/// <summary>
+/// Embedded remote layout area (a <see cref="LayoutAreaControl"/>, e.g. the home page's bottom chat
+/// composer) → the existing <see cref="LayoutAreaView"/> over the owning node's address. Resolves the
+/// workspace + address off the current area's hub and reuses the same GetRemoteStream path the node
+/// pages use; a same-hub address renders via the local ctor.
+/// </summary>
+public sealed class LayoutAreaControlView : MauiView<LayoutAreaControl>
+{
+    protected override View CreateView()
+    {
+        if (Stream is null) return new ContentView();
+        var workspace = Stream.Hub.GetWorkspace();
+        Address address = Model.Address?.ToString() ?? "";
+        return address.Equals(workspace.Hub.Address)
+            ? new LayoutAreaView(workspace, Model.Reference, Renderer)
+            : new LayoutAreaView(workspace, address, Model.Reference, Renderer);
     }
 }
 
@@ -775,13 +832,16 @@ public sealed class MeshNodePickerView : FormMauiView<MeshNodePickerControl>
 }
 
 /// <summary>
-/// Catalog / mesh-node search → a search box (the <c>VisibleQuery</c>) fused with the always-applied
-/// <c>HiddenQuery</c>, queried via <c>hub.GetQuery</c> and rendered as a list of node cards. The native
-/// counterpart of the Blazor MeshSearchView (thumbnail grid); drill-down navigation is a later wave.
+/// Catalog / mesh-node search → an optional search box (the <c>VisibleQuery</c>) fused with the
+/// always-applied <c>HiddenQuery</c>, queried LIVE via <c>hub.GetQuery</c> and rendered as a list of
+/// node cards. When the result set is empty it shows the control's empty state — a message (when
+/// <c>ShowEmptyMessage</c>) and, when a <c>CreateNodeType</c> is configured, a "➕ New" affordance that
+/// creates the node via the framework <see cref="IMeshService"/>. The native counterpart of the Blazor
+/// MeshSearchView (thumbnail grid); drill-down navigation is a later wave.
 /// </summary>
 public sealed class MeshSearchView : MauiView<MeshSearchControl>
 {
-    private Entry _search = null!;
+    private Entry? _search;
     private VerticalStackLayout _results = null!;
     private string _hidden = "";
     private IDisposable? _searchSub;
@@ -789,9 +849,16 @@ public sealed class MeshSearchView : MauiView<MeshSearchControl>
     protected override View CreateView()
     {
         _results = new VerticalStackLayout { Spacing = 4 };
-        _search = new Entry { Placeholder = Model.Placeholder?.ToString() ?? "Search…" };
-        _search.TextChanged += (_, _) => RunSearch();
-        return new VerticalStackLayout { Spacing = 8, Children = { _search, _results } };
+        var root = new VerticalStackLayout { Spacing = 8 };
+        // Honor ShowSearchBox: embedded sections (Spaces / Last Read / …) hide the box.
+        if (AsBool(Model.ShowSearchBox, defaultValue: true))
+        {
+            _search = new Entry { Placeholder = Model.Placeholder?.ToString() ?? "Search…" };
+            _search.TextChanged += (_, _) => RunSearch();
+            root.Children.Add(_search);
+        }
+        root.Children.Add(_results);
+        return root;
     }
 
     protected override void Bind()
@@ -799,7 +866,7 @@ public sealed class MeshSearchView : MauiView<MeshSearchControl>
         Bind<object>(Model.HiddenQuery, v => { _hidden = v?.ToString() ?? ""; RunSearch(); });
         Bind<object>(Model.VisibleQuery, v =>
         {
-            if (v is not null && string.IsNullOrEmpty(_search.Text)) _search.Text = v.ToString();
+            if (_search is not null && v is not null && string.IsNullOrEmpty(_search.Text)) _search.Text = v.ToString();
         });
     }
 
@@ -810,9 +877,10 @@ public sealed class MeshSearchView : MauiView<MeshSearchControl>
         var query = string.Join(" ", parts).Trim();
         if (query.Length == 0) { _results.Children.Clear(); return; }
 
+        // LIVE: stay subscribed so the catalog updates as nodes change (e.g. after a create). The
+        // previous subscription is disposed on each re-query so there is no accumulation.
         _searchSub?.Dispose();
         _searchSub = Stream.Hub.GetQuery("search:" + query, query)
-            .Take(1)
             .Subscribe(nodes => MainThread.BeginInvokeOnMainThread(() => RenderResults(nodes)));
         Disposables.Add(_searchSub);
     }
@@ -820,21 +888,77 @@ public sealed class MeshSearchView : MauiView<MeshSearchControl>
     private void RenderResults(IEnumerable<MeshNode> nodes)
     {
         _results.Children.Clear();
-        foreach (var node in nodes.Take(50))
-            _results.Children.Add(new Border
-            {
-                Padding = 8,
-                StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 6 },
-                Stroke = Colors.Gray,
-                StrokeThickness = 1,
-                Content = new VerticalStackLayout
-                {
-                    Children =
-                    {
-                        new Label { Text = node.Name ?? node.Path, FontAttributes = FontAttributes.Bold },
-                        new Label { Text = node.NodeType ?? "", FontSize = 11, TextColor = Colors.Gray },
-                    },
-                },
-            });
+        var list = nodes.ToList();
+        if (list.Count == 0) { RenderEmptyState(); return; }
+        foreach (var node in list.Take(50))
+            _results.Children.Add(Card(node));
     }
+
+    private static View Card(MeshNode node) => new Border
+    {
+        Padding = 8,
+        StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 6 },
+        Stroke = Colors.Gray,
+        StrokeThickness = 1,
+        Content = new VerticalStackLayout
+        {
+            Children =
+            {
+                new Label { Text = node.Name ?? node.Path, FontAttributes = FontAttributes.Bold },
+                new Label { Text = node.NodeType ?? "", FontSize = 11, TextColor = Colors.Gray },
+            },
+        },
+    };
+
+    private void RenderEmptyState()
+    {
+        var createType = Model.CreateNodeType?.ToString();
+        var hasCreate = !string.IsNullOrEmpty(createType);
+        if (!AsBool(Model.ShowEmptyMessage, defaultValue: true) && !hasCreate) return;
+
+        var stack = new VerticalStackLayout { Spacing = 10, Padding = new Thickness(4, 16) };
+        if (AsBool(Model.ShowEmptyMessage, defaultValue: true))
+            stack.Children.Add(new Label { Text = "Nothing here yet.", TextColor = Colors.Gray });
+        if (hasCreate)
+        {
+            var btn = new Button
+            {
+                Text = $"➕ New {createType}",
+                FontSize = 15,
+                BackgroundColor = Colors.RoyalBlue,
+                TextColor = Colors.White,
+                CornerRadius = 8,
+                Padding = new Thickness(16, 6),
+                HorizontalOptions = LayoutOptions.Start,
+            };
+            btn.Clicked += (_, _) => CreateNode(createType!);
+            stack.Children.Add(btn);
+        }
+        _results.Children.Add(stack);
+    }
+
+    // The framework create primitive: a real node of CreateNodeType under CreateNamespace. The live
+    // query above re-renders when the new node lands. Errors are logged, never swallowed.
+    private void CreateNode(string nodeType)
+    {
+        var ns = Model.CreateNamespace?.ToString();
+        if (Stream is null || string.IsNullOrEmpty(ns)) return;
+        var meshService = Stream.Hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService is null) return;
+        var logger = Stream.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<MeshSearchView>();
+        var node = new MeshNode(Guid.NewGuid().ToString("N")[..8], ns) { NodeType = nodeType, Name = $"New {nodeType}" };
+        Disposables.Add(meshService.CreateNode(node).Subscribe(
+            _ => { },
+            ex => logger?.LogWarning(ex, "[MeshSearchView] create {NodeType} in {Namespace} failed", nodeType, ns)));
+    }
+
+    // Coerce a control flag that may arrive as a literal bool or a JSON bool (post stream round-trip).
+    private static bool AsBool(object? value, bool defaultValue) => value switch
+    {
+        null => defaultValue,
+        bool b => b,
+        JsonElement je when je.ValueKind == JsonValueKind.True => true,
+        JsonElement je when je.ValueKind == JsonValueKind.False => false,
+        _ => bool.TryParse(value.ToString(), out var p) ? p : defaultValue,
+    };
 }
