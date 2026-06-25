@@ -85,8 +85,6 @@ public static class MauiProgram
             .AddSpaceType()
             // Connectable-mesh node type; THIS instance is a MemexInstance node too.
             .AddMemexInstanceType()
-            // Single-user local mesh: the device-user (the phone's user) owns everything (root Admin).
-            .AddMeshNodes(DeviceUserAdminGrant())
             // Content service (file collections) — non-Blazor; the mesh + native UI use it.
             .ConfigureServices(services => services
                 .AddContentService())
@@ -166,27 +164,65 @@ public static class MauiProgram
         if (string.IsNullOrWhiteSpace(osName)) osName = "Device User";
         hub.ServiceProvider.GetRequiredService<AccessService>()
             .SetCircuitContext(new AccessContext { ObjectId = DeviceUserId, Name = osName });
+        // Auto-onboard the device user with the FRAMEWORK's real onboarding (replaces the old
+        // hand-rolled root-Admin seed): on first boot create their proper User node — the framework
+        // auto-provisions the per-user partition schema and auto-grants Admin in {device-user}/_Access
+        // — then grant platform admin properly (Admin/_Access, NOT a root _Access data-superuser grant).
+        // Idempotent: a returning boot already has the User node and skips.
+        AutoOnboardDeviceUser(hub, DeviceUserId, osName);
         SeedOwnInstance(hub);
 
         return app;
     }
 
-    /// <summary>Root-scope Admin grant for the device user — they own the single-user local mesh.</summary>
-    private static MeshNode DeviceUserAdminGrant() =>
-        // Root scope lives at "_Access" (NOT "") so SecurityService recognises scope = "" (global) —
-        // see TestUsers.CreateAccessNode.
-        new(DeviceUserId + "_Access", "_Access")
-        {
-            NodeType = "AccessAssignment",
-            Name = "Device User — Admin",
-            Content = new AccessAssignment
-            {
-                AccessObject = DeviceUserId,
-                DisplayName = "Device User",
-                Roles = [new RoleAssignment { Role = "Admin" }],
-            },
-            MainNode = "",
-        };
+    /// <summary>
+    /// First-boot onboarding for the single local user — the framework path, not a hand-rolled grant.
+    /// Creating the partition-root <c>User</c> node (namespace = "") triggers the framework's
+    /// <c>OwnsPartitionProvisioningValidator</c> (provisions the <c>device-user</c> SQLite partition
+    /// schema before the write) AND the User post-creation handler (auto-grants Admin in
+    /// <c>device-user/_Access</c>). We then add the proper platform-admin grant in <c>Admin/_Access</c>
+    /// (<c>MainNode=""</c>) so the device owner is a global admin via <c>hub.IsGlobalAdmin()</c> — the
+    /// sanctioned shape, never a root <c>_Access</c> grant. All writes run as System because a
+    /// brand-new partition root is owned by nobody yet (mirrors <c>UserOnboardingService.CreateUser</c>).
+    /// </summary>
+    private static void AutoOnboardDeviceUser(IMessageHub hub, string userId, string displayName)
+    {
+        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("DeviceOnboarding");
+
+        // Existence check via GetQuery (emits the current set immediately — empty on a fresh mesh);
+        // GetMeshNodeStream(path) would WAIT for the node and so can't detect first-boot absence.
+        hub.GetWorkspace()
+            .GetQuery("boot-device-user", $"nodeType:User content.email:{userId}@local limit:1")
+            .Take(1).Timeout(TimeSpan.FromSeconds(15))
+            .Where(existing => !existing.Any())
+            .SelectMany(_ => Observable.Using(
+                () => accessService.ImpersonateAsSystem(),
+                _ => meshService.CreateNode(new MeshNode(userId) // partition root: namespace "" → provisions {userId} schema + self-Admin
+                    {
+                        NodeType = "User",
+                        Name = displayName,
+                        State = MeshNodeState.Active,
+                        Content = new User { FullName = displayName, Email = $"{userId}@local" },
+                    })
+                    // Platform admin — the proper global-admin shape (Admin/_Access, MainNode="").
+                    .SelectMany(_ => meshService.CreateNode(new MeshNode($"{userId}_Access", "Admin/_Access")
+                    {
+                        NodeType = "AccessAssignment",
+                        Name = $"{displayName} — Admin",
+                        MainNode = "",
+                        Content = new AccessAssignment
+                        {
+                            AccessObject = userId,
+                            DisplayName = displayName,
+                            Roles = [new RoleAssignment { Role = "Admin" }],
+                        },
+                    }))))
+            .Subscribe(
+                _ => logger?.LogInformation("Auto-onboarded device user {User}", userId),
+                ex => logger?.LogWarning(ex, "Failed to auto-onboard device user {User}", userId));
+    }
 
     /// <summary>
     /// Seeds the "own instance" MemexInstance node (named after the device) when it's absent — the one
