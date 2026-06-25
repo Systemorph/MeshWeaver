@@ -546,5 +546,58 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Cleanup
         await NodeFactory.DeleteNode(commentPath).Should().Emit();
     }
+
+    /// <summary>
+    /// Tests the suggest-edit handler: a CreateSuggestedEditRequest creates a TrackedChange satellite
+    /// anchored to a (Start, Length) range WITHOUT mutating the document.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task CreateSuggestedEditRequest_ShouldAnchorChangeWithoutMutatingDocument()
+    {
+        var client = GetClient();
+        var docPath = "Doc/DataMesh/CollaborativeEditing";
+        var docAddress = new Address(docPath);
+
+        await client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).Should().Within(30.Seconds()).Emit();
+        var workspace = client.GetWorkspace();
+
+        var response = await client.Observe(
+            new CreateSuggestedEditRequest
+            {
+                DocumentId = docPath,
+                Position = 0,
+                InsertedText = "PREFIXWORD ",
+                Author = "TestAuthor"
+            },
+            o => o.WithTarget(docAddress)).Should().Within(30.Seconds()).Emit();
+
+        var resp = response.Message;
+        resp.Success.Should().BeTrue("CreateSuggestedEditRequest should succeed: {0}", resp.Error ?? "");
+        resp.ChangeId.Should().NotBeNullOrEmpty();
+        var changeId = resp.ChangeId!;
+
+        // The change is a TrackedChange satellite carrying the capture (Start/Length/AnchorText/NewText).
+        var changePath = $"{docPath}/{AnnotationExtensions.TrackingPartition}/{changeId}";
+        var changeNodeResponse = await client.Observe(new GetDataRequest(new EntityReference(nameof(MeshNode), changeId)), o => o.WithTarget(new Address(changePath))).Should().Within(30.Seconds()).Emit();
+        var changeNode = changeNodeResponse.Message.Data as MeshNode;
+        changeNode.Should().NotBeNull($"TrackedChange MeshNode should exist at {changePath}");
+        var change = changeNode!.Content.Should().BeOfType<MeshWeaver.Mesh.TrackedChange>().Subject;
+        change.ChangeType.Should().Be(MeshWeaver.Mesh.TrackedChangeType.Insertion);
+        change.NewText.Should().Be("PREFIXWORD ");
+        change.Start.Should().Be(0);
+        change.AnchorText.Should().NotBeNullOrEmpty("the change records the document text it was taken against");
+        change.Author.Should().Be("TestAuthor");
+        Output.WriteLine($"Change node verified: {changeNode.Path} {change.ChangeType} at {change.Start}+{change.Length} v{change.Version}");
+
+        // The document must NOT be mutated by a suggestion — it is applied only on accept.
+        var docContent = await workspace.GetMeshNodeStream(docAddress.Path)
+            .Where(n => n?.Content is MarkdownContent)
+            .Select(n => ((MarkdownContent)n!.Content!).Content ?? "")
+            .FirstAsync().ToTask();
+        docContent.Should().NotContain("PREFIXWORD ", "a suggestion is anchored on the satellite, not applied to the document");
+        Output.WriteLine("Document text confirmed un-mutated by the suggestion.");
+
+        await NodeFactory.DeleteNode(changePath).Should().Emit();
+    }
 }
 
