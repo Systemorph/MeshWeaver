@@ -88,6 +88,8 @@ public sealed class PortalShellPage : ContentPage
 
     private readonly ContentView _frame = new() { VerticalOptions = LayoutOptions.Fill, HorizontalOptions = LayoutOptions.Fill };
     private readonly Border _chatColumn;
+    private Grid _overlay = null!;        // tap-to-dismiss scrim hosting the dropdown
+    private Border _menuCard = null!;     // the anchored dropdown card (top-right, under the menu buttons)
 
     public PortalShellPage(
         IServiceProvider services, IMessageHub hub, NavigationService nav, IPreferencesService prefs,
@@ -171,7 +173,31 @@ public sealed class PortalShellPage : ContentPage
         root.Add(bar, 0, 0);
         root.Add(new BoxView { HeightRequest = 1, Color = Colors.Gray, Opacity = 0.25 }, 0, 1);
         root.Add(body, 0, 2);
-        Content = root;
+
+        // Lightweight native dropdown: a card anchored top-right (under the menu buttons) over a
+        // tap-to-dismiss scrim — a normal anchored menu, not a heavy modal action sheet, no dependency.
+        _menuCard = new Border
+        {
+            BackgroundColor = Color.FromArgb(SurfaceBg),
+            Stroke = Color.FromArgb(BorderColor),
+            StrokeThickness = 1,
+            StrokeShape = new RoundRectangle { CornerRadius = 12 },
+            HorizontalOptions = LayoutOptions.End,
+            VerticalOptions = LayoutOptions.Start,
+            Margin = new Thickness(8, 50, 8, 8),
+            Padding = new Thickness(4),
+        };
+        _menuCard.GestureRecognizers.Add(new TapGestureRecognizer());   // absorb taps on the card itself
+        _overlay = new Grid { IsVisible = false, BackgroundColor = Color.FromArgb("#22000000") };
+        var dismiss = new TapGestureRecognizer();
+        dismiss.Tapped += (_, _) => HideMenu();
+        _overlay.GestureRecognizers.Add(dismiss);
+        _overlay.Children.Add(_menuCard);
+
+        var outer = new Grid();
+        outer.Children.Add(root);
+        outer.Children.Add(_overlay);
+        Content = outer;
 
         // Re-flow the menu buttons (inline group buttons ↔ "☰" hamburger) on rotation / resize.
         SizeChanged += (_, _) => RenderMenu();
@@ -265,11 +291,11 @@ public sealed class PortalShellPage : ContentPage
         {
             // Narrow: everything (Node/Mesh/AI/Settings/User) behind one "☰" drawer — the mobile split.
             var hamburger = RoundIcon("☰");
-            hamburger.Clicked += async (_, _) => await ShowDrawerSheetAsync();
+            hamburger.Clicked += (_, _) => ShowDrawerMenu();
             _menuBar.Children.Add(hamburger);
             return;
         }
-        // Wide: one round button per context that currently has items; tap opens its native action sheet.
+        // Wide: one round button per context that currently has items; tap opens its anchored dropdown.
         foreach (var (context, glyph) in MenuContexts)
         {
             var items = ItemsFor(context);
@@ -277,48 +303,90 @@ public sealed class PortalShellPage : ContentPage
             var button = RoundIcon(glyph);
             var ctx = context;
             var ctxItems = items;
-            button.Clicked += async (_, _) => await ShowContextSheetAsync(ctx, ctxItems);
+            button.Clicked += (_, _) => ShowMenu(ctx, ctxItems);
             _menuBar.Children.Add(button);
         }
     }
 
-    // ── native menus (DisplayActionSheet — no dependency, works fully offline) ────────────────────────────
+    // ── native dropdown menus (anchored card over a tap-to-dismiss scrim — light, offline-safe) ───────────
 
-    /// <summary>One context's menu as a native action sheet of its items.</summary>
-    private async Task ShowContextSheetAsync(string title, IReadOnlyList<NodeMenuItemDefinition> items)
+    /// <summary>One context's menu as an anchored dropdown of its items.</summary>
+    private void ShowMenu(string title, IReadOnlyList<NodeMenuItemDefinition> items)
     {
         if (items.Count == 0) return;
-        var labels = items.Select(LabelFor).ToArray();
-        var pick = await DisplayActionSheet(title, "Cancel", null, labels);
-        var chosen = items.FirstOrDefault(i => LabelFor(i) == pick);
-        if (chosen is not null) await InvokeItemAsync(chosen);
+        var stack = new VerticalStackLayout { Spacing = 0 };
+        foreach (var item in items)
+            stack.Children.Add(MenuRow(item, depth: 0));
+        ShowCard(stack, 280);
     }
 
-    /// <summary>Narrow-mode drawer: pick a context, then its items.</summary>
-    private async Task ShowDrawerSheetAsync()
+    /// <summary>Narrow-mode drawer: every context's items under section headers, in one dropdown.</summary>
+    private void ShowDrawerMenu()
     {
-        var contexts = MenuContexts.Where(c => ItemsFor(c.Context).Count > 0).ToArray();
-        if (contexts.Length == 0) return;
-        var labels = contexts.Select(c => $"{c.Glyph}  {c.Context}").ToArray();
-        var pick = await DisplayActionSheet("Menu", "Cancel", null, labels);
-        var chosen = contexts.FirstOrDefault(c => $"{c.Glyph}  {c.Context}" == pick);
-        if (chosen.Context is not null)
-            await ShowContextSheetAsync(chosen.Context, ItemsFor(chosen.Context));
+        var stack = new VerticalStackLayout { Spacing = 0 };
+        var first = true;
+        foreach (var (context, glyph) in MenuContexts)
+        {
+            var items = ItemsFor(context);
+            if (items.Count == 0) continue;
+            if (!first) stack.Children.Add(MenuDivider());
+            first = false;
+            stack.Children.Add(new Label
+            {
+                Text = $"{glyph}  {context}", FontSize = 12, FontAttributes = FontAttributes.Bold,
+                TextColor = Colors.Gray, Padding = new Thickness(12, 8, 12, 4),
+            });
+            foreach (var item in items)
+                stack.Children.Add(MenuRow(item, depth: 0));
+        }
+        if (stack.Children.Count == 0) return;
+        ShowCard(stack, 300);
     }
 
-    /// <summary>Leaf item → navigate; item with <c>Children</c> → a nested action sheet.</summary>
-    private async Task InvokeItemAsync(NodeMenuItemDefinition item)
+    private void ShowCard(View content, double width)
     {
+        _menuCard.WidthRequest = width;
+        _menuCard.Content = new ScrollView { MaximumHeightRequest = 520, Content = content };
+        _overlay.IsVisible = true;
+    }
+
+    private void HideMenu() => _overlay.IsVisible = false;
+
+    /// <summary>A tappable dropdown row; rows with <c>Children</c> toggle an inline indented expander.</summary>
+    private View MenuRow(NodeMenuItemDefinition item, int depth)
+    {
+        if (item.Area == "_separator") return MenuDivider();
+
+        var row = new Grid
+        {
+            Padding = new Thickness(12 + depth * 14, 10, 12, 10),
+            ColumnSpacing = 8,
+            ColumnDefinitions = { new(GridLength.Star), new(GridLength.Auto) },
+        };
+        row.Add(new Label { Text = LabelFor(item), TextColor = Colors.White, FontSize = 15, VerticalOptions = LayoutOptions.Center }, 0);
+
+        var container = new VerticalStackLayout { Children = { row } };
         if (item.Children is { Count: > 0 } children)
         {
-            var labels = children.Select(LabelFor).ToArray();
-            var pick = await DisplayActionSheet(item.Label, "Cancel", null, labels);
-            var chosen = children.FirstOrDefault(c => LabelFor(c) == pick);
-            if (chosen is not null) await InvokeItemAsync(chosen);
-            return;
+            var chevron = new Label { Text = "›", TextColor = Colors.Gray, FontSize = 18, VerticalOptions = LayoutOptions.Center };
+            row.Add(chevron, 1);
+            var kids = new VerticalStackLayout { IsVisible = false };
+            foreach (var child in children) kids.Children.Add(MenuRow(child, depth + 1));
+            container.Children.Add(kids);
+            var tap = new TapGestureRecognizer();
+            tap.Tapped += (_, _) => { kids.IsVisible = !kids.IsVisible; chevron.Text = kids.IsVisible ? "⌄" : "›"; };
+            row.GestureRecognizers.Add(tap);
         }
-        InvokeItem(item);
+        else
+        {
+            var tap = new TapGestureRecognizer();
+            tap.Tapped += (_, _) => { HideMenu(); InvokeItem(item); };
+            row.GestureRecognizers.Add(tap);
+        }
+        return container;
     }
+
+    private static BoxView MenuDivider() => new() { HeightRequest = 1, Color = Color.FromArgb(BorderColor), Margin = new Thickness(8, 4) };
 
     /// <summary>Prefix the label with an emoji/text glyph; skip server SVG-path icons (can't load offline).</summary>
     private static string LabelFor(NodeMenuItemDefinition item) =>
