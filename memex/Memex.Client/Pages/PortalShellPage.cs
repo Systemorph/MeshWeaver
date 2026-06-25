@@ -125,7 +125,10 @@ public sealed class PortalShellPage : ContentPage
     // node-card grid), driven by the same GetQuery queries. Built natively because the layout-area pipeline
     // doesn't yet deliver the area's control to the MAUI view pack (under investigation); the view pack +
     // its controls (forms, picker, catalog, Monaco chat) remain for node areas / once that's fixed.
-    private View BuildPortalHome() => new ActivityDashboardView(_hub, $"{_current?.Name ?? "your local"} mesh");
+    private View BuildPortalHome() => new ActivityDashboardView(_hub, $"{_current?.Name ?? "your local"} mesh")
+    {
+        OnNodeSelected = node => Navigate(node.Name ?? node.Path, () => new NodeAreaView(_hub, node.Path)),
+    };
 
     private View BuildInstanceManager()
     {

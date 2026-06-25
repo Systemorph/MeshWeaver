@@ -31,6 +31,9 @@ public sealed class ActivityDashboardView : ContentView
     private string _activeTab = Tabs[0].Name;
     private IDisposable? _querySub;
 
+    /// <summary>Raised when a node card is tapped — the shell navigates to that node's area.</summary>
+    public Action<MeshNode>? OnNodeSelected { get; set; }
+
     public ActivityDashboardView(IMessageHub hub, string instanceName)
     {
         _hub = hub;
@@ -113,7 +116,7 @@ public sealed class ActivityDashboardView : ContentView
             _cards.Children.Add(Card(node));
     }
 
-    private static View Card(MeshNode node)
+    private View Card(MeshNode node)
     {
         var name = node.Name ?? node.Path;
         var avatar = new Border
@@ -159,6 +162,7 @@ public sealed class ActivityDashboardView : ContentView
                 },
             },
         };
+        card.GestureRecognizers.Add(new TapGestureRecognizer { Command = new Command(() => OnNodeSelected?.Invoke(node)) });
         // Roughly 2–3 cards per row.
         FlexLayout.SetBasis(card, new FlexBasis(0.31f, true));
         return card;
