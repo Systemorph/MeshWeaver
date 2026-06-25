@@ -62,9 +62,9 @@ When a child is created, the handler appends its ID to the parent list via `work
 
 A comment is top-level when its namespace ends with `_Comment` (e.g. `Doc/MyDoc/_Comment`). A reply's namespace is the parent comment's path (e.g. `Doc/MyDoc/_Comment/c1`). No parent load is required — the shape of the path is the signal.
 
-### Comments are anchored, NOT injected into the document
+### Comments and changes are anchored, NOT injected into the document
 
-A text-range comment is **never** written into the document's markdown. The `Comment` satellite carries its own anchor — `Version` (the document `MeshNode.Version` the offsets were computed against), `FromPosition`/`ToPosition` (offsets into the document's **rendered plain text**), and `HighlightedText`. The inline highlight is re-derived at render time by `CommentAnchoring.DecorateWithComments`: while the document is still at the comment's `Version` the stored offsets are used verbatim; once it has moved ahead the comment is **re-anchored** by relocating `HighlightedText` (nearest the old offset). This decouples commenting from the document — a `Comment`-only user (no document `Update` permission) can comment, and edits above a comment don't strand its highlight. (Tracked changes — `insert`/`delete` — DO still embed `<!--…-->` markers in the document text; only comments moved off it.)
+A text-range comment or tracked change is **never** written into the document's markdown — the document stays clean. The satellite carries its own anchor: `Start`/`Length` (the captured character range in the document's clean text), the `Version` it was captured against, the `AnchorText` (the document text at that version), and the `HighlightedText`/`OriginalText`. At render time the **effective range** is recomputed against the current text: while the document is still at the captured `Version` the stored offsets are used verbatim; once it has moved ahead, `AnchorMath` diffs `AnchorText` against the current text and maps the offsets through that diff (`diff_xIndex`-style), exposed as `EffectiveStart`/`EffectiveEnd`. The comment highlight (`CommentRendering`) and the tracked-change diff (`ChangeRendering`) are overlaid for that one render by `CollaborativeRenderer` — never persisted. This decouples annotating from the document: a `Comment`-only user (no document `Update` permission) can comment, and edits above an annotation don't strand it. Tracked changes are satellites too (`_Tracking`); **accepting** one applies its `NewText` to the document, **rejecting** drops the satellite.
 
 ---
 
@@ -325,7 +325,7 @@ var response = await client.AwaitResponse(request, o => o.WithTarget(address), c
 var updatedContent = await markersAppeared;
 ```
 
-**Comments are different**: they do not change the document text, so don't wait on the doc stream. Verify the `Comment` satellite node instead — assert it carries the anchor (`HighlightedText`, `FromPosition`/`ToPosition`, `Version`) via `GetDataRequest` below.
+**Comments are different**: they do not change the document text, so don't wait on the doc stream. Verify the `Comment` satellite node instead — assert it carries the anchor (`HighlightedText`, `Start`/`Length`, `Version`) via `GetDataRequest` below.
 
 ### Verification via `GetDataRequest`
 
@@ -360,7 +360,7 @@ private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, Ca
 4.  Send CreateCommentRequest (or create the Comment node directly via meshService.CreateNode)
 5.  Assert CreateCommentResponse.Success == true
 6.  GetDataRequest on comment path → verify Comment content AND its anchor
-    (HighlightedText, FromPosition/ToPosition, Version)
+    (HighlightedText, Start/Length, Version)
 7.  Assert the document text was NOT mutated (no `<!--comment:{markerId}` injected)
 8.  (Optional) Subscribe to comment layout area to verify the highlight renders
 9.  (Optional) Send reply CreateCommentRequest, verify the parent's Replies list grew

@@ -1,17 +1,15 @@
 # MeshWeaver.Markdown.Collaboration
 
-Provides collaborative editing infrastructure for markdown documents, including Operational Transformation (OT) for concurrent edits, range-anchored comments, and tracked changes with accept/reject workflows.
+Provides collaborative editing infrastructure for markdown documents: the version-delta position engine that anchors comments and tracked changes to clean text, Operational Transformation (OT) for concurrent edits, and the marker utilities used to keep legacy content clean.
 
 ## Features
 
+- `AnchorMath` -- the version-delta engine. Anchors a captured `[start, length)` range to a known text version and recomputes its effective range against the current text by diffing the two versions (`diff_xIndex`-style position mapping). This is what lets comments/changes live as satellites with the document kept clean; see `CommentRendering` / `ChangeRendering` in `MeshWeaver.Graph`.
 - `CollaborativeEditingCoordinator` -- manages document state, applies OT transformations, and tracks active editing sessions with cursor positions
 - Text operations: `InsertOperation`, `DeleteOperation`, `CompositeOperation` with version-based conflict resolution
 - `TextOperationTransformer` for server-side OT transformation of concurrent edits
-- `RangeComment` -- comments anchored to text ranges via embedded markdown markers (`<!--comment:MarkerId-->`)
-- `TrackedChange` -- suggested edits (insertions, deletions, replacements) with pending/accepted/rejected status
-- `AnnotationSyncService` for synchronizing annotations between the document and external storage
-- `MarkdownAnnotationParser` for extracting and embedding annotation markers in markdown content
-- Vector clock-based versioning and session presence awareness with stale session cleanup
+- `MarkdownAnnotationParser` -- extracts/strips annotation markers (`<!--comment:id-->…`). Used to keep rendered content clean; the comment/change flow no longer *embeds* markers.
+- `RangeComment` -- a legacy marker-anchored comment model, superseded by the satellite + `AnchorMath` model.
 
 ## Usage
 
