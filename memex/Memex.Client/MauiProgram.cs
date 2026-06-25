@@ -81,6 +81,12 @@ public static class MauiProgram
             .UseMonolithMesh()
             .AddPartitionedSqlitePersistence($"Data Source={Path.Combine(appData, "memex-local.db")}")
             .AddRowLevelSecurity()
+            // Sandbox: the real NuGetAssemblyResolver reads NuGet.Config at construction (denied on
+            // MacCatalyst/iOS), which crashed per-node hub activation → node-area spinner. Pre-register a
+            // no-op (the device never compiles `#r "nuget:"`) BEFORE AddGraph, whose AddNuGetResolver
+            // TryAddSingleton then no-ops. See NoOpNuGetAssemblyResolver + the COMPILER_PROBE diagnosis.
+            .ConfigureServices(services => services
+                .AddSingleton<MeshWeaver.NuGet.INuGetAssemblyResolver, NoOpNuGetAssemblyResolver>())
             .AddGraph()
             .AddSpaceType()
             // Connectable-mesh node type; THIS instance is a MemexInstance node too.
@@ -166,21 +172,6 @@ public static class MauiProgram
         if (string.IsNullOrWhiteSpace(osName)) osName = "Device User";
         hub.ServiceProvider.GetRequiredService<AccessService>()
             .SetCircuitContext(new AccessContext { ObjectId = DeviceUserId, Name = osName });
-
-        // COMPILER PROBE (diagnostic, never fatal): resolve the compilation service to surface the inner
-        // exception that blocks per-node hub activation (the node-area "eternal spinner"). If this throws,
-        // it's a construction issue (e.g. NuGet settings under the sandbox); if it resolves, the failure is
-        // the node-hub child-scope topology.
-        var probeLog = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("CompilerProbe");
-        try
-        {
-            _ = hub.ServiceProvider.GetService<IMeshNodeCompilationService>();
-            probeLog?.LogInformation("COMPILER_PROBE: resolved IMeshNodeCompilationService OK (root scope)");
-        }
-        catch (Exception ex)
-        {
-            probeLog?.LogError(ex, "COMPILER_PROBE: MeshNodeCompilationService construction FAILED");
-        }
         // Onboarding is now INTERACTIVE (OnboardingPage): on first launch the user fills in their full
         // name + bio, and "Get started" runs DeviceOnboarding (creates the User node → framework provisions
         // the user partition + self-admin, then global admin in Admin/_Access). A returning launch detects
