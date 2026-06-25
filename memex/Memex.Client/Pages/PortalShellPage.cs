@@ -461,8 +461,17 @@ public sealed class PortalShellPage : ContentPage
     // ── destinations ────────────────────────────────────────────────────────────────────────────────
     // Home = the user's own Activity area (device-user/Activity, the User node's default area) — a real
     // node area, so the platform node menu loads in the top bar. Not a hand-rolled dashboard.
+    // Home content is the NATIVE dashboard (the platform Activity area's catalog doesn't render in the MAUI
+    // view pack), but we navigate "at" the user node + Activity area so the Node/Mesh menus still load.
     private void NavigateHome()
-        => NavigateToNode(DeviceOnboarding.DeviceUserId, "Home", UserActivityArea);
+        => Navigate("Home", BuildHome, DeviceOnboarding.DeviceUserId, UserActivityArea);
+
+    private View BuildHome()
+        => new ActivityDashboardView(_hub, DeviceOnboarding.FullNameGuess(), "your mesh")
+        {
+            OnNodeSelected = node => NavigateToNode(node.Path, node.Name ?? node.Path, "Overview"),
+            OnThreadCreated = node => NavigateToNode(node.Path, node.Name ?? "Thread", "Overview"),
+        };
 
     private void NavigateToNode(string nodePath, string title, string area)
         => Navigate(title, () => new NodeAreaView(_hub, nodePath, area), nodePath, area);

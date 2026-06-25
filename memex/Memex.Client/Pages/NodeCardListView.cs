@@ -27,6 +27,10 @@ public sealed class NodeCardListView : ContentView, IDisposable
     /// <summary>Shown when a query returns no nodes.</summary>
     public string EmptyMessage { get; set; } = "No items found.";
 
+    /// <summary>Optional custom empty-state view (e.g. a "➕ New thread" call-to-action). Overrides
+    /// <see cref="EmptyMessage"/> when set.</summary>
+    public Func<View>? EmptyView { get; set; }
+
     public NodeCardListView(IMessageHub hub)
     {
         _hub = hub;
@@ -41,9 +45,11 @@ public sealed class NodeCardListView : ContentView, IDisposable
         _cards.Children.Add(new ActivityIndicator { IsRunning = true, Margin = new Thickness(4, 12) });
 
         _querySub?.Dispose();
-        _querySub = _hub.GetQuery("cards:" + query, query).Take(1)
+        // Surface failures (incl. a 15s timeout) as a VISIBLE error instead of an eternal spinner — so a
+        // query the backend can't run (e.g. an unsupported sort/filter on SQLite) is diagnosable, not silent.
+        _querySub = _hub.GetQuery("cards:" + query, query).Take(1).Timeout(TimeSpan.FromSeconds(15))
             .Subscribe(nodes => MainThread.BeginInvokeOnMainThread(() => Render(nodes)),
-                       _ => MainThread.BeginInvokeOnMainThread(() => Render(Array.Empty<MeshNode>())));
+                       ex => MainThread.BeginInvokeOnMainThread(() => RenderError(query, ex)));
     }
 
     private void Render(IEnumerable<MeshNode> nodes)
@@ -52,11 +58,28 @@ public sealed class NodeCardListView : ContentView, IDisposable
         var list = nodes.ToList();
         if (list.Count == 0)
         {
-            _cards.Children.Add(new Label { Text = EmptyMessage, TextColor = Colors.Gray, Margin = new Thickness(4, 8) });
+            _cards.Children.Add(EmptyView?.Invoke()
+                ?? new Label { Text = EmptyMessage, TextColor = Colors.Gray, Margin = new Thickness(4, 8) });
             return;
         }
         foreach (var node in list)
             _cards.Children.Add(Card(node, OnNodeSelected));
+    }
+
+    private void RenderError(string query, Exception ex)
+    {
+        _cards.Children.Clear();
+        _cards.Children.Add(new VerticalStackLayout
+        {
+            Spacing = 4,
+            Margin = new Thickness(4, 8),
+            Children =
+            {
+                new Label { Text = "Couldn't load this list.", TextColor = Colors.OrangeRed, FontAttributes = FontAttributes.Bold },
+                new Label { Text = $"query: {query}", FontSize = 12, TextColor = Colors.Gray },
+                new Label { Text = $"{ex.GetType().Name}: {ex.Message}", FontSize = 12, TextColor = Colors.Gray },
+            },
+        });
     }
 
     /// <summary>Builds one node card. Static so any view can render a node card consistently.</summary>
