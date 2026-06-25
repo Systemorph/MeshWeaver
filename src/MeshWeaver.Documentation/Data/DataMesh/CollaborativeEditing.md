@@ -68,7 +68,7 @@ MeshWeaver stores annotations **beside** the document, not inside it. Every comm
 | Comment | `_Comment` | `CommentsExtensions` |
 | Tracked change | `_Tracking` | `AnnotationExtensions` |
 
-The markdown source itself holds lightweight **inline markers** (`<!--comment:id-->text<!--/comment:id-->`) as the authoritative record of which text range an annotation covers. Positions are always *derived* from those markers at load time — they are never stored on the entities.
+The markdown source itself holds lightweight **inline markers** (`text`) as the authoritative record of which text range an annotation covers. Positions are always *derived* from those markers at load time — they are never stored on the entities.
 
 ### The load–edit–save cycle
 
@@ -110,7 +110,7 @@ Select any passage and click **Comment** in the toolbar. The system creates a `C
 
 ### Example — a paragraph with comments
 
-> MeshWeaver is a <!--comment:c1-->powerful platform<!--/comment:c1--> for building <!--comment:c2-->collaborative applications<!--/comment:c2-->. It provides real-time synchronization and <!--comment:c3-->conflict-free editing<!--/comment:c3-->.
+> MeshWeaver is a powerful platform for building collaborative applications. It provides real-time synchronization and conflict-free editing.
 
 In the above example three comment markers are embedded in the source:
 
@@ -126,23 +126,23 @@ In the above example three comment markers are embedded in the source:
 
 ### Suggested additions
 
-Proposed new text gets a <!--insert:i1:Alice:Dec 18-->green underline<!--/insert:i1-->.
+Proposed new text gets a green underline.
 
-> The quarterly report shows <!--insert:i2:Bob:Dec 19-->significant growth of 25%<!--/insert:i2--> in user engagement.
+> The quarterly report shows significant growth of 25% in user engagement.
 
 ### Suggested deletions
 
-Text proposed for removal gets a <!--delete:d1:Carol:Dec 20-->red strikethrough<!--/delete:d1-->. The original text stays visible until the suggestion is decided.
+Text proposed for removal gets a . The original text stays visible until the suggestion is decided.
 
-> Please review the <!--delete:d2:Alice:Dec 21-->outdated and no longer relevant<!--/delete:d2--> documentation before the meeting.
+> Please review the  documentation before the meeting.
 
 ### Combined example
 
-> Our team has completed the <!--delete:d3:Bob:Dec 22-->initial<!--/delete:d3--><!--insert:i3:Bob:Dec 22-->comprehensive<!--/insert:i3--> analysis of the <!--comment:c4-->market trends<!--/comment:c4-->. We recommend <!--insert:i4:Alice:Dec 23-->immediate action on the following priorities<!--/insert:i4-->:
+> Our team has completed the comprehensive analysis of the market trends. We recommend immediate action on the following priorities:
 >
-> 1. <!--insert:i5:Bob:Dec 23-->Expand into European markets<!--/insert:i5-->
-> 2. <!--delete:d4:Carol:Dec 23-->Reduce marketing budget<!--/delete:d4--><!--insert:i6:Carol:Dec 23-->Reallocate marketing spend to digital channels<!--/insert:i6-->
-> 3. Improve customer <!--delete:d5:Alice:Dec 24-->satisfaction<!--/delete:d5--><!--insert:i7:Alice:Dec 24-->retention rates<!--/insert:i7-->
+> 1. Expand into European markets
+> 2. Reallocate marketing spend to digital channels
+> 3. Improve customer retention rates
 
 ---
 
@@ -196,11 +196,11 @@ Multiple editors work on the same document without conflicts:
 
 > **Project Proposal** *(3 collaborators editing)*
 >
-> The <!--comment:c5-->proposed timeline<!--/comment:c5--> for Phase 1 is <!--delete:d6:Bob:Dec 26-->6 months<!--/delete:d6--><!--insert:i8:Bob:Dec 26-->4 months<!--/insert:i8-->. This <!--insert:i9:Alice:Dec 26-->aggressive but achievable<!--/insert:i9--> schedule requires:
+> The proposed timeline for Phase 1 is 4 months. This aggressive but achievable schedule requires:
 >
-> - <!--comment:c6-->Additional resources<!--/comment:c6--> from the engineering team
-> - <!--delete:d7:Carol:Dec 27-->Weekly<!--/delete:d7--><!--insert:i10:Carol:Dec 27-->Daily<!--/insert:i10--> standup meetings
-> - <!--insert:i11:Alice:Dec 27-->A dedicated project manager<!--/insert:i11-->
+> - Additional resources from the engineering team
+> - Daily standup meetings
+> - A dedicated project manager
 
 ---
 

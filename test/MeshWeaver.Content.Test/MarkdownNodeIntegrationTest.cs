@@ -152,9 +152,12 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
             var markdownContent = contentProp.GetString();
             markdownContent.Should().NotBeNullOrEmpty();
             markdownContent.Should().Contain("Adding Comments");
-            markdownContent.Should().Contain("comment:c1");
-            markdownContent.Should().Contain("insert:i1");
-            markdownContent.Should().Contain("delete:d1");
+            markdownContent.Should().Contain("powerful platform");
+            // The example is kept CLEAN — comments and tracked changes are satellites now, not
+            // embedded markers in the document text.
+            markdownContent.Should().NotContain("<!--comment:");
+            markdownContent.Should().NotContain("<!--insert:");
+            markdownContent.Should().NotContain("<!--delete:");
         }
     }
 
