@@ -62,10 +62,16 @@ public sealed class PortalFixture : IAsyncLifetime
             return;
         }
 
+        // E2E_HEADED=1 shows the browser (with a slow-mo so you can watch); default is headless.
+        var headed = Environment.GetEnvironmentVariable("E2E_HEADED") == "1";
         try
         {
             _playwright = await Playwright.CreateAsync();
-            _browser = await _playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { Headless = true });
+            _browser = await _playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
+            {
+                Headless = !headed,
+                SlowMo = headed ? 300 : 0
+            });
         }
         catch (Exception ex)
         {
@@ -75,8 +81,14 @@ public sealed class PortalFixture : IAsyncLifetime
             return;
         }
 
+        // Record a video of every test into TestResults/videos so a run leaves a watchable artifact.
+        VideoDir = Path.Combine(AppContext.BaseDirectory, "TestResults", "videos");
+        Directory.CreateDirectory(VideoDir);
         BaseUrl = baseUrl.TrimEnd('/');
     }
+
+    /// <summary>Directory where per-test videos are written (under the test bin's TestResults).</summary>
+    public string? VideoDir { get; private set; }
 
     /// <summary>
     /// Creates a fresh browser context authenticated as the DevLogin user. The auth cookie is minted
@@ -85,7 +97,11 @@ public sealed class PortalFixture : IAsyncLifetime
     /// </summary>
     public async Task<IBrowserContext> NewAuthenticatedContextAsync()
     {
-        var context = await _browser!.NewContextAsync(new BrowserNewContextOptions { IgnoreHTTPSErrors = true });
+        var context = await _browser!.NewContextAsync(new BrowserNewContextOptions
+        {
+            IgnoreHTTPSErrors = true,
+            RecordVideoDir = VideoDir
+        });
         var response = await context.APIRequest.PostAsync($"{BaseUrl}/dev/signin", new APIRequestContextOptions
         {
             Headers = new Dictionary<string, string> { ["content-type"] = "application/x-www-form-urlencoded" },
