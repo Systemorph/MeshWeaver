@@ -131,6 +131,8 @@ public static class MauiProgram
         // hosts content views — the in-process local portal (rendered natively via the MeshWeaver.Maui
         // LayoutAreaView), on-device voice, and the instance manager.
         builder.Services.AddSingleton<InstanceStore>();
+        builder.Services.AddSingleton<DeviceOnboarding>();
+        builder.Services.AddTransient<OnboardingPage>();
         builder.Services.AddTransient<PortalShellPage>();
         builder.Services.AddTransient<VoiceView>();
         builder.Services.AddTransient<InstanceManagerView>();
@@ -164,65 +166,30 @@ public static class MauiProgram
         if (string.IsNullOrWhiteSpace(osName)) osName = "Device User";
         hub.ServiceProvider.GetRequiredService<AccessService>()
             .SetCircuitContext(new AccessContext { ObjectId = DeviceUserId, Name = osName });
-        // Auto-onboard the device user with the FRAMEWORK's real onboarding (replaces the old
-        // hand-rolled root-Admin seed): on first boot create their proper User node — the framework
-        // auto-provisions the per-user partition schema and auto-grants Admin in {device-user}/_Access
-        // — then grant platform admin properly (Admin/_Access, NOT a root _Access data-superuser grant).
-        // Idempotent: a returning boot already has the User node and skips.
-        AutoOnboardDeviceUser(hub, DeviceUserId, osName);
+
+        // COMPILER PROBE (diagnostic, never fatal): resolve the compilation service to surface the inner
+        // exception that blocks per-node hub activation (the node-area "eternal spinner"). If this throws,
+        // it's a construction issue (e.g. NuGet settings under the sandbox); if it resolves, the failure is
+        // the node-hub child-scope topology.
+        var probeLog = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("CompilerProbe");
+        try
+        {
+            _ = hub.ServiceProvider.GetService<IMeshNodeCompilationService>();
+            probeLog?.LogInformation("COMPILER_PROBE: resolved IMeshNodeCompilationService OK (root scope)");
+        }
+        catch (Exception ex)
+        {
+            probeLog?.LogError(ex, "COMPILER_PROBE: MeshNodeCompilationService construction FAILED");
+        }
+        // Onboarding is now INTERACTIVE (OnboardingPage): on first launch the user fills in their full
+        // name + bio, and "Get started" runs DeviceOnboarding (creates the User node → framework provisions
+        // the user partition + self-admin, then global admin in Admin/_Access). A returning launch detects
+        // the existing User node and goes straight to the shell.
         SeedOwnInstance(hub);
 
         return app;
     }
 
-    /// <summary>
-    /// First-boot onboarding for the single local user — the framework path, not a hand-rolled grant.
-    /// Creating the partition-root <c>User</c> node (namespace = "") triggers the framework's
-    /// <c>OwnsPartitionProvisioningValidator</c> (provisions the <c>device-user</c> SQLite partition
-    /// schema before the write) AND the User post-creation handler (auto-grants Admin in
-    /// <c>device-user/_Access</c>). We then add the proper platform-admin grant in <c>Admin/_Access</c>
-    /// (<c>MainNode=""</c>) so the device owner is a global admin via <c>hub.IsGlobalAdmin()</c> — the
-    /// sanctioned shape, never a root <c>_Access</c> grant. All writes run as System because a
-    /// brand-new partition root is owned by nobody yet (mirrors <c>UserOnboardingService.CreateUser</c>).
-    /// </summary>
-    private static void AutoOnboardDeviceUser(IMessageHub hub, string userId, string displayName)
-    {
-        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
-        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("DeviceOnboarding");
-
-        // Existence check via GetQuery (emits the current set immediately — empty on a fresh mesh);
-        // GetMeshNodeStream(path) would WAIT for the node and so can't detect first-boot absence.
-        hub.GetWorkspace()
-            .GetQuery("boot-device-user", $"nodeType:User content.email:{userId}@local limit:1")
-            .Take(1).Timeout(TimeSpan.FromSeconds(15))
-            .Where(existing => !existing.Any())
-            .SelectMany(_ => Observable.Using(
-                () => accessService.ImpersonateAsSystem(),
-                _ => meshService.CreateNode(new MeshNode(userId) // partition root: namespace "" → provisions {userId} schema + self-Admin
-                    {
-                        NodeType = "User",
-                        Name = displayName,
-                        State = MeshNodeState.Active,
-                        Content = new User { FullName = displayName, Email = $"{userId}@local" },
-                    })
-                    // Platform admin — the proper global-admin shape (Admin/_Access, MainNode="").
-                    .SelectMany(_ => meshService.CreateNode(new MeshNode($"{userId}_Access", "Admin/_Access")
-                    {
-                        NodeType = "AccessAssignment",
-                        Name = $"{displayName} — Admin",
-                        MainNode = "",
-                        Content = new AccessAssignment
-                        {
-                            AccessObject = userId,
-                            DisplayName = displayName,
-                            Roles = [new RoleAssignment { Role = "Admin" }],
-                        },
-                    }))))
-            .Subscribe(
-                _ => logger?.LogInformation("Auto-onboarded device user {User}", userId),
-                ex => logger?.LogWarning(ex, "Failed to auto-onboard device user {User}", userId));
-    }
 
     /// <summary>
     /// Seeds the "own instance" MemexInstance node (named after the device) when it's absent — the one
