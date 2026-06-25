@@ -9,6 +9,7 @@ using MeshWeaver.Maui;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
+using MeshWeaver.Hosting.Persistence.Http;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Hosting.Sqlite;
 using MeshWeaver.Mesh;
@@ -136,6 +137,17 @@ public static class MauiProgram
         // MemexInstance node so the next boot reconnects. See the /connect page.
         builder.Services.AddSingleton<MeshOAuthClient>();
         builder.Services.AddSingleton(sp => new MeshConnector(sp.GetRequiredService<IMessageHub>()));
+
+        // ── Import from a remote instance ───────────────────────────────────────────────────────────────
+        // Pull mesh nodes from a connected remote instance into the local mesh. The remote-read surface is
+        // the framework's IRemoteMeshClient (MCP-over-HTTP against the remote portal's /mcp, authenticated
+        // with the instance's stored token) — the SAME surface MirrorRequest's Pull uses, and the ONLY one
+        // that returns raw MeshNodes cross-instance (the SignalR workspace API forbids GetRemoteStream<MeshNode>).
+        // RemoteImporter create-or-updates the pulled subtree locally (idempotent). Mesh-scoped singletons.
+        builder.Services.AddSingleton<IRemoteMeshClientFactory>(sp =>
+            new McpRemoteMeshClientFactory(sp.GetRequiredService<IMessageHub>(), sp.GetService<ILoggerFactory>()));
+        builder.Services.AddSingleton(sp =>
+            new RemoteImporter(sp.GetRequiredService<IMessageHub>(), sp.GetRequiredService<IRemoteMeshClientFactory>()));
 
         // Native browser-like shell: PortalShellPage (back/forward history + instance switcher in the title)
         // hosts content views — the in-process local portal (rendered natively via the MeshWeaver.Maui
