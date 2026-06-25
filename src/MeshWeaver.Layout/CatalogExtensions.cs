@@ -22,6 +22,10 @@ public static class CatalogExtensions
     /// <paramref name="nodeType"/> are composed into the search's hidden query (with any extra
     /// <paramref name="query"/> appended); set <paramref name="createNodeType"/> to offer a "New" action
     /// and an inviting empty state for that node type.
+    /// <para><paramref name="configure"/> is an OPTIONAL last-mile hook to fine-tune the composed
+    /// <see cref="MeshSearchControl"/> — render mode, item/row/column limits, <c>CreateHref</c>, reactive
+    /// mode, whether the search box shows — WITHOUT leaving the declarative tab declaration. Applied AFTER
+    /// the query/create composition so the caller can override anything the parameters set.</para>
     /// </summary>
     public static TabsControl WithMeshSearch(
         this TabsControl tabs,
@@ -32,7 +36,8 @@ public static class CatalogExtensions
         string? query = null,
         string? createNodeType = null,
         string? createNamespace = null,
-        string? placeholder = null)
+        string? placeholder = null,
+        Func<MeshSearchControl, MeshSearchControl>? configure = null)
     {
         var hiddenQuery = string.Join(" ", new[]
         {
@@ -51,6 +56,8 @@ public static class CatalogExtensions
             search = search with { CreateNamespace = createNamespace };
         if (!string.IsNullOrWhiteSpace(placeholder))
             search = search.WithPlaceholder(placeholder!);
+        if (configure is not null)
+            search = configure(search);
 
         // WithView(view, area) names the tab's area by `label`; TabsControl.CreateItemSkin turns that into
         // the tab's TabSkin label, so the tab title menu reads the supplied labels.
