@@ -477,9 +477,9 @@ public sealed class PortalShellPage : ContentPage
     private void NavigateHome()
         => Navigate("Home", BuildHome, DeviceOnboarding.DeviceUserId, UserActivityArea);
 
-    // Home = the native dashboard. The shared framework Activity area is the goal, but the MAUI view pack
-    // can't yet resolve its nested/remote layout areas ("area Activity didn't resolve"), so until that
-    // rendering gap is fixed the native view is what actually works (catalog + composer + New, diagnosable).
+    // Home = the native dashboard (works today). The retry fix resolves the framework area's TOP level, but
+    // its nested REMOTE sub-areas (catalog content + composer) still don't render — the remote client can't
+    // trigger their server-side render. Until that gap closes, the native view is what actually works.
     private View BuildHome()
         => new ActivityDashboardView(_hub, DeviceOnboarding.FullNameGuess(), "your mesh")
         {
