@@ -130,7 +130,10 @@ public sealed class ActivityDashboardView : ContentView
             Text = "➕ New thread", FontSize = 15, BackgroundColor = Colors.RoyalBlue, TextColor = Colors.White,
             CornerRadius = 8, Padding = new Thickness(16, 6), HorizontalOptions = LayoutOptions.Start,
         };
-        btn.Clicked += (_, _) => _composer.Focus();
+        // Open a thread immediately (visible effect); the user then types into it. Focusing the composer
+        // alone reads as "no effect" on desktop (no soft keyboard), so create + open.
+        btn.Clicked += (_, _) => _hub.StartThread(DeviceOnboarding.DeviceUserId, "New thread",
+            onCreated: node => MainThread.BeginInvokeOnMainThread(() => OnThreadCreated?.Invoke(node)));
         return new VerticalStackLayout
         {
             Spacing = 10, Padding = new Thickness(4, 20),
