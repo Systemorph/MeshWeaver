@@ -311,7 +311,10 @@ public sealed class ButtonView : MauiView<ButtonControl>
 public sealed class HtmlView : MauiView<HtmlControl>
 {
     private Label _label = null!;
-    protected override View CreateView() => _label = new Label();
+    // TextType.Html so an HtmlControl's markup renders as formatted text (the platform's "Welcome back"
+    // banner etc.) instead of showing raw <div …> source. MAUI maps this to the platform HTML→text
+    // renderer; inline CSS is largely ignored but tags/entities resolve.
+    protected override View CreateView() => _label = new Label { TextType = TextType.Html };
     protected override void Bind() => Bind<object>(Model.Data, v => _label.Text = v?.ToString() ?? "");
 }
 
