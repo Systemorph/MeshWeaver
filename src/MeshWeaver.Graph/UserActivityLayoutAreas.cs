@@ -164,7 +164,9 @@ public static class UserActivityLayoutAreas
 
         // (a) Welcome banner — Markdown, NOT a hand-built HTML string.
         dashboard = dashboard.WithView(Controls.Markdown(
-            $"### Welcome back, {ownerName}\n\nYou can ask the agent to customize your home screen."));
+            $"### Welcome back, {ownerName}\n\n" +
+            "_This home is configurable — just tell the agent what you'd like to see here._\n\n" +
+            "Search supports the full [query syntax](/Doc/DataMesh/QuerySyntax)."));
 
         // (b) Pinned band — its own always-visible section above the tabs (when the owner has pins).
         var pinned = BuildPinnedItems(ownerNode);
