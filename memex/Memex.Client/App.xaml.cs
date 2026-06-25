@@ -18,5 +18,7 @@ public partial class App : Application
     // MeshWeaver.Maui view pack (LayoutAreaView) — no BlazorWebView. The shell IS the navigator, so it's the
     // window root directly (no NavigationPage wrapper).
     protected override Window CreateWindow(IActivationState? activationState)
-        => new Window(_services.GetRequiredService<PortalShellPage>()) { Title = "Memex" };
+        // Start on the onboarding gate: it shows the onboarding form on first launch and swaps the window
+        // root to PortalShellPage once the user is onboarded (or immediately, on a returning launch).
+        => new Window(_services.GetRequiredService<OnboardingPage>()) { Title = "Memex" };
 }
