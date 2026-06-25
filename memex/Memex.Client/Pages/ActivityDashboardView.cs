@@ -46,11 +46,15 @@ public sealed class ActivityDashboardView : ContentView
         _hub = hub;
         _cards = new NodeCardListView(hub);
 
-        var banner = new Label
+        var banner = new VerticalStackLayout
         {
-            Text = $"Welcome back, {userName}",
-            FontSize = 24, FontAttributes = FontAttributes.Bold,
+            Spacing = 4,
             Padding = new Thickness(20, 16, 20, 8),
+            Children =
+            {
+                new Label { Text = $"Welcome back, {userName}", FontSize = 24, FontAttributes = FontAttributes.Bold },
+                new Label { Text = "💬 You can ask the agent to customize your home screen.", FontSize = 12, TextColor = Colors.Gray },
+            },
         };
 
         foreach (var (name, _) in Tabs) _tabBar.Children.Add(TabButton(name));
