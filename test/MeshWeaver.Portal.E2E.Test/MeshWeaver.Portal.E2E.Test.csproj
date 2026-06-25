@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    End-to-end Playwright browser tests for the collaborative-markdown UI.
+    NOT part of the normal solution test run: the tests Skip themselves unless E2E is enabled
+    (set E2E_BASE_URL or E2E_LAUNCH=1). See README.md in this folder for how to run.
+  -->
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Playwright" />
+  </ItemGroup>
+
+</Project>
