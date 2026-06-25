@@ -96,10 +96,8 @@ public partial class LayoutAreaView
                 AreaStream.Dispose();
             }
             DialogStream?.Dispose();
-            MenuStream?.Dispose();
-            NodeMenuStream?.Dispose();
-            MeshMenuStream?.Dispose();
             ProgressStream?.Dispose();
+            // Menu subscriptions were registered on AreaStream (above) and tore down with its Dispose().
         }
         else
         {
@@ -108,10 +106,6 @@ public partial class LayoutAreaView
         }
         AreaStream = null;
         DialogStream = null;
-        MenuStream = null;
-        NodeMenuStream = null;
-        MeshMenuStream = null;
-        AiMenuStream = null;
         ProgressStream = null;
         await base.DisposeAsync();
     }
@@ -120,16 +114,9 @@ public partial class LayoutAreaView
     {
         AreaStream?.Dispose();
         DialogStream?.Dispose();
-        MenuStream?.Dispose();
-        NodeMenuStream?.Dispose();
-        MeshMenuStream?.Dispose();
         ProgressStream?.Dispose();
         AreaStream = null;
         DialogStream = null;
-        MenuStream = null;
-        NodeMenuStream = null;
-        MeshMenuStream = null;
-        AiMenuStream = null;
         ProgressStream = null;
     }
 
@@ -172,34 +159,20 @@ public partial class LayoutAreaView
                     ex => OnReducedStreamError(ex, "progress")));
             if (Top)
             {
-                MenuStream = SetupMenuAreaMonitoring(AreaStream!, MenuControl.MenuArea);
-                MenuStream?.RegisterForDisposal(MenuStream.DistinctUntilChanged().Subscribe(
-                    el => OnMenuStreamChanged(el.Value, ""),
-                    ex => OnReducedStreamError(ex, "menu")));
-
-                NodeMenuStream = SetupMenuAreaMonitoring(AreaStream!, MenuControl.GetMenuArea(NodeMenuContext));
-                NodeMenuStream?.RegisterForDisposal(NodeMenuStream.DistinctUntilChanged().Subscribe(
-                    el => OnMenuStreamChanged(el.Value, NodeMenuContext),
-                    ex => OnReducedStreamError(ex, "node-menu")));
-
-                MeshMenuStream = SetupMenuAreaMonitoring(AreaStream!, MenuControl.GetMenuArea(MeshMenuContext));
-                MeshMenuStream?.RegisterForDisposal(MeshMenuStream.DistinctUntilChanged().Subscribe(
-                    el => OnMenuStreamChanged(el.Value, MeshMenuContext),
-                    ex => OnReducedStreamError(ex, "mesh-menu")));
-
-                AiMenuStream = SetupMenuAreaMonitoring(AreaStream!, MenuControl.GetMenuArea(AiMenuContext));
-                AiMenuStream?.RegisterForDisposal(AiMenuStream.DistinctUntilChanged().Subscribe(
-                    el => OnMenuStreamChanged(el.Value, AiMenuContext),
-                    ex => OnReducedStreamError(ex, "ai-menu")));
+                // Menus ride the SAME area stream, read via the renderer-agnostic hub.GetMenu API
+                // (MeshWeaver.Mesh.MenuStreamExtensions) — the framework counterpart of hub.GetQuery.
+                // No bespoke reduce + deserialize per context here; the native MAUI shell consumes the
+                // exact same observable. Each subscription registers on AreaStream so AreaStream.Dispose()
+                // tears it down (no separate menu-stream fields to track / null out).
+                SubscribeMenu("", null);
+                SubscribeMenu(NodeMenuContext, NodeMenuContext);
+                SubscribeMenu(MeshMenuContext, MeshMenuContext);
+                SubscribeMenu(AiMenuContext, AiMenuContext);
             }
         }
     }
 
     private ISynchronizationStream<JsonElement>? DialogStream { get; set; }
-    private ISynchronizationStream<JsonElement>? MenuStream { get; set; }
-    private ISynchronizationStream<JsonElement>? NodeMenuStream { get; set; }
-    private ISynchronizationStream<JsonElement>? MeshMenuStream { get; set; }
-    private ISynchronizationStream<JsonElement>? AiMenuStream { get; set; }
     private ISynchronizationStream<JsonElement>? ProgressStream { get; set; }
 
     /// <summary>
@@ -261,35 +234,20 @@ public partial class LayoutAreaView
             new JsonPointerReference(LayoutAreaReference.GetControlPointer(DialogControl.DialogArea)));
     }
 
-    private ISynchronizationStream<JsonElement>? SetupMenuAreaMonitoring(ISynchronizationStream<JsonElement> areaStream, string area)
+    /// <summary>
+    /// Subscribes the portal's <see cref="IMenuItemsProvider"/> slot <paramref name="providerContext"/>
+    /// to the live items of <paramref name="menuContext"/> (<c>null</c> = the root <c>$Menu</c>) on the
+    /// shared <see cref="AreaStream"/>, via the common <c>AreaStream.GetMenu(...)</c> API. Registered on
+    /// AreaStream so it disposes with it. The reactive provider re-emits on permission changes, so the
+    /// menu self-corrects without a reload.
+    /// </summary>
+    private void SubscribeMenu(string providerContext, string? menuContext)
     {
-        return areaStream.Reduce(
-            new JsonPointerReference(LayoutAreaReference.GetControlPointer(area)));
-    }
-
-    private void OnMenuStreamChanged(JsonElement menuData, string context)
-    {
-        try
-        {
-            if (IsNotPreRender)
-            {
-                if (menuData.ValueKind != JsonValueKind.Null && menuData.ValueKind != JsonValueKind.Undefined)
-                {
-                    var menuControl = menuData.Deserialize<MenuControl>(Hub.JsonSerializerOptions);
-                    if (menuControl?.Items != null)
-                    {
-                        MenuItemsProvider.Update(context, menuControl.Items);
-                        return;
-                    }
-                }
-
-                MenuItemsProvider.Update(context, []);
-            }
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(ex, "Error processing menu stream change for context '{Context}'", context);
-        }
+        if (!IsNotPreRender)
+            return;
+        AreaStream!.RegisterForDisposal(AreaStream!.GetMenu(menuContext).Subscribe(
+            items => MenuItemsProvider.Update(providerContext, items),
+            ex => OnReducedStreamError(ex, $"{providerContext} menu")));
     }
 
     private void OnDialogStreamChanged(JsonElement dialogData)

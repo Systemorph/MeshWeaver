@@ -1,35 +1,48 @@
+using System.Reactive.Linq;
+using MeshWeaver.Data;
+using MeshWeaver.Layout;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Memex.Client.Services;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Maui.Controls.Shapes;
+using Microsoft.Maui.ApplicationModel;
 
 namespace Memex.Client.Pages;
 
 /// <summary>
-/// The app's portal shell — the native equivalent of the Blazor portal layout, with three regions:
-/// a <b>top bar</b> (nav toggle · ← → · instance switcher · chat toggle), a <b>left nav menu</b>
-/// (Home / Profile / Voice / Instances), a <b>main content area</b> (history-driven, back/forward like a
-/// browser), and a <b>collapsible chat side-panel</b>. The content frame hosts the dashboard, node areas
-/// (rendered via the MAUI view pack), and the instance manager; the chat panel hosts the on-device chat.
+/// The app's portal shell — the native equivalent of the Blazor portal layout. A single <b>top bar</b>
+/// carries navigation (🏠 · ← → · instance switcher), a real <b>search bar</b> (mesh <c>hub.GetQuery</c>),
+/// the current node's <b>platform menu</b> (pulled live from <c>hub.GetMenu</c> — NOT hardcoded — shown as
+/// buttons in landscape, collapsed into a "⋯" overflow in portrait), a chat toggle, and an account menu.
+/// The <b>content frame</b> is history-driven (browser-style back/forward); a collapsible <b>chat panel</b>
+/// hosts the on-device chat. There is no hardcoded side nav: destinations come from the platform (node
+/// menu items, search results, the user's own node area) — the shell only provides the chrome.
 /// </summary>
 public sealed class PortalShellPage : ContentPage
 {
+    private sealed record NavEntry(string Title, Func<View> Build, string? NodePath, string Area);
+
     private readonly IServiceProvider _services;
     private readonly InstanceStore _store;
     private readonly IMessageHub _hub;
 
-    private readonly List<(string Title, Func<View> Build)> _history = new();
+    private readonly List<NavEntry> _history = new();
     private int _index = -1;
     private bool _started;
 
     private readonly Button _back = NavButton("←", 18);
     private readonly Button _forward = NavButton("→", 18);
     private readonly Button _instance = new() { FontSize = 15, FontAttributes = FontAttributes.Bold, BackgroundColor = Colors.Transparent };
-    private readonly Label _crumb = new() { FontSize = 13, TextColor = Colors.Gray, VerticalOptions = LayoutOptions.Center };
+    private readonly Entry _search = new() { Placeholder = "Search the mesh…", ReturnType = ReturnType.Search, FontSize = 14, VerticalOptions = LayoutOptions.Center };
+
+    // The current node's platform menu (from hub.GetMenu) — buttons in landscape, "⋯" overflow in portrait.
+    private readonly HorizontalStackLayout _menuBar = new() { Spacing = 2, VerticalOptions = LayoutOptions.Center };
+    private readonly Button _menuOverflow = NavButton("⋯", 20);
+    private IDisposable? _menuSub;
+    private IReadOnlyList<NodeMenuItemDefinition> _menuItems = [];
+    private string? _currentNodePath;
 
     private readonly ContentView _frame = new() { VerticalOptions = LayoutOptions.Fill, HorizontalOptions = LayoutOptions.Fill };
-    private readonly VerticalStackLayout _navMenu = new() { Spacing = 2, Padding = new Thickness(8, 12) };
-    private Border _navColumn = null!;
     private Border _chatColumn = null!;
     private MemexInstance? _current;
 
@@ -42,13 +55,29 @@ public sealed class PortalShellPage : ContentPage
         Title = "Memex";
 
         // ── top bar ──────────────────────────────────────────────────────────────────────────────────
-        var navToggle = NavButton("☰", 18);
-        navToggle.Clicked += (_, _) => _navColumn.IsVisible = !_navColumn.IsVisible;
+        var home = NavButton("🏠", 16);
+        home.Clicked += (_, _) => NavigateHome();
         _back.Clicked += (_, _) => GoBack();
         _forward.Clicked += (_, _) => GoForward();
         _instance.Clicked += async (_, _) => await ShowInstanceSwitcherAsync();
+        _search.Completed += (_, _) => RunSearch();
+        _menuOverflow.Clicked += async (_, _) => await ShowMenuSheetAsync();
         var chatToggle = NavButton("💬", 16);
         chatToggle.Clicked += (_, _) => _chatColumn.IsVisible = !_chatColumn.IsVisible;
+        var account = NavButton("👤", 16);
+        account.Clicked += async (_, _) => await ShowAccountSheetAsync();
+
+        var searchBox = new Border
+        {
+            StrokeThickness = 1,
+            Stroke = Color.FromArgb("#3A3A3C"),
+            BackgroundColor = Color.FromArgb("#1C1C1E"),
+            Padding = new Thickness(10, 0),
+            Margin = new Thickness(4, 0),
+            StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 8 },
+            Content = _search,
+            HorizontalOptions = LayoutOptions.Fill,
+        };
 
         var bar = new Grid
         {
@@ -56,29 +85,19 @@ public sealed class PortalShellPage : ContentPage
             ColumnSpacing = 2,
             ColumnDefinitions =
             {
-                new(GridLength.Auto), new(GridLength.Auto), new(GridLength.Auto),
-                new(GridLength.Auto), new(GridLength.Star), new(GridLength.Auto),
+                new(GridLength.Auto), new(GridLength.Auto), new(GridLength.Auto), new(GridLength.Auto),
+                new(GridLength.Star), new(GridLength.Auto), new(GridLength.Auto), new(GridLength.Auto), new(GridLength.Auto),
             },
         };
-        bar.Add(navToggle, 0);
+        bar.Add(home, 0);
         bar.Add(_back, 1);
         bar.Add(_forward, 2);
         bar.Add(_instance, 3);
-        bar.Add(_crumb, 4);
-        bar.Add(chatToggle, 5);
-
-        // ── left nav menu ────────────────────────────────────────────────────────────────────────────
-        AddNavItem("🏠", "Home", NavigateHome);
-        AddNavItem("👤", "Profile", () => Navigate("Profile", () => new NodeAreaView(_hub, DeviceOnboarding.DeviceUserId)));
-        AddNavItem("🎙", "Voice", () => Navigate("Voice", () => _services.GetRequiredService<VoiceView>()));
-        AddNavItem("🧩", "Instances", () => Navigate("Instances", BuildInstanceManager));
-        _navColumn = new Border
-        {
-            WidthRequest = 210,
-            StrokeThickness = 0,
-            BackgroundColor = Color.FromArgb("#1C1C1E"),
-            Content = new ScrollView { Content = _navMenu },
-        };
+        bar.Add(searchBox, 4);
+        bar.Add(_menuBar, 5);
+        bar.Add(_menuOverflow, 6);
+        bar.Add(chatToggle, 7);
+        bar.Add(account, 8);
 
         // ── chat side-panel (collapsible, hidden by default) ──────────────────────────────────────────
         _chatColumn = new Border
@@ -91,25 +110,24 @@ public sealed class PortalShellPage : ContentPage
             Content = _services.GetRequiredService<ChatView>(),
         };
 
-        // ── body: [nav][content][chat] ────────────────────────────────────────────────────────────────
+        // ── body: [content][chat] ─────────────────────────────────────────────────────────────────────
         var body = new Grid
         {
             ColumnSpacing = 0,
-            ColumnDefinitions = { new(GridLength.Auto), new(GridLength.Star), new(GridLength.Auto) },
+            ColumnDefinitions = { new(GridLength.Star), new(GridLength.Auto) },
         };
-        body.Add(_navColumn, 0);
-        body.Add(_frame, 1);
-        body.Add(_chatColumn, 2);
+        body.Add(_frame, 0);
+        body.Add(_chatColumn, 1);
 
-        var root = new Grid { RowSpacing = 0, RowDefinitions = { new(GridLength.Auto), new(new GridLength(1, GridUnitType.Auto)), new(GridLength.Star) } };
-        root.Add(bar, 0);
-        Grid.SetRow(bar, 0);
+        var root = new Grid { RowSpacing = 0, RowDefinitions = { new(GridLength.Auto), new(GridLength.Auto), new(GridLength.Star) } };
+        root.Add(bar, 0, 0);
         var sep = new BoxView { HeightRequest = 1, Color = Colors.Gray, Opacity = 0.25 };
-        root.Add(sep);
-        Grid.SetRow(sep, 1);
-        root.Add(body);
-        Grid.SetRow(body, 2);
+        root.Add(sep, 0, 1);
+        root.Add(body, 0, 2);
         Content = root;
+
+        // Re-flow the platform menu (buttons ↔ overflow) on rotation / resize.
+        SizeChanged += (_, _) => RenderMenu();
     }
 
     protected override void OnAppearing()
@@ -120,31 +138,15 @@ public sealed class PortalShellPage : ContentPage
         NavigateHome();
     }
 
-    // ── nav menu helpers ──────────────────────────────────────────────────────────────────────────────
-    private void AddNavItem(string icon, string text, Action action)
-    {
-        // A left-aligned tappable row (MAUI Button can't left-align its text).
-        var row = new Border
-        {
-            StrokeThickness = 0,
-            BackgroundColor = Colors.Transparent,
-            Padding = new Thickness(10, 10),
-            StrokeShape = new RoundRectangle { CornerRadius = 8 },
-            Content = new Label { Text = $"{icon}   {text}", FontSize = 15, VerticalOptions = LayoutOptions.Center },
-        };
-        row.GestureRecognizers.Add(new TapGestureRecognizer { Command = new Command(action) });
-        _navMenu.Children.Add(row);
-    }
-
     private static Button NavButton(string text, double size) =>
         new() { Text = text, FontSize = size, WidthRequest = 40, BackgroundColor = Colors.Transparent };
 
     // ── navigation history (the content area) ─────────────────────────────────────────────────────────
-    private void Navigate(string title, Func<View> build)
+    private void Navigate(string title, Func<View> build, string? nodePath = null, string area = "Overview")
     {
         if (_index < _history.Count - 1)
             _history.RemoveRange(_index + 1, _history.Count - 1 - _index);
-        _history.Add((title, build));
+        _history.Add(new NavEntry(title, build, nodePath, area));
         _index = _history.Count - 1;
         Render();
     }
@@ -154,25 +156,107 @@ public sealed class PortalShellPage : ContentPage
 
     private void Render()
     {
-        _frame.Content = _history[_index].Build();
+        var entry = _history[_index];
+        _frame.Content = entry.Build();
         _back.IsEnabled = _index > 0;
         _forward.IsEnabled = _index < _history.Count - 1;
         _back.Opacity = _back.IsEnabled ? 1 : 0.35;
         _forward.Opacity = _forward.IsEnabled ? 1 : 0.35;
         _instance.Text = $"{_current?.Name ?? "Local"} ▾";
-        _crumb.Text = _history[_index].Title;
+        RefreshMenu(entry);
+    }
+
+    // ── platform node menu (from hub.GetMenu — NOT hardcoded) ─────────────────────────────────────────
+    private void RefreshMenu(NavEntry entry)
+    {
+        _menuSub?.Dispose();
+        _menuSub = null;
+        _menuItems = [];
+        _currentNodePath = entry.NodePath;
+        if (entry.NodePath is null)
+        {
+            RenderMenu();
+            return;
+        }
+        // Same reactive API the Blazor portal uses; re-emits when the viewer's permissions change.
+        _menuSub = _hub.GetMenu((Address)entry.NodePath, new LayoutAreaReference(entry.Area), "Node")
+            .Subscribe(
+                items => MainThread.BeginInvokeOnMainThread(() => { _menuItems = items; RenderMenu(); }),
+                _ => { });
+    }
+
+    private void RenderMenu()
+    {
+        _menuBar.Children.Clear();
+        var narrow = Width > 0 && Width < 760;
+        var hasItems = _menuItems.Count > 0;
+        _menuOverflow.IsVisible = hasItems && narrow;
+        _menuBar.IsVisible = hasItems && !narrow;
+        if (!hasItems || narrow)
+            return;
+        foreach (var item in _menuItems)
+            _menuBar.Children.Add(MenuButton(item));
+    }
+
+    private Button MenuButton(NodeMenuItemDefinition item)
+    {
+        var label = string.IsNullOrEmpty(item.Icon) ? item.Label : $"{item.Icon} {item.Label}";
+        var btn = new Button { Text = label, FontSize = 13, BackgroundColor = Colors.Transparent, Padding = new Thickness(8, 4) };
+        btn.Clicked += async (_, _) => await InvokeMenuItemAsync(item);
+        return btn;
+    }
+
+    private async Task ShowMenuSheetAsync()
+    {
+        if (_menuItems.Count == 0) return;
+        var labels = _menuItems.Select(i => i.Label).ToArray();
+        var pick = await DisplayActionSheet("Menu", "Cancel", null, labels);
+        var chosen = _menuItems.FirstOrDefault(i => i.Label == pick);
+        if (chosen is not null) await InvokeMenuItemAsync(chosen);
+    }
+
+    private async Task InvokeMenuItemAsync(NodeMenuItemDefinition item)
+    {
+        if (item.Children is { Count: > 0 } children)
+        {
+            var labels = children.Select(c => c.Label).ToArray();
+            var pick = await DisplayActionSheet(item.Label, "Cancel", null, labels);
+            var chosen = children.FirstOrDefault(c => c.Label == pick);
+            if (chosen is not null) await InvokeMenuItemAsync(chosen);
+            return;
+        }
+        // Href → cross-node navigation; otherwise append the item's Area to the current node path.
+        if (!string.IsNullOrEmpty(item.Href))
+        {
+            NavigateToNode(item.Href, item.Label, "Overview");
+            return;
+        }
+        if (_currentNodePath is not null)
+            NavigateToNode(_currentNodePath, item.Label, item.Area);
     }
 
     // ── destinations ────────────────────────────────────────────────────────────────────────────────
     private void NavigateHome() => Navigate("Home", BuildPortalHome);
+
+    private void NavigateToNode(string nodePath, string title, string area)
+        => Navigate(title, () => new NodeAreaView(_hub, nodePath, area), nodePath, area);
 
     private View BuildPortalHome()
     {
         var userName = _hub.ServiceProvider.GetService<AccessService>()?.CircuitContext?.Name ?? "you";
         return new ActivityDashboardView(_hub, userName, $"{_current?.Name ?? "your local"} mesh")
         {
-            OnNodeSelected = node => Navigate(node.Name ?? node.Path, () => new NodeAreaView(_hub, node.Path)),
+            OnNodeSelected = node => NavigateToNode(node.Path, node.Name ?? node.Path, "Overview"),
         };
+    }
+
+    private void RunSearch()
+    {
+        var query = _search.Text?.Trim();
+        if (string.IsNullOrEmpty(query)) return;
+        Navigate($"Search: {query}",
+            () => new SearchResultsView(_hub, query,
+                node => NavigateToNode(node.Path, node.Name ?? node.Path, "Overview")));
     }
 
     private View BuildInstanceManager()
@@ -192,5 +276,25 @@ public sealed class PortalShellPage : ContentPage
 
         var chosen = _store.Instances.FirstOrDefault(i => i.Name == pick);
         if (chosen is not null) { _current = chosen; NavigateHome(); }
+    }
+
+    private async Task ShowAccountSheetAsync()
+    {
+        const string profile = "👤 My profile";
+        const string voice = "🎙 Voice";
+        const string instances = "🧩 Manage instances";
+        var pick = await DisplayActionSheet("Account", "Cancel", null, profile, voice, instances);
+        switch (pick)
+        {
+            case profile:
+                NavigateToNode(DeviceOnboarding.DeviceUserId, "Profile", "Overview");
+                break;
+            case voice:
+                Navigate("Voice", () => _services.GetRequiredService<VoiceView>());
+                break;
+            case instances:
+                Navigate("Instances", BuildInstanceManager);
+                break;
+        }
     }
 }
