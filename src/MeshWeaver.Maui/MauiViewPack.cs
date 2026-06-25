@@ -91,9 +91,12 @@ public sealed class MauiControlRenderer(MauiViewRegistry registry) : IMauiContro
         // control on a later Full frame, so a subscription torn down on a spurious Unloaded (the old churn)
         // missed it. Dispose only when the host is finally removed AND not re-added (deferred check).
         sub = stream.GetControlStream(area)
-            // Don't spin forever: if an area's control never arrives, surface WHY (timeout) instead of an
-            // eternal spinner — so an unresolvable nested/remote area is diagnosable, not a mystery.
-            .Timeout(TimeSpan.FromSeconds(15))
+            // Retry transient area errors with backoff until the (possibly nested/remote) area resolves —
+            // the SAME shared helper Blazor's NamedAreaView uses. Without it a nested area that errors
+            // transiently while its node renders it never recovers (the "area didn't resolve" symptom).
+            .RetryAreaWithBackoff(AreaErrorClassifier.ShouldRetryArea)
+            // Backstop: if it STILL never arrives, surface WHY (timeout) instead of an eternal spinner.
+            .Timeout(TimeSpan.FromSeconds(20))
             .Subscribe(
                 ctrl => MainThread.BeginInvokeOnMainThread(() =>
                     host.Content = ctrl is UiControl c ? RenderControl(c, stream, area) : null),
