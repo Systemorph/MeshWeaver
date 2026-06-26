@@ -194,12 +194,10 @@ public static class SpaceLayoutAreas
         if (IsSystemorph(spacePath))
             shell = shell.WithView(BuildSystemorphHighlights(spacePath));
 
-        // Navigation catalog, pinned full-width at the BOTTOM of every space page. The default
-        // welcome no longer carries an in-body @@("area:Search") embed (that rendered inside the
-        // narrow reading column); the catalog is a fixed bottom section so it's consistently the
-        // last thing on the page. An author can still @@-embed extra catalogs in their own body.
-        shell = shell.WithView(BuildNavigation(spacePath));
-
+        // No hardcoded navigation/catalog section. The space body (BuildBodyContent above) owns the
+        // catalog: the standard WelcomeMarkdown template embeds it INLINE via @@("area:Search"), and
+        // an author can move/tune/remove it in the editable Body like any other content. A fixed
+        // BuildNavigation section here double-rendered the catalog for any body that embedded it.
         return shell;
     }
 
@@ -324,29 +322,6 @@ public static class SpaceLayoutAreas
         // bodies may also use the absolute @@/{space}/area/Search, which resolves either way.
         var body = !string.IsNullOrWhiteSpace(space?.Body) ? space!.Body! : SpaceNodeType.WelcomeMarkdown;
         return (Controls.Markdown(body) with { NodePath = spacePath }).WithStyle(bodyStyle);
-    }
-
-    /// <summary>
-    /// The space's content catalog — the node's <see cref="MeshNodeLayoutAreas.SearchArea"/> —
-    /// rendered as a fixed full-width section at the BOTTOM of the page (the standard "browse
-    /// what's in this space" navigation). Embedded via <see cref="LayoutAreaControl"/>, the same
-    /// way <see cref="BuildEventCalendar"/> embeds a child area.
-    /// </summary>
-    private static UiControl BuildNavigation(string spacePath)
-    {
-        var heading = Controls.Html(
-            $"<div style=\"{ContentInset} padding-top: 24px;\">" +
-            "<h2 style=\"margin: 0 0 12px 0; font-size: 1.35rem; border-bottom: 1px solid var(--neutral-stroke-rest); padding-bottom: 8px;\">In this space</h2></div>");
-
-        var catalog = new LayoutAreaControl(spacePath, new LayoutAreaReference(MeshNodeLayoutAreas.SearchArea))
-            .WithShowProgress(false)
-            .WithStyle($"{ContentInset} display: block; padding-bottom: 48px; width: 100%;");
-
-        return Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("width: 100%;")
-            .WithView(heading)
-            .WithView(catalog);
     }
 
     /// <summary>

@@ -120,9 +120,10 @@ public static class SpaceNodeType
     /// (set on <see cref="MeshNode.PreRenderedHtml"/>).
     /// <para>The mesh catalog is the node's <c>Search</c> area (namespace tree by default;
     /// <c>?groupBy=type|category|flat</c> and <c>?subtree=true</c> tune it — see the
-    /// "Mesh Search &amp; Catalogs" doc). It is rendered as a fixed full-width section at the
-    /// bottom of every space page (<see cref="SpaceLayoutAreas.BuildNavigation"/>), so the welcome
-    /// body no longer embeds it; an author can still add extra <c>@@("area:Search")</c> embeds.</para>
+    /// "Mesh Search &amp; Catalogs" doc). It is embedded INLINE in this template via the
+    /// <c>@@("area:Search")</c> operator (a "Contents" section), NOT a hardcoded layout section —
+    /// so an author owns it in the editable Body and can move, tune (<c>@@("area:Search?groupBy=…")</c>),
+    /// or remove it like any other content.</para>
     /// </summary>
     public const string WelcomeMarkdown = """
         # Welcome
@@ -148,6 +149,10 @@ public static class SpaceNodeType
         (top-right **⋯**) → **Edit**, then write your overview in the **Body** field
         (plain markdown — headings, links, tables, and `@@`-embeds all work). Or simply
         ask the assistant in the chat below to draft it — it writes to the same Body field.
+
+        ## Contents
+
+        @@("area:Search")
         """;
 
     /// <summary>
