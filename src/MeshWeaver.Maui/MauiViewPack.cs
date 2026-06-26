@@ -612,12 +612,60 @@ public sealed class MenuItemView : MauiView<MenuItemControl>
     protected override void Bind() => Bind<object>(Model.Title, v => _label.Text = v?.ToString() ?? "");
 }
 
-/// <summary>Icon glyph/text → MAUI <see cref="Label"/>.</summary>
+/// <summary>
+/// Icon → native MAUI. An icon value can be raw <c>&lt;svg&gt;</c> markup, an image URL / data-URI, or a
+/// glyph/emoji/name. A native <see cref="Label"/> (the old impl) can only show text, so SVG markup never
+/// appeared. Now: SVG markup (or an <c>.svg</c>/<c>data:image/svg</c> source) renders in a tiny transparent
+/// <see cref="WebView"/> (the same not-a-BlazorWebView approach the markdown views use — keeps the build
+/// AspNetCore-free); raster URLs/data-URIs use a native <see cref="Image"/>; everything else stays a Label.
+/// SVGs using <c>currentColor</c> inherit the dark shell's light foreground so they're visible.
+/// </summary>
 public sealed class IconView : MauiView<IconControl>
 {
-    private Label _label = null!;
-    protected override View CreateView() => _label = new Label();
-    protected override void Bind() => Bind<object>(Model.Data, v => _label.Text = v?.ToString() ?? "");
+    private const int Size = 20;
+    private readonly ContentView _host = new();
+    protected override View CreateView() => _host;
+    protected override void Bind() =>
+        Bind<object>(Model.Data, v => _host.Content = Build((MarkdownViewLogic.CoerceString(v) ?? "").Trim()));
+
+    private static View Build(string icon)
+    {
+        if (string.IsNullOrEmpty(icon)) return new ContentView();
+
+        var isSvg = icon.Contains("<svg", StringComparison.OrdinalIgnoreCase)
+                    || icon.StartsWith("data:image/svg", StringComparison.OrdinalIgnoreCase)
+                    || (icon.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                        && icon.EndsWith(".svg", StringComparison.OrdinalIgnoreCase));
+        if (isSvg)
+            return new WebView
+            {
+                WidthRequest = Size, HeightRequest = Size, BackgroundColor = Colors.Transparent,
+                Source = new HtmlWebViewSource { Html = SvgHtml(icon) },
+            };
+
+        // Raster image (png/jpg/…) by URL or data-URI → native Image.
+        if (icon.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+            || icon.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+            || icon.StartsWith("/", StringComparison.Ordinal))
+            return new Image { Source = icon, WidthRequest = Size, HeightRequest = Size, Aspect = Aspect.AspectFit };
+
+        // Glyph / emoji / (Fluent) icon name — no native icon set, so show as text (unchanged behaviour).
+        return new Label { Text = icon, FontSize = 16, VerticalOptions = LayoutOptions.Center };
+    }
+
+    // $$"""…""" raw interpolation: single { } are LITERAL CSS braces; {{…}} are interpolations.
+    private static string SvgHtml(string icon)
+    {
+        var body = icon.Contains("<svg", StringComparison.OrdinalIgnoreCase)
+            ? icon
+            : $"<img src=\"{icon}\" style=\"width:{Size}px;height:{Size}px\"/>";
+        return $$"""
+            <!DOCTYPE html><html><head><meta charset="utf-8">
+            <style>html,body{margin:0;padding:0;background:transparent;overflow:hidden;color:#e0e0e0}
+            svg{width:{{Size}}px;height:{{Size}}px;display:block;fill:currentColor}
+            img{display:block}</style></head><body>{{body}}</body></html>
+            """;
+    }
 }
 
 /// <summary>Tabular data → a header + rows (read-only this wave; sorting/virtualization later).</summary>
