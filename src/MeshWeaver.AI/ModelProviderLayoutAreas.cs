@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Linq;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -55,8 +56,21 @@ public static class ModelProviderLayoutAreas
                     })
                     .WithView(Controls.Button("Enter Key")
                         .WithAppearance(Appearance.Accent)
-                        .WithClickAction((Action<UiActionContext>)(ctx => ShowKeyDialog(ctx, path))));
+                        .WithClickAction((Action<UiActionContext>)(ctx => ShowKeyDialog(ctx, path))))
+                    // The models this provider exposes (its LanguageModel children) — surfaced on the
+                    // provider page so the catalog is visible, not just the key/endpoint controls.
+                    .WithView(ModelsView(cfg));
             });
+
+    // The provider's models, from the denormalized snapshot on the ModelProvider node (the same ids
+    // its LanguageModel children carry). Markdown list — no hand-built HTML.
+    private static UiControl ModelsView(ModelProviderConfiguration cfg)
+    {
+        var body = cfg.Models.IsDefaultOrEmpty
+            ? "_No models configured._"
+            : string.Join("\n", cfg.Models.Select(m => $"- `{m}`"));
+        return Controls.Markdown($"### Models\n\n{body}");
+    }
 
     private static void ShowKeyDialog(UiActionContext ctx, string providerPath)
     {

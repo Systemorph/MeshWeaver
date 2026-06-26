@@ -117,7 +117,15 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                 ApiKey = apiKey,
                 Endpoint = endpoint,
                 Label = source.ProviderName,
-                CreatedAt = DateTimeOffset.UtcNow,
+                // 🚨 DETERMINISTIC seed timestamp — NEVER DateTimeOffset.UtcNow. The static-repo
+                // importer fingerprints this node's CONTENT (Versioned=false → contentHash). A
+                // per-enumeration UtcNow changed the content — and thus the fingerprint — on EVERY
+                // call, so the importer's "already imported" short-circuit never matched and the
+                // catalog re-imported in a loop → the Provider/{name} Create/Delete/Update write
+                // storm (atioz 2026-06-25 wedge). A fixed value keeps the fingerprint stable:
+                // import once, then short-circuit forever, so an admin's later (encrypted) key edit
+                // survives instead of being clobbered by the re-seed. See the /storm skill.
+                CreatedAt = default,
                 Models = models
             };
             emitted.Add(new MeshNode(source.ProviderName, ModelProviderNodeType.RootNamespace)

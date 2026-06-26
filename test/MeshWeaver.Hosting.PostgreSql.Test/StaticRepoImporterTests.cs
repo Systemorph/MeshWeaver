@@ -249,6 +249,62 @@ public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelpe
         remaining.Items.Should().NotContain(n => n.Id == "Page2", "Page2 was removed from the source → pruned");
     }
 
+    /// <summary>
+    /// "sync: none" on a partition ROOT. Setting the partition root's <see cref="SyncBehavior"/> to
+    /// <see cref="SyncBehavior.ExcludeThisAndChildren"/> must DURABLY decouple the whole partition: a
+    /// later source change (new fingerprint → full re-import) must leave the root's claim intact AND
+    /// must NOT overwrite an admin's edits to children. Before the EnsureRoot fix, EnsureRoot
+    /// re-materialised the root from the static source on every import → reset SyncBehavior back to
+    /// <see cref="SyncBehavior.Include"/> → re-enabled sync → clobbered admin edits (the atioz
+    /// <c>Provider/Anthropic</c> key reset, 2026-06-25).
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task Reimport_RootClaimedSyncNone_PreservesRootClaim_AndAdminChildEdits()
+    {
+        (await Import()).Single(r => r.Partition == _partition).Outcome.Should().Be("Imported");
+
+        // Admin claims the partition ROOT — "sync: none" for the whole partition.
+        await Mesh.GetMeshNodeStream(_partition)
+            .Update(n => n with { SyncBehavior = SyncBehavior.ExcludeThisAndChildren })
+            .Should().Within(30.Seconds()).Emit();
+        (await Mesh.GetMeshNodeStream(_partition)
+                .Where(n => n is { SyncBehavior: SyncBehavior.ExcludeThisAndChildren })
+                .Should().Within(30.Seconds()).Emit())
+            .Should().NotBeNull("the root claim must persist");
+
+        // Admin edits a child — exactly the kind of edit the re-sync used to clobber.
+        await Mesh.GetMeshNodeStream($"{_partition}/Page1")
+            .Update(n => n with { Content = new MarkdownContent { Content = "ADMIN EDIT" } })
+            .Should().Within(30.Seconds()).Emit();
+
+        // Source changes (root + child) → new fingerprint → FULL re-import. The claimed partition
+        // MUST be left untouched.
+        _source.Root = _source.Root! with { Content = new MarkdownContent { Content = "SOURCE CHANGED ROOT" } };
+        _source.Nodes =
+        [
+            new MeshNode("Page1", _partition)
+            {
+                NodeType = "Markdown", Name = "Page 1", State = MeshNodeState.Active,
+                Content = new MarkdownContent { Content = "SOURCE CHANGED PAGE" }
+            }
+        ];
+        await Import();
+
+        // EnsureRoot left the claimed root untouched — SyncBehavior NOT reset to Include.
+        var root = await Mesh.GetMeshNodeStream(_partition)
+            .Where(n => n is { NodeType: "Space" }).Should().Within(30.Seconds()).Emit();
+        root!.SyncBehavior.Should().Be(SyncBehavior.ExcludeThisAndChildren,
+            "EnsureRoot must leave a claimed partition root untouched; re-materialising it resets "
+            + "SyncBehavior to Include and re-enables sync (the key-clobber bug)");
+
+        // The child admin-edit survives — the claimed subtree was skipped, not overwritten by the source.
+        var page = await Read($"{_partition}/Page1");
+        (page!.Content as MarkdownContent)!.Content.Should().Contain("ADMIN EDIT",
+            "a claimed (ExcludeThisAndChildren) partition root decouples the whole subtree — the source "
+            + "change must NOT overwrite the admin's edit");
+        (page.Content as MarkdownContent)!.Content.Should().NotContain("SOURCE CHANGED");
+    }
+
     /// <summary>Mutable in-memory repo: children + a customizable Space root.</summary>
     private sealed class FakeRepoSource(string partition) : IStaticRepoSource
     {

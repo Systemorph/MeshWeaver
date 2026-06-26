@@ -3,8 +3,9 @@ using System.Collections.Frozen;
 namespace MeshWeaver.Hosting.PostgreSql;
 
 /// <summary>
-/// Configuration options for the Azure Foundry embedding provider.
-/// Bind from "Embedding" config section.
+/// Configuration options for the embedding provider. Bind from the "Embedding" config section.
+/// <see cref="Provider"/> selects the backend: Azure AI Foundry (cloud) or an
+/// OpenAI-compatible <c>/v1/embeddings</c> endpoint such as a local Ollama (on-host).
 /// </summary>
 public class EmbeddingOptions
 {
@@ -15,13 +16,30 @@ public class EmbeddingOptions
             ["text-embedding-3-small"] = 1536,
             ["text-embedding-3-large"] = 3072,
             ["text-embedding-ada-002"] = 1536,
+            // Local Ollama embedding models (OpenAI-compatible /v1/embeddings).
+            ["bge-m3"] = 1024,
+            ["nomic-embed-text"] = 768,
+            ["mxbai-embed-large"] = 1024,
         }.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
 
     private int? _dimensions;
 
+    /// <summary>
+    /// Backend selector. "AzureFoundry" (default) → <see cref="AzureFoundryEmbeddingProvider"/>;
+    /// "Ollama" / "OpenAICompatible" → <see cref="OllamaEmbeddingProvider"/> against
+    /// <see cref="Endpoint"/>'s <c>/v1/embeddings</c>.
+    /// </summary>
+    public string? Provider { get; set; }
+
     public string? Endpoint { get; set; }
     public string? ApiKey { get; set; }
     public string Model { get; set; } = "embed-v-4-0";
+
+    /// <summary>
+    /// Request timeout (seconds) for the OpenAI-compatible provider. A finite bound is
+    /// required so a hung embedding leaf never pins an <c>IIoPool</c> slot.
+    /// </summary>
+    public int TimeoutSeconds { get; set; } = 30;
 
     /// <summary>
     /// Vector dimensions. Auto-derived from <see cref="Model"/> for known models; defaults to 1536.

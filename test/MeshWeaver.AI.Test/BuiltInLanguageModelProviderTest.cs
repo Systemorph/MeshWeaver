@@ -96,6 +96,31 @@ public class BuiltInLanguageModelProviderTest
     }
 
     [Fact]
+    public void GetStaticNodes_IsDeterministic_SoTheImportFingerprintDoesNotChurn()
+    {
+        // 🚨 The static-repo importer fingerprints node CONTENT (Versioned=false → contentHash; see
+        // IStaticRepoSource). If GetStaticNodes is NON-deterministic across calls, the fingerprint
+        // changes on every enumeration → the importer's "already imported" short-circuit never
+        // matches → the catalog re-imports in a loop → the Provider/{name} Create/Delete/Update
+        // write storm that wedged atioz (2026-06-25). The classic culprit was CreatedAt =
+        // DateTimeOffset.UtcNow stamped per enumeration. Two enumerations MUST serialize identically.
+        var provider = Build(new Dictionary<string, string?>
+        {
+            ["Azure:Models:0"] = "claude-sonnet-4",
+            ["Azure:Models:1"] = "claude-haiku-4",
+            ["Azure:Endpoint"] = "https://x.openai.azure.com",
+            ["Azure:ApiKey"] = "sk-secret",
+        }, new LanguageModelCatalogSource("Azure", "Azure"));
+
+        var first = JsonSerializer.Serialize(provider.GetStaticNodes().ToArray(), Json);
+        var second = JsonSerializer.Serialize(provider.GetStaticNodes().ToArray(), Json);
+
+        second.Should().Be(first,
+            "GetStaticNodes must be byte-deterministic — any per-call value (e.g. CreatedAt = UtcNow) "
+            + "churns the import fingerprint and re-imports the catalog forever (the provider write storm)");
+    }
+
+    [Fact]
     public void ToModelInfo_CarriesNodePath_SoSelectionPersistsTheNodeIdentity()
     {
         var node = new MeshNode("claude-sonnet-4", "Provider/Azure")

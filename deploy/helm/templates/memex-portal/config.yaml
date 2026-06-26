@@ -31,10 +31,15 @@ data:
   Portal__InstanceName: "{{ .Values.config.memex_portal.Portal__InstanceName | default "" }}"
   Portal__InstanceColor: "{{ .Values.config.memex_portal.Portal__InstanceColor | default "" }}"
   # ---- Embeddings (vector search + content indexing) — optional -------------
-  # With Endpoint + ApiKey (secret, in secrets.yaml) set, the portal registers the embedding
-  # provider: search-bar queries hit the HNSW vector index AND the content-indexing pipeline
-  # activates (chunk→embed→store in the SEPARATE `contentindex` database on the same Postgres
-  # server). Empty = full-text search only, content indexing inert. See PostgreSqlExtensions.
+  # With an Endpoint set, the portal registers the embedding provider: search-bar queries hit
+  # the HNSW vector index AND the content-indexing pipeline activates (chunk→embed→store in the
+  # SEPARATE `contentindex` database on the same Postgres server). Empty = full-text (ILIKE)
+  # search only, content indexing inert. See PostgreSqlExtensions.
+  #   Provider="AzureFoundry" (default) → Cohere embed-v4 (needs ApiKey from secrets.yaml).
+  #   Provider="Ollama"                 → local on-host /v1/embeddings (bge-m3 etc., no key).
+  # Dimensions auto-derive from the model (bge-m3=1024, nomic-embed-text=768, embed-v-4-0=1536);
+  # changing them re-migrates the pgvector column + HNSW index on next startup.
+  Embedding__Provider: "{{ .Values.config.memex_portal.Embedding__Provider | default "" }}"
   Embedding__Endpoint: "{{ .Values.config.memex_portal.Embedding__Endpoint | default "" }}"
   Embedding__Model: "{{ .Values.config.memex_portal.Embedding__Model | default "" }}"
   # ---- AI model providers (non-secret: endpoints + model catalog) ----------

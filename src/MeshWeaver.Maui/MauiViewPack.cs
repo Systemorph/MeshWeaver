@@ -495,8 +495,10 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
         if (_submitted) return;
         _submitted = true;
 
-        // iOS has no JIT → Roslyn can't run; surface that instead of an eternal spinner.
-        if (OperatingSystem.IsIOS())
+        // Real iOS/tvOS devices have no JIT → Roslyn can't run; surface that instead of a spinner.
+        // 🚨 Mac Catalyst reports OperatingSystem.IsIOS()==true (it's an iOS-derived TFM) but DOES have
+        // JIT — it's a full desktop macOS process — so it must be EXECUTED, not gated out. Exclude it.
+        if (OperatingSystem.IsIOS() && !OperatingSystem.IsMacCatalyst())
         {
             SetAll(pending, "Interactive code execution is unavailable on this device (no JIT).", Colors.Gray);
             return;

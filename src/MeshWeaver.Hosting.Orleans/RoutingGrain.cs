@@ -84,7 +84,23 @@ internal class RoutingGrain(
                 .ContinueWith(t =>
                 {
                     if (t.IsFaulted)
+                    {
                         RoutingGrainTrace.Write($"RoutingGrain.RouteMessage MEMORY_STREAM_FAULT id={delivery.Id} ex={t.Exception?.InnerException?.Message ?? t.Exception?.Message}");
+                        // 🚨 The memory-stream post FAULTED — the stream-routed hub
+                        // (messagehub/{partition}, portal/{user}, cache/…) was unreachable: a
+                        // silo-membership blip / stream-provider error. The delivery VANISHED, and a
+                        // dropped stream post has NO downstream response/DeliveryFailure path. WITHOUT
+                        // surfacing it here the sender's Observe parks FOREVER → its hub action block
+                        // hangs → /healthz stops responding → liveness SIGKILLs the pod. That is the
+                        // atioz wedge ("Failed to forward message → messagehub/{partition}" then a
+                        // silent ~10-min hang). NACK the sender so it fails fast instead. See /storm.
+                        logger.LogWarning(t.Exception,
+                            "[ROUTE] Stream-routed forward to {Address} faulted — surfacing DeliveryFailure to sender {Sender}",
+                            addressPath, delivery.Sender);
+                        PostFailureToSender(
+                            $"Stream-routed delivery to '{addressPath}' failed: {t.Exception?.InnerException?.Message ?? t.Exception?.Message ?? "stream forward fault"}",
+                            ErrorType.Failed);
+                    }
                     else
                         RoutingGrainTrace.Write($"RoutingGrain.RouteMessage MEMORY_STREAM_OK id={delivery.Id}");
                     return delivery.Forwarded(address);

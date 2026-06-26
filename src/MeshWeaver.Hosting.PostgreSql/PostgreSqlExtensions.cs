@@ -64,20 +64,47 @@ public class PostgreSqlStorageAdapterFactory(
 public static class PostgreSqlExtensions
 {
     /// <summary>
-    /// Registers the Azure Foundry embedding provider from an <see cref="EmbeddingOptions"/> instance.
+    /// Registers an embedding provider from an <see cref="EmbeddingOptions"/> instance,
+    /// selecting the backend by <see cref="EmbeddingOptions.Provider"/>:
+    /// <list type="bullet">
+    /// <item>"Ollama" / "OpenAICompatible" → <see cref="OllamaEmbeddingProvider"/> (local, on-host).</item>
+    /// <item>anything else (default) → <see cref="AzureFoundryEmbeddingProvider"/> (cloud; requires an API key).</item>
+    /// </list>
+    /// No <see cref="EmbeddingOptions.Endpoint"/> ⇒ no provider registered, so the query path
+    /// falls back to the ILIKE text search via <see cref="NullEmbeddingProvider"/>.
     /// </summary>
-    public static IServiceCollection AddAzureFoundryEmbeddings(
+    public static IServiceCollection AddEmbeddings(
         this IServiceCollection services, EmbeddingOptions options)
     {
-        if (string.IsNullOrEmpty(options.Endpoint) || string.IsNullOrEmpty(options.ApiKey))
+        if (string.IsNullOrEmpty(options.Endpoint))
             return services;
 
-        services.AddSingleton<IEmbeddingProvider>(
-            new AzureFoundryEmbeddingProvider(options.Endpoint, options.ApiKey,
-                options.Model, options.Dimensions));
+        IEmbeddingProvider? provider = options.Provider?.Trim().ToLowerInvariant() switch
+        {
+            "ollama" or "openaicompatible" => new OllamaEmbeddingProvider(
+                options.Endpoint, options.Model, options.Dimensions, options.ApiKey,
+                TimeSpan.FromSeconds(options.TimeoutSeconds)),
+            // Azure Foundry (default) needs a key; without one there is nothing to register.
+            _ => string.IsNullOrEmpty(options.ApiKey)
+                ? null
+                : new AzureFoundryEmbeddingProvider(options.Endpoint, options.ApiKey,
+                    options.Model, options.Dimensions),
+        };
+        if (provider is null)
+            return services;
+
+        services.AddSingleton(provider);
         services.Configure<PostgreSqlStorageOptions>(o => o.VectorDimensions = options.Dimensions);
         return services;
     }
+
+    /// <summary>
+    /// Registers the Azure Foundry embedding provider from an <see cref="EmbeddingOptions"/> instance.
+    /// Back-compat shim — prefer <see cref="AddEmbeddings"/>, which also handles the local Ollama path.
+    /// </summary>
+    public static IServiceCollection AddAzureFoundryEmbeddings(
+        this IServiceCollection services, EmbeddingOptions options)
+        => services.AddEmbeddings(options);
 
     /// <summary>
     /// Registers the PostgreSQL storage adapter factory for use with AddPersistenceFromConfig.

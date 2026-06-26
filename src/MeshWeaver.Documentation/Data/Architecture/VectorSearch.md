@@ -1,7 +1,7 @@
 ---
 Name: Vector Search
 Category: Architecture
-Description: How free-floating text tokens in a mesh query are routed through HNSW cosine similarity on stored Cohere embeddings, while structured field-filters stay on the regular SQL path.
+Description: How free-floating text tokens in a mesh query are routed through HNSW cosine similarity on stored embeddings (cloud Cohere or a local on-host model), while structured field-filters stay on the regular SQL path.
 Icon: Search
 ---
 
@@ -148,6 +148,68 @@ The dimension `{dim}` is configured via `PostgreSqlStorageOptions.EmbeddingDimen
 ## Fallback when no embedding provider is registered
 
 `NullEmbeddingProvider.GenerateEmbeddingAsync` returns `null`. The intercept detects this and falls through to the existing `GenerateTextSearchClause` ILIKE path, so callers still get results instead of an empty page. Tests that do not wire an embedding provider get the regular ILIKE behaviour automatically.
+
+---
+
+## Provider backends
+
+`IEmbeddingProvider` has three implementations; the active one is chosen by the `Embedding:Provider` config key and wired by `PostgreSqlExtensions.AddEmbeddings(EmbeddingOptions)`:
+
+| `Embedding:Provider` | Implementation | Backend | Needs |
+|---|---|---|---|
+| `AzureFoundry` *(default)* | `AzureFoundryEmbeddingProvider` | Cohere `embed-v4` via Azure AI Foundry (cloud) | `Endpoint` **and** `ApiKey` |
+| `Ollama` / `OpenAICompatible` | `OllamaEmbeddingProvider` | any OpenAI-compatible `/v1/embeddings` — e.g. a local **Ollama** | `Endpoint` (+ `Model`); no key |
+| *(none — no `Endpoint`)* | `NullEmbeddingProvider` | — | falls through to the ILIKE path |
+
+`AddEmbeddings` registers nothing when `Endpoint` is empty (so search stays on ILIKE), and the default cloud path additionally needs an `ApiKey`. The same `EmbeddingOptions` is bound by **both** the portal (`Memex.Portal.Distributed/Program.cs`) and the migration (`Memex.Database.Migration/Program.cs`) — they must agree, because the migration sizes the pgvector column from `Embedding:Model` and the portal generates the query vectors.
+
+### Config keys
+
+| Key | Meaning |
+|---|---|
+| `Embedding:Provider` | backend selector (table above) |
+| `Embedding:Endpoint` | provider URL — for Ollama the OpenAI-compatible base, e.g. `http://ollama:11434/v1` |
+| `Embedding:Model` | model name; drives the column dimension |
+| `Embedding:ApiKey` | required for `AzureFoundry`; ignored by Ollama (a dummy bearer is sent) |
+| `Embedding:Dimensions` | override; otherwise auto-derived from `Model` |
+| `Embedding:TimeoutSeconds` | OpenAI-compatible request timeout (default 30) — a finite bound so a hung leaf never pins an `IIoPool` slot |
+
+Model → dimension defaults: `embed-v-4-0`=1536, `text-embedding-3-large`=3072, **`bge-m3`=1024**, `nomic-embed-text`=768, `mxbai-embed-large`=1024.
+
+---
+
+## Running embeddings locally (Ollama)
+
+The local/self-host stack already runs **Ollama on the host** for the chat model (the in-cluster `ollama` Service → host gateway). The *same* server hosts embedding models, so vector search runs fully on-host with no cloud round-trip — reuse the server, not the chat model (a generation model makes poor retrieval vectors and has a huge hidden dimension; pull a dedicated embedding model instead).
+
+1. **Pull a dedicated embedding model** into the same Ollama: `ollama pull bge-m3` (1024-dim, multilingual). It coexists with the chat model — one server, two models.
+2. **Point both the portal and the migration** at it:
+   ```
+   Embedding__Provider = Ollama
+   Embedding__Endpoint = http://ollama:11434/v1
+   Embedding__Model    = bge-m3
+   ```
+   In the helm chart these flow through `config.memex_portal.Embedding__*` and `config.memex_migration.Embedding__*`.
+3. **Restart the portal.** Schema init (`PostgreSqlSchemaInitializer`, run by the portal on connect — *not only* by the migration job) sees the new dimension and re-migrates: `DROP INDEX idx_mn_embedding; ALTER TABLE mesh_nodes ALTER COLUMN embedding TYPE vector(1024) USING NULL;` then rebuilds the HNSW index. This runs for the base schema **and** every already-provisioned partition.
+4. **Re-embed existing content** — see the warning below. This step is mandatory, not optional.
+
+> **Why not just point the cloud provider at Azure from local?** `AzureFoundryEmbeddingProvider` builds its `EmbeddingsClient` with **no timeout**. If the configured endpoint is unreachable from the cluster, every bare-text query blocks on the embedding round-trip for the HttpClient default (~100 s) — search appears **frozen**. `OllamaEmbeddingProvider` sets a finite timeout for exactly this reason. Never wire embeddings at an endpoint the cluster can't reach.
+
+### 🚨 The re-embed requirement (don't skip)
+
+Registering *any* provider flips a switch: bare-text queries stop using ILIKE and route to the vector path, whose SQL hard-filters `WHERE embedding IS NOT NULL` (`PostgreSqlSqlGenerator.GenerateVectorSearchQuery`). The per-row ILIKE fallback does **not** exist — ILIKE only returns if the *provider itself* fails for the query embedding.
+
+So a row is searchable only once it has an embedding, and embeddings are written **only at node-write time** (`PostgreSqlStorageAdapter.WriteAsyncCore`). On a stack that previously had no provider, every existing row's `embedding` is NULL. The column re-migration in step 3 also nulls anything that was there. Consequences:
+
+- **New / edited nodes** embed automatically and become vector-searchable.
+- **Pre-existing, untouched nodes** stay NULL → they **vanish from search** until re-written.
+- There is **no general mesh-node backfill** today. `DocumentationBackfill` (in the migration) re-embeds only the `doc` schema; ordinary mesh nodes have no equivalent.
+
+Therefore: enabling a provider **without** first re-embedding existing content makes search *worse* (empty results instead of ILIKE substring hits). A one-time re-embed — iterate every partition's `mesh_nodes`/satellite rows with a NULL embedding, compute the vector via the provider on the `IIoPool`, and `UPDATE` the column — is the missing piece that makes "turn on local vectors" actually deliver. Treat the provider config and the backfill as a single change set.
+
+### Apple Intelligence / on-device — not a fit here
+
+There is no Apple service you can call from a containerized .NET portal to get embeddings or a vector index. The Natural Language framework's `NLEmbedding` is in-process macOS/iOS only; the Foundation Models framework (on-device Apple Intelligence) is Swift-only, exposes tool calling but **no embeddings API**, and its vector space wouldn't match the server's index anyway. The local answer is pgvector (already installed via the `pgvector/pgvector:pg17` image) plus a local Ollama embedding model, as above.
 
 ---
 

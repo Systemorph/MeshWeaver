@@ -542,7 +542,13 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                             // pattern DelegationTool uses for the parent's
                             // TCS resolution — emit Terminal here so the
                             // cancel-watcher + tool-call stamper drop the entry.
-                            workspace.GetMeshNodeStream(subThreadPath).Subscribe(
+                            // Self-disposing watch: the sub-thread sync subscription is released
+                            // the moment the sub-thread reaches a terminal state. Without this it
+                            // stays subscribed for the life of the PROCESS — one leaked sync/ hub
+                            // per delegation, which accumulates until the portal wedges (the atioz
+                            // 2026-06-25 wedge: ~1778 leaked sync hubs). See the /storm skill.
+                            IDisposable? subThreadWatch = null;
+                            subThreadWatch = workspace.GetMeshNodeStream(subThreadPath).Subscribe(
                                 node =>
                                 {
                                     if (node?.Content is not MeshThread t) return;
@@ -561,6 +567,8 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                                         agentChat.EmitDelegationEvent(
                                             new MeshWeaver.AI.Delegation.DelegationEvent(callId, subThreadPath,
                                                 MeshWeaver.AI.Delegation.DelegationLifecycle.Terminal));
+                                        // Done watching — release the sync subscription (no leak).
+                                        subThreadWatch?.Dispose();
                                     }
                                 },
                                 ex => Logger.LogWarning(ex,
