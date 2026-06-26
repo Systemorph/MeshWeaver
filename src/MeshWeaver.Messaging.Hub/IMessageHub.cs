@@ -6,9 +6,19 @@ using MeshWeaver.Domain;
 
 namespace MeshWeaver.Messaging;
 
+/// <summary>
+/// An address-partitioned, single-threaded actor. A message hub receives
+/// <see cref="IMessageDelivery"/> messages and processes them one at a time through its
+/// registered handler chain. It owns its hosted child hubs, exposes request/response
+/// primitives, a reactive lifecycle, and a per-hub property bag. Implements
+/// <see cref="IMessageHandlerRegistry"/> (handler registration) and
+/// <see cref="IDisposable"/> (reactive teardown).
+/// </summary>
 public interface IMessageHub : IMessageHandlerRegistry, IDisposable
 {
+    /// <summary>The immutable configuration this hub was built from (address, handlers, buildup/dispose actions, timeouts).</summary>
     MessageHubConfiguration Configuration { get; }
+    /// <summary>Monotonic counter incremented once per message the hub processes; used for ordering and disposal sequencing.</summary>
     long Version { get; }
 
     /// <summary>
@@ -17,10 +27,30 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     /// </summary>
     void SetInitialVersion(long version);
 
+    /// <summary>
+    /// Completes when the hub has finished initialization (its buildup actions ran and the init
+    /// gate opened); faults if startup failed. Await only at a genuine async edge (tests).
+    /// </summary>
     Task Started { get; }
+    /// <summary>
+    /// Posts a message into the mesh for routing/handling. The side effect is the dispatch itself;
+    /// for a correlated response use the <c>hub.Observe(...)</c> extension.
+    /// </summary>
+    /// <typeparam name="TMessage">The message payload type.</typeparam>
+    /// <param name="message">The message payload to send.</param>
+    /// <param name="options">Optional configuration of the delivery (target, sender, response-correlation, message id).</param>
+    /// <returns>The created delivery wrapping <paramref name="message"/>, or <c>null</c> if it was not posted.</returns>
     IMessageDelivery<TMessage>? Post<TMessage>(TMessage message, Func<PostOptions, PostOptions>? options = null);
+    /// <summary>
+    /// Inbound entry point: hands an already-routed delivery to this hub, marking it Submitted and
+    /// routing it onto the hub's single-threaded action block. Called by the transport/routing layer.
+    /// </summary>
+    /// <param name="delivery">The delivery to process on this hub.</param>
+    /// <returns>The delivery in its post-routing state.</returns>
     IMessageDelivery DeliverMessage(IMessageDelivery delivery);
+    /// <summary>The address that identifies this hub within the mesh (its partition key for routing).</summary>
     Address Address { get; }
+    /// <summary>The DI service provider scoped to this hub; resolve hub-scoped services from it.</summary>
     IServiceProvider ServiceProvider { get; }
 
     // === Request/response primitives ===
@@ -48,10 +78,29 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     /// in place. Application code calls <c>hub.Observe(request, options?)</c>.
     /// </summary>
     internal IObservable<IMessageDelivery> Observe(object request, Func<PostOptions, PostOptions> options);
+    /// <summary>
+    /// Schedules an action to run on the hub's action block (so it executes serially with message
+    /// handling, on the hub's thread). The work is posted as an execution request; its
+    /// genuinely-async leaf runs off the action block via the IO pool. Use this to marshal external
+    /// callbacks back onto the hub.
+    /// </summary>
+    /// <param name="action">The work to run, receiving the hub's current cancellation token.</param>
+    /// <param name="exceptionCallback">Invoked with any exception thrown by <paramref name="action"/>.</param>
     public void InvokeAsync(Func<CancellationToken, Task> action, Func<Exception, Task> exceptionCallback);
 
+    /// <summary>
+    /// Schedules a synchronous action onto the hub's action block (serial with message handling).
+    /// Exceptions are not observed — use the overload taking an exception callback to handle them.
+    /// </summary>
+    /// <param name="action">The work to run on the hub thread.</param>
     public void InvokeAsync(Action action)
         => InvokeAsync(action, _ => Task.CompletedTask);
+    /// <summary>
+    /// Schedules a synchronous action onto the hub's action block (serial with message handling),
+    /// routing any exception it throws to <paramref name="exceptionCallback"/>.
+    /// </summary>
+    /// <param name="action">The work to run on the hub thread.</param>
+    /// <param name="exceptionCallback">Invoked with any exception thrown by <paramref name="action"/>.</param>
     public void InvokeAsync(Action action, Func<Exception, Task> exceptionCallback) => InvokeAsync(_ =>
     {
         action();
@@ -94,7 +143,19 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     // Disposal at the hub level is reactive but never a Task — nothing here is async
     // in the await sense. The first two overloads couple a SYNCHRONOUS cleanup to the
     // hub's lifetime (held in a CompositeDisposable, disposed during ShutDown).
+    /// <summary>
+    /// Couples a synchronous cleanup to the hub's lifetime; the disposable is disposed during the
+    /// hub's ShutDown phase, and a registrant added after disposal began is disposed immediately.
+    /// </summary>
+    /// <param name="disposable">The resource to dispose when the hub shuts down.</param>
+    /// <returns>This hub, for chaining.</returns>
     IMessageHub RegisterForDisposal(IDisposable disposable);
+    /// <summary>
+    /// Couples a synchronous cleanup callback (receiving this hub) to the hub's lifetime; it runs
+    /// during the ShutDown phase. For cleanups that do I/O, prefer the observable-returning overload.
+    /// </summary>
+    /// <param name="disposeAction">The cleanup to run at shutdown, receiving this hub.</param>
+    /// <returns>This hub, for chaining.</returns>
     IMessageHub RegisterForDisposal(Action<IMessageHub> disposeAction);
 
     /// <summary>
@@ -109,7 +170,9 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     /// and uncomposable, which is exactly what this overload exists to avoid.
     /// </summary>
     IMessageHub RegisterForDisposal(Func<IMessageHub, IObservable<Unit>> disposeAction);
+    /// <summary>The JSON serialization options used for messages on this hub (inherits and extends the parent hub's options).</summary>
     JsonSerializerOptions JsonSerializerOptions { get; }
+    /// <summary>The hub's current lifecycle phase (starting, started, quiescing, shutting down, dead).</summary>
     MessageHubRunLevel RunLevel { get; }
 
     /// <summary>
@@ -155,6 +218,7 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     /// bridge once with <c>DisposalCompleted.FirstOrDefaultAsync()</c> / <c>.ToTask()</c>.
     /// </summary>
     IObservable<Unit> DisposalCompleted { get; }
+    /// <summary>The hub's type registry, mapping message type names to CLR types for (de)serialization and routing.</summary>
     ITypeRegistry TypeRegistry { get; }
 
     /// <summary>

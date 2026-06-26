@@ -37,8 +37,19 @@ public class CachingStorageAdapter : IStorageAdapter
 
     private static readonly string[] SupportedExtensions = [".md", ".cs", ".json"];
 
+    /// <summary>
+    /// Absolute path of the directory tree this adapter caches and serves nodes from.
+    /// </summary>
     public string BaseDirectory => _baseDirectory;
 
+    /// <summary>
+    /// Creates a caching storage adapter over a directory tree, scanning its file
+    /// paths into an in-memory snapshot (file bytes are read lazily on first access).
+    /// </summary>
+    /// <param name="baseDirectory">Root directory to cache; created if it does not exist. Resolved to an absolute path.</param>
+    /// <param name="writeOptionsModifier">Optional transform applied to the <c>JsonSerializerOptions</c> used when writing nodes through the inner file-system adapter.</param>
+    /// <param name="ioPoolRegistry">Optional registry used to resolve the file-system <c>IIoPool</c> that bridges blocking reads to observables; falls back to an unbounded pool when null.</param>
+    /// <param name="logger">Optional logger for surfacing unparseable cached files.</param>
     public CachingStorageAdapter(
         string baseDirectory,
         Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null,
@@ -135,6 +146,7 @@ public class CachingStorageAdapter : IStorageAdapter
         }
     }
 
+    /// <inheritdoc />
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
         // ReadCore is fully synchronous (the cached-bytes access triggers File.ReadAllBytes
         // — genuine blocking I/O — and the parse is in-memory), so it runs on the blocking
@@ -214,6 +226,7 @@ public class CachingStorageAdapter : IStorageAdapter
         return node;
     }
 
+    /// <inheritdoc />
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
     {
         var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry);
@@ -224,6 +237,7 @@ public class CachingStorageAdapter : IStorageAdapter
             });
     }
 
+    /// <inheritdoc />
     public IObservable<string> Delete(string path)
     {
         var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry);
@@ -240,6 +254,7 @@ public class CachingStorageAdapter : IStorageAdapter
             });
     }
 
+    /// <inheritdoc />
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
         => Observable.Defer(() => Observable.Return(ListChildPathsCore(parentPath)));
 
@@ -302,6 +317,7 @@ public class CachingStorageAdapter : IStorageAdapter
         return (nodePaths, directoryPaths);
     }
 
+    /// <inheritdoc />
     public IObservable<bool> Exists(string path)
         => Observable.Defer(() =>
         {
@@ -309,6 +325,7 @@ public class CachingStorageAdapter : IStorageAdapter
             return Observable.Return(filePath != null && _snapshot.Files.ContainsKey(filePath));
         });
 
+    /// <inheritdoc />
     public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
         => Observable.Defer(() => Observable.Return(ListPartitionSubPathsCore(nodePath)));
 
@@ -343,6 +360,7 @@ public class CachingStorageAdapter : IStorageAdapter
     // Pump inside the IIoPool (InvokeStream) — never Observable.Create(async ...),
     // which runs the pump on the subscriber's scheduler (the grain-wedge defect;
     // see PartitionObjectsSubscriberIndependenceTest).
+    /// <inheritdoc />
     public IObservable<object> GetPartitionObjects(
         string nodePath, string? subPath, JsonSerializerOptions options)
         => _ioPool.InvokeStream(ct => GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct));
@@ -422,6 +440,7 @@ public class CachingStorageAdapter : IStorageAdapter
         }
     }
 
+    /// <inheritdoc />
     public IObservable<Unit> SavePartitionObjects(
         string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
     {
@@ -430,12 +449,14 @@ public class CachingStorageAdapter : IStorageAdapter
             .Do(_ => RefreshCacheForPartition(nodePath, subPath));
     }
 
+    /// <inheritdoc />
     public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
     {
         var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry);
         return innerAdapter.DeletePartitionObjects(nodePath, subPath);
     }
 
+    /// <inheritdoc />
     public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
         => Observable.Defer(() =>
         {

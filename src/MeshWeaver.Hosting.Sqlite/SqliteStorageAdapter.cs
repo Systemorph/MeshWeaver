@@ -31,6 +31,17 @@ public sealed class SqliteStorageAdapter : IStorageAdapter, IDisposable
     private readonly object _gate = new();
     private readonly Subject<DataChangeNotification> _changes = new();
 
+    /// <summary>
+    /// Opens the SQLite store, holding one dedicated connection for the adapter's lifetime and
+    /// creating the schema on construction.
+    /// </summary>
+    /// <param name="connectionString">A Microsoft.Data.Sqlite connection string — a file path
+    /// (<c>Data Source=memex.db</c>) or <c>Data Source=:memory:</c> for tests.</param>
+    /// <param name="ioPool">Pool that runs the sync-blocking SQLite leaves off the hub scheduler;
+    /// defaults to <see cref="IoPool.Unbounded"/> when <c>null</c>.</param>
+    /// <param name="embedder">Optional text embedder; when supplied, writes embed each node so
+    /// vector search lights up. When <c>null</c>, embeddings are stored as NULL and lexical search is unchanged.</param>
+    /// <param name="logger">Optional logger for best-effort diagnostics (e.g. embedding failures).</param>
     public SqliteStorageAdapter(string connectionString, IIoPool? ioPool = null,
         ITextEmbedder? embedder = null, ILogger<SqliteStorageAdapter>? logger = null)
     {
@@ -45,6 +56,7 @@ public sealed class SqliteStorageAdapter : IStorageAdapter, IDisposable
         EnsureSchema();
     }
 
+    /// <inheritdoc />
     public IObservable<DataChangeNotification> Changes => _changes.AsObservable();
 
     private static string Norm(string? path) => path?.Trim('/') ?? "";
@@ -92,6 +104,7 @@ public sealed class SqliteStorageAdapter : IStorageAdapter, IDisposable
         }
     }
 
+    /// <inheritdoc />
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
         => _ioPool.InvokeBlocking<MeshNode?>(_ =>
         {
@@ -106,6 +119,7 @@ public sealed class SqliteStorageAdapter : IStorageAdapter, IDisposable
             }
         });
 
+    /// <inheritdoc />
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
     {
         var path = Norm(node.Path);
@@ -199,6 +213,7 @@ public sealed class SqliteStorageAdapter : IStorageAdapter, IDisposable
             return result;
         });
 
+    /// <inheritdoc />
     public IObservable<string> Delete(string path)
         => _ioPool.InvokeBlocking(_ =>
         {
@@ -214,6 +229,7 @@ public sealed class SqliteStorageAdapter : IStorageAdapter, IDisposable
             return path;
         });
 
+    /// <inheritdoc />
     public IObservable<bool> Exists(string path)
         => _ioPool.InvokeBlocking(_ =>
         {
@@ -226,6 +242,7 @@ public sealed class SqliteStorageAdapter : IStorageAdapter, IDisposable
             }
         });
 
+    /// <inheritdoc />
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
         => _ioPool.InvokeBlocking<(IEnumerable<string>, IEnumerable<string>)>(_ =>
         {
@@ -269,6 +286,7 @@ public sealed class SqliteStorageAdapter : IStorageAdapter, IDisposable
             return ((IEnumerable<string>)nodePaths, (IEnumerable<string>)directoryPaths);
         });
 
+    /// <inheritdoc />
     public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
         string fullPath, JsonSerializerOptions options)
         => _ioPool.InvokeBlocking<(MeshNode?, int)>(_ =>
@@ -290,10 +308,12 @@ public sealed class SqliteStorageAdapter : IStorageAdapter, IDisposable
             }
         });
 
+    /// <inheritdoc />
     public IObservable<(MeshNode? Node, int MatchedSegments)> ResolvePath(string fullPath, JsonSerializerOptions options)
         => FindBestPrefixMatch(fullPath, options);
 
     // Partition objects: the whole collection is stored as one JSON array per partition key.
+    /// <inheritdoc />
     public IObservable<object> GetPartitionObjects(string nodePath, string? subPath, JsonSerializerOptions options)
         => _ioPool.InvokeBlocking(_ =>
         {
@@ -308,6 +328,7 @@ public sealed class SqliteStorageAdapter : IStorageAdapter, IDisposable
             }
         }).SelectMany(arr => arr.ToObservable());
 
+    /// <inheritdoc />
     public IObservable<Unit> SavePartitionObjects(
         string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
         => _ioPool.InvokeBlocking(_ =>
@@ -329,6 +350,7 @@ public sealed class SqliteStorageAdapter : IStorageAdapter, IDisposable
             return Unit.Default;
         });
 
+    /// <inheritdoc />
     public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
         => _ioPool.InvokeBlocking(_ =>
         {
@@ -344,6 +366,7 @@ public sealed class SqliteStorageAdapter : IStorageAdapter, IDisposable
             return Unit.Default;
         });
 
+    /// <inheritdoc />
     public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
         => _ioPool.InvokeBlocking<DateTimeOffset?>(_ =>
         {
@@ -364,6 +387,7 @@ public sealed class SqliteStorageAdapter : IStorageAdapter, IDisposable
         return string.IsNullOrEmpty(subPath) ? key : $"{key}/{Norm(subPath)}";
     }
 
+    /// <inheritdoc />
     public void Dispose()
     {
         try { _changes.OnCompleted(); } catch { /* ignore */ }

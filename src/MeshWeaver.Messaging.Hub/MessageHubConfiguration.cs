@@ -11,12 +11,37 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Messaging;
 
+/// <summary>
+/// Immutable fluent builder for a message hub (actor). Each <c>With…</c> / <c>Add…</c>
+/// method returns a copy with the new setting applied, so a configuration can be composed
+/// across multiple layers (NodeType config, default node-hub config, module extensions)
+/// before <see cref="Build{TAddress}"/> materialises the hub. Carries the hub's address,
+/// service registrations, message handlers, initialization gates, post/delivery pipelines,
+/// posting identity and timeouts.
+/// </summary>
 public record MessageHubConfiguration
 {
+    /// <summary>
+    /// Name of the framework's built-in initialization gate that is opened once the
+    /// hub's <see cref="BuildupActions"/> complete. It admits only
+    /// <c>InitializeHubRequest</c> during initialization and otherwise marks the
+    /// completion of buildup.
+    /// </summary>
     public const string InitializeGateName = "Initialize";
 
+    /// <summary>The address (actor identity / routing key) of the hub this configuration builds.</summary>
     public Address Address { get; }
+    /// <summary>
+    /// Service provider of the parent scope, used to resolve the parent hub, an inherited
+    /// <c>ITypeRegistry</c>, and a shared <c>AccessService</c>. Null for a root hub with no parent.
+    /// </summary>
     protected readonly IServiceProvider? ParentServiceProvider;
+    /// <summary>
+    /// Creates a configuration rooted at the given address, seeding the type registry (inheriting
+    /// the parent's registry when available) and the default post / delivery pipelines.
+    /// </summary>
+    /// <param name="parentServiceProvider">Service provider of the parent scope, or null for a root hub.</param>
+    /// <param name="address">The address of the hub to build.</param>
     public MessageHubConfiguration(IServiceProvider? parentServiceProvider, Address address)
     {
         Address = address;
@@ -116,6 +141,10 @@ public record MessageHubConfiguration
 
     internal Func<IServiceCollection, IServiceCollection> Services { get; init; } = x => x;
 
+    /// <summary>
+    /// The DI container backing the built hub. Null until <see cref="CreateServiceProvider"/>
+    /// runs (during <see cref="Build{TAddress}"/>); thereafter it is the hub's own scoped provider.
+    /// </summary>
     public IServiceProvider ServiceProvider { get; set; } = null!;
     private readonly Lock serviceProviderLock = new();
 
@@ -130,11 +159,29 @@ public record MessageHubConfiguration
     // Observable buildup actions: each is a factory returning IObservable<Unit>. The hub composes them
     // reactively (Observable.Concat) when it handles InitializeHubRequest and opens the Initialize gate on
     // completion — the init path is observable end-to-end, no await. See MessageHub.HandleInitialize.
+    /// <summary>
+    /// Reactive initialization actions registered via the observable <c>WithInitialization</c>
+    /// overload. Each is a factory returning an <see cref="IObservable{Unit}"/> that the hub
+    /// composes (concatenated) when handling <c>InitializeHubRequest</c>, opening the Initialize
+    /// gate on completion. The init path is observable end-to-end — no await.
+    /// </summary>
     protected internal ImmutableList<Func<IMessageHub, IObservable<Unit>>> BuildupActions { get; init; } = ImmutableList<Func<IMessageHub, IObservable<Unit>>>.Empty;
+    /// <summary>
+    /// Synchronous initialization actions run during <see cref="Build{TAddress}"/> BEFORE message
+    /// processing starts, so services such as the workspace / data context are fully configured
+    /// before any message arrives. Registered via the synchronous <c>WithInitialization</c> overload.
+    /// </summary>
     protected internal ImmutableList<Action<IMessageHub>> SyncBuildupActions { get; init; } = [];
 
     internal IMessageHub HubInstance { get; set; } = null!;
 
+    /// <summary>
+    /// Registers a synchronous action to run when the built hub is disposed. Hub-level disposal
+    /// is purely synchronous; anything genuinely async must be bridged onto the mesh IO pool by
+    /// the layer that owns it.
+    /// </summary>
+    /// <param name="disposeAction">Action invoked with the hub instance during disposal.</param>
+    /// <returns>A new configuration with the dispose action appended.</returns>
     public MessageHubConfiguration RegisterForDisposal(Action<IMessageHub> disposeAction)
         => this with { DisposeActions = DisposeActions.Add(disposeAction) };
 
@@ -142,11 +189,25 @@ public record MessageHubConfiguration
 
 
 
+    /// <summary>
+    /// Adds DI service registrations for the built hub. The supplied configurator is composed onto
+    /// any previously registered services and applied when the hub's service provider is created.
+    /// </summary>
+    /// <param name="configuration">Receives the service collection (already carrying prior registrations) and returns it with additions.</param>
+    /// <returns>A new configuration whose service-registration chain includes the configurator.</returns>
     public MessageHubConfiguration WithServices(Func<IServiceCollection, IServiceCollection> configuration)
     {
         return this with { Services = x => configuration(Services(x)) };
     }
 
+    /// <summary>
+    /// Declares a hosted (child) hub at the given address. Messages routed to that address are
+    /// delivered to a hosted hub lazily created from <paramref name="configuration"/>; the original
+    /// delivery is then marked forwarded.
+    /// </summary>
+    /// <param name="address">Address of the hosted hub.</param>
+    /// <param name="configuration">Builds the hosted hub's configuration.</param>
+    /// <returns>A new configuration with a route registered for the hosted address.</returns>
     public MessageHubConfiguration WithHostedHub(Address address,
         Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
         =>
@@ -162,7 +223,19 @@ public record MessageHubConfiguration
         }));
 
 
+    /// <summary>
+    /// The type registry for this hub, mapping CLR types to their serialization type names. Seeded
+    /// from the parent's registry (when present) plus the address type; extended via
+    /// <see cref="WithType{T}"/> / <see cref="WithType"/> and the <c>WithHandler</c> registrations.
+    /// </summary>
     public ITypeRegistry TypeRegistry { get; }
+    /// <summary>
+    /// Builds the DI service collection for the hub: registers the <c>IMessageHub</c>, its hosted-hubs
+    /// collection, the type registry, the parent-hub reference, and an <c>AccessService</c> when the
+    /// parent scope has none, then applies the user-supplied <see cref="WithServices"/> registrations.
+    /// </summary>
+    /// <param name="parent">The parent hub, or null for a root hub.</param>
+    /// <returns>The populated service collection (not yet built into a provider).</returns>
     protected virtual ServiceCollection ConfigureServices(IMessageHub? parent)
     {
         var services = new ServiceCollection();
@@ -184,6 +257,16 @@ public record MessageHubConfiguration
     private record ParentMessageHub(IMessageHub Value);
 
 
+    /// <summary>
+    /// Registers a synchronous handler for messages of type <typeparamref name="TMessage"/>. The
+    /// handler runs inline on the hub's single ActionBlock thread (preserving the actor-model
+    /// <c>TaskScheduler.Current</c> invariant) and its result is emitted reactively. Non-matching
+    /// deliveries (failing the type check or <paramref name="filter"/>) pass through unchanged.
+    /// </summary>
+    /// <typeparam name="TMessage">The message type this handler processes.</typeparam>
+    /// <param name="delivery">Handles a typed delivery and returns the resulting delivery (e.g. processed / forwarded).</param>
+    /// <param name="filter">Optional predicate gating which deliveries the handler accepts; defaults to a target-address match.</param>
+    /// <returns>A new configuration with the handler registered.</returns>
     public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, IMessageDelivery> delivery, Func<IMessageHub, IMessageDelivery, bool>? filter = null)
     {
         TypeRegistry.GetOrAddType(typeof(TMessage));
@@ -202,6 +285,17 @@ public record MessageHubConfiguration
                             : Observable.Return(m)))
         };
     }
+    /// <summary>
+    /// Registers an asynchronous handler for messages of type <typeparamref name="TMessage"/>. The
+    /// handler's synchronous prefix runs inline on the hub's ActionBlock scheduler (actor-model
+    /// invariant) and the returned <see cref="Task{T}"/> is bridged into the reactive rule chain — an
+    /// already-completed task emits inline; genuine async resumes on its own continuation.
+    /// Non-matching deliveries pass through unchanged.
+    /// </summary>
+    /// <typeparam name="TMessage">The message type this handler processes.</typeparam>
+    /// <param name="delivery">Handles a typed delivery (with a cancellation token) and returns a task producing the resulting delivery.</param>
+    /// <param name="filter">Optional predicate gating which deliveries the handler accepts; defaults to a target-address match.</param>
+    /// <returns>A new configuration with the handler registered.</returns>
     public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, CancellationToken, Task<IMessageDelivery>> delivery, Func<IMessageHub, IMessageDelivery, bool>? filter = null)
     {
         TypeRegistry.GetOrAddType(typeof(TMessage));
@@ -276,6 +370,12 @@ public record MessageHubConfiguration
     internal ImmutableHashSet<Func<IMessageHub, IObservable<Unit>>> RegisteredObservableInits { get; init; } =
         ImmutableHashSet<Func<IMessageHub, IObservable<Unit>>>.Empty;
 
+    /// <summary>
+    /// Builds and caches <see cref="ServiceProvider"/> from <see cref="ConfigureServices"/> (with
+    /// module setup applied) the first time it is called. Idempotent and thread-safe — a second call
+    /// is a no-op once the provider exists.
+    /// </summary>
+    /// <param name="parent">The parent hub passed to <see cref="ConfigureServices"/>, or null for a root hub.</param>
     protected void CreateServiceProvider(IMessageHub? parent)
     {
         lock (serviceProviderLock)
@@ -288,6 +388,15 @@ public record MessageHubConfiguration
         }
     }
 
+    /// <summary>
+    /// Materialises the hub: creates its service provider, resolves the <c>IMessageHub</c> instance,
+    /// registers it with the parent's hosted-hubs collection, runs the synchronous
+    /// <see cref="SyncBuildupActions"/>, then starts message processing.
+    /// </summary>
+    /// <typeparam name="TAddress">The address type of the hub being built.</typeparam>
+    /// <param name="serviceProvider">The ambient service provider (the configuration uses its own parent scope to resolve dependencies).</param>
+    /// <param name="address">The hub's address.</param>
+    /// <returns>The fully initialized hub instance.</returns>
     public virtual IMessageHub Build<TAddress>(IServiceProvider serviceProvider, TAddress address)
     {
         // TODO V10: Check whether this address is already built in hosted hubs collection, if not build. (18.01.2024, Roland Buergi)
@@ -315,6 +424,12 @@ public record MessageHubConfiguration
     internal ImmutableDictionary<(Type, string?), object> Properties { get; init; } = ImmutableDictionary<(Type, string?), object>.Empty;
     internal ImmutableList<Func<SyncPipelineConfig, SyncPipelineConfig>> PostPipeline { get; set; }
 
+    /// <summary>
+    /// Appends a synchronous post-pipeline step, run when a message is posted (the outbound side,
+    /// e.g. AccessContext stamping). Steps compose in registration order.
+    /// </summary>
+    /// <param name="pipeline">Extends a <see cref="SyncPipelineConfig"/> by adding a step to its synchronous delivery chain.</param>
+    /// <returns>A new configuration with the post-pipeline step appended.</returns>
     public MessageHubConfiguration AddPostPipeline(Func<SyncPipelineConfig, SyncPipelineConfig> pipeline) => this with { PostPipeline = PostPipeline.Add(pipeline) };
     private SyncPipelineConfig UserServicePostPipeline(SyncPipelineConfig syncPipeline)
     {
@@ -561,6 +676,13 @@ public record MessageHubConfiguration
     public MessageHubConfiguration WithDeferredInitialization(bool deferred = true) =>
         this with { DeferredInitialization = deferred };
 
+    /// <summary>
+    /// Appends an asynchronous delivery-pipeline step, run when a message is delivered to its target
+    /// handler (the inbound side, e.g. propagating the user identity to AsyncLocal). Steps compose in
+    /// registration order.
+    /// </summary>
+    /// <param name="pipeline">Extends an <see cref="AsyncPipelineConfig"/> by adding a step to its asynchronous delivery chain.</param>
+    /// <returns>A new configuration with the delivery-pipeline step appended.</returns>
     public MessageHubConfiguration AddDeliveryPipeline(Func<AsyncPipelineConfig, AsyncPipelineConfig> pipeline) => this with { DeliveryPipeline = DeliveryPipeline.Add(pipeline) };
     private AsyncPipelineConfig UserServiceDeliveryPipeline(AsyncPipelineConfig asyncPipeline)
     {
@@ -594,10 +716,33 @@ public record MessageHubConfiguration
         });
     }
 
+    /// <summary>
+    /// Reads a configuration property previously stored via <see cref="Set{T}"/>, keyed by type
+    /// <typeparamref name="T"/> and an optional context discriminator.
+    /// </summary>
+    /// <typeparam name="T">The property type / key.</typeparam>
+    /// <param name="context">Optional discriminator allowing multiple values of the same type; null for the default slot.</param>
+    /// <returns>The stored value, or the default of <typeparamref name="T"/> when none is set.</returns>
     public T? Get<T>(string? context = null) => (T?)(Properties.GetValueOrDefault((typeof(T), context)) ?? default(T));
+    /// <summary>
+    /// Stores a configuration property keyed by type <typeparamref name="T"/> and an optional context
+    /// discriminator, replacing any existing value for that key.
+    /// </summary>
+    /// <typeparam name="T">The property type / key.</typeparam>
+    /// <param name="value">The value to store.</param>
+    /// <param name="context">Optional discriminator allowing multiple values of the same type; null for the default slot.</param>
+    /// <returns>A new configuration with the property set.</returns>
     public MessageHubConfiguration Set<T>(T value, string? context = null) => this with { Properties = Properties.SetItem((typeof(T), context), value!) };
 
 
+    /// <summary>
+    /// Registers type <typeparamref name="T"/> in this hub's <see cref="TypeRegistry"/> under the
+    /// given serialization name (defaulting to its full type name) so messages carrying it can be
+    /// (de)serialized. Mutates the shared registry in place and returns the same configuration.
+    /// </summary>
+    /// <typeparam name="T">The type to register.</typeparam>
+    /// <param name="name">Optional serialization type name; defaults to <c>typeof(T).FullName</c>.</param>
+    /// <returns>This configuration.</returns>
     public MessageHubConfiguration WithType<T>(string? name = null)
     {
         var typeName = name ?? typeof(T).FullName!;
@@ -605,6 +750,14 @@ public record MessageHubConfiguration
         TypeRegistry.WithType(typeof(T), typeName);
         return this;
     }
+    /// <summary>
+    /// Registers <paramref name="type"/> in this hub's <see cref="TypeRegistry"/> under the given
+    /// serialization name (defaulting to its full type name). The non-generic counterpart to
+    /// <see cref="WithType{T}"/>; mutates the shared registry in place and returns the same configuration.
+    /// </summary>
+    /// <param name="type">The type to register.</param>
+    /// <param name="name">Optional serialization type name; defaults to <c>type.FullName</c>.</param>
+    /// <returns>This configuration.</returns>
     public MessageHubConfiguration WithType(Type type, string? name = null)
     {
         TypeRegistry.WithType(type, name ?? type.FullName!);
@@ -613,8 +766,17 @@ public record MessageHubConfiguration
 
 }
 
+/// <summary>
+/// Builder for a hub's asynchronous delivery pipeline. Wraps the current delivery delegate and the
+/// owning hub; each <see cref="AddPipeline"/> nests a new step in front of the existing chain.
+/// </summary>
 public record AsyncPipelineConfig
 {
+    /// <summary>
+    /// Creates a pipeline configuration around the owning hub and an initial delivery delegate.
+    /// </summary>
+    /// <param name="Hub">The hub this pipeline belongs to.</param>
+    /// <param name="asyncDelivery">The initial (innermost) asynchronous delivery delegate.</param>
     public AsyncPipelineConfig(IMessageHub Hub, AsyncDelivery asyncDelivery)
     {
         this.Hub = Hub;
@@ -624,14 +786,30 @@ public record AsyncPipelineConfig
 
     internal AsyncDelivery AsyncDelivery { get; init; }
 
+    /// <summary>
+    /// Adds a step in front of the current delivery chain. The step receives the delivery, a
+    /// cancellation token, and the next delegate to invoke (the previously composed chain).
+    /// </summary>
+    /// <param name="pipeline">The step: given the delivery, token and next delegate, produces the resulting delivery stream.</param>
+    /// <returns>A new configuration whose delivery delegate runs the added step.</returns>
     public AsyncPipelineConfig AddPipeline(
         Func<IMessageDelivery, CancellationToken, AsyncDelivery, IObservable<IMessageDelivery>> pipeline)
         => this with { AsyncDelivery = (d, ct) => pipeline.Invoke(d, ct, AsyncDelivery) };
 
+    /// <summary>The hub that owns this delivery pipeline.</summary>
     public IMessageHub Hub { get; init; }
 }
+/// <summary>
+/// Builder for a hub's synchronous post pipeline. Wraps the current delivery delegate and the
+/// owning hub; each <see cref="AddPipeline"/> nests a new step in front of the existing chain.
+/// </summary>
 public record SyncPipelineConfig
 {
+    /// <summary>
+    /// Creates a pipeline configuration around the owning hub and an initial delivery delegate.
+    /// </summary>
+    /// <param name="Hub">The hub this pipeline belongs to.</param>
+    /// <param name="syncDelivery">The initial (innermost) synchronous delivery delegate.</param>
     public SyncPipelineConfig(IMessageHub Hub, SyncDelivery syncDelivery)
     {
         this.Hub = Hub;
@@ -641,10 +819,17 @@ public record SyncPipelineConfig
 
     internal SyncDelivery SyncDelivery { get; init; }
 
+    /// <summary>
+    /// Adds a step in front of the current post chain. The step receives the delivery and the next
+    /// delegate to invoke (the previously composed chain).
+    /// </summary>
+    /// <param name="pipeline">The step: given the delivery and next delegate, returns the resulting delivery.</param>
+    /// <returns>A new configuration whose post delegate runs the added step.</returns>
     public SyncPipelineConfig AddPipeline(
         Func<IMessageDelivery, SyncDelivery, IMessageDelivery> pipeline)
         => this with { SyncDelivery = d => pipeline.Invoke(d, SyncDelivery) };
 
+    /// <summary>The hub that owns this post pipeline.</summary>
     public IMessageHub Hub { get; init; }
 }
 

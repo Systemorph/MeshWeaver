@@ -27,8 +27,13 @@ public sealed class InMemoryPublishQueue : IPublishQueue
 {
     private readonly ConcurrentDictionary<string, PublishableSnapshot> _pending = new();
 
+    /// <summary>Adds or replaces the snapshot keyed by its <c>PostPath</c>.</summary>
+    /// <param name="snapshot">The publishable snapshot to enqueue.</param>
     public void Enqueue(PublishableSnapshot snapshot) => _pending[snapshot.PostPath] = snapshot;
 
+    /// <summary>Removes and returns the snapshots whose <c>ScheduledAt</c> is at or before <paramref name="now"/>.</summary>
+    /// <param name="now">The cutoff time; snapshots scheduled at or before this are returned.</param>
+    /// <returns>The snapshots that are now due for publishing.</returns>
     public IReadOnlyList<PublishableSnapshot> DrainDue(System.DateTimeOffset now)
     {
         var due = new List<PublishableSnapshot>();

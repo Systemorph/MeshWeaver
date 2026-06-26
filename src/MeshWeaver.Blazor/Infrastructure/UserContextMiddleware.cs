@@ -13,12 +13,25 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Blazor.Infrastructure;
 
+/// <summary>
+/// ASP.NET Core middleware that resolves the authenticated user identity for each request
+/// and sets the <c>AccessService</c> context, falling back to the well-known Anonymous identity
+/// for unauthenticated or unresolvable requests.
+/// </summary>
+/// <param name="next">The next middleware delegate in the pipeline.</param>
+/// <param name="logger">Logger for user resolution warnings and errors.</param>
 public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMiddleware> logger)
 {
     // Blazor framework files, static assets, and favicon — no user context needed.
     private static readonly string[] ExcludedPrefixes =
         ["/_framework", "/_content", "/_blazor", "/static/", "/favicon.ico"];
 
+    /// <summary>
+    /// Resolves the user identity from OAuth claims or a Bearer token and sets the
+    /// <c>AccessService</c> context for the current request before passing to the next middleware.
+    /// Static-asset paths are bypassed without any identity work.
+    /// </summary>
+    /// <param name="context">The current HTTP context.</param>
     public async Task InvokeAsync(HttpContext context)
     {
         // Skip user resolution for static assets and Blazor framework resources.

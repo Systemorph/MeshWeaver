@@ -18,12 +18,26 @@ public sealed class DescriptionGenerator : IDescriptionGenerator
     private readonly IServiceProvider services;
     private readonly ILogger<DescriptionGenerator>? logger;
 
+    /// <summary>
+    /// Creates the generator, resolving an optional logger from <paramref name="services"/>.
+    /// The same provider is used to spin up an <c>AgentChatClient</c> per generation call.
+    /// </summary>
+    /// <param name="services">The service provider used to resolve the logger and build per-call chat clients.</param>
     public DescriptionGenerator(IServiceProvider services)
     {
         this.services = services;
         this.logger = (ILogger<DescriptionGenerator>?)services.GetService(typeof(ILogger<DescriptionGenerator>));
     }
 
+    /// <summary>
+    /// Generates a short human-readable description for a node by running the built-in
+    /// <c>DescriptionWriter</c> agent over the supplied name (and optional category) and
+    /// parsing the <c>Description:</c> line from its reply.
+    /// </summary>
+    /// <param name="name">The node name to describe.</param>
+    /// <param name="category">Optional category hint that steers the generated wording; may be <c>null</c>.</param>
+    /// <param name="ct">Token to cancel the underlying agent call.</param>
+    /// <returns>A cold observable that emits the parsed description, or errors if the agent returns no parsable description.</returns>
     public IObservable<string> GenerateDescriptionAsync(string name, string? category, CancellationToken ct = default)
     {
         var chat = new AgentChatClient(services);

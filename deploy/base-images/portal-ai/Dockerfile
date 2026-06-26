@@ -4,13 +4,21 @@
 # ON TOP of this base via the portal's <ContainerBaseImage>. The lean `portal` flavour skips
 # this and uses the default mcr.microsoft.com/dotnet/aspnet base.
 #
-# Build + push once per release:
-#   docker build -t ghcr.io/systemorph/memex-portal-ai-base:$TAG deploy/base-images/portal-ai
-#   docker push ghcr.io/systemorph/memex-portal-ai-base:$TAG
+# Build + push once per release — MULTI-ARCH (linux/amd64 + linux/arm64) so both an x86 cloud node
+# and an Apple-silicon (arm64) local k3s can pull this base — and the app image layered on it —
+# natively. A single-arch `docker build` is NOT enough: it must be a manifest list.
+#   docker buildx build --platform linux/amd64,linux/arm64 \
+#     -t ghcr.io/systemorph/memex-portal-ai-base:$TAG --push deploy/base-images/portal-ai
+# CI does exactly this in .github/workflows/release-images.yml (with docker/setup-qemu-action so the
+# arm64 RUN steps emulate on an amd64 runner). For ACR, the equivalent is the same buildx --push to
+# meshweaver.azurecr.io, or `az acr build --platform linux/amd64 --platform linux/arm64`.
 #
 # Both CLIs are bundled deliberately (locked decision) rather than relying on the publish-time
 # copilot fetch, which keys off the build-host RID. npm packages verified: @github/copilot
 # (the GitHub Copilot CLI) + @anthropic-ai/claude-code (Claude Code has no standalone binary).
+# Multi-arch is safe: @anthropic-ai/claude-code is pure JS (arch-independent), and `npm install -g
+# @github/copilot` resolves the matching per-platform optional-dep binary (@github/copilot-linux-x64
+# / @github/copilot-linux-arm64) inside each platform's build — so each arch bakes in its own CLI.
 ARG DOTNET_VERSION=10.0
 FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION}
 

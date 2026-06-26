@@ -9,6 +9,10 @@ using Namotion.Reflection;
 
 namespace MeshWeaver.Layout.Domain;
 
+/// <summary>
+/// Layout area that renders a Mermaid class diagram of the data domain and per-type property/derived-type detail pages.
+/// Exposed as the <c>DataModel</c> area on domain hubs; the optional Id parameter selects a specific type's detail page.
+/// </summary>
 [Display(GroupName = "Data Model")]
 public static class DataModelLayoutArea
 {

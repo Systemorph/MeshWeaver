@@ -17,17 +17,56 @@ using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor.Portal.Layout;
 
+/// <summary>
+/// Base component for the portal's main layout: hosts the header navigation menus
+/// (Node / Mesh / AI), the routed content area, and the resizable, auth-gated side panel
+/// that shows chat threads or layout-area content.
+/// </summary>
 public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 {
+    /// <summary>
+    /// JS runtime used for side-panel persistence, sizing, and resize dispatch.
+    /// </summary>
     [Inject] protected IJSRuntime JSRuntime { get; set; } = null!;
+
+    /// <summary>
+    /// Manages URL navigation in response to menu clicks and panel actions.
+    /// </summary>
     [Inject] protected NavigationManager NavigationManager { get; set; } = null!;
+
+    /// <summary>
+    /// Holds and persists the side panel's visibility, position, size, and content.
+    /// </summary>
     [Inject] protected SidePanelStateService SidePanelState { get; set; } = null!;
+
+    /// <summary>
+    /// Message hub used for mesh queries such as the global-admin check.
+    /// </summary>
     [Inject] protected IMessageHub Hub { get; set; } = null!;
+
+    /// <summary>
+    /// Provides the reactive navigation context and side-panel navigation requests.
+    /// </summary>
     [Inject] protected INavigationService NavigationService { get; set; } = null!;
+
+    /// <summary>
+    /// Supplies the dynamic Node / Mesh / AI menu item definitions.
+    /// </summary>
     [Inject] protected IMenuItemsProvider MenuItemsProvider { get; set; } = null!;
+
+    /// <summary>
+    /// Resolves content paths into layout-area references for the side panel.
+    /// </summary>
     [Inject] protected IPathResolver PathResolver { get; set; } = null!;
+
+    /// <summary>
+    /// Provides the current user's access context (e.g. their object id).
+    /// </summary>
     [Inject] protected AccessService AccessService { get; set; } = null!;
 
+    /// <summary>
+    /// Cascading authentication state; used to gate side-panel content for anonymous circuits.
+    /// </summary>
     [CascadingParameter]
     protected Task<AuthenticationState>? AuthStateTask { get; set; }
 
@@ -58,9 +97,16 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     [Parameter]
     public RenderFragment? MobileNavMenu { get; set; }
 
+    /// <summary>
+    /// Name of the message-bar section where top-of-page notifications are rendered.
+    /// </summary>
     protected const string MessageBarSection = "MessagesTop";
 
     private bool isNavMenuOpen;
+
+    /// <summary>
+    /// Whether the mobile navigation menu is currently open.
+    /// </summary>
     protected bool IsNavMenuOpen => isNavMenuOpen;
 
     private bool isNodeMenuOpen;
@@ -82,12 +128,19 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
 
     // Editable content collections
+    /// <summary>
+    /// Content collections the current user is permitted to edit.
+    /// </summary>
     protected IReadOnlyList<ContentCollectionConfig> EditableCollections { get; private set; } = [];
     private IJSObjectReference? jsModule;
     private DotNetObjectReference<PortalLayoutBase>? dotNetRef;
 
     private IDisposable? _navContextSubscription;
 
+    /// <summary>
+    /// Wires the side-panel, navigation-context, and Node / Mesh / AI menu subscriptions,
+    /// re-rendering as each stream emits.
+    /// </summary>
     protected override void OnInitialized()
     {
         base.OnInitialized();
@@ -112,6 +165,11 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         });
     }
 
+    /// <summary>
+    /// Initializes the navigation service, snapshots the authentication state, and forces the
+    /// side panel closed (resolving its content only when authenticated and visible).
+    /// </summary>
+    /// <returns>A task that completes when initialization finishes.</returns>
     protected override async Task OnInitializedAsync()
     {
         await base.OnInitializedAsync();
@@ -327,6 +385,12 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// On first render, imports the layout's JS module, registers the .NET reference, and
+    /// restores the persisted side-panel state from local storage.
+    /// </summary>
+    /// <param name="firstRender">True on the component's first render pass.</param>
+    /// <returns>A task that completes when first-render initialization finishes.</returns>
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
@@ -434,6 +498,9 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         InvokeAsync(StateHasChanged);
     }
 
+    /// <summary>
+    /// Closes the mobile navigation menu when the viewport switches to a desktop size.
+    /// </summary>
     protected override void OnParametersSet()
     {
         if (ViewportInformation.IsDesktop && isNavMenuOpen)
@@ -443,14 +510,23 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         }
     }
 
+    /// <summary>
+    /// Current viewport classification (desktop/mobile, ultra-low), supplied as a cascading value.
+    /// </summary>
     [CascadingParameter]
     public required ViewportInformation ViewportInformation { get; set; }
 
+    /// <summary>
+    /// Toggles the mobile navigation menu open or closed.
+    /// </summary>
     protected void ToggleNavMenu()
     {
         isNavMenuOpen = !isNavMenuOpen;
     }
 
+    /// <summary>
+    /// Closes the mobile navigation menu and re-renders.
+    /// </summary>
     protected void CloseMobileNavMenu()
     {
         isNavMenuOpen = false;
@@ -459,9 +535,22 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
 
     // Side panel is gated on auth — anonymous users see neither toggle nor pane.
+    /// <summary>
+    /// Whether the side panel should render — requires both an authenticated circuit and visible state.
+    /// </summary>
     public bool IsSidePanelVisible => isAuthenticated && SidePanelState.IsVisible;
+
+    /// <summary>
+    /// The side panel's current docking position.
+    /// </summary>
     protected SidePanelPosition SidePanelPositionValue => SidePanelState.Position;
 
+    /// <summary>
+    /// Toggles the side panel. When a thread is shown full-screen, navigates to the thread's content
+    /// node and reopens the thread inside the panel; otherwise flips visibility, applying the
+    /// persisted size when opening.
+    /// </summary>
+    /// <returns>A task that completes once panel state and size have been applied.</returns>
     public async Task ToggleSidePanel()
     {
         var context = _currentNavContext;
@@ -609,6 +698,9 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         return _cachedSidePanelControl;
     }
 
+    /// <summary>
+    /// Unsubscribes from side-panel, navigation, and menu events and disposes JS interop references.
+    /// </summary>
     public void Dispose()
     {
         SidePanelState.OnStateChanged -= OnSidePanelStateChanged;

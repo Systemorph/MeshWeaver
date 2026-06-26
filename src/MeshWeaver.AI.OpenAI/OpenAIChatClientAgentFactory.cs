@@ -28,10 +28,13 @@ public class OpenAIChatClientAgentFactory(
 {
     private readonly OpenAIConfiguration credentials = options.Value ?? new OpenAIConfiguration();
 
+    /// <summary>Display name of this provider factory ("OpenAI").</summary>
     public override string Name => "OpenAI";
 
+    /// <summary>Model ids this factory serves, as configured in <c>OpenAIConfiguration</c>.</summary>
     public override IReadOnlyList<string> Models => credentials.Models;
 
+    /// <summary>Selection priority among factories; lower values are preferred. Sourced from configuration.</summary>
     public override int Order => credentials.Order;
 
     /// <summary>
@@ -61,6 +64,16 @@ public class OpenAIChatClientAgentFactory(
             || base.Supports(modelName);
     }
 
+    /// <summary>
+    /// Builds an <see cref="IChatClient"/> for OpenAI or an OpenAI-compatible gateway. Picks the model
+    /// (composer selection, then the agent's model tier, then the first configured model), resolves the
+    /// API key and optional base URL via <c>ChatClientCredentialResolver</c> (falling back to configured
+    /// <c>IOptions</c> values; a null endpoint uses the SDK default <c>api.openai.com</c>), and returns
+    /// a chat client over that model.
+    /// </summary>
+    /// <param name="agentConfig">Agent configuration used to resolve the model tier and for log context.</param>
+    /// <returns>A chat client targeting the resolved model on the resolved endpoint.</returns>
+    /// <exception cref="InvalidOperationException">No model is configured, or the API key cannot be resolved.</exception>
     protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {
         // Composer selection wins; then the agent's ModelTier; first configured model as a last resort.

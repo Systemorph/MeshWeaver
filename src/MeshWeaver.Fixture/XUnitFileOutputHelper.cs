@@ -18,15 +18,33 @@ public static class XUnitFileOutputRegistry
 {
     private static readonly AsyncLocal<XUnitFileOutputHelper?> _current = new();
 
+    /// <summary>
+    /// Sets the output helper for the current async execution context.
+    /// </summary>
+    /// <param name="testInstance">The owning test instance (used for call-site identification only).</param>
+    /// <param name="outputHelper">The output helper to make current.</param>
     public static void Register(object testInstance, XUnitFileOutputHelper outputHelper)
         => _current.Value = outputHelper;
 
+    /// <summary>
+    /// Clears the output helper for the current async execution context.
+    /// </summary>
+    /// <param name="testInstance">The owning test instance (used for call-site identification only).</param>
     public static void Unregister(object testInstance)
         => _current.Value = null;
 
+    /// <summary>
+    /// Returns the output helper for the current async execution context, if any.
+    /// </summary>
+    /// <param name="testInstance">The owning test instance (used for call-site identification only).</param>
+    /// <returns>The current output helper, or null when none is active.</returns>
     public static XUnitFileOutputHelper? GetOutputHelper(object testInstance)
         => _current.Value;
 
+    /// <summary>
+    /// Returns the output helper active on the current async execution context, if any.
+    /// </summary>
+    /// <returns>The current output helper, or null when none is active.</returns>
     public static XUnitFileOutputHelper? GetAnyActiveOutputHelper()
         => _current.Value;
 }
@@ -72,6 +90,12 @@ public class XUnitFileOutputHelper : ITestOutputHelper, IDisposable
             Directory.CreateDirectory(LogDirectory);
     }
 
+    /// <summary>
+    /// Initializes a new helper that mirrors output to the given xUnit helper and (when enabled)
+    /// to per-test-method log files.
+    /// </summary>
+    /// <param name="xunitOutput">The underlying xUnit output helper to forward to.</param>
+    /// <param name="testName">Optional test class name used as the log file base name.</param>
     public XUnitFileOutputHelper(ITestOutputHelper xunitOutput, string? testName = null)
     {
         _xunitOutput = xunitOutput;
@@ -83,6 +107,11 @@ public class XUnitFileOutputHelper : ITestOutputHelper, IDisposable
         _logFilePath = string.Empty;
     }
 
+    /// <summary>
+    /// Sets the current test method name and, when file logging is enabled, opens a fresh
+    /// per-method log file and writes its header.
+    /// </summary>
+    /// <param name="methodName">The name of the test method now executing.</param>
     public void SetCurrentTestMethod(string methodName)
     {
         if (_disposed) return;
@@ -129,17 +158,28 @@ public class XUnitFileOutputHelper : ITestOutputHelper, IDisposable
         WriteToFile(new string('=', 60));
     }
 
+    /// <summary>
+    /// Clears the current test method name, marking that no test method is currently running.
+    /// </summary>
     public void ClearCurrentTestMethod()
     {
         if (_disposed) return;
         _currentTestMethod = null;
     }
 
+    /// <summary>
+    /// Indicates whether a test method is currently active.
+    /// </summary>
+    /// <returns><c>true</c> while a test method is set; otherwise <c>false</c>.</returns>
     public bool IsInTestMethod()
     {
         return !string.IsNullOrEmpty(_currentTestMethod);
     }
 
+    /// <summary>
+    /// Writes a timestamped line to both the xUnit output and (when enabled) the log file.
+    /// </summary>
+    /// <param name="message">The message to write.</param>
     public void WriteLine(string message)
     {
         if (_disposed) return;
@@ -167,23 +207,38 @@ public class XUnitFileOutputHelper : ITestOutputHelper, IDisposable
         WriteToFile(timestampedMessage);
     }
 
+    /// <summary>
+    /// Formats and writes a timestamped line to both the xUnit output and (when enabled) the log file.
+    /// </summary>
+    /// <param name="format">A composite format string.</param>
+    /// <param name="args">The arguments to format into <paramref name="format"/>.</param>
     public void WriteLine(string format, params object[] args)
     {
         WriteLine(string.Format(format, args));
     }
 
+    /// <summary>
+    /// Writes a message. Implemented as a line write for consistency with file logging.
+    /// </summary>
+    /// <param name="message">The message to write.</param>
     public void Write(string message)
     {
         // Convert Write to WriteLine for consistency with file logging
         WriteLine(message);
     }
 
+    /// <summary>
+    /// Formats and writes a message. Implemented as a line write for consistency with file logging.
+    /// </summary>
+    /// <param name="format">A composite format string.</param>
+    /// <param name="args">The arguments to format into <paramref name="format"/>.</param>
     public void Write(string format, params object[] args)
     {
         // Convert Write to WriteLine for consistency with file logging
         WriteLine(format, args);
     }
 
+    /// <summary>Gets the captured output. Returns a constant placeholder identifier.</summary>
     public string Output => "XUnitFileOutputHelper";
 
     private void WriteToFile(string message)
@@ -210,6 +265,9 @@ public class XUnitFileOutputHelper : ITestOutputHelper, IDisposable
         }
     }
 
+    /// <summary>
+    /// Writes the log-end marker and disposes the underlying file writer.
+    /// </summary>
     public void Dispose()
     {
         if (_disposed) return;
@@ -238,12 +296,22 @@ public class XUnitFileLoggerProvider : ILoggerProvider
     private readonly IServiceProvider? _serviceProvider;
     private bool _disposed = false;
 
+    /// <summary>
+    /// Initializes a new provider that creates loggers backed by the supplied output helper factory.
+    /// </summary>
+    /// <param name="outputHelperFactory">Factory returning the current output helper (may return null).</param>
+    /// <param name="serviceProvider">Optional service provider used to resolve log-level configuration.</param>
     public XUnitFileLoggerProvider(Func<XUnitFileOutputHelper?> outputHelperFactory, IServiceProvider? serviceProvider = null)
     {
         _outputHelperFactory = outputHelperFactory;
         _serviceProvider = serviceProvider;
     }
 
+    /// <summary>
+    /// Returns a cached <see cref="XUnitFileLogger"/> for the given category, creating one if needed.
+    /// </summary>
+    /// <param name="categoryName">The logger category name.</param>
+    /// <returns>The logger for the category.</returns>
     public ILogger CreateLogger(string categoryName)
     {
         if (_disposed)
@@ -252,6 +320,9 @@ public class XUnitFileLoggerProvider : ILoggerProvider
         return _loggers.GetOrAdd(categoryName, name => new XUnitFileLogger(name, _outputHelperFactory, _serviceProvider));
     }
 
+    /// <summary>
+    /// Disposes the provider and clears its cached loggers.
+    /// </summary>
     public void Dispose()
     {
         if (_disposed) return;
@@ -273,6 +344,13 @@ public class XUnitFileLogger : ILogger
     private readonly IServiceProvider? _serviceProvider;
     private readonly Lazy<LogLevel> _minLogLevel;
 
+    /// <summary>
+    /// Initializes a new logger for the given category, resolving its minimum log level lazily
+    /// from configuration.
+    /// </summary>
+    /// <param name="categoryName">The logger category name.</param>
+    /// <param name="outputHelperFactory">Factory returning the current output helper (may return null).</param>
+    /// <param name="serviceProvider">Optional service provider used to resolve log-level configuration.</param>
     public XUnitFileLogger(string categoryName, Func<XUnitFileOutputHelper?> outputHelperFactory, IServiceProvider? serviceProvider = null)
     {
         _categoryName = categoryName;
@@ -281,9 +359,20 @@ public class XUnitFileLogger : ILogger
         _minLogLevel = new Lazy<LogLevel>(GetMinLogLevel);
     }
 
+    /// <summary>
+    /// Begins a logical logging scope. This implementation returns a no-op disposable.
+    /// </summary>
+    /// <typeparam name="TState">The type of the scope state.</typeparam>
+    /// <param name="state">The scope state.</param>
+    /// <returns>A disposable that does nothing when disposed.</returns>
     public IDisposable BeginScope<TState>(TState state) where TState : notnull 
         => new NoOpDisposable();
 
+    /// <summary>
+    /// Determines whether logging is enabled for the given level based on the resolved minimum level.
+    /// </summary>
+    /// <param name="logLevel">The level to test.</param>
+    /// <returns><c>true</c> if logging is enabled for <paramref name="logLevel"/>; otherwise <c>false</c>.</returns>
     public bool IsEnabled(LogLevel logLevel) => logLevel >= _minLogLevel.Value;
 
     private LogLevel GetMinLogLevel()
@@ -344,6 +433,16 @@ public class XUnitFileLogger : ILogger
         }
     }
 
+    /// <summary>
+    /// Writes a log entry to the active output helper when the level is enabled and a test
+    /// method is currently running.
+    /// </summary>
+    /// <typeparam name="TState">The type of the state object being logged.</typeparam>
+    /// <param name="logLevel">The severity level of the entry.</param>
+    /// <param name="eventId">The event id of the entry.</param>
+    /// <param name="state">The state to be logged.</param>
+    /// <param name="exception">An optional exception associated with the entry.</param>
+    /// <param name="formatter">Function that produces the log message from <paramref name="state"/> and <paramref name="exception"/>.</param>
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
     {
         if (!IsEnabled(logLevel))

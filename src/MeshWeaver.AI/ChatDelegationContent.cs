@@ -27,6 +27,13 @@ public class ChatDelegationContent : AIContent
     /// </summary>
     public bool RequiresUserFeedback { get; }
 
+    /// <summary>
+    /// Creates a delegation content entry describing one agent routing a task to another.
+    /// </summary>
+    /// <param name="delegatingAgent">The agent initiating the delegation.</param>
+    /// <param name="targetAgent">The agent the task is being delegated to.</param>
+    /// <param name="delegationMessage">The task/message sent to the target agent.</param>
+    /// <param name="requiresUserFeedback">Whether the delegation requires user feedback before proceeding.</param>
     public ChatDelegationContent(
         string delegatingAgent,
         string targetAgent,

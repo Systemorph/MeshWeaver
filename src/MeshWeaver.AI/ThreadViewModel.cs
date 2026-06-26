@@ -17,9 +17,13 @@ namespace MeshWeaver.AI;
 /// </summary>
 public record ThreadViewModel
 {
+    /// <summary>Ordered list of the thread's message node IDs to render.</summary>
     public IReadOnlyList<string> Messages { get; init; } = [];
+    /// <summary>Full path of the thread node this view binds to.</summary>
     public string? ThreadPath { get; init; }
+    /// <summary>Context path used to initialize the agent for this thread.</summary>
     public string? InitialContext { get; init; }
+    /// <summary>Human-readable display name for <see cref="InitialContext"/>.</summary>
     public string? InitialContextDisplayName { get; init; }
 
     /// <summary>True while a message is being submitted (cells not yet created).</summary>
@@ -61,6 +65,12 @@ public record ThreadViewModel
     /// </summary>
     public string? CreatedBy { get; init; }
 
+    /// <summary>
+    /// Value equality over all bound thread state (using <c>SequenceEqual</c> for the
+    /// message, tool-call and pending-text lists) so the view skips redundant updates.
+    /// </summary>
+    /// <param name="other">The view model to compare against.</param>
+    /// <returns>True when all bound state is equal.</returns>
     public virtual bool Equals(ThreadViewModel? other)
     {
         if (other is null) return false;
@@ -80,6 +90,8 @@ public record ThreadViewModel
                && PendingMessageTexts.SequenceEqual(other.PendingMessageTexts);
     }
 
+    /// <summary>Hash consistent with <see cref="Equals(ThreadViewModel?)"/>.</summary>
+    /// <returns>A hash combining the thread's bound state and list elements.</returns>
     public override int GetHashCode()
     {
         var hash = new HashCode();

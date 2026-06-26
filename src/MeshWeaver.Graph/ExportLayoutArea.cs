@@ -17,6 +17,7 @@ namespace MeshWeaver.Graph;
 [Browsable(false)]
 public static class ExportLayoutArea
 {
+    /// <summary>Area name for the Export layout area.</summary>
     public const string ExportArea = "Export";
 
     /// <summary>

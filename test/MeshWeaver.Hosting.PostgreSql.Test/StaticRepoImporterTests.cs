@@ -96,7 +96,7 @@ public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelpe
     private Task<IList<StaticRepoImportResult>> Import() =>
         StaticRepoImporter.ImportAll(Mesh).ToList().Should().Within(120.Seconds()).Emit();
 
-    private Task<MeshNode?> Read(string path) =>
+    private Task<MeshNode> Read(string path) =>
         Mesh.GetMeshNodeStream(path).Where(n => n is not null).Should().Within(30.Seconds()).Emit();
 
     [Fact(Timeout = 120000)]

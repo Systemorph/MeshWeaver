@@ -6,6 +6,9 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.NuGet.AzureBlob;
 
+/// <summary>
+/// Service-collection extensions for registering the Azure Blob-backed NuGet package cache.
+/// </summary>
 public static class BlobNuGetPackageCacheExtensions
 {
     /// <summary>

@@ -17,8 +17,10 @@ namespace MeshWeaver.Hosting.SignalR;
 /// </summary>
 public sealed class SignalRConnectionHub(IMessageHub hub, SignalRConnectionRegistry registry) : Hub
 {
+    /// <summary>The route segment the hub is mapped at (<c>/signalr</c>).</summary>
     public const string EndPoint = "signalr";
 
+    /// <inheritdoc />
     public override async Task OnConnectedAsync()
     {
         // Boundary bridge (SignalR is async by contract): validate the token once per connection.
@@ -43,6 +45,7 @@ public sealed class SignalRConnectionHub(IMessageHub hub, SignalRConnectionRegis
             registry.Deliver(Context.ConnectionId, delivery);
     }
 
+    /// <inheritdoc />
     public override Task OnDisconnectedAsync(Exception? exception)
     {
         registry.Disconnect(Context.ConnectionId);

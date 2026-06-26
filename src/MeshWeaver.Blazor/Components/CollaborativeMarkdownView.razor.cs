@@ -22,6 +22,11 @@ using TrackedChangeStatus = MeshWeaver.Mesh.TrackedChangeStatus;
 
 namespace MeshWeaver.Blazor.Components;
 
+/// <summary>
+/// Blazor view for markdown content that supports inline commenting, tracked-change annotation,
+/// and collaborative editing via JavaScript interop. Extends <c>MarkdownView</c> rendering with
+/// a comment sidebar and selection-based comment creation.
+/// </summary>
 public partial class CollaborativeMarkdownView
 {
     [Inject] private IJSRuntime JS { get; set; } = null!;
@@ -159,6 +164,10 @@ public partial class CollaborativeMarkdownView
         _ => ""
     };
 
+    /// <summary>
+    /// Binds the node path, annotation mode, comment list, and tracked-change state
+    /// from the layout-area stream, and subscribes to reactive comment and change feeds.
+    /// </summary>
     protected override void BindData()
     {
         base.BindData();
@@ -319,6 +328,12 @@ public partial class CollaborativeMarkdownView
             ex => SurfaceError(ex, "Loading document comments")));
     }
 
+    /// <summary>
+    /// On first render, loads the JavaScript interop module, registers the .NET reference for
+    /// JS callbacks, and wires up text-selection-based comment triggering in the browser.
+    /// </summary>
+    /// <param name="firstRender">True on the very first render of this component instance.</param>
+    /// <returns>A task that completes once JavaScript initialisation is done.</returns>
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
@@ -630,6 +645,15 @@ public partial class CollaborativeMarkdownView
     private string _pendingStartFragment = "";
     private string _pendingEndFragment = "";
 
+    /// <summary>
+    /// JavaScript-invokable callback that fires when the user selects text and triggers the
+    /// "Add Comment" action. Resolves the anchor fragment in the markdown source and opens
+    /// the inline comment input form.
+    /// </summary>
+    /// <param name="selectedText">The visible text the user highlighted.</param>
+    /// <param name="startFragment">Browser selection start fragment identifier.</param>
+    /// <param name="endFragment">Browser selection end fragment identifier.</param>
+    /// <returns>A completed task; comment state mutations are synchronous.</returns>
     [JSInvokable]
     public Task OnCommentFromSelection(string selectedText, string startFragment, string endFragment)
     {
@@ -700,6 +724,12 @@ public partial class CollaborativeMarkdownView
     /// </summary>
     private void CreateCommentNode(Comment comment)
     {
+        // BoundNodePath is required to anchor the satellite; a comment can't exist without its main
+        // node. The IsNullOrEmpty guard also narrows BoundNodePath to non-null for the MainNode
+        // assignment below (it is set from ViewModel.NodePath before any comment can be created).
+        if (string.IsNullOrEmpty(BoundNodePath))
+            return;
+
         var node = new MeshNode(comment.Id, $"{BoundNodePath}/{CommentsExtensions.CommentPartition}")
         {
             Name = string.IsNullOrEmpty(comment.Author) ? "Comment" : $"Comment by {comment.Author}",
@@ -828,6 +858,11 @@ public partial class CollaborativeMarkdownView
         return dateTime.ToString("MMM d, yyyy");
     }
 
+    /// <summary>
+    /// Disposes the JavaScript interop module, releases the <c>DotNetObjectReference</c>,
+    /// and cleans up all reactive subscriptions held by this view.
+    /// </summary>
+    /// <returns>A value task that completes once all resources are released.</returns>
     public override async ValueTask DisposeAsync()
     {
         if (jsModule != null)

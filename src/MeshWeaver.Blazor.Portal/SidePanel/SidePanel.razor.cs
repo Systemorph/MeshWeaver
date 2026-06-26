@@ -29,6 +29,9 @@ public partial class SidePanel : ComponentBase, IDisposable
     private string DisplayTitle => SidePanelState.Title ?? "New Thread";
     private bool HasThread => !string.IsNullOrEmpty(SidePanelState.ContentPath);
 
+    /// <summary>
+    /// Subscribes to side-panel state changes so the panel re-renders when its state updates.
+    /// </summary>
     protected override void OnInitialized()
     {
         base.OnInitialized();
@@ -75,6 +78,9 @@ public partial class SidePanel : ComponentBase, IDisposable
         }
     }
 
+    /// <summary>
+    /// Unsubscribes from side-panel state changes.
+    /// </summary>
     public void Dispose()
     {
         SidePanelState.OnStateChanged -= OnStateChanged;

@@ -13,6 +13,12 @@ public sealed class AuthRequiredException : Exception
     /// <summary>Provider key the user must (re)connect, e.g. <c>"ClaudeCode"</c> or <c>"Copilot"</c>.</summary>
     public string Provider { get; }
 
+    /// <summary>
+    /// Creates an authentication-required exception for the given provider.
+    /// </summary>
+    /// <param name="provider">Provider key the user must (re)connect, e.g. <c>"ClaudeCode"</c> or <c>"Copilot"</c>.</param>
+    /// <param name="message">The exception message.</param>
+    /// <param name="innerException">The underlying cause, if any.</param>
     public AuthRequiredException(string provider, string message, Exception? innerException = null)
         : base(message, innerException)
         => Provider = provider;

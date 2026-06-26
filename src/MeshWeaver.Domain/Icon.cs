@@ -9,8 +9,14 @@
 /// <param name="Id"></param>
 public record Icon(string Provider, string Id)
 {
+    /// <summary>
+    /// The rendered size of the icon; defaults to <see cref="IconSize.Size24"/>.
+    /// </summary>
     public IconSize Size { get; init; } = IconSize.Size24;
 
+    /// <summary>
+    /// The icon variant (regular or filled); defaults to <see cref="IconVariant.Regular"/>.
+    /// </summary>
     public IconVariant Variant { get; init; } = IconVariant.Regular;
 
 }

@@ -18,6 +18,14 @@ public class CosmosChangeFeedProcessor : IAsyncDisposable
     private readonly string _processorName;
     private ChangeFeedProcessor? _processor;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="CosmosChangeFeedProcessor"/> class.
+    /// </summary>
+    /// <param name="monitoredContainer">The container whose change feed is observed.</param>
+    /// <param name="leaseContainer">The container that stores change-feed lease state.</param>
+    /// <param name="changeNotifier">The observer that receives a <see cref="DataChangeNotification"/> for each change.</param>
+    /// <param name="processorName">The change-feed processor name used for lease coordination.</param>
+    /// <param name="logger">Optional logger for diagnostics.</param>
     public CosmosChangeFeedProcessor(
         Container monitoredContainer,
         Container leaseContainer,
@@ -143,6 +151,7 @@ public class CosmosChangeFeedProcessor : IAsyncDisposable
         _logger?.LogDebug("Published change notification for path '{Path}'", path);
     }
 
+    /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
         await StopAsync().ConfigureAwait(false);

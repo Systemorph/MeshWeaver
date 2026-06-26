@@ -10,8 +10,12 @@ namespace MeshWeaver.Hosting.AzureStorage;
 /// </summary>
 public class AzureBlobStorageAdapterFactory : IStorageAdapterFactory
 {
+    /// <summary>
+    /// The storage type key (<c>"AzureBlob"</c>) under which this factory is registered as a keyed service.
+    /// </summary>
     public const string StorageType = "AzureBlob";
 
+    /// <inheritdoc />
     public IStorageAdapter Create(GraphStorageConfig config, IServiceProvider serviceProvider)
     {
         var connectionString = config.ConnectionString

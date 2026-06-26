@@ -99,6 +99,26 @@ param backupStorageAccountName string = ''
 @description('Kubernetes namespace + service account the pgBackRest pods run as.')
 param pgBackRestServiceAccountSubject string = 'system:serviceaccount:memex:pgbackrest-sa'
 
+// --- Portal Workload Identity (self-updater ACR polling) -------------------
+@description('Provision the portal user-assigned managed identity + federated credentials (Workload Identity) so the in-pod self-updater can authenticate to ACR (AcrPull) and list image tags keyless. Mirrors the pgBackRest WI wiring.')
+param deployPortalIdentity bool = true
+
+@description('Name of the portal UAMI. Empty = "<namePrefix>-portal-mi".')
+param portalIdentityName string = ''
+
+@description('Kubernetes namespaces that run the portal. One federated credential (subject system:serviceaccount:<ns>:memex-portal-sa) is created per namespace. Keep in sync with the deployed environments (memex, atioz, memex-cloud).')
+param portalNamespaces array = [
+  'memex'
+  'atioz'
+  'memex-cloud'
+]
+
+@description('Author AcrPull for the portal UAMI on the SHARED (cross-RG) registry as IaC. Requires the deploying principal to have User Access Administrator/Owner on the shared ACR resource group. Default false = grant it out-of-band (az role assignment create), matching how the kubelet AcrPull is granted. Ignored when a per-deployment ACR is created (that grant is authored in-bicep).')
+param grantSharedAcrPull bool = false
+
+@description('Resource group of the SHARED ACR (used only when sharedAcrLoginServer is set AND grantSharedAcrPull=true). Defaults to the shared registry RG.')
+param sharedAcrResourceGroup string = 'meshweaver-shared'
+
 // --- Content / log Azure Files shares --------------------------------------
 @description('Provision the dedicated Azure Files account with named shares (content, attachments, users, data, otel-logs) for STATIC PV binding. Dynamic azurefile provisioning is the default and does not require this.')
 param deployContentFileShares bool = true
@@ -134,6 +154,7 @@ var effectiveAcrName = empty(acrName) ? take('${namePrefix}acr${uniqueString(sub
 var effectiveBackupSa = empty(backupStorageAccountName) ? take('${namePrefix}bkp${uniqueString(subscription().id, resourceGroupName)}', 24) : backupStorageAccountName
 var effectiveContentFilesSa = empty(contentFilesAccountName) ? take('${namePrefix}files${uniqueString(subscription().id, resourceGroupName)}', 24) : contentFilesAccountName
 var effectivePostgresServer = empty(postgresServerName) ? '${namePrefix}-pg' : postgresServerName
+var effectivePortalIdentityName = empty(portalIdentityName) ? '${namePrefix}-portal-mi' : portalIdentityName
 var clusterName = '${namePrefix}-cluster'
 
 // Shared-ACR axis: when sharedAcrLoginServer is set, no per-RG ACR is created and the
@@ -218,6 +239,35 @@ module storage 'modules/storage.bicep' = if (deployBackupStorage) {
   }
 }
 
+// Portal Workload Identity: UAMI + one federated credential per portal namespace
+// (subject system:serviceaccount:<ns>:memex-portal-sa) for the in-pod self-updater.
+// Same-RG ACR -> AcrPull authored in the module; shared cross-RG ACR -> see
+// portalSharedAcrPull below (opt-in) or the out-of-band grant in the README.
+module portalIdentity 'modules/portal-identity.bicep' = if (deployPortalIdentity) {
+  name: 'portalIdentity'
+  scope: rg
+  params: {
+    location: location
+    identityName: effectivePortalIdentityName
+    oidcIssuerUrl: aks.outputs.oidcIssuerUrl
+    namespaces: portalNamespaces
+    acrId: effectiveAcrId // empty for the shared cross-RG registry (grant is out-of-band / portalSharedAcrPull)
+    tags: tags
+  }
+}
+
+// Opt-in IaC AcrPull for the portal UAMI on the SHARED (cross-RG) registry. Deployed
+// to the registry's own RG (so a cross-RG role assignment is allowed). Off by default
+// (the deployer often lacks UAA on meshweaver-shared) — then grant out-of-band.
+module portalSharedAcrPull 'modules/acr-role-assignment.bicep' = if (deployPortalIdentity && useSharedAcr && grantSharedAcrPull) {
+  name: 'portalSharedAcrPull'
+  scope: resourceGroup(sharedAcrResourceGroup)
+  params: {
+    acrName: split(sharedAcrLoginServer, '.')[0]
+    principalId: portalIdentity!.outputs.portalIdentityPrincipalId
+  }
+}
+
 module contentFiles 'modules/files.bicep' = if (deployContentFileShares) {
   name: 'contentFiles'
   scope: rg
@@ -256,6 +306,13 @@ output backupStorageAccount string = storage.?outputs.storageAccountName ?? ''
 output backupBlobEndpoint string = storage.?outputs.blobEndpoint ?? ''
 output backupContainerName string = storage.?outputs.backupContainerName ?? ''
 output pgBackRestIdentityClientId string = storage.?outputs.backupIdentityClientId ?? ''
+
+// --- Portal Workload Identity (self-updater) -------------------------------
+// portalIdentityClientId -> selfUpdate.azureClientId (Helm) for EVERY portal namespace.
+// portalIdentityPrincipalId -> the objectId for the out-of-band / cross-RG AcrPull grant.
+output portalIdentityName string = portalIdentity.?outputs.portalIdentityName ?? ''
+output portalIdentityClientId string = portalIdentity.?outputs.portalIdentityClientId ?? ''
+output portalIdentityPrincipalId string = portalIdentity.?outputs.portalIdentityPrincipalId ?? ''
 
 // --- Content / log Azure Files (static PV binding) -------------------------
 output contentFilesAccount string = contentFiles.?outputs.storageAccountName ?? ''

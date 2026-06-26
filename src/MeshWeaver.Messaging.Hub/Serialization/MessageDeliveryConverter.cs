@@ -10,11 +10,25 @@ namespace MeshWeaver.Messaging.Serialization;
 /// </summary>
 public class MessageDeliveryConverter(ITypeRegistry typeRegistry) : JsonConverter<IMessageDelivery>
 {
+    /// <summary>
+    /// Indicates that this converter handles only the <see cref="IMessageDelivery"/> interface itself.
+    /// </summary>
+    /// <param name="typeToConvert">The candidate type.</param>
+    /// <returns><c>true</c> when <paramref name="typeToConvert"/> is exactly <see cref="IMessageDelivery"/>.</returns>
     public override bool CanConvert(Type typeToConvert)
     {
         return typeToConvert == typeof(IMessageDelivery);
     }
 
+    /// <summary>
+    /// Reads an <see cref="IMessageDelivery"/>, using the "$type" discriminator and the
+    /// type registry to deserialize into the concrete delivery type; when the type is
+    /// missing or unknown, falls back to a MessageDelivery carrying the raw JSON message.
+    /// </summary>
+    /// <param name="reader">The reader positioned at the delivery object.</param>
+    /// <param name="typeToConvert">The target type (the <see cref="IMessageDelivery"/> interface).</param>
+    /// <param name="options">The active serializer options.</param>
+    /// <returns>The deserialized message delivery.</returns>
     public override IMessageDelivery Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         using var doc = JsonDocument.ParseValue(ref reader);
@@ -38,6 +52,13 @@ public class MessageDeliveryConverter(ITypeRegistry typeRegistry) : JsonConverte
         return JsonSerializer.Deserialize<MessageDelivery<RawJson>>(json2, options)!;
     }
 
+    /// <summary>
+    /// Writes the delivery using its concrete runtime type so the polymorphic "$type"
+    /// discriminator is emitted for round-tripping on read.
+    /// </summary>
+    /// <param name="writer">The writer to emit the delivery to.</param>
+    /// <param name="value">The message delivery to serialize.</param>
+    /// <param name="options">The active serializer options.</param>
     public override void Write(Utf8JsonWriter writer, IMessageDelivery value, JsonSerializerOptions options)
     {
         // Serialize using the actual type of the value

@@ -12,7 +12,9 @@ namespace MeshWeaver.Documentation.DataCube;
 /// <summary>Which side of the balance sheet a position belongs to.</summary>
 public enum BalanceSheetSide
 {
+    /// <summary>The position is an asset of the fund.</summary>
     Assets,
+    /// <summary>The position is a liability of the fund.</summary>
     Liabilities,
     /// <summary>Computed positions (sums, ratios) — not on either side.</summary>
     Computed,
@@ -188,18 +190,23 @@ public interface BalanceSheetSummary : IScope<string, BalanceSheetStorage>
     private static string PathOf(BalanceSheetStorage storage, string suffix)
         => storage.Positions.Keys.First(p => p.EndsWith("/" + suffix));
 
+    /// <summary>Total of the balance sheet (CHF m) for the reporting year.</summary>
     double BalanceSheetSum => GetScope<PositionValue>(
         new PositionYear(PathOf(GetStorage(), "BalanceSheetSum"), Identity)).Value;
 
+    /// <summary>Sum of all asset positions (CHF m) for the reporting year.</summary>
     double TotalAssets => GetScope<PositionValue>(
         new PositionYear(PathOf(GetStorage(), "TotalAssets"), Identity)).Value;
 
+    /// <summary>Sum of all liability positions (CHF m) for the reporting year.</summary>
     double TotalLiabilities => GetScope<PositionValue>(
         new PositionYear(PathOf(GetStorage(), "TotalLiabilities"), Identity)).Value;
 
+    /// <summary>Pension capital (active members + pensioners + technical provisions, CHF m).</summary>
     double PensionCapital => GetScope<PositionValue>(
         new PositionYear(PathOf(GetStorage(), "PensionCapital"), Identity)).Value;
 
+    /// <summary>Funding ratio: available assets divided by pension capital.</summary>
     double FundingRatio => GetScope<PositionValue>(
         new PositionYear(PathOf(GetStorage(), "FundingRatio"), Identity)).Value;
 

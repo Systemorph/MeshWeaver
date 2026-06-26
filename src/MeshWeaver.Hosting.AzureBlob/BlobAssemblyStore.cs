@@ -43,6 +43,14 @@ public sealed class BlobAssemblyStore : IAssemblyStore
     // Doc/Architecture/AsynchronousCalls.md.
     private readonly IIoPool _ioPool;
 
+    /// <summary>
+    /// Initializes a new instance of the <c>BlobAssemblyStore</c> class.
+    /// </summary>
+    /// <param name="blobService">Azure Blob service client used to access the assembly-cache container.</param>
+    /// <param name="containerName">Name of the blob container that stores compiled assemblies.</param>
+    /// <param name="localCacheDirectory">Process-local directory into which downloaded assemblies are materialised for loading by path.</param>
+    /// <param name="logger">Logger for store operations.</param>
+    /// <param name="ioPoolRegistry">Optional I/O pool registry; when omitted, an unbounded pool is used for blob I/O.</param>
     public BlobAssemblyStore(
         BlobServiceClient blobService,
         string containerName,
@@ -59,6 +67,7 @@ public sealed class BlobAssemblyStore : IAssemblyStore
         Directory.CreateDirectory(localCacheDirectory);
     }
 
+    /// <inheritdoc />
     public IObservable<string?> TryGetAssemblyPath(string nodeTypePath, long version)
     {
         var localPath = LocalPath(nodeTypePath, version);
@@ -90,10 +99,12 @@ public sealed class BlobAssemblyStore : IAssemblyStore
         });
     }
 
+    /// <inheritdoc />
     public IObservable<string> Put(string nodeTypePath, long version, byte[] assemblyBytes, byte[]? pdbBytes)
         => PutWithLocation(nodeTypePath, version, assemblyBytes, pdbBytes)
             .Select(loc => loc.LocalPath);
 
+    /// <inheritdoc />
     public IObservable<AssemblyStoreLocation> PutWithLocation(string nodeTypePath, long version, byte[] assemblyBytes, byte[]? pdbBytes)
     {
         var localPath = LocalPath(nodeTypePath, version);

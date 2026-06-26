@@ -136,6 +136,14 @@ public class PostgreSqlSqlGenerator
         "length", "lower", "upper"
     };
 
+    /// <summary>
+    /// Builds the <c>WHERE</c> clause (with bound parameters) for a parsed query, combining
+    /// filter, text search, access control, main-node, excluded-node-type, and active-state predicates.
+    /// </summary>
+    /// <param name="query">The parsed query whose filter/text/scope predicates are translated.</param>
+    /// <param name="userId">Optional user id used to add the access-control predicate; omit for system/unfiltered access.</param>
+    /// <param name="excludedNodeTypes">Optional node types to exclude (e.g. hidden from a given context).</param>
+    /// <returns>The <c>WHERE</c> clause text (empty when no predicates) and the bound parameter map.</returns>
     public (string WhereClause, Dictionary<string, object> Parameters) GenerateWhereClause(
         ParsedQuery query, string? userId = null, IReadOnlyCollection<string>? excludedNodeTypes = null)
     {
@@ -193,6 +201,19 @@ public class PostgreSqlSqlGenerator
         return (whereClause, new Dictionary<string, object>(_parameters));
     }
 
+    /// <summary>
+    /// Builds a complete <c>SELECT</c> statement (columns, optional activity/user-activity joins,
+    /// scope, order, and limit) for a parsed query, with bound parameters.
+    /// </summary>
+    /// <param name="query">The parsed query to translate.</param>
+    /// <param name="userId">Optional user id for the access-control predicate.</param>
+    /// <param name="activityUserId">Optional user id used to join the user-activity satellite for <c>source:accessed</c> queries.</param>
+    /// <param name="tableName">Primary table to select from; defaults to <c>mesh_nodes</c>.</param>
+    /// <param name="activityTable">Activity satellite table joined for <c>source:activity</c> queries.</param>
+    /// <param name="userActivityTable">User-activity satellite table joined for <c>source:accessed</c> queries.</param>
+    /// <param name="excludedNodeTypes">Optional node types to exclude from results.</param>
+    /// <param name="includeContent">When false, projects <c>NULL::jsonb</c> for content to avoid fetching large blobs.</param>
+    /// <returns>The SQL statement text and the bound parameter map.</returns>
     public (string Sql, Dictionary<string, object> Parameters) GenerateSelectQuery(
         ParsedQuery query, string? userId = null, string? activityUserId = null,
         string tableName = "mesh_nodes",
@@ -318,6 +339,15 @@ public class PostgreSqlSqlGenerator
         return (clause, parameters);
     }
 
+    /// <summary>
+    /// Builds the path-scoping predicate (with bound parameters) for a single base path and
+    /// <paramref name="scope"/> — exact, children, or subtree matching against the path or main-node column.
+    /// </summary>
+    /// <param name="basePath">The base path to scope to; <c>null</c> yields an empty clause.</param>
+    /// <param name="scope">How <paramref name="basePath"/> is matched (exact, children, subtree, etc.).</param>
+    /// <param name="useMainNode">When true, scopes against <c>n.main_node</c> instead of <c>n.path</c>.</param>
+    /// <param name="qualifiedTable">Optional schema-qualified table alias to use instead of the default.</param>
+    /// <returns>The scope clause text (empty when no base path) and the bound parameter map.</returns>
     public (string Clause, Dictionary<string, object> Parameters) GenerateScopeClause(
         string? basePath, QueryScope scope, bool useMainNode = false, string? qualifiedTable = null)
     {
@@ -651,6 +681,19 @@ public class PostgreSqlSqlGenerator
     private const string SlugSql =
         "COALESCE(NULLIF(regexp_replace(regexp_replace(trim(cc.file_path), '[^A-Za-z0-9._-]+', '-', 'g'), '^-+|-+$', '', 'g'), ''), 'document')";
 
+    /// <summary>
+    /// Builds a vector-similarity <c>SELECT</c> (HNSW cosine distance against <paramref name="queryVector"/>),
+    /// optionally folding in a lexical term and indexed content chunks, with access control and an optional
+    /// namespace-prefix scope. Returns the top <paramref name="topK"/> matches.
+    /// </summary>
+    /// <param name="filterQuery">Optional parsed query providing additional structured predicates.</param>
+    /// <param name="queryVector">The embedding vector to rank candidates against.</param>
+    /// <param name="userId">Optional user id for the access-control predicate.</param>
+    /// <param name="topK">Maximum number of nearest matches to return.</param>
+    /// <param name="lexicalTerm">Optional lexical term blended into the ranking alongside vector similarity.</param>
+    /// <param name="namespacePath">Optional namespace prefix to scope the search to a partition subtree.</param>
+    /// <param name="includeContentChunks">When true, also ranks indexed content chunks and projects them to their owning document.</param>
+    /// <returns>The SQL statement text and the bound parameter map.</returns>
     public (string Sql, Dictionary<string, object> Parameters) GenerateVectorSearchQuery(
         ParsedQuery? filterQuery,
         float[] queryVector,
@@ -1210,6 +1253,12 @@ public class PostgreSqlSqlGenerator
         return value;
     }
 
+    /// <summary>
+    /// Returns the ancestor paths of <paramref name="path"/>, from the top-level segment down to the
+    /// immediate parent (excluding <paramref name="path"/> itself). Returns an empty array for a root or empty path.
+    /// </summary>
+    /// <param name="path">The slash-separated node path to derive ancestors from.</param>
+    /// <returns>The ancestor paths, ordered shallowest-first.</returns>
     public static string[] GetAncestorPaths(string path)
     {
         if (string.IsNullOrEmpty(path))

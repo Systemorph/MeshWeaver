@@ -19,9 +19,17 @@ public static class SelfUpdateConfiguration
         builder.ConfigureServices(services =>
         {
             services.AddSingleton(opts);
-            services.AddSingleton<IAcrTagLister, AcrTagLister>();
-            services.AddSingleton<IDeploymentUpdater, KubernetesDeploymentUpdater>();
-            services.AddHostedService<SelfUpdateHostedService>();
+            // The poller lists ACR tags (Azure.Identity) and patches k8s deployments (X.509/TLS) via
+            // APIs that are [UnsupportedOSPlatform("browser")]. It is a server-side hosted service and
+            // is never wanted in a Blazor WASM client, so skip registration on browser. The guard also
+            // satisfies CA1416 for the browser-unsupported impl types without cascading the platform
+            // attribute up through AddSelfUpdate's callers (this is a browser-supporting assembly).
+            if (!OperatingSystem.IsBrowser())
+            {
+                services.AddSingleton<IAcrTagLister, AcrTagLister>();
+                services.AddSingleton<IDeploymentUpdater, KubernetesDeploymentUpdater>();
+                services.AddHostedService<SelfUpdateHostedService>();
+            }
             return services;
         });
         return builder;

@@ -31,6 +31,10 @@ public partial class MeshNodeContentEditorView
     private readonly Dictionary<string, string?> _text = new();
     private readonly Dictionary<string, bool> _bool = new();
 
+    /// <summary>
+    /// Reads <c>NodePath</c>, <c>CanEdit</c>, and <c>Fields</c> from the view-model, then
+    /// subscribes to the node stream so field values refresh whenever the underlying node changes.
+    /// </summary>
     protected override void BindData()
     {
         base.BindData();

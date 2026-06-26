@@ -34,8 +34,10 @@ public sealed class MeshTeardownHostedService(
     /// rather than hanging shutdown; the underlying defect surfaces via the hub's own diagnostics.</summary>
     private static readonly TimeSpan TeardownTimeout = TimeSpan.FromSeconds(30);
 
+    /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
+    /// <inheritdoc />
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         // Resolve the mesh root hub lazily here (the scope is still alive during StopAsync).

@@ -13,6 +13,14 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data.Serialization;
 
+/// <summary>
+/// Concrete synchronization stream: a hub-backed, reactive store of a single state value of type
+/// <typeparamref name="TStream"/> that is kept in sync with its owner via change items
+/// (full snapshots and patches). Subscribers observe the latest state, writers mutate it through
+/// <see cref="Update(System.Func{TStream,TStream},System.Action{System.Exception})"/>/<c>SetFull</c>,
+/// and reduced/derived streams are produced through the <see cref="ReduceManager"/>.
+/// </summary>
+/// <typeparam name="TStream">Type of the state carried by the stream.</typeparam>
 public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 {
     /// <summary>
@@ -44,6 +52,14 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     object ISynchronizationStream.Reference => Reference;
 
+    /// <summary>
+    /// Derives a reduced stream of <typeparamref name="TReduced"/> from this stream for the given
+    /// reference, dispatching to the strongly-typed reducer via reflection on the reference's runtime type.
+    /// </summary>
+    /// <typeparam name="TReduced">Type of the reduced state.</typeparam>
+    /// <param name="reference">The reference selecting the reduced slice.</param>
+    /// <param name="config">Optional configuration for the reduced stream.</param>
+    /// <returns>The reduced stream, or <c>null</c> if it cannot be produced.</returns>
     public ISynchronizationStream<TReduced>? Reduce<TReduced>(
         WorkspaceReference<TReduced> reference,
         Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>? config
@@ -57,22 +73,52 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         SynchronizationStream<TStream>
     >(x => x.Reduce<object, WorkspaceReference<object>>(null!, null!));
 
+    /// <summary>
+    /// Derives a reduced stream of <typeparamref name="TReduced"/> for the given reference using the
+    /// default (identity) configuration.
+    /// </summary>
+    /// <typeparam name="TReduced">Type of the reduced state.</typeparam>
+    /// <typeparam name="TReference2">The reference type selecting the reduced slice.</typeparam>
+    /// <param name="reference">The reference selecting the reduced slice.</param>
+    /// <returns>The reduced stream.</returns>
     public ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(
         TReference2 reference)
         where TReference2 : WorkspaceReference =>
         Reduce<TReduced, TReference2>(reference, x => x);
 
 
+    /// <summary>
+    /// Derives a reduced stream of <typeparamref name="TReduced"/> for the given reference using the
+    /// default (identity) configuration.
+    /// </summary>
+    /// <typeparam name="TReduced">Type of the reduced state.</typeparam>
+    /// <param name="reference">The reference selecting the reduced slice.</param>
+    /// <returns>The reduced stream, or <c>null</c> if it cannot be produced.</returns>
     public ISynchronizationStream<TReduced>? Reduce<TReduced>(WorkspaceReference<TReduced> reference)
         => Reduce(reference, (Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>?)(x => x));
 
 
+    /// <summary>
+    /// Derives a reduced stream of <typeparamref name="TReduced"/> for the given reference, applying the
+    /// supplied configuration.
+    /// </summary>
+    /// <typeparam name="TReduced">Type of the reduced state.</typeparam>
+    /// <typeparam name="TReference2">The reference type selecting the reduced slice.</typeparam>
+    /// <param name="reference">The reference selecting the reduced slice.</param>
+    /// <param name="config">Configures the reduced stream.</param>
+    /// <returns>The reduced stream.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when the reduced stream cannot be created.</exception>
     public ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(
         TReference2 reference,
         Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> config)
         where TReference2 : WorkspaceReference =>
         ReduceManager.ReduceStream(this, reference, config) ?? throw new InvalidOperationException("Failed to create reduced stream");
 
+    /// <summary>
+    /// Subscribes an observer to the stream's change items, replaying the most recent change immediately.
+    /// </summary>
+    /// <param name="observer">The observer to receive change items.</param>
+    /// <returns>A disposable that ends the subscription; a no-op disposable if the underlying store is disposed.</returns>
     public virtual IDisposable Subscribe(IObserver<ChangeItem<TStream>> observer)
     {
         // Fallback creation-context capture: a stream constructed off the subscriber's
@@ -131,6 +177,10 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     /// </summary>
     private AccessContext? _creationContext;
 
+    /// <summary>
+    /// The most recently applied change item (the current state snapshot), or <c>null</c> before any value
+    /// has been set.
+    /// </summary>
     public ChangeItem<TStream>? Current
     {
         get => current;
@@ -149,6 +199,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
 
 
+    /// <summary>
+    /// The reduce manager used to derive reduced/projected streams and to apply patches for this stream.
+    /// </summary>
     public ReduceManager<TStream> ReduceManager { get; init; }
 
     private void SetCurrent(IMessageHub hub, ChangeItem<TStream>? value)
@@ -281,6 +334,14 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     }
 
     private const string SynchronizationGate = nameof(SynchronizationGate);
+    /// <summary>
+    /// Low-level write: posts a transform that maps the current state to the next change item to the
+    /// stream's hub, where it is applied serially. Captures the caller's access context (falling back to
+    /// the creation/owner/infrastructure identity) so the write runs under the correct identity even on a
+    /// deferred continuation. A dead/disposed stream signals the producer via <paramref name="exceptionCallback"/>.
+    /// </summary>
+    /// <param name="update">Maps the current state to the change to apply, or <c>null</c> for a no-op.</param>
+    /// <param name="exceptionCallback">Invoked synchronously if the write fails.</param>
     public void Update(Func<TStream?, ChangeItem<TStream>?> update, Action<Exception> exceptionCallback)
     {
         if (!TryGetActiveHub(out var hub))
@@ -604,12 +665,20 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         return true;
     }
 
+    /// <summary>
+    /// Completes the stream, signalling no further change items to subscribers.
+    /// </summary>
     public void OnCompleted()
     {
         if (!Store.IsDisposed)
             Store.OnCompleted();
     }
 
+    /// <summary>
+    /// Faults the stream with an error, propagating it to subscribers and failing hub startup. Benign
+    /// teardown (<see cref="ObjectDisposedException"/>) and transient hub timeouts are logged quietly.
+    /// </summary>
+    /// <param name="error">The error to propagate.</param>
     public void OnError(Exception error)
     {
         if (!Store.IsDisposed)
@@ -693,6 +762,11 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         return false;
     }
 
+    /// <summary>
+    /// Couples the lifetime of <paramref name="disposable"/> to this stream: it is disposed when the stream
+    /// is disposed, or immediately if the stream is already dead.
+    /// </summary>
+    /// <param name="disposable">The disposable to dispose with the stream.</param>
     public void RegisterForDisposal(IDisposable disposable)
     {
         if (isDisposed || Hub is null)
@@ -707,6 +781,11 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         Hub.RegisterForDisposal(_ => disposable.Dispose());
     }
 
+    /// <summary>
+    /// Forwards a message delivery to the stream's hub for processing.
+    /// </summary>
+    /// <param name="delivery">The delivery to forward.</param>
+    /// <returns>The processed delivery, or a failed delivery if the stream is dead/disposed.</returns>
     public IMessageDelivery DeliverMessage(IMessageDelivery delivery)
     {
         if (isDisposed || Hub is null)
@@ -718,6 +797,11 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     }
 
 
+    /// <summary>
+    /// Pushes a change item into the stream by posting it to the stream's hub (as a SetCurrentRequest).
+    /// A dead/disposed stream drops the value; a post failure is forwarded to subscribers via the store's error channel.
+    /// </summary>
+    /// <param name="value">The change item to publish.</param>
     public void OnNext(ChangeItem<TStream> value)
     {
         // Dead stream (created against a disposing parent — see ctor) has no
@@ -766,12 +850,28 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         }
     }
 
+    /// <summary>
+    /// Requests a change to the stream (the validation-aware entry point), currently delegating to
+    /// <see cref="Update(System.Func{TStream,ChangeItem{TStream}},System.Action{System.Exception})"/>.
+    /// </summary>
+    /// <param name="update">Maps the current state to the change to apply, or <c>null</c> for a no-op.</param>
+    /// <param name="exceptionCallback">Invoked synchronously if the change fails.</param>
     public virtual void RequestChange(Func<TStream?, ChangeItem<TStream>?> update, Action<Exception> exceptionCallback)
     {
         // TODO V10: Here we need to inject validations (29.07.2024, Roland Bürgi)
         Update(update, exceptionCallback);
     }
 
+    /// <summary>
+    /// Creates a synchronization stream hosted under <paramref name="Host"/>. Spins up a dedicated
+    /// hosted hub for the stream and captures the creating user's identity; if the host is already
+    /// shutting down the stream is created dead-on-arrival (subscriptions complete immediately, writes no-op).
+    /// </summary>
+    /// <param name="StreamIdentity">Identity (owner + partition) of the stream.</param>
+    /// <param name="Host">The hub hosting this stream.</param>
+    /// <param name="Reference">The projected reference selecting what this stream represents.</param>
+    /// <param name="ReduceManager">The reduce manager for deriving reduced streams and applying patches.</param>
+    /// <param name="configuration">Optional configuration of the stream (client id, subscriber, initialization, …).</param>
     public SynchronizationStream(
         StreamIdentity StreamIdentity,
         IMessageHub Host,
@@ -1212,14 +1312,28 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
 
 
+    /// <summary>
+    /// Per-instance unique identifier of this stream object (a fresh GUID), distinct from <see cref="ClientId"/>.
+    /// </summary>
     public string StreamId { get; } = Guid.NewGuid().AsString();
+    /// <summary>
+    /// The stable client/stream identity used for echo suppression and change authorship
+    /// (the value set via <see cref="StreamConfiguration{TStream}.WithClientId"/>).
+    /// </summary>
     public string ClientId => Configuration.ClientId;
+    /// <summary>
+    /// Optional identity tag for the stream, or <c>null</c> when unset.
+    /// </summary>
     public string? Identity { get; init; }
 
 
     internal StreamConfiguration<TStream> Configuration { get; }
 
 
+    /// <summary>
+    /// Disposes the stream: completes and disposes the underlying store and tears down the hosted hub.
+    /// Idempotent.
+    /// </summary>
     public void Dispose()
     {
         lock (disposeLock)
@@ -1234,12 +1348,31 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             Hub.Dispose();
     }
     private ConcurrentDictionary<string, object?> Properties { get; } = new();
+    /// <summary>Reads a property bag value by key.</summary>
+    /// <typeparam name="T">Expected value type.</typeparam>
+    /// <param name="key">The property key.</param>
+    /// <returns>The stored value cast to <typeparamref name="T"/>, or the default if absent.</returns>
     public T? Get<T>(string key) => (T?)Properties.GetValueOrDefault(key);
+    /// <summary>Reads a property bag value keyed by the full name of <typeparamref name="T"/>.</summary>
+    /// <typeparam name="T">Both the value type and the implicit key.</typeparam>
+    /// <returns>The stored value, or the default if absent.</returns>
     public T? Get<T>() => Get<T>(typeof(T).FullName!);
+    /// <summary>Stores a property bag value under the given key.</summary>
+    /// <typeparam name="T">Value type.</typeparam>
+    /// <param name="key">The property key.</param>
+    /// <param name="value">The value to store.</param>
     public void Set<T>(string key, T? value) => Properties[key] = value;
+    /// <summary>Stores a property bag value keyed by the full name of <typeparamref name="T"/>.</summary>
+    /// <typeparam name="T">Both the value type and the implicit key.</typeparam>
+    /// <param name="value">The value to store.</param>
     public void Set<T>(T? value) => Properties[typeof(T).FullName!] = value;
 
     private readonly ConcurrentDictionary<int, Task> tasks = new();
+    /// <summary>
+    /// Ties a background task's lifetime to the stream: tracks it until completion and faults the stream
+    /// if the task faults.
+    /// </summary>
+    /// <param name="task">The task to bind.</param>
     public void BindToTask(Task task)
     {
         tasks[task.Id] = task;
@@ -1251,6 +1384,12 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         });
     }
 
+    /// <summary>
+    /// Internal hub message carrying a pending value transform and its error callback to the stream's
+    /// hub, where it is applied serially.
+    /// </summary>
+    /// <param name="Update">The transform mapping the current state to the change to apply.</param>
+    /// <param name="ExceptionCallback">Invoked synchronously if applying the update throws.</param>
     [PreventLogging]
     public record UpdateStreamRequest([property: JsonIgnore] Func<TStream?, ChangeItem<TStream>?> Update, [property: JsonIgnore] Action<Exception> ExceptionCallback);
 
@@ -1271,9 +1410,21 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 }
 
 
+/// <summary>
+/// Immutable configuration for a <see cref="SynchronizationStream{TStream}"/>: client identity,
+/// subscriber address, initialization strategy, infrastructure flag, and exception handling.
+/// Builder methods return modified copies.
+/// </summary>
+/// <typeparam name="TStream">Type of the state carried by the stream being configured.</typeparam>
+/// <param name="Stream">The stream this configuration belongs to.</param>
 public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Stream)
 {
     internal string ClientId { get; init; } = Guid.NewGuid().AsString();
+    /// <summary>
+    /// Sets the stable client/stream identity used for change authorship and echo suppression.
+    /// </summary>
+    /// <param name="streamId">The client/stream identity to use.</param>
+    /// <returns>A copy with the client id set.</returns>
     public StreamConfiguration<TStream> WithClientId(string streamId) =>
         this with { ClientId = streamId };
 
@@ -1282,11 +1433,21 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
     /// Used for sending messages back to the subscriber, such as NavigationRequest.
     /// </summary>
     public Address? Subscriber { get; init; }
+    /// <summary>
+    /// Sets the subscriber (client/portal) address that messages can be routed back to.
+    /// </summary>
+    /// <param name="subscriber">The subscriber address.</param>
+    /// <returns>A copy with the subscriber set.</returns>
     public StreamConfiguration<TStream> WithSubscriber(Address subscriber) =>
         this with { Subscriber = subscriber };
 
     internal bool NullReturn { get; init; }
 
+    /// <summary>
+    /// Configures the stream to return <c>null</c> (rather than throwing or waiting) when the referenced
+    /// state is not present.
+    /// </summary>
+    /// <returns>A copy with null-when-absent behaviour enabled.</returns>
     public StreamConfiguration<TStream> ReturnNullWhenNotPresent()
         => this with { NullReturn = true };
 
@@ -1338,6 +1499,13 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
     internal string? DeferredGateName { get; init; }
     internal Predicate<IMessageDelivery>? DeferredGatePredicate { get; init; }
 
+    /// <summary>
+    /// Sets a one-shot, Task-based initializer producing the stream's initial state. The Task is bridged
+    /// reactively at the stream's hub-init boundary; its single result becomes the initial current value.
+    /// Mutually exclusive with the observable-based <c>WithInitialization</c> overload.
+    /// </summary>
+    /// <param name="init">Produces the initial state for the stream.</param>
+    /// <returns>A copy with the initializer set.</returns>
     public StreamConfiguration<TStream> WithInitialization(Func<ISynchronizationStream<TStream>, CancellationToken, Task<TStream>> init)
         => this with { Initialization = init };
 
@@ -1352,6 +1520,11 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
     public StreamConfiguration<TStream> WithInitialization(Func<ISynchronizationStream<TStream>, IObservable<TStream>> init)
         => this with { ObservableInitialization = init };
 
+    /// <summary>
+    /// Sets the callback invoked when an exception occurs on the stream.
+    /// </summary>
+    /// <param name="exceptionCallback">The exception handler.</param>
+    /// <returns>A copy with the exception callback set.</returns>
     public StreamConfiguration<TStream> WithExceptionCallback(Action<Exception> exceptionCallback)
         => this with { ExceptionCallback = exceptionCallback };
 

@@ -47,6 +47,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     // sub-millisecond to_regclass() catalog lookup run inside the pooled READ leaf.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _contentChunksExists = new(StringComparer.Ordinal);
 
+    /// <summary>The underlying Npgsql data source (connection pool) this adapter reads and writes through.</summary>
     public NpgsqlDataSource DataSource => _dataSource;
 
     /// <inheritdoc />
@@ -64,6 +65,15 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     /// </summary>
     internal IObserver<DataChangeNotification> ChangeObserver => _changes;
 
+    /// <summary>
+    /// Initializes the storage adapter over a data source, optionally scoped to a single partition schema.
+    /// </summary>
+    /// <param name="dataSource">The Npgsql data source used for all reads and writes.</param>
+    /// <param name="embeddingProvider">Optional embedding provider used to populate the vector column on write; defaults to a no-op provider.</param>
+    /// <param name="partitionDefinition">Optional partition definition; when set, table references are scoped to its schema.</param>
+    /// <param name="logger">Optional logger for read/write diagnostics.</param>
+    /// <param name="readPool">Optional per-adapter read pool bounding concurrent reads below the connection-pool size.</param>
+    /// <param name="ioPool">Optional per-adapter write pool (capped at one connection) serializing writes.</param>
     public PostgreSqlStorageAdapter(
         NpgsqlDataSource dataSource,
         IEmbeddingProvider? embeddingProvider = null,
@@ -176,6 +186,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     private static bool IsUndefinedTable(Exception ex)
         => ex is PostgresException pg && pg.SqlState == "42P01";
 
+    /// <inheritdoc />
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
         => _ioPool.Invoke(ct => ReadAsyncCore(path, options, ct));
 
@@ -285,6 +296,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         }
     }
 
+    /// <inheritdoc />
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
         => _ioPool.Invoke<MeshNode?>(async ct =>
         {
@@ -363,6 +375,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
+    /// <inheritdoc />
     public IObservable<string> Delete(string path)
         => _ioPool.Invoke(async ct =>
         {
@@ -391,6 +404,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
 
     // Child-listing is a READ → runs in the read pool (pg-read:{adapter}), bounded below the
     // connection-pool size, NOT the cap-1 write pool (which would serialise it behind writes).
+    /// <inheritdoc />
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
         => _readPool.Invoke(ct => ListChildPathsAsyncCore(parentPath, ct))
             .Catch<(IEnumerable<string>, IEnumerable<string>), Exception>(ex => IsUndefinedTable(ex)
@@ -421,6 +435,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         return (paths, Enumerable.Empty<string>());
     }
 
+    /// <inheritdoc />
     public IObservable<bool> Exists(string path)
         => _ioPool.Invoke(ct => ExistsAsyncCore(path, ct))
             .Catch<bool, Exception>(ex => IsUndefinedTable(ex)
@@ -445,6 +460,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         return await reader.ReadAsync(ct).ConfigureAwait(false);
     }
 
+    /// <inheritdoc />
     public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
         string fullPath, JsonSerializerOptions options)
         => _ioPool.Invoke(ct => FindBestPrefixMatchAsyncCore(fullPath, options, ct))
@@ -555,6 +571,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     // which starts the pump on the subscriber's scheduler. This is the
     // virtual-data-source load that runs at hub init — the exact grain-wedge
     // edge (see PartitionObjectsSubscriberIndependenceTest for the repro shape).
+    /// <inheritdoc />
     public IObservable<object> GetPartitionObjects(
         string nodePath, string? subPath, JsonSerializerOptions options)
         => _ioPool.InvokeStream(ct => GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct))
@@ -600,6 +617,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         }
     }
 
+    /// <inheritdoc />
     public IObservable<Unit> SavePartitionObjects(
         string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
         => _ioPool.Invoke(async ct => { await SavePartitionObjectsAsyncCore(nodePath, subPath, objects, options, ct).ConfigureAwait(false); return Unit.Default; });
@@ -641,6 +659,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         }
     }
 
+    /// <inheritdoc />
     public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
         => _ioPool.Invoke(async ct => { await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct).ConfigureAwait(false); return Unit.Default; })
             .Catch<Unit, Exception>(ex => IsUndefinedTable(ex)
@@ -662,6 +681,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
+    /// <inheritdoc />
     public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
         => _ioPool.Invoke(ct => GetPartitionMaxTimestampAsyncCore(nodePath, subPath, ct))
             .Catch<DateTimeOffset?, Exception>(ex => IsUndefinedTable(ex)
@@ -688,6 +708,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         return null;
     }
 
+    /// <inheritdoc />
     public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
         => _ioPool.Invoke(ct => ListPartitionSubPathsAsyncCore(nodePath, ct))
             .Catch<IEnumerable<string>, Exception>(ex => IsUndefinedTable(ex)
@@ -1311,6 +1332,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         return id ?? Guid.NewGuid().ToString();
     }
 
+    /// <inheritdoc />
     public ValueTask DisposeAsync()
     {
         // DataSource is typically shared and disposed elsewhere

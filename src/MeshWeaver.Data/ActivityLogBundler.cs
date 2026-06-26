@@ -27,6 +27,13 @@ public class ActivityLogBundler : IDisposable
     private readonly ConcurrentDictionary<BundleKey, ActiveBundle> _activeBundles = new();
     private bool _disposed;
 
+    /// <summary>
+    /// Creates a bundler bound to <paramref name="hub"/>; it registers itself for disposal so any
+    /// pending timers are stopped when the hub tears down.
+    /// </summary>
+    /// <param name="hub">Hub whose data changes are bundled; supplies the hub path recorded on each log.</param>
+    /// <param name="onFlush">Callback invoked with the bundled <see cref="ActivityLog"/> when a bundle is flushed.</param>
+    /// <param name="logger">Optional logger for flush failures.</param>
     public ActivityLogBundler(IMessageHub hub, Action<ActivityLog> onFlush, ILogger<ActivityLogBundler>? logger = null)
     {
         _onFlush = onFlush;
@@ -112,6 +119,11 @@ public class ActivityLogBundler : IDisposable
         }
     }
 
+    /// <summary>
+    /// Stops every pending debounce timer WITHOUT flushing. Flushing during hub disposal would
+    /// round-trip through the tearing-down hub and wedge teardown; the bundled summary is dropped
+    /// (the underlying data changes are already persisted).
+    /// </summary>
     public void Dispose()
     {
         if (_disposed) return;

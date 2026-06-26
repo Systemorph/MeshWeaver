@@ -31,7 +31,9 @@ namespace MeshWeaver.GitSync;
 /// </summary>
 public sealed class PullRequestService
 {
+    /// <summary>The <see cref="MeshNode.NodeType"/> of a pull-request draft/handle node.</summary>
     public const string NodeType = "PullRequest";
+    /// <summary>The satellite namespace segment under a Space that holds pull-request nodes.</summary>
     public const string SatelliteSegment = "_PullRequest";
 
     private readonly IMessageHub hub;
@@ -42,6 +44,14 @@ public sealed class PullRequestService
     private readonly IPullRequestDraftService draftService;
     private readonly ILogger? logger;
 
+    /// <summary>Initializes a new instance of the <c>PullRequestService</c> class.</summary>
+    /// <param name="hub">The message hub used for workspace access and node updates.</param>
+    /// <param name="meshService">Mesh service used to create and query pull-request nodes.</param>
+    /// <param name="repoClient">The GitHub repo client performing branch/PR operations on GitHub.</param>
+    /// <param name="credentials">Per-user GitHub credential store providing the OAuth access token.</param>
+    /// <param name="sync">The sync service providing repo config and the import/mirror pipeline.</param>
+    /// <param name="draftService">The AI-backed service that drafts the PR title and body.</param>
+    /// <param name="logger">Optional logger.</param>
     public PullRequestService(
         IMessageHub hub,
         IMeshService meshService,

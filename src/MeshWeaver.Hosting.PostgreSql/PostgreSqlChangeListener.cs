@@ -17,6 +17,12 @@ public class PostgreSqlChangeListener : IAsyncDisposable
     private CancellationTokenSource? _cts;
     private Task? _listenTask;
 
+    /// <summary>
+    /// Initializes the change listener.
+    /// </summary>
+    /// <param name="dataSource">The PostgreSQL data source used to open the dedicated LISTEN connection.</param>
+    /// <param name="changeNotifier">Observer that receives a <see cref="DataChangeNotification"/> for each NOTIFY payload.</param>
+    /// <param name="logger">Optional logger for listener lifecycle and error diagnostics.</param>
     public PostgreSqlChangeListener(
         NpgsqlDataSource dataSource,
         IObserver<DataChangeNotification> changeNotifier,
@@ -129,6 +135,7 @@ public class PostgreSqlChangeListener : IAsyncDisposable
         }
     }
 
+    /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
         await StopAsync().ConfigureAwait(false);

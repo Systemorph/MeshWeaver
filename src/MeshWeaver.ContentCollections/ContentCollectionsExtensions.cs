@@ -15,6 +15,10 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MeshWeaver.ContentCollections;
 
+/// <summary>
+/// Extension and helper methods for registering content-collection infrastructure on a hub,
+/// wiring up the content service, and resolving/parsing content paths and URLs.
+/// </summary>
 public static class ContentCollectionsExtensions
 {
     /// <summary>
@@ -322,6 +326,13 @@ public static class ContentCollectionsExtensions
         return stream;
     }
 
+    /// <summary>
+    /// Registers the content service, file content provider, document transformers, and the
+    /// built-in stream-provider factories (FileSystem, EmbeddedResource, Hub). Idempotent —
+    /// safe to call from both the Blazor host and hub configurators.
+    /// </summary>
+    /// <param name="services">The service collection to register into.</param>
+    /// <returns>The same <paramref name="services"/> instance for chaining.</returns>
     public static IServiceCollection AddContentService(this IServiceCollection services)
     {
         if (services.All(d => d.ServiceType != typeof(IContentService)))
@@ -356,6 +367,16 @@ public static class ContentCollectionsExtensions
     internal static IContentService GetContentService(this IMessageHub hub)
         => hub.ServiceProvider.GetRequiredService<IContentService>();
 
+    /// <summary>
+    /// Parses raw markdown text into a <see cref="MarkdownElement"/>, stripping any YAML
+    /// front matter, pre-rendering HTML, and computing the content URL and executable code blocks.
+    /// </summary>
+    /// <param name="collection">The collection the file belongs to.</param>
+    /// <param name="path">The file path within the collection.</param>
+    /// <param name="lastWriteTime">The file's last-modified timestamp.</param>
+    /// <param name="content">The raw markdown content to parse.</param>
+    /// <param name="address">The hub address used to build the content URL, or <c>null</c>.</param>
+    /// <returns>The parsed markdown element.</returns>
     public static MarkdownElement ParseContent(string collection, string path, DateTime lastWriteTime, string content, Address? address)
     {
         if (OperatingSystem.IsWindows())
@@ -387,6 +408,15 @@ public static class ContentCollectionsExtensions
         };
     }
 
+    /// <summary>
+    /// Normalizes a resource URL referenced from content: absolute and root-relative URLs are
+    /// returned unchanged; a bare relative URL is rewritten under the <c>/static</c> route for
+    /// the given collection (and address, when present).
+    /// </summary>
+    /// <param name="resourceUrl">The resource URL to adapt; may be <c>null</c> or empty.</param>
+    /// <param name="collection">The collection the resource belongs to.</param>
+    /// <param name="address">The hub address, or <c>null</c> for an address-less collection.</param>
+    /// <returns>The adapted URL, or the original value when no rewrite is needed.</returns>
     public static string? AdaptResourceUrl(string? resourceUrl, string collection, Address? address)
     {
         if (string.IsNullOrEmpty(resourceUrl))
@@ -412,6 +442,14 @@ public static class ContentCollectionsExtensions
     }
 
 
+    /// <summary>
+    /// Builds the <c>/content</c> route URL for a file in a collection, including the hub
+    /// address segment when one is supplied.
+    /// </summary>
+    /// <param name="collection">The collection name.</param>
+    /// <param name="path">The file path within the collection.</param>
+    /// <param name="address">The hub address, or <c>null</c> for an address-less collection.</param>
+    /// <returns>The content route URL.</returns>
     public static string GetContentUrl(string collection, string path, Address? address = null)
         => address != null
             ? $"/content/{address}/{collection}/{path}"
@@ -421,6 +459,14 @@ public static class ContentCollectionsExtensions
     /// <param name="configuration">The message hub configuration</param>
     extension(MessageHubConfiguration configuration)
     {
+        /// <summary>
+        /// Registers a read-only content collection sourced from embedded resources of the
+        /// given assembly under the specified relative path.
+        /// </summary>
+        /// <param name="collectionName">The name of the collection to register.</param>
+        /// <param name="assembly">The assembly whose embedded resources back the collection.</param>
+        /// <param name="relativePath">The resource path prefix (relative to the assembly's default namespace).</param>
+        /// <returns>The configured message hub configuration.</returns>
         public MessageHubConfiguration AddEmbeddedResourceContentCollection(string collectionName,
             Assembly assembly,
             string relativePath)

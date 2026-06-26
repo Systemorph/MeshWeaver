@@ -25,6 +25,13 @@ public static class ModelProviderLayoutAreas
 {
     private const string OverviewArea = "Overview";
 
+    /// <summary>
+    /// Registers the minimal <c>ModelProvider</c> detail layout, wiring both the default
+    /// <c>Overview</c> area and the <c>/Edit</c> route to the same secret-safe
+    /// <see cref="Overview"/> view (replacing the generic node editor that leaked the API key).
+    /// </summary>
+    /// <param name="configuration">The hub configuration to extend with the provider views.</param>
+    /// <returns>The same <paramref name="configuration"/> for fluent chaining.</returns>
     public static MessageHubConfiguration AddModelProviderViews(this MessageHubConfiguration configuration)
         => configuration.AddLayout(layout => layout
             .WithDefaultArea(OverviewArea)
@@ -33,6 +40,14 @@ public static class ModelProviderLayoutAreas
             // "did not work at all" (and leaked the key); point it at our view too.
             .WithView(MeshNodeLayoutAreas.EditArea, Overview));
 
+    /// <summary>
+    /// Renders the provider detail: title, a read-only "key set/not set" indicator, an editable
+    /// endpoint field bound directly to the node stream, a write-only "Enter Key" button, and the
+    /// provider's configured models. Never displays the secret key. Bound live to the node stream.
+    /// </summary>
+    /// <param name="host">The layout-area host providing the workspace and node stream.</param>
+    /// <param name="_">The rendering context (unused).</param>
+    /// <returns>An observable that emits the provider detail control on every node-stream change.</returns>
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
         => host.Workspace.GetMeshNodeStream()
             .Select(node =>

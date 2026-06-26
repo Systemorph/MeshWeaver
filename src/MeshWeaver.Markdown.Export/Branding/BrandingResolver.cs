@@ -23,6 +23,16 @@ public class BrandingResolver
     private readonly ILogger<BrandingResolver> logger;
     private readonly IIoPool _ioPool;
 
+    /// <summary>
+    /// Initializes a new instance of the <c>BrandingResolver</c> class.
+    /// </summary>
+    /// <param name="hub">Message hub used to read brand mesh nodes and resolve services.</param>
+    /// <param name="templateResolver">Resolves export template assets (logo, fonts, DOCX template).</param>
+    /// <param name="logger">Logger for resolution warnings and diagnostics.</param>
+    /// <param name="ioPoolRegistry">
+    /// Optional I/O pool registry; the file-system pool drives logo and template loads, falling
+    /// back to the unbounded pool when not supplied.
+    /// </param>
     public BrandingResolver(
         IMessageHub hub,
         ExportTemplateResolver templateResolver,

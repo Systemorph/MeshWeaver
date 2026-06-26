@@ -18,6 +18,12 @@ public record SwitchControl(object Data)
     /// </summary>
     public object? UncheckedMessage { get; init; }
 
+    /// <summary>Returns a copy with <paramref name="message"/> as the checked-state label.</summary>
+    /// <param name="message">The message to display when the switch is on.</param>
+    /// <returns>A new <see cref="SwitchControl"/> with the updated checked message.</returns>
     public SwitchControl WithCheckedMessage(object message) => this with { CheckedMessage = message };
+    /// <summary>Returns a copy with <paramref name="message"/> as the unchecked-state label.</summary>
+    /// <param name="message">The message to display when the switch is off.</param>
+    /// <returns>A new <see cref="SwitchControl"/> with the updated unchecked message.</returns>
     public SwitchControl WithUncheckedMessage(object message) => this with { UncheckedMessage = message };
 }

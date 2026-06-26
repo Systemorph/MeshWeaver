@@ -3,6 +3,9 @@ using Radzen;
 
 namespace MeshWeaver.Blazor.Radzen;
 
+/// <summary>
+/// Extension methods for registering Radzen Blazor services in the dependency-injection container.
+/// </summary>
 public static class RadzenServiceExtensions
 {
     /// <summary>

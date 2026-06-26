@@ -22,6 +22,12 @@ public record ViewportInformation(bool IsDesktop, bool IsUltraLowHeight, bool Is
     // Very close to the minimum width we need to support (320px)
     internal const int LowWidthCutoffPixelWidth = 350;
 
+    /// <summary>
+    /// Derives the viewport classification (desktop, ultra-low height, ultra-low width)
+    /// from a raw pixel size using the configured cutoffs.
+    /// </summary>
+    /// <param name="viewportSize">The raw browser viewport pixel size.</param>
+    /// <returns>The classification computed from <paramref name="viewportSize"/>.</returns>
     public static ViewportInformation GetViewportInformation(ViewportSize viewportSize)
     {
         return new ViewportInformation(

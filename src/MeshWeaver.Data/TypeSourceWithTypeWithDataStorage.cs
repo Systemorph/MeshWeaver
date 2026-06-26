@@ -5,10 +5,21 @@ using MeshWeaver.Utils;
 
 namespace MeshWeaver.Data;
 
+/// <summary>
+/// A type source backed by a data storage backend: diffs each update against the last saved
+/// snapshot and persists the resulting adds, updates, and deletes; loads initial data from storage.
+/// </summary>
+/// <typeparam name="T">The entity type managed by this source.</typeparam>
 public record TypeSourceWithTypeWithDataStorage<T>
     : TypeSourceWithType<T, TypeSourceWithTypeWithDataStorage<T>>
     where T : class
 {
+    /// <summary>
+    /// Initializes the type source bound to the given storage backend.
+    /// </summary>
+    /// <param name="Workspace">The workspace this type source belongs to.</param>
+    /// <param name="DataSource">Identifier of the owning data source.</param>
+    /// <param name="Storage">The storage backend used to persist and load instances.</param>
     public TypeSourceWithTypeWithDataStorage(
         IWorkspace Workspace,
         object DataSource,
@@ -21,6 +32,12 @@ public record TypeSourceWithTypeWithDataStorage<T>
 
     private InstanceCollection LastSaved { get; set; } = new();
 
+    /// <summary>
+    /// Diffs the incoming collection against the last saved snapshot and persists the resulting
+    /// adds, updates, and deletes to storage.
+    /// </summary>
+    /// <param name="instances">The current collection to persist.</param>
+    /// <returns>The same collection, now recorded as the last saved snapshot.</returns>
     protected override InstanceCollection UpdateImpl(InstanceCollection instances)
     {
         var adds = instances
@@ -73,5 +90,8 @@ public record TypeSourceWithTypeWithDataStorage<T>
         };
     }
 
+    /// <summary>
+    /// The storage backend used to persist and load this type's instances.
+    /// </summary>
     public IDataStorage Storage { get; init; }
 }

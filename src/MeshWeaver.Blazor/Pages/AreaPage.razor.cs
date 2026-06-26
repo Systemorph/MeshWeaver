@@ -9,6 +9,10 @@ using Microsoft.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor.Pages;
 
+/// <summary>
+/// Blazor page that resolves the current URL path to a mesh address and renders the
+/// corresponding layout area. Uses path resolution to map URL segments to hub addresses.
+/// </summary>
 public partial class AreaPage : ComponentBase
 {
     private LayoutAreaControl ViewModel { get; set; } = null!;
@@ -27,6 +31,7 @@ public partial class AreaPage : ComponentBase
 
     private string? PageTitle { get; set; } = "";
 
+    /// <summary>Catches any route parameters not explicitly declared; available for downstream layout areas as additional options.</summary>
     [Parameter(CaptureUnmatchedValues = true)]
     public IReadOnlyDictionary<string, object>? Options { get; set; } = ImmutableDictionary<string, object>.Empty;
 
@@ -34,6 +39,10 @@ public partial class AreaPage : ComponentBase
     private Address? Address => Resolution != null ? (Address)Resolution.Prefix : null;
 
     private LayoutAreaReference Reference { get; set; } = null!;
+    /// <summary>
+    /// Resolves the current path to a mesh address via <c>IPathResolver</c> and updates the
+    /// layout area view model whenever the path parameter changes.
+    /// </summary>
     protected override void OnParametersSet()
     {
         // Reactive — Subscribe, never await on PathResolver chain (deadlock surface;
@@ -86,6 +95,10 @@ public partial class AreaPage : ComponentBase
         return (remainder, null);
     }
 
+    /// <summary>
+    /// Marks content as ready after a short stabilization delay, triggering a final state update once content has loaded.
+    /// </summary>
+    /// <param name="firstRender">True on the component's first render.</param>
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
 

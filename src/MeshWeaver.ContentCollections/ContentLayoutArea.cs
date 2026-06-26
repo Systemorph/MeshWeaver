@@ -11,6 +11,10 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.ContentCollections;
 
+/// <summary>
+/// Layout area that renders content-collection files (markdown, images, documents, and other
+/// text formats) into UI controls, resolving the collection and path from the area's reference.
+/// </summary>
 public static class ContentLayoutArea
 {
     private static UiControl RenderContent(string path, object content, bool isPresentationMode = false)

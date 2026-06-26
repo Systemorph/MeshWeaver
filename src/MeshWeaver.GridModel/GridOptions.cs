@@ -3,98 +3,135 @@ using MeshWeaver.Layout;
 
 namespace MeshWeaver.GridModel
 {
+    /// <summary>
+    /// Top-level configuration for a data grid (ag-Grid style <c>gridOptions</c>): the columns, row
+    /// data, grouping/pivot/aggregation behaviour, layout sizing and event callbacks.
+    /// </summary>
     public record GridOptions
     {
 
-        // Columns
+        /// <summary>The column definitions for the grid.</summary>
         public IReadOnlyCollection<ColDef> ColumnDefs { get; init; } = [];
-        // Rows: set the data to be displayed as rows in the grid.
+
+        /// <summary>The data rows displayed in the grid.</summary>
         public IReadOnlyCollection<object> RowData { get; init; } = [];
 
-        // A default column definition. Set properties for all columns
-
+        /// <summary>Default column definition whose properties apply to every column.</summary>
         public ColDef? DefaultColDef { get; init; }
 
-        // A default column group definition
+        /// <summary>Default column group definition whose properties apply to every column group.</summary>
         public ColGroupDef? DefaultColGroupDef { get; init; }
 
+        /// <summary>Definition of the auto-generated group column used when row grouping.</summary>
         public ColDef? AutoGroupColumnDef { get; init; }
 
-        // true to display the side bar with default configuration;
-        // 'columns' or 'filters' to display side bar with just one of Columns or Filters tool panels;
-        // an object of type SideBarDef(explained below) to allow detailed configuration of the side bar
+        /// <summary>
+        /// Side bar configuration: <c>true</c> for the default side bar, <c>"columns"</c> or
+        /// <c>"filters"</c> for a single tool panel, or a side-bar definition object for detail.
+        /// </summary>
         public object? SideBar { get; init; }
 
-        // Set to true to enable pivot mode.
+        /// <summary>When <c>true</c>, enables pivot mode.</summary>
         public bool? PivotMode { get; init; }
 
-        // When to show the 'pivot panel' (where you drag rows to pivot) at the top. Options: 'never', 'always', 'onlyWhenPivoting'
+        /// <summary>When to show the pivot panel at the top; options are <c>"never"</c>, <c>"always"</c> and <c>"onlyWhenPivoting"</c>.</summary>
         public bool? PivotPanelShow { get; init; }
-        // When true, column headers won't include the aggFunc name, e.g. 'sum(Bank Balance)' will just be 'Bank Balance'.
+
+        /// <summary>When <c>true</c>, omits the aggregation function name from column headers (e.g. <c>"Bank Balance"</c> instead of <c>"sum(Bank Balance)"</c>).</summary>
         public bool? SuppressAggFuncInHeader { get; init; }
-        // When true, the aggregations won't be computed for the root node of the grid
+
+        /// <summary>When <c>true</c>, aggregations are not computed for the grid's root node.</summary>
         public bool? SuppressAggAtRootLevel { get; init; }
-        // When enabled, pivot column groups will appear 'fixed', without the ability to expand and collapse the column groups.
+
+        /// <summary>When <c>true</c>, pivot column groups appear fixed and cannot be expanded or collapsed.</summary>
         public bool? SuppressExpandablePivotGroups { get; init; }
-        // If true, the grid will not swap in the grouping column when pivoting.
+
+        /// <summary>When <c>true</c>, the grid does not swap in the grouping column while pivoting.</summary>
         public bool? PivotSuppressAutoColumn { get; init; }
-        // To enable Pivot Row Totals, declare the following property: gridOption.pivotRowTotals = 'before' | 'after'
+
+        /// <summary>Enables pivot row totals; accepted values are <c>"before"</c> and <c>"after"</c>.</summary>
         public string? PivotRowTotals { get; init; }
-        // To enable total columns set gridOptions.pivotColumnGroupTotals = 'before' | 'after'
+
+        /// <summary>Enables pivot column group totals; accepted values are <c>"before"</c> and <c>"after"</c>.</summary>
         public string? PivotColumnGroupTotals { get; init; }
 
-        // adds subtotals
+        /// <summary>When <c>true</c>, adds per-group subtotal footer rows.</summary>
         public bool? GroupIncludeFooter { get; init; }
-        // includes grand total
+
+        /// <summary>When <c>true</c>, adds a grand-total footer row.</summary>
         public bool? GroupIncludeTotalFooter { get; init; }
 
+        /// <summary>When <c>true</c>, enables the integrated charting feature.</summary>
         public bool? EnableCharts { get; init; }
+
+        /// <summary>When <c>true</c>, enables range (cell) selection.</summary>
         public bool? EnableRangeSelection { get; init; }
 
-        // Specifies how the results of row grouping should be displayed. The options are:
-        // 'singleColumn': single group column automatically added by the grid.
-        // 'multipleColumns': a group column per row group is added automatically.
-        // 'groupRows': group rows are automatically added instead of group columns.
-        // 'custom': informs the grid that group columns will be provided.
+        /// <summary>
+        /// How row grouping is displayed; options are <c>"singleColumn"</c>, <c>"multipleColumns"</c>,
+        /// <c>"groupRows"</c> and <c>"custom"</c>.
+        /// </summary>
         public string? GroupDisplayType { get; init; }
 
-        // If grouping, set to the number of levels to expand by default, e.g. 0 for none, 1 for first level only, etc. Set to -1 to expand everything.
+        /// <summary>Number of group levels expanded by default; <c>0</c> for none, <c>-1</c> to expand everything.</summary>
         public int? GroupDefaultExpanded { get; init; }
-        // Shows the open group in the group column for non-group rows.
+
+        /// <summary>When <c>true</c>, shows the open group in the group column for non-group rows.</summary>
         public bool? ShowOpenedGroup { get; init; }
-        // Set to true to collapse groups that only have one child.
+
+        /// <summary>When <c>true</c>, collapses groups that have only a single child.</summary>
         public bool? GroupRemoveSingleChildren { get; init; }
-        // Set to true to collapse lowest level groups that only have one child.
+
+        /// <summary>When <c>true</c>, collapses lowest-level groups that have only a single child.</summary>
         public bool? GroupRemoveLowestSingleChildren { get; init; }
 
+        /// <summary>Map of custom component names to their registered renderer/editor implementations.</summary>
         public IImmutableDictionary<string, string> Components { get; init; } = ImmutableDictionary<string, string>.Empty;
 
-        // Set to true to enable the Grid to work with Tree Data. You must also implement the getDataPath(data) callback. It is not possible to do pivot or row grouping while using tree data
+        /// <summary>When <c>true</c>, enables tree-data mode; requires <see cref="GetDataPath"/> and is incompatible with pivot or row grouping.</summary>
         public bool? TreeData { get; init; }
-        // When providing tree data to the grid you implement the gridOptions.getDataPath(data) callback to tell the grid the hierarchy for each row. The callback returns back a string[] with each element specifying a level of the tree.
+
+        /// <summary>Callback returning the hierarchy path (one element per tree level) for each row in tree-data mode.</summary>
         public string? GetDataPath { get; init; }
 
+        /// <summary>Excel cell styles available when exporting to Excel.</summary>
         public IReadOnlyCollection<string>? ExcelStyles { get; init; }
 
-        // Way to reset height of the grid.
-
+        /// <summary>Height in pixels of group header rows.</summary>
         public int? GroupHeaderHeight { get; init; }
+
+        /// <summary>Height in pixels of the column header row.</summary>
         public int? HeaderHeight { get; init; }
+
+        /// <summary>Height in pixels of data rows.</summary>
         public int? RowHeight { get; init; }
 
+        /// <summary>When <c>true</c>, disables the hover highlight on rows.</summary>
         public bool? SuppressRowHoverHighlight { get; init; }
 
+        /// <summary>Inline style applied to every row.</summary>
         public CellStyle? RowStyle { get; init; }
 
+        /// <summary>Callback expression returning a per-row style.</summary>
         public string? GetRowStyle { get; init; }
 
+        /// <summary>JavaScript handler invoked when the grid is ready.</summary>
         public string? OnGridReady { get; init; }
+
+        /// <summary>Callback that post-processes secondary (pivot) column definitions before they are applied.</summary>
         public string? ProcessSecondaryColDef { get; init; }
+
+        /// <summary>JavaScript handler invoked after the grid first renders its data.</summary>
         public string? OnFirstDataRendered { get; init; }
 
+        /// <summary>When <c>true</c> (the default), highlights the column under the mouse on hover.</summary>
         public bool ColumnHoverHighlight { get; init; } = true;
+
+        /// <summary>DOM layout mode; e.g. <c>"normal"</c>, <c>"autoHeight"</c> or <c>"print"</c>.</summary>
         public string? DomLayout { get; set; }
 
+        /// <summary>Returns a copy of these options with the framework's default column, header and sizing settings applied.</summary>
+        /// <returns>A new <see cref="GridOptions"/> with the default settings merged in.</returns>
         public GridOptions WithDefaultSettings()
         {
             var gridOptions = this with
@@ -117,6 +154,9 @@ namespace MeshWeaver.GridModel
             return gridOptions;
         }
 
+        /// <summary>Determines value equality, comparing every option including deep/structural comparison of columns and row data.</summary>
+        /// <param name="other">The other instance to compare against.</param>
+        /// <returns><c>true</c> if all options are equal; otherwise <c>false</c>.</returns>
         public virtual bool Equals(GridOptions? other)
         {
             if (other is null)
@@ -164,6 +204,8 @@ namespace MeshWeaver.GridModel
                    DomLayout == other.DomLayout;
         }
 
+        /// <summary>Computes a hash code consistent with <c>Equals</c> across all options.</summary>
+        /// <returns>A hash code for this instance.</returns>
         public override int GetHashCode()
         {
             var hash = new HashCode();

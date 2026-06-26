@@ -17,12 +17,23 @@ namespace MeshWeaver.Markdown.Export.Ast;
 /// </summary>
 public sealed class PageBreakExtension : IMarkdownExtension
 {
+    /// <summary>
+    /// Registers the <c>PageBreakParser</c> at the front of the pipeline's block parsers so
+    /// page-break markers are recognised before other block parsers run.
+    /// </summary>
+    /// <param name="pipeline">The pipeline builder being configured.</param>
     public void Setup(MarkdownPipelineBuilder pipeline)
     {
         if (!pipeline.BlockParsers.Contains<PageBreakParser>())
             pipeline.BlockParsers.Insert(0, new PageBreakParser());
     }
 
+    /// <summary>
+    /// No-op render setup: the export pipeline consumes the AST directly, so there is no HTML
+    /// rendering path to configure.
+    /// </summary>
+    /// <param name="pipeline">The built markdown pipeline.</param>
+    /// <param name="renderer">The renderer that would normally receive custom render hooks.</param>
     public void Setup(MarkdownPipeline pipeline, IMarkdownRenderer renderer)
     {
         // No HTML rendering path: the export pipeline consumes the AST directly.
@@ -38,6 +49,15 @@ public sealed class PageBreakBlock(BlockParser parser) : LeafBlock(parser)
 /// <summary>Parser that matches lines containing one of the supported page-break tokens.</summary>
 public sealed class PageBreakParser : BlockParser
 {
+    /// <summary>
+    /// Attempts to open a <c>PageBreakBlock</c> when the current line is a recognised
+    /// page-break marker.
+    /// </summary>
+    /// <param name="processor">The block processor positioned at the current line.</param>
+    /// <returns>
+    /// <c>BlockState.BreakDiscard</c> when a marker was matched and consumed; otherwise
+    /// <c>BlockState.None</c>.
+    /// </returns>
     public override BlockState TryOpen(BlockProcessor processor)
     {
         if (processor.IsCodeIndent) return BlockState.None;

@@ -21,6 +21,12 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
     private readonly string rootDirectory;
     private readonly ILogger<FileSystemAssemblyStore> logger;
 
+    /// <summary>
+    /// Initializes a new instance of the filesystem-backed assembly store rooted at the
+    /// given directory (created if it does not exist).
+    /// </summary>
+    /// <param name="rootDirectory">The root directory under which compiled assemblies are cached.</param>
+    /// <param name="logger">The logger for cache hit/miss and write diagnostics.</param>
     public FileSystemAssemblyStore(string rootDirectory, ILogger<FileSystemAssemblyStore> logger)
     {
         this.rootDirectory = rootDirectory;
@@ -28,6 +34,13 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
         Directory.CreateDirectory(rootDirectory);
     }
 
+    /// <summary>
+    /// Looks up the cached assembly for a (node-type path, version) pair, returning the
+    /// path of the newest matching DLL or null if none is cached.
+    /// </summary>
+    /// <param name="nodeTypePath">The mesh path of the node type whose assembly is requested.</param>
+    /// <param name="version">The MeshNode version the assembly was compiled for.</param>
+    /// <returns>An observable emitting the local DLL path, or null on a cache miss.</returns>
     public IObservable<string?> TryGetAssemblyPath(string nodeTypePath, long version)
     {
         // Lookup by (nodeTypePath, version) alone — the caller doesn't know the
@@ -55,6 +68,16 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
         return Observable.Return<string?>(candidate.FullName);
     }
 
+    /// <summary>
+    /// Writes the compiled assembly (and optional PDB) into the cache for the given
+    /// (node-type path, version) pair, returning the local DLL path. First-write-wins:
+    /// an existing DLL for the same key is returned without overwriting.
+    /// </summary>
+    /// <param name="nodeTypePath">The mesh path of the node type the assembly belongs to.</param>
+    /// <param name="version">The MeshNode version the assembly was compiled for.</param>
+    /// <param name="assemblyBytes">The compiled assembly (DLL) bytes.</param>
+    /// <param name="pdbBytes">The optional debug symbol (PDB) bytes; null or empty to skip.</param>
+    /// <returns>An observable emitting the local path of the cached DLL.</returns>
     public IObservable<string> Put(string nodeTypePath, long version, byte[] assemblyBytes, byte[]? pdbBytes)
         => PutWithLocation(nodeTypePath, version, assemblyBytes, pdbBytes)
             .Select(loc => loc.LocalPath);
@@ -66,6 +89,17 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
     /// </summary>
     public const string FileSystemCollectionName = "local";
 
+    /// <summary>
+    /// Writes the compiled assembly (and optional PDB) into the cache and returns its full
+    /// store location (local path, collection name, and relative content path).
+    /// First-write-wins for ALC safety: an existing DLL for the same (node-type path,
+    /// version) is returned without overwriting.
+    /// </summary>
+    /// <param name="nodeTypePath">The mesh path of the node type the assembly belongs to.</param>
+    /// <param name="version">The MeshNode version the assembly was compiled for.</param>
+    /// <param name="assemblyBytes">The compiled assembly (DLL) bytes.</param>
+    /// <param name="pdbBytes">The optional debug symbol (PDB) bytes; null or empty to skip.</param>
+    /// <returns>An observable emitting the location of the cached assembly.</returns>
     public IObservable<AssemblyStoreLocation> PutWithLocation(string nodeTypePath, long version, byte[] assemblyBytes, byte[]? pdbBytes)
     {
         var dir = Path.Combine(rootDirectory, Sanitize(nodeTypePath));

@@ -351,6 +351,12 @@ public static class MeshNodeExtensions
     private static bool IsAlreadyExistsRace(InvalidOperationException ex)
         => ex.Message.StartsWith("Node already exists:", StringComparison.Ordinal);
 
+    /// <summary>
+    /// Registers all graph-related content and message types on the type registry under
+    /// their short names, enabling polymorphic serialization/deserialization across hubs.
+    /// </summary>
+    /// <param name="typeRegistry">The type registry to register the graph types on.</param>
+    /// <returns>The same type registry, for chaining.</returns>
     public static ITypeRegistry WithGraphTypes(this ITypeRegistry typeRegistry)
     {
         typeRegistry.WithType(typeof(NodeTypeDefinition), nameof(NodeTypeDefinition));

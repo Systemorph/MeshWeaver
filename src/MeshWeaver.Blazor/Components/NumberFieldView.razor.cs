@@ -2,6 +2,12 @@
 
 namespace MeshWeaver.Blazor.Components;
 
+/// <summary>
+/// Blazor form component for editing numeric values using a Fluent UI number field.
+/// Supports integer and floating-point types; automatically configures step behaviour
+/// based on whether <typeparamref name="TValue"/> is an integer-like type.
+/// </summary>
+/// <typeparam name="TValue">The numeric CLR type being edited (e.g. <c>int</c>, <c>decimal</c>, <c>double</c>).</typeparam>
 public partial class NumberFieldView<TValue>
     where TValue:new()
 {
@@ -65,6 +71,12 @@ public partial class NumberFieldView<TValue>
         => type == typeof(int) || type == typeof(long) || type == typeof(short) ||
            type == typeof(byte) || type == typeof(sbyte) || type == typeof(uint) ||
            type == typeof(ulong) || type == typeof(ushort);
+    /// <summary>
+    /// Binds all number-field-specific parameters (HideStep, DataList, MaxLength, MinLength,
+    /// Size, Step, Max, Min, Appearance, ParsingErrorMessage) from the view-model. The default
+    /// for <c>HideStep</c> is derived from whether <typeparamref name="TValue"/> is integer-like,
+    /// and <c>Step</c> defaults to <c>"any"</c> for floating-point types.
+    /// </summary>
     protected override void BindData()
     {
         base.BindData();

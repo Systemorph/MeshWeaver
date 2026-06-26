@@ -46,6 +46,14 @@ public class McpMeshPlugin
     private readonly ILogger<McpMeshPlugin> logger;
     private readonly string baseUrl;
 
+    /// <summary>
+    /// Initializes a new instance of the <c>McpMeshPlugin</c>, resolving the UI base
+    /// URL (configured value, then live request scheme+host, then empty) and
+    /// materialising the session-scoped hub through which all tool calls route.
+    /// </summary>
+    /// <param name="hub">The root message hub the session hub is created from.</param>
+    /// <param name="config">Optional MCP configuration carrying the UI base URL.</param>
+    /// <param name="httpContextAccessor">Optional accessor used to derive the base URL and session identity from the current HTTP request.</param>
     public McpMeshPlugin(
         IMessageHub hub,
         IOptions<McpConfiguration>? config = null,
@@ -86,6 +94,12 @@ public class McpMeshPlugin
         ops = new MeshOperations(sessionHub);
     }
 
+    /// <summary>
+    /// Retrieves a node or a resource attached to a node by path — returns JSON for
+    /// nodes/data/schemas or raw (JSON-escaped) bytes for content-collection files.
+    /// </summary>
+    /// <param name="path">The mesh path to read (node, children, data, schema, area, or collection file).</param>
+    /// <returns>The node JSON or file payload as a string.</returns>
     [McpServerTool(Title = "Get a node or attached resource", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description(@"Retrieves a node or a resource attached to a node by path. Returns JSON for nodes/data/schemas, or raw file bytes (JSON-escaped) for content-collection files.
 
@@ -115,6 +129,13 @@ Legacy colon form `path/prefix:value` still works for backward compatibility.")]
   @Cornerstone/model/                           (full model)")] string path)
         => ops.Get(path).FirstAsync().ToTask();
 
+    /// <summary>
+    /// Uploads raw file bytes into a node's content collection — the write-side
+    /// mirror of <c>Get</c> for content-collection files.
+    /// </summary>
+    /// <param name="path">Target path including the collection segment and filename.</param>
+    /// <param name="base64Content">The file content as a raw base64-encoded payload (no data: URI prefix).</param>
+    /// <returns>A JSON status envelope on success, or an <c>Error: …</c> string otherwise.</returns>
     [McpServerTool(Title = "Upload a file into a content collection", Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description(@"Uploads raw file bytes into a node's content collection — the write-side mirror of `Get` for content-collection files. Use this to attach images, documents, or any binary asset to a node (e.g. an organisation logo or an Excel input file for a script).
 
@@ -137,6 +158,14 @@ The target collection must exist on the node and be editable (`IsEditable=true`)
         return ops.Upload(path, bytes).FirstAsync().ToTask();
     }
 
+    /// <summary>
+    /// Searches the mesh using GitHub-style query syntax (field filters, location
+    /// scopes, sorting, and free-text semantic terms).
+    /// </summary>
+    /// <param name="query">The query string (field filters and/or free text).</param>
+    /// <param name="basePath">Optional base path to search from; empty searches everything.</param>
+    /// <param name="limit">Maximum number of results to return (default 50, max 200).</param>
+    /// <returns>A JSON envelope <c>{count, limit, truncated, results}</c> as a string.</returns>
     [McpServerTool(Title = "Search the mesh", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description(@"Searches the mesh using GitHub-style query syntax. Returns {count, limit, truncated, results:[{path,name,nodeType}]} — when 'truncated' is true there are more matches than returned; narrow the query or raise 'limit'.
 
@@ -153,6 +182,13 @@ Full reference: read the 'tools-reference' MCP resource.")]
         [Description("Maximum number of results to return. Default 50, max 200.")] int limit = 50)
         => ops.Search(query, basePath, limit).FirstAsync().ToTask();
 
+    /// <summary>
+    /// Autocompletes a partial @-reference using the in-portal autocomplete engine,
+    /// blending the same ranked sources the chat input shows as the user types <c>@</c>.
+    /// </summary>
+    /// <param name="query">The partial @-reference to complete (a leading <c>@</c> is added if missing).</param>
+    /// <param name="context">Optional context namespace used to rank nearby results; empty for global only.</param>
+    /// <returns>A JSON envelope <c>{count, results}</c> of ranked completions as a string.</returns>
     [McpServerTool(Title = "Autocomplete an @-reference", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description(@"Autocomplete a partial @-reference using the REAL in-portal autocomplete engine — DISTINCT from `search`. Where `search` runs one GitHub-style query, autocomplete blends multiple ranked sources (current-node providers, partition list + drill-down, and a global fan-out), deduped and priority-sorted — the same suggestions the chat input shows as you type `@`. Use it to resolve a name/path fragment the user typed into a concrete `insertText`/path before Get / NavigateTo. Returns {count, results:[{label, insertText, kind, category, description}]}.
 
@@ -198,6 +234,14 @@ The leading `@` is required (this is @-reference autocomplete, not free-text sea
             .ToTask();
     }
 
+    /// <summary>
+    /// Semantic search over indexed content chunks — the chunk-level companion to
+    /// <c>Search</c>, returning each hit with its collection/file path and chunk index.
+    /// </summary>
+    /// <param name="query">Free-text query matched semantically against indexed chunk text.</param>
+    /// <param name="scope">Node path to anchor the search at; this path and each ancestor prefix are searched.</param>
+    /// <param name="limit">Maximum number of chunk hits to return (1-200, default 20).</param>
+    /// <returns>A JSON envelope <c>{count, results}</c> of matching chunks as a string.</returns>
     [McpServerTool(Title = "Search content chunks", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description(@"Semantic search over INDEXED content chunks — the chunk-level companion to `Search`. Where node `Search` resolves a content hit up to its Document node and drops the chunk position, this returns the matching chunks WITH their (collectionPath, filePath, chunkIndex) so you can read the exact window or step through neighbours with `get_chunk`. Use it to FIND relevant passages and gather context; for whole-document reads (e.g. table extraction) use `Get` on the Document.
 
@@ -214,6 +258,14 @@ Returns `{count, results:[{documentPath, collectionPath, filePath, chunkIndex, r
             .FirstAsync().ToTask();
     }
 
+    /// <summary>
+    /// Reads one indexed content chunk by its 0-based index within a file, with
+    /// prev/next links to step through the file's chunk sequence.
+    /// </summary>
+    /// <param name="collectionPath">The content collection path the chunk belongs to.</param>
+    /// <param name="filePath">The file path within the collection.</param>
+    /// <param name="chunkIndex">The 0-based chunk index within the file.</param>
+    /// <returns>A JSON envelope with the chunk text and prev/next indices as a string.</returns>
     [McpServerTool(Title = "Read a content chunk by index", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description(@"Reads ONE indexed content chunk by its 0-based index within a file, with prev/next links to step through the file's chunk sequence. Use after `search_chunks` (which gives the collectionPath/filePath/chunkIndex of a hit) to read the full 1000-char window and walk to adjacent chunks.
 
@@ -225,6 +277,12 @@ Returns `{found, collectionPath, filePath, chunkIndex, text, prevIndex, nextInde
         => ChunkNavigation.GetChunk(sessionHub.ServiceProvider, MeshOperations.ResolvePath(collectionPath), filePath, chunkIndex)
             .FirstAsync().ToTask();
 
+    /// <summary>
+    /// Creates a new node in the mesh from a JSON MeshNode object, validating the
+    /// required fields (id, namespace, name, nodeType) up front.
+    /// </summary>
+    /// <param name="node">The JSON MeshNode object to create.</param>
+    /// <returns>A JSON result describing the created node, or an error string.</returns>
     [McpServerTool(Title = "Create a node", Destructive = false, Idempotent = false, OpenWorld = false)]
     [Description(@"Creates a new node in the mesh. Pass a JSON MeshNode object. Required fields — validated up-front with a descriptive error before anything is written:
   • id        — the node's own slug, NO slashes (e.g. ""PricingTool""). The parent path goes in 'namespace'; the node's path is derived as {namespace}/{id}.
@@ -236,12 +294,25 @@ Recommended: 'icon' as an inline SVG starting with <svg, using currentColor. 'co
         [Description("JSON MeshNode object to create (e.g., {\"id\": \"NewOrg\", \"namespace\": \"ACME\", \"name\": \"New Org\", \"nodeType\": \"Organization\", \"content\": {}})")] string node)
         => ops.Create(node).FirstAsync().ToTask();
 
+    /// <summary>
+    /// Replaces existing nodes wholesale from a JSON array of complete MeshNode
+    /// objects (the entire node is overwritten, not merged).
+    /// </summary>
+    /// <param name="nodes">A JSON array of complete MeshNode objects.</param>
+    /// <returns>A JSON result describing the updated nodes, or an error string.</returns>
     [McpServerTool(Title = "Replace nodes (full update)", Destructive = true, Idempotent = true, OpenWorld = false)]
     [Description("Updates existing nodes in the mesh. Pass a JSON array of complete MeshNode objects. Always Get before Update — the entire node is replaced, not merged; a node missing 'nodeType' or 'content' is rejected with a descriptive error before anything is written. For small changes prefer Patch (field-level) or edit_content (text-level).")]
     public Task<string> Update(
         [Description("JSON array of MeshNode objects with all fields (get existing node first, modify, then pass here)")] string nodes)
         => ops.Update(nodes).FirstAsync().ToTask();
 
+    /// <summary>
+    /// Partially updates a single node — only the supplied fields change, and
+    /// <c>content</c> deep-merges (RFC 7396) so omitted keys are preserved.
+    /// </summary>
+    /// <param name="path">Path to the node to patch.</param>
+    /// <param name="fields">A JSON object with only the fields to change.</param>
+    /// <returns>A JSON result describing the patched node, or an error string.</returns>
     [McpServerTool(Title = "Patch node fields", Destructive = true, Idempotent = true, OpenWorld = false)]
     [Description("Partial update of a single node. Only the keys present in 'fields' are changed; omitted keys preserve existing values. 'content' deep-merges (RFC 7396): the nested keys you send are updated, the ones you omit are kept, and a null member deletes just that key — so you can change a single content field (e.g. {\"content\":{\"logo\":\"…\"}}) without resending the rest. Setting the whole 'content' to null is rejected. Prefer this over Update for small edits like icon/name/category; for edits inside a long Markdown body or source file prefer edit_content.")]
     public Task<string> Patch(
@@ -249,6 +320,15 @@ Recommended: 'icon' as an inline SVG starting with <svg, using currentColor. 'co
         [Description("JSON object with ONLY the fields to change. Examples: {\"icon\": \"<svg>...</svg>\"}, {\"name\": \"New Name\"}, {\"content\":{\"logo\":\"https://…\"}} (deep-merges into existing content).")] string fields)
         => ops.Patch(path, fields).FirstAsync().ToTask();
 
+    /// <summary>
+    /// Performs an anchored text edit on a node's content (Markdown body or Code
+    /// source), replacing a verbatim snippet rather than re-sending the whole document.
+    /// </summary>
+    /// <param name="path">Path to the node whose content is edited.</param>
+    /// <param name="oldText">The exact text to replace, copied verbatim from the current content.</param>
+    /// <param name="newText">The replacement text.</param>
+    /// <param name="replaceAll">When true, replaces every occurrence instead of requiring a unique match.</param>
+    /// <returns>A JSON result describing the edit, or an error string when the text isn't found or isn't unique.</returns>
     [McpServerTool(Title = "Anchored text edit", Destructive = true, Idempotent = false, OpenWorld = false)]
     [Description(@"Anchored text edit on a node's content (Markdown body or Code source). Replaces oldText with newText — pass just the snippet to change plus enough surrounding context to make it unique, instead of re-sending the whole document. Fails with a descriptive error when the text isn't found or isn't unique. Preferred over patch for any edit inside a long document or source file (cheaper, and immune to truncation corrupting the rest of the content).")]
     public Task<string> EditContent(
@@ -258,12 +338,25 @@ Recommended: 'icon' as an inline SVG starting with <svg, using currentColor. 'co
         [Description("Replace every occurrence instead of requiring a unique match. Default: false.")] bool replaceAll = false)
         => ops.EditContent(path, oldText, newText, replaceAll).FirstAsync().ToTask();
 
+    /// <summary>
+    /// Deletes one or more nodes by path; deletion is recursive, so deleting a
+    /// parent removes all of its descendants.
+    /// </summary>
+    /// <param name="paths">A JSON array of path strings to delete.</param>
+    /// <returns>A JSON result describing the deletion, or an error string.</returns>
     [McpServerTool(Title = "Delete nodes (recursive)", Destructive = true, Idempotent = true, OpenWorld = false)]
     [Description("Deletes one or more nodes from the mesh by path. Recursive: deleting a parent removes all descendants. To remove a subtree, just pass the root path — children do not need to be enumerated.")]
     public Task<string> Delete(
         [Description("JSON array of path strings to delete (e.g., [\"ACME/OldProject\", \"ACME/ArchivedTask\"])")] string paths)
         => ops.Delete(paths).FirstAsync().ToTask();
 
+    /// <summary>
+    /// Moves a node and its descendants to a new path (requires Delete on the
+    /// source namespace and Create on the target).
+    /// </summary>
+    /// <param name="sourcePath">The current full path of the node.</param>
+    /// <param name="targetPath">The new full path for the node.</param>
+    /// <returns>A JSON result describing the move, or an error string.</returns>
     [McpServerTool(Title = "Move a subtree", Destructive = true, Idempotent = false, OpenWorld = false)]
     [Description("Moves a node and its descendants to a new path. Equivalent to the Move menu item. Requires Delete on the source namespace and Create on the target. Source and target are full paths (namespace + id), e.g. 'OrgA/Child' -> 'OrgB/Child'.")]
     public Task<string> Move(
@@ -271,6 +364,14 @@ Recommended: 'icon' as an inline SVG starting with <svg, using currentColor. 'co
         [Description("New path for the node (e.g., @OrgB/Child)")] string targetPath)
         => ops.Move(sourcePath, targetPath).FirstAsync().ToTask();
 
+    /// <summary>
+    /// Copies a node and all its descendants to a target namespace, preserving
+    /// source ids and rewriting paths under the target.
+    /// </summary>
+    /// <param name="sourcePath">The current full path of the node to copy.</param>
+    /// <param name="targetNamespace">The target namespace to copy under.</param>
+    /// <param name="force">When true, overwrites existing nodes at the target.</param>
+    /// <returns>A JSON result describing the copy, or an error string.</returns>
     [McpServerTool(Title = "Copy a subtree", Destructive = false, Idempotent = false, OpenWorld = false)]
     [Description("Copies a node and all its descendants to a target namespace. Equivalent to the Copy menu item. Source ids are preserved; paths are rewritten under the target namespace.")]
     public Task<string> Copy(
@@ -279,6 +380,12 @@ Recommended: 'icon' as an inline SVG starting with <svg, using currentColor. 'co
         [Description("Overwrite existing nodes at the target. Default: false.")] bool force = false)
         => ops.Copy(sourcePath, targetNamespace, force).FirstAsync().ToTask();
 
+    /// <summary>
+    /// Returns a browser URL to view a node in the MeshWeaver UI, shaped as
+    /// <c>{baseUrl}/{path}</c>; an empty path returns the base URL alone.
+    /// </summary>
+    /// <param name="path">Path to navigate to (leading <c>@</c> is stripped); empty returns the base URL.</param>
+    /// <returns>The fully-qualified UI URL for the node.</returns>
     [McpServerTool(Title = "Browser URL for a node", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description("Returns a URL to view a node in the MeshWeaver UI. The URL shape is `{baseUrl}/{path}` — the mesh path is appended directly to the base URL with no intermediate segment (no `/node/`) and without URL-escaping the path separators. Use this when you want to give a user a link to open in their browser. Call with an empty path to get the base URL on its own.")]
     public string NavigateTo(
@@ -293,18 +400,36 @@ Recommended: 'icon' as an inline SVG starting with <svg, using currentColor. 'co
         return $"{baseUrl.TrimEnd('/')}/{resolvedPath.TrimStart('/')}";
     }
 
+    /// <summary>
+    /// Returns compilation diagnostics for a NodeType (or any instance of one):
+    /// <c>Ok</c>, <c>Error</c> with details, <c>Compiling</c>, or <c>Unknown</c>.
+    /// </summary>
+    /// <param name="path">Path to a NodeType or to any instance of one.</param>
+    /// <returns>A JSON result with the compile status as a string.</returns>
     [McpServerTool(Title = "NodeType compile status", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description("Returns compilation diagnostics for a NodeType (or any instance of one). Status is 'Ok' when the type compiled cleanly, 'Error' with details when it failed, 'Compiling' while a compile is in progress (with elapsedMs), or 'Unknown' when no compile has happened yet. Use after creating/updating a NodeType to verify it actually compiles — a NodeType that doesn't compile is not 'done'.")]
     public Task<string> GetDiagnostics(
         [Description("Path to a NodeType (e.g., @Systemorph/SocialMedia/Profile) or to any instance of one")] string path)
         => ops.GetDiagnostics(path).FirstAsync().ToTask();
 
+    /// <summary>
+    /// Recycles the hub at the given path (posts <c>DisposeRequest</c>), forcing a
+    /// fresh hub initialization on the next access.
+    /// </summary>
+    /// <param name="path">Path to the node whose hub should be recycled.</param>
+    /// <returns>A JSON result <c>{status:'Recycled', path}</c> as a string.</returns>
     [McpServerTool(Title = "Recycle a node's hub", Destructive = true, Idempotent = true, OpenWorld = false)]
     [Description("Recycles the hub at the given path by posting DisposeRequest. Forces a fresh hub initialization on the next access — use after fixing a broken NodeType, after editing the `sources` list, or whenever a grain is stuck in a cached bad state. Requires Update permission on the target node. Returns {status:'Recycled', path}. Wait ~100ms before the next access so the grain teardown completes.")]
     public Task<string> Recycle(
         [Description("Path to the node (e.g., @Systemorph/SocialMedia/Profile). Use the NodeType path to recycle the whole type; use an instance path to recycle just that instance's hub.")] string path)
         => ops.Recycle(path).FirstAsync().ToTask();
 
+    /// <summary>
+    /// Compiles a NodeType and waits inline for the result, flipping its status to
+    /// <c>Pending</c> and waiting up to 60s for the CompileWatcher to settle it.
+    /// </summary>
+    /// <param name="path">Path to the NodeType definition node (not an instance).</param>
+    /// <returns>A structured JSON result reporting <c>Ok</c>, <c>Error</c> (with diagnostics), or <c>Pending</c> on timeout.</returns>
     [McpServerTool(Title = "Compile a NodeType", Idempotent = true, OpenWorld = false)]
     [Description(@"Compiles a NodeType and waits for the result inline. Flips the NodeType's `compilationStatus` to `Pending` via the canonical remote-stream `Update` (no PatchDataRequest, no Update permission required), then subscribes to the NodeType's MeshNode stream and waits up to 60s for the framework's CompileWatcher to settle the status to `Ok` or `Error`.
 
@@ -318,6 +443,14 @@ For the full source-discovery + matched-Code-paths + Roslyn trace, `get @<activi
         [Description("Path to the NodeType (e.g., @User/me/MyType or @Systemorph/SocialMedia/Profile). Must point at a NodeType definition node, not an instance.")] string path)
         => ops.Compile(path).FirstAsync().ToTask();
 
+    /// <summary>
+    /// Runs a speculative Roslyn check against a NodeType's current source set with
+    /// one file substituted by <paramref name="proposedCode"/> — no emit, no side effects.
+    /// </summary>
+    /// <param name="nodeTypePath">Path to the NodeType.</param>
+    /// <param name="sourcePath">Path of the Source Code node being edited (added as a new file if not in the current set).</param>
+    /// <param name="proposedCode">The proposed full source text for that file.</param>
+    /// <returns>A JSON result <c>{ok, diagnostics}</c> as a string.</returns>
     [McpServerTool(Title = "Speculative Roslyn check", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description(@"PRE-FLIGHT CHECK before committing a source change to a NodeType. Runs Roslyn against the NodeType's current source set with ONE source file substituted by `proposedCode`, returns all diagnostics (errors + warnings). No emit, no Recycle, no side effects — purely speculative.
 
@@ -338,6 +471,12 @@ Returns `{ok: true, diagnostics: []}` when the substituted source compiles clean
             .FirstAsync().ToTask();
     }
 
+    /// <summary>
+    /// Returns every Roslyn diagnostic from the NodeType's current cached compilation
+    /// (errors, warnings, and info) with source locations.
+    /// </summary>
+    /// <param name="nodeTypePath">Path to the NodeType.</param>
+    /// <returns>A JSON result <c>{ok, diagnostics}</c> as a string.</returns>
     [McpServerTool(Title = "Roslyn diagnostics for a NodeType", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description(@"Returns Roslyn diagnostics from the NodeType's CURRENT cached compilation — distinct from `GetDiagnostics` which only reports compile status (Ok/Error/Compiling). This enumerates every diagnostic in the compilation (errors + warnings + info) with source location, so you can see exactly what's wrong without re-compiling.
 
@@ -382,6 +521,13 @@ Returns `{ok: true|false, diagnostics: [...]}` — same shape as `lsp_check_node
             options);
     }
 
+    /// <summary>
+    /// Runs an executable Code node's C# through the kernel and returns stdout /
+    /// return value / errors, blocking until the kernel signals completion.
+    /// </summary>
+    /// <param name="path">Path to an executable Code node (must be <c>IsExecutable=true</c>).</param>
+    /// <param name="timeoutSeconds">Execution timeout in seconds (default 120).</param>
+    /// <returns>The script output as a string.</returns>
     [McpServerTool(Title = "Execute a Code node", Destructive = true, Idempotent = false, OpenWorld = false)]
     [Description("Runs an executable Code node's C# through the kernel (Microsoft.DotNet.Interactive) and returns stdout / return value / errors. The target node must have `CodeConfiguration.IsExecutable == true`. Blocks until the kernel signals completion (side-effects — e.g. mesh.CreateNode calls inside the script — have happened by the time this returns). Use to run import/test scripts from MCP without needing a UI click.")]
     public Task<string> ExecuteScript(
@@ -389,6 +535,15 @@ Returns `{ok: true|false, diagnostics: [...]}` — same shape as `lsp_check_node
         [Description("Timeout in seconds. Default 120.")] int timeoutSeconds = 120)
         => ops.ExecuteScript(path, timeoutSeconds).FirstAsync().ToTask();
 
+    /// <summary>
+    /// Starts a new agent conversation thread and submits the first message; the
+    /// server-side agent then executes the thread asynchronously.
+    /// </summary>
+    /// <param name="namespacePath">Namespace to create the thread under (the thread lives at <c>{namespace}/_Thread/{id}</c>).</param>
+    /// <param name="message">The first user message — the self-contained task for the agent.</param>
+    /// <param name="agentName">Optional agent to run the thread; defaults to the platform's default agent.</param>
+    /// <param name="contextPath">Optional node path the agent treats as its working context.</param>
+    /// <returns>A JSON result <c>{status:'Started', threadPath}</c>, or an error string.</returns>
     [McpServerTool(Title = "Start an agent thread", Destructive = false, Idempotent = false, OpenWorld = false)]
     [Description(@"Starts a new agent conversation thread and submits the first message — the server-side agent executes it asynchronously. This is the ONLY way to launch a thread from MCP: do NOT hand-assemble Thread nodes with `create`/`patch` — the submission protocol (pending-message draining, response-cell allocation) is owned by the thread hub, and bypassing it leaves a wedged thread.
 
@@ -432,6 +587,14 @@ Returns `{status:'Started', threadPath}` as soon as the thread node exists; the 
         return tcs.Task.ContinueWith(t => { cts.Dispose(); return t.Result; });
     }
 
+    /// <summary>
+    /// Queues a follow-up user message on an existing agent thread; the submission
+    /// watcher dispatches a new round when the thread is idle.
+    /// </summary>
+    /// <param name="threadPath">Path of the thread to submit to.</param>
+    /// <param name="message">The user message text.</param>
+    /// <param name="agentName">Optional agent override for this round; defaults to the thread's current agent.</param>
+    /// <returns>A JSON result reporting the message was submitted/queued, or an error string.</returns>
     [McpServerTool(Title = "Send a message to a thread", Destructive = false, Idempotent = false, OpenWorld = false)]
     [Description(@"Queues a follow-up user message on an existing agent thread. If the thread is idle, the submission watcher dispatches a new round immediately; if the agent is mid-round, the message is delivered the next time it checks its inbox. Use `start_thread` to create a new thread; use `get` on the thread path to read status and results.")]
     public Task<string> SubmitMessage(
@@ -468,6 +631,18 @@ Returns `{status:'Started', threadPath}` as soon as the thread node exists; the 
                     sessionHub.JsonSerializerOptions));
     }
 
+    /// <summary>
+    /// Mirrors a subtree between this instance and a remote MeshWeaver portal —
+    /// <c>push</c> copies local to remote, <c>pull</c> copies remote to local.
+    /// </summary>
+    /// <param name="direction"><c>push</c> (local → remote) or <c>pull</c> (remote → local).</param>
+    /// <param name="remote">A named remote profile (preferred) or a base URL.</param>
+    /// <param name="sourcePath">Path whose subtree to mirror.</param>
+    /// <param name="targetPath">Optional destination path; defaults to <paramref name="sourcePath"/>.</param>
+    /// <param name="removeMissing">When true, deletes destination nodes that don't exist at the source (destructive).</param>
+    /// <param name="dryRun">When true, only enumerates what would be touched without writing.</param>
+    /// <param name="remoteToken">Optional inline ApiToken for the remote; discouraged — prefer a configured profile.</param>
+    /// <returns>A JSON summary of the mirror operation (or a dry-run preview), or an error string.</returns>
     [McpServerTool(Title = "Mirror a subtree to/from a remote portal", Destructive = true, Idempotent = true)]
     [Description(@"Mirror a subtree between THIS instance and a remote MeshWeaver portal. `direction='push'` copies local → remote (promote dev content to prod, stage a snapshot for review); `direction='pull'` copies remote → local (seed dev with prod data).
 
@@ -578,6 +753,13 @@ Network: this instance must have outbound HTTPS reach to the remote. Prod can't 
             .Select(r => JsonSerializer.Serialize(r, sessionHub.JsonSerializerOptions))
             .FirstAsync().ToTask();
 
+    /// <summary>
+    /// Returns an interactive rendering of a layout area as an MCP-UI embedded
+    /// resource — hosts that support MCP-UI render it inline as an iframe widget.
+    /// </summary>
+    /// <param name="path">Path to the node hosting the layout area (leading <c>@</c> is stripped).</param>
+    /// <param name="areaName">The layout area name on that node.</param>
+    /// <returns>A <c>CallToolResult</c> carrying the embedded iframe resource, a resource link, and a fallback URL.</returns>
     [McpServerTool(Title = "Render a layout area (MCP-UI)", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description(@"Returns an interactive rendering of a layout area as an MCP-UI embedded resource. Hosts that support MCP-UI (Claude.ai web/desktop, ChatGPT Apps) render this inline as an iframe widget; text-only hosts see the URL as a fallback.
 

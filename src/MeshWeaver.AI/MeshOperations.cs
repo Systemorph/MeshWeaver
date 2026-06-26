@@ -45,6 +45,11 @@ public class MeshOperations
     /// </summary>
     public Action<NodeChangeEntry>? OnNodeChange { get; set; }
 
+    /// <summary>
+    /// Creates the operations facade over a message hub, resolving the logger and
+    /// <c>IMeshService</c> from the hub's service provider.
+    /// </summary>
+    /// <param name="hub">The message hub whose services and address back every mesh operation.</param>
     public MeshOperations(IMessageHub hub)
     {
         this.hub = hub;
@@ -186,6 +191,13 @@ public class MeshOperations
         return $"@{contextPath2}/{raw}";
     }
 
+    /// <summary>
+    /// Reads a node (or, for a <c>path/*</c> query, its direct children) and returns it as a
+    /// JSON string. Resolves <c>@</c>/quote noise and Unified-Path prefixes first; surfaces a
+    /// recorded NodeType compilation error alongside the node, or an <c>"Error: …"</c>/<c>"Not found: …"</c> string.
+    /// </summary>
+    /// <param name="path">The node path to read, or a <c>path/*</c> form to list children.</param>
+    /// <returns>A cold observable emitting the JSON payload or a descriptive error string.</returns>
     public IObservable<string> Get(string path)
     {
         logger.LogInformation("Get called with path={Path}", path);
@@ -578,6 +590,15 @@ public class MeshOperations
             Observable.Return<string?>($"Error: Timeout resolving '{remainder}' at {addressPart}"));
     }
 
+    /// <summary>
+    /// Runs a mesh query and returns a JSON envelope <c>{count, limit, truncated, results:[{path,name,nodeType}]}</c>.
+    /// When <paramref name="basePath"/> is set the query is scoped to that namespace; <c>truncated</c> flags that
+    /// more matches exist than were returned.
+    /// </summary>
+    /// <param name="query">The GitHub-style query string (e.g. <c>nodeType:Agent name:*sales*</c>).</param>
+    /// <param name="basePath">Optional namespace to scope the search to; <c>null</c> searches everywhere.</param>
+    /// <param name="limit">Maximum number of results, clamped to 1..200 (default 50).</param>
+    /// <returns>A cold observable emitting the JSON results envelope or an <c>"Error: …"</c> string.</returns>
     public IObservable<string> Search(string query, string? basePath = null, int limit = 50)
     {
         logger.LogInformation("Search called with query={Query}, basePath={BasePath}, limit={Limit}", query, basePath, limit);
@@ -631,6 +652,12 @@ public class MeshOperations
             });
     }
 
+    /// <summary>
+    /// Deserialises a single MeshNode from JSON (repairing common LLM JSON defects), validates its
+    /// identity and content schema, then creates it in the mesh.
+    /// </summary>
+    /// <param name="node">The JSON MeshNode to create (requires id, name, nodeType, namespace).</param>
+    /// <returns>A cold observable emitting <c>"Created: {path}"</c> or a descriptive error string.</returns>
     public IObservable<string> Create(string node)
     {
         logger.LogInformation("Create called");
@@ -690,6 +717,13 @@ public class MeshOperations
         });
     }
 
+    /// <summary>
+    /// Full-replacement update of one or more existing nodes from a JSON array. Each node is validated and
+    /// written independently (results combine in input order); a read-your-writes barrier ensures a
+    /// following read sees the reconciled state.
+    /// </summary>
+    /// <param name="nodes">A JSON array of complete MeshNode objects to write.</param>
+    /// <returns>A cold observable emitting a newline-joined per-node result/error summary.</returns>
     public IObservable<string> Update(string nodes)
     {
         logger.LogInformation("Update called");
@@ -789,6 +823,14 @@ public class MeshOperations
     private string SerialisePretty(MeshNode node) =>
         JsonSerializer.Serialize(node, new JsonSerializerOptions(hub.JsonSerializerOptions) { WriteIndented = true });
 
+    /// <summary>
+    /// Partial update of a single node: only the keys present in <paramref name="fields"/> change, with
+    /// <c>content</c> deep-merged per RFC 7396 (omitted keys preserved, a null member deletes that key).
+    /// Merged content is schema-validated before the write.
+    /// </summary>
+    /// <param name="path">The exact path of the node to patch.</param>
+    /// <param name="fields">A JSON object holding only the fields to change.</param>
+    /// <returns>A cold observable emitting <c>"Patched: {path}"</c> (with version delta) or a descriptive error string.</returns>
     public IObservable<string> Patch(string path, string fields)
     {
         logger.LogInformation("Patch called for path={Path}", path);
@@ -1372,6 +1414,11 @@ public class MeshOperations
         });
     }
 
+    /// <summary>
+    /// Deletes one or more nodes (and their descendants) given a JSON array of path strings.
+    /// </summary>
+    /// <param name="paths">A JSON array of node paths to delete.</param>
+    /// <returns>A cold observable emitting the per-path deletion result or a descriptive error string.</returns>
     public IObservable<string> Delete(string paths)
     {
         logger.LogInformation("Delete called");

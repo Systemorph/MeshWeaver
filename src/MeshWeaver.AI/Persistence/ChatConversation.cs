@@ -7,11 +7,17 @@ namespace MeshWeaver.AI.Persistence;
 /// </summary>
 public record ChatConversation
 {
+    /// <summary>Unique conversation identifier; defaults to a new GUID.</summary>
     public string Id { get; init; } = Guid.NewGuid().ToString();
+    /// <summary>User-facing conversation title; defaults to "New Chat".</summary>
     public string Title { get; init; } = "New Chat";
+    /// <summary>UTC timestamp when the conversation was created.</summary>
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
+    /// <summary>UTC timestamp of the most recent message addition.</summary>
     public DateTime LastModifiedAt { get; init; } = DateTime.UtcNow;
+    /// <summary>The ordered chat messages making up the conversation.</summary>
     public List<ChatMessage> Messages { get; init; } = new();
+    /// <summary>The agent context this conversation runs under; null when not bound to an agent.</summary>
     public AgentContext? AgentContext { get; init; }
 
     /// <summary>

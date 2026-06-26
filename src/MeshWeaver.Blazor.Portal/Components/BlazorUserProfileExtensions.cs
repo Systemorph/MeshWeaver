@@ -3,6 +3,10 @@ using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Blazor.Portal.Components;
 
+/// <summary>
+/// Hub-configuration extensions that register the portal's Blazor renderer for the
+/// user-profile layout control.
+/// </summary>
 public static class BlazorUserProfileExtensions
 {
     /// <summary>

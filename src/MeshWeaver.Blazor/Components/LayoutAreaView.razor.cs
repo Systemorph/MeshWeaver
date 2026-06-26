@@ -13,8 +13,18 @@ using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor.Components;
 
+/// <summary>
+/// Top-level Blazor component that hosts a single layout area from the mesh.
+/// Manages the area's synchronization stream lifecycle (bind, rebind on parameter
+/// change, dispose), surfaces progress/dialog sidecars, and wires the portal menu
+/// when rendered as the top-level area.
+/// </summary>
 public partial class LayoutAreaView
 {
+    /// <summary>
+    /// JavaScript runtime used for interop calls after the component has been
+    /// rendered interactively (never called during pre-render).
+    /// </summary>
     [Inject] protected IJSRuntime JsRuntime { get; set; } = null!;
     [Inject] private IMenuItemsProvider MenuItemsProvider { get; set; } = null!;
 
@@ -24,6 +34,13 @@ public partial class LayoutAreaView
     private NamedAreaControl NamedArea =>
         new(Area) { ShowProgress = showProgress, ProgressMessage = progressMessage, SpinnerType = ViewModel.SpinnerType };
 
+    /// <summary>
+    /// Responds to parameter changes by re-binding the view-model and, when the
+    /// area reference or target address has changed, disposing the stale stream
+    /// and opening a fresh one. Skips stream binding during Blazor pre-render
+    /// (only the first <c>OnAfterRenderAsync</c> triggers the actual stream).
+    /// </summary>
+    /// <param name="parameters">The incoming Blazor parameter set.</param>
     public override async Task SetParametersAsync(ParameterView parameters)
     {
         await base.SetParametersAsync(parameters);
@@ -85,6 +102,11 @@ public partial class LayoutAreaView
 
     private Address? Address { get; set; }
     private ISynchronizationStream<JsonElement>? AreaStream { get; set; }
+    /// <summary>
+    /// Disposes the area, dialog, and progress streams when the component is torn down
+    /// in interactive mode. In pre-render mode the streams were never bound, so disposal
+    /// is a no-op beyond calling the base implementation.
+    /// </summary>
     public override async ValueTask DisposeAsync()
     {
         if (IsNotPreRender)
@@ -110,6 +132,11 @@ public partial class LayoutAreaView
         await base.DisposeAsync();
     }
 
+    /// <summary>
+    /// Finalizer safety-net: disposes any streams that were not released by
+    /// <c>DisposeAsync</c> (e.g. if the component was abandoned without being
+    /// properly torn down by the Blazor runtime).
+    /// </summary>
     ~LayoutAreaView()
     {
         AreaStream?.Dispose();
@@ -283,6 +310,12 @@ public partial class LayoutAreaView
         }
     }
 
+    /// <summary>
+    /// On the first render, marks the component as interactive (<c>IsNotPreRender = true</c>)
+    /// and binds the area stream if it was not already bound during parameter setup.
+    /// Subsequent renders are no-ops beyond the base implementation.
+    /// </summary>
+    /// <param name="firstRender"><c>true</c> on the very first interactive render; <c>false</c> on re-renders.</param>
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         await base.OnAfterRenderAsync(firstRender);
@@ -301,6 +334,11 @@ public partial class LayoutAreaView
         }
     }
 
+    /// <summary>
+    /// <c>true</c> once the component has completed its first interactive render.
+    /// Stream binding and JavaScript interop are deferred until this flag is set
+    /// to avoid executing browser-dependent code during server-side pre-render.
+    /// </summary>
     protected bool IsNotPreRender { get; private set; }
 
 }

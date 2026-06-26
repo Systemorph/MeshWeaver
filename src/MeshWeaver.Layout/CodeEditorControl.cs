@@ -76,18 +76,57 @@ public record CodeEditorControl() : UiControl<CodeEditorControl>(ModuleSetup.Mod
     /// </summary>
     public IReadOnlyList<CodeEditorDiagnostic>? Diagnostics { get; init; }
 
+    /// <summary>Returns a copy with <paramref name="value"/> as its initial editor content.</summary>
+    /// <param name="value">The initial text content of the editor.</param>
+    /// <returns>A new instance with the updated Value.</returns>
     public CodeEditorControl WithValue(string value) => this with { Value = value };
+    /// <summary>Returns a copy with <paramref name="language"/> as the syntax-highlighting language.</summary>
+    /// <param name="language">The Monaco language id, e.g. "csharp", "javascript", "markdown".</param>
+    /// <returns>A new instance with the updated Language.</returns>
     public CodeEditorControl WithLanguage(string language) => this with { Language = language };
+    /// <summary>Returns a copy with <paramref name="theme"/> as the Monaco editor theme.</summary>
+    /// <param name="theme">The theme id, e.g. "vs", "vs-dark", "hc-black".</param>
+    /// <returns>A new instance with the updated Theme.</returns>
     public CodeEditorControl WithTheme(string theme) => this with { Theme = theme };
+    /// <summary>Returns a copy with the read-only flag set to <paramref name="readonly"/>.</summary>
+    /// <param name="readonly">True to make the editor read-only; false to allow editing.</param>
+    /// <returns>A new instance with the updated Readonly setting.</returns>
     public CodeEditorControl WithReadonly(bool @readonly) => this with { Readonly = @readonly };
+    /// <summary>Returns a copy with <paramref name="height"/> as the editor height CSS value.</summary>
+    /// <param name="height">A CSS height string, e.g. "300px" or "100%".</param>
+    /// <returns>A new instance with the updated Height.</returns>
     public CodeEditorControl WithHeight(string height) => this with { Height = height };
+    /// <summary>Returns a copy with line-number visibility set to <paramref name="show"/>.</summary>
+    /// <param name="show">True to show line numbers; false to hide them.</param>
+    /// <returns>A new instance with the updated LineNumbers setting.</returns>
     public CodeEditorControl WithLineNumbers(bool show) => this with { LineNumbers = show };
+    /// <summary>Returns a copy with the minimap enabled or disabled per <paramref name="enabled"/>.</summary>
+    /// <param name="enabled">True to show the minimap; false to hide it.</param>
+    /// <returns>A new instance with the updated Minimap setting.</returns>
     public CodeEditorControl WithMinimap(bool enabled) => this with { Minimap = enabled };
+    /// <summary>Returns a copy with word-wrap enabled or disabled per <paramref name="enabled"/>.</summary>
+    /// <param name="enabled">True to enable word-wrap; false to disable it.</param>
+    /// <returns>A new instance with the updated WordWrap setting.</returns>
     public CodeEditorControl WithWordWrap(bool enabled) => this with { WordWrap = enabled };
+    /// <summary>Returns a copy with <paramref name="placeholder"/> as the empty-editor placeholder text.</summary>
+    /// <param name="placeholder">The placeholder text shown when the editor is empty.</param>
+    /// <returns>A new instance with the updated Placeholder.</returns>
     public CodeEditorControl WithPlaceholder(string placeholder) => this with { Placeholder = placeholder };
+    /// <summary>Returns a copy with <paramref name="definitions"/> as extra type definitions for Monaco autocomplete.</summary>
+    /// <param name="definitions">Additional source code (e.g. type stubs) to include in the language service context.</param>
+    /// <returns>A new instance with the updated ExtraTypeDefinitions.</returns>
     public CodeEditorControl WithExtraTypeDefinitions(string definitions) => this with { ExtraTypeDefinitions = definitions };
+    /// <summary>
+    /// Returns a copy with Roslyn-backed live diagnostics enabled, using the specified node type and source paths.
+    /// </summary>
+    /// <param name="nodeTypePath">Path of the NodeType whose compilation hosts the source.</param>
+    /// <param name="sourcePath">Path of the Code MeshNode being edited.</param>
+    /// <returns>A new instance with the updated LanguageServer configuration.</returns>
     public CodeEditorControl WithLanguageServer(string nodeTypePath, string sourcePath) =>
         this with { LanguageServer = new CodeEditorLanguageServerConfig(nodeTypePath, sourcePath) };
+    /// <summary>Returns a copy with <paramref name="diagnostics"/> as the static diagnostic markers.</summary>
+    /// <param name="diagnostics">Pre-computed diagnostic markers to render as Monaco squiggles on load.</param>
+    /// <returns>A new instance with the updated Diagnostics.</returns>
     public CodeEditorControl WithDiagnostics(IReadOnlyList<CodeEditorDiagnostic> diagnostics) =>
         this with { Diagnostics = diagnostics };
 }

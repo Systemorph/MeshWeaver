@@ -113,6 +113,12 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
     /// <returns>A new <see cref="LayoutAreaControl"/> instance with the specified spinner type.</returns>
     public LayoutAreaControl WithSpinnerType(SpinnerType spinnerType) => this with { SpinnerType = spinnerType };
 
+    /// <summary>
+    /// Determines whether this instance is equal to another <see cref="LayoutAreaControl"/> by
+    /// comparing all significant properties (Address, Reference, ShowProgress, SpinnerType, ProgressMessage).
+    /// </summary>
+    /// <param name="other">The instance to compare with, or null.</param>
+    /// <returns>True if all significant properties match; false otherwise.</returns>
     public virtual bool Equals(LayoutAreaControl? other)
     {
         if (other is null) return false;
@@ -150,6 +156,9 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
         );
     }
 
+    /// <summary>Returns a copy with the loading indicator visibility set to <paramref name="showProgress"/>.</summary>
+    /// <param name="showProgress">True to show the spinner while the area is loading; false to hide it.</param>
+    /// <returns>A new <see cref="LayoutAreaControl"/> with the updated show-progress setting.</returns>
     public LayoutAreaControl WithShowProgress(bool showProgress)
         => this with { ShowProgress = showProgress };
 }

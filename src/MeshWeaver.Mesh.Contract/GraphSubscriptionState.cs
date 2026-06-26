@@ -12,6 +12,7 @@ namespace MeshWeaver.Mesh;
 /// </summary>
 public record GraphSubscriptionState
 {
+    /// <summary>Stable satellite id; one subscription state per inbox, so it is constant.</summary>
     [Browsable(false)]
     [Key]
     public string Id { get; init; } = "inbox";   // one per inbox → stable id

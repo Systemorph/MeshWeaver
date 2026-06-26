@@ -44,6 +44,12 @@ internal static class OrleansRouteTrace
     }
 }
 
+/// <summary>
+/// Orleans implementation of <see cref="IRoutingService"/>. Delivers messages either to a
+/// locally registered stream (portals / in-process clients) or, for everything else, via
+/// the silo-side routing grain with retry-on-transient-failure. Also bridges registration
+/// of Orleans memory streams so cross-process deliveries reach local hubs.
+/// </summary>
 public class OrleansRoutingService : IRoutingService, IDisposable
 {
     private readonly IGrainFactory grainFactory;
@@ -61,6 +67,13 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     // UnsubscribeAsync, never a sustained fan-out.
     private const string StreamPoolName = "RoutingStream";
 
+    /// <summary>
+    /// Creates the routing service.
+    /// </summary>
+    /// <param name="grainFactory">Factory used to obtain the silo-side routing grain.</param>
+    /// <param name="serviceProvider">Service provider used to resolve the mesh hub, access
+    /// service, stream providers, and the mesh-scoped IO pool.</param>
+    /// <param name="logger">Logger for delivery diagnostics.</param>
     public OrleansRoutingService(
         IGrainFactory grainFactory,
         IServiceProvider serviceProvider,
@@ -73,6 +86,14 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                  ?? IoPool.Unbounded;
     }
 
+    /// <summary>
+    /// Routes a message delivery to its target. Locally registered streams are invoked
+    /// inline; otherwise the delivery is dispatched in the background through the routing
+    /// grain (with retry/backoff) and the caller immediately receives the forwarded delivery.
+    /// </summary>
+    /// <param name="delivery">The message delivery envelope to route.</param>
+    /// <returns>A cold observable that, on subscribe, performs the routing and emits the
+    /// resulting (or forwarded) delivery.</returns>
     public IObservable<IMessageDelivery> DeliverMessage(IMessageDelivery delivery)
     {
         return Observable.Defer(() =>
@@ -259,6 +280,14 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             || (ex.InnerException != null && IsTransientFailure(ex.InnerException));
     }
 
+    /// <summary>
+    /// Registers a local delivery callback for an address and subscribes the matching Orleans
+    /// memory stream so cross-process messages for that address are routed into the callback.
+    /// </summary>
+    /// <param name="address">The mesh address this callback serves.</param>
+    /// <param name="callback">The delivery callback invoked for messages targeting the address.</param>
+    /// <returns>A disposable that removes the local route and unsubscribes the Orleans stream
+    /// (the async unsubscribe is bridged onto the mesh IO pool).</returns>
     public IDisposable RegisterStream(Address address, AsyncDelivery callback)
     {
         streams[address] = callback;
@@ -334,6 +363,10 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         return address;
     }
 
+    /// <summary>
+    /// Marks the service disposed (preventing new grain dispatches) and tears down any
+    /// in-flight background dispatch subscriptions.
+    /// </summary>
     public void Dispose()
     {
         disposed = true;

@@ -30,7 +30,10 @@ namespace MeshWeaver.Social;
 /// </summary>
 public sealed class LinkedInPublisher : IPlatformPublisher
 {
+    /// <summary>The platform identifier ("LinkedIn") used to match posts to this publisher.</summary>
     public const string PlatformId = "LinkedIn";
+
+    /// <inheritdoc />
     public string Platform => PlatformId;
 
     private static readonly Uri ApiBase = new("https://api.linkedin.com/");
@@ -40,6 +43,12 @@ public sealed class LinkedInPublisher : IPlatformPublisher
     private readonly ILogger<LinkedInPublisher>? _logger;
     private readonly LinkedInOptions _options;
 
+    /// <summary>
+    /// Initializes a new instance of the <c>LinkedInPublisher</c> class.
+    /// </summary>
+    /// <param name="http">HTTP client used for LinkedIn API calls and token refresh.</param>
+    /// <param name="options">App-level LinkedIn OAuth configuration.</param>
+    /// <param name="logger">Optional logger for diagnostics.</param>
     public LinkedInPublisher(HttpClient http, LinkedInOptions options, ILogger<LinkedInPublisher>? logger = null)
     {
         _http = http;
@@ -47,6 +56,7 @@ public sealed class LinkedInPublisher : IPlatformPublisher
         _logger = logger;
     }
 
+    /// <inheritdoc />
     public async Task<PublishResult> PublishAsync(PlatformPublishRequest request, CancellationToken ct)
     {
         var credential = await EnsureFreshAsync(request.Credential, ct);
@@ -163,6 +173,7 @@ public sealed class LinkedInPublisher : IPlatformPublisher
         return (retryResp, refreshed);
     }
 
+    /// <inheritdoc />
     public async Task<PostStats> GetStatsAsync(string urn, PlatformCredential credential, CancellationToken ct)
     {
         credential = await EnsureFreshAsync(credential, ct);
@@ -192,6 +203,7 @@ public sealed class LinkedInPublisher : IPlatformPublisher
         return new PostStats(Impressions: 0, Likes: likes, Comments: comments, Shares: 0, RetrievedAt: DateTimeOffset.UtcNow);
     }
 
+    /// <inheritdoc />
     public async IAsyncEnumerable<PastPost> ListPastPostsAsync(
         PlatformCredential credential,
         DateTimeOffset? sinceInclusive,
@@ -278,6 +290,7 @@ public sealed class LinkedInPublisher : IPlatformPublisher
         }
     }
 
+    /// <inheritdoc />
     public async IAsyncEnumerable<EngagementComment> ListCommentsAsync(
         string urn,
         PlatformCredential credential,
@@ -339,6 +352,7 @@ public sealed class LinkedInPublisher : IPlatformPublisher
         }
     }
 
+    /// <inheritdoc />
     public async IAsyncEnumerable<EngagementLike> ListLikesAsync(
         string urn,
         PlatformCredential credential,
@@ -450,6 +464,9 @@ public sealed class LinkedInPublisher : IPlatformPublisher
 /// </summary>
 public sealed record LinkedInOptions
 {
+    /// <summary>The OAuth app client identifier.</summary>
     public required string ClientId { get; init; }
+
+    /// <summary>The OAuth app client secret.</summary>
     public required string ClientSecret { get; init; }
 }

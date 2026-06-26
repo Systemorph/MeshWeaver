@@ -44,6 +44,11 @@ public sealed class CopilotConnectStrategy : IConnectStrategy
     private readonly IIoPool processPool;
     private readonly IIoPool httpPool;
 
+    /// <summary>
+    /// Creates the strategy, resolving the Process and Http I/O pools from the service provider's
+    /// <see cref="IoPoolRegistry"/> (falling back to an unbounded pool when none is registered).
+    /// </summary>
+    /// <param name="services">Service provider used to resolve logging, options, and the I/O pool registry.</param>
     public CopilotConnectStrategy(IServiceProvider services)
     {
         this.services = services;
@@ -53,6 +58,7 @@ public sealed class CopilotConnectStrategy : IConnectStrategy
         httpPool = registry?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
     }
 
+    /// <summary>The Connect provider this strategy drives — <see cref="ConnectProvider.Copilot"/>.</summary>
     public ConnectProvider Provider => ConnectProvider.Copilot;
 
     /// <summary>Copilot is device-flow — nothing to paste; the manager auto-polls to completion.</summary>
@@ -72,9 +78,23 @@ public sealed class CopilotConnectStrategy : IConnectStrategy
     public IObservable<bool> IsLoggedIn(string? userConfigDir)
         => httpPool.Invoke(ct => GetIsAuthenticatedAsync(userConfigDir, ct));
 
+    /// <summary>
+    /// Starts the device-flow login by spawning the configured login command and scraping the
+    /// verification URL and user code from its output.
+    /// </summary>
+    /// <param name="session">The connect session whose spawned process and config dir are tracked.</param>
+    /// <param name="ownerPath">Mesh path of the node that owns this connection.</param>
+    /// <returns>A stream emitting the <see cref="ConnectChallenge"/> (URL + user code) once both are scraped.</returns>
     public IObservable<ConnectChallenge> StartConnect(ConnectSession session, string ownerPath)
         => SpawnAndScrapeDeviceCode(session, Options);
 
+    /// <summary>
+    /// Completes the device-flow login by polling <c>GetAuthStatusAsync().IsAuthenticated</c> until the
+    /// user finishes in the browser, then returns the captured GitHub token.
+    /// </summary>
+    /// <param name="session">The connect session started by <see cref="StartConnect"/>.</param>
+    /// <param name="pastedCode">Unused for Copilot (device-flow auto-polls); present for the interface contract.</param>
+    /// <returns>A stream emitting the captured GitHub token once authentication succeeds.</returns>
     public IObservable<string> CompleteConnect(ConnectSession session, string? pastedCode)
     {
         var options = Options;
@@ -246,7 +266,12 @@ public sealed class CopilotConnectOptions
     /// <summary>An env var a test sets to inject the captured token, short-circuiting the poll.</summary>
     public string? TokenEnvironmentVariable { get; set; }
 
+    /// <summary>Maximum time to wait for the device code to appear in the login command's output.</summary>
     public TimeSpan DeviceCodeTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>Maximum time to wait for the user to complete browser authentication before timing out.</summary>
     public TimeSpan PollTimeout { get; set; } = TimeSpan.FromMinutes(4);
+
+    /// <summary>Delay between successive auth-status poll iterations.</summary>
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(3);
 }

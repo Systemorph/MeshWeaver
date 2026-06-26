@@ -6,6 +6,9 @@ namespace MeshWeaver.Blazor.Portal.Authentication;
 /// </summary>
 public class AuthenticationOptions
 {
+    /// <summary>
+    /// The configuration section name (<c>Authentication</c>) these options bind to.
+    /// </summary>
     public const string SectionName = "Authentication";
 
     /// <summary>
@@ -80,10 +83,16 @@ public record ExternalProviderConfig
 /// </summary>
 public static class AuthenticationProviders
 {
+    /// <summary>The developer login provider, showing a user list for quick local sign-in.</summary>
     public const string Dev = "Dev";
+    /// <summary>The Microsoft Identity (Entra ID / Azure AD) provider.</summary>
     public const string MicrosoftIdentity = "MicrosoftIdentity";
+    /// <summary>The Google OAuth provider.</summary>
     public const string Google = "Google";
+    /// <summary>The LinkedIn OAuth provider.</summary>
     public const string LinkedIn = "LinkedIn";
+    /// <summary>The Apple Sign In provider.</summary>
     public const string Apple = "Apple";
+    /// <summary>A custom, externally configured authentication provider.</summary>
     public const string Custom = "Custom";
 }

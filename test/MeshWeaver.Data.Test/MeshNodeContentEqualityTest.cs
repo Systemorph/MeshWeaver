@@ -10,7 +10,7 @@ namespace MeshWeaver.Data.Test;
 /// Pins the sync fan-out amplifier behind <see cref="MeshNode"/> value equality.
 ///
 /// <para><see cref="MeshNode.Content"/> is an <c>object?</c> that, on the
-/// <see cref="IMeshNodeStreamCache"/> / cross-hub-sync side, is a
+/// <c>IMeshNodeStreamCache</c> / cross-hub-sync side, is a
 /// <see cref="JsonElement"/> (the cache hub does not know domain types, so Content
 /// lands there as raw JSON). A <c>JsonElement</c> has NO structural equality — two
 /// elements with identical JSON are never <c>.Equals</c> — so the compiler-synthesized

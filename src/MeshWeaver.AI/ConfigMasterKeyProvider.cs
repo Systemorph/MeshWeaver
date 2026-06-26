@@ -24,10 +24,16 @@ namespace MeshWeaver.AI;
 /// </summary>
 public sealed class ConfigMasterKeyProvider : IMasterKeyProvider
 {
+    /// <summary>Configuration key holding the base64 master key: <c>Ai:KeyProtection:MasterKey</c>.</summary>
     public const string ConfigKey = "Ai:KeyProtection:MasterKey";
 
     private readonly byte[]? masterKey;
 
+    /// <summary>
+    /// Reads the configured master key from <see cref="ConfigKey"/>, deriving a stable 32-byte AES
+    /// key via SHA-256. When absent/blank, leaves the key null so encryption falls back to plaintext.
+    /// </summary>
+    /// <param name="services">Service provider supplying configuration and the logger factory.</param>
     public ConfigMasterKeyProvider(IServiceProvider services)
     {
         var logger = services.GetService<ILoggerFactory>()?.CreateLogger<ConfigMasterKeyProvider>();
@@ -49,5 +55,6 @@ public sealed class ConfigMasterKeyProvider : IMasterKeyProvider
         logger?.LogInformation("Provider-key encryption ENABLED (master key from {ConfigKey}).", ConfigKey);
     }
 
+    /// <summary>Returns the derived 32-byte AES master key, or <c>null</c> when encryption is disabled (no key configured).</summary>
     public byte[]? GetMasterKey() => masterKey;
 }

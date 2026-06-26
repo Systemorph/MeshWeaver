@@ -10,23 +10,33 @@ using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor.Portal.Components;
 
+/// <summary>
+/// Global mesh search bar for the portal shell. Debounces keystrokes through a reactive
+/// pipeline, renders progressive suggestions, and routes plain queries, <c>@path</c>
+/// navigation, and <c>@path query</c> scoped searches. Activated by the <c>/</c> shortcut.
+/// </summary>
 public partial class SearchBar : IDisposable
 {
     private const string SearchPlaceholder = "Search the mesh... (e.g. nodeType:Story status:Open)";
     private const int MaxResults = 10;
 
+    /// <summary>Navigation manager used to route to nodes and the search results page.</summary>
     [Inject]
     public required NavigationManager NavigationManager { get; set; }
 
+    /// <summary>Global key-code service; the bar registers a <c>/</c> listener to grab focus.</summary>
     [Inject]
     public required IKeyCodeService KeyCodeService { get; set; }
 
+    /// <summary>Message hub used to resolve the mesh service that backs suggestions.</summary>
     [Inject]
     public required IMessageHub Hub { get; set; }
 
+    /// <summary>Optional navigation service supplying the current namespace to scope suggestions.</summary>
     [Inject]
     public INavigationService? NavigationService { get; set; }
 
+    /// <summary>JS runtime used to detect whether an editor/input is focused before grabbing focus.</summary>
     [Inject]
     public required IJSRuntime JSRuntime { get; set; }
 
@@ -51,6 +61,11 @@ public partial class SearchBar : IDisposable
     /// marks the frame after the source has quieted (drops the progress bar).</summary>
     private readonly record struct SearchFrame(IReadOnlyList<QuerySuggestion> Suggestions, bool Settled);
 
+    /// <summary>
+    /// Registers the <c>/</c> key listener and wires the reactive suggestion pipeline:
+    /// keystrokes are throttled, switched to the latest term's live suggestion stream,
+    /// and bound progressively until the source settles.
+    /// </summary>
     protected override void OnInitialized()
     {
         KeyCodeService.RegisterListener(OnKeyDownAsync);
@@ -92,6 +107,12 @@ public partial class SearchBar : IDisposable
         StateHasChanged();
     });
 
+    /// <summary>
+    /// Global key handler: when <c>/</c> is pressed outside a text field, editor, or
+    /// content-editable element, moves focus into the search input.
+    /// </summary>
+    /// <param name="args">The key-code event, or <c>null</c> when no key is available.</param>
+    /// <returns>A task that completes once the focus check (and any focus shift) is done.</returns>
     public async Task OnKeyDownAsync(FluentKeyCodeEventArgs? args)
     {
         if (args is not null && args.Key == KeyCode.Slash)
@@ -278,6 +299,10 @@ public partial class SearchBar : IDisposable
         return lastSlash >= 0 ? nodeType[(lastSlash + 1)..] : nodeType;
     }
 
+    /// <summary>
+    /// Unregisters the key listener and disposes the search/defaults subscriptions and the
+    /// terms subject.
+    /// </summary>
     public void Dispose()
     {
         KeyCodeService.UnregisterListener(OnKeyDownAsync, OnKeyDownAsync);

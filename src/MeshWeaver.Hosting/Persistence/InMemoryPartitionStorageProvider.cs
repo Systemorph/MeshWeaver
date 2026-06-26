@@ -56,6 +56,11 @@ public sealed class InMemoryPartitionStorageProvider : IPartitionStorageProvider
     /// name (e.g. <c>"InMemory:Release"</c>) so log lines distinguish multiple
     /// in-memory providers.
     /// </param>
+    /// <param name="priority">
+    /// Claim priority. Defaults to <c>0</c> so the unscoped catch-all only claims
+    /// after every durable backend (Priority 100) has declined; scoped providers
+    /// may pass a higher value to claim their slice first.
+    /// </param>
     public InMemoryPartitionStorageProvider(
         InMemoryStorageAdapter adapter,
         IEnumerable<string>? contexts = null,

@@ -11,6 +11,7 @@ namespace MeshWeaver.Mesh;
 /// </summary>
 public record TeamsConversation
 {
+    /// <summary>Stable satellite id; one Teams conversation per thread, so it is constant.</summary>
     [Browsable(false)]
     [Key]
     public string Id { get; init; } = "teams-conversation";   // one per thread → stable id

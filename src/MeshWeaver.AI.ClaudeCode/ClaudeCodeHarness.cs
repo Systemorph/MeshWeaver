@@ -18,8 +18,13 @@ public sealed class ClaudeCodeHarness(IOptions<ClaudeCodeConfiguration> options)
 {
     private readonly ClaudeCodeConfiguration configuration = options.Value ?? new ClaudeCodeConfiguration();
 
+    /// <summary>The stable identifier for this harness (<c>Harnesses.ClaudeCode</c>).</summary>
     public string Id => Harnesses.ClaudeCode;
 
+    /// <summary>
+    /// The harness descriptor surfaced in the UI: id, display name, description, inline SVG icon,
+    /// ordering, and agent-selection support.
+    /// </summary>
     public Harness Definition => new()
     {
         Id = Harnesses.ClaudeCode,
@@ -35,14 +40,30 @@ public sealed class ClaudeCodeHarness(IOptions<ClaudeCodeConfiguration> options)
     // Claude Code owns its auth slash-commands: /login (re)authenticates the user's Claude
     // subscription via the Connect flow; /logout forgets the stored token. When this harness is the
     // active one, these REPLACE MeshWeaver's /agent /model in the chat autocomplete + dispatch.
+    /// <summary>
+    /// The harness-owned chat slash-commands: <c>/login</c> to (re)authenticate the user's Claude
+    /// subscription via the Connect flow and <c>/logout</c> to forget the stored token. When this
+    /// harness is active these replace MeshWeaver's <c>/agent</c> and <c>/model</c> commands.
+    /// </summary>
     public IReadOnlyList<HarnessCommand> Commands { get; } =
     [
         new("login", "Log in to your Claude subscription", HarnessCommandKind.Connect),
         new("logout", "Log out of Claude Code", HarnessCommandKind.Disconnect),
     ];
 
+    /// <summary>
+    /// The Connect provider used by this harness's <c>/login</c> and <c>/logout</c> commands to
+    /// manage the user's Claude subscription token.
+    /// </summary>
     public Connect.ConnectProvider? AuthProvider => Connect.ConnectProvider.ClaudeCode;
 
+    /// <summary>
+    /// Builds a per-user <see cref="ClaudeCodeChatClient"/> for the round, resolving the calling
+    /// user's identity, Connect (subscription) token, per-user config dir, and MCP back-connection
+    /// from the execution context. No model is forwarded — the CLI uses the user's own subscription.
+    /// </summary>
+    /// <param name="context">The harness execution context carrying the message hub and, through it, the calling user's access context and services.</param>
+    /// <returns>A chat client bound to the calling user, or <c>null</c> if one cannot be created.</returns>
     public IChatClient? CreateChatClient(HarnessExecutionContext context)
     {
         var hub = context.Hub;

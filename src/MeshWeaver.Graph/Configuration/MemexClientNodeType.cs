@@ -29,6 +29,7 @@ public record MemexClientContent
 
     /// <summary>Voice on/off and the wake word that starts capture.</summary>
     public bool VoiceEnabled { get; init; } = true;
+    /// <summary>The spoken wake word that starts voice capture (defaults to "memex").</summary>
     public string WakeWord { get; init; } = "memex";
 
     /// <summary>Last time this installation checked in (the client stamps it on connect).</summary>

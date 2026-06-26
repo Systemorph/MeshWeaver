@@ -17,21 +17,51 @@ namespace MeshWeaver.Blazor.Components;
 /// </summary>
 public class MarkdownHtmlRenderer
 {
+    /// <summary>
+    /// Captures a Unified Content Reference (UCR) link encountered during HTML rendering,
+    /// used to build the "References" section appended below the document body.
+    /// </summary>
+    /// <param name="RawPath">The raw UCR path as it appears in the markdown source (e.g. <c>@/Doc/Foo</c>).</param>
+    /// <param name="Href">The resolved href attribute emitted in the rendered anchor element.</param>
+    /// <param name="DisplayText">The link label shown to the reader.</param>
     public record UcrReference(string RawPath, string Href, string DisplayText);
 
+    /// <summary>
+    /// Accumulates all <c>UcrReference</c> instances encountered during the most recent
+    /// <c>RenderHtml</c> call, used to populate the references section.
+    /// </summary>
     public List<UcrReference> References { get; } = new();
+
+    /// <summary>
+    /// When <c>true</c> (the default), a "References" section listing all UCR links found in the
+    /// document is appended after the main content.
+    /// </summary>
     public bool ShowReferencesSection { get; set; } = true;
 
     private List<string> _svgBlocks = new();
     private readonly DesignThemeModes _mode;
     private readonly ISynchronizationStream? _stream;
 
+    /// <summary>
+    /// Initialises the renderer with the current UI theme and an optional synchronization stream
+    /// used to resolve the owner address for self-reference filtering.
+    /// </summary>
+    /// <param name="mode">The active design theme (light/dark) passed to mermaid and code-block components.</param>
+    /// <param name="stream">The synchronization stream whose owner address is used to suppress self-referential UCR entries; may be <c>null</c>.</param>
     public MarkdownHtmlRenderer(DesignThemeModes mode, ISynchronizationStream? stream)
     {
         _mode = mode;
         _stream = stream;
     }
 
+    /// <summary>
+    /// Walks the HtmlAgilityPack DOM of <paramref name="html"/> and emits the corresponding
+    /// Blazor render-tree frames, dispatching UCR links, layout areas, code blocks, mermaid
+    /// diagrams, math, and SVG to their respective Blazor components. Appends a references
+    /// section when UCR links are found and <c>ShowReferencesSection</c> is enabled.
+    /// </summary>
+    /// <param name="builder">The Blazor <c>RenderTreeBuilder</c> receiving all emitted frames.</param>
+    /// <param name="html">Pre-rendered HTML string produced by Markdig; <c>null</c> is a no-op.</param>
     public void RenderHtml(RenderTreeBuilder builder, string? html)
     {
         if (html is null)

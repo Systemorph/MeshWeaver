@@ -9,6 +9,10 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Blazor.Portal;
 
+/// <summary>
+/// Extension methods for registering Blazor portal services (dimension management, cache storage,
+/// app version, autocomplete, side panel state, and the route constraints used by portal pages).
+/// </summary>
 public static class BlazorPortalExtensions
 {
     /// <summary>

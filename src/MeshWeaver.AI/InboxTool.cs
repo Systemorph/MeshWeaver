@@ -45,8 +45,10 @@ public sealed record InboxDrainResult(
 /// </summary>
 public static class InboxTool
 {
+    /// <summary>The AI-function name the agent calls to poll for new user messages.</summary>
     public const string ToolName = "check_inbox";
 
+    /// <summary>The tool description shown to the model, instructing when and how to call <c>check_inbox</c>.</summary>
     public const string ToolDescription =
         "Check if the user has sent any new messages while you were working. " +
         "Call this between major steps — after each tool call or before starting a new file edit — " +

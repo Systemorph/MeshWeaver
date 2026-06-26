@@ -8,10 +8,24 @@ namespace MeshWeaver.Blazor.Components;
 /// </summary>
 public class ChatSubmissionHandler : IDisposable
 {
+    /// <summary>
+    /// Tracks the current phase of a chat submission cycle so that the UI can
+    /// block duplicate submissions and disable the input field at the right times.
+    /// </summary>
     public enum SubmissionState
     {
+        /// <summary>
+        /// No submission in progress; the input field is enabled and ready to accept text.
+        /// </summary>
         Idle,
+        /// <summary>
+        /// A message has been accepted and is being posted to the thread — the input field is disabled.
+        /// </summary>
         Submitting,
+        /// <summary>
+        /// The message has been posted and the handler is waiting for the user message
+        /// to appear in the thread display before re-enabling input.
+        /// </summary>
         WaitingForResponse
     }
 
@@ -40,6 +54,17 @@ public class ChatSubmissionHandler : IDisposable
     /// </summary>
     public int SubmissionCount { get; private set; }
 
+    /// <summary>
+    /// Creates a new <c>ChatSubmissionHandler</c>.
+    /// </summary>
+    /// <param name="dedupWindow">
+    /// How long after an accepted submission the same text is silently rejected to guard
+    /// against accidental double-clicks. Defaults to 500 ms.
+    /// </param>
+    /// <param name="now">
+    /// Clock factory used to determine whether the dedup window has elapsed.
+    /// Defaults to <c>DateTime.UtcNow</c>. Override in unit tests for deterministic timing.
+    /// </param>
     public ChatSubmissionHandler(
         TimeSpan? dedupWindow = null,
         Func<DateTime>? now = null)
@@ -114,6 +139,10 @@ public class ChatSubmissionHandler : IDisposable
         State = SubmissionState.Idle;
     }
 
+    /// <summary>
+    /// Marks the handler as disposed so that subsequent <c>TryBeginSubmit</c> calls
+    /// return <c>false</c> without side effects.
+    /// </summary>
     public void Dispose()
     {
         _disposed = true;

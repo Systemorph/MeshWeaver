@@ -12,9 +12,16 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class ApiTokenLayoutAreas
 {
+    /// <summary>Area name for the Overview layout area.</summary>
     public const string OverviewArea = "Overview";
+    /// <summary>Area name for the Thumbnail layout area.</summary>
     public const string ThumbnailArea = "Thumbnail";
 
+    /// <summary>
+    /// Registers the ApiToken layout-area views (Overview, Thumbnail) on the hub configuration.
+    /// </summary>
+    /// <param name="configuration">The message hub configuration to register the views on.</param>
+    /// <returns>The same configuration with the ApiToken views added, for chaining.</returns>
     public static MessageHubConfiguration AddApiTokenViews(this MessageHubConfiguration configuration)
         => configuration
             .AddLayout(layout => layout
@@ -22,6 +29,12 @@ public static class ApiTokenLayoutAreas
                 .WithView(OverviewArea, Overview)
                 .WithView(ThumbnailArea, Thumbnail));
 
+    /// <summary>
+    /// Renders the Overview area for an ApiToken node: a markdown table of label, user, status, and timestamps.
+    /// </summary>
+    /// <param name="host">The layout area host rendering the area.</param>
+    /// <param name="_">The rendering context for the area.</param>
+    /// <returns>An observable stream of the Overview view for the API token.</returns>
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         return host.Workspace.GetMeshNodeStream()
@@ -54,6 +67,12 @@ public static class ApiTokenLayoutAreas
             });
     }
 
+    /// <summary>
+    /// Renders the Thumbnail area for an ApiToken node: a compact label plus active/revoked status.
+    /// </summary>
+    /// <param name="host">The layout area host rendering the area.</param>
+    /// <param name="_">The rendering context for the area.</param>
+    /// <returns>An observable stream of the Thumbnail view for the API token.</returns>
     public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
         return host.Workspace.GetMeshNodeStream()

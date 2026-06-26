@@ -39,6 +39,15 @@ public sealed class ScheduledPostPublisher : BackgroundService
     // no registry is wired (tests).
     private readonly IIoPool _http;
 
+    /// <summary>
+    /// Initializes a new instance of the <c>ScheduledPostPublisher</c> class.
+    /// </summary>
+    /// <param name="queue">Queue of due, approved posts to drain and publish.</param>
+    /// <param name="publishers">Registered platform publishers, matched by platform name.</param>
+    /// <param name="bridge">Bridge that applies the publish result back onto the post node.</param>
+    /// <param name="options">Social publish configuration (tick interval, max attempts).</param>
+    /// <param name="logger">Optional logger for diagnostics.</param>
+    /// <param name="registry">Optional I/O pool registry; falls back to the unbounded pool in tests.</param>
     public ScheduledPostPublisher(
         IPublishQueue queue,
         IEnumerable<IPlatformPublisher> publishers,
@@ -55,6 +64,12 @@ public sealed class ScheduledPostPublisher : BackgroundService
         _http = registry?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
     }
 
+    /// <summary>
+    /// Runs the publish loop: on each tick, drains due items from the queue and
+    /// publishes each (with retry) until the host stops.
+    /// </summary>
+    /// <param name="stoppingToken">Token signalling host shutdown.</param>
+    /// <returns>A task that completes when the host stops the service.</returns>
     // BackgroundService boundary — single .ToTask() bridge for the framework's Task
     // contract. Inside is one observable chain; the rest of the file is reactive.
     protected override Task ExecuteAsync(CancellationToken stoppingToken)

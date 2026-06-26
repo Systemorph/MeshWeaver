@@ -194,6 +194,16 @@ public static class ActivityControlPlaneExtensions
     /// re-establish ONLY for genuinely transient faults (a hub hiccup where the activity
     /// is still alive and must not be left unobserved).</para>
     /// </summary>
+    /// <typeparam name="T">Element type produced by the observed source.</typeparam>
+    /// <param name="source">Factory that (re-)creates the observable to watch; called once per
+    /// establish attempt so each re-establish gets a fresh subscription.</param>
+    /// <param name="onNext">Invoked for every element the source emits.</param>
+    /// <param name="address">The hub/node address this watcher belongs to (used for log context and
+    /// own-node-gone detection).</param>
+    /// <param name="logger">Optional logger for transient-fault and terminal-stop diagnostics.</param>
+    /// <param name="faultLogContext">Short human-readable name of the watcher, included in fault logs.</param>
+    /// <param name="onTransientFault">Optional callback run before a transient re-establish, e.g. to
+    /// release a single-flight guard a faulted in-flight dispatch may have left set.</param>
     /// <param name="scheduleReEstablish">Test seam for how a transient re-establish is
     /// scheduled. Production default is a 1 s <see cref="Observable.Timer(TimeSpan)"/>
     /// off the action block.</param>

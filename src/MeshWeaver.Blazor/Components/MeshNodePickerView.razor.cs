@@ -12,6 +12,12 @@ using Microsoft.AspNetCore.Components.Web;
 
 namespace MeshWeaver.Blazor.Components;
 
+/// <summary>
+/// Blazor view for <c>MeshNodePickerControl</c> — a combobox that lets the user search for and
+/// select a mesh node by path, backed by one or more mesh queries plus optional pre-loaded
+/// <c>Items</c>. Supports keyboard navigation, debounced remote search, DefaultToFirst
+/// auto-selection, and both normal and thin/upward-opening layout modes.
+/// </summary>
 public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerControl, MeshNodePickerView, string>
 {
     [Inject]
@@ -45,6 +51,10 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
     private bool IsThin => ViewModel?.Layout == MeshNodePickerLayout.Thin;
     private bool OpensUp => ViewModel?.Open == MeshNodePickerOpenDirection.Up;
 
+    /// <summary>
+    /// Binds the pre-loaded <c>Items</c> collection from the view-model and delegates to the
+    /// base class to wire up the common form data-binding pipeline.
+    /// </summary>
     protected override void BindData()
     {
         DataBind(ViewModel.Items, x => x.BoundItems, ConvertItems);
@@ -69,6 +79,11 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
         return defaultValue;
     }
 
+    /// <summary>
+    /// After parameters are applied, resolves the display node when a non-empty <c>Value</c>
+    /// arrives that does not match the current selection, or triggers DefaultToFirst
+    /// auto-selection when the value is still empty and the option is enabled.
+    /// </summary>
     protected override void OnParametersSet()
     {
         base.OnParametersSet();
@@ -98,6 +113,11 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
         LoadResultsAsync();
     }
 
+    /// <summary>
+    /// After each render, focuses the search input field when the dropdown has just been opened
+    /// so the user can start typing immediately without a manual click.
+    /// </summary>
+    /// <param name="firstRender">Whether this is the first render of the component.</param>
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         await base.OnAfterRenderAsync(firstRender);

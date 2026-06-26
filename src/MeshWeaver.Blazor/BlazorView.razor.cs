@@ -18,46 +18,85 @@ using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor;
 
+/// <summary>
+/// Base Blazor view component that pairs a <typeparamref name="TViewModel"/> control model with its
+/// concrete <typeparamref name="TView"/> Razor component. Manages reactive data bindings, cascading
+/// parameters, stream subscriptions, and lifecycle disposal for all layout-area views.
+/// </summary>
+/// <typeparam name="TViewModel">The <c>IUiControl</c> view-model type this component renders.</typeparam>
+/// <typeparam name="TView">The concrete Blazor component type that inherits this base class.</typeparam>
 public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     where TViewModel : IUiControl
     where TView : BlazorView<TViewModel, TView>
 {
+    /// <summary>Logger scoped to the concrete view type, used for debug/trace binding lifecycle messages.</summary>
     [Inject] protected ILogger<TView> Logger { get; set; } = null!;
+    /// <summary>Portal application root, providing the <c>Hub</c> and other portal-wide services.</summary>
     [Inject] protected PortalApplication PortalApplication { get; set; } = null!;
+    /// <summary>JavaScript interop runtime, used for theme detection and other JS bridge calls.</summary>
     [Inject] protected IJSRuntime JSRuntime { get; set; } = null!;
+    /// <summary>
+    /// The circuit's <c>AccessService</c>. Set by <c>CircuitAccessHandler</c> to the clicking user's
+    /// identity so that user-driven messages such as <c>ClickedEvent</c> carry the correct
+    /// <c>AccessContext</c> across the sync-stream boundary.
+    /// </summary>
     // The circuit's AccessService — CircuitAccessHandler sets the clicking user's identity on it. Used to
     // stamp user-driven messages (ClickedEvent) so they don't lose identity crossing the sync-stream
     // boundary (Stream.Hub is the sync hub, whose AccessService has no user context).
     [Inject] protected AccessService AccessService { get; set; } = null!;
+    /// <summary>
+    /// Circuit-scoped service provider. Used to resolve optional services such as
+    /// <c>PortalErrorSink</c> that non-portal hosts (e.g. MAUI) do not register.
+    /// </summary>
     // The circuit's service provider — used to resolve the optional PortalErrorSink (modal surface) for
     // SurfaceError. Resolved lazily (GetService, not [Inject]) because non-portal hosts (e.g. the MAUI
     // client) don't register the sink.
     [Inject] protected IServiceProvider Services { get; set; } = null!;
+    /// <summary>The portal's message hub, shortcut via <c>PortalApplication.Hub</c>.</summary>
     protected IMessageHub Hub => PortalApplication.Hub;
+    /// <summary>The control view-model that drives this component's rendered output.</summary>
     [Parameter] public required TViewModel ViewModel { get; set; } 
 
+    /// <summary>Synchronization stream supplying data-bound values for JSON-pointer references in this area.</summary>
     [Parameter] public ISynchronizationStream<JsonElement>? Stream { get; set; } 
+    /// <summary>The layout-area path identifier for this component within the page hierarchy.</summary>
     [Parameter] public string Area { get; set; } = null!;
 
+    /// <summary>Optional context object cascaded down the component tree, providing ambient data for <c>ContextProperty</c> bindings.</summary>
     [CascadingParameter(Name = "Context")] public object? Context { get; set; }
 
+    /// <summary>Current Fluent UI design theme mode (light/dark/system), cascaded from the root layout.</summary>
     [CascadingParameter(Name = "ThemeMode")]
     public DesignThemeModes Mode { get; set; }
 
+    /// <summary>
+    /// The data-context path cascaded from a parent container. JSON-pointer references without a leading
+    /// <c>/</c> are resolved relative to this path.
+    /// </summary>
     [CascadingParameter(Name = nameof(DataContext))]
     public string? DataContext { get; set; }
 
+    /// <summary>
+    /// Inline model parameter cascaded by container views. When set, pointer references without a
+    /// leading <c>/</c> are resolved against this model rather than the synchronization stream.
+    /// </summary>
     [CascadingParameter(Name = nameof(Model))]
     public ModelParameter<JsonElement>? Model { get; set; }
 
+    /// <summary>Inline CSS style string bound from <c>ViewModel.Style</c>; applied to the root element.</summary>
     protected string? Style { get; set; }
 
+    /// <summary>Tears down previous data bindings and rebuilds them after every Blazor parameter update.</summary>
     protected override void OnParametersSet()
     {
         base.OnParametersSet();
         BindDataAfterParameterReset();
     }
 
+    /// <summary>
+    /// Called by <c>OnParametersSet</c> to dispose stale bindings and invoke <c>BindData</c> for the
+    /// new parameter values.
+    /// </summary>
     protected virtual void BindDataAfterParameterReset()
     {
         Logger.LogDebug("Preparing data bindings for area {Area}", Area);
@@ -67,9 +106,12 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     }
 
 
+    /// <summary>CSS class string bound from <c>ViewModel.Class</c>; applied to the root element.</summary>
     protected string? Class { get; set; }
+    /// <summary>HTML element id bound from <c>ViewModel.Id</c>.</summary>
     protected string? Id { get; set; }
 
+    /// <summary>Component-lifetime disposables released in <c>DisposeAsync</c>, in addition to data-binding subscriptions.</summary>
     protected List<IDisposable> Disposables { get; } = new();
 
     private bool _viewDisposed;
@@ -78,6 +120,10 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     /// can check this to avoid invoking <c>StateHasChanged</c> on a dead renderer.</summary>
     protected bool IsViewDisposed => _viewDisposed;
 
+    /// <summary>
+    /// Sets <c>IsViewDisposed</c>, disposes all data-binding subscriptions, and releases all
+    /// <c>Disposables</c> to cleanly tear down the component.
+    /// </summary>
     public virtual ValueTask DisposeAsync()
     {
         // Set the flag BEFORE disposing subscriptions so any in-flight callbacks
@@ -92,11 +138,24 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         return default;
     }
 
+    /// <summary>Registers a data-binding subscription to be disposed when bindings are reset or the component is disposed.</summary>
+    /// <param name="binding">The subscription handle returned by a reactive binding call.</param>
     protected void AddBinding(IDisposable binding)
     {
         bindings.Add(binding);
     }
 
+    /// <summary>
+    /// Resolves <paramref name="value"/> — which may be a <c>JsonPointerReference</c>, a
+    /// <c>ContextProperty</c>, or a plain value — and sets the target property on this component.
+    /// For pointer and context references a live subscription is registered so the property updates
+    /// reactively whenever the underlying stream or data context emits a new value.
+    /// </summary>
+    /// <typeparam name="T">The type of the target property.</typeparam>
+    /// <param name="value">The source value or reference to bind.</param>
+    /// <param name="propertySelector">An expression selecting the target property or field on this view.</param>
+    /// <param name="conversion">Optional conversion function from the raw JSON-deserialized value to <typeparamref name="T"/>.</param>
+    /// <param name="defaultValue">Value assigned when the source is null or the binding faults.</param>
     protected void DataBind<T>(
         object? value, 
         Expression<Func<TView, T?>> propertySelector, 
@@ -300,6 +359,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         }
     }
 
+    /// <summary>Requests a Blazor re-render by calling <c>StateHasChanged</c>.</summary>
     protected void RequestStateChange()
     {
         StateHasChanged();
@@ -350,9 +410,19 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         catch (ObjectDisposedException) { /* renderer gone */ }
     }
 
+    /// <summary>Returns a child area path by appending <paramref name="area"/> to the current <c>Area</c>.</summary>
+    /// <param name="area">The child area segment to append.</param>
+    /// <returns>The full child area path.</returns>
     protected string SubArea(string area)
         => $"{Area}/{area}";
 
+    /// <summary>
+    /// Writes <paramref name="value"/> back to the data source at the location identified by
+    /// <paramref name="reference"/>. Routes to the mesh-node stream when the data context is a
+    /// node reference, otherwise writes through the synchronization stream.
+    /// </summary>
+    /// <param name="value">The new value to write.</param>
+    /// <param name="reference">The JSON-pointer reference identifying the field to update.</param>
     protected virtual void UpdatePointer(object? value, JsonPointerReference reference)
     {
         // Node-bound DataContext: write the edited field straight back to the node stream
@@ -372,6 +442,10 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     }
 
 
+    /// <summary>
+    /// Binds the view-model's <c>Id</c>, <c>Class</c>, and <c>Style</c> properties to the corresponding
+    /// protected fields on this component. Override to add control-specific bindings.
+    /// </summary>
     protected virtual void BindData()
     {
         // ViewModel is declared `required` but Blazor's parameter pipeline can
@@ -387,6 +461,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     }
     private readonly List<IDisposable> bindings = new();
 
+    /// <summary>Disposes all active data-binding subscriptions registered via <c>AddBinding</c> and <c>DataBind</c>.</summary>
     protected virtual void DisposeBindings()
     {
         foreach (var d in bindings)
@@ -394,6 +469,10 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         bindings.Clear();
     }
 
+    /// <summary>
+    /// Posts a <c>ClickedEvent</c> for the current area to the stream owner, stamping the circuit
+    /// user's <c>AccessContext</c> so the event is not denied by the hub's access gate.
+    /// </summary>
     protected virtual void OnClick()
     {
         if(Stream is null)
@@ -488,6 +567,10 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     }
 
 
+    /// <summary>
+    /// Returns <c>true</c> when the active theme is dark: resolves directly for explicit
+    /// light/dark modes, or queries the browser via JS interop for the system mode.
+    /// </summary>
     protected async Task<bool> IsDarkModeAsync()
     {
         return Mode switch

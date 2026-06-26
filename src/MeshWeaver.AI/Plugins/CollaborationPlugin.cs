@@ -39,6 +39,16 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
         ];
     }
 
+    /// <summary>
+    /// Agent tool: anchors a comment to a passage of a Markdown document via the collaborative
+    /// editing infrastructure. Reads the document off the hub scheduler, locates
+    /// <paramref name="selectedText"/>, and posts a comment-create request to the document's node hub.
+    /// </summary>
+    /// <param name="documentPath">Canonical mesh path of the document (the node's <c>path</c>, not its display name).</param>
+    /// <param name="selectedText">The exact passage to anchor the comment to; must match document content.</param>
+    /// <param name="commentText">The comment body.</param>
+    /// <param name="cancellationToken">Token to cancel the operation.</param>
+    /// <returns>A status message describing success, or the reason the comment could not be added.</returns>
     [Description("Adds a comment to a text passage in a Markdown document. The comment is anchored to the selected text and visible to all collaborators.")]
     public Task<string> AddComment(
         [Description("Canonical path to the document — NOT the display name. Use @/full/path for absolute or @relative/path relative to the current context. Example: @/PartnerRe/AIConsulting/FinalReport or @FinalReport. If you only know the display name, call Search('name:\"...\"') first and use the path field.")] string documentPath,
@@ -118,6 +128,17 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
                 : $"Error adding comment: {resp.Error ?? "unknown error"}");
     }
 
+    /// <summary>
+    /// Agent tool: proposes a text edit (insertion, replacement, or deletion) on a Markdown document
+    /// as a tracked change other collaborators can accept or reject. An empty
+    /// <paramref name="originalText"/> means insertion at document start; an empty
+    /// <paramref name="newText"/> means deletion.
+    /// </summary>
+    /// <param name="documentPath">Canonical mesh path of the document (the node's <c>path</c>, not its display name).</param>
+    /// <param name="originalText">The exact text to replace; empty string for a pure insertion at document start.</param>
+    /// <param name="newText">The replacement text; empty string for a deletion.</param>
+    /// <param name="cancellationToken">Token to cancel the operation.</param>
+    /// <returns>A status message describing the suggested change, or the reason it could not be created.</returns>
     [Description("Suggests a text edit (insertion, replacement, or deletion) on a Markdown document as a tracked change. Other collaborators can accept or reject the suggestion.")]
     public Task<string> SuggestEdit(
         [Description("Canonical path to the document — NOT the display name. Use @/full/path for absolute or @relative/path relative to the current context. Example: @/PartnerRe/AIConsulting/FinalReport or @FinalReport. If you only know the display name, call Search('name:\"...\"') first and use the path field.")] string documentPath,

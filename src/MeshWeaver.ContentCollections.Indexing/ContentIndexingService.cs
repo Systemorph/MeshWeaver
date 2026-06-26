@@ -24,8 +24,15 @@ public enum IndexStatus
 /// <param name="ChunkCount">Chunks stored (0 for <see cref="IndexStatus.Skipped"/> / <see cref="IndexStatus.NoText"/>).</param>
 public sealed record IndexResult(IndexStatus Status, int ChunkCount)
 {
+    /// <summary>Creates a result for a file that was (re)indexed, recording how many chunks were stored.</summary>
+    /// <param name="chunkCount">The number of chunks stored for the file.</param>
+    /// <returns>An <c>IndexResult</c> with <see cref="IndexStatus.Indexed"/> status and the given chunk count.</returns>
     public static IndexResult Indexed(int chunkCount) => new(IndexStatus.Indexed, chunkCount);
+
+    /// <summary>The shared result for a file skipped by the hash gate (unchanged; zero chunks).</summary>
     public static readonly IndexResult Skipped = new(IndexStatus.Skipped, 0);
+
+    /// <summary>The shared result for a file that yielded no extractable text (zero chunks).</summary>
     public static readonly IndexResult NoText = new(IndexStatus.NoText, 0);
 }
 
@@ -46,6 +53,16 @@ public sealed class ContentIndexingService
     private readonly ContentIndexingOptions _options;
     private readonly ILogger<ContentIndexingService> _logger;
 
+    /// <summary>
+    /// Initializes a new instance of the <c>ContentIndexingService</c> class.
+    /// </summary>
+    /// <param name="extractor">Extracts plain text from raw file bytes (dispatched by extension).</param>
+    /// <param name="embedder">Produces the embedding vector for each chunk of text.</param>
+    /// <param name="store">Persists file hashes and chunk sets and serves vector search.</param>
+    /// <param name="options">Chunking and concurrency options; defaults are used when <c>null</c>.</param>
+    /// <param name="logger">Logger for the indexing pipeline; a no-op logger is used when <c>null</c>.</param>
+    /// <param name="summarizer">Optional per-document summarizer; the document branch runs only when both this and <paramref name="documentSink"/> are supplied.</param>
+    /// <param name="documentSink">Optional sink that persists the per-file <see cref="DocumentInfo"/>; paired with <paramref name="summarizer"/>.</param>
     public ContentIndexingService(
         ITextExtractor extractor,
         IChunkEmbedder embedder,

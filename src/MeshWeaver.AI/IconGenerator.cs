@@ -18,12 +18,26 @@ public sealed class IconGenerator : IIconGenerator
     private readonly IServiceProvider services;
     private readonly ILogger<IconGenerator>? logger;
 
+    /// <summary>
+    /// Creates the generator, resolving an optional logger from <paramref name="services"/>.
+    /// The same provider is used to spin up an <c>AgentChatClient</c> per generation call.
+    /// </summary>
+    /// <param name="services">The service provider used to resolve the logger and build per-call chat clients.</param>
     public IconGenerator(IServiceProvider services)
     {
         this.services = services;
         this.logger = (ILogger<IconGenerator>?)services.GetService(typeof(ILogger<IconGenerator>));
     }
 
+    /// <summary>
+    /// Generates an inline SVG icon for a node by running the built-in <c>NodeInitializer</c>
+    /// agent over the supplied name (and optional description) and parsing the <c>Svg:</c>
+    /// line (or any embedded &lt;svg&gt; markup) from its reply.
+    /// </summary>
+    /// <param name="name">The node name to generate an icon for.</param>
+    /// <param name="description">Optional description that informs the icon's imagery; may be <c>null</c>.</param>
+    /// <param name="ct">Token to cancel the underlying agent call.</param>
+    /// <returns>A cold observable that emits the SVG markup, or errors if the agent returns no parsable SVG.</returns>
     public IObservable<string> GenerateSvgAsync(string name, string? description, CancellationToken ct = default)
     {
         var chat = new AgentChatClient(services);

@@ -17,6 +17,7 @@ namespace MeshWeaver.Data;
 public record PatchDataRequest(WorkspaceReference Reference, RawJson Patch)
     : IRequest<PatchDataResponse>
 {
+    /// <summary>Identifier of the actor performing the change, if known.</summary>
     public string? ChangedBy { get; init; }
 }
 

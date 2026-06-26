@@ -10,8 +10,22 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Messaging;
 
+/// <summary>
+/// Convenience extensions over <see cref="IMessageHub"/>,
+/// <see cref="IServiceProvider"/>, and addresses — hub construction, typed
+/// response observation, route and type-registry access, and address parsing.
+/// </summary>
 public static class MessageHubExtensions
 {
+    /// <summary>
+    /// Builds a new <see cref="IMessageHub"/> for <paramref name="address"/> from
+    /// the given service provider, applying the optional configuration transform.
+    /// The address's type is registered with the hub automatically.
+    /// </summary>
+    /// <param name="serviceProvider">Service provider used to resolve hub dependencies.</param>
+    /// <param name="address">The address that identifies the new hub.</param>
+    /// <param name="configuration">Optional configuration transform; identity if omitted.</param>
+    /// <returns>The constructed hub.</returns>
     public static IMessageHub CreateMessageHub(this IServiceProvider serviceProvider, Address address, Func<MessageHubConfiguration, MessageHubConfiguration>? configuration = null)
     {
         var hubSetup = new MessageHubConfiguration(serviceProvider, address)
@@ -20,6 +34,11 @@ public static class MessageHubExtensions
         return configuration(hubSetup).Build(serviceProvider, address);
     }
 
+    /// <summary>
+    /// Reads the originating request id stamped on a delivery's properties, if any.
+    /// </summary>
+    /// <param name="delivery">The delivery to inspect.</param>
+    /// <returns>The request id, or null when the delivery is not a response to a tracked request.</returns>
     public static string? GetRequestId(this IMessageDelivery delivery)
         => delivery.Properties.GetValueOrDefault(PostOptions.RequestId) as string;
 
@@ -54,6 +73,14 @@ public static class MessageHubExtensions
                 : throw new InvalidOperationException(
                     $"Observe<{typeof(TResponse).Name}>: unexpected response type {d.Message?.GetType().Name ?? "null"}"));
 
+    /// <summary>
+    /// Appends a routing-configuration lambda to the hub configuration. The lambda
+    /// is applied to the hub's <see cref="RouteConfiguration"/> at build time,
+    /// letting callers register address routes and handlers.
+    /// </summary>
+    /// <param name="config">The hub configuration to extend.</param>
+    /// <param name="lambda">Transform that adds routes to the route configuration.</param>
+    /// <returns>The updated hub configuration, for chaining.</returns>
     public static MessageHubConfiguration WithRoutes(this MessageHubConfiguration config,
         Func<RouteConfiguration, RouteConfiguration> lambda)
         => config.Set(config.GetListOfRouteLambdas().Add(lambda));
@@ -63,8 +90,19 @@ public static class MessageHubExtensions
         => config.Get<ImmutableList<Func<RouteConfiguration, RouteConfiguration>>>() ?? [];
 
 
+    /// <summary>
+    /// Gets the <see cref="ITypeRegistry"/> associated with the hub (resolved from
+    /// its service provider).
+    /// </summary>
+    /// <param name="hub">The hub whose type registry to retrieve.</param>
+    /// <returns>The hub's type registry.</returns>
     public static ITypeRegistry GetTypeRegistry(this IMessageHub hub)
         => hub.ServiceProvider.GetTypeRegistry();
+    /// <summary>
+    /// Resolves the <see cref="ITypeRegistry"/> from a service provider.
+    /// </summary>
+    /// <param name="serviceProvider">The service provider to resolve from.</param>
+    /// <returns>The registered type registry.</returns>
     public static ITypeRegistry GetTypeRegistry(this IServiceProvider serviceProvider)
         => serviceProvider.GetRequiredService<ITypeRegistry>();
 
@@ -77,6 +115,14 @@ public static class MessageHubExtensions
     public static ITypeRegistry CreateTypeRegistry(ITypeRegistry? parent = null)
         => new TypeRegistry(parent);
 
+    /// <summary>
+    /// Splits an address-shaped instance into its type and id parts. Accepts a
+    /// <c>JsonObject</c> (reads the serialized type property) or an
+    /// address string in <c>AddressType/AddressId</c> form.
+    /// </summary>
+    /// <param name="instance">The address instance or JSON object to parse.</param>
+    /// <returns>A tuple of the address type and the (possibly multi-segment) address id.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when a string address is not in <c>AddressType/AddressId</c> form.</exception>
     public static (string AddressType, string AddressId) GetAddressTypeAndId(object instance)
     {
         if (instance is JsonObject jObj)
@@ -90,6 +136,13 @@ public static class MessageHubExtensions
         return (split[0], string.Join('/', split.Skip(1)));
     }
 
+    /// <summary>
+    /// Returns the address as type <typeparamref name="T"/> if it is (or its
+    /// host-stripped form is) of that type; otherwise the default.
+    /// </summary>
+    /// <typeparam name="T">The target address type.</typeparam>
+    /// <param name="address">The address to match.</param>
+    /// <returns>The matching address of type <typeparamref name="T"/>, or default if none matches.</returns>
     public static T? GetAddressOfType<T>(object address)
     {
         if (address is T ret)
@@ -99,6 +152,13 @@ public static class MessageHubExtensions
         return default;
     }
 
+    /// <summary>
+    /// Returns the address whose <c>Type</c> matches <paramref name="addressType"/>,
+    /// checking the address and its host-stripped form; otherwise null.
+    /// </summary>
+    /// <param name="address">The address to match.</param>
+    /// <param name="addressType">The address type string to match against.</param>
+    /// <returns>The matching <see cref="Address"/>, or null if none matches.</returns>
     public static Address? GetAddressOfType(object address, string addressType)
     {
         if (address is Address addr && addr.Type == addressType)
@@ -108,6 +168,14 @@ public static class MessageHubExtensions
         return null;
     }
 
+    /// <summary>
+    /// Parses an address string into an <see cref="Address"/>, honouring the
+    /// <c>@</c> separator for hosted addresses (via the implicit string-to-address
+    /// conversion).
+    /// </summary>
+    /// <param name="hub">The hub the call is made against (not otherwise used).</param>
+    /// <param name="address">The address string to parse.</param>
+    /// <returns>The parsed address.</returns>
     public static Address GetAddress(this IMessageHub hub, string address)
     {
         // Use implicit conversion which handles @ separator for hosted addresses

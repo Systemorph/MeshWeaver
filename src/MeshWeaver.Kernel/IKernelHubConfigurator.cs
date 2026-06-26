@@ -11,6 +11,12 @@ namespace MeshWeaver.Kernel;
 /// </summary>
 public interface IKernelHubConfigurator
 {
+    /// <summary>
+    /// Applies the full kernel hub configuration (handlers, services, types) to
+    /// the given configuration.
+    /// </summary>
+    /// <param name="config">The hub configuration to extend.</param>
+    /// <returns>The configuration with kernel handlers and services applied.</returns>
     MessageHubConfiguration Configure(MessageHubConfiguration config);
 
     /// <summary>
@@ -20,6 +26,11 @@ public interface IKernelHubConfigurator
     MessageHubConfiguration ConfigureSubHub(MessageHubConfiguration config) => Configure(config);
 }
 
+/// <summary>
+/// Extension methods that wire kernel hub handlers into a
+/// <c>MessageHubConfiguration</c> by resolving the registered
+/// <see cref="IKernelHubConfigurator"/> from DI.
+/// </summary>
 public static class KernelHubConfigurationExtensions
 {
     /// <summary>

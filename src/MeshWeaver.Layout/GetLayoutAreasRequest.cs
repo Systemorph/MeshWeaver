@@ -21,6 +21,7 @@ public record LayoutAreasResponse(IEnumerable<LayoutAreaDefinition> Areas);
 /// </summary>
 public record LayoutAreasReference() : WorkspaceReference<object>
 {
+    /// <summary>Returns the fixed string <c>"layoutAreas"</c> that identifies this reference in hrefs.</summary>
     public override string ToString() => "layoutAreas";
 }
 

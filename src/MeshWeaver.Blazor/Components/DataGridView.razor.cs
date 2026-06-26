@@ -10,6 +10,10 @@ using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor.Components;
 
+/// <summary>
+/// Blazor view for <c>DataGridControl</c> — renders a paginated, sortable, optionally virtualised
+/// FluentUI data grid whose columns and rows are data-bound from the layout-area stream.
+/// </summary>
 public partial class DataGridView
 {
     private readonly bool virtualize;
@@ -41,6 +45,10 @@ public partial class DataGridView
 
     private readonly IQueryable<JsonObject> QueryableData = Enumerable.Empty<JsonObject>().AsQueryable();
 
+    /// <summary>
+    /// Binds all <c>DataGridControl</c> properties (virtualization, pagination, column configuration,
+    /// data rows, etc.) from the layout-area stream to the corresponding component fields.
+    /// </summary>
     protected override void BindData()
     {
         base.BindData();
@@ -101,6 +109,11 @@ public partial class DataGridView
             });
     }
 
+    /// <summary>
+    /// Synchronises the <c>FluentDataGrid</c> pagination state (total item count and page size)
+    /// after parameters are applied, then delegates to the base implementation.
+    /// </summary>
+    /// <returns>A task that completes once pagination state is updated.</returns>
     protected override async Task OnParametersSetAsync()
     {
         await base.OnParametersSetAsync();
@@ -113,12 +126,21 @@ public partial class DataGridView
         }
     }
 
+    /// <summary>
+    /// Registers a handler on <c>PaginationState.TotalItemCountChanged</c> so the component
+    /// re-renders whenever the total row count changes.
+    /// </summary>
     protected override void OnInitialized()
     {
         base.OnInitialized();
         Pagination.TotalItemCountChanged += (_, _) => StateHasChanged();
     }
 
+    /// <summary>
+    /// After each render, corrects the <c>PaginationState.ItemsPerPage</c> if a user-initiated
+    /// page-size change caused it to drift from the bound value.
+    /// </summary>
+    /// <param name="firstRender">True on the very first render of this component instance.</param>
     protected override void OnAfterRender(bool firstRender)
     {
         base.OnAfterRender(firstRender);
@@ -130,6 +152,13 @@ public partial class DataGridView
         }
     }
 
+    /// <summary>
+    /// Dynamically emits a <c>PropertyColumn&lt;JsonObject, T&gt;</c> component into the render tree
+    /// for the given <paramref name="column"/> definition, wiring up title, format, sort, tooltip,
+    /// alignment, and width from the data-bound stream.
+    /// </summary>
+    /// <param name="builder">The Blazor <c>RenderTreeBuilder</c> receiving the component frames.</param>
+    /// <param name="column">The column configuration describing property name and display options.</param>
     public void RenderPropertyColumn(RenderTreeBuilder builder, PropertyColumnControl column)
     {
         builder.OpenComponent(0,
@@ -248,6 +277,10 @@ public partial class DataGridView
     }
 
 
+    /// <summary>
+    /// Event callback wired to the FluentUI data grid's cell-click event; posts a
+    /// <c>ClickedEvent</c> carrying the clicked row and column back to the stream owner.
+    /// </summary>
     public EventCallback<FluentDataGridCell<JsonObject>> OnCellClick => EventCallback.Factory.Create<FluentDataGridCell<JsonObject>>(this, HandleCellClick);
     private Task HandleCellClick(FluentDataGridCell<JsonObject> obj)
     {

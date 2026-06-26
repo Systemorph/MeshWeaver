@@ -14,18 +14,45 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Layout.Composition;
 
+/// <summary>
+/// Hosts a single layout area for a subscriber. Owns the
+/// <see cref="ISynchronizationStream{EntityStore}"/> that carries the area's rendered controls and
+/// data to the client, manages per-area variable state, and serialises render/data writes through
+/// the stream's single-threaded action block. Created by the framework when a LayoutAreaReference
+/// is subscribed; callers interact via the public Update*, RegisterForDisposal, and InvokeAsync
+/// surfaces.
+/// </summary>
 public record LayoutAreaHost : IDisposable
 {
     private readonly IUiControlService uiControlService;
+    /// <summary>The layout-area reference (area name + optional id) this host renders.</summary>
     public LayoutAreaReference Reference { get; }
+    /// <summary>The synchronisation stream that carries rendered controls and data to the subscriber.</summary>
     public ISynchronizationStream<EntityStore> Stream { get; }
+    /// <summary>The message hub that owns this layout area.</summary>
     public IMessageHub Hub => Workspace.Hub;
+    /// <summary>The workspace whose data sources back this layout area's renderers.</summary>
     public IWorkspace Workspace { get; }
     private readonly Dictionary<object, object?> variables = new();
 
+    /// <summary>Returns the value stored under <paramref name="key"/>, or <c>default</c> if absent.</summary>
+    /// <typeparam name="T">The expected type of the variable.</typeparam>
+    /// <param name="key">The variable key.</param>
     public T? GetVariable<T>(object key) => variables.TryGetValue(key, out var value) ? (T?)value : default;
+    /// <summary>Returns <c>true</c> if a variable with <paramref name="key"/> has been stored.</summary>
+    /// <param name="key">The variable key to check.</param>
     public bool ContainsVariable(object key) => variables.ContainsKey(key);
+    /// <summary>Stores <paramref name="value"/> under <paramref name="key"/> and returns it.</summary>
+    /// <param name="key">The variable key.</param>
+    /// <param name="value">The value to store; may be null.</param>
     public object? SetVariable(object key, object? value) => variables[key] = value;
+    /// <summary>
+    /// Returns the value stored under <paramref name="key"/>, creating and storing it via
+    /// <paramref name="factory"/> if not yet present.
+    /// </summary>
+    /// <typeparam name="T">The type of the variable.</typeparam>
+    /// <param name="key">The variable key.</param>
+    /// <param name="factory">Factory invoked once to produce the initial value.</param>
     public T GetOrAddVariable<T>(object key, Func<T> factory)
     {
         if (!ContainsVariable(key))
@@ -36,6 +63,7 @@ public record LayoutAreaHost : IDisposable
         return GetVariable<T>(key) ?? factory();
     }
 
+    /// <summary>The layout definition that contains the renderers wired to this host.</summary>
     public LayoutDefinition LayoutDefinition { get; }
     private readonly ILogger<LayoutAreaHost> logger;
 
@@ -50,6 +78,14 @@ public record LayoutAreaHost : IDisposable
     /// </summary>
     public const string ProgressDataId = "progress";
 
+    /// <summary>
+    /// Initialises a new layout-area host, wires the rendering pipeline, and triggers initialization
+    /// of the synchronisation stream.
+    /// </summary>
+    /// <param name="workspace">The workspace whose data sources back this area's renderers.</param>
+    /// <param name="reference">The layout-area reference (area name + optional id) to render.</param>
+    /// <param name="uiControlService">Service used to resolve and convert UI controls.</param>
+    /// <param name="configuration">Optional stream-configuration transform applied before deferred initialization.</param>
     public LayoutAreaHost(IWorkspace workspace,
         LayoutAreaReference reference,
         IUiControlService uiControlService,
@@ -318,6 +354,11 @@ public record LayoutAreaHost : IDisposable
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Returns the control currently rendered at <paramref name="area"/>, or <c>null</c> if none.
+    /// Reads directly from the stream's current snapshot — no network round-trip.
+    /// </summary>
+    /// <param name="area">The area key to look up in the current EntityStore.</param>
     public object? GetControl(string area) =>
         Stream
             .Current?.Value?.Collections.GetValueOrDefault(LayoutAreaReference.Areas)
@@ -520,6 +561,13 @@ public record LayoutAreaHost : IDisposable
         => Observable.Return(RenderArea(context, view, store));
 
 
+    /// <summary>
+    /// Re-renders <paramref name="view"/> into the area identified by <paramref name="context"/>,
+    /// disposing child-area subscriptions first and then pushing the updated store through the
+    /// stream's serialised action block.
+    /// </summary>
+    /// <param name="context">The rendering context identifying the target area.</param>
+    /// <param name="view">The view object to render; <c>null</c> clears the area.</param>
     public void UpdateArea(RenderingContext context, object? view)
     {
         Stream.Update(store =>
@@ -551,9 +599,22 @@ public record LayoutAreaHost : IDisposable
         }, ex => logger.LogWarning(ex, "Cannot clear {Area}", context.Area));
     }
 
+    /// <summary>
+    /// Subscribes to <paramref name="stream"/> and writes each emission into the Data collection
+    /// under <paramref name="id"/>, keeping the data alive for the lifetime of this host.
+    /// </summary>
+    /// <typeparam name="T">The type of data items emitted by the stream.</typeparam>
+    /// <param name="id">The key in the Data collection where each emission is stored.</param>
+    /// <param name="stream">The observable source to subscribe to.</param>
     public void SubscribeToDataStream<T>(string id, IObservable<T> stream)
         => RegisterForDisposal(id, stream.Subscribe(x => Update(LayoutAreaReference.Data, coll => coll.SetItem(id, x!))));
 
+    /// <summary>
+    /// Applies <paramref name="update"/> to the specified <paramref name="collection"/> in the
+    /// stream's EntityStore via the serialised action block.
+    /// </summary>
+    /// <param name="collection">The collection key to update (e.g. LayoutAreaReference.Data).</param>
+    /// <param name="update">Transform applied to the current InstanceCollection.</param>
     public void Update(string collection, Func<InstanceCollection, InstanceCollection> update)
     {
         Stream.Update(ws =>
@@ -561,6 +622,12 @@ public record LayoutAreaHost : IDisposable
             ex => logger.LogWarning(ex, "Cannot update {Collection}", collection));
     }
 
+    /// <summary>
+    /// Writes <paramref name="data"/> into the Data collection under <paramref name="id"/>.
+    /// No-op when <paramref name="data"/> is <c>null</c>.
+    /// </summary>
+    /// <param name="id">The key in the Data collection.</param>
+    /// <param name="data">The value to store; null is ignored.</param>
     public void UpdateData(string id, object? data)
     {
         if (data != null)
@@ -587,6 +654,12 @@ public record LayoutAreaHost : IDisposable
     private readonly ConcurrentDictionary<string, List<IDisposable>> disposablesByArea = new();
 
 
+    /// <summary>
+    /// Registers <paramref name="disposable"/> to be disposed when the area identified by
+    /// <paramref name="area"/> is cleared or this host is disposed.
+    /// </summary>
+    /// <param name="area">The area key that owns the disposable.</param>
+    /// <param name="disposable">The subscription or resource to dispose on teardown.</param>
     public void RegisterForDisposal(string area, IDisposable disposable)
     {
         disposablesByArea.GetOrAdd(area, _ => new()).Add(disposable);
@@ -611,11 +684,22 @@ public record LayoutAreaHost : IDisposable
         disposablesByArea.GetOrAdd(key, _ => new()).Add(disposable);
     }
 
+    /// <summary>
+    /// Registers <paramref name="disposable"/> at the host level, disposed when this host is disposed.
+    /// </summary>
+    /// <param name="disposable">The subscription or resource to dispose on host teardown.</param>
     public void RegisterForDisposal(IDisposable disposable)
     {
         disposablesByArea.GetOrAdd(string.Empty, _ => new()).Add(disposable);
     }
 
+    /// <summary>
+    /// Returns an observable that emits the current and future values of the Data item with key
+    /// <paramref name="id"/>, deserialized as <typeparamref name="T"/>. Skips nulls; applies
+    /// DistinctUntilChanged.
+    /// </summary>
+    /// <typeparam name="T">The expected type of the data item (must be a reference type).</typeparam>
+    /// <param name="id">The key in the Data collection to observe.</param>
     public IObservable<T?> GetDataStream<T>(string id)
         where T : class
         => GetStream<T>(new EntityReference(LayoutAreaReference.Data, id));
@@ -680,6 +764,9 @@ public record LayoutAreaHost : IDisposable
             $"Cannot convert instance of type {result.GetType().Name} to Type {typeof(T).FullName}");
     }
 
+    /// <summary>
+    /// Disposes all registered subscriptions and resources for every area owned by this host.
+    /// </summary>
     public void Dispose()
     {
         foreach (var disposable in disposablesByArea.ToArray())
@@ -687,11 +774,23 @@ public record LayoutAreaHost : IDisposable
         disposablesByArea.Clear();
     }
 
+    /// <summary>
+    /// Schedules <paramref name="action"/> on the hub's async context; <paramref name="exceptionCallback"/>
+    /// is called if <paramref name="action"/> throws.
+    /// </summary>
+    /// <param name="action">The async work to run; receives a cancellation token.</param>
+    /// <param name="exceptionCallback">Called with any exception thrown by <paramref name="action"/>.</param>
     public void InvokeAsync(Func<CancellationToken, Task> action, Func<Exception, Task> exceptionCallback)
     {
         Stream.Hub.InvokeAsync(action, exceptionCallback);
     }
 
+    /// <summary>
+    /// Schedules synchronous <paramref name="action"/> on the hub's async context; <paramref name="exceptionCallback"/>
+    /// is called if it throws.
+    /// </summary>
+    /// <param name="action">The synchronous action to run.</param>
+    /// <param name="exceptionCallback">Called with any exception thrown by <paramref name="action"/>.</param>
     public void InvokeAsync(Action action, Func<Exception, Task> exceptionCallback) =>
         InvokeAsync(_ =>
         {
@@ -833,6 +932,12 @@ public record LayoutAreaHost : IDisposable
             }));
         });
 
+    /// <summary>
+    /// Pushes a progress control into the Areas collection at <paramref name="area"/>,
+    /// replacing any prior progress indicator there.
+    /// </summary>
+    /// <param name="area">The area key where the progress control is rendered.</param>
+    /// <param name="progress">The progress control to display.</param>
     public void UpdateProgress(string area, ProgressControl progress)
         => Stream.Update(state => Stream.ApplyChanges(
             new(state ?? new EntityStore(), [new(LayoutAreaReference.Areas, area, progress)], Stream.StreamId)),

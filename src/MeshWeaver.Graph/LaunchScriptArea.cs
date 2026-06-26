@@ -25,6 +25,7 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class LaunchScriptArea
 {
+    /// <summary>Area name for the LaunchScript layout area.</summary>
     public const string AreaName = "LaunchScript";
 
     /// <summary>

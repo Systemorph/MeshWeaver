@@ -12,6 +12,11 @@ public class FileFormatParserRegistry
     private readonly Dictionary<string, List<IFileFormatParser>> _parsersByExtension;
     private readonly List<IFileFormatParser> _parsers;
 
+    /// <summary>
+    /// Builds the registry with the built-in parsers (agent, markdown, C#) in priority order,
+    /// adding a JSON parser only when serializer options are supplied.
+    /// </summary>
+    /// <param name="jsonOptions">Serializer options used to construct the JSON parser; when null, no JSON parser is registered.</param>
     public FileFormatParserRegistry(JsonSerializerOptions? jsonOptions = null)
     {
         // Parsers are listed in priority order for each extension

@@ -33,9 +33,24 @@ public record CollaborativeMarkdownControl()
     /// </summary>
     public bool CanEdit { get; init; }
 
+    /// <summary>Returns a copy with <paramref name="value"/> as the annotated markdown content.</summary>
+    /// <param name="value">The markdown string (with annotation markers) to render.</param>
+    /// <returns>A new <see cref="CollaborativeMarkdownControl"/> with the updated value.</returns>
     public CollaborativeMarkdownControl WithValue(string value) => this with { Value = value };
+    /// <summary>Returns a copy with <paramref name="nodePath"/> as the node path for comment anchoring.</summary>
+    /// <param name="nodePath">The mesh node path used when creating or resolving comments.</param>
+    /// <returns>A new <see cref="CollaborativeMarkdownControl"/> with the updated node path.</returns>
     public CollaborativeMarkdownControl WithNodePath(string nodePath) => this with { NodePath = nodePath };
+    /// <summary>Returns a copy with <paramref name="hubAddress"/> as the hub address for change requests.</summary>
+    /// <param name="hubAddress">The hub address string used to route accept/reject change requests.</param>
+    /// <returns>A new <see cref="CollaborativeMarkdownControl"/> with the updated hub address.</returns>
     public CollaborativeMarkdownControl WithHubAddress(string hubAddress) => this with { HubAddress = hubAddress };
+    /// <summary>Returns a copy with <paramref name="canComment"/> controlling whether the user can annotate text.</summary>
+    /// <param name="canComment">True to enable text-selection comment creation.</param>
+    /// <returns>A new <see cref="CollaborativeMarkdownControl"/> with the updated can-comment flag.</returns>
     public CollaborativeMarkdownControl WithCanComment(bool canComment) => this with { CanComment = canComment };
+    /// <summary>Returns a copy with <paramref name="canEdit"/> controlling whether the user can accept/reject changes.</summary>
+    /// <param name="canEdit">True to enable accept/reject tracked-change controls.</param>
+    /// <returns>A new <see cref="CollaborativeMarkdownControl"/> with the updated can-edit flag.</returns>
     public CollaborativeMarkdownControl WithCanEdit(bool canEdit) => this with { CanEdit = canEdit };
 }

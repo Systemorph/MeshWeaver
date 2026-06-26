@@ -37,6 +37,15 @@ public sealed class PastPostIngestJob : BackgroundService
     // stateless unbounded pool when no registry is wired (tests).
     private readonly IIoPool _http;
 
+    /// <summary>
+    /// Initializes a new instance of the <c>PastPostIngestJob</c> class.
+    /// </summary>
+    /// <param name="source">Supplies the profiles + credentials to pull history for.</param>
+    /// <param name="sink">Persists each historic post as a mesh node, skipping existing Urns.</param>
+    /// <param name="publishers">Registered platform publishers, matched by platform name.</param>
+    /// <param name="options">Social ingest configuration (interval, page size).</param>
+    /// <param name="logger">Optional logger for diagnostics.</param>
+    /// <param name="registry">Optional I/O pool registry; falls back to the unbounded pool in tests.</param>
     public PastPostIngestJob(
         IPastPostIngestSource source,
         IPastPostSink sink,
@@ -53,6 +62,12 @@ public sealed class PastPostIngestJob : BackgroundService
         _http = registry?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
     }
 
+    /// <summary>
+    /// Runs the ingest loop: an initial backfill on startup, then a periodic sweep
+    /// on <c>PastPostIngestInterval</c> until the host stops.
+    /// </summary>
+    /// <param name="stoppingToken">Token signalling host shutdown.</param>
+    /// <returns>A task that completes when the host stops the service.</returns>
     // BackgroundService boundary — single .ToTask() bridge for the framework's Task
     // contract. Inside is one observable chain; the rest of the file is reactive.
     protected override Task ExecuteAsync(CancellationToken stoppingToken)
@@ -108,13 +123,28 @@ public sealed record IngestTarget(
     PlatformCredential Credential,
     DateTimeOffset? SinceInclusive);
 
+/// <summary>
+/// Hosting-app callback that yields which profiles + credentials the ingest job
+/// should pull post history for. Streamed because the mesh query is async.
+/// </summary>
 public interface IPastPostIngestSource
 {
+    /// <summary>Streams the profiles whose post history should be ingested.</summary>
+    /// <param name="ct">Token to cancel enumeration.</param>
+    /// <returns>An async stream of ingest targets.</returns>
     IAsyncEnumerable<IngestTarget> GetIngestTargetsAsync(CancellationToken ct);
 }
 
+/// <summary>
+/// Hosting-app callback that persists each fetched historic post as a mesh node,
+/// deduplicating by platform URN.
+/// </summary>
 public interface IPastPostSink
 {
     /// <summary>Returns true if a new node was created, false if an existing one was updated or skipped.</summary>
+    /// <param name="target">The ingest target the post belongs to.</param>
+    /// <param name="post">The historic post to persist.</param>
+    /// <param name="ct">Token to cancel the operation.</param>
+    /// <returns>True if a new node was created; otherwise false.</returns>
     Task<bool> UpsertAsync(IngestTarget target, PastPost post, CancellationToken ct);
 }

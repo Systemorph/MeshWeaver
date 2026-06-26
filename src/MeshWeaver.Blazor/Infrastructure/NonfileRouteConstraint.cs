@@ -17,6 +17,16 @@ public class NonfileRouteConstraint : IRouteConstraint
         "signin-microsoft", "signin-google", "signin-linkedin", "signin-apple"
     };
 
+    /// <summary>
+    /// Returns false when the route value for <paramref name="routeKey"/> begins with an excluded prefix;
+    /// returns true otherwise, allowing the route to match.
+    /// </summary>
+    /// <param name="httpContext">The current HTTP context (may be null during constraint evaluation).</param>
+    /// <param name="route">The router that defined this constraint.</param>
+    /// <param name="routeKey">The name of the route value to inspect.</param>
+    /// <param name="values">The route values for the current request.</param>
+    /// <param name="routeDirection">Indicates whether the constraint is evaluated for incoming or outgoing routes.</param>
+    /// <returns>True when the path does not start with an excluded static-file prefix; false otherwise.</returns>
     public bool Match(
         HttpContext? httpContext,
         IRouter? route,

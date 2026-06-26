@@ -5,12 +5,23 @@ using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Messaging;
 
 
+/// <summary>
+/// Immutable description of how a hub routes messages to other addresses and
+/// hosted hubs. Built up fluently — each <c>WithHandler</c>/<c>RouteAddress…</c>
+/// call returns a new configuration with the additional handler appended.
+/// </summary>
+/// <param name="Hub">The hub this routing configuration belongs to.</param>
 public record RouteConfiguration(IMessageHub Hub)
 {
     internal ImmutableList<AsyncDelivery> Handlers { get; init; } = ImmutableList<AsyncDelivery>.Empty;
 
     internal readonly Dictionary<Address, HashSet<Address>> RoutedMessageAddresses = new();
 
+    /// <summary>
+    /// Appends a raw asynchronous delivery handler to the route chain.
+    /// </summary>
+    /// <param name="handler">The delivery handler to add.</param>
+    /// <returns>A new <see cref="RouteConfiguration"/> including the handler.</returns>
     public RouteConfiguration WithHandler(AsyncDelivery handler) => this with { Handlers = Handlers.Add(handler) };
 
     /// <summary>

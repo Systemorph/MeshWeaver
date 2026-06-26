@@ -11,6 +11,14 @@ namespace MeshWeaver.Import;
 public class ConfiguredExcelImporter<T>(Func<Dictionary<string, object?>, T> entityBuilder)
     where T : class
 {
+    /// <summary>
+    /// Reads the configured worksheet from an Excel stream, applying column, allocation,
+    /// total-row and ignore rules, and yields the built entities one row at a time.
+    /// </summary>
+    /// <param name="stream">The Excel workbook stream.</param>
+    /// <param name="sourceName">Source name recorded on each entity as provenance (e.g. file name).</param>
+    /// <param name="config">The Excel import configuration.</param>
+    /// <returns>The lazily-built imported entities.</returns>
     public IEnumerable<T> Import(Stream stream, string sourceName, ExcelImportConfiguration config)
     {
         using var wb = new XLWorkbook(stream);
@@ -95,6 +103,12 @@ public class ConfiguredExcelImporter<T>(Func<Dictionary<string, object?>, T> ent
         }
     }
 
+    /// <summary>
+    /// Opens an Excel file from disk and imports its entities using the given configuration.
+    /// </summary>
+    /// <param name="filePath">Path to the Excel file; its file name is used as the source name.</param>
+    /// <param name="config">The Excel import configuration.</param>
+    /// <returns>The lazily-built imported entities.</returns>
     public IEnumerable<T> Import(string filePath, ExcelImportConfiguration config)
     {
         using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);

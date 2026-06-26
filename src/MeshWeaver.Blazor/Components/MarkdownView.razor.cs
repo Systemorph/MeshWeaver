@@ -9,6 +9,12 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Blazor.Components;
 
+/// <summary>
+/// Blazor view for <c>MarkdownControl</c> — renders markdown or pre-rendered HTML with support
+/// for executable code blocks (interactive kernel), UCR links, layout-area embeds, mermaid
+/// diagrams, and a references section. Memoises the Markdig parse to avoid redundant work during
+/// streaming chat updates.
+/// </summary>
 public partial class MarkdownView
 {
     private object? MarkdownRaw { get; set; }
@@ -19,6 +25,10 @@ public partial class MarkdownView
 
     private string? Html { get; set; }
     private IReadOnlyList<SubmitCodeRequest>? CodeSubmissions { get; set; }
+    /// <summary>
+    /// When <c>true</c> (the default), appends a "References" section below the rendered content
+    /// listing all UCR links found in the markdown. Bound from <c>MarkdownControl.ShowReferences</c>.
+    /// </summary>
     public bool ShowReferencesSection { get; set; } = true;
 
     // Per-view kernel session id. Used as the Activity MeshNode id below.
@@ -82,6 +92,11 @@ public partial class MarkdownView
     // "unavailable" notice instead of storming a path nobody can create.
     private string? KernelOwnerPath() => ResolveCircuitUser()?.ObjectId;
 
+    /// <summary>
+    /// Binds markdown text, pre-rendered HTML, code submissions, reference-section visibility,
+    /// and node path from the layout-area stream. Runs the Markdig pipeline when raw markdown is
+    /// present, using a memoised result to avoid re-parsing unchanged content on every render tick.
+    /// </summary>
     protected override void BindData()
     {
         base.BindData();
@@ -139,6 +154,13 @@ public partial class MarkdownView
         // Markdig. See RenderHtml + OnAfterRenderAsync.
     }
 
+    /// <summary>
+    /// On the first render, creates the per-view kernel <c>Activity</c> node and submits any
+    /// executable code blocks found in the markdown. The activity is anchored under the viewing
+    /// user's home partition to ensure the Create is permitted. Subsequent renders are no-ops.
+    /// </summary>
+    /// <param name="firstRender">True on the very first render of this component instance.</param>
+    /// <returns>A task that completes once kernel creation and code submission are initiated.</returns>
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         await base.OnAfterRenderAsync(firstRender);
@@ -182,6 +204,11 @@ public partial class MarkdownView
         });
     }
 
+    /// <summary>
+    /// Disposes resources held by this view, delegating to the base <c>DisposeAsync</c>
+    /// which tears down data bindings and reactive subscriptions.
+    /// </summary>
+    /// <returns>A value task that completes once all resources are released.</returns>
     public override async ValueTask DisposeAsync()
     {
         await base.DisposeAsync();

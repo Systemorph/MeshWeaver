@@ -72,10 +72,13 @@ public interface ICircuitContextAccessor
 /// <inheritdoc />
 public sealed class CircuitContextAccessor : ICircuitContextAccessor
 {
+    /// <inheritdoc />
     public string? CircuitId { get; private set; }
 
+    /// <inheritdoc />
     public AccessContext? UserContext { get; private set; }
 
+    /// <inheritdoc />
     public void SetCircuitId(string circuitId)
     {
         // Write-once. The circuit handler opens a circuit exactly once, but guard anyway
@@ -84,5 +87,6 @@ public sealed class CircuitContextAccessor : ICircuitContextAccessor
         CircuitId ??= circuitId;
     }
 
+    /// <inheritdoc />
     public void SetUserContext(AccessContext? userContext) => UserContext = userContext;
 }

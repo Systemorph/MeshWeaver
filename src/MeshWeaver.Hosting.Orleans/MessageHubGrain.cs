@@ -15,6 +15,14 @@ using Orleans.Streams;
 
 namespace MeshWeaver.Hosting.Orleans;
 
+/// <summary>
+/// Orleans grain that hosts a per-node MeshWeaver message hub. Activation resolves the
+/// node's <c>HubConfiguration</c> reactively and builds the hub; incoming deliveries park
+/// on a ready-signal until the hub is available and are then dispatched to it. The grain is
+/// reentrant so deliveries can be queued while activation is still in flight.
+/// </summary>
+/// <param name="logger">Logger for activation, deactivation and delivery diagnostics.</param>
+/// <param name="meshHub">The mesh hub used to resolve services, addresses and node streams.</param>
 [global::Orleans.Concurrency.Reentrant]
 public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHub)
     : Grain, IMessageHubGrain
@@ -357,6 +365,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     }
 
 
+    /// <inheritdoc />
     public override async Task OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
     {
         var grainId = this.GetPrimaryKeyString();
@@ -441,11 +450,20 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
 
 
+/// <summary>
+/// Tracks the state of a grain's Orleans stream subscription: how many events of each kind
+/// have been seen, how many errors occurred, the latest stream position, and whether the
+/// owning grain has been deactivated.
+/// </summary>
 public record StreamActivity
 {
+    /// <summary>Count of received events keyed by event kind / stream namespace.</summary>
     public ImmutableDictionary<string, int> EventCounter { get; init; } = ImmutableDictionary<string, int>.Empty;
+    /// <summary>Number of stream errors observed.</summary>
     public int ErrorCounter { get; init; }
+    /// <summary>The latest stream sequence token (stream position) seen, if any.</summary>
     public StreamSequenceToken? Token { get; init; }
+    /// <summary>Whether the grain owning this stream activity has been deactivated.</summary>
     public bool IsDeactivated { get; init; }
 }
 

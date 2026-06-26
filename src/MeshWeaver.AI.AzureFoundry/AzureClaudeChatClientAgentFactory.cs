@@ -40,10 +40,13 @@ public class AzureClaudeChatClientAgentFactory(
         return config;
     }
 
+    /// <summary>Display name of this factory, surfaced in the model/provider listings.</summary>
     public override string Name => "Azure Claude";
 
+    /// <summary>The Claude/Anthropic model ids this factory advertises as available.</summary>
     public override IReadOnlyList<string> Models => configuration.Models;
 
+    /// <summary>Selection priority among factories; lower values are preferred when several factories support the same model.</summary>
     public override int Order => configuration.Order;
 
     /// <summary>
@@ -58,6 +61,15 @@ public class AzureClaudeChatClientAgentFactory(
         !string.IsNullOrEmpty(modelName)
         && modelName.StartsWith("claude", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Builds an <see cref="IChatClient"/> for the Claude model selected for the
+    /// given agent. Resolves the model name (composer selection, then the agent's
+    /// ModelTier, then the first configured model), then resolves the endpoint and
+    /// API key via the <see cref="ChatClientCredentialResolver"/> with an IOptions
+    /// fallback, and constructs an <see cref="AzureClaudeChatClient"/>.
+    /// </summary>
+    /// <param name="agentConfig">Configuration of the agent the client is created for; supplies the model tier and identifies the agent in logs and errors.</param>
+    /// <returns>A chat client targeting the resolved Claude model endpoint.</returns>
     protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {
         // Composer selection wins; then the agent's ModelTier; first configured model as a last resort.

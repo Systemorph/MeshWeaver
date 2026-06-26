@@ -10,13 +10,26 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Import.Implementation;
 
+/// <summary>
+/// Handles <see cref="ImportRequest"/> messages on a data hub: reads the source into an
+/// <c>EntityStore</c>, validates it, saves the instances to the workspace and posts an
+/// <see cref="ImportResponse"/>. Built from the hub's accumulated import configuration.
+/// </summary>
 public class ImportManager
 {
+    /// <summary>The folded import configuration (formats, readers, validations) for this hub.</summary>
     public ImportBuilder Configuration { get; }
 
+    /// <summary>The workspace the imported instances are written to.</summary>
     public IWorkspace Workspace { get; }
+    /// <summary>The message hub this manager serves; source of services and the post target for responses.</summary>
     public IMessageHub Hub { get; }
 
+    /// <summary>
+    /// Creates the manager, folding the hub's configured import lambdas into <see cref="Configuration"/>.
+    /// </summary>
+    /// <param name="workspace">The workspace to import into.</param>
+    /// <param name="hub">The hub providing services and configuration.</param>
     public ImportManager(IWorkspace workspace, IMessageHub hub)
     {
         var logger = hub.ServiceProvider.GetService<ILogger<ImportManager>>();
@@ -30,6 +43,14 @@ public class ImportManager
         logger?.LogDebug("ImportManager constructor completed for hub {HubAddress}", hub.Address);
     }
 
+    /// <summary>
+    /// Handles an incoming import request: runs the (cold) import pipeline under an activity,
+    /// saves the resulting instances on success, and posts an <see cref="ImportResponse"/>
+    /// (with the activity log) on completion or failure.
+    /// </summary>
+    /// <param name="request">The import request delivery to process.</param>
+    /// <param name="cancellationToken">Token linked with the request's optional timeout.</param>
+    /// <returns>The delivery marked as processed.</returns>
     public IMessageDelivery HandleImportRequest(IMessageDelivery<ImportRequest> request, CancellationToken cancellationToken)
     {
         // Create cancellation token with timeout if specified in the import request.
@@ -355,5 +376,6 @@ public class ImportManager
         return (dataSet, importFormat);
     }
 
+    /// <summary>Message logged to the activity when an import fails validation.</summary>
     public static string ImportFailed = "Import Failed. See Activity Log for Errors";
 }

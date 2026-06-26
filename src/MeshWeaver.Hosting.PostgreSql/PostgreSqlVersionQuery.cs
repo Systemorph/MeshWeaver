@@ -21,6 +21,12 @@ public class PostgreSqlVersionQuery : IVersionQuery
     // Every DB round-trip runs inside the pg I/O pool (Invoke), never a bare _ioPool.Invoke.
     private readonly IIoPool _ioPool;
 
+    /// <summary>
+    /// Initializes the version query over the <c>mesh_node_history</c> table.
+    /// </summary>
+    /// <param name="dataSource">The PostgreSQL data source used for all history reads and writes.</param>
+    /// <param name="schema">Optional schema name; when set, the history table is schema-qualified, otherwise resolved via SearchPath.</param>
+    /// <param name="ioPool">Optional I/O pool; every DB round-trip runs inside it. Falls back to the unbounded pool outside DI.</param>
     public PostgreSqlVersionQuery(NpgsqlDataSource dataSource, string? schema = null, IIoPool? ioPool = null)
     {
         _dataSource = dataSource;
@@ -38,6 +44,7 @@ public class PostgreSqlVersionQuery : IVersionQuery
         return (ns, id);
     }
 
+    /// <inheritdoc />
     public IObservable<MeshNodeVersion> GetVersions(string path)
         // The pg I/O pool runs the DB fetch on the ThreadPool behind its concurrency gate
         // with ConfigureAwait(false) — no custom TaskScheduler (Orleans) is ever captured.
@@ -68,6 +75,7 @@ public class PostgreSqlVersionQuery : IVersionQuery
         return results;
     }
 
+    /// <inheritdoc />
     public IObservable<MeshNode?> GetVersion(string path, long version, JsonSerializerOptions options)
         => _ioPool.Invoke(async ct =>
         {
@@ -87,6 +95,7 @@ public class PostgreSqlVersionQuery : IVersionQuery
             return ReadMeshNode(reader, options);
         });
 
+    /// <inheritdoc />
     public IObservable<MeshNode?> GetVersionBefore(string path, long beforeVersion, JsonSerializerOptions options)
         => _ioPool.Invoke(async ct =>
         {
@@ -107,6 +116,7 @@ public class PostgreSqlVersionQuery : IVersionQuery
             return ReadMeshNode(reader, options);
         });
 
+    /// <inheritdoc />
     public IObservable<MeshNode> WriteVersion(MeshNode node, JsonSerializerOptions options)
         => _ioPool.Invoke(async ct =>
         {

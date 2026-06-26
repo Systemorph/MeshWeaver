@@ -8,9 +8,20 @@ using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
 
+/// <summary>
+/// Builds the default reduce manager for an <see cref="EntityStore"/>, wiring the standard
+/// workspace-reference reducers and patch functions used to project and patch workspace state.
+/// </summary>
 public static class StandardReducers
 {
 
+    /// <summary>
+    /// Creates the default reduce manager for an <see cref="EntityStore"/>, registering reducers for the
+    /// standard workspace references (entity, collection, JSON-pointer, schema, content, and partitioned
+    /// variants) and the patch functions for entity stores, instance collections and JSON elements.
+    /// </summary>
+    /// <param name="hub">The hub whose type registry and serializer options the reducers use.</param>
+    /// <returns>A configured entity-store reduce manager.</returns>
     public static ReduceManager<EntityStore> CreateReduceManager(this IMessageHub hub)
     {
         var typeRegistry = hub.TypeRegistry;

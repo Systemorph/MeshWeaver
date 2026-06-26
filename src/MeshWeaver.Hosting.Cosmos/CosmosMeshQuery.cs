@@ -27,8 +27,18 @@ public class CosmosMeshQuery : IMeshQueryProvider
     // Cosmos queries run inside the I/O pool (Invoke), never a bare _ioPool.Invoke.
     private readonly IIoPool _ioPool;
 
+    /// <summary>
+    /// Default interval used to debounce change-feed-driven query re-runs.
+    /// </summary>
     public static readonly TimeSpan DefaultDebounceInterval = TimeSpan.FromMilliseconds(100);
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="CosmosMeshQuery"/> class.
+    /// </summary>
+    /// <param name="adapter">The Cosmos storage adapter that executes the underlying SQL queries.</param>
+    /// <param name="meshConfiguration">Optional mesh configuration controlling context and autocomplete exclusions.</param>
+    /// <param name="excludedNamespaces">Namespaces owned by static providers that this Cosmos provider should not query.</param>
+    /// <param name="ioPool">Optional I/O pool used to run Cosmos round-trips off the calling scheduler; defaults to the unbounded pool.</param>
     public CosmosMeshQuery(
         CosmosStorageAdapter adapter,
         MeshConfiguration? meshConfiguration = null,

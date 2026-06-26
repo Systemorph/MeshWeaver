@@ -14,8 +14,12 @@ namespace MeshWeaver.Hosting.Sqlite;
 /// </summary>
 public sealed class SqlitePartitionStorageProvider(SqliteStorageAdapter adapter) : IPartitionStorageProvider
 {
+    /// <inheritdoc />
     public string Name => "Sqlite";
+    /// <inheritdoc />
     public bool IsReadOnly => false;
+    /// <inheritdoc />
     public int Priority => 100;
+    /// <inheritdoc />
     public IStorageAdapter Adapter { get; } = adapter;
 }

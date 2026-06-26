@@ -44,7 +44,10 @@
                 Content = new MessageBoxContent
                 {
                     Title = "Something went wrong",
-                    Message = msg,
+                    // MarkupMessage (MarkupString) replaces the obsolete Message (plain string).
+                    // HtmlEncode the error text so it still renders as plain text — MarkupMessage is
+                    // raw HTML, and exception messages can contain '<'/'&'.
+                    MarkupMessage = new MarkupString(System.Net.WebUtility.HtmlEncode(msg)),
                 },
                 PrimaryAction = "OK",
                 SecondaryAction = null,

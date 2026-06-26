@@ -7,11 +7,20 @@ using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor.Components;
 
+/// <summary>
+/// Blazor view for the edit-form control. Binds a JSON data context from the layout
+/// stream, handles form submission reactively (without async/await), and shows toast
+/// notifications on success or failure.
+/// </summary>
 public partial class EditFormView
 {
     private ModelParameter<JsonElement>? model;
     private ActivityLog? Log { get; set; }
 
+    /// <summary>
+    /// Binds the form's JSON model from the pointer path specified by the view-model's
+    /// <c>DataContext</c> property (defaults to the root <c>"/"</c>).
+    /// </summary>
     protected override void BindData()
     {
         DataBind(
@@ -73,6 +82,10 @@ public partial class EditFormView
         ToastService.ShowToast(ToastIntent.Error, message);
     }
 
+    /// <summary>
+    /// Unsubscribes from the model's element-changed event before delegating to the
+    /// base <c>DisposeAsync</c> to release stream subscriptions.
+    /// </summary>
     public override ValueTask DisposeAsync()
     {
         if (model is not null)

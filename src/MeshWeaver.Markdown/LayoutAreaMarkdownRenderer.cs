@@ -4,8 +4,18 @@ using System.Web;
 
 namespace MeshWeaver.Markdown;
 
+/// <summary>
+/// HTML renderer for <see cref="LayoutAreaComponentInfo"/>: emits an inline layout-area div (for <c>@@</c>)
+/// or a unified-content-reference hyperlink (for <c>@</c>), carrying raw-path and resolved address/area/id
+/// data attributes for client-side resolution.
+/// </summary>
 public class LayoutAreaMarkdownRenderer : HtmlObjectRenderer<LayoutAreaComponentInfo>
 {
+    /// <summary>
+    /// Writes the layout-area reference as inline content (<c>@@</c>) or a hyperlink (<c>@</c>).
+    /// </summary>
+    /// <param name="renderer">The HTML renderer to write to.</param>
+    /// <param name="obj">The layout-area reference block being rendered.</param>
     protected override void Write(HtmlRenderer renderer, LayoutAreaComponentInfo obj)
     {
         renderer.EnsureLine();
@@ -44,11 +54,22 @@ public class LayoutAreaMarkdownRenderer : HtmlObjectRenderer<LayoutAreaComponent
         renderer.EnsureLine();
     }
 
+    /// <summary>CSS class for an embedded layout-area div.</summary>
     public const string LayoutArea = "layout-area";
+
+    /// <summary>CSS class for a unified-content-reference hyperlink.</summary>
     public const string UcrLink = "ucr-link";
+
+    /// <summary>Data-attribute suffix (<c>data-raw-path</c>) carrying the original reference path.</summary>
     public const string RawPath = "raw-path";
+
+    /// <summary>Data-attribute suffix (<c>data-address</c>) carrying the resolved node address.</summary>
     public const string Address = "address";
+
+    /// <summary>Data-attribute suffix (<c>data-area</c>) carrying the resolved area name.</summary>
     public const string Area = "area";
+
+    /// <summary>Data-attribute suffix (<c>data-area-id</c>) carrying the resolved area id.</summary>
     public const string AreaId = "area-id";
 
     /// <summary>

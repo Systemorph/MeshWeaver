@@ -32,6 +32,11 @@ public partial class MeshNodeThumbnailView
         ? Description.Substring(0, 117) + "..."
         : Description ?? string.Empty;
 
+    /// <summary>
+    /// Seeds title, description, and image URL from the view-model, then subscribes to
+    /// <c>Hub.GetMeshNodeStream(NodePath)</c> so the card reflects live node changes
+    /// without a full re-render cycle.
+    /// </summary>
     protected override void BindData()
     {
         base.BindData();

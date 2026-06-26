@@ -10,6 +10,9 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Blazor.Graph;
 
+/// <summary>
+/// Blazor editor view that streams a single mesh node, binding its name and content to editor fields and writing every change back through the live node stream.
+/// </summary>
 public partial class MeshNodeEditorView : IDisposable
 {
     private MonacoEditorView? _monacoEditor;
@@ -30,6 +33,9 @@ public partial class MeshNodeEditorView : IDisposable
     private IMeshNodeEditor? _editor;
     private IDisposable? _streamSub;
 
+    /// <summary>
+    /// Subscribes to the target node's mesh-node stream, refreshing the bound fields on each emission.
+    /// </summary>
     protected override void BindData()
     {
         base.BindData();
@@ -171,6 +177,9 @@ public partial class MeshNodeEditorView : IDisposable
         };
     }
 
+    /// <summary>
+    /// Disposes the node stream subscription and the underlying editor.
+    /// </summary>
     public void Dispose()
     {
         _streamSub?.Dispose();

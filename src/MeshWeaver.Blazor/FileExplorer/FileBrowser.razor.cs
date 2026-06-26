@@ -8,6 +8,10 @@ using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor.FileExplorer;
 
+/// <summary>
+/// Blazor component that displays and manages files and folders within a named content collection.
+/// Supports browsing, uploading, downloading, creating folders, and deleting items.
+/// </summary>
 public partial class FileBrowser
 {
     [Inject] private IDialogService DialogService { get; set; } = null!;
@@ -15,17 +19,30 @@ public partial class FileBrowser
     [Inject] private IToastService ToastService { get; set; } = null!;
     [Inject] private IMessageHub Hub { get; set; } = null!;
     [Inject] private IJSRuntime JSRuntime { get; set; } = null!;
+    /// <summary>Name of the content collection to browse. Changing this value reloads the collection.</summary>
     [Parameter] public string? CollectionName { get; set; } = "";
+    /// <summary>Current folder path within the collection. Defaults to the root.</summary>
     [Parameter] public string? CurrentPath { get; set; } = "/";
+    /// <summary>The highest-level path the browser allows navigating to; prevents navigation above this folder.</summary>
     [Parameter] public string TopLevelPath { get; set; } = "";
+    /// <summary>When true the browser renders in an embedded (compact) mode without a full-page chrome.</summary>
     [Parameter] public bool Embed { get; set; }
+    /// <summary>When true, automatically creates <c>CurrentPath</c> inside the collection on initialization if it does not exist.</summary>
     [Parameter] public bool CreatePath { get; set; }
+    /// <summary>When true, shows the "New Article" action in the toolbar.</summary>
     [Parameter] public bool ShowNewArticle { get; set; }
+    /// <summary>Optional configuration registered with the content service on initialization, creating the collection if it does not already exist.</summary>
     [Parameter] public ContentCollectionConfig? CollectionConfiguration { get; set; }
+    /// <summary>Mesh address used to build download and preview URLs for files in the collection.</summary>
     [Parameter] public Address? Address { get; set; }
+    /// <summary>When true, hides upload, create, and delete controls so the browser is read-only.</summary>
     [Parameter] public bool IsReadOnly { get; set; }
     private IReadOnlyCollection<CollectionItem> CollectionItems { get; set; } = [];
     FluentInputFile myFileByStream = default!;
+    /// <summary>
+    /// Runs after each parameter update: registers any new collection configuration, loads the collection by name,
+    /// optionally creates <c>CurrentPath</c>, and refreshes the displayed items.
+    /// </summary>
     protected override async Task OnParametersSetAsync()
     {
         await base.OnParametersSetAsync();

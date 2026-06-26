@@ -7,12 +7,20 @@ using System.Xml.Serialization;
 namespace MeshWeaver.DataStructures
 {
     // TODO V10: We should convert this to immutable (12.02.2024, Roland Bürgi)
+    /// <summary>
+    /// A lightweight, mutable data set: a named collection of <c>IDataTable</c> instances.
+    /// Supports XML serialization via <c>IXmlSerializable</c>.
+    /// </summary>
     [Serializable]
     public class DataSet : IDataSet, IXmlSerializable
     {
+        /// <summary>Gets or sets the name of the data set; may be <c>null</c>.</summary>
         public string? DataSetName { get; set; }
+        /// <summary>Gets the collection of tables contained in this data set.</summary>
         public IDataTableCollection Tables { get; } = new DataTableCollection();
 
+        /// <summary>Initializes a new data set with the given name.</summary>
+        /// <param name="name">Optional name for the data set; <c>null</c> for an unnamed set.</param>
         public DataSet(string? name = null)
         {
             DataSetName = name;
@@ -23,6 +31,8 @@ namespace MeshWeaver.DataStructures
         {
         }
 
+        /// <summary>Returns an enumerator over the tables in this data set.</summary>
+        /// <returns>An enumerator over the data set's tables.</returns>
         public IEnumerator<IDataTable> GetEnumerator()
         {
             return Tables.GetEnumerator();
@@ -33,6 +43,11 @@ namespace MeshWeaver.DataStructures
             return GetEnumerator();
         }
 
+        /// <summary>
+        /// Merges the tables and rows of another data set into this one. Matching tables (by name)
+        /// and columns (by name) are reused; missing tables and columns are created as needed.
+        /// </summary>
+        /// <param name="dataSet">The data set whose tables and rows are merged in.</param>
         public void Merge(IDataSet dataSet)
         {
             foreach (var table in dataSet.Tables)
@@ -72,11 +87,15 @@ namespace MeshWeaver.DataStructures
 
         #region IXmlSerializable Implementation
 
+        /// <summary>Returns the XML schema for this type. Always <c>null</c>, as required by <c>IXmlSerializable</c>.</summary>
+        /// <returns>Always <c>null</c>.</returns>
         public XmlSchema? GetSchema()
         {
             return null;
         }
 
+        /// <summary>Reconstructs the data set from its XML representation, recreating tables, columns, and rows.</summary>
+        /// <param name="reader">Reader positioned at the serialized data set element.</param>
         public void ReadXml(XmlReader reader)
         {
             var settings = new XmlReaderSettings { IgnoreWhitespace = true };
@@ -132,6 +151,8 @@ namespace MeshWeaver.DataStructures
             subreader.ReadEndElement();
         }
 
+        /// <summary>Writes the data set to XML, emitting one element per row with a child element per column.</summary>
+        /// <param name="writer">Writer to which the XML is written.</param>
         public void WriteXml(XmlWriter writer)
         {
             if (!string.IsNullOrEmpty(DataSetName))
@@ -163,12 +184,15 @@ namespace MeshWeaver.DataStructures
         #endregion
     }
 
+    /// <summary>The default <c>IDataTableCollection</c> implementation backing a <c>DataSet</c>.</summary>
     [Serializable]
     public class DataTableCollection : IDataTableCollection
     {
         private readonly List<IDataTable> tables = new List<IDataTable>();
         private readonly Dictionary<string, int> tableNames = new Dictionary<string, int>();
 
+        /// <summary>Returns an enumerator over the tables in this collection.</summary>
+        /// <returns>An enumerator over the collection's tables.</returns>
         public IEnumerator<IDataTable> GetEnumerator()
         {
             return tables.GetEnumerator();
@@ -179,8 +203,14 @@ namespace MeshWeaver.DataStructures
             return GetEnumerator();
         }
 
+        /// <summary>Gets the table at the given position.</summary>
+        /// <param name="i">Zero-based index of the table.</param>
+        /// <returns>The table at that index.</returns>
         public IDataTable this[int i] => tables[i];
 
+        /// <summary>Gets the table with the given name, or <c>null</c> if no such table exists.</summary>
+        /// <param name="name">Name of the table to look up.</param>
+        /// <returns>The matching table, or <c>null</c>.</returns>
         public IDataTable? this[string name]
         {
             get
@@ -192,8 +222,11 @@ namespace MeshWeaver.DataStructures
             }
         }
 
+        /// <summary>Gets the number of tables in the collection.</summary>
         public int Count => tables.Count;
 
+        /// <summary>Adds an existing table to the collection, assigning a default name if it has none.</summary>
+        /// <param name="table">The table to add.</param>
         public void Add(IDataTable table)
         {
             if (table.TableName == null)
@@ -204,6 +237,9 @@ namespace MeshWeaver.DataStructures
             internalImpl?.DataTableCollections.Add(this);
         }
 
+        /// <summary>Creates a new table with the given name and adds it to the collection.</summary>
+        /// <param name="name">Name for the new table.</param>
+        /// <returns>The newly created table.</returns>
         public IDataTable Add(string name)
         {
             var dataTable = new DataTable(name);
@@ -211,12 +247,16 @@ namespace MeshWeaver.DataStructures
             return dataTable;
         }
 
+        /// <summary>Adds a sequence of existing tables to the collection.</summary>
+        /// <param name="newTables">The tables to add.</param>
         public void AddRange(IEnumerable<IDataTable> newTables)
         {
             foreach (var t in newTables)
                 Add(t);
         }
 
+        /// <summary>Removes the table with the given name, if present.</summary>
+        /// <param name="tableName">Name of the table to remove.</param>
         public void Remove(string tableName)
         {
             var table = this[tableName];
@@ -244,6 +284,7 @@ namespace MeshWeaver.DataStructures
             }
         }
 
+        /// <summary>Removes all tables from the collection.</summary>
         public void Clear()
         {
             foreach (var internalImpl in tables.Cast<DataTable>())
@@ -253,11 +294,17 @@ namespace MeshWeaver.DataStructures
             tableNames.Clear();
         }
 
+        /// <summary>Gets the position of the table with the given name.</summary>
+        /// <param name="tableName">Name of the table.</param>
+        /// <returns>Zero-based index of the table.</returns>
         public int IndexOf(string tableName)
         {
             return tableNames[tableName];
         }
 
+        /// <summary>Determines whether a table with the given name exists in the collection.</summary>
+        /// <param name="tableName">Name of the table to check.</param>
+        /// <returns><c>true</c> if a table with that name exists; otherwise <c>false</c>.</returns>
         public bool Contains(string tableName)
         {
             return tableNames.ContainsKey(tableName);

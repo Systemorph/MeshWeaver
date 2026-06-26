@@ -7,9 +7,13 @@ namespace MeshWeaver.Data.Validation;
 /// </summary>
 public static class AccessAction
 {
+    /// <summary>The create action.</summary>
     public const string Create = "Create";
+    /// <summary>The read action.</summary>
     public const string Read = "Read";
+    /// <summary>The update action.</summary>
     public const string Update = "Update";
+    /// <summary>The delete action.</summary>
     public const string Delete = "Delete";
 
     /// <summary>

@@ -28,7 +28,9 @@ namespace MeshWeaver.AI;
 /// </summary>
 public abstract class ChatClientAgentFactory : IChatClientFactory
 {
+    /// <summary>The owning message hub — source of the service provider, workspace, and mesh services this factory uses to build agents.</summary>
     protected readonly IMessageHub Hub;
+    /// <summary>Logger for this factory instance, categorised to the concrete factory type.</summary>
     protected readonly ILogger Logger;
 
     /// <summary>
@@ -36,6 +38,10 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
     /// </summary>
     protected string? CurrentModelName { get; private set; }
 
+    /// <summary>
+    /// Initialises the factory with its owning hub and resolves a type-categorised logger from it.
+    /// </summary>
+    /// <param name="hub">The message hub that owns this factory; supplies the service provider, workspace, and mesh services.</param>
     protected ChatClientAgentFactory(IMessageHub hub)
     {
         Hub = hub;
@@ -128,6 +134,17 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         return CreateAgentCore(config, chat, existingAgents, hierarchyAgents, instructions, modelName);
     }
 
+    /// <summary>
+    /// Obsolete async agent creation — resolves @@references in instructions before building the
+    /// agent. Deadlocks under Orleans (the await captures the grain scheduler); use <c>CreateAgent</c>
+    /// instead, which builds synchronously and resolves references lazily at runtime.
+    /// </summary>
+    /// <param name="config">The agent configuration to build the chat client agent from.</param>
+    /// <param name="chat">The chat session the agent participates in (supplies execution context and tool callbacks).</param>
+    /// <param name="existingAgents">Already-built agents in the hierarchy, keyed by id, available for delegation wiring.</param>
+    /// <param name="hierarchyAgents">All agent configurations in the hierarchy, used to build delegation/handoff tools and instructions.</param>
+    /// <param name="modelName">The composer-selected model to use, or <c>null</c> to fall back to the agent's tier then the provider default.</param>
+    /// <returns>The constructed <c>ChatClientAgent</c>.</returns>
     [Obsolete("Use CreateAgent — CreateAgentAsync deadlocks in Orleans")]
     public async Task<ChatClientAgent> CreateAgentAsync(
         AgentConfiguration config,
@@ -285,6 +302,12 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
             nTools);
     }
 
+    /// <summary>
+    /// Standard tools made available to every agent regardless of configuration. The base
+    /// implementation returns none; concrete factories override to inject provider-wide tools.
+    /// </summary>
+    /// <param name="chat">The chat session the tools will operate within.</param>
+    /// <returns>The standard tools to add to the agent; empty by default.</returns>
     protected virtual IEnumerable<AITool> GetStandardTools(IAgentChat chat)
     {
         return [];
@@ -647,6 +670,14 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         return BuildInstructionsWithDelegations(baseInstructions, agentConfig, hierarchyAgents, chat);
     }
 
+    /// <summary>
+    /// Builds the agent's full instruction text with @@references resolved (the async path), then
+    /// appends the delegation, handoff, and thread-inspection/summary guidance for the hierarchy.
+    /// </summary>
+    /// <param name="agentConfig">The agent whose base instructions are resolved and augmented.</param>
+    /// <param name="hierarchyAgents">All agents in the hierarchy, used to render the available-delegation/handoff lists.</param>
+    /// <param name="chat">The chat session, used to resolve @@references against the live workspace.</param>
+    /// <returns>The composed instruction string for the agent.</returns>
     protected async Task<string> GetAgentInstructionsAsync(AgentConfiguration agentConfig, IReadOnlyList<AgentConfiguration> hierarchyAgents, IAgentChat chat)
     {
         var baseInstructions = agentConfig.Instructions ?? string.Empty;

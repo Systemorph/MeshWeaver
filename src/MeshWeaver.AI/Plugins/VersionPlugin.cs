@@ -29,6 +29,12 @@ public class VersionPlugin(IMessageHub hub)
     private readonly IVersionQuery? versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
     private readonly IMeshService meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
 
+    /// <summary>
+    /// MCP/agent tool: lists every available version of a node, newest first —
+    /// version number, modification date, who changed it, name and node type.
+    /// </summary>
+    /// <param name="path">Path to the node (e.g. <c>OrgA/my-doc</c>).</param>
+    /// <returns>A task resolving to JSON of the versions, or a human-readable message when none exist or version history is unavailable.</returns>
     [Description("Lists all available versions of a node, ordered newest first. Returns version number, date, who changed it, and node name.")]
     public Task<string> GetVersions(
         [Description("Path to the node (e.g., 'OrgA/my-doc')")] string path)
@@ -62,6 +68,12 @@ public class VersionPlugin(IMessageHub hub)
         return tcs.Task;
     }
 
+    /// <summary>
+    /// MCP/agent tool: retrieves the full node content at a specific version number.
+    /// </summary>
+    /// <param name="path">Path to the node.</param>
+    /// <param name="version">Version number to retrieve.</param>
+    /// <returns>A task resolving to the serialized node JSON, or a message when the version is not found.</returns>
     [Description("Retrieves the full node content at a specific version number.")]
     public Task<string> GetVersion(
         [Description("Path to the node")] string path,
@@ -87,6 +99,13 @@ public class VersionPlugin(IMessageHub hub)
         return tcs.Task;
     }
 
+    /// <summary>
+    /// MCP/agent tool: restores a node to a specific version number; the historical
+    /// state is written back as a new latest version.
+    /// </summary>
+    /// <param name="path">Path to the node.</param>
+    /// <param name="version">Version number to restore to.</param>
+    /// <returns>A task resolving to a status message reporting the restored and new version numbers.</returns>
     [Description("Restores a node to a specific version number. The historical state becomes the latest version.")]
     public Task<string> RestoreVersion(
         [Description("Path to the node")] string path,
@@ -119,6 +138,13 @@ public class VersionPlugin(IMessageHub hub)
         return tcs.Task;
     }
 
+    /// <summary>
+    /// MCP/agent tool: restores a node to its state at a point in time by finding the
+    /// latest version at or before the given timestamp and writing it back as the new latest.
+    /// </summary>
+    /// <param name="path">Path to the node.</param>
+    /// <param name="timestamp">ISO 8601 timestamp to restore to (e.g. <c>2026-03-25T14:30:00Z</c>).</param>
+    /// <returns>A task resolving to a status message, or an error when the timestamp is invalid or no matching version exists.</returns>
     [Description("Restores a node to its state at a specific point in time. Finds the latest version before the given timestamp.")]
     public Task<string> RestoreFromPointInTime(
         [Description("Path to the node")] string path,
@@ -172,6 +198,11 @@ public class VersionPlugin(IMessageHub hub)
         return tcs.Task;
     }
 
+    /// <summary>
+    /// Builds the <c>AITool</c> list this plugin exposes to agents — GetVersions,
+    /// GetVersion, RestoreVersion and RestoreFromPointInTime.
+    /// </summary>
+    /// <returns>The version-history tools.</returns>
     public IList<AITool> CreateTools()
     {
         return

@@ -17,6 +17,12 @@ public sealed class IoPool : IIoPool, IDisposable
     private readonly TaskFactory _blockingFactory;
     private int _inFlight;
 
+    /// <summary>
+    /// Creates a pool whose async gate and sync-blocking scheduler are both capped at
+    /// <paramref name="maxConcurrency"/>.
+    /// </summary>
+    /// <param name="maxConcurrency">Maximum number of operations allowed to run concurrently; must be at least 1.</param>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="maxConcurrency"/> is less than 1.</exception>
     public IoPool(int maxConcurrency)
     {
         if (maxConcurrency < 1)
@@ -29,8 +35,15 @@ public sealed class IoPool : IIoPool, IDisposable
             new LimitedConcurrencyLevelTaskScheduler(maxConcurrency));
     }
 
+    /// <summary>Number of operations currently executing through this pool.</summary>
     public int CurrentInFlight => Volatile.Read(ref _inFlight);
 
+    /// <summary>
+    /// Runs an async I/O leaf off the calling scheduler under the pool's concurrency gate.
+    /// </summary>
+    /// <typeparam name="T">Result type produced by the I/O operation.</typeparam>
+    /// <param name="io">The cancellable async work to run once the gate grants a slot.</param>
+    /// <returns>A cold observable that, on subscribe, runs the work and emits its single result.</returns>
     public IObservable<T> Invoke<T>(Func<CancellationToken, Task<T>> io)
         // SubscribeOn moves the whole subscribe — including the gate wait and the
         // synchronous prologue of `io` — onto a ThreadPool thread, so the work
@@ -56,6 +69,12 @@ public sealed class IoPool : IIoPool, IDisposable
             }
         }).SubscribeOn(TaskPoolScheduler.Default);
 
+    /// <summary>
+    /// Streams an async-enumerable I/O leaf off the calling scheduler under the pool's concurrency gate.
+    /// </summary>
+    /// <typeparam name="T">Element type produced by the stream.</typeparam>
+    /// <param name="source">The cancellable async sequence to enumerate once the gate grants a slot.</param>
+    /// <returns>A cold observable that, on subscribe, enumerates the source and emits each element.</returns>
     public IObservable<T> InvokeStream<T>(Func<CancellationToken, IAsyncEnumerable<T>> source)
         => Observable.Create<T>(async (observer, ct) =>
         {
@@ -74,6 +93,13 @@ public sealed class IoPool : IIoPool, IDisposable
             }
         }).SubscribeOn(TaskPoolScheduler.Default);
 
+    /// <summary>
+    /// Runs a synchronous, blocking or CPU-bound leaf on the pool's limited-concurrency scheduler
+    /// so it never blocks the calling hub/grain thread.
+    /// </summary>
+    /// <typeparam name="T">Result type produced by the work.</typeparam>
+    /// <param name="work">The cancellable blocking work to run once the scheduler grants a slot.</param>
+    /// <returns>A cold observable that, on subscribe, runs the work and emits its single result; unsubscribing cancels it.</returns>
     public IObservable<T> InvokeBlocking<T>(Func<CancellationToken, T> work)
         => Observable.Create<T>(observer =>
         {
@@ -118,6 +144,7 @@ public sealed class IoPool : IIoPool, IDisposable
             });
         });
 
+    /// <summary>Disposes the underlying concurrency gate; called when the owning mesh is torn down.</summary>
     public void Dispose() => _gate.Dispose();
 
     /// <summary>

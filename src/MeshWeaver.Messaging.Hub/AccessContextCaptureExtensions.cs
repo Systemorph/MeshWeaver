@@ -78,6 +78,7 @@ public static class AccessContextCaptureExtensions
     /// </summary>
     /// <param name="source">Cold observable returned by a framework primitive.</param>
     /// <param name="services">DI scope used to resolve <see cref="AccessService"/>.</param>
+    /// <param name="restoreNullCapture">When <c>true</c>, a null captured context is restored AS null (clamped) for the duration of each subscriber callback, so a framework infrastructure identity ambient on the emission thread cannot leak into the caller's callback; when <c>false</c> (the default), a null capture passes through unwrapped, preserving whatever identity is ambient at emission time.</param>
     public static IObservable<T> CarryAccessContext<T>(
         this IObservable<T> source, IServiceProvider services, bool restoreNullCapture = false)
     {

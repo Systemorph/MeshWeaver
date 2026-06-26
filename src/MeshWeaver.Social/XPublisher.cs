@@ -27,7 +27,10 @@ namespace MeshWeaver.Social;
 /// </summary>
 public sealed class XPublisher : IPlatformPublisher
 {
+    /// <summary>The platform identifier ("Twitter") used to match posts to this publisher.</summary>
     public const string PlatformId = "Twitter";
+
+    /// <inheritdoc />
     public string Platform => PlatformId;
 
     private static readonly Uri ApiBase = new("https://api.twitter.com/");
@@ -37,6 +40,12 @@ public sealed class XPublisher : IPlatformPublisher
     private readonly XOptions _options;
     private readonly ILogger<XPublisher>? _logger;
 
+    /// <summary>
+    /// Initializes a new instance of the <c>XPublisher</c> class.
+    /// </summary>
+    /// <param name="http">HTTP client used for X API calls and token refresh.</param>
+    /// <param name="options">App-level X (Twitter) OAuth configuration.</param>
+    /// <param name="logger">Optional logger for diagnostics.</param>
     public XPublisher(HttpClient http, XOptions options, ILogger<XPublisher>? logger = null)
     {
         _http = http;
@@ -44,6 +53,7 @@ public sealed class XPublisher : IPlatformPublisher
         _logger = logger;
     }
 
+    /// <inheritdoc />
     public async Task<PublishResult> PublishAsync(PlatformPublishRequest request, CancellationToken ct)
     {
         var credential = await EnsureFreshAsync(request.Credential, ct);
@@ -121,6 +131,7 @@ public sealed class XPublisher : IPlatformPublisher
         return (retryResp, refreshed);
     }
 
+    /// <inheritdoc />
     public async Task<PostStats> GetStatsAsync(string urn, PlatformCredential credential, CancellationToken ct)
     {
         credential = await EnsureFreshAsync(credential, ct);
@@ -150,6 +161,7 @@ public sealed class XPublisher : IPlatformPublisher
         return new PostStats(impressions, likes, replies, retweets, DateTimeOffset.UtcNow);
     }
 
+    /// <inheritdoc />
     public async IAsyncEnumerable<PastPost> ListPastPostsAsync(
         PlatformCredential credential,
         DateTimeOffset? sinceInclusive,
@@ -219,6 +231,7 @@ public sealed class XPublisher : IPlatformPublisher
         }
     }
 
+    /// <inheritdoc />
     public async IAsyncEnumerable<EngagementComment> ListCommentsAsync(
         string urn,
         PlatformCredential credential,
@@ -233,6 +246,7 @@ public sealed class XPublisher : IPlatformPublisher
         yield break;
     }
 
+    /// <inheritdoc />
     public async IAsyncEnumerable<EngagementLike> ListLikesAsync(
         string urn,
         PlatformCredential credential,
@@ -292,6 +306,9 @@ public sealed class XPublisher : IPlatformPublisher
 /// </summary>
 public sealed record XOptions
 {
+    /// <summary>The OAuth app client identifier.</summary>
     public required string ClientId { get; init; }
+
+    /// <summary>The OAuth app client secret.</summary>
     public required string ClientSecret { get; init; }
 }

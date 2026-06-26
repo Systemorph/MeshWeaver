@@ -81,6 +81,10 @@ public record ContentViewOptions
     public string? BoundDataContext { get; init; }
 }
 
+/// <summary>
+/// Static helper that builds unified content view layouts (overview, edit, create) for domain types.
+/// Composes a header, a property form grid, and optional footer actions using the standard framework controls.
+/// </summary>
 public static class EditLayoutArea
 {
     /// <summary>
@@ -204,6 +208,10 @@ public static class EditLayoutArea
     /// <param name="dataId">The data ID used for data binding.</param>
     /// <param name="canEdit">Whether editing is allowed based on permissions.</param>
     /// <param name="isToggleable">If true (default), starts read-only and can toggle. If false, stays in edit mode.</param>
+    /// <param name="boundDataContext">
+    /// Optional node-bound data context path. When set, form controls bind their values directly to the mesh node stream
+    /// instead of the layout-area /data replica, providing a single source of truth. Leave null for create forms.
+    /// </param>
     public static UiControl BuildPropertyForm(
         LayoutAreaHost host,
         Type contentType,

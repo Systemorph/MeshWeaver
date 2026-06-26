@@ -23,6 +23,12 @@ using TextContent = Microsoft.Extensions.AI.TextContent;
 
 namespace MeshWeaver.AI;
 
+/// <summary>
+/// Default <c>IAgentChat</c> implementation. Selects an agent from the workspace's
+/// synced agent collection, assembles the contextual system prompt, and streams the
+/// model response — text, tool calls, layout-area content and agent handoffs — back to
+/// the thread-execution layer while holding the in-memory conversation session.
+/// </summary>
 public class AgentChatClient : IAgentChat
 {
     private readonly IMessageHub hub;
@@ -170,6 +176,11 @@ public class AgentChatClient : IAgentChat
         return path;
     }
 
+    /// <summary>
+    /// The current application context (node, path, address) the agent reasons about.
+    /// Set via <c>SetContext</c>, which strips satellite path segments at the boundary.
+    /// Null until a context is assigned.
+    /// </summary>
     public AgentContext? Context { get; private set; }
 
     /// <inheritdoc />
@@ -232,6 +243,11 @@ public class AgentChatClient : IAgentChat
     /// <summary>Sets the execution context for delegation sub-thread creation.</summary>
     public void SetExecutionContext(ThreadExecutionContext? ctx) => ExecutionContext = ctx;
 
+    /// <summary>
+    /// Switches the active conversation to the given thread, resetting the shared
+    /// in-memory session so the next response starts a fresh agent session.
+    /// </summary>
+    /// <param name="threadId">Identifier of the thread to switch to; must be non-empty.</param>
     public void SetThreadId(string threadId)
     {
         if (string.IsNullOrEmpty(threadId))
@@ -617,6 +633,14 @@ public class AgentChatClient : IAgentChat
     }
 
 
+    /// <summary>
+    /// Runs the selected agent over the given messages and yields the complete response
+    /// messages (text, tool calls, queued layout-area content and any handoffs). Surfaces
+    /// a chat-formatted error instead of throwing when no agent can be selected.
+    /// </summary>
+    /// <param name="messages">The conversation messages; the last one drives agent selection.</param>
+    /// <param name="cancellationToken">Cancels the in-flight agent run.</param>
+    /// <returns>An async stream of assistant <c>ChatMessage</c>s.</returns>
     public async IAsyncEnumerable<ChatMessage> GetResponseAsync(
         IReadOnlyCollection<ChatMessage> messages,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -753,6 +777,14 @@ public class AgentChatClient : IAgentChat
         }
     }
 
+    /// <summary>
+    /// Streams the selected agent's response incrementally — text deltas, tool-call and
+    /// tool-result content, token usage and handoffs — as they arrive from the model.
+    /// Surfaces a chat-formatted error instead of throwing when no agent can be selected.
+    /// </summary>
+    /// <param name="messages">The conversation messages; the last one drives agent selection.</param>
+    /// <param name="cancellationToken">Cancels the in-flight streaming run.</param>
+    /// <returns>An async stream of <c>ChatResponseUpdate</c> deltas.</returns>
     public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IReadOnlyCollection<ChatMessage> messages,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -1182,6 +1214,12 @@ public class AgentChatClient : IAgentChat
         currentAgentName = SelectionId.IdOf(agentName);
     }
 
+    /// <summary>
+    /// Sets the application context for the agent, normalising away satellite path
+    /// segments, and re-initialises the synced-agent subscription when the context
+    /// node's NodeType changes (so NodeType-scoped agents surface).
+    /// </summary>
+    /// <param name="applicationContext">The new context, or null to clear it.</param>
     public void SetContext(AgentContext? applicationContext)
     {
         // Normalize at the boundary: strip satellite segments (e.g. "_Thread/<slug>") so
@@ -1823,6 +1861,12 @@ public class AgentChatClient : IAgentChat
         return Task.FromResult<IReadOnlyList<AgentDisplayInfo>>(loadedAgents);
     }
 
+    /// <summary>
+    /// Resumes a prior conversation. A no-op under the in-memory <c>AgentSession</c>
+    /// model: the thread already carries the conversation state, so nothing is restored.
+    /// </summary>
+    /// <param name="conversation">The conversation to resume.</param>
+    /// <returns>A completed task.</returns>
     public Task ResumeAsync(ChatConversation conversation)
     {
         // With AgentSession, we don't need to manually restore history
@@ -1830,12 +1874,22 @@ public class AgentChatClient : IAgentChat
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Queues a layout-area control to be emitted as assistant content once the current
+    /// agent response completes.
+    /// </summary>
+    /// <param name="layoutAreaControl">The layout-area control to display in the chat.</param>
     public void DisplayLayoutArea(LayoutAreaControl layoutAreaControl)
     {
         var layoutAreaContent = new ChatLayoutAreaContent(layoutAreaControl);
         queuedLayoutAreaContent = queuedLayoutAreaContent.Enqueue(layoutAreaContent);
     }
 
+    /// <summary>
+    /// Records a pending handoff to another agent; it is processed at the end of the
+    /// current response, transferring the shared thread to the target agent.
+    /// </summary>
+    /// <param name="request">The handoff request (source agent, target agent and message).</param>
     public void RequestHandoff(HandoffRequest request)
     {
         pendingHandoff = request;

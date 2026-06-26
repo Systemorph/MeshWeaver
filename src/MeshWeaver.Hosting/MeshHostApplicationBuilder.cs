@@ -6,8 +6,17 @@ using Microsoft.Extensions.Hosting;
 
 namespace MeshWeaver.Hosting;
 
+/// <summary>
+/// A <see cref="MeshBuilder"/> bound to an <see cref="IHostApplicationBuilder"/>, wiring the mesh
+/// hub as the host's service-provider factory and registering ordered shutdown teardown.
+/// </summary>
 public record MeshHostApplicationBuilder : MeshBuilder
 {
+    /// <summary>
+    /// Binds the mesh to the host application builder and registers the hub container factory and teardown service.
+    /// </summary>
+    /// <param name="Host">The host application builder to bind the mesh to.</param>
+    /// <param name="address">The mesh address for the root hub.</param>
     public MeshHostApplicationBuilder(IHostApplicationBuilder Host, Address address) : base(x => x.Invoke(Host.Services), address)
     {
         this.Host = Host;
@@ -20,10 +29,20 @@ public record MeshHostApplicationBuilder : MeshBuilder
         Host.Services.AddHostedService<MeshTeardownHostedService>();
     }
 
+    /// <summary>The host application builder this mesh is bound to.</summary>
     public IHostApplicationBuilder Host { get; }
 }
+/// <summary>
+/// A <see cref="MeshBuilder"/> bound to the legacy <see cref="IHostBuilder"/>, wiring the mesh hub
+/// as the host's service-provider factory.
+/// </summary>
 public record MeshHostBuilder : MeshBuilder
 {
+    /// <summary>
+    /// Binds the mesh to the host builder and registers the hub container factory.
+    /// </summary>
+    /// <param name="Host">The host builder to bind the mesh to.</param>
+    /// <param name="address">The mesh address for the root hub.</param>
     public MeshHostBuilder(IHostBuilder Host, Address address) : base(c => Host.ConfigureServices((_,services) => c(services)), address)
     {
         this.Host = Host;
@@ -32,5 +51,6 @@ public record MeshHostBuilder : MeshBuilder
     }
 
 
+    /// <summary>The host builder this mesh is bound to.</summary>
     public IHostBuilder Host { get; }
 }

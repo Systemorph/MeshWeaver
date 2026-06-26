@@ -4,6 +4,9 @@ using MeshWeaver.DataSetReader.Excel.Utils;
 
 namespace MeshWeaver.DataSetReader.Excel
 {
+	/// <summary>
+	/// Default factory creating <see cref="IExcelDataReader"/> instances for binary (.xls) and OpenXML (.xlsx) workbooks.
+	/// </summary>
 	public class ExcelReaderFactory : IExcelReaderFactory
 	{
 

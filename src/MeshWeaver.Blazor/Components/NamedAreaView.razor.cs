@@ -8,8 +8,17 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Blazor.Components;
 
+/// <summary>
+/// Blazor view for <c>NamedAreaControl</c> — resolves an area reference to a
+/// <c>UiControl</c> via the synchronisation stream and renders it, handling transient
+/// hub failures, compilation-in-progress NACKs, and teardown gracefully.
+/// </summary>
 public partial class NamedAreaView
 {
+    /// <summary>
+    /// When <c>true</c>, this area is the top-level root area of the page layout.
+    /// Used to drive page-title and meta-attribute propagation.
+    /// </summary>
     [Parameter] public bool Top { get; set; }
 
     private UiControl? RootControl { get; set; }
@@ -25,6 +34,11 @@ public partial class NamedAreaView
 
     private string? AreaToBeRendered { get; set; }
 
+    /// <summary>
+    /// Tears down the prior area subscription and opens a new reactive subscription for
+    /// the area reference. Applies bounded backoff retry for transient hub failures and
+    /// swaps to the NodeType progress view when a CompilationInProgress NACK is received.
+    /// </summary>
     protected override void BindData()
     {
         subscription?.Dispose();

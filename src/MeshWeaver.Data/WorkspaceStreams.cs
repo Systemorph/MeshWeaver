@@ -6,6 +6,11 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data;
 
+/// <summary>
+/// Helpers that build and reduce workspace synchronization streams: resolving a workspace reference
+/// to the owning data source(s), combining multiple sources into a single store stream, and creating
+/// reduced or projected streams.
+/// </summary>
 public static class WorkspaceStreams
 {
     internal static ISynchronizationStream? CreateWorkspaceStream<TReduced, TReference>(

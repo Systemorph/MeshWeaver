@@ -2,6 +2,12 @@ using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Graph;
 
+/// <summary>
+/// Helper for resolving and classifying a mesh node's icon for rendering. Resolves
+/// content: references to absolute URLs, supplies NodeType default icons, and detects
+/// whether an icon value is inline SVG, an image URL/data URI, an emoji, or a legacy
+/// Fluent icon name.
+/// </summary>
 public static class MeshNodeImageHelper
 {
     /// <summary>

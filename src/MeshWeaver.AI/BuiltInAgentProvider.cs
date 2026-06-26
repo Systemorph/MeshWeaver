@@ -18,6 +18,7 @@ namespace MeshWeaver.AI;
 /// </summary>
 public class BuiltInAgentProvider : IStaticNodeProvider
 {
+    /// <summary>Id of the built-in utility agent that names new threads from the first user message.</summary>
     public const string ThreadNamerId = "ThreadNamer";
 
     private static readonly Lazy<MeshNode[]> LazyNodes = new(LoadAllNodes);
@@ -37,6 +38,11 @@ public class BuiltInAgentProvider : IStaticNodeProvider
 
     private const string RootNamespace = "Agent";
 
+    /// <summary>
+    /// Returns the static agent nodes: the world-readable Agent-namespace access policy, the
+    /// built-in ThreadNamer agent, and every agent/markdown node loaded from embedded resources.
+    /// </summary>
+    /// <returns>The built-in agent and supporting MeshNodes.</returns>
     public IEnumerable<MeshNode> GetStaticNodes()
     {
         // Read-only, world-readable policy for the Agent namespace. PublicRead grants

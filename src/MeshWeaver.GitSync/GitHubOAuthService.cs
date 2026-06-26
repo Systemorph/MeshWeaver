@@ -25,6 +25,11 @@ public sealed class GitHubOAuthService
     private readonly GitHubOAuthOptions options;
     private readonly ILogger? logger;
 
+    /// <summary>Initializes a new instance of the <c>GitHubOAuthService</c> class.</summary>
+    /// <param name="ioPools">Registry the HTTP I/O pool is resolved from so every HTTP leaf runs off the hub.</param>
+    /// <param name="options">The bound <see cref="GitHubOAuthOptions"/> (client id/secret, endpoints, scopes).</param>
+    /// <param name="logger">Optional logger.</param>
+    /// <param name="httpClient">Optional <see cref="HttpClient"/> to reuse; a default one is created when null.</param>
     public GitHubOAuthService(
         IoPoolRegistry ioPools,
         IOptions<GitHubOAuthOptions> options,
@@ -39,6 +44,7 @@ public sealed class GitHubOAuthService
             http.DefaultRequestHeaders.UserAgent.ParseAdd("MeshWeaver-GitSync");
     }
 
+    /// <summary>True when the OAuth client id and secret are configured and the flow can run.</summary>
     public bool IsConfigured => options.IsConfigured;
 
     private IIoPool Http => ioPools.Get(IoPoolNames.Http);

@@ -43,6 +43,11 @@ public sealed class ClaudeConnectStrategy : IConnectStrategy
     // Spawning + scraping the claude CLI is a process I/O leaf — bounded Process pool, never FromAsync.
     private readonly IIoPool processPool;
 
+    /// <summary>
+    /// Initialises the strategy, resolving the optional logger and the bounded Process I/O pool
+    /// (falling back to an unbounded pool when no registry is available).
+    /// </summary>
+    /// <param name="services">Service provider supplying the logger factory, options, and I/O pool registry.</param>
     public ClaudeConnectStrategy(IServiceProvider services)
     {
         this.services = services;
@@ -50,6 +55,7 @@ public sealed class ClaudeConnectStrategy : IConnectStrategy
         processPool = services.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Process) ?? IoPool.Unbounded;
     }
 
+    /// <summary>The CLI this strategy logs in — always <see cref="ConnectProvider.ClaudeCode"/>.</summary>
     public ConnectProvider Provider => ConnectProvider.ClaudeCode;
 
     /// <summary>Claude uses the paste-a-code flow.</summary>
@@ -88,12 +94,27 @@ public sealed class ClaudeConnectStrategy : IConnectStrategy
         });
     }
 
+    /// <summary>
+    /// Spawns the <c>claude setup-token</c> login under the user's config dir and emits a
+    /// <see cref="ConnectChallenge"/> once the auth URL is scraped from its output. Runs on the
+    /// bounded Process I/O pool.
+    /// </summary>
+    /// <param name="session">The session that holds the live process and config dir for the login.</param>
+    /// <param name="ownerPath">The path identifying the user the login belongs to.</param>
+    /// <returns>A cold observable emitting the login challenge (the auth URL) once known.</returns>
     public IObservable<ConnectChallenge> StartConnect(ConnectSession session, string ownerPath)
     {
         var options = Options;
         return processPool.Invoke(ct => SpawnAndScrapeUrlAsync(session, options, ct));
     }
 
+    /// <summary>
+    /// Writes the pasted code to the live login process's stdin and captures the resulting token from
+    /// its output (falling back to the CLI's <c>.credentials.json</c>). Runs on the bounded Process pool.
+    /// </summary>
+    /// <param name="session">The session holding the live login process started by <see cref="StartConnect"/>.</param>
+    /// <param name="pastedCode">The code the user pasted back from the auth URL.</param>
+    /// <returns>A cold observable emitting the captured raw token exactly once.</returns>
     public IObservable<string> CompleteConnect(ConnectSession session, string? pastedCode)
     {
         var options = Options;

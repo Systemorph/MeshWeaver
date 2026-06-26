@@ -18,10 +18,15 @@ namespace MeshWeaver.AI.Plugins;
 /// </summary>
 public record DelegationResult
 {
+    /// <summary>Name of the agent the task was delegated to.</summary>
     public required string AgentName { get; init; }
+    /// <summary>The task or instructions that were delegated.</summary>
     public required string Task { get; init; }
+    /// <summary>The delegated agent's resulting summary text.</summary>
     public required string Result { get; init; }
+    /// <summary>True when the delegation completed successfully; defaults to true.</summary>
     public bool Success { get; init; } = true;
+    /// <summary>Identifier of the sub-thread that handled the delegation; null if none was created.</summary>
     public string? ThreadId { get; init; }
 }
 

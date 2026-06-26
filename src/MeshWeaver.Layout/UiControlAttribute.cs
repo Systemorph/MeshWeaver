@@ -1,5 +1,11 @@
 ﻿namespace MeshWeaver.Layout;
 
+/// <summary>
+/// Marks a property with the UI control types to use when displaying or editing it.
+/// Applied by the form-rendering pipeline to pick the appropriate control for each property.
+/// </summary>
+/// <param name="displayControl">Control type used in read/display mode; null to use <paramref name="editControl"/> for both modes.</param>
+/// <param name="editControl">Control type used in edit mode.</param>
 [AttributeUsage(AttributeTargets.Property)]
 public class UiControlAttribute(Type? displayControl = null, Type? editControl = null) : Attribute
 {

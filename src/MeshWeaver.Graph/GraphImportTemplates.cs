@@ -21,10 +21,18 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class GraphImportTemplates
 {
+    /// <summary>Namespace the import-template Code nodes are seeded under.</summary>
     public const string TemplatesNamespace = "Templates/Import";
+    /// <summary>Node id of the "copy node tree" import template.</summary>
     public const string NodeCopyId = "NodeCopy";
+    /// <summary>Node id of the "mirror across portals" import template.</summary>
     public const string MirrorId = "Mirror";
 
+    /// <summary>
+    /// Returns the built-in import-template Code nodes (lazily loaded from this
+    /// assembly's embedded .csx resources) for registration via AddMeshNodes.
+    /// </summary>
+    /// <returns>The set of executable Code template nodes.</returns>
     public static IEnumerable<MeshNode> GetStaticNodes() => LazyNodes.Value;
 
     private static readonly Lazy<MeshNode[]> LazyNodes = new(LoadAllNodes);

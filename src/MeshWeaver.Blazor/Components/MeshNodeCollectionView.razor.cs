@@ -11,12 +11,21 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Blazor.Components;
 
+/// <summary>
+/// Blazor view for <c>MeshNodeCollectionControl</c> — renders a live, query-driven list of
+/// mesh nodes with inline sub-entry chips, delete, and navigate actions. Each configured
+/// query is subscribed independently so the view stays live with the underlying data.
+/// </summary>
 public partial class MeshNodeCollectionView : BlazorView<MeshNodeCollectionControl, MeshNodeCollectionView>
 {
     private List<MeshNode> _items = [];
     private bool _isLoading = true;
     private readonly List<IDisposable> _subscriptions = new();
 
+    /// <summary>
+    /// Tears down prior per-query subscriptions and starts a fresh live subscription for
+    /// each query declared on the view-model, merging results by path.
+    /// </summary>
     protected override void BindData()
     {
         base.BindData();

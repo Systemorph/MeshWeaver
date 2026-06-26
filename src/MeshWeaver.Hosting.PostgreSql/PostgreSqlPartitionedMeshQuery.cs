@@ -78,6 +78,15 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
     // Postgres. See Doc/Architecture/PartitionStorageRouting.md.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<PostgreSqlStorageAdapter, PostgreSqlMeshQuery> _scopedDelegates = new();
 
+    /// <summary>
+    /// Initializes the partition-aware fan-out query provider.
+    /// </summary>
+    /// <param name="crossSchema">Cross-schema provider used to UNION unscoped / wildcard queries across partitions.</param>
+    /// <param name="accessService">Optional access service used to scope results to the calling user.</param>
+    /// <param name="logger">Optional logger for query diagnostics.</param>
+    /// <param name="partitionProvider">Optional partition storage provider used to resolve a scoped query to its owning partition's adapter.</param>
+    /// <param name="ioPoolRegistry">Optional I/O pool registry; query leaves run on the shared storage-read pool.</param>
+    /// <param name="meshConfiguration">Optional mesh configuration (node-type permissions, etc.).</param>
     public PostgreSqlPartitionedMeshQuery(
         ICrossSchemaQueryProvider crossSchema,
         AccessService? accessService = null,

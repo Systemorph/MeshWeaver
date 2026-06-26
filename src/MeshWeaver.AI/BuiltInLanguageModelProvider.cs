@@ -40,6 +40,13 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
     private readonly LanguageModelCatalogOptions options;
     private readonly ILogger<BuiltInLanguageModelProvider>? logger;
 
+    /// <summary>
+    /// Constructs the provider from the configuration root (where each catalog source reads
+    /// its endpoint/key/models) and the registered catalog options.
+    /// </summary>
+    /// <param name="configuration">Configuration root holding the per-provider sections.</param>
+    /// <param name="options">The registered catalog sources to project into Model nodes.</param>
+    /// <param name="loggerFactory">Optional logger factory; logging is skipped when null.</param>
     public BuiltInLanguageModelProvider(
         IConfiguration configuration,
         LanguageModelCatalogOptions options,
@@ -50,6 +57,12 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
         this.logger = loggerFactory?.CreateLogger<BuiltInLanguageModelProvider>();
     }
 
+    /// <summary>
+    /// Projects the configured catalog sources into static MeshNodes: one ModelProvider node
+    /// per source, a public key-less LanguageModel child per model id, and the read-only access
+    /// policies for the Provider and LanguageModel partitions.
+    /// </summary>
+    /// <returns>The model-catalog MeshNodes.</returns>
     public IEnumerable<MeshNode> GetStaticNodes()
     {
         // Stable de-dup: first registered source wins on model-Id collision —

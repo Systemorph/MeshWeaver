@@ -53,11 +53,20 @@ public record TokenUsage
 /// </summary>
 public static class TokenUsageNodeType
 {
+    /// <summary>The NodeType discriminator for token-usage satellite nodes (<c>TokenUsage</c>).</summary>
     public const string NodeType = "TokenUsage";
 
     /// <summary>The satellite sub-namespace under a thread — usage lives at <c>{threadPath}/_Usage/{modelKey}</c>.</summary>
     public const string SatelliteSegment = "_Usage";
 
+    /// <summary>
+    /// Registers the <see cref="TokenUsage"/> satellite NodeType on the mesh builder:
+    /// the node definition, autocomplete exclusion, and the MainNode-delegating
+    /// <c>SatelliteAccessRule</c>.
+    /// </summary>
+    /// <typeparam name="TBuilder">The concrete <c>MeshBuilder</c> type, returned for fluent chaining.</typeparam>
+    /// <param name="builder">The mesh builder to register on.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
     public static TBuilder AddTokenUsageType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
@@ -71,6 +80,11 @@ public static class TokenUsageNodeType
         return builder;
     }
 
+    /// <summary>
+    /// Creates the <see cref="TokenUsage"/> NodeType definition — a search/create-excluded
+    /// satellite type whose per-node hub hosts a data source over <see cref="TokenUsage"/> content.
+    /// </summary>
+    /// <returns>The NodeType definition mesh node.</returns>
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "Token Usage",

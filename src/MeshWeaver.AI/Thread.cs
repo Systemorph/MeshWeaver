@@ -343,9 +343,19 @@ public record Thread
     public ImmutableDictionary<string, ThreadMessage> PendingUserMessages { get; init; }
         = ImmutableDictionary<string, ThreadMessage>.Empty;
 
+    /// <summary>
+    /// Transient buffer of the active response's streaming text, throttled onto the
+    /// thread node so the GUI can render partial output live. Not persisted
+    /// (<c>JsonIgnore</c>); cleared by <see cref="ResetExecution"/>.
+    /// </summary>
     [JsonIgnore]
     public string? StreamingText { get; init; }
 
+    /// <summary>
+    /// Transient buffer of the active response's in-flight tool calls, mirrored onto
+    /// the thread node for live GUI rendering. Not persisted (<c>JsonIgnore</c>);
+    /// cleared by <see cref="ResetExecution"/>.
+    /// </summary>
     [JsonIgnore]
     public ImmutableList<ToolCallEntry>? StreamingToolCalls { get; init; }
 
@@ -510,7 +520,9 @@ public record ThreadMessage
     /// provider includes cached / reasoning tokens.
     /// </summary>
     public int? InputTokens { get; init; }
+    /// <summary>Output (completion) tokens the provider reported for this response. Null while streaming or when usage is unavailable.</summary>
     public int? OutputTokens { get; init; }
+    /// <summary>Total tokens the provider billed for this response. May exceed <see cref="InputTokens"/> + <see cref="OutputTokens"/> when cached / reasoning tokens are included.</summary>
     public int? TotalTokens { get; init; }
 
     /// <summary>

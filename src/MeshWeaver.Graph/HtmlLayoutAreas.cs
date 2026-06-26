@@ -12,8 +12,14 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class HtmlLayoutAreas
 {
+    /// <summary>Area name for the Overview layout area.</summary>
     public const string OverviewArea = "Overview";
 
+    /// <summary>
+    /// Registers the HTML layout-area views (Overview, Thumbnail, Create, Delete) on the hub configuration.
+    /// </summary>
+    /// <param name="configuration">The message hub configuration to register the views on.</param>
+    /// <returns>The same configuration with the HTML views added, for chaining.</returns>
     public static MessageHubConfiguration AddHtmlViews(this MessageHubConfiguration configuration)
         => configuration
             .AddLayout(layout => layout
@@ -23,6 +29,12 @@ public static class HtmlLayoutAreas
                 .WithView(MeshNodeLayoutAreas.CreateNodeArea, CreateLayoutArea.Create)
                 .WithView(MeshNodeLayoutAreas.DeleteArea, DeleteLayoutArea.Delete));
 
+    /// <summary>
+    /// Renders the Overview area for an HTML node: a standard header followed by the stored HTML/SVG content and the children section.
+    /// </summary>
+    /// <param name="host">The layout area host rendering the area.</param>
+    /// <param name="_">The rendering context for the area.</param>
+    /// <returns>An observable stream of the Overview view for the HTML node.</returns>
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         return host.Workspace.GetMeshNodeStream()

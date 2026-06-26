@@ -20,8 +20,17 @@ namespace MeshWeaver.Graph.Configuration;
 /// </summary>
 public static class ApiTokenNodeType
 {
+    /// <summary>The node-type identifier string for ApiToken nodes.</summary>
     public const string NodeType = "ApiToken";
 
+    /// <summary>
+    /// Registers the ApiToken node type on the mesh builder: adds the MeshNode definition,
+    /// excludes it from autocomplete, and registers the ApiToken domain and message types
+    /// in the hub's type registry so they serialize across silos.
+    /// </summary>
+    /// <typeparam name="TBuilder">The mesh builder type.</typeparam>
+    /// <param name="builder">The mesh builder to configure.</param>
+    /// <returns>The same builder, to allow fluent chaining.</returns>
     public static TBuilder AddApiTokenType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
@@ -43,6 +52,12 @@ public static class ApiTokenNodeType
         return builder;
     }
 
+    /// <summary>
+    /// Builds the MeshNode definition for the ApiToken node type, including its content
+    /// type registrations, excluded contexts, and hub configuration (token views, the
+    /// validation handler, and the data source for tokens and their index).
+    /// </summary>
+    /// <returns>The ApiToken MeshNode definition.</returns>
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "API Token",

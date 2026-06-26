@@ -378,31 +378,23 @@ public class InboxToolIntegrationTest : AITestBase
     /// subsequent rounds. The invariant: <b>every submitted message is eventually ingested
     /// and rendered — none is lost.</b>
     ///
-    /// <para>🐞 KNOWN-FAILING repro (Skip) for the message-loss flake behind the CI reds
+    /// <para>Regression guard for the message-loss flake behind the CI reds
     /// <see cref="Cancel_WithMultiplePending_RestartsAndDrainsAllInSubsequentRounds"/> and the
-    /// Orleans <c>RapidSubmits_PileUpAndAllIngest</c>. Submitting 12 → only 8–9 ingest; 3–4
-    /// vanish entirely (not pending, not ingested, not in Messages). ROOT CAUSE (proven by the
-    /// timeline this test dumps on failure): the cross-hub patch handler
-    /// <c>DataExtensions.ApplyJsonMergePatchAndUpdate</c> is a NON-ATOMIC read-modify-write — it
-    /// reads a <c>stream.Take(1)</c> snapshot of the reduced node stream (which LAGS the data
-    /// source), JSON-merges the patch, then commits the full merged node via a SEPARATE
-    /// <c>RequestChange</c>. Under concurrent writers (a burst of cross-mirror submit patches,
-    /// and owner own-writes through the data-source <c>EntityStore</c> stream) a stale-base commit
-    /// overwrites a sibling writer's just-added <c>PendingUserMessages</c> key. The
-    /// <c>ReconcileUserMessageIds</c> STOPGAP in <c>ThreadSubmission</c> exists only to paper over
-    /// this — it cannot recover a pending entry that was clobbered out of existence.
-    ///
-    /// <para>FIX (deferred — high blast radius on the core cross-hub write path, needs full CI
-    /// validation): make the patch apply atomically against live state, through the SAME
-    /// data-source stream the owner's own-writes (<c>MeshNodeStreamHandle.UpdateOwn</c>) use, so
-    /// patches and own-writes serialise on one queue. A partial attempt routing the merge through
-    /// the reduced stream's atomic <c>Update</c> fixed patch-vs-patch but NOT patch-vs-own-write
-    /// (different streams), so it was reverted. Remove this Skip once the handler is atomic.</para>
+    /// Orleans <c>RapidSubmits_PileUpAndAllIngest</c>. The ROOT CAUSE was the cross-hub patch
+    /// handler <c>DataExtensions.ApplyJsonMergePatchAndUpdate</c> being a NON-ATOMIC
+    /// read-modify-write: it read a <c>stream.Take(1)</c> snapshot at handler time, JSON-merged
+    /// the patch, then committed the full merged node via a SEPARATE deferred <c>RequestChange</c>
+    /// turn. Two patches queued back-to-back at the owner each read pre-the-other's-write state,
+    /// and the later full-node write overwrote a sibling writer's just-added field — dropping a
+    /// queued message entirely. FIXED in <c>DataExtensions.ApplyMeshNodePatchAtomic</c>: the merge
+    /// now applies onto the LIVE node in ONE primary-stream turn, serialised with every other
+    /// writer. The deterministic repro is
+    /// <c>CrossHubPatchAtomicityTest.ConcurrentCrossHubPatches_DoNotDropAQueuedMessage</c>; this
+    /// hammer is the concurrency-level guard (the residual RFC 7396 array-replace under concurrent
+    /// cross-mirror submits is reconciled from the merge-safe dict by
+    /// <c>ThreadSubmissionServer.ReconcileUserMessageIds</c>).</para>
     /// </summary>
-    [Fact(Timeout = 180_000, Skip = "KNOWN BUG: non-atomic cross-hub patch apply loses messages "
-        + "under concurrent submits — DataExtensions.ApplyJsonMergePatchAndUpdate must merge "
-        + "atomically through the data-source stream. See method remarks. Repro is real; unskip "
-        + "to verify the fix.")]
+    [Fact(Timeout = 180_000)]
     public async Task Hammer_ConcurrentSubmits_AllIngested_NoneLost()
     {
         var ct = TestContext.Current.CancellationToken;

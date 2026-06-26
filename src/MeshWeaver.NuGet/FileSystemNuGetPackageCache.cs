@@ -16,6 +16,13 @@ public sealed class FileSystemNuGetPackageCache : INuGetPackageCache
     private readonly string _root;
     private readonly ILogger<FileSystemNuGetPackageCache> _logger;
 
+    /// <summary>
+    /// Creates a filesystem-backed package cache rooted at <paramref name="root"/>. The root
+    /// directory is resolved to an absolute path and created if it does not already exist.
+    /// </summary>
+    /// <param name="root">The directory under which cached package archives are stored. May be a
+    /// local volume (single node) or a shared volume (HA) so any replica can hydrate from it.</param>
+    /// <param name="logger">Logger used to record hydrate/save outcomes.</param>
     public FileSystemNuGetPackageCache(string root, ILogger<FileSystemNuGetPackageCache> logger)
     {
         _root = Path.GetFullPath(root);
@@ -23,6 +30,16 @@ public sealed class FileSystemNuGetPackageCache : INuGetPackageCache
         Directory.CreateDirectory(_root);
     }
 
+    /// <summary>
+    /// Attempts to restore a previously cached package into <paramref name="targetPackageFolder"/>
+    /// by extracting its archive. Returns <c>false</c> (without throwing) when the archive is
+    /// missing or extraction fails, so the caller can fall back to the live feed.
+    /// </summary>
+    /// <param name="packageId">The package id to hydrate.</param>
+    /// <param name="version">The exact package version to hydrate.</param>
+    /// <param name="targetPackageFolder">The destination folder the package contents are extracted into.</param>
+    /// <param name="ct">Token used to cancel the extraction.</param>
+    /// <returns><c>true</c> if the package was hydrated from the cache; otherwise <c>false</c>.</returns>
     public async Task<bool> TryHydrateAsync(string packageId, string version, string targetPackageFolder, CancellationToken ct)
     {
         var archivePath = ArchivePath(packageId, version);
@@ -55,6 +72,16 @@ public sealed class FileSystemNuGetPackageCache : INuGetPackageCache
         }
     }
 
+    /// <summary>
+    /// Persists the contents of <paramref name="sourcePackageFolder"/> into the cache as a single
+    /// zip archive. Writes to a unique temp file then atomically moves it into place, and no-ops
+    /// when the archive already exists, so concurrent replicas racing to save are safe.
+    /// </summary>
+    /// <param name="packageId">The package id being cached.</param>
+    /// <param name="version">The exact package version being cached.</param>
+    /// <param name="sourcePackageFolder">The installed package folder whose contents are archived.</param>
+    /// <param name="ct">Token used to cancel the archive write.</param>
+    /// <returns>A task that completes once the package has been saved (or skipped).</returns>
     public async Task SaveAsync(string packageId, string version, string sourcePackageFolder, CancellationToken ct)
     {
         if (!Directory.Exists(sourcePackageFolder)) return;

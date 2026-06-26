@@ -1613,14 +1613,27 @@ internal class MeshNodeCompilationService(
 /// </summary>
 public class CompilationException : Exception
 {
+    /// <summary>The mesh path of the node whose compilation failed.</summary>
     public string NodePath { get; }
 
+    /// <summary>
+    /// Initializes a new instance of the exception for a failed compilation.
+    /// </summary>
+    /// <param name="nodePath">The mesh path of the node whose compilation failed.</param>
+    /// <param name="message">The error message describing the failure.</param>
     public CompilationException(string nodePath, string message)
         : base(message)
     {
         NodePath = nodePath;
     }
 
+    /// <summary>
+    /// Initializes a new instance of the exception for a failed compilation, wrapping an
+    /// underlying cause.
+    /// </summary>
+    /// <param name="nodePath">The mesh path of the node whose compilation failed.</param>
+    /// <param name="message">The error message describing the failure.</param>
+    /// <param name="innerException">The underlying exception that caused the failure.</param>
     public CompilationException(string nodePath, string message, Exception innerException)
         : base(message, innerException)
     {

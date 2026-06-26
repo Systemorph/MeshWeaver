@@ -34,6 +34,10 @@ public sealed class CopilotModelCatalog
 {
     private readonly IMessageHub hub;
 
+    /// <summary>
+    /// Creates the catalog, resolving the mesh hub (which owns the shared workspace and synced-query cache).
+    /// </summary>
+    /// <param name="services">Service provider used to resolve the <see cref="IMessageHub"/>.</param>
     public CopilotModelCatalog(IServiceProvider services)
     {
         // The mesh hub owns the shared workspace + synced-query cache.

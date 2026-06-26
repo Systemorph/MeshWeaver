@@ -26,6 +26,11 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
     /// <inheritdoc />
     public IObservable<DataChangeNotification> Changes => _changes.AsObservable();
 
+    /// <summary>
+    /// Creates an adapter with its own fresh, case-insensitive backing
+    /// dictionaries for nodes and partition objects.
+    /// </summary>
+    /// <param name="logger">Optional logger for read/write/lookup diagnostics.</param>
     public InMemoryStorageAdapter(
         ILogger<InMemoryStorageAdapter>? logger = null)
         : this(
@@ -54,6 +59,7 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
 
     private static string Norm(string? path) => path?.Trim('/') ?? "";
 
+    /// <inheritdoc />
     public override IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
         => Observable.Defer(() =>
         {
@@ -63,6 +69,7 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
             return Observable.Return<MeshNode?>(node);
         });
 
+    /// <inheritdoc />
     public override IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
         => Observable.Defer(() =>
         {
@@ -76,6 +83,7 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
             return Observable.Return(node);
         });
 
+    /// <inheritdoc />
     public override IObservable<string> Delete(string path)
         => Observable.Defer(() =>
         {
@@ -84,6 +92,7 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
             return Observable.Return(path);
         });
 
+    /// <inheritdoc />
     public override IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)>
         ListChildPaths(string? parentPath)
         => Observable.Defer(() =>
@@ -130,9 +139,11 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
                 (nodePaths, directoryPaths));
         });
 
+    /// <inheritdoc />
     public override IObservable<bool> Exists(string path)
         => Observable.Defer(() => Observable.Return(_nodes.ContainsKey(Norm(path))));
 
+    /// <inheritdoc />
     public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
         string fullPath, JsonSerializerOptions options)
         => Observable.Defer(() =>
@@ -170,6 +181,7 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
         string fullPath, JsonSerializerOptions options)
         => FindBestPrefixMatch(fullPath, options);
 
+    /// <inheritdoc />
     public override IObservable<object> GetPartitionObjects(
         string nodePath, string? subPath, JsonSerializerOptions options)
         => Observable.Defer(() =>
@@ -180,6 +192,7 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
                 : Observable.Empty<object>();
         });
 
+    /// <inheritdoc />
     public override IObservable<Unit> SavePartitionObjects(
         string nodePath, string? subPath,
         IReadOnlyCollection<object> objects, JsonSerializerOptions options)
@@ -189,6 +202,7 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
             return Observable.Return(Unit.Default);
         });
 
+    /// <inheritdoc />
     public override IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
         => Observable.Defer(() =>
         {
@@ -196,6 +210,7 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
             return Observable.Return(Unit.Default);
         });
 
+    /// <inheritdoc />
     public override IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
         => Observable.Defer(() => Observable.Return<DateTimeOffset?>(
             _partitionObjects.ContainsKey(PartitionKey(nodePath, subPath))

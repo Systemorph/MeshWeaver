@@ -27,8 +27,10 @@ public record Harness
     /// <summary>Friendly name for the picker (defaults to <see cref="Id"/>).</summary>
     public string? DisplayName { get; init; }
 
+    /// <summary>Short description shown in the harness picker; <c>null</c> when none.</summary>
     public string? Description { get; init; }
 
+    /// <summary>Icon for the picker (URL or inline SVG); <c>null</c> when none.</summary>
     public string? Icon { get; init; }
 
     /// <summary>Display order in the harness picker (lower first).</summary>

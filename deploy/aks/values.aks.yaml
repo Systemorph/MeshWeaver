@@ -180,8 +180,16 @@ config:
 # AcrPull on the registry. This arms ACR polling AND opts the pod into the workload-identity webhook.
 # The in-cluster deployment PATCH (RBAC) works regardless; this is only needed to authenticate the
 # ACR tag-list call. See Doc/Architecture/ReleaseStrategy → "AKS prerequisites".
+#
+# The value is the `portalIdentityClientId` output of infra/main.bicep (modules/portal-identity.bicep
+# provisions the shared portal UAMI + a federated credential per namespace). The SAME client id is
+# used for EVERY portal namespace (memex, atioz, memex-cloud) — one shared UAMI, one AcrPull grant.
+# Inject it at `helm upgrade` time rather than committing it: for the `memex` env put the real id in
+# the git-ignored values.deploy.yaml (see scripts/values.deploy.example.yaml) or pass
+# `--set selfUpdate.azureClientId=<portalIdentityClientId>`; for atioz / memex-cloud set it in their
+# git-ignored envs/<env>/values.<env>.yaml. See Doc/Architecture/DeploymentAKS → "Portal self-update".
 selfUpdate:
-  azureClientId: ""   # e.g. set via --set or Key Vault; the portal UAMI client id
+  azureClientId: ""   # set per-env from the portalIdentityClientId bicep output
 
 # --- Container images -------------------------------------------------------
 # Default = pull straight from GHCR (no ACR needed). To use the private ACR,

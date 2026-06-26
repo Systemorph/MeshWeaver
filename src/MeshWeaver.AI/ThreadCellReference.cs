@@ -8,6 +8,8 @@ namespace MeshWeaver.AI;
 /// </summary>
 public record ThreadCellReference
 {
+    /// <summary>Full mesh path of the referenced thread message node.</summary>
     public required string Path { get; init; }
+    /// <summary>Zero-based position of this cell within the thread, used for ordered rendering.</summary>
     public int Order { get; init; }
 }

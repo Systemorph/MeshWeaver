@@ -42,6 +42,12 @@ public sealed class ConnectSessionManager : IDisposable
         public ConnectStatus Status { get; set; } = new ConnectStatus.NotConnected();
     }
 
+    /// <summary>
+    /// Initialises the manager with its hub and the registered connect strategies (last registration
+    /// per provider wins, tolerating duplicate DI registrations).
+    /// </summary>
+    /// <param name="hub">The message hub that owns this manager and supplies the token sink and logger.</param>
+    /// <param name="strategies">The per-provider connect strategies to dispatch login flows to.</param>
     public ConnectSessionManager(IMessageHub hub, IEnumerable<IConnectStrategy> strategies)
     {
         this.hub = hub;
@@ -216,6 +222,10 @@ public sealed class ConnectSessionManager : IDisposable
         return Convert.ToHexString(hash, 0, 4).ToLowerInvariant();
     }
 
+    /// <summary>
+    /// Disposes every live session (killing CLI processes and cancelling timeouts) and clears the
+    /// session table. Idempotent.
+    /// </summary>
     public void Dispose()
     {
         if (disposed) return;

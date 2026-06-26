@@ -5,14 +5,23 @@ using Microsoft.Extensions.AI;
 
 namespace MeshWeaver.AI;
 
+/// <summary>
+/// A single agent chat session — selects an agent, sends/streams messages, and tracks
+/// the application context and execution context for one conversation thread.
+/// </summary>
 public interface IAgentChat
 {
+    /// <summary>Sets the application context (the node the conversation is anchored to), used to rank and pick relevant agents.</summary>
+    /// <param name="applicationContext">The context to apply, or <c>null</c> to clear it.</param>
     void SetContext(AgentContext? applicationContext);
 
     /// <summary>Sets the currently selected agent by name.</summary>
     /// <param name="agentName">The name/ID of the agent to use</param>
     void SetSelectedAgent(string? agentName);
 
+    /// <summary>Reloads a previously persisted conversation so the session can continue it.</summary>
+    /// <param name="conversation">The stored conversation to resume from.</param>
+    /// <returns>A task that completes once the conversation history has been restored.</returns>
     Task ResumeAsync(ChatConversation conversation);
 
     /// <summary>
@@ -67,6 +76,7 @@ public interface IAgentChat
     /// </summary>
     void RequestHandoff(HandoffRequest request) { }
 
+    /// <summary>The application context currently set on this session; <c>null</c> when none.</summary>
     AgentContext? Context { get; }
 
     /// <summary>

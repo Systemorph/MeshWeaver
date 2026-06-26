@@ -17,6 +17,12 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
     private readonly ILogger<RlsNodeValidator> _logger;
     private readonly IReadOnlyDictionary<string, INodeTypeAccessRule> _accessRules;
 
+    /// <summary>
+    /// Initializes a new instance of the row-level-security node validator.
+    /// </summary>
+    /// <param name="hub">The message hub used for permission checks.</param>
+    /// <param name="logger">The logger used to record access grants and denials.</param>
+    /// <param name="accessRules">The per-node-type access rules, indexed by node type (last registration wins per type).</param>
     public RlsNodeValidator(
         IMessageHub hub,
         ILogger<RlsNodeValidator> logger,
@@ -41,6 +47,13 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
     public IReadOnlyCollection<NodeOperation> SupportedOperations =>
         [NodeOperation.Read, NodeOperation.Create, NodeOperation.Update, NodeOperation.Delete];
 
+    /// <summary>
+    /// Validates an operation against row-level security, granting system and own-scope
+    /// writes outright and otherwise checking the hub rule, the custom per-type access
+    /// rule, and the effective permissions for the required permission.
+    /// </summary>
+    /// <param name="context">The validation context describing the node and operation.</param>
+    /// <returns>An observable that emits the validation result for the operation.</returns>
     public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
         // System bypass + own-scope shortcuts — pure sync, no observable needed.

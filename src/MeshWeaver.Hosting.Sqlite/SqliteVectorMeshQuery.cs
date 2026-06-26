@@ -30,6 +30,14 @@ public sealed class SqliteVectorMeshQuery : IMeshQueryProvider
     private readonly QueryEvaluator _evaluator = new();
     private long _version;
 
+    /// <summary>
+    /// Creates the SQLite-local vector query provider.
+    /// </summary>
+    /// <param name="adapter">The storage adapter whose stored embeddings are brute-forced for cosine ranking.</param>
+    /// <param name="embedder">Optional text embedder; when <c>null</c> the provider stays inert and
+    /// contributes nothing (lexical search is unchanged).</param>
+    /// <param name="ioPoolRegistry">Registry supplying the I/O pool that runs query-time embeds off
+    /// the hub scheduler; falls back to <see cref="IoPool.Unbounded"/> when <c>null</c>.</param>
     public SqliteVectorMeshQuery(SqliteStorageAdapter adapter, ITextEmbedder? embedder = null,
         IoPoolRegistry? ioPoolRegistry = null)
     {
@@ -38,6 +46,7 @@ public sealed class SqliteVectorMeshQuery : IMeshQueryProvider
         _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
     }
 
+    /// <inheritdoc />
     public bool Matches(IReadOnlyList<string> queryNamespaces) => _embedder is not null;
 
     /// <inheritdoc />

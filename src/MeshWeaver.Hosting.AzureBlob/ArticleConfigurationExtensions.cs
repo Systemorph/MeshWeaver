@@ -8,8 +8,18 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MeshWeaver.Hosting.AzureBlob;
 
+/// <summary>
+/// Extension methods that register Azure Blob Storage support — the stream-provider
+/// factory and content collections — into a service collection or message-hub configuration.
+/// </summary>
 public static class ArticleConfigurationExtensions
 {
+    /// <summary>
+    /// Registers the Azure Blob stream-provider factory and a fallback
+    /// <c>BlobServiceClient</c> factory used when no Azure client factory is already registered.
+    /// </summary>
+    /// <param name="services">The service collection to add the registrations to.</param>
+    /// <returns>The same <paramref name="services"/> instance, for chaining.</returns>
     public static IServiceCollection AddAzureBlob(
         this IServiceCollection services)
     {
@@ -24,6 +34,11 @@ public static class ArticleConfigurationExtensions
 
         return services;
     }
+    /// <summary>
+    /// Registers Azure Blob Storage support on the message-hub configuration's services.
+    /// </summary>
+    /// <param name="config">The message-hub configuration to add the registrations to.</param>
+    /// <returns>The same <paramref name="config"/> instance, for chaining.</returns>
     public static MessageHubConfiguration AddAzureBlob(
         this MessageHubConfiguration config) =>
         config.WithServices(AddAzureBlob);
@@ -70,10 +85,17 @@ public static class ArticleConfigurationExtensions
             });
 }
 
+/// <summary>
+/// <see cref="IStreamProviderFactory"/> that creates Azure Blob-backed stream providers
+/// from content-collection configuration.
+/// </summary>
+/// <param name="serviceProvider">Service provider used to resolve the <c>IAzureClientFactory&lt;BlobServiceClient&gt;</c> that supplies blob clients.</param>
 public class AzureBlobStreamProviderFactory(IServiceProvider serviceProvider) : IStreamProviderFactory
 {
+    /// <summary>The content-collection source-type discriminator handled by this factory.</summary>
     public const string SourceType = "AzureBlob";
 
+    /// <inheritdoc />
     public IObservable<IStreamProvider> Create(ContentCollectionConfig config)
     {
         if (config.Settings == null)
@@ -101,6 +123,7 @@ public class AzureBlobStreamProviderFactory(IServiceProvider serviceProvider) : 
 /// </summary>
 public class FallbackBlobServiceClientFactory(IConfiguration configuration) : IAzureClientFactory<BlobServiceClient>
 {
+    /// <inheritdoc />
     public BlobServiceClient CreateClient(string name)
     {
         var connectionString = configuration.GetSection("Graph")["ConnectionString"];

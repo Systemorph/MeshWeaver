@@ -22,5 +22,6 @@ namespace MeshWeaver.AI.Attributes;
 [AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = false)]
 public sealed class ToolTimeoutAttribute(int seconds) : Attribute
 {
+    /// <summary>The tool execution timeout, derived from the <c>seconds</c> constructor argument.</summary>
     public TimeSpan Timeout { get; } = TimeSpan.FromSeconds(seconds);
 }

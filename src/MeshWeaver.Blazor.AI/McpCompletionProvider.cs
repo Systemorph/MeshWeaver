@@ -14,6 +14,11 @@ public class McpCompletionProvider
     private readonly IMeshService meshQuery;
     private readonly ILogger<McpCompletionProvider> logger;
 
+    /// <summary>
+    /// Initializes a new instance of the <c>McpCompletionProvider</c>.
+    /// </summary>
+    /// <param name="meshQuery">The mesh service used to run autocomplete queries.</param>
+    /// <param name="logger">The logger for diagnostics.</param>
     public McpCompletionProvider(IMeshService meshQuery, ILogger<McpCompletionProvider> logger)
     {
         this.meshQuery = meshQuery;

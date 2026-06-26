@@ -47,6 +47,14 @@ public static class McpExtensions
         "its instructions. Read each skill only once.\n\n" +
         "Read the `tools-reference` resource for the full tool + query-syntax reference.";
 
+    /// <summary>
+    /// Registers the MCP server with HTTP transport, exposing the tools from
+    /// <c>McpMeshPlugin</c> and the resources from <c>McpResources</c>, sets the
+    /// connect-time <see cref="ServerInstructions"/>, and binds
+    /// <see cref="McpConfiguration"/> to the <c>Mcp</c> configuration section.
+    /// </summary>
+    /// <param name="services">The service collection to add MCP services to.</param>
+    /// <returns>The same service collection for chaining.</returns>
     public static IServiceCollection AddMeshMcp(this IServiceCollection services)
     {
         services.AddMcpServer(options => options.ServerInstructions = ServerInstructions)

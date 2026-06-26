@@ -11,9 +11,15 @@ namespace MeshWeaver.Hosting.SignalR;
 /// </summary>
 public static class SignalRHostingExtensions
 {
+    /// <summary>Registers the SignalR mesh-transport services on the mesh.</summary>
+    /// <param name="builder">The mesh builder to configure.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
     public static MeshBuilder AddSignalRHub(this MeshBuilder builder)
         => builder.ConfigureServices(services => services.AddSignalRHub());
 
+    /// <summary>Registers SignalR and the singleton <c>SignalRConnectionRegistry</c> in the service collection.</summary>
+    /// <param name="services">The service collection to add the SignalR mesh-transport services to.</param>
+    /// <returns>The same <paramref name="services"/> for chaining.</returns>
     public static IServiceCollection AddSignalRHub(this IServiceCollection services)
     {
         services.AddSignalR();
@@ -21,6 +27,9 @@ public static class SignalRHostingExtensions
         return services;
     }
 
+    /// <summary>Maps the SignalR connection hub endpoint at <c>/signalr</c> on the application pipeline.</summary>
+    /// <param name="app">The application builder to map the hub endpoint on.</param>
+    /// <returns>The same <paramref name="app"/> for chaining.</returns>
     public static IApplicationBuilder MapMeshWeaverSignalRHubs(this IApplicationBuilder app)
     {
         app.UseEndpoints(endpoints => endpoints.MapHub<SignalRConnectionHub>($"/{SignalRConnectionHub.EndPoint}"));

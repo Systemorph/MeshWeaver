@@ -21,8 +21,11 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class GroupLayoutAreas
 {
+    /// <summary>Area name for the Overview layout area.</summary>
     public const string OverviewArea = "Overview";
+    /// <summary>Area name for the Edit layout area.</summary>
     public const string EditArea = "Edit";
+    /// <summary>Area name for the Memberships layout area.</summary>
     public const string MembershipsArea = "Memberships";
 
     /// <summary>

@@ -29,6 +29,10 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
     [Inject] private IMeshService MeshQuery { get; set; } = null!;
     [Inject] private IMessageHub Hub { get; set; } = null!;
 
+    /// <summary>
+    /// Raised when the user dismisses the panel (e.g. the close button), letting the host
+    /// collapse or hide the thread side panel.
+    /// </summary>
     [Parameter] public EventCallback OnCloseRequested { get; set; }
 
     private bool positionMenuVisible;
@@ -42,6 +46,11 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
     private string? _observedComposerPath;
     private ILogger<ThreadSidePanelContent>? _logger;
 
+    /// <summary>
+    /// Component initialization: resolves the logger, seeds the selected thread from
+    /// <c>SidePanelState</c>, subscribes to side-panel state changes and the navigation-context
+    /// stream, and ensures the per-user composer observer is running.
+    /// </summary>
     protected override void OnInitialized()
     {
         base.OnInitialized();
@@ -169,6 +178,10 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
                 ex => _logger?.LogDebug(ex, "[ThreadSidePanel] composer observer errored for {Path}", path));
     }
 
+    /// <summary>
+    /// Unhooks the side-panel state handler and disposes the navigation-context and
+    /// composer-observer subscriptions.
+    /// </summary>
     public void Dispose()
     {
         SidePanelState.OnStateChanged -= OnSidePanelStateChanged;

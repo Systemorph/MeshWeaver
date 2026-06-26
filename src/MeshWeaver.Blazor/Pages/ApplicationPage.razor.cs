@@ -13,6 +13,11 @@ using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor.Pages;
 
+/// <summary>
+/// Main application page component. Resolves the current URL path to a mesh address,
+/// subscribes to the navigation context stream, renders a layout area view, and handles
+/// the prerender to interactive lifecycle including pre-rendered HTML caching.
+/// </summary>
 public partial class ApplicationPage : ComponentBase, IDisposable
 {
     private DesignThemeModes Mode { get; set; }
@@ -59,6 +64,7 @@ public partial class ApplicationPage : ComponentBase, IDisposable
 
     private string? PageTitle { get; set; } = "";
 
+    /// <summary>Catches any route parameters not explicitly declared; passed through to the layout area as additional options.</summary>
     [Parameter(CaptureUnmatchedValues = true)]
     public IReadOnlyDictionary<string, object>? Options { get; set; } = ImmutableDictionary<string, object>.Empty;
 
@@ -95,6 +101,10 @@ public partial class ApplicationPage : ComponentBase, IDisposable
     private NavigationContext? _currentContext;
     private IDisposable? _navContextSubscription;
 
+    /// <summary>
+    /// Subscribes to the navigation context and status streams so the component reacts reactively
+    /// to address resolution changes and navigation status updates throughout the circuit lifetime.
+    /// </summary>
     protected override void OnInitialized()
     {
         base.OnInitialized();
@@ -128,6 +138,10 @@ public partial class ApplicationPage : ComponentBase, IDisposable
             ex => Logger.LogWarning(ex, "Navigation Status subscription faulted"));
     }
 
+    /// <summary>
+    /// During the prerender phase, fetches cached pre-rendered HTML for authenticated visitors.
+    /// During the interactive phase, triggers a full navigation initialization when the path changes.
+    /// </summary>
     protected override async Task OnParametersSetAsync()
     {
         if (!IsInteractive)
@@ -157,6 +171,11 @@ public partial class ApplicationPage : ComponentBase, IDisposable
             await InitializeForCurrentPath();
     }
 
+    /// <summary>
+    /// On the first render, marks the component as interactive and runs the full path initialization
+    /// so the layout area subscription and navigation service are set up for the interactive circuit.
+    /// </summary>
+    /// <param name="firstRender">True on the first render after the circuit becomes interactive.</param>
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
@@ -253,6 +272,7 @@ public partial class ApplicationPage : ComponentBase, IDisposable
         return Reference.Id.ToString()!.Split("?").First().Split("/").Last();
     }
 
+    /// <summary>Disposes the navigation context and status subscriptions.</summary>
     public void Dispose()
     {
         _navContextSubscription?.Dispose();

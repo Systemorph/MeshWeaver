@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
@@ -47,6 +48,11 @@ public static class HostingTarget
 /// portal's service account) — see the Helm <c>memex-portal/rbac.yaml</c>. Without it the PATCH
 /// returns 403; the caller's error sink logs it and the poller keeps ticking (no crash).</para>
 /// </summary>
+/// <remarks>Server-only (never runs in a Blazor WASM browser host): the X.509 / TLS APIs in the
+/// constructor are <c>[UnsupportedOSPlatform("browser")]</c>. The concrete class is resolved only via
+/// DI in the hosted-service path (<c>AddSelfUpdate</c>), which never executes on browser, so declaring
+/// the same unsupported platform is accurate and silences CA1416 without a runtime guard.</remarks>
+[UnsupportedOSPlatform("browser")]
 public sealed class KubernetesDeploymentUpdater : IDeploymentUpdater
 {
     private const string TokenFile = "/var/run/secrets/kubernetes.io/serviceaccount/token";

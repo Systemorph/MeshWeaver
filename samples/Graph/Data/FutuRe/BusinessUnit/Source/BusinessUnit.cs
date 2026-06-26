@@ -1,8 +1,3 @@
-// <meshweaver>
-// Id: BusinessUnit
-// DisplayName: Business Unit
-// </meshweaver>
-
 using System.ComponentModel.DataAnnotations;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;

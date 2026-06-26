@@ -12,8 +12,25 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Layout.Client;
 
+/// <summary>
+/// Extension methods for layout-client data binding and model synchronization.
+/// Provides helpers for writing values back to a synchronization stream via JSON Patch,
+/// reading data-bound values (synchronous and reactive), and converting raw objects to
+/// typed values for the Blazor rendering pipeline.
+/// </summary>
 public static class LayoutClientExtensions
 {
+    /// <summary>
+    /// Writes <paramref name="value"/> to the location in <paramref name="stream"/> identified by
+    /// <paramref name="reference"/>. When <paramref name="model"/> is provided the patch is
+    /// applied to the model parameter directly; otherwise it is applied to the stream's current
+    /// state and propagated as an update.
+    /// </summary>
+    /// <param name="stream">The synchronization stream to update.</param>
+    /// <param name="value">The new value to write at the pointer location.</param>
+    /// <param name="dataContext">The JSON Pointer prefix for relative pointer resolution.</param>
+    /// <param name="reference">Identifies the JSON Pointer location to update; no-op when <c>null</c>.</param>
+    /// <param name="model">Optional model parameter to update directly instead of the stream.</param>
     public static void UpdatePointer(this ISynchronizationStream<JsonElement> stream,
         object? value,
         string? dataContext,
@@ -67,6 +84,18 @@ public static class LayoutClientExtensions
             ;
     }
 
+    /// <summary>
+    /// Returns an observable that emits the value at <paramref name="reference"/> within
+    /// <paramref name="stream"/> each time it changes, converted to <typeparamref name="T"/>.
+    /// Distinct-until-changed; null emissions are filtered out.
+    /// </summary>
+    /// <typeparam name="T">The target value type to deserialize to.</typeparam>
+    /// <param name="stream">The synchronization stream to bind against.</param>
+    /// <param name="reference">JSON Pointer reference identifying the value's location.</param>
+    /// <param name="dataContext">Optional prefix for relative pointer resolution.</param>
+    /// <param name="conversion">Optional custom conversion function applied after deserialization.</param>
+    /// <param name="defaultValue">Default value used when the conversion returns <c>null</c>.</param>
+    /// <returns>An observable sequence of <typeparamref name="T"/> values as the stream changes.</returns>
     public static IObservable<T> DataBind<T>(this ISynchronizationStream<JsonElement> stream,
         JsonPointerReference reference,
         string? dataContext = null,
@@ -82,12 +111,30 @@ public static class LayoutClientExtensions
             .DistinctUntilChanged();
 
 
+    /// <summary>
+    /// Evaluates <paramref name="reference"/> against the current element of <paramref name="model"/>.
+    /// </summary>
+    /// <param name="model">The model parameter whose current element is evaluated.</param>
+    /// <param name="reference">JSON Pointer reference identifying the value location.</param>
+    /// <returns>The <see cref="JsonElement"/> at the pointer, or <c>null</c> if not present.</returns>
     public static JsonElement? GetValueFromModel(this ModelParameter<JsonElement> model, JsonPointerReference reference)
     {
         var pointer = JsonPointer.Parse($"/{reference.Pointer}");
         return pointer.Evaluate(model.Element);
     }
 
+    /// <summary>
+    /// Synchronously reads the value of <paramref name="value"/> from the stream's current state,
+    /// converting the result to <typeparamref name="T"/>. When <paramref name="value"/> is a
+    /// <c>JsonPointerReference</c> the pointer is resolved against the stream;
+    /// otherwise the value is converted directly. Enums are parsed case-insensitively; numeric
+    /// conversions are defensive (no render-crashing exceptions).
+    /// </summary>
+    /// <typeparam name="T">The target type to produce.</typeparam>
+    /// <param name="stream">The synchronization stream whose current state is read.</param>
+    /// <param name="value">The raw value or pointer reference to resolve.</param>
+    /// <param name="dataContext">The JSON Pointer prefix for relative pointer resolution.</param>
+    /// <returns>The resolved and converted value, or <c>default</c> on failure.</returns>
     public static T? GetDataBoundValue<T>(this ISynchronizationStream<JsonElement> stream, object? value, string? dataContext)
     {
         if (value is JsonPointerReference reference)
@@ -154,6 +201,15 @@ public static class LayoutClientExtensions
         return ret.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions);
     }
 
+    /// <summary>
+    /// Returns an observable that emits the deserialized value at <paramref name="reference"/>
+    /// each time <paramref name="stream"/> emits. Null values are filtered out.
+    /// </summary>
+    /// <typeparam name="T">The target type to deserialize to.</typeparam>
+    /// <param name="stream">The synchronization stream to observe.</param>
+    /// <param name="reference">JSON Pointer reference identifying the value location.</param>
+    /// <param name="dataContext">Optional prefix for relative pointer resolution.</param>
+    /// <returns>An observable sequence of <typeparamref name="T"/> values.</returns>
     public static IObservable<T> GetDataBoundObservable<T>(this ISynchronizationStream<JsonElement> stream,
         JsonPointerReference reference, string? dataContext = null)
     {
@@ -180,6 +236,18 @@ public static class LayoutClientExtensions
         return $"{dataContext}/{pointer.TrimEnd('/')}";
     }
 
+    /// <summary>
+    /// Converts a single raw <paramref name="value"/> to <typeparamref name="T"/> using
+    /// <paramref name="conversion"/> when provided, or the hub's JSON serializer and built-in
+    /// type coercion otherwise. Handles <see cref="System.Text.Json.JsonElement"/>,
+    /// <see cref="System.Text.Json.Nodes.JsonObject"/>, strings, and numeric types.
+    /// </summary>
+    /// <typeparam name="T">The target type to produce.</typeparam>
+    /// <param name="hub">The hub whose JSON serializer options are used for deserialization.</param>
+    /// <param name="value">The raw value to convert; may be <c>null</c>.</param>
+    /// <param name="conversion">Optional custom converter; when non-null it overrides built-in coercion.</param>
+    /// <param name="defaultValue">Returned when <paramref name="value"/> is <c>null</c>.</param>
+    /// <returns>The converted value, or <paramref name="defaultValue"/> for <c>null</c> input.</returns>
     public static T? ConvertSingle<T>(this IMessageHub hub, object? value, Func<object?, T?, T?>? conversion, T? defaultValue = default(T))
     {
         conversion ??= null;

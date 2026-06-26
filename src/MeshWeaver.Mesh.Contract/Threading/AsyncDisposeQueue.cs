@@ -30,6 +30,10 @@ public sealed class AsyncDisposeQueue
     private readonly ActionBlock<Func<CancellationToken, Task>> _block;
     private long _drained;
 
+    /// <summary>
+    /// Creates the queue with a single-consumer action block so enqueued async cleanups
+    /// drain serially in enqueue order.
+    /// </summary>
     public AsyncDisposeQueue()
     {
         // MaxDegreeOfParallelism = 1: cleanup runs serially in enqueue order, so

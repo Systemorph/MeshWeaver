@@ -34,6 +34,17 @@ public sealed class OllamaTextEmbedder : ITextEmbedder
     private readonly string _model;
     private readonly int _dimensions;
 
+    /// <summary>
+    /// Creates an embedder that talks to an OpenAI-compatible embeddings endpoint.
+    /// </summary>
+    /// <param name="endpoint">OpenAI-compatible base URL, e.g. <c>http://localhost:11434/v1</c>;
+    /// requests resolve against <c>&lt;base&gt;/embeddings</c>.</param>
+    /// <param name="model">Embedding model name, e.g. <c>bge-m3</c> or <c>nomic-embed-text</c>.</param>
+    /// <param name="dimensions">Vector dimension override; when <c>null</c> it is inferred from
+    /// <paramref name="model"/> via <see cref="DimensionsFor"/>.</param>
+    /// <param name="apiKey">Bearer token; defaults to the literal <c>"ollama"</c> when empty.</param>
+    /// <param name="timeout">Request timeout; defaults to 15 seconds. Must be finite so a hung
+    /// embedding leaf cannot pin an <c>IIoPool</c> slot.</param>
     public OllamaTextEmbedder(string endpoint, string model, int? dimensions = null,
         string? apiKey = null, TimeSpan? timeout = null)
     {
@@ -51,8 +62,10 @@ public sealed class OllamaTextEmbedder : ITextEmbedder
         _dimensions = dimensions ?? DimensionsFor(model);
     }
 
+    /// <inheritdoc />
     public int Dimensions => _dimensions;
 
+    /// <inheritdoc />
     public async Task<float[]?> EmbedAsync(string text, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(text)) return null;

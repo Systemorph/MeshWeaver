@@ -12,23 +12,49 @@ using MeshWeaver.Utils;
 
 namespace MeshWeaver.Import.Configuration;
 
+/// <summary>
+/// Base type for a mapping that turns one named data-set table into entities in a store.
+/// </summary>
+/// <param name="Name">The data-set table name this mapping applies to.</param>
 public abstract record TableMapping(string Name)
 {
+    /// <summary>
+    /// Maps the given table's rows into the store.
+    /// </summary>
+    /// <param name="dataSet">The parsed source data set.</param>
+    /// <param name="dataSetTable">The table within the data set to map.</param>
+    /// <param name="store">The store to populate.</param>
+    /// <returns>The populated entity store.</returns>
     public abstract Task<EntityStore> Map(IDataSet dataSet, IDataTable dataSetTable, EntityStore store);
 }
 
+/// <summary>
+/// A table mapping delegating the row-to-entity conversion to a caller-supplied function.
+/// </summary>
+/// <param name="Name">The data-set table name this mapping applies to.</param>
+/// <param name="MappingFunction">Function that converts the table into the entity store.</param>
+/// <param name="Workspace">The workspace passed through to the mapping function.</param>
 public record DirectTableMapping(
     string Name,
     Func<IDataSet, IDataTable, IWorkspace, EntityStore, Task<EntityStore>> MappingFunction,
     IWorkspace Workspace
 ) : TableMapping(Name)
 {
+    /// <inheritdoc />
     public override Task<EntityStore> Map(IDataSet dataSet, IDataTable dataSetTable, EntityStore store) =>
         MappingFunction(dataSet, dataSetTable, Workspace, store);
 }
 
+/// <summary>
+/// A convention-based mapping that materializes rows of a table into instances of a CLR type,
+/// matching columns to constructor parameters and writable properties (case-insensitively).
+/// </summary>
+/// <param name="Name">The data-set table name this mapping applies to.</param>
+/// <param name="Type">The CLR entity type to instantiate per row.</param>
+/// <param name="Workspace">The workspace used to add the materialized instances.</param>
 public record TableToTypeMapping(string Name, Type Type, IWorkspace Workspace) : TableMapping(Name)
 {
+    /// <inheritdoc />
     public override Task<EntityStore> Map(IDataSet dataSet, IDataTable dataSetTable, EntityStore store) =>
         Task.FromResult(MapTableToType(dataSet, dataSetTable, store));
 
@@ -326,6 +352,10 @@ public record TableToTypeMapping(string Name, Type Type, IWorkspace Workspace) :
         return Expression.Invoke(lambdaExpression, rowParameter);
     }
 
+    /// <summary>
+    /// Reflection handle to the internal value-conversion method, used when building the
+    /// compiled row-materialization expressions.
+    /// </summary>
     public static readonly MethodInfo ConvertValueMethod = ReflectionHelper.GetStaticMethod(
         () => ConvertValue(null!, null!)
     );
@@ -375,6 +405,10 @@ public record TableToTypeMapping(string Name, Type Type, IWorkspace Workspace) :
     => Convert.ChangeType(value, type, CultureInfo.InvariantCulture);
 
 
+    /// <summary>
+    /// Format string (<c>{0}</c> = type, <c>{1}</c> = parameters) for the error raised when a
+    /// constructor's parameters cannot be matched to table columns.
+    /// </summary>
     public const string ParameterExceptionMessage =
         "Constructor for type {0} can not find parameters {1}";
 

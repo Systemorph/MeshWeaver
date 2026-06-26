@@ -12,6 +12,12 @@ public class AuthenticationNavigationService : IAuthenticationNavigationService
     private readonly string _loginPath;
     private readonly string _logoutPath;
 
+    /// <summary>
+    /// Initializes the service, resolving the login and logout paths from the supplied options
+    /// (defaulting to <c>/login</c> and either <c>/auth/logout</c> or <c>/dev/logout</c>) and
+    /// applying any custom path overrides.
+    /// </summary>
+    /// <param name="options">The authentication options used to determine login/logout paths and return-URL behavior.</param>
     public AuthenticationNavigationService(IOptions<AuthenticationOptions> options)
     {
         _options = options.Value;
@@ -27,6 +33,9 @@ public class AuthenticationNavigationService : IAuthenticationNavigationService
             _logoutPath = _options.LogoutPath;
     }
 
+    /// <summary>
+    /// Gets the name of the configured authentication provider.
+    /// </summary>
     public string ProviderName => _options.Provider;
 
     /// <summary>
@@ -39,11 +48,21 @@ public class AuthenticationNavigationService : IAuthenticationNavigationService
     /// </summary>
     public bool IsDevMode => _options.EnableDevLogin;
 
+    /// <summary>
+    /// Builds the login URL, optionally appending the return URL as a query parameter.
+    /// </summary>
+    /// <param name="returnUrl">The URL to return to after a successful login; ignored when return URLs are disabled or it is empty.</param>
+    /// <returns>The login path, with the return URL appended when configured.</returns>
     public string GetLoginUrl(string? returnUrl = null)
     {
         return BuildUrl(_loginPath, returnUrl);
     }
 
+    /// <summary>
+    /// Builds the logout URL, optionally appending the return URL as a query parameter.
+    /// </summary>
+    /// <param name="returnUrl">The URL to return to after logout; ignored when return URLs are disabled or it is empty.</param>
+    /// <returns>The logout path, with the return URL appended when configured.</returns>
     public string GetLogoutUrl(string? returnUrl = null)
     {
         return BuildUrl(_logoutPath, returnUrl);

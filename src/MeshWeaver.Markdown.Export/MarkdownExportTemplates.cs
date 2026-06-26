@@ -23,8 +23,11 @@ namespace MeshWeaver.Markdown.Export;
 /// </summary>
 public static class MarkdownExportTemplates
 {
+    /// <summary>Namespace under which the export Code template nodes are seeded.</summary>
     public const string TemplatesNamespace = "Templates/Export";
+    /// <summary>Node id of the PDF export Code template.</summary>
     public const string ExportPdfId = "Pdf";
+    /// <summary>Node id of the DOCX export Code template.</summary>
     public const string ExportDocxId = "Docx";
 
     /// <summary>

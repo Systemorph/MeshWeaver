@@ -7,6 +7,11 @@ using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Layout;
 
+/// <summary>
+/// Static helpers for creating data-bound UI controls from typed expression-tree templates.
+/// Each <c>Bind</c>/<c>BindMany</c>/<c>BindEnumerable</c> overload walks the expression,
+/// replaces property accesses with JSON-Pointer bindings, and sets <c>DataContext</c> on the result.
+/// </summary>
 public static class Template
 {
 
@@ -160,6 +165,14 @@ public static class Template
     }
 
 
+    /// <summary>
+    /// Binds an <see cref="IEnumerable{T}"/> to a repeating item template; delegates to <c>BindMany</c>.
+    /// </summary>
+    /// <typeparam name="T">The item type.</typeparam>
+    /// <typeparam name="TView">The UI control produced per item.</typeparam>
+    /// <param name="data">The sequence of items to render.</param>
+    /// <param name="dataTemplate">Expression template describing the per-item control.</param>
+    /// <returns>A <see cref="UiControl"/> that repeats the template for each item.</returns>
     [ReplaceBindMethod]
     public static UiControl Bind<T, TView>(
         this IEnumerable<T> data,
@@ -167,6 +180,14 @@ public static class Template
     )
         where TView : UiControl => BindMany(data, dataTemplate);
 
+    /// <summary>
+    /// Builds a data-bound <typeparamref name="TView"/> from a raw JSON Pointer string used as the data context root.
+    /// </summary>
+    /// <typeparam name="T">The data type the template binds to.</typeparam>
+    /// <typeparam name="TView">The UI control type produced by the template.</typeparam>
+    /// <param name="pointer">The JSON Pointer string that serves as the data context.</param>
+    /// <param name="dataTemplate">Expression template to compile and bind.</param>
+    /// <returns>The compiled, data-bound UI control.</returns>
     public static TView Bind<T, TView>(
         string pointer,
         Expression<Func<T, TView>> dataTemplate
@@ -179,6 +200,15 @@ public static class Template
         return view;
     }
 
+    /// <summary>
+    /// Builds an <see cref="ItemTemplateControl"/> that repeats <paramref name="dataTemplate"/>
+    /// for each item in the collection referenced by <paramref name="pointer"/>.
+    /// </summary>
+    /// <typeparam name="T">The item type.</typeparam>
+    /// <typeparam name="TView">The UI control produced per item.</typeparam>
+    /// <param name="pointer">A JSON Pointer reference to the enumerable collection in the data context.</param>
+    /// <param name="dataTemplate">Expression template describing the per-item control.</param>
+    /// <returns>An <see cref="ItemTemplateControl"/> bound to the pointer collection.</returns>
     public static ItemTemplateControl BindEnumerable<T, TView>(
         JsonPointerReference pointer,
         Expression<Func<T, TView>> dataTemplate

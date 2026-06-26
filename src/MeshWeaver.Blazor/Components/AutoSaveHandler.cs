@@ -109,6 +109,10 @@ public class AutoSaveHandler : IDisposable
         CurrentValue = value;
     }
 
+    /// <summary>
+    /// Disposes the handler by releasing the throttle subscription and completing the value subject.
+    /// Subsequent calls to <c>OnValueChanged</c> are silently ignored after disposal.
+    /// </summary>
     public void Dispose()
     {
         if (_disposed)

@@ -25,6 +25,19 @@ public class ClaudeCodeChatClient : IChatClient
     private readonly string? userEmail;
     private readonly ILogger? logger;
 
+    /// <summary>
+    /// Creates a chat client that runs the Claude Code CLI (via the Claude Agent SDK) for a single
+    /// user, isolating their credentials, config dir, and MCP back-connection per spawn.
+    /// </summary>
+    /// <param name="configuration">Claude Code configuration: CLI directory, skills/working directory, global system prompt, session timeout, and max turns.</param>
+    /// <param name="modelName">Optional model name. The harness passes <c>null</c> so the CLI uses the user's own subscription default; forwarding a model would make the <c>claude</c> CLI fail.</param>
+    /// <param name="logger">Optional logger for diagnostics.</param>
+    /// <param name="configDir">Per-user <c>CLAUDE_CONFIG_DIR</c> so concurrent users on one portal replica never share <c>.claude</c> credentials or session state. <c>null</c> in single-user dev (the CLI uses the machine's own login).</param>
+    /// <param name="oauthToken">The user's Claude subscription OAuth token (<c>CLAUDE_CODE_OAUTH_TOKEN</c>) resolved from their Connect provider node. Falls back to the token persisted in the config dir's <c>.credentials.json</c> when the resolver cache is cold.</param>
+    /// <param name="mcpBackConnection">Provisions the per-spawn HTTP MCP back-connection so the mesh is the CLI's workspace, authenticated as the user.</param>
+    /// <param name="userId">The calling user's id, used to mint/reuse the MCP back-connection.</param>
+    /// <param name="userName">The calling user's display name, forwarded to the MCP back-connection provisioning.</param>
+    /// <param name="userEmail">The calling user's email, forwarded to the MCP back-connection provisioning.</param>
     public ClaudeCodeChatClient(
         ClaudeCodeConfiguration configuration,
         string? modelName = null,

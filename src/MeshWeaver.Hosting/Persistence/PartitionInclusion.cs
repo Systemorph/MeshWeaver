@@ -14,5 +14,12 @@ public class PartitionFilter(IEnumerable<string> includedPartitions)
 {
     private readonly HashSet<string> _included = new(includedPartitions, StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Decides whether a partition is included by this filter: returns
+    /// <c>true</c> when no inclusions are registered (all pass) or when
+    /// <paramref name="name"/> is in the inclusion list (case-insensitive).
+    /// </summary>
+    /// <param name="name">The partition name to test.</param>
+    /// <returns><c>true</c> if the partition should be included; otherwise <c>false</c>.</returns>
     public bool ShouldInclude(string name) => _included.Count == 0 || _included.Contains(name);
 }

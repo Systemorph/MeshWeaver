@@ -19,7 +19,7 @@ namespace MeshWeaver.AI.Test;
 /// is the ONE place that declares the built-in Claude model list (latest per category), so this
 /// guards that:
 /// <list type="number">
-///   <item><see cref="AddAnthropic"/> registers a single "Anthropic" BYO-key catalog source with the
+///   <item><see cref="AzureFoundryExtensions.AddAnthropic"/> registers a single "Anthropic" BYO-key catalog source with the
 ///   direct <c>api.anthropic.com</c> endpoint and the current Claude model ids.</item>
 ///   <item><see cref="BuiltInLanguageModelProvider"/> materialises that source into a
 ///   <c>ModelProvider</c> node (always — so an admin can add a key) plus, ONCE a key is
@@ -30,7 +30,7 @@ namespace MeshWeaver.AI.Test;
 ///   <item>the <see cref="AzureClaudeChatClientAgentFactory"/> routes those ids (Supports), and
 ///   each id has a built-in price row so cost shows.</item>
 /// </list>
-/// When Anthropic ships a newer snapshot, bump <see cref="AddAnthropic"/>'s DefaultModelIds +
+/// When Anthropic ships a newer snapshot, bump <see cref="AzureFoundryExtensions.AddAnthropic"/>'s DefaultModelIds +
 /// <see cref="ModelPricing.Defaults"/> and update <see cref="ExpectedClaudeModels"/> here.
 /// </summary>
 public class AnthropicProviderCatalogTest : AITestBase

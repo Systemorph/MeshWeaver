@@ -56,6 +56,7 @@ public class CosmosSqlGenerator
     /// </summary>
     /// <param name="query">The parsed RSQL query</param>
     /// <param name="alias">The container alias (default: "c")</param>
+    /// <param name="includeContent">When <c>true</c>, projects all fields (<c>*</c>); when <c>false</c>, emits an explicit field list that omits <c>content</c>.</param>
     /// <returns>The complete SQL query and parameters</returns>
     public (string Sql, Dictionary<string, object> Parameters) GenerateSelectQuery(
         ParsedQuery query,

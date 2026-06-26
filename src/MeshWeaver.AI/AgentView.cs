@@ -27,8 +27,13 @@ namespace MeshWeaver.AI;
 /// </summary>
 public static class AgentView
 {
+    /// <summary>Area name for the agent catalog (list of all agents).</summary>
     public const string CatalogArea = "Catalog";
+
+    /// <summary>Area name for an agent's details/overview view.</summary>
     public const string DetailsArea = "Details";
+
+    /// <summary>Area name for the agent configuration editor.</summary>
     public const string EditArea = "Edit";
 
     /// <summary>

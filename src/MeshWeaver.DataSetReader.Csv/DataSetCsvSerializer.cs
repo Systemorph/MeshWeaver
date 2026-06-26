@@ -9,16 +9,30 @@ using MeshWeaver.Reflection;
 
 namespace MeshWeaver.DataSetReader.Csv
 {
+    /// <summary>
+    /// Serializes an <see cref="IDataSet"/> to CSV text and parses CSV text (including the multi-table marker syntax) back into a data set.
+    /// </summary>
     public static class DataSetCsvSerializer
     {
+        /// <summary>Line prefix (<c>@@</c>) marking the start of a named table within the CSV stream.</summary>
         public const string TablePrefix = "@@";
+
+        /// <summary>Line prefix (<c>$$</c>) marking the data-set format descriptor line.</summary>
         public const string FormatPrefix = "$$";
+
+        /// <summary>Line prefix (<c>##</c>) marking the data-set name line.</summary>
         public const string DataSetNamePrefix = "##";
 
         //Detects odd number of quotes located sequentially
         private static readonly Regex QuotesRegex =
             new("(?<!\")\"(\"\")*(?!\")", RegexOptions.Compiled);
 
+        /// <summary>
+        /// Serializes a data set to CSV text, emitting an <see cref="TablePrefix"/> marker line before each table.
+        /// </summary>
+        /// <param name="dataSet">The data set to serialize.</param>
+        /// <param name="delimiter">The field delimiter to use between values.</param>
+        /// <returns>The CSV representation of the data set.</returns>
         public static string Serialize(IDataSet dataSet, char delimiter)
         {
             var csvFactory = new Factory();
@@ -63,6 +77,14 @@ namespace MeshWeaver.DataSetReader.Csv
             return sb.ToString();
         }
 
+        /// <summary>
+        /// Parses CSV text into a data set, honoring the table, format, and header-row markers.
+        /// </summary>
+        /// <param name="reader">The reader positioned at the start of the CSV content.</param>
+        /// <param name="delimiter">The field delimiter separating values.</param>
+        /// <param name="withHeaderRow">Whether the first row of each table is a header row.</param>
+        /// <param name="contentType">The entity type used to build columns when the content has no leading table marker.</param>
+        /// <returns>A tuple containing the parsed data set and the optional format descriptor.</returns>
         public static async Task<(IDataSet DataSet, string? Format)> Parse(
             StreamReader reader,
             char delimiter,
@@ -247,6 +269,12 @@ namespace MeshWeaver.DataSetReader.Csv
             return Regex.Match(content, $"[^{prefix}]*\\w", RegexOptions.Compiled).Value;
         }
 
+        /// <summary>
+        /// Reads CSV content from a stream and parses it into a data set using the supplied options.
+        /// </summary>
+        /// <param name="stream">The stream containing the CSV content.</param>
+        /// <param name="options">Options controlling delimiter, header handling, and entity type.</param>
+        /// <returns>A tuple containing the parsed data set and the optional format descriptor.</returns>
         public static async Task<(IDataSet DataSet, string? Format)> ReadAsync(
             Stream stream,
             DataSetReaderOptions options

@@ -28,6 +28,7 @@ namespace MeshWeaver.ContentCollections.Indexing.Graph;
 /// </summary>
 public static class ContentIndexSettingsTab
 {
+    /// <summary>The stable id of the Content Indexing settings tab.</summary>
     public const string TabId = "ContentIndex";
 
     // Holds the path of the currently-running re-index activity (empty = none); the progress panel binds

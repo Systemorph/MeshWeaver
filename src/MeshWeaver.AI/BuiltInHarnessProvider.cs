@@ -13,6 +13,11 @@ namespace MeshWeaver.AI;
 /// </summary>
 public sealed class BuiltInHarnessProvider(IEnumerable<IHarness> harnesses) : IStaticNodeProvider
 {
+    /// <summary>
+    /// Returns the harness catalog nodes: a public-read access policy plus one read-only
+    /// node per registered <c>IHarness</c>, ordered by the harness definition's order.
+    /// </summary>
+    /// <returns>The harness catalog MeshNodes.</returns>
     public IEnumerable<MeshNode> GetStaticNodes()
     {
         // World-readable catalog, unmodifiable — same shape as the agent catalog.

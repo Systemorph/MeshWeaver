@@ -51,6 +51,11 @@ public sealed class OwnsPartitionProvisioningValidator : INodeValidator
     private readonly IMessageHub _hub;
     private readonly ILogger<OwnsPartitionProvisioningValidator> _logger;
 
+    /// <summary>
+    /// Initializes a new instance of the owns-partition provisioning validator.
+    /// </summary>
+    /// <param name="hub">The message hub providing static-node lookup and partition storage providers.</param>
+    /// <param name="logger">The logger used to record partition provisioning.</param>
     public OwnsPartitionProvisioningValidator(
         IMessageHub hub,
         ILogger<OwnsPartitionProvisioningValidator> logger)
@@ -62,6 +67,13 @@ public sealed class OwnsPartitionProvisioningValidator : INodeValidator
     /// <summary>Create only — provisioning a NEW partition can only happen on create.</summary>
     public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Create];
 
+    /// <summary>
+    /// Validates a create, eagerly provisioning the backing partition store (Postgres
+    /// schema + tables) before the root write when the node's type owns its partition,
+    /// and rejecting a partition-owning create that is not top-level.
+    /// </summary>
+    /// <param name="context">The validation context describing the node and operation.</param>
+    /// <returns>An observable that emits the validation result for the operation.</returns>
     public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
         // Read the centralized partition-ownership flag off the NodeType's definition.

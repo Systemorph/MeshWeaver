@@ -33,5 +33,10 @@ public record ModelInfo
     /// </summary>
     public string DisplayName => $"{Provider}: {Name}";
 
+    /// <summary>
+    /// Returns the bare model <see cref="Name"/> (not the provider-qualified
+    /// <see cref="DisplayName"/>).
+    /// </summary>
+    /// <returns>The model name/identifier.</returns>
     public override string ToString() => Name;
 }

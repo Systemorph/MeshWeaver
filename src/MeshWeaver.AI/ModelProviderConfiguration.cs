@@ -80,8 +80,10 @@ public record ModelProviderConfiguration
     /// <summary>Human-readable display name (e.g. "Roland's personal key").</summary>
     public string? Label { get; init; }
 
+    /// <summary>UTC timestamp when this provider configuration node was first created.</summary>
     public DateTimeOffset CreatedAt { get; init; }
 
+    /// <summary>UTC timestamp of the most recent use by a chat-client factory; null if never used.</summary>
     public DateTimeOffset? LastUsedAt { get; init; }
 
     /// <summary>

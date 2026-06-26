@@ -113,6 +113,18 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     /// <inheritdoc/>
     public ImmutableHashSet<string> Contexts { get; }
 
+    /// <summary>
+    /// Initializes the partition storage provider, which maps each top-level path segment to its own PostgreSQL schema.
+    /// </summary>
+    /// <param name="baseDataSource">The base data source used for schema discovery and provisioning.</param>
+    /// <param name="baseConnectionString">Connection string used to build per-schema data sources.</param>
+    /// <param name="options">Storage options (vector dimensions, pool sizing, etc.).</param>
+    /// <param name="partitions">Optional pre-known partition definitions registered at boot so the router can resolve their real schema names.</param>
+    /// <param name="embeddingProvider">Optional embedding provider passed to each per-partition adapter for vector search.</param>
+    /// <param name="configureDataSource">Optional hook to further configure each per-schema <see cref="NpgsqlDataSourceBuilder"/>.</param>
+    /// <param name="contexts">Optional partition contexts this provider participates in; defaults to Search, Create, Autocomplete, and Browse.</param>
+    /// <param name="logger">Optional logger for provisioning and routing diagnostics.</param>
+    /// <param name="ioPoolRegistry">Optional I/O pool registry providing the per-adapter write and read pools.</param>
     public PostgreSqlPartitionStorageProvider(
         NpgsqlDataSource baseDataSource,
         string baseConnectionString,

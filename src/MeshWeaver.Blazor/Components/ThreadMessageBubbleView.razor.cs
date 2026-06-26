@@ -11,6 +11,13 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Blazor.Components;
 
+/// <summary>
+/// Blazor view for <c>ThreadMessageBubbleControl</c> — renders a single message bubble
+/// in a conversation thread. When <c>NodePath</c> is set the view subscribes to the
+/// per-message node stream via the process-wide <c>IMeshNodeStreamCache</c> and stays
+/// live with incremental text, tool-call, and node-change updates as the agent writes them.
+/// Falls back to static view-model fields for legacy callers that pre-populate the control.
+/// </summary>
 public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleControl, ThreadMessageBubbleView>
 {
     // Local view state: populated from the bound MeshNode stream when NodePath is set,
@@ -51,6 +58,12 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
 
     private void CancelEdit() => isEditing = false;
 
+    /// <summary>
+    /// When <c>NodePath</c> is non-empty, subscribes to the per-message node stream (bypassing
+    /// RLS with system impersonation) and updates role, author, model, timestamp, text, tool
+    /// calls, and node changes on each emission. When <c>NodePath</c> is absent, binds concrete
+    /// fields from the static view-model instead.
+    /// </summary>
     protected override void BindData()
     {
         base.BindData();

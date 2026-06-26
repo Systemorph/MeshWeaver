@@ -14,29 +14,42 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Blazor.Portal.Components;
 
+/// <summary>
+/// Portal header component showing the signed-in user's avatar/initials and a menu with
+/// profile, settings, login, and logout actions. Resolves the display name and the
+/// platform-admin flag from the authentication state and access context.
+/// </summary>
 public partial class UserProfile : ComponentBase
 {
+    /// <summary>Navigation manager used for login, logout, and profile/settings routing.</summary>
     [Inject]
     public required NavigationManager Navigation { get; init; }
 
+    /// <summary>Logger for the user-profile component.</summary>
     [Inject]
     public required ILogger<UserProfile> Logger { get; init; }
 
+    /// <summary>Service that builds the login and logout URLs (with return URLs).</summary>
     [Inject]
     public required IAuthenticationNavigationService AuthNavigation { get; init; }
 
+    /// <summary>Access service supplying the current user's access context (name, object id).</summary>
     [Inject]
     public required AccessService AccessService { get; init; }
 
+    /// <summary>Portal application providing the message hub used for the platform-admin check.</summary>
     [Inject]
     public required PortalApplication PortalApp { get; init; }
 
+    /// <summary>Cascaded authentication state used to read the signed-in user's claims.</summary>
     [CascadingParameter]
     public required Task<AuthenticationState> AuthenticationState { get; set; }
 
+    /// <summary>CSS size of the avatar button shown in the header. Defaults to <c>24px</c>.</summary>
     [Parameter]
     public string ButtonSize { get; set; } = "24px";
 
+    /// <summary>CSS size of the avatar image inside the profile menu. Defaults to <c>52px</c>.</summary>
     [Parameter]
     public string ImageSize { get; set; } = "52px";
 
@@ -45,8 +58,14 @@ public partial class UserProfile : ComponentBase
     private string? initials;
     private bool isPlatformAdmin;
     private string NameClaimType { get; } = "name";
+    /// <summary>The claim type read for the user's preferred username (<c>preferred_username</c>).</summary>
     public string UsernameClaimType { get; } = "preferred_username";
 
+    /// <summary>
+    /// Resolves the display name (preferring the access-context name over the name claim),
+    /// computes the initials, and determines whether the user is a platform admin.
+    /// </summary>
+    /// <returns>A task that completes once the profile fields have been populated.</returns>
     protected override async Task OnParametersSetAsync()
     {
         var authState = await AuthenticationState;
@@ -74,6 +93,12 @@ public partial class UserProfile : ComponentBase
         }
 
     }
+    /// <summary>
+    /// Derives the avatar initials from a name: the first letter for a single word, or the
+    /// first letters of the first and last words otherwise.
+    /// </summary>
+    /// <param name="name">The user's display name.</param>
+    /// <returns>The uppercased initials, or an empty string when the name is null/blank.</returns>
     public static string GetInitials(string name)
     {
         if (string.IsNullOrEmpty(name))

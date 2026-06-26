@@ -1,0 +1,163 @@
+# Builds the Memex MAUI client for Mac Catalyst (the native macOS desktop app) on a hosted
+# macOS runner, code-signs it, packages it as a signed installer (.pkg), and uploads it to
+# App Store Connect (Mac App Store / TestFlight for macOS).
+#
+# ── Distribution path: MAC APP STORE (App Store Connect), NOT Developer-ID notarization ──
+# This mirrors memex-ios-testflight.yml on purpose. The iOS pipeline distributes through
+# App Store Connect with an ASC API key + `xcrun altool`; the Mac App Store path lets this
+# workflow REUSE the exact same credentials:
+#   * the same App Store Connect API key  (ASC_KEY_ID / ASC_ISSUER_ID / ASC_API_KEY_P8_BASE64)
+#   * the same "Apple Distribution" code-signing certificate (Apple's unified distribution
+#     cert signs BOTH iOS App Store and Mac App Store .app bundles).
+# Because the Mac App Store sandboxes apps, the existing Platforms/MacCatalyst/Entitlements.plist
+# (app-sandbox + network.client + device.audio-input) is exactly what the store requires — no
+# Hardened Runtime needed (that is a Developer-ID/notarization concern, see the note at the end).
+#
+# The two things macOS genuinely needs beyond the iOS secrets:
+#   1. a Mac App Store *provisioning profile* (the iOS .mobileprovision does NOT cover maccatalyst), and
+#   2. a *Mac installer* signing cert ("3rd Party Mac Developer Installer") to sign the .pkg —
+#      the App-Store .pkg is a signed product archive; the .app cert alone cannot sign it.
+#
+# Like the iOS pipeline, this is the FIRST real Mac Catalyst native link of the app (Windows only
+# compiled managed code). If trimming/AOT trips on the framework chain it surfaces here. We pass
+# MtouchLink=SdkOnly so app assemblies are left un-trimmed on this first run — tighten later if
+# you want a smaller binary, fixing any fallout with <MtouchLink>/[DynamicDependency].
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   # ── reused VERBATIM from memex-ios-testflight.yml ──
+#   APPLE_CERT_P12_BASE64              base64 of your "Apple Distribution" cert (.p12) — signs the .app
+#   APPLE_CERT_PASSWORD               password for that .p12
+#   APPLE_SIGNING_IDENTITY            e.g. "Apple Distribution: Your Org (TEAMID)"
+#   ASC_KEY_ID                        App Store Connect API key id
+#   ASC_ISSUER_ID                     App Store Connect issuer id
+#   ASC_API_KEY_P8_BASE64             base64 of the App Store Connect API key (.p8)
+#   # ── NEW, Mac-Catalyst-only ──
+#   APPLE_INSTALLER_CERT_P12_BASE64   base64 of your "3rd Party Mac Developer Installer" cert (.p12) — signs the .pkg
+#   APPLE_INSTALLER_CERT_PASSWORD     password for that installer .p12
+#   APPLE_INSTALLER_SIGNING_IDENTITY  e.g. "3rd Party Mac Developer Installer: Your Org (TEAMID)"
+#   APPLE_MAC_PROVISIONING_PROFILE_BASE64   base64 of the Mac App Store provisioning profile (.provisionprofile)
+#   APPLE_MAC_PROVISIONING_PROFILE_NAME     the profile's name (as shown in the Apple Developer portal)
+# And set BUNDLE_ID below to your own — it must match BOTH the registered Mac App ID and the
+# provisioning profile above (the Mac App ID is a separate registration from the iOS one).
+
+name: Memex Mac Catalyst → App Store Connect
+
+on:
+  workflow_dispatch:
+
+env:
+  PROJECT: memex/Memex.Client/Memex.Client.csproj
+  MACCATALYST_TFM: net10.0-maccatalyst
+  BUNDLE_ID: cloud.meshweaver.memex
+  DOTNET_VERSION: '10.0.x'
+
+jobs:
+  build-maccatalyst:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Show toolchain (diagnostics for the Swift shim + native link)
+        run: |
+          dotnet --info
+          xcodebuild -version
+          echo "Selected Xcode: $(xcode-select -p)"
+
+      # Restores every workload the multi-target project declares (android+ios+maccatalyst);
+      # heavier than a single install but guaranteed to bring in maccatalyst. The leaner
+      # equivalent is `dotnet workload install maui-maccatalyst --version ${{ env.DOTNET_VERSION }}`
+      # if you want to skip the Android workload (its JDK/SDK are preinstalled on macos-15 anyway).
+      - name: Restore MAUI workloads
+        run: dotnet workload restore "$PROJECT"
+
+      # The .app bundle is signed with the "Apple Distribution" cert (same one the iOS pipeline
+      # uses). A shared keychain-password (run id) lets the second import target the same keychain.
+      - name: Import app code-signing certificate ("Apple Distribution")
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          p12-password: ${{ secrets.APPLE_CERT_PASSWORD }}
+          keychain: memex-signing
+          keychain-password: ${{ github.run_id }}
+
+      # The .pkg installer is signed with the "3rd Party Mac Developer Installer" cert. This is a
+      # SEPARATE certificate from the Apple Distribution one — the Mac App Store requires a signed
+      # product archive. create-keychain:false appends it to the keychain created above.
+      - name: Import installer certificate ("3rd Party Mac Developer Installer")
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_INSTALLER_CERT_P12_BASE64 }}
+          p12-password: ${{ secrets.APPLE_INSTALLER_CERT_PASSWORD }}
+          keychain: memex-signing
+          keychain-password: ${{ github.run_id }}
+          create-keychain: false
+
+      # Mac provisioning profiles use the .provisionprofile extension and live in the same folder
+      # the build scans as iOS. CodesignProvision (below) matches it by NAME, not filename.
+      - name: Install Mac App Store provisioning profile
+        run: |
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          echo "${{ secrets.APPLE_MAC_PROVISIONING_PROFILE_BASE64 }}" | base64 --decode \
+            > ~/Library/MobileDevice/Provisioning\ Profiles/memex-maccatalyst.provisionprofile
+
+      # Mac App Store publish (per the MAUI docs): CreatePackage builds the signed .pkg,
+      # EnableCodeSigning signs the .app with CodesignKey, EnablePackageSigning signs the .pkg
+      # with PackageSigningKey. The Mac App Store requires BOTH archs (x64+arm64) OR x64-only —
+      # arm64-only is rejected — so RuntimeIdentifiers (plural) lists both; the double quotes
+      # protect the ';' from the shell.
+      - name: Publish signed .pkg (Mac App Store)
+        run: |
+          dotnet publish "$PROJECT" -f "$MACCATALYST_TFM" -c Release \
+            -p:ApplicationId="$BUNDLE_ID" \
+            -p:RuntimeIdentifiers="maccatalyst-x64;maccatalyst-arm64" \
+            -p:MtouchLink=SdkOnly \
+            -p:CreatePackage=true \
+            -p:EnableCodeSigning=true \
+            -p:EnablePackageSigning=true \
+            -p:CodesignEntitlements=Platforms/MacCatalyst/Entitlements.plist \
+            -p:CodesignKey="${{ secrets.APPLE_SIGNING_IDENTITY }}" \
+            -p:CodesignProvision="${{ secrets.APPLE_MAC_PROVISIONING_PROFILE_NAME }}" \
+            -p:PackageSigningKey="${{ secrets.APPLE_INSTALLER_SIGNING_IDENTITY }}"
+
+      - name: Locate .pkg
+        id: pkg
+        run: echo "path=$(find memex/Memex.Client/bin -name '*.pkg' | head -n1)" >> "$GITHUB_OUTPUT"
+
+      # altool resolves the API key by searching API_PRIVATE_KEYS_DIR for a file named
+      # EXACTLY AuthKey_<ASC_KEY_ID>.p8 — so the decoded key must use that filename (this is the
+      # documented convention; a differently-named file is silently not found). -t macos selects
+      # the Mac App Store upload target (the iOS pipeline uses -t ios).
+      - name: Upload to App Store Connect
+        run: |
+          mkdir -p /tmp/asc_keys
+          echo "${{ secrets.ASC_API_KEY_P8_BASE64 }}" | base64 --decode \
+            > "/tmp/asc_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8"
+          xcrun altool --upload-app -f "${{ steps.pkg.outputs.path }}" -t macos \
+            --apiKey "${{ secrets.ASC_KEY_ID }}" \
+            --apiIssuer "${{ secrets.ASC_ISSUER_ID }}"
+        env:
+          API_PRIVATE_KEYS_DIR: /tmp/asc_keys
+
+      - name: Upload .pkg artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: memex-maccatalyst-pkg
+          path: ${{ steps.pkg.outputs.path }}
+          if-no-files-found: ignore
+
+# ──────────────────────────────────────────────────────────────────────────────────────────────
+# Alternative NOT used here: direct (outside-the-store) distribution via Developer ID + notarytool.
+# It would replace the certs/profile with a "Developer ID Application" cert (CodesignKey) + a
+# "Developer ID Installer" cert (PackageSigningKey), add -p:UseHardenedRuntime=true, drop the
+# App-Store provisioning profile, then notarize + staple instead of altool:
+#     xcrun notarytool submit "<pkg>" --key AuthKey_<id>.p8 --key-id <ASC_KEY_ID> \
+#         --issuer <ASC_ISSUER_ID> --wait
+#     xcrun stapler staple "<pkg>"
+# We chose the Mac App Store path so this workflow reuses the iOS pipeline's ASC API key and
+# Apple Distribution cert verbatim. Switch only if you need to ship a downloadable .pkg/.app.

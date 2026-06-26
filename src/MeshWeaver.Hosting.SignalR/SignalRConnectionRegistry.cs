@@ -31,6 +31,13 @@ public sealed class SignalRConnectionRegistry : IDisposable
     private readonly AccessService accessService;
     private readonly IIoPool ioPool;
 
+    /// <summary>
+    /// Initializes a new instance of the <c>SignalRConnectionRegistry</c> class.
+    /// </summary>
+    /// <param name="hub">The portal message hub used for serialization options and token validation.</param>
+    /// <param name="routingService">The routing service used to register per-connection push routes.</param>
+    /// <param name="hubContext">The SignalR hub context used to push messages down to connected clients.</param>
+    /// <param name="ioPools">Optional I/O pool registry; the HTTP pool is used to bridge async client sends, falling back to the unbounded pool when not supplied.</param>
     public SignalRConnectionRegistry(
         IMessageHub hub,
         IRoutingService routingService,
@@ -113,6 +120,8 @@ public sealed class SignalRConnectionRegistry : IDisposable
             hub.DeliverMessage(delivery.SetAccessContext(user));
     }
 
+    /// <summary>Forget the connection's identity and dispose its inbound route.</summary>
+    /// <param name="connectionId">The SignalR connection identifier to remove.</param>
     public void Disconnect(string connectionId)
     {
         if (connections.TryRemove(connectionId, out var s))
@@ -130,6 +139,7 @@ public sealed class SignalRConnectionRegistry : IDisposable
             return delivery.Forwarded();
         });
 
+    /// <inheritdoc />
     public void Dispose()
     {
         foreach (var s in connections.Values)

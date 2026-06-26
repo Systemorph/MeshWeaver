@@ -44,6 +44,11 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
     /// </summary>
     internal int ActualSyncCount;
 
+    /// <summary>
+    /// Initializes the cross-schema query provider.
+    /// </summary>
+    /// <param name="dataSource">The PostgreSQL data source used for schema discovery and fan-out queries.</param>
+    /// <param name="logger">Optional logger for query and diagnostics output.</param>
     public PostgreSqlCrossSchemaQueryProvider(
         NpgsqlDataSource dataSource,
         ILogger<PostgreSqlCrossSchemaQueryProvider>? logger = null)
@@ -184,6 +189,7 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         return present;
     }
 
+    /// <inheritdoc />
     public async Task<IReadOnlyList<string>> GetSearchableSchemasAsync(CancellationToken ct = default)
     {
         try
@@ -217,6 +223,7 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         }
     }
 
+    /// <inheritdoc />
     public async IAsyncEnumerable<MeshNode> QueryAcrossSchemasAsync(
         ParsedQuery query,
         JsonSerializerOptions options,
@@ -423,6 +430,7 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         };
     }
 
+    /// <inheritdoc />
     public IAsyncEnumerable<MeshNode> QueryAcrossSchemasAsync(
         ParsedQuery query,
         JsonSerializerOptions options,

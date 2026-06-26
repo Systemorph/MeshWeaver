@@ -26,8 +26,11 @@ namespace MeshWeaver.GitSync;
 /// </summary>
 public sealed class GitHubSyncService
 {
+    /// <summary>The fixed node id of a Space's GitHub-sync config satellite (<c>{space}/_GitSync</c>).</summary>
     public const string ConfigId = "_GitSync";
+    /// <summary>The <see cref="MeshNode.NodeType"/> of the sync config node.</summary>
     public const string ConfigNodeType = "GitHubSyncConfig";
+    /// <summary>The <see cref="MeshNode.NodeType"/> identifying a Space (the unit GitHub sync acts on).</summary>
     public const string SpaceNodeType = "Space";
 
     private readonly IMessageHub hub;
@@ -37,6 +40,12 @@ public sealed class GitHubSyncService
     private readonly ILogger? logger;
     private readonly FileFormatParserRegistry parsers;
 
+    /// <summary>Initializes a new instance of the <c>GitHubSyncService</c> class.</summary>
+    /// <param name="hub">The message hub used for node create/update and workspace access.</param>
+    /// <param name="meshService">Mesh service used for node creation and descendant queries.</param>
+    /// <param name="repoClient">The GitHub repo client that performs the actual push/fetch operations.</param>
+    /// <param name="credentials">Per-user GitHub credential store providing the OAuth access token.</param>
+    /// <param name="logger">Optional logger.</param>
     public GitHubSyncService(
         IMessageHub hub,
         IMeshService meshService,
@@ -52,6 +61,9 @@ public sealed class GitHubSyncService
         parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions);
     }
 
+    /// <summary>The sync-config node path for a Space: <c>{spacePath}/_GitSync</c>.</summary>
+    /// <param name="spacePath">The Space (partition root) path.</param>
+    /// <returns>The config node path.</returns>
     public static string ConfigPath(string spacePath) => $"{spacePath}/{ConfigId}";
 
     // ══════════════════════════════════════════════════════════════════════════

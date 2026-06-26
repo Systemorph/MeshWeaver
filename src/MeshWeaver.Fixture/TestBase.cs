@@ -11,10 +11,16 @@ namespace MeshWeaver.Fixture;
 [AutoTestLogging]
 public class TestBase : ServiceSetup, IAsyncLifetime
 {
+    /// <summary>The raw xUnit output helper for the running test.</summary>
     protected readonly ITestOutputHelper Output;
+    /// <summary>The file-and-xUnit output helper that captures test output to both sinks.</summary>
     protected readonly XUnitFileOutputHelper FileOutput;
     private ILogger? _logger;
 
+    /// <summary>
+    /// Initializes a new test instance, creating the file output helper and wiring file logging.
+    /// </summary>
+    /// <param name="output">The xUnit output helper for the running test.</param>
     protected TestBase(ITestOutputHelper output)
     {
         Output = output;
@@ -35,6 +41,11 @@ public class TestBase : ServiceSetup, IAsyncLifetime
         
     }
 
+    /// <summary>
+    /// Builds the service provider, registers this test for cross-class output access, and logs
+    /// the test-class start marker.
+    /// </summary>
+    /// <returns>A completed <see cref="ValueTask"/>.</returns>
     public virtual ValueTask InitializeAsync()
     {
         Initialize();
@@ -58,6 +69,10 @@ public class TestBase : ServiceSetup, IAsyncLifetime
 
 
 
+    /// <summary>
+    /// Logs the test-class dispose marker, unregisters this test, and disposes the file output helper.
+    /// </summary>
+    /// <returns>A completed <see cref="ValueTask"/>.</returns>
     public virtual ValueTask DisposeAsync()
     {
         // Log test end with class info
@@ -87,17 +102,31 @@ public class TestBase : ServiceSetup, IAsyncLifetime
 
 }
 
+/// <summary>
+/// Base class for tests that share a <typeparamref name="TFixture"/> across the test class,
+/// routing each test's output through the shared fixture.
+/// </summary>
+/// <typeparam name="TFixture">The shared fixture type.</typeparam>
 public class TestBase<TFixture> : IDisposable
     where TFixture : BaseFixture, new()
 {
+    /// <summary>The shared fixture for the test class.</summary>
     public TFixture Fixture { get; }
 
+    /// <summary>
+    /// Initializes a new test instance bound to the shared fixture and wires the test's output helper.
+    /// </summary>
+    /// <param name="fixture">The shared fixture instance.</param>
+    /// <param name="output">The xUnit output helper for the running test.</param>
     protected TestBase(TFixture fixture, ITestOutputHelper output)
     {
         fixture.SetOutputHelper(output);
         Fixture = fixture;
     }
 
+    /// <summary>
+    /// Detaches this test's output helper from the shared fixture and disposes the fixture.
+    /// </summary>
     public virtual void Dispose()
     {
         Fixture.SetOutputHelper(null);

@@ -8,13 +8,31 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.AI.Application.Layout;
 
+/// <summary>
+/// Layout area that renders the details page for a single AI agent — its description,
+/// instructions, attributes, and its incoming and outgoing delegation graph.
+/// </summary>
 public static class AgentDetailsArea
 {
+    /// <summary>
+    /// Registers the <c>AgentDetails</c> view on the given layout definition.
+    /// </summary>
+    /// <param name="layout">The layout definition to extend.</param>
+    /// <returns>The same layout definition with the agent-details view registered.</returns>
     public static LayoutDefinition AddAgentDetails(this LayoutDefinition layout)
     {
         return layout.WithView(nameof(AgentDetails), AgentDetails);
     }
 
+    /// <summary>
+    /// Builds the agent-details view for the agent identified by the layout area reference id.
+    /// </summary>
+    /// <param name="host">The layout area host that supplies the hub and the reference id.</param>
+    /// <param name="ctx">The rendering context for this area.</param>
+    /// <returns>
+    /// An observable emitting the rendered details control, or an error/not-found message
+    /// when no agent matches the requested name.
+    /// </returns>
     public static IObservable<UiControl?> AgentDetails(LayoutAreaHost host, RenderingContext ctx)
     {
         // Extract agent name from LayoutAreaReference.Id

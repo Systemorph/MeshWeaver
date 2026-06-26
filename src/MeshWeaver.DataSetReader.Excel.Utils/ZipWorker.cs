@@ -2,6 +2,10 @@
 
 namespace MeshWeaver.DataSetReader.Excel.Utils
 {
+	/// <summary>
+	/// Extracts and caches the relevant <c>xl/</c> parts (workbook, styles, shared strings, worksheets) from an OpenXML
+	/// (<c>.xlsx</c>) zip package so they can be read as individual streams.
+	/// </summary>
 	public class ZipWorker : IDisposable
 	{
 		#region Members and Properties
@@ -79,10 +83,17 @@ namespace MeshWeaver.DataSetReader.Excel.Utils
 			return zipStreams.TryGetValue(filePath, out var stream) ? stream : null;
 		}
 
+		/// <summary>Gets the shared-strings part stream, or <c>null</c> if absent.</summary>
 		public Stream? GetSharedStringsStream() => GetStreamOrDefault("xl/sharedStrings.xml");
+		/// <summary>Gets the styles part stream, or <c>null</c> if absent.</summary>
 		public Stream? GetStylesStream() => GetStreamOrDefault("xl/styles.xml");
+		/// <summary>Gets the workbook part stream, or <c>null</c> if absent.</summary>
 		public Stream? GetWorkbookStream() => GetStreamOrDefault("xl/workbook.xml");
+		/// <summary>Gets the workbook relationships part stream, or <c>null</c> if absent.</summary>
 		public Stream? GetWorkbookRelsStream() => GetStreamOrDefault("xl/_rels/workbook.xml.rels");
+		/// <summary>Gets the stream for a specific worksheet part.</summary>
+		/// <param name="sheetPath">The worksheet part path (with or without a leading <c>/xl/</c>).</param>
+		/// <returns>The worksheet stream, or <c>null</c> if absent.</returns>
 		public Stream? GetWorksheetStream(string sheetPath)
 		{
 			//its possible sheetPath starts with /xl. in this case trim the /xl
@@ -94,6 +105,7 @@ namespace MeshWeaver.DataSetReader.Excel.Utils
 
 		#region IDisposable Members
 
+		/// <summary>Disposes all cached part streams held by this worker.</summary>
 		public void Dispose()
 		{
 			Dispose(true);
@@ -115,6 +127,7 @@ namespace MeshWeaver.DataSetReader.Excel.Utils
 			}
 		}
 
+		/// <summary>Finalizer that disposes cached part streams if <see cref="Dispose()"/> was not called.</summary>
 		~ZipWorker()
 		{
 			Dispose(false);

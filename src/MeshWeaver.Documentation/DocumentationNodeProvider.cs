@@ -15,6 +15,7 @@ namespace MeshWeaver.Documentation;
 /// </summary>
 public class DocumentationNodeProvider : IStaticNodeProvider
 {
+    /// <summary>The partition namespace under which all documentation nodes are served (<c>Doc</c>).</summary>
     public const string RootNamespace = "Doc";
 
     private readonly Lazy<MeshNode[]> _lazyNodes;
@@ -33,6 +34,12 @@ public class DocumentationNodeProvider : IStaticNodeProvider
             LoadNodes(serviceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions));
     }
 
+    /// <summary>
+    /// Yields the documentation governance nodes (read-only access policy plus
+    /// Public and Anonymous viewer grants) followed by every documentation page
+    /// loaded from the embedded markdown resources.
+    /// </summary>
+    /// <returns>The full set of static documentation MeshNodes.</returns>
     public IEnumerable<MeshNode> GetStaticNodes()
     {
         // Read-only policy for the Doc namespace — all documentation is unmodifiable

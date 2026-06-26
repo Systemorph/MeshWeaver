@@ -26,6 +26,7 @@ namespace MeshWeaver.GitSync;
 /// </summary>
 public static class WorkingTreeTab
 {
+    /// <summary>The settings-menu item id for the Code-workspace tab.</summary>
     public const string TabId = "CodeWorkspace";
 
     private const string ResultId = "wtResult";

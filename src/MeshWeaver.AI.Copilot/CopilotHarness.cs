@@ -19,8 +19,10 @@ public sealed class CopilotHarness(IOptions<CopilotConfiguration> options) : IHa
 {
     private readonly CopilotConfiguration configuration = options.Value ?? new CopilotConfiguration();
 
+    /// <summary>The harness identifier — <see cref="Harnesses.Copilot"/>.</summary>
     public string Id => Harnesses.Copilot;
 
+    /// <summary>The harness definition (id, display name, description, icon, ordering) surfaced in the UI.</summary>
     public Harness Definition => new()
     {
         Id = Harnesses.Copilot,
@@ -35,14 +37,25 @@ public sealed class CopilotHarness(IOptions<CopilotConfiguration> options) : IHa
     // Copilot owns its auth slash-commands: /login runs the GitHub device-flow login via the Connect
     // flow; /logout forgets the stored token. When this harness is active these REPLACE MeshWeaver's
     // /agent /model in the chat autocomplete + dispatch.
+    /// <summary>
+    /// The auth slash-commands this harness owns (<c>/login</c>, <c>/logout</c>); when active they replace
+    /// MeshWeaver's <c>/agent</c> and <c>/model</c> commands in the chat autocomplete and dispatch.
+    /// </summary>
     public IReadOnlyList<HarnessCommand> Commands { get; } =
     [
         new("login", "Log in to GitHub Copilot", HarnessCommandKind.Connect),
         new("logout", "Log out of GitHub Copilot", HarnessCommandKind.Disconnect),
     ];
 
+    /// <summary>The Connect provider used for this harness's authentication — <see cref="Connect.ConnectProvider.Copilot"/>.</summary>
     public Connect.ConnectProvider? AuthProvider => Connect.ConnectProvider.Copilot;
 
+    /// <summary>
+    /// Builds a <see cref="CopilotChatClient"/> for the current round, resolving the user's GitHub
+    /// Connect token, the Http I/O pool, the MCP back-connection, and the user's selectable agents.
+    /// </summary>
+    /// <param name="context">Execution context providing the hub and per-user access information.</param>
+    /// <returns>A configured chat client, or null when one cannot be created.</returns>
     public IChatClient? CreateChatClient(HarnessExecutionContext context)
     {
         var hub = context.Hub;

@@ -73,8 +73,18 @@ public static class NodeAccessExtensions
 /// </summary>
 public record NodeAccessRuleSet
 {
+    /// <summary>
+    /// The collected access rules, each pairing the operations it applies to with a check
+    /// predicate that returns true to allow access (false to fall through to the next rule).
+    /// </summary>
     public IReadOnlyList<(IReadOnlyCollection<NodeOperation> Operations, Func<NodeValidationContext, string?, bool> Check)> Rules { get; init; } = [];
 
+    /// <summary>
+    /// Returns a new rule set with an additional access rule appended.
+    /// </summary>
+    /// <param name="operations">The operations the rule applies to (empty means all operations).</param>
+    /// <param name="rule">The check predicate, given the validation context and the user id, returning true to allow access.</param>
+    /// <returns>A new rule set including the added rule.</returns>
     public NodeAccessRuleSet Add(IReadOnlyCollection<NodeOperation> operations, Func<NodeValidationContext, string?, bool> rule)
         => this with { Rules = [.. Rules, (operations, rule)] };
 

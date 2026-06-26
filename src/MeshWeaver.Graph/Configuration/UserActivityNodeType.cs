@@ -17,8 +17,17 @@ namespace MeshWeaver.Graph.Configuration;
 /// </summary>
 public static class UserActivityNodeType
 {
+    /// <summary>The node-type identifier for UserActivity nodes.</summary>
     public const string NodeType = "UserActivity";
 
+    /// <summary>
+    /// Registers the UserActivity node type on the mesh builder, excluding it from
+    /// autocomplete context and wiring up its satellite access rule (access is delegated
+    /// to the owning User node).
+    /// </summary>
+    /// <typeparam name="TBuilder">The mesh builder type.</typeparam>
+    /// <param name="builder">The mesh builder to register the node type on.</param>
+    /// <returns>The same builder, to allow fluent chaining.</returns>
     public static TBuilder AddUserActivityType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
@@ -32,6 +41,11 @@ public static class UserActivityNodeType
         return builder;
     }
 
+    /// <summary>
+    /// Builds the MeshNode definition for the UserActivity node type, including its
+    /// satellite-storage routing to the <c>user_activities</c> table.
+    /// </summary>
+    /// <returns>The UserActivity node-type definition.</returns>
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "User Activity",

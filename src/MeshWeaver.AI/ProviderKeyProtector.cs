@@ -20,12 +20,24 @@ public sealed class ProviderKeyProtector : IProviderKeyProtector
     private readonly IMasterKeyProvider masterKeyProvider;
     private readonly ILogger<ProviderKeyProtector>? logger;
 
+    /// <summary>
+    /// Creates the protector over the given master-key source.
+    /// </summary>
+    /// <param name="masterKeyProvider">Supplies the AES-256 master key; a null key disables encryption (passthrough).</param>
+    /// <param name="logger">Optional logger for decrypt failures and unknown-tag warnings.</param>
     public ProviderKeyProtector(IMasterKeyProvider masterKeyProvider, ILogger<ProviderKeyProtector>? logger = null)
     {
         this.masterKeyProvider = masterKeyProvider;
         this.logger = logger;
     }
 
+    /// <summary>
+    /// Encrypts a provider key into the <c>enc:v1:</c> stored form. Idempotent (an
+    /// already-tagged value is returned unchanged) and a passthrough when no master
+    /// key is configured.
+    /// </summary>
+    /// <param name="plaintext">The key to protect; null/empty is returned as-is.</param>
+    /// <returns>The encrypted stored form, or the original value when encryption is disabled or skipped.</returns>
     public string? Protect(string? plaintext)
     {
         if (string.IsNullOrEmpty(plaintext)) return plaintext;
@@ -50,6 +62,13 @@ public sealed class ProviderKeyProtector : IProviderKeyProtector
         return Prefix + Convert.ToBase64String(blob);
     }
 
+    /// <summary>
+    /// Decrypts a stored provider key. Untagged (legacy/plaintext) values are returned
+    /// as-is; an unknown encryption tag, a missing master key, or a decrypt failure
+    /// returns null (logged as a warning).
+    /// </summary>
+    /// <param name="stored">The stored value to decrypt; null/empty is returned as-is.</param>
+    /// <returns>The plaintext key, or null when it cannot be decrypted.</returns>
     public string? Unprotect(string? stored)
     {
         if (string.IsNullOrEmpty(stored)) return stored;

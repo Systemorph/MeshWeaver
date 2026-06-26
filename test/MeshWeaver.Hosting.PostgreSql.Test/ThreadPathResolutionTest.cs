@@ -282,7 +282,7 @@ public class ThreadPathResolutionTest
         // Grant Anonymous Read so the Query isn't filtered out by RLS —
         // the prod bug exists independent of access control; we want to isolate
         // the path-resolution surface.
-        _fixture.AccessControl.Grant("TestOrg", "Anonymous", "Read", isAllow: true, ct)
+        await _fixture.AccessControl.Grant("TestOrg", "Anonymous", "Read", isAllow: true, ct)
             .Should().Within(30.Seconds()).Emit();
 
         // Seed: partition root + thread in _Thread satellite. This is the exact

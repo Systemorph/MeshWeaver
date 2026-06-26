@@ -36,15 +36,22 @@ public partial class ContentPage : ComponentBase, IDisposable
     /// </summary>
     public Address? TargetAddress { get; set; }
 
+    /// <summary>The raw content stream loaded from the resolved collection; null until the content is fetched.</summary>
     public Stream? Content { get; set; }
+    /// <summary>MIME type of the loaded content (e.g. <c>text/markdown</c>, <c>text/csv</c>, <c>image/png</c>).</summary>
     public string? ContentType { get; set; }
+    /// <summary>User-facing error message when path resolution or content loading fails; null on success.</summary>
     public string? ErrorMessage { get; set; }
 
     // CSV support
+    /// <summary>Column headers parsed from the first row of a CSV file; null for non-CSV content.</summary>
     public string[]? CsvHeaders { get; set; }
+    /// <summary>All data rows parsed from a CSV file; null for non-CSV content.</summary>
     public List<string[]>? CsvRows { get; set; }
+    /// <summary>Number of CSV rows currently shown; starts at 50 and increases as the user requests more.</summary>
     public int CsvVisibleRows { get; set; } = 50;
 
+    /// <summary>The per-circuit portal application injected by DI; supplies the portal hub used to access the content service.</summary>
     [Inject] public PortalApplication PortalApplication { get; set; } = null!;
     private IContentService ContentService => PortalApplication.Hub.ServiceProvider.GetRequiredService<IContentService>();
 
@@ -54,6 +61,10 @@ public partial class ContentPage : ComponentBase, IDisposable
     // thread. Property named Pool (not IoPool) to avoid clashing with the IoPool type.
     private IIoPool Pool => IoPoolRegistry?.Get(IoPoolNames.FileSystem) ?? global::MeshWeaver.Mesh.Threading.IoPool.Unbounded;
 
+    /// <summary>
+    /// Parses the <c>FullPath</c> route parameter and initiates content loading by resolving the
+    /// collection name and file path, then subscribing to the content service via the I/O pool.
+    /// </summary>
     protected override void OnInitialized()
     {
         base.OnInitialized();
@@ -172,6 +183,9 @@ public partial class ContentPage : ComponentBase, IDisposable
             });
     }
 
+    /// <summary>Reads all bytes from the given stream into a byte array.</summary>
+    /// <param name="stream">The stream to read.</param>
+    /// <returns>All bytes from the stream.</returns>
     public byte[] ReadStream(Stream stream)
     {
         using var memoryStream = new MemoryStream();
@@ -179,12 +193,16 @@ public partial class ContentPage : ComponentBase, IDisposable
         return memoryStream.ToArray();
     }
 
+    /// <summary>Reads the entire content of the given stream as a UTF-8 string.</summary>
+    /// <param name="stream">The stream to read.</param>
+    /// <returns>The stream's content as a string.</returns>
     public string ReadStreamAsString(Stream stream)
     {
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd();
     }
 
+    /// <summary>Disposes the loaded content stream if one was opened.</summary>
     public void Dispose()
     {
         Content?.Dispose();

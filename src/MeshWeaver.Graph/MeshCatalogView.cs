@@ -19,7 +19,9 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class MeshCatalogView
 {
+    /// <summary>Area name for the child-nodes DataGrid view (optionally type-filtered).</summary>
     public const string NodesArea = "_Nodes";
+    /// <summary>Area name for the node editor view.</summary>
     public const string EditorArea = "_Editor";
 
     /// <summary>
@@ -142,13 +144,22 @@ public static class MeshCatalogView
 /// </summary>
 public record MeshNodeViewModel
 {
+    /// <summary>The node's full mesh path.</summary>
     public string Path { get; init; } = string.Empty;
+    /// <summary>The node's display name.</summary>
     public string? Name { get; init; }
+    /// <summary>The node's type.</summary>
     public string? NodeType { get; init; }
+    /// <summary>The node's icon value.</summary>
     public string? Icon { get; init; }
 
+    /// <summary>Initializes a new empty view model.</summary>
     public MeshNodeViewModel() { }
 
+    /// <summary>
+    /// Initializes a new view model from a mesh node, copying its path, name, type, and icon.
+    /// </summary>
+    /// <param name="node">The mesh node to project into the view model.</param>
     public MeshNodeViewModel(MeshNode node)
     {
         Path = node.Path;

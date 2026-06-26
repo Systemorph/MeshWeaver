@@ -123,6 +123,7 @@ public static class ThreadNodeType
     /// <param name="contextPath">The namespace/context path (e.g., "User/Roland")</param>
     /// <param name="messageText">First message text — used for name and speaking ID</param>
     /// <param name="createdBy">User ID who creates the thread</param>
+    /// <param name="speakingId">Optional pre-chosen speaking ID for the thread node; when null one is generated from <paramref name="messageText"/>.</param>
     public static MeshNode BuildThreadNode(string contextPath, string messageText, string? createdBy = null,
         string? speakingId = null)
     {

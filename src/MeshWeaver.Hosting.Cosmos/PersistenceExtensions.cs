@@ -19,8 +19,12 @@ namespace MeshWeaver.Hosting.Cosmos;
 public class CosmosStorageAdapterFactory(
     IOptions<CosmosStorageOptions> options) : IStorageAdapterFactory
 {
+    /// <summary>
+    /// The storage-type key under which this factory is registered (<c>"Cosmos"</c>).
+    /// </summary>
     public const string StorageType = "Cosmos";
 
+    /// <inheritdoc />
     public IStorageAdapter Create(GraphStorageConfig config, IServiceProvider serviceProvider)
     {
         var opts = options.Value;

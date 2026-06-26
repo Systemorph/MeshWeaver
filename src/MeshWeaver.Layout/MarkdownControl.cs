@@ -7,6 +7,7 @@
 public record MarkdownControl(object Markdown)
     : UiControl<MarkdownControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
 {
+    /// <summary>File extension used for markdown content nodes (<c>.md</c>).</summary>
     public const string Extension = ".md";
 
     /// <summary>

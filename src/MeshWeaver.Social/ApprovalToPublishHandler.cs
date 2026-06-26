@@ -33,6 +33,15 @@ public sealed class ApprovalToPublishHandler : IHostedService, IDisposable
     private readonly ILogger<ApprovalToPublishHandler>? _logger;
     private IDisposable? _subscription;
 
+    /// <summary>
+    /// Initializes a new instance of the <c>ApprovalToPublishHandler</c> class.
+    /// </summary>
+    /// <param name="hub">Message hub used to read approval nodes reactively.</param>
+    /// <param name="feed">Change feed whose Approval-node events drive this handler.</param>
+    /// <param name="mesh">Mesh service used to resolve node content.</param>
+    /// <param name="bridge">Bridge that resolves an approved node into a publishable snapshot.</param>
+    /// <param name="queue">Queue that the scheduled publisher drains on its next tick.</param>
+    /// <param name="logger">Optional logger for diagnostics.</param>
     public ApprovalToPublishHandler(
         IMessageHub hub,
         IMeshChangeFeed feed,
@@ -49,6 +58,11 @@ public sealed class ApprovalToPublishHandler : IHostedService, IDisposable
         _logger = logger;
     }
 
+    /// <summary>
+    /// Subscribes to the mesh change feed when the host starts.
+    /// </summary>
+    /// <param name="cancellationToken">Token signalling host startup cancellation.</param>
+    /// <returns>A completed task.</returns>
     public System.Threading.Tasks.Task StartAsync(CancellationToken cancellationToken)
     {
         _subscription = _feed.Subscribe(OnChange);
@@ -56,6 +70,11 @@ public sealed class ApprovalToPublishHandler : IHostedService, IDisposable
         return System.Threading.Tasks.Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Disposes the change-feed subscription when the host stops.
+    /// </summary>
+    /// <param name="cancellationToken">Token signalling host shutdown cancellation.</param>
+    /// <returns>A completed task.</returns>
     public System.Threading.Tasks.Task StopAsync(CancellationToken cancellationToken)
     {
         _subscription?.Dispose();
@@ -63,6 +82,7 @@ public sealed class ApprovalToPublishHandler : IHostedService, IDisposable
         return System.Threading.Tasks.Task.CompletedTask;
     }
 
+    /// <summary>Disposes the change-feed subscription.</summary>
     public void Dispose() => _subscription?.Dispose();
 
     private void OnChange(MeshChangeEvent evt)

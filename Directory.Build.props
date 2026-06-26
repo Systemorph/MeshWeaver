@@ -18,13 +18,15 @@
          applies). Removing them would regress the pinned-CVE fix, so the advisory is suppressed; it is
          a restore advisory, not a code-quality warning, and must not fail the -warnaserror gate. -->
     <NoWarn>649;CA2255;NU5104;NU1510;CS1591;CS1573;CS1712;$(NoWarn)</NoWarn>
-    <!-- The -warnaserror merge gate (ReleaseStrategy.md precondition a) targets CODE warnings. CI
-         restores in a SEPARATE step (without -warnaserror) and then builds the already-restored tree
-         with -warnaserror, so NuGet restore advisories (incl. dependency VULNERABILITY warnings
-         NU1901..NU1904, e.g. a transitive CVE) surface during restore but do NOT fail the compiler
-         gate. That is deliberate: a newly-disclosed CVE on an existing transitive must not fail every
-         unrelated PR; fix those with a version override (see the security-override ItemGroup below),
-         not by blocking merges. -->
+    <!-- The -warnaserror merge gate (ReleaseStrategy.md precondition a) targets CODE warnings. NuGet
+         dependency VULNERABILITY advisories (NU1901..NU1904 — a transitive CVE) are dependency-hygiene
+         signals, NOT code quality, and a newly-disclosed CVE on an existing transitive must not fail
+         every unrelated PR. NuGet replays these audit warnings from project.assets.json even on the
+         no-restore build, so they WOULD hit the gate; WarningsNotAsErrors (NOT NoWarn) keeps them
+         VISIBLE as warnings while preventing -warnaserror from promoting them to errors. Fix the CVE
+         with a version override (see the security-override ItemGroup below) or via Dependabot — not by
+         blocking merges. -->
+    <WarningsNotAsErrors>NU1901;NU1902;NU1903;NU1904;$(WarningsNotAsErrors)</WarningsNotAsErrors>
 
     <!-- Generate XML doc files for all assemblies (IntelliSense + NuGet). The doc-completeness
          warning family (CS1591 missing member doc, CS1573 missing param, CS1574 unresolved cref,

@@ -9,8 +9,22 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data;
 
+/// <summary>
+/// Workspace mutation primitives: validates and routes <see cref="DataChangeRequest"/>s to the
+/// owning data-source streams, plus pure <see cref="EntityStore"/> merge/update/read helpers used
+/// by the change pipeline.
+/// </summary>
 public static class WorkspaceOperations
 {
+    /// <summary>
+    /// Validates the creations, updates and deletions in a change request and, if all are valid,
+    /// applies them to the matching data-source streams. Validation failures are logged on the
+    /// activity and the change is not applied.
+    /// </summary>
+    /// <param name="workspace">The workspace to apply the change to.</param>
+    /// <param name="change">The change request to validate and apply.</param>
+    /// <param name="activity">Optional activity for logging validation and update progress; may be null.</param>
+    /// <param name="request">Optional originating message delivery for failure propagation.</param>
     public static void Change(this IWorkspace workspace, DataChangeRequest change, Activity? activity, IMessageDelivery? request)
     {
         var allValid = true;
@@ -274,9 +288,18 @@ public static class WorkspaceOperations
         }
     }
 
+    /// <summary>Merges <paramref name="updated"/> into <paramref name="store"/> using default update options.</summary>
+    /// <param name="store">The base store.</param>
+    /// <param name="updated">The store whose collections are merged in.</param>
+    /// <returns>A new store with the collections merged.</returns>
     public static EntityStore Merge(this EntityStore store, EntityStore updated) =>
         store.Merge(updated, UpdateOptions.Default);
 
+    /// <summary>Merges <paramref name="updated"/> into <paramref name="store"/> using options built from a configurator.</summary>
+    /// <param name="store">The base store.</param>
+    /// <param name="updated">The store whose collections are merged in.</param>
+    /// <param name="options">Configures the update options; when snapshot is set, collections are replaced rather than merged.</param>
+    /// <returns>A new store with the collections merged (or replaced under snapshot semantics).</returns>
     public static EntityStore Merge(this EntityStore store, EntityStore updated,
         Func<UpdateOptions, UpdateOptions> options) =>
         store with
@@ -291,6 +314,11 @@ public static class WorkspaceOperations
             )
         };
 
+    /// <summary>Merges <paramref name="updated"/> into <paramref name="store"/> using the supplied update options.</summary>
+    /// <param name="store">The base store.</param>
+    /// <param name="updated">The store whose collections are merged in.</param>
+    /// <param name="options">The update options; when snapshot is set, collections are replaced rather than merged.</param>
+    /// <returns>A new store with the collections merged (or replaced under snapshot semantics).</returns>
     public static EntityStore Merge(this EntityStore store, EntityStore updated, UpdateOptions options) =>
         store with
         {
@@ -304,6 +332,11 @@ public static class WorkspaceOperations
             )
         };
 
+    /// <summary>Applies an in-place transform to a named collection, creating it if absent.</summary>
+    /// <param name="store">The store to update.</param>
+    /// <param name="collection">The collection name to transform.</param>
+    /// <param name="update">The transform applied to the (possibly empty) collection.</param>
+    /// <returns>A new store with the transformed collection.</returns>
     public static EntityStore Update(
         this EntityStore store,
         string collection,
@@ -317,9 +350,21 @@ public static class WorkspaceOperations
             )
         );
 
+    /// <summary>Updates the part of the store addressed by a workspace reference with a new value, using default options.</summary>
+    /// <param name="store">The store to update.</param>
+    /// <param name="reference">The reference (entity, collection, collections or store) identifying what to update.</param>
+    /// <param name="value">The new value to write at the referenced location.</param>
+    /// <returns>A new store with the referenced location updated.</returns>
     public static EntityStore Update(this EntityStore store, WorkspaceReference reference, object value) =>
         store.Update(reference, value, x => x);
 
+    /// <summary>Updates the part of the store addressed by a workspace reference, dispatching on the reference type.</summary>
+    /// <param name="store">The store to update.</param>
+    /// <param name="reference">The reference identifying what to update; supported kinds are entity, collection, collections, partitioned and whole-store references.</param>
+    /// <param name="value">The new value to write at the referenced location.</param>
+    /// <param name="options">Configures the update options (e.g. merge vs. snapshot) for whole-store merges.</param>
+    /// <returns>A new store with the referenced location updated.</returns>
+    /// <exception cref="NotSupportedException">Thrown for an unsupported reference type.</exception>
     public static EntityStore Update(
         this EntityStore store,
         WorkspaceReference reference,
@@ -347,9 +392,18 @@ public static class WorkspaceOperations
         };
     }
 
+    /// <summary>Reads all entities of type <typeparamref name="T"/> from the store.</summary>
+    /// <typeparam name="T">The entity type to read.</typeparam>
+    /// <param name="store">The store to read from.</param>
+    /// <returns>The entities of the type, or an empty collection if none.</returns>
     public static IReadOnlyCollection<T> GetData<T>(this EntityStore store)
         => store.GetCollection(store.GetCollectionName?.Invoke(typeof(T)) ?? typeof(T).Name)?.Get<T>().ToArray() ?? [];
 
+    /// <summary>Reads a single entity of type <typeparamref name="T"/> from the store by id.</summary>
+    /// <typeparam name="T">The entity type to read.</typeparam>
+    /// <param name="store">The store to read from.</param>
+    /// <param name="id">The id of the entity.</param>
+    /// <returns>The entity, or default if not present.</returns>
     public static T? GetData<T>(this EntityStore store, object id)
         => (T?)store.GetCollection(store.GetCollectionName?.Invoke(typeof(T))
                                    ?? typeof(T).Name)?.Instances.GetValueOrDefault(id)
@@ -382,6 +436,15 @@ public static class WorkspaceOperations
         return workspace.ValidateUpdate(instances);
     }
 
+    /// <summary>
+    /// Merges <paramref name="updated"/> into <paramref name="store"/> and computes the resulting
+    /// per-collection entity updates, returning both the new store and the change set.
+    /// </summary>
+    /// <param name="store">The base store.</param>
+    /// <param name="updated">The store whose collections are merged in.</param>
+    /// <param name="changedBy">Identifier of the writer, recorded on the change set.</param>
+    /// <param name="options">Optional update options; defaults to <see cref="UpdateOptions.Default"/>.</param>
+    /// <returns>The merged store together with the computed entity updates.</returns>
     public static EntityStoreAndUpdates MergeWithUpdates(this EntityStore store, EntityStore updated, string changedBy,
         UpdateOptions? options = null)
     {

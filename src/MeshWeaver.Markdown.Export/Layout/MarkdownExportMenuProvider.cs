@@ -23,6 +23,7 @@ public class MarkdownExportMenuProvider : INodeMenuProvider
     /// <summary>Menu item label for the DOCX export.</summary>
     public const string DocxLabel = "Export to DOCX";
 
+    /// <summary>The menu context this provider contributes to — the Node menu.</summary>
     public string Context => NodeMenuItemsExtensions.NodeMenuContext;
 
     /// <summary>

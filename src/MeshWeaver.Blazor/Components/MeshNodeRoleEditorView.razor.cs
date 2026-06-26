@@ -29,6 +29,11 @@ public partial class MeshNodeRoleEditorView
     private bool _denied;
     private IReadOnlyList<string> _options = Array.Empty<string>();
 
+    /// <summary>
+    /// Reads <c>NodePath</c>, <c>RoleIndex</c>, <c>CanEdit</c>, and role options from the
+    /// view-model, then subscribes to the node stream so the displayed role and Deny flag
+    /// stay live with the underlying <c>AccessAssignment</c> node.
+    /// </summary>
     protected override void BindData()
     {
         base.BindData();

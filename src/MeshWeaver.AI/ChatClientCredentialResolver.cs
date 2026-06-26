@@ -20,6 +20,7 @@ namespace MeshWeaver.AI;
 /// </summary>
 public record CredentialResolution(string? Endpoint, string? ApiKey, string Source)
 {
+    /// <summary>Sentinel result meaning no credential could be resolved — the caller falls back to its <c>IOptions</c> configuration binding.</summary>
     public static readonly CredentialResolution Missing = new(null, null, "missing");
 }
 
@@ -102,6 +103,11 @@ public sealed class ChatClientCredentialResolver : IDisposable
     // timeouts. Tracked here and torn down in Dispose() so disposal collapses that window to zero.
     private IDisposable? refreshSubscription;
 
+    /// <summary>
+    /// Initialises the resolver with its hub, resolving the optional logger and provider-key
+    /// protector from the hub's service provider.
+    /// </summary>
+    /// <param name="hub">The message hub whose workspace and services back the live credential snapshot.</param>
     public ChatClientCredentialResolver(IMessageHub hub)
     {
         this.hub = hub;
@@ -334,6 +340,10 @@ public sealed class ChatClientCredentialResolver : IDisposable
         return def?.Provider;
     }
 
+    /// <summary>
+    /// Tears down the persistent snapshot subscription and any in-flight authoritative refresh so
+    /// their timers stop GC-rooting the resolver (and the mesh hub it references). Idempotent.
+    /// </summary>
     public void Dispose()
     {
         if (disposed) return;

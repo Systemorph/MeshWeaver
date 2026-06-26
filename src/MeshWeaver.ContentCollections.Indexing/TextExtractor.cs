@@ -28,6 +28,13 @@ public sealed class TextExtractor : ITextExtractor
         _logger = logger ?? NullLogger<TextExtractor>.Instance;
     }
 
+    /// <summary>
+    /// Extracts plain text from the file bytes, dispatching by the file extension and running the
+    /// CPU-bound parse off the calling scheduler via the I/O pool. Unknown/binary formats yield empty text.
+    /// </summary>
+    /// <param name="fileName">The file name; its extension selects the decoder.</param>
+    /// <param name="bytes">The raw file content to decode.</param>
+    /// <returns>A cold observable emitting the extracted text (empty for unsupported formats).</returns>
     public IObservable<string> ExtractText(string fileName, byte[] bytes)
     {
         var extension = Path.GetExtension(fileName).ToLowerInvariant();

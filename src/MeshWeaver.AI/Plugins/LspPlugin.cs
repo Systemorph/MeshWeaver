@@ -33,6 +33,15 @@ public class LspPlugin(IMessageHub hub, IAgentChat chat)
         hub.ServiceProvider.GetRequiredService<IMeshLanguageService>();
     private readonly AccessService? accessService = hub.ServiceProvider.GetService<AccessService>();
 
+    /// <summary>
+    /// Agent tool: speculative pre-flight Roslyn check. Compiles the NodeType's current source set
+    /// with one file substituted by <paramref name="proposedCode"/> and returns all diagnostics, with
+    /// no emit, recycle, or side effects.
+    /// </summary>
+    /// <param name="nodeTypePath">Path to the NodeType (e.g. <c>@ACME/Story</c>).</param>
+    /// <param name="sourcePath">Path of the Source Code node being edited; added as a new file if not in the current source set.</param>
+    /// <param name="proposedCode">The proposed full source text for that file.</param>
+    /// <returns>A JSON string <c>{ok, diagnostics:[...]}</c>; <c>ok</c> is true when the substituted source compiles without errors.</returns>
     [Description(@"PRE-FLIGHT CHECK before committing a source change to a NodeType. Runs Roslyn against the NodeType's current source set with ONE source file substituted by `proposedCode`, returns all diagnostics (errors + warnings). No emit, no Recycle, no side effects — purely speculative.
 
 Use this in the Coder edit loop: edit a Source/*.cs file in your head → `LspCheckNode` → if diagnostics, fix → repeat → only then `Patch` + `Compile`. Eliminates the costly blind-patch / Compile / fix cycle.
@@ -49,6 +58,12 @@ Returns `{ok: true, diagnostics: []}` when the substituted source compiles clean
             .Select(diagnostics => FormatDiagnosticsJson(diagnostics))
             .FirstAsync().ToTask();
 
+    /// <summary>
+    /// Agent tool: enumerates every Roslyn diagnostic (errors, warnings, info) from the NodeType's
+    /// current cached compilation, with source locations — without re-compiling.
+    /// </summary>
+    /// <param name="nodeTypePath">Path to the NodeType (e.g. <c>@ACME/Story</c>).</param>
+    /// <returns>A JSON string <c>{ok, diagnostics:[...]}</c>; an empty list with <c>ok:true</c> means clean.</returns>
     [Description(@"Returns Roslyn diagnostics from the NodeType's CURRENT cached compilation — distinct from `GetDiagnostics` which only reports compile status (Ok/Error/Compiling). This enumerates every diagnostic in the compilation (errors + warnings + info) with source location, so you can see exactly what's wrong without re-compiling.
 
 Returns `{ok: true|false, diagnostics: [...]}` — same shape as `LspCheckNode`. Empty `diagnostics` plus `ok:true` means clean.")]
@@ -59,6 +74,15 @@ Returns `{ok: true|false, diagnostics: [...]}` — same shape as `LspCheckNode`.
             .Select(diagnostics => FormatDiagnosticsJson(diagnostics))
             .FirstAsync().ToTask();
 
+    /// <summary>
+    /// Agent tool: Roslyn QuickInfo (hover) at a position in a Source Code file, returning the
+    /// symbol's signature and XML doc summary as markdown.
+    /// </summary>
+    /// <param name="nodeTypePath">Path to the NodeType (e.g. <c>@ACME/Story</c>).</param>
+    /// <param name="sourcePath">Path of the Source Code node.</param>
+    /// <param name="line">0-based line number.</param>
+    /// <param name="character">0-based character offset within the line.</param>
+    /// <returns>A JSON string <c>{markdown:"..."}</c> when a symbol resolves, or <c>{}</c> when nothing is at the position.</returns>
     [Description(@"Roslyn QuickInfo (hover tooltip) at a position in a Source Code file. Returns the symbol's signature and XML doc summary as markdown.
 
 Returns `{markdown: ""..."" }` when a symbol resolves at the position, or `{}` when nothing is there. Positions are 0-based (LSP convention) — line 0 is the first line.")]
@@ -76,6 +100,16 @@ Returns `{markdown: ""..."" }` when a symbol resolves at the position, or `{}` w
                 hub.JsonSerializerOptions))
             .FirstAsync().ToTask();
 
+    /// <summary>
+    /// Agent tool: Roslyn code completions at a position in a Source Code file, returning up to
+    /// <paramref name="max"/> suggestions sorted by Roslyn's relevance.
+    /// </summary>
+    /// <param name="nodeTypePath">Path to the NodeType (e.g. <c>@ACME/Story</c>).</param>
+    /// <param name="sourcePath">Path of the Source Code node.</param>
+    /// <param name="line">0-based line number.</param>
+    /// <param name="character">0-based character offset within the line.</param>
+    /// <param name="max">Maximum number of completions to return; default 20.</param>
+    /// <returns>A JSON string <c>{items:[{label, kind, insertText, detail?, sortText?}, ...]}</c>; empty <c>items</c> means no completions.</returns>
     [Description(@"Roslyn code completions at a position in a Source Code file. Returns up to `max` suggestions with kind / insert text / detail / sort key, sorted by Roslyn's relevance.
 
 Returns `{items: [{label, kind, insertText, detail?, sortText?}, ...]}`. `kind` is the LSP completion-item kind name (`Method`, `Class`, `Field`, etc.). Empty `items` means no completions at that position. Positions are 0-based.")]
@@ -139,6 +173,10 @@ Returns `{items: [{label, kind, insertText, detail?, sortText?}, ...]}`. `kind` 
             hub.JsonSerializerOptions);
     }
 
+    /// <summary>
+    /// Builds the LSP agent tools: speculative check, diagnostics, hover, and completions.
+    /// </summary>
+    /// <returns>The plugin's <see cref="AITool"/> instances.</returns>
     public IList<AITool> CreateTools()
     {
         return

@@ -8,6 +8,9 @@ namespace MeshWeaver.Hosting.Persistence;
 /// </summary>
 public class FileSystemStorageAdapterFactory : IStorageAdapterFactory
 {
+    /// <summary>
+    /// The storage type discriminator this factory handles (<c>"FileSystem"</c>).
+    /// </summary>
     public const string StorageType = "FileSystem";
 
     /// <summary>
@@ -16,6 +19,7 @@ public class FileSystemStorageAdapterFactory : IStorageAdapterFactory
     public static Func<JsonSerializerOptions, JsonSerializerOptions> FormattedJsonModifier =>
         options => new JsonSerializerOptions(options) { WriteIndented = true };
 
+    /// <inheritdoc />
     public IStorageAdapter Create(GraphStorageConfig config, IServiceProvider serviceProvider)
     {
         var basePath = config.BasePath

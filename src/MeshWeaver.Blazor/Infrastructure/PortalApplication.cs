@@ -44,8 +44,17 @@ namespace MeshWeaver.Blazor.Infrastructure;
 /// </summary>
 public class PortalApplication : IDisposable
 {
+    /// <summary>The per-circuit portal hub created or reused for this Blazor circuit.</summary>
     public IMessageHub Hub { get; }
 
+    /// <summary>
+    /// Creates or reuses a portal hub keyed to the current Blazor circuit or user identity.
+    /// </summary>
+    /// <param name="hub">The parent mesh hub; the portal hub is registered as a hosted child hub.</param>
+    /// <param name="routingService">Wired into the portal hub to register the navigation stream.</param>
+    /// <param name="navigationService">Handles inbound <c>NavigationRequest</c> messages from the portal hub.</param>
+    /// <param name="circuitContextAccessor">Supplies the stable circuit id and the circuit user for access-context stamping.</param>
+    /// <param name="errorSink">Receives un-awaited post failures from the portal hub and surfaces them as GUI modals.</param>
     public PortalApplication(
         IMessageHub hub,
         IRoutingService routingService,
@@ -95,6 +104,17 @@ public class PortalApplication : IDisposable
                         (cc, ccc) => ccc.Invoke(cc)))!;
     }
 
+    /// <summary>
+    /// Applies the standard portal configuration to a hub configuration: error reporting, circuit-user
+    /// access-context stamping, markdown-export type registration, routing, content collections,
+    /// and a navigation handler.
+    /// </summary>
+    /// <param name="config">The base hub configuration to extend.</param>
+    /// <param name="routingService">Registered to provide the navigation stream on hub initialization.</param>
+    /// <param name="navigationService">Handles <c>NavigationRequest</c> messages by calling <c>NavigateTo</c>.</param>
+    /// <param name="circuitUser">When non-null, a post-pipeline step stamps this user on every outbound message that lacks an access context.</param>
+    /// <param name="errorSink">When non-null, un-awaited delivery failures are pushed to this sink instead of being silently logged.</param>
+    /// <returns>The modified hub configuration.</returns>
     public static MessageHubConfiguration DefaultPortalConfig(MessageHubConfiguration config,
         IRoutingService routingService, INavigationService navigationService,
         AccessContext? circuitUser = null, PortalErrorSink? errorSink = null)
@@ -144,6 +164,10 @@ public class PortalApplication : IDisposable
             });
     }
 
+    /// <summary>
+    /// No-op: the portal hub's lifetime is managed by the parent mesh hub, not by this wrapper.
+    /// Disposing individual wrappers within the same circuit must not tear down the shared hub.
+    /// </summary>
     public void Dispose()
     {
         // Do NOT dispose Hub here. The hub is shared across every PortalApplication

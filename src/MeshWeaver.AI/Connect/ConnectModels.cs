@@ -5,7 +5,9 @@ namespace MeshWeaver.AI.Connect;
 /// <summary>Which co-hosted CLI a Connect session authenticates.</summary>
 public enum ConnectProvider
 {
+    /// <summary>The Anthropic Claude Code CLI (paste-code login flow).</summary>
     ClaudeCode,
+    /// <summary>The GitHub Copilot CLI (device-flow login).</summary>
     Copilot
 }
 
@@ -47,8 +49,11 @@ public abstract record ConnectStatus
 /// </summary>
 public sealed class ConnectSession : IDisposable
 {
+    /// <summary>Unique id for this login session.</summary>
     public required string SessionId { get; init; }
+    /// <summary>Path identifying the user that owns this session.</summary>
     public required string OwnerPath { get; init; }
+    /// <summary>Which CLI this session authenticates.</summary>
     public required ConnectProvider Provider { get; init; }
 
     /// <summary>Per-user CLI config dir (e.g. {ConfigDirRoot}/{userId}/.claude) the login runs under.</summary>
@@ -63,6 +68,10 @@ public sealed class ConnectSession : IDisposable
     /// <summary>The 5-minute hard-timeout subscription; disposed on completion/cancel.</summary>
     public IDisposable? TimeoutSubscription { get; set; }
 
+    /// <summary>
+    /// Tears down the live login: cancels the timeout, kills the CLI process tree, and disposes the
+    /// process and any provider client. Best-effort — never throws.
+    /// </summary>
     public void Dispose()
     {
         try { TimeoutSubscription?.Dispose(); } catch { /* best effort */ }

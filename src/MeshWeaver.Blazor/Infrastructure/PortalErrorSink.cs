@@ -25,6 +25,7 @@ public sealed class PortalErrorSink : IDisposable
         catch { /* a faulting subscriber must never wedge the hub posting the failure */ }
     }
 
+    /// <summary>Completes the error stream and releases the underlying subject.</summary>
     public void Dispose()
     {
         try { errors.OnCompleted(); } catch { /* ignore */ }

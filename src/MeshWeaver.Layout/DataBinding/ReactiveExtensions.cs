@@ -4,6 +4,11 @@ using System.Reactive.Linq;
 
 namespace MeshWeaver.Layout.DataBinding
 {
+    /// <summary>
+    /// Provides custom Rx extension methods for time-based filtering: a trailing-edge debounce that
+    /// always delivers the final value, and a leading-edge throttle that emits immediately then suppresses
+    /// for a cooldown period while guaranteeing the last suppressed value is eventually delivered.
+    /// </summary>
     public static class ReactiveExtensions
     {
         /// <summary>

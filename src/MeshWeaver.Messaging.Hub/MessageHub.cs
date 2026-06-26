@@ -17,14 +17,30 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Messaging;
 
+/// <summary>
+/// The concrete <see cref="IMessageHub"/>: a single-threaded actor that processes
+/// <see cref="IMessageDelivery"/> messages serially through a registered rule chain. Owns its
+/// hosted child hubs, correlates request/response via AsyncSubject-backed callbacks, and runs a
+/// reactive initialization and a phased reactive disposal (Quiescing → DisposeHostedHubs → ShutDown).
+/// Sealed; constructed by the framework, not directly by application code.
+/// </summary>
 public sealed class MessageHub : IMessageHub
 {
+    /// <summary>This hub's address (its routing/partition key), taken from <see cref="Configuration"/>.</summary>
     public Address Address => Configuration.Address;
 
 
+    /// <summary>
+    /// Schedules <paramref name="action"/> onto the hub's action block by posting an execution
+    /// request, so it runs serially with message handling; its async leaf runs off the action block.
+    /// Faults are routed to <paramref name="exceptionCallback"/>.
+    /// </summary>
+    /// <param name="action">The work to run, receiving the hub's cancellation token.</param>
+    /// <param name="exceptionCallback">Invoked with any exception thrown by <paramref name="action"/>.</param>
     public void InvokeAsync(Func<CancellationToken, Task> action, Func<Exception, Task> exceptionCallback) =>
         Post(new ExecutionRequest(action, exceptionCallback));
 
+    /// <summary>The DI service provider scoped to this hub.</summary>
     public IServiceProvider ServiceProvider { get; }
 
 
@@ -111,6 +127,7 @@ public sealed class MessageHub : IMessageHub
     }
 
     private readonly ILogger logger;
+    /// <summary>The immutable configuration this hub was built from.</summary>
     public MessageHubConfiguration Configuration { get; }
 
     /// <summary>
@@ -122,6 +139,7 @@ public sealed class MessageHub : IMessageHub
     private readonly HostedHubsCollection hostedHubs;
     private readonly AccessService accessService;
 
+    /// <summary>Monotonic counter, incremented once per message processed; used for ordering and disposal sequencing.</summary>
     public long Version { get; private set; }
 
     /// <summary>
@@ -143,6 +161,7 @@ public sealed class MessageHub : IMessageHub
         Version = version;
     }
 
+    /// <summary>The hub's current lifecycle phase; advances through start, quiescing, and the disposal phases.</summary>
     public MessageHubRunLevel RunLevel { get; private set; }
 
     /// <summary>
@@ -170,7 +189,12 @@ public sealed class MessageHub : IMessageHub
     /// scope that may already be disposed.
     /// </summary>
     private readonly Address? parentAddress;
+    /// <summary>The hub's type registry, mapping message type names to CLR types for (de)serialization and routing.</summary>
     public ITypeRegistry TypeRegistry { get; }
+    /// <summary>
+    /// Transitions the hub to <see cref="MessageHubRunLevel.Started"/> (idempotent) and completes the
+    /// <see cref="Started"/> task. Called by the framework once initialization gates are open.
+    /// </summary>
     public void Start()
     {
         if (RunLevel < MessageHubRunLevel.Started)
@@ -180,11 +204,20 @@ public sealed class MessageHub : IMessageHub
         }
     }
 
+    /// <summary>
+    /// Faults the <see cref="Started"/> task with <paramref name="error"/> so dependents observing
+    /// startup (e.g. data-source initialization) also fault. Called when a stream errors during init.
+    /// </summary>
+    /// <param name="error">The exception that caused startup to fail.</param>
     public void FailStartup(Exception error)
     {
         hasStarted.TrySetException(error);
     }
 
+    /// <summary>
+    /// Cancels the currently-executing handler's cancellation token and rolls a fresh one for
+    /// subsequent messages, aborting a long-running handler (e.g. streaming) without disposing the hub.
+    /// </summary>
     public void CancelCurrentExecution()
     {
         messageService.CancelExecution();
@@ -305,6 +338,16 @@ public sealed class MessageHub : IMessageHub
     private readonly ThreadSafeLinkedList<AsyncDelivery> rules = new();
     private readonly Lock messageHandlerRegistrationLock = new();
     private readonly Lock typeRegistryLock = new();
+    /// <summary>
+    /// Constructs the hub: wires DI, the type registry, the message service, JSON options, the
+    /// built-in lifecycle handlers (dispose / shutdown / ping / initialize) and the configured
+    /// message handlers. Message processing is started separately (by the configuration's Build,
+    /// after synchronous buildup completes), not from this constructor.
+    /// </summary>
+    /// <param name="serviceProvider">The DI service provider scoped to this hub.</param>
+    /// <param name="hostedHubs">The collection that owns this hub's hosted child hubs.</param>
+    /// <param name="configuration">The configuration describing address, handlers, buildup/dispose actions and timeouts.</param>
+    /// <param name="parentHub">The parent hub, or <c>null</c> for a root hub; used for routing and inherited JSON options.</param>
     public MessageHub(
         IServiceProvider serviceProvider,
         HostedHubsCollection hostedHubs,
@@ -624,6 +667,11 @@ public sealed class MessageHub : IMessageHub
         return result;
     }
 
+    /// <summary>
+    /// Opens the named initialization gate on the message service, releasing messages deferred behind it.
+    /// </summary>
+    /// <param name="name">The name of the gate to open.</param>
+    /// <returns><c>true</c> if the gate existed and was opened; <c>false</c> if it was already open or not found.</returns>
     public bool OpenGate(string name)
     {
         return messageService.OpenGate(name);
@@ -784,6 +832,9 @@ public sealed class MessageHub : IMessageHub
     }
 
     private readonly TaskCompletionSource hasStarted = new();
+    /// <summary>
+    /// Completes when the hub has finished initialization; faults via <see cref="FailStartup"/> if startup failed.
+    /// </summary>
     public Task Started => hasStarted.Task;
 
 
@@ -1040,6 +1091,14 @@ public sealed class MessageHub : IMessageHub
 
     Address IMessageHub.Address => Address;
 
+    /// <summary>
+    /// Posts a message into the mesh via the message service for routing/handling, applying optional
+    /// delivery options. The side effect is the dispatch itself.
+    /// </summary>
+    /// <typeparam name="TMessage">The message payload type.</typeparam>
+    /// <param name="message">The message payload to send.</param>
+    /// <param name="configure">Optional configuration of the delivery (target, sender, response-correlation, message id).</param>
+    /// <returns>The created delivery wrapping <paramref name="message"/>, or <c>null</c> if it was not posted.</returns>
     public IMessageDelivery<TMessage>? Post<TMessage>(
         TMessage message,
         Func<PostOptions, PostOptions>? configure = null
@@ -1070,6 +1129,12 @@ public sealed class MessageHub : IMessageHub
         return result;
     }
 
+    /// <summary>
+    /// Inbound entry point: marks <paramref name="delivery"/> as Submitted and routes it onto the
+    /// hub's action block for processing. Called by the routing layer, not application code.
+    /// </summary>
+    /// <param name="delivery">The routed delivery to process on this hub.</param>
+    /// <returns>The delivery in its post-routing state.</returns>
     public IMessageDelivery DeliverMessage(IMessageDelivery delivery)
     {
         // Per-inbound hot path. Cache type name + gate by IsEnabled.
@@ -1090,6 +1155,14 @@ public sealed class MessageHub : IMessageHub
         return result;
     }
 
+    /// <summary>
+    /// Resolves (and, depending on <paramref name="create"/>, creates) the hosted child hub at
+    /// <paramref name="address"/>, applying <paramref name="config"/> to its configuration when created.
+    /// </summary>
+    /// <param name="address">The address of the hosted hub.</param>
+    /// <param name="config">Transform applied to the hosted hub's configuration when it is created.</param>
+    /// <param name="create">Whether to create the hub if it does not yet exist.</param>
+    /// <returns>The hosted hub, or <c>null</c> if it does not exist and <paramref name="create"/> is <see cref="HostedHubCreation.Never"/>.</returns>
     public IMessageHub? GetHostedHub(
         Address address,
         Func<MessageHubConfiguration, MessageHubConfiguration> config,
@@ -1100,6 +1173,13 @@ public sealed class MessageHub : IMessageHub
         return messageHub;
     }
 
+    /// <summary>
+    /// Couples a synchronous cleanup to the hub's lifetime by adding it to the hub's composite
+    /// disposable; disposed during the ShutDown phase. A registrant added after disposal has begun
+    /// is disposed immediately, so late registrations never leak.
+    /// </summary>
+    /// <param name="disposable">The resource to dispose when the hub shuts down.</param>
+    /// <returns>This hub, for chaining.</returns>
     public IMessageHub RegisterForDisposal(IDisposable disposable)
     {
         // Normal subscription logic: hold the IDisposable in the hub's
@@ -1110,9 +1190,22 @@ public sealed class MessageHub : IMessageHub
         return this;
     }
 
+    /// <summary>
+    /// Couples a synchronous cleanup callback (receiving this hub) to the hub's lifetime; runs during
+    /// the ShutDown phase. Implemented by wrapping the callback in a disposable.
+    /// </summary>
+    /// <param name="disposeAction">The cleanup to run at shutdown, receiving this hub.</param>
+    /// <returns>This hub, for chaining.</returns>
     public IMessageHub RegisterForDisposal(Action<IMessageHub> disposeAction)
         => RegisterForDisposal(System.Reactive.Disposables.Disposable.Create(() => disposeAction(this)));
 
+    /// <summary>
+    /// Registers a reactive cleanup returning <see cref="IObservable{T}"/> (Unit) for I/O-performing
+    /// teardown. Held in an immutable list, composed into one chain at dispose and subscribed so its
+    /// async leaves run on the mesh IO pool.
+    /// </summary>
+    /// <param name="disposeAction">The reactive cleanup, receiving this hub and returning a Unit observable.</param>
+    /// <returns>This hub, for chaining.</returns>
     public IMessageHub RegisterForDisposal(Func<IMessageHub, IObservable<Unit>> disposeAction)
     {
         // Reactive dispose actions are kept in an immutable list (NOT a ConcurrentBag)
@@ -1124,8 +1217,13 @@ public sealed class MessageHub : IMessageHub
         return this;
     }
 
+    /// <summary>The JSON serialization options used for messages on this hub (built from the parent hub's options).</summary>
     public JsonSerializerOptions JsonSerializerOptions { get; }
 
+    /// <summary>
+    /// <c>true</c> from the moment <see cref="Dispose"/> begins. The reactive, Task-free
+    /// "is this hub shutting down?" probe; observe <see cref="DisposalCompleted"/> for completion.
+    /// </summary>
     public bool IsDisposing => disposalStarted;
     private volatile bool disposalStarted;
 
@@ -1181,6 +1279,12 @@ public sealed class MessageHub : IMessageHub
 
     private readonly Lock locker = new();
 
+    /// <summary>
+    /// Begins the hub's reactive, phased teardown (idempotent). Cancels any in-flight handler, posts
+    /// the Quiescing shutdown request that drives the Quiescing → DisposeHostedHubs → ShutDown state
+    /// machine, and arms a watchdog that force-completes disposal if that path ever wedges. Returns
+    /// immediately; observe <see cref="DisposalCompleted"/> for completion.
+    /// </summary>
     public void Dispose()
     {
         var totalStopwatch = Stopwatch.StartNew();
@@ -1324,6 +1428,12 @@ public sealed class MessageHub : IMessageHub
     /// </summary>
     private const int MaxHostedHubRecursionDepth = 32;
 
+    /// <summary>
+    /// <c>true</c> if this hub or any hosted hub (recursively) hit the Quiescing-phase timeout — i.e.
+    /// had response callbacks still pending when the dispose drain budget elapsed. Tests treat this as
+    /// a dispose failure (a leaked subscription that never received its reply).
+    /// </summary>
+    /// <returns><c>true</c> if any hub in the tree timed out during Quiescing.</returns>
     public bool AnyHubQuiescingTimedOut() => AnyHubQuiescingTimedOut(depth: 0);
 
     private bool AnyHubQuiescingTimedOut(int depth)
@@ -1335,6 +1445,11 @@ public sealed class MessageHub : IMessageHub
         return false;
     }
 
+    /// <summary>
+    /// Builds a concise, indented summary of the hubs (and their pending callbacks) that hit the
+    /// Quiescing timeout, for a dispose-failure message. Empty when none timed out.
+    /// </summary>
+    /// <returns>The multi-line summary, or an empty string when no hub timed out.</returns>
     public string GetQuiescingTimeoutSummary()
     {
         var sb = new System.Text.StringBuilder();
@@ -1815,11 +1930,24 @@ public sealed class MessageHub : IMessageHub
 
     private readonly ConcurrentDictionary<(string Conext, Type Type), object?> properties = new();
 
+    /// <summary>
+    /// Stores a value in the per-hub property bag, keyed by (<paramref name="context"/>, typeof(T)).
+    /// Caches instance state on the hub without a static dictionary; the entry lives with the hub.
+    /// </summary>
+    /// <typeparam name="T">The value type, part of the bag key.</typeparam>
+    /// <param name="obj">The value to store.</param>
+    /// <param name="context">An optional discriminator allowing multiple entries of the same type.</param>
     public void Set<T>(T obj, string context = "")
     {
         properties[(context, typeof(T))] = obj;
     }
 
+    /// <summary>
+    /// Reads the value previously stored via <see cref="Set{T}"/> for (<paramref name="context"/>, typeof(T)).
+    /// </summary>
+    /// <typeparam name="T">The value type, part of the bag key.</typeparam>
+    /// <param name="context">The discriminator used when the value was stored.</param>
+    /// <returns>The stored value, or <c>default</c> when no entry exists.</returns>
     public T Get<T>(string context = "")
     {
         properties.TryGetValue((context, typeof(T)), out var ret);
@@ -1854,12 +1982,25 @@ public sealed class MessageHub : IMessageHub
 
 
     #region Registry
+    /// <summary>Registers a synchronous handler for messages of type <typeparamref name="TMessage"/> (no filter).</summary>
+    /// <typeparam name="TMessage">The message type the handler processes.</typeparam>
+    /// <param name="action">The synchronous delivery handler.</param>
+    /// <returns>A disposable that unregisters the handler.</returns>
     public IDisposable Register<TMessage>(SyncDelivery<TMessage> action) =>
         Register(action, _ => true);
 
+    /// <summary>Registers an asynchronous (observable-returning) handler for messages of type <typeparamref name="TMessage"/> (no filter).</summary>
+    /// <typeparam name="TMessage">The message type the handler processes.</typeparam>
+    /// <param name="action">The reactive delivery handler.</param>
+    /// <returns>A disposable that unregisters the handler.</returns>
     public IDisposable Register<TMessage>(AsyncDelivery<TMessage> action) =>
         Register(action, _ => true);
 
+    /// <summary>Registers a synchronous handler for messages of type <typeparamref name="TMessage"/> that pass <paramref name="filter"/>.</summary>
+    /// <typeparam name="TMessage">The message type the handler processes.</typeparam>
+    /// <param name="action">The synchronous delivery handler.</param>
+    /// <param name="filter">Predicate selecting which deliveries the handler receives.</param>
+    /// <returns>A disposable that unregisters the handler.</returns>
     public IDisposable Register<TMessage>(
         SyncDelivery<TMessage> action,
         DeliveryFilter<TMessage> filter
@@ -1868,6 +2009,15 @@ public sealed class MessageHub : IMessageHub
         return Register((d, _) => Observable.Return(action(d)), filter);
     }
 
+    /// <summary>
+    /// Registers an asynchronous handler that is INHERITED — appended to the END of the rule chain (so
+    /// it runs after the hub's own rules), passing through deliveries that don't match
+    /// <typeparamref name="TMessage"/> or the optional <paramref name="filter"/>.
+    /// </summary>
+    /// <typeparam name="TMessage">The message type the handler processes.</typeparam>
+    /// <param name="action">The reactive delivery handler.</param>
+    /// <param name="filter">Optional predicate selecting which deliveries the handler receives; <c>null</c> matches all of the type.</param>
+    /// <returns>A disposable that unregisters the handler.</returns>
     public IDisposable RegisterInherited<TMessage>(
         AsyncDelivery<TMessage> action,
         DeliveryFilter<TMessage>? filter = null
@@ -1883,9 +2033,21 @@ public sealed class MessageHub : IMessageHub
         return new AnonymousDisposable(() => rules.Remove(node));
     }
 
+    /// <summary>
+    /// Registers a non-generic synchronous handler that receives every delivery (it inspects the
+    /// message type itself).
+    /// </summary>
+    /// <param name="delivery">The synchronous delivery handler.</param>
+    /// <returns>A disposable that unregisters the handler.</returns>
     public IDisposable Register(SyncDelivery delivery) =>
         Register((d, _) => Observable.Return(delivery(d)));
 
+    /// <summary>
+    /// Registers a non-generic asynchronous handler at the FRONT of the rule chain; it receives every
+    /// delivery and returns an observable of the transformed delivery.
+    /// </summary>
+    /// <param name="delivery">The reactive delivery handler.</param>
+    /// <returns>A disposable that unregisters the handler.</returns>
     public IDisposable Register(AsyncDelivery delivery)
     {
         var node = new LinkedListNode<AsyncDelivery>(delivery);
@@ -1893,11 +2055,28 @@ public sealed class MessageHub : IMessageHub
         return new AnonymousDisposable(() => rules.Remove(node));
     }
 
+    /// <summary>
+    /// Synchronous overload of the inherited registration: registers an end-of-chain handler for
+    /// messages of type <typeparamref name="TMessage"/> matching the optional <paramref name="filter"/>.
+    /// </summary>
+    /// <typeparam name="TMessage">The message type the handler processes.</typeparam>
+    /// <param name="action">The synchronous delivery handler.</param>
+    /// <param name="filter">Optional predicate selecting which deliveries the handler receives; <c>null</c> matches all of the type.</param>
+    /// <returns>A disposable that unregisters the handler.</returns>
     public IDisposable RegisterInherited<TMessage>(
         SyncDelivery<TMessage> action,
         DeliveryFilter<TMessage>? filter = null
     ) => RegisterInherited((d, _) => Observable.Return(action(d)), filter);
 
+    /// <summary>
+    /// Registers an asynchronous handler for messages of type <typeparamref name="TMessage"/> that
+    /// target this hub's address and pass <paramref name="filter"/>. Also registers the message type
+    /// (and related types) in the type registry.
+    /// </summary>
+    /// <typeparam name="TMessage">The message type the handler processes.</typeparam>
+    /// <param name="action">The reactive delivery handler.</param>
+    /// <param name="filter">Predicate selecting which deliveries the handler receives.</param>
+    /// <returns>A disposable that unregisters the handler.</returns>
     public IDisposable Register<TMessage>(
         AsyncDelivery<TMessage> action,
         DeliveryFilter<TMessage> filter
@@ -1915,12 +2094,26 @@ public sealed class MessageHub : IMessageHub
         );
     }
 
+    /// <summary>
+    /// Registers a non-generic asynchronous handler for messages assignable to <paramref name="tMessage"/>,
+    /// registering that type in the type registry.
+    /// </summary>
+    /// <param name="tMessage">The message type (by runtime <see cref="Type"/>) the handler processes.</param>
+    /// <param name="action">The reactive delivery handler.</param>
+    /// <returns>A disposable that unregisters the handler.</returns>
     public IDisposable Register(Type tMessage, AsyncDelivery action)
     {
         WithTypeAndRelatedTypesFor(tMessage);
         return Register(action, d => tMessage.IsInstanceOfType(d.Message));
     }
 
+    /// <summary>
+    /// Registers a non-generic asynchronous handler at the FRONT of the rule chain, invoked only for
+    /// deliveries that pass <paramref name="filter"/> (non-matching deliveries pass through unchanged).
+    /// </summary>
+    /// <param name="action">The reactive delivery handler.</param>
+    /// <param name="filter">Predicate selecting which deliveries the handler receives.</param>
+    /// <returns>A disposable that unregisters the handler.</returns>
     public IDisposable Register(AsyncDelivery action, DeliveryFilter filter)
     {
         IObservable<IMessageDelivery> Rule
@@ -1946,9 +2139,23 @@ public sealed class MessageHub : IMessageHub
         return Observable.Return(delivery);
     }
 
+    /// <summary>
+    /// Registers a non-generic synchronous handler for messages assignable to <paramref name="tMessage"/> (no filter).
+    /// </summary>
+    /// <param name="tMessage">The message type (by runtime <see cref="Type"/>) the handler processes.</param>
+    /// <param name="action">The synchronous delivery handler.</param>
+    /// <returns>A disposable that unregisters the handler.</returns>
     public IDisposable Register(Type tMessage, SyncDelivery action) =>
         Register(tMessage, action, _ => true);
 
+    /// <summary>
+    /// Registers a non-generic synchronous handler for messages assignable to <paramref name="tMessage"/>
+    /// that also pass <paramref name="filter"/>.
+    /// </summary>
+    /// <param name="tMessage">The message type (by runtime <see cref="Type"/>) the handler processes.</param>
+    /// <param name="action">The synchronous delivery handler.</param>
+    /// <param name="filter">Predicate selecting which deliveries the handler receives.</param>
+    /// <returns>A disposable that unregisters the handler.</returns>
     public IDisposable Register(Type tMessage, SyncDelivery action, DeliveryFilter filter) =>
         Register(
             tMessage,
@@ -1961,6 +2168,14 @@ public sealed class MessageHub : IMessageHub
         );
 
 
+    /// <summary>
+    /// Registers a non-generic asynchronous handler for messages assignable to <paramref name="tMessage"/>
+    /// that also pass <paramref name="filter"/>, registering the type (and related types) in the type registry.
+    /// </summary>
+    /// <param name="tMessage">The message type (by runtime <see cref="Type"/>) the handler processes.</param>
+    /// <param name="action">The reactive delivery handler.</param>
+    /// <param name="filter">Predicate selecting which deliveries the handler receives.</param>
+    /// <returns>A disposable that unregisters the handler.</returns>
     public IDisposable Register(Type tMessage, AsyncDelivery action, DeliveryFilter filter)
     {
         WithTypeAndRelatedTypesFor(tMessage);

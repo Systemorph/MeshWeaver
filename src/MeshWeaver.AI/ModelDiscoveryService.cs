@@ -49,6 +49,11 @@ public sealed class ModelDiscoveryService
     private readonly IMessageHub meshHub;
     private readonly ILogger<ModelDiscoveryService>? logger;
 
+    /// <summary>
+    /// Creates the discovery service anchored to the supplied mesh hub.
+    /// </summary>
+    /// <param name="meshHub">The long-lived top-level mesh hub whose workspace backs every synced
+    /// discovery query; its service provider also supplies the optional logger.</param>
     public ModelDiscoveryService(IMessageHub meshHub)
     {
         this.meshHub = meshHub;

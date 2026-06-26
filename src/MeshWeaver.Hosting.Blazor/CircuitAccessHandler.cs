@@ -32,6 +32,13 @@ public class CircuitAccessHandler : CircuitHandler
     private readonly ILogger _logger;
     private AccessContext? _userContext;
 
+    /// <summary>
+    /// Initializes a new instance of the <c>CircuitAccessHandler</c> class.
+    /// </summary>
+    /// <param name="hub">The message hub used to resolve the <c>AccessService</c> and mesh services.</param>
+    /// <param name="authStateProvider">Provides the authentication state used to resolve the circuit's user.</param>
+    /// <param name="circuitContextAccessor">The circuit-scoped accessor that carries the circuit id and user context.</param>
+    /// <param name="loggerFactory">Factory used to create the access-context logger.</param>
     public CircuitAccessHandler(
         IMessageHub hub,
         AuthenticationStateProvider authStateProvider,
@@ -67,6 +74,7 @@ public class CircuitAccessHandler : CircuitHandler
         _logger.LogDebug("Circuit context updated: user={UserId}", context.ObjectId);
     }
 
+    /// <inheritdoc />
     public override async Task OnCircuitOpenedAsync(Circuit circuit, CancellationToken ct)
     {
         // Capture the stable per-circuit id BEFORE anything else. The framework runs this
@@ -96,6 +104,7 @@ public class CircuitAccessHandler : CircuitHandler
             circuit.Id, _userContext?.ObjectId ?? "(anonymous)");
     }
 
+    /// <inheritdoc />
     public override Func<CircuitInboundActivityContext, Task> CreateInboundActivityHandler(
         Func<CircuitInboundActivityContext, Task> next)
     {
@@ -115,6 +124,7 @@ public class CircuitAccessHandler : CircuitHandler
         };
     }
 
+    /// <inheritdoc />
     public override Task OnCircuitClosedAsync(Circuit circuit, CancellationToken ct)
     {
         _logger.LogDebug("Circuit closed: id={CircuitId}, user={UserId}",

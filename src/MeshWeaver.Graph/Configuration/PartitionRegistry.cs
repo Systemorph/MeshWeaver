@@ -26,6 +26,11 @@ public sealed class PartitionRegistry
     private readonly ILogger<PartitionRegistry>? logger;
     private readonly ConcurrentDictionary<string, IObservable<PartitionDefinition?>> cache = new();
 
+    /// <summary>
+    /// Initializes a new instance of the partition registry bound to the given hub.
+    /// </summary>
+    /// <param name="hub">The message hub used to resolve the mesh service and query partitions.</param>
+    /// <param name="loggerFactory">An optional logger factory used to log lookup failures.</param>
     public PartitionRegistry(IMessageHub hub, ILoggerFactory? loggerFactory = null)
     {
         this.hub = hub;

@@ -435,6 +435,13 @@ namespace MeshWeaver.Utils
 
         #endregion
 
+        /// <summary>
+        /// Exposes a queryable as an <see cref="IAsyncEnumerable{T}"/>. If the source already implements
+        /// <see cref="IAsyncEnumerable{T}"/> it is returned directly; otherwise it is enumerated synchronously.
+        /// </summary>
+        /// <typeparam name="T">The element type.</typeparam>
+        /// <param name="source">The queryable to adapt.</param>
+        /// <returns>An async-enumerable view over the source.</returns>
         [SuppressMessage("ReSharper", "SuspiciousTypeConversion.Global", Justification = "In other Repos/Solutions we might have classes that implement both IAsyncEnumerable and IQueryable")]
         public static IAsyncEnumerable<T> AsAsyncEnumerable<T>(this IQueryable<T> source)
         {
@@ -461,8 +468,16 @@ namespace MeshWeaver.Utils
 #pragma warning restore CS1998
     }
 
+    /// <summary>
+    /// Lightweight argument-validation helpers.
+    /// </summary>
     public static class Check
     {
+        /// <summary>
+        /// Throws <see cref="ArgumentNullException"/> when <paramref name="source"/> is <c>null</c>.
+        /// </summary>
+        /// <param name="source">The argument value to validate.</param>
+        /// <param name="name">The parameter name reported in the exception.</param>
         public static void NotNull(object source, string name)
         {
             if(source == null)

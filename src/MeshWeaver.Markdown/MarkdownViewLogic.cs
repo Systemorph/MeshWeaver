@@ -29,6 +29,12 @@ namespace MeshWeaver.Markdown;
 /// </summary>
 public static class MarkdownViewLogic
 {
+    /// <summary>
+    /// Unboxes a layout-stream value to a string, handling the <see cref="JsonElement"/> round-trip
+    /// (string elements decode to their value; null elements to null; other kinds to raw JSON text).
+    /// </summary>
+    /// <param name="value">The boxed value from the layout stream.</param>
+    /// <returns>The coerced string, or null.</returns>
     public static string? CoerceString(object? value) => value switch
     {
         null => null,
@@ -39,6 +45,13 @@ public static class MarkdownViewLogic
         _ => value.ToString()
     };
 
+    /// <summary>
+    /// Unboxes a layout-stream value to a bool, handling the <see cref="JsonElement"/> round-trip
+    /// (true/false elements) and falling back to <paramref name="defaultValue"/> for anything else.
+    /// </summary>
+    /// <param name="value">The boxed value from the layout stream.</param>
+    /// <param name="defaultValue">The value returned when <paramref name="value"/> is null or not a recognised bool.</param>
+    /// <returns>The coerced boolean.</returns>
     public static bool CoerceBool(object? value, bool defaultValue = false) => value switch
     {
         null => defaultValue,
@@ -354,6 +367,12 @@ public static class MarkdownViewLogic
     /// submissions are NOT posted — the error surfaces via the standard
     /// observable path.</para>
     /// </summary>
+    /// <param name="senderHub">The hub that posts the code submissions and observes responses.</param>
+    /// <param name="meshService">The mesh service used to create the per-view Activity node.</param>
+    /// <param name="activityAddress">The address of the Activity hub that hosts the kernel and receives submissions.</param>
+    /// <param name="ownerPath">The owning node path under which the Activity is created; must be non-empty for a routable activity.</param>
+    /// <param name="kernelId">Identifier used to name the Activity node and its path.</param>
+    /// <param name="submissions">The code submissions to post once the Activity is routable.</param>
     /// <param name="onReady">Invoked ONCE, on the create/subscribe thread, the moment the per-view
     /// Activity node has been created AND become routable — i.e. it is now safe for the GUI to embed
     /// the live kernel area and subscribe. The Blazor views pass a callback that flips their
@@ -449,6 +468,11 @@ public static class MarkdownViewLogic
     }
 }
 
+/// <summary>
+/// The result of rendering markdown: the produced HTML plus any extracted executable code submissions.
+/// </summary>
+/// <param name="Html">The rendered HTML (with kernel-address placeholders still embedded).</param>
+/// <param name="CodeSubmissions">The executable code submissions found in the document, or null if none.</param>
 public sealed record MarkdownRenderResult(
     string Html,
     IReadOnlyList<SubmitCodeRequest>? CodeSubmissions);

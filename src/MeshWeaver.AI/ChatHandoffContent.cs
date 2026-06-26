@@ -24,6 +24,12 @@ public class ChatHandoffContent : AIContent
     /// </summary>
     public string HandoffMessage { get; }
 
+    /// <summary>
+    /// Creates a handoff content entry describing one agent transferring control to another.
+    /// </summary>
+    /// <param name="sourceAgent">The agent initiating the handoff.</param>
+    /// <param name="targetAgent">The agent receiving control of the conversation.</param>
+    /// <param name="handoffMessage">The message/context passed to the target agent.</param>
     public ChatHandoffContent(string sourceAgent, string targetAgent, string handoffMessage)
     {
         SourceAgent = sourceAgent;

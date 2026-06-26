@@ -28,9 +28,18 @@ public record ExceptionControl(string Message, string Type)
     public string? StackTrace { get; init; }
 }
 
+/// <summary>
+/// Renders a collapsible code sample with syntax highlighting.
+/// <paramref name="Data"/> is the code string or object displayed in the expanded view.
+/// </summary>
+/// <param name="Data">The code content to display.</param>
 public record CodeSampleControl(object Data)
     : UiControl<CodeSampleControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion);
 
+/// <summary>
+/// A boolean checkbox form control bound to <paramref name="Data"/>.
+/// </summary>
+/// <param name="Data">The bound boolean data value.</param>
 public record CheckBoxControl(object Data)
     : FormControlBase<CheckBoxControl>(Data);
 

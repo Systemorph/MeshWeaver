@@ -37,6 +37,16 @@ public sealed class BlobNuGetPackageCache : INuGetPackageCache
     private readonly object _initGate = new();
     private IObservable<Unit>? _containerReady;
 
+    /// <summary>
+    /// Creates a blob-backed NuGet package cache bound to the given container.
+    /// </summary>
+    /// <param name="blobService">The Azure Blob service client used to resolve the backing container.</param>
+    /// <param name="containerName">Name of the blob container in which package archives are stored.</param>
+    /// <param name="logger">Logger for hydrate/save diagnostics.</param>
+    /// <param name="ioPoolRegistry">
+    /// Optional registry providing the Blob I/O pool that bounds blob-storage concurrency;
+    /// when absent, an unbounded fallback pool is used.
+    /// </param>
     public BlobNuGetPackageCache(
         BlobServiceClient blobService,
         string containerName,
@@ -50,6 +60,16 @@ public sealed class BlobNuGetPackageCache : INuGetPackageCache
         _ioPool = ioPoolRegistry?.Get(IoPoolNames.Blob) ?? IoPool.Unbounded;
     }
 
+    /// <summary>
+    /// Attempts to restore a cached package version into the target folder by downloading and
+    /// extracting its blob archive. Returns <c>false</c> when the package is not cached or the
+    /// restore fails (the caller then falls back to the feed).
+    /// </summary>
+    /// <param name="packageId">The NuGet package identifier.</param>
+    /// <param name="version">The package version to hydrate.</param>
+    /// <param name="targetPackageFolder">Destination folder to extract the package contents into.</param>
+    /// <param name="ct">Token to cancel the operation.</param>
+    /// <returns><c>true</c> if the package was found and extracted; otherwise <c>false</c>.</returns>
     public async Task<bool> TryHydrateAsync(string packageId, string version, string targetPackageFolder, CancellationToken ct)
     {
         await EnsureContainerReady(ct);
@@ -88,6 +108,16 @@ public sealed class BlobNuGetPackageCache : INuGetPackageCache
         }
     }
 
+    /// <summary>
+    /// Zips the contents of the source package folder and uploads it as the cached blob for the
+    /// given package version. Skips the upload when the blob already exists (another replica won
+    /// the race) and is a no-op when the source folder is missing.
+    /// </summary>
+    /// <param name="packageId">The NuGet package identifier.</param>
+    /// <param name="version">The package version to save.</param>
+    /// <param name="sourcePackageFolder">Folder whose contents are zipped and uploaded.</param>
+    /// <param name="ct">Token to cancel the operation.</param>
+    /// <returns>A task that completes when the save attempt finishes.</returns>
     public async Task SaveAsync(string packageId, string version, string sourcePackageFolder, CancellationToken ct)
     {
         if (!Directory.Exists(sourcePackageFolder)) return;

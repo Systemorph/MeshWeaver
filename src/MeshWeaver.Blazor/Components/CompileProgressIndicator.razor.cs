@@ -53,6 +53,12 @@ public partial class CompileProgressIndicator : IDisposable
     private sealed record CompileState(
         string? Path, CompilationStatus? Status, string? ActivityPath, string? Error);
 
+    /// <summary>
+    /// Starts the compile-state subscription. In single-path mode subscribes to
+    /// <c>NodeTypePath</c>'s mesh node stream; in global mode queries the
+    /// <c>nodeType:NodeType</c> synced query. Also wires the per-second elapsed-time
+    /// ticker and the live activity message subscription for in-flight compiles.
+    /// </summary>
     protected override void OnInitialized()
     {
         // Surface BOTH an in-flight compile (spinner + live activity message)
@@ -170,6 +176,9 @@ public partial class CompileProgressIndicator : IDisposable
             });
     }
 
+    /// <summary>
+    /// Disposes the compile-state, activity-progress, and elapsed-time ticker subscriptions.
+    /// </summary>
     public void Dispose()
     {
         _statusSub?.Dispose();

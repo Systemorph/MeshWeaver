@@ -11,8 +11,10 @@ namespace MeshWeaver.AI;
 /// </summary>
 public sealed class MeshWeaverHarness : IHarness
 {
+    /// <summary>Stable harness id (<c>Harnesses.MeshWeaver</c>).</summary>
     public string Id => Harnesses.MeshWeaver;
 
+    /// <summary>The catalog definition surfaced as a node and in the harness picker.</summary>
     public Harness Definition => new()
     {
         Id = Harnesses.MeshWeaver,
@@ -24,5 +26,11 @@ public sealed class MeshWeaverHarness : IHarness
         SupportsAgentSelection = true
     };
 
+    /// <summary>
+    /// Returns <c>null</c> so execution falls through to the default MeshWeaver
+    /// agent/model path (this harness has no library-specific client).
+    /// </summary>
+    /// <param name="context">The per-round execution inputs (unused by this harness).</param>
+    /// <returns>Always <c>null</c>.</returns>
     public IChatClient? CreateChatClient(HarnessExecutionContext context) => null;
 }

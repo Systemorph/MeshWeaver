@@ -28,6 +28,14 @@ public sealed class PathRemappingStorageAdapter : IStorageAdapter
     private readonly string _sourcePrefix;
     private readonly string _targetPrefix;
 
+    /// <summary>
+    /// Creates the remapping decorator that rewrites the <paramref name="sourcePrefix"/>
+    /// path prefix to <paramref name="targetPrefix"/> on every operation forwarded to
+    /// <paramref name="inner"/>.
+    /// </summary>
+    /// <param name="inner">The wrapped adapter that receives target-side paths. Not null.</param>
+    /// <param name="sourcePrefix">The source-side path prefix to match (leading/trailing slashes are trimmed).</param>
+    /// <param name="targetPrefix">The target-side path prefix the source prefix is rewritten to (leading/trailing slashes are trimmed).</param>
     public PathRemappingStorageAdapter(IStorageAdapter inner, string sourcePrefix, string targetPrefix)
     {
         _inner = inner ?? throw new ArgumentNullException(nameof(inner));
@@ -83,31 +91,40 @@ public sealed class PathRemappingStorageAdapter : IStorageAdapter
         return remapped;
     }
 
+    /// <inheritdoc />
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
         => _inner.Read(Remap(path), options);
 
+    /// <inheritdoc />
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
         => _inner.Write(RemapNode(node), options);
 
+    /// <inheritdoc />
     public IObservable<string> Delete(string path)
         => _inner.Delete(Remap(path));
 
+    /// <inheritdoc />
     public IObservable<bool> Exists(string path)
         => _inner.Exists(Remap(path));
 
+    /// <inheritdoc />
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
         => _inner.ListChildPaths(parentPath is null ? null : Remap(parentPath));
 
+    /// <inheritdoc />
     public IObservable<object> GetPartitionObjects(string nodePath, string? subPath, JsonSerializerOptions options)
         => _inner.GetPartitionObjects(Remap(nodePath), subPath, options);
 
+    /// <inheritdoc />
     public IObservable<System.Reactive.Unit> SavePartitionObjects(
         string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
         => _inner.SavePartitionObjects(Remap(nodePath), subPath, objects, options);
 
+    /// <inheritdoc />
     public IObservable<System.Reactive.Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
         => _inner.DeletePartitionObjects(Remap(nodePath), subPath);
 
+    /// <inheritdoc />
     public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
         => _inner.GetPartitionMaxTimestamp(Remap(nodePath), subPath);
 }

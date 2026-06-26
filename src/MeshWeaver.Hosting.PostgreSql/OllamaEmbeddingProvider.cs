@@ -23,6 +23,14 @@ public sealed class OllamaEmbeddingProvider : IEmbeddingProvider
     private readonly string _model;
     private readonly int _dimensions;
 
+    /// <summary>
+    /// Initializes the provider against an OpenAI-compatible embeddings endpoint.
+    /// </summary>
+    /// <param name="endpoint">OpenAI-compatible base URI (e.g. <c>http://ollama:11434/v1</c>); requests resolve against <c>&lt;base&gt;/embeddings</c>.</param>
+    /// <param name="model">Embedding model name to request.</param>
+    /// <param name="dimensions">Dimensionality of the vectors the model returns.</param>
+    /// <param name="apiKey">Optional bearer token; defaults to <c>ollama</c> (which Ollama ignores) when not supplied.</param>
+    /// <param name="timeout">Optional request timeout; defaults to 30 seconds. A finite bound prevents a hung leaf from pinning an <c>IIoPool</c> slot.</param>
     public OllamaEmbeddingProvider(string endpoint, string model, int dimensions,
         string? apiKey = null, TimeSpan? timeout = null)
     {
@@ -41,8 +49,10 @@ public sealed class OllamaEmbeddingProvider : IEmbeddingProvider
         _dimensions = dimensions;
     }
 
+    /// <inheritdoc />
     public int Dimensions => _dimensions;
 
+    /// <inheritdoc />
     public async Task<float[]?> GenerateEmbeddingAsync(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) return null;

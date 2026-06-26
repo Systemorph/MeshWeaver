@@ -13,6 +13,11 @@ public class PostgreSqlAccessControl
     private readonly NpgsqlDataSource _dataSource;
     private readonly string? _schemaName;
 
+    /// <summary>
+    /// Initializes the access-control helper over a data source, optionally scoped to a schema.
+    /// </summary>
+    /// <param name="dataSource">The PostgreSQL data source used for all permission queries and rebuilds.</param>
+    /// <param name="schemaName">Optional schema name; when set, all table and function references are schema-qualified for cross-schema queries.</param>
     public PostgreSqlAccessControl(NpgsqlDataSource dataSource, string? schemaName = null)
     {
         _dataSource = dataSource;

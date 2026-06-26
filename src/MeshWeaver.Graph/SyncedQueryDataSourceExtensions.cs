@@ -284,5 +284,7 @@ public static class SyncedQueryDataSourceExtensions
 /// </summary>
 public readonly record struct SyncedQueryKey(object Id, string UserId)
 {
+    /// <summary>Returns the string representation of the key as "id@userId".</summary>
+    /// <returns>The key formatted as the query id and user id joined by '@'.</returns>
     public override string ToString() => $"{Id}@{UserId}";
 }

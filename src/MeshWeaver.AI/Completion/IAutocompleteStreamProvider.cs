@@ -38,6 +38,7 @@ public interface IAutocompleteStreamProvider
 public sealed class AutocompleteStreamProvider(IEnumerable<IAutocompleteProvider> providers, int topN = 50)
     : IAutocompleteStreamProvider
 {
+    /// <inheritdoc />
     public IObservable<IReadOnlyList<AutocompleteItem>> Stream(string query, string? contextPath)
     {
         return AutocompleteSnapshots

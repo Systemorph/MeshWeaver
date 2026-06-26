@@ -173,7 +173,7 @@ public class ChangeFeedResubscribeCoalesceTest(ITestOutputHelper output) : HubTe
         Thread.Sleep(ResubscribeWindow + TimeSpan.FromMilliseconds(500));
 
         var resubscribes = Volatile.Read(ref _subscribeCount) - afterInitial;
-        output.WriteLine($"DIAG afterInitial={afterInitial} total={Volatile.Read(ref _subscribeCount)} resubscribes={resubscribes}");
+        Output.WriteLine($"DIAG afterInitial={afterInitial} total={Volatile.Read(ref _subscribeCount)} resubscribes={resubscribes}");
 
         // A burst of N owner change events must collapse to ONE fresh-snapshot resubscribe,
         // not N. Allow ≤1 (a single coalesced resubscribe). Without the fix this climbs toward

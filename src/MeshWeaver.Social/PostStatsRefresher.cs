@@ -55,6 +55,15 @@ public sealed class PostStatsRefresher : BackgroundService
     // no registry is wired (tests).
     private readonly IIoPool _http;
 
+    /// <summary>
+    /// Initializes a new instance of the <c>PostStatsRefresher</c> class.
+    /// </summary>
+    /// <param name="source">Supplies which posts are due for a stats refresh.</param>
+    /// <param name="publishers">Registered platform publishers, matched by platform name.</param>
+    /// <param name="bridge">Bridge that applies fetched stats back onto the post node.</param>
+    /// <param name="options">Social stats configuration (interval, window, parallelism, backoff).</param>
+    /// <param name="logger">Optional logger for diagnostics.</param>
+    /// <param name="registry">Optional I/O pool registry; falls back to the unbounded pool in tests.</param>
     public PostStatsRefresher(
         IStatsRefreshSource source,
         IEnumerable<IPlatformPublisher> publishers,
@@ -71,6 +80,12 @@ public sealed class PostStatsRefresher : BackgroundService
         _http = registry?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
     }
 
+    /// <summary>
+    /// Runs the refresh loop: on each tick, fetches the due posts and refreshes
+    /// their stats in parallel until the host stops.
+    /// </summary>
+    /// <param name="stoppingToken">Token signalling host shutdown.</param>
+    /// <returns>A task that completes when the host stops the service.</returns>
     // BackgroundService boundary — single .ToTask() bridge for the framework's Task
     // contract. Inside is one observable chain; the rest of the file is reactive.
     protected override Task ExecuteAsync(CancellationToken stoppingToken)
@@ -147,5 +162,9 @@ public sealed record StatsRefreshTarget(
 /// </summary>
 public interface IStatsRefreshSource
 {
+    /// <summary>Streams the posts whose stats are due for a refresh within <paramref name="window"/>.</summary>
+    /// <param name="window">How far back to look for posts needing a stats refresh.</param>
+    /// <param name="ct">Token to cancel enumeration.</param>
+    /// <returns>An async stream of posts needing a stats refresh.</returns>
     IAsyncEnumerable<StatsRefreshTarget> GetDueRefreshesAsync(TimeSpan window, CancellationToken ct);
 }

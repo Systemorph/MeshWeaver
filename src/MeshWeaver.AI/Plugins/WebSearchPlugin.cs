@@ -45,8 +45,17 @@ public class WebSearchPlugin : IAgentPlugin
     private readonly ILogger<WebSearchPlugin> logger;
     private readonly IIoPool ioPool;
 
+    /// <summary>The plugin's stable identifier, <c>WebSearch</c>.</summary>
     public string Name => "WebSearch";
 
+    /// <summary>
+    /// Creates the plugin, resolving the named <c>Http</c> I/O pool through which every
+    /// HTTP leaf is bridged (falls back to <c>IoPool.Unbounded</c> when no registry is supplied).
+    /// </summary>
+    /// <param name="httpClient">HTTP client used for search and page-fetch requests.</param>
+    /// <param name="options">Web-search configuration (Bing key, endpoint, fetch limit).</param>
+    /// <param name="logger">Logger for diagnostics.</param>
+    /// <param name="ioPoolRegistry">Optional registry supplying the bounded HTTP I/O pool.</param>
     public WebSearchPlugin(
         HttpClient httpClient,
         IOptions<WebSearchConfiguration> options,
@@ -62,12 +71,25 @@ public class WebSearchPlugin : IAgentPlugin
     // The AIFunction surface requires Task<string> — these are the sanctioned one-line
     // boundary adapters; the bodies are reactive with the HTTP leaf bridged through the
     // IIoPool (AsynchronousCalls.md, ControlledIoPooling.md).
+    /// <summary>
+    /// MCP/agent tool: searches the web via Bing and returns matching results
+    /// (title, URL and snippet) as JSON.
+    /// </summary>
+    /// <param name="query">Search query string.</param>
+    /// <param name="count">Number of results to return (default 5, clamped to 1..20).</param>
+    /// <returns>A task resolving to the JSON result list, or a message when search is not configured or fails.</returns>
     [Description("Searches the web using Bing and returns relevant results with titles, URLs, and snippets. Use this to find current information, documentation, or any topic on the internet.")]
     public Task<string> SearchWeb(
         [Description("Search query string")] string query,
         [Description("Number of results to return (default 5, max 20)")] int count = 5)
         => SearchWebCore(query, count).FirstAsync().ToTask();
 
+    /// <summary>
+    /// MCP/agent tool: fetches a web page and extracts its readable text, truncated
+    /// to the configured maximum length.
+    /// </summary>
+    /// <param name="url">URL of the web page to fetch.</param>
+    /// <returns>A task resolving to the extracted text, or a message when the URL is empty or the fetch fails.</returns>
     [Description("Fetches a web page and extracts its text content. Use this to read articles, documentation, or any public web page after finding URLs via SearchWeb.")]
     public Task<string> FetchWebPage(
         [Description("URL of the web page to fetch")] string url)
@@ -202,6 +224,10 @@ public class WebSearchPlugin : IAgentPlugin
             sb.AppendLine();
     }
 
+    /// <summary>
+    /// Builds the <c>AITool</c> set this plugin exposes to agents — SearchWeb and FetchWebPage.
+    /// </summary>
+    /// <returns>The web-search tools.</returns>
     public IEnumerable<AITool> CreateTools()
     {
         return

@@ -85,12 +85,22 @@ public partial class MeshSearchView : IDisposable
     [Inject]
     private MeshWeaver.Messaging.IMessageHub Hub { get; set; } = default!;
 
+    /// <summary>
+    /// The <c>MeshSearchControl</c> that drives this view's query configuration,
+    /// grouping options, and display settings.
+    /// </summary>
     [Parameter]
     public MeshSearchControl? ViewModel { get; set; }
 
+    /// <summary>
+    /// The synchronization stream supplying data context for data-bound values within the search control.
+    /// </summary>
     [Parameter]
     public ISynchronizationStream<JsonElement>? Stream { get; set; }
 
+    /// <summary>
+    /// The layout-area identifier under which this search view is rendered.
+    /// </summary>
     [Parameter]
     public string? Area { get; set; }
 
@@ -345,6 +355,10 @@ public partial class MeshSearchView : IDisposable
         return _nodes.Count > 0;
     }
 
+    /// <summary>
+    /// Detects changes to <c>BoundVisibleQuery</c> and <c>BoundHiddenQuery</c> from the parent
+    /// and triggers a re-query when the search parameters change after the component is initialised.
+    /// </summary>
     protected override void OnParametersSet()
     {
         base.OnParametersSet();
@@ -400,6 +414,12 @@ public partial class MeshSearchView : IDisposable
         }
     }
 
+    /// <summary>
+    /// On the first render, marks the component as initialised, seeds the Monaco editor with the
+    /// initial query value, and executes the initial search.
+    /// </summary>
+    /// <param name="firstRender">True on the very first render of this component instance.</param>
+    /// <returns>A task that completes once first-render initialisation is done.</returns>
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
@@ -1727,6 +1747,9 @@ public partial class MeshSearchView : IDisposable
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Disposes all reactive subscriptions (search results, navigation, tree, affordance) held by this view.
+    /// </summary>
     public void Dispose()
     {
         _reactiveSubscription?.Dispose();

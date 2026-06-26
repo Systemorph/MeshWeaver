@@ -21,10 +21,12 @@ namespace MeshWeaver.Hosting.PostgreSql;
 public class PostgreSqlStorageAdapterFactory(
     IOptions<PostgreSqlStorageOptions> options) : IStorageAdapterFactory
 {
+    /// <summary>The storage-type key under which this factory is registered.</summary>
     public const string StorageType = "PostgreSql";
 
     private NpgsqlDataSource? _cachedDataSource;
 
+    /// <inheritdoc />
     public IStorageAdapter Create(GraphStorageConfig config, IServiceProvider serviceProvider)
     {
         // Try to use an Aspire-injected or externally-registered NpgsqlDataSource first
@@ -267,6 +269,7 @@ public static class PostgreSqlExtensions
     /// <param name="services">The service collection</param>
     /// <param name="connectionString">PostgreSQL connection string</param>
     /// <param name="configure">Optional configuration for PostgreSqlStorageOptions</param>
+    /// <param name="configureDataSource">Optional hook to further configure the <see cref="NpgsqlDataSourceBuilder"/> before the data source is built.</param>
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddPartitionedPostgreSqlPersistence(
         this IServiceCollection services,
@@ -385,6 +388,7 @@ public static class PostgreSqlExtensions
     /// </summary>
     /// <param name="services">The service collection</param>
     /// <param name="configure">Optional configuration for PostgreSqlStorageOptions</param>
+    /// <param name="configureDataSource">Optional hook to further configure the <see cref="NpgsqlDataSourceBuilder"/> before the data source is built.</param>
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddPartitionedPostgreSqlPersistence(
         this IServiceCollection services,

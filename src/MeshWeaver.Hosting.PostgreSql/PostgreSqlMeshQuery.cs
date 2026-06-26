@@ -25,6 +25,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
     private readonly QueryParser _parser = new();
     private long _version;
 
+    /// <summary>Default debounce interval applied to live-query change notifications before re-running the query.</summary>
     public static readonly TimeSpan DefaultDebounceInterval = TimeSpan.FromMilliseconds(100);
 
     // Namespaces handled by other (static) partitions — Postgres excludes
@@ -61,6 +62,15 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
     // See Doc/Architecture/ControlledIoPooling.md + AsynchronousCalls.md.
     private readonly IIoPool _ioPool;
 
+    /// <summary>
+    /// Initializes the PostgreSQL native query provider.
+    /// </summary>
+    /// <param name="adapter">The storage adapter that translates parsed queries into SQL.</param>
+    /// <param name="accessService">Optional access service used to scope results to the calling user.</param>
+    /// <param name="meshConfiguration">Optional mesh configuration (node-type permissions, etc.).</param>
+    /// <param name="excludedNamespaces">Namespaces owned by other (static) partitions; queries scoped only to these short-circuit out of SQL.</param>
+    /// <param name="embeddingProvider">Optional embedding provider that routes bare-text queries through vector search; falls back to ILIKE when absent.</param>
+    /// <param name="ioPoolRegistry">Optional I/O pool registry; the provider runs every async query leaf on the shared storage-read pool.</param>
     public PostgreSqlMeshQuery(
         PostgreSqlStorageAdapter adapter,
         AccessService? accessService = null,
@@ -550,6 +560,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
             });
     }
 
+    /// <inheritdoc />
     public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request, JsonSerializerOptions options)
     {
         // Self-filter: when the request only targets static-owned namespaces,

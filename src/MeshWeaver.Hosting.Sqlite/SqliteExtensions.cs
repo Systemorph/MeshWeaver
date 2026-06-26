@@ -20,6 +20,7 @@ namespace MeshWeaver.Hosting.Sqlite;
 /// </summary>
 public static class SqliteExtensions
 {
+    /// <param name="services">The service collection to register the SQLite persistence backend into.</param>
     /// <param name="connectionString">A Microsoft.Data.Sqlite connection string, e.g.
     /// <c>Data Source=memex.db</c> (a file) or <c>Data Source=:memory:</c> (tests).</param>
     public static IServiceCollection AddPartitionedSqlitePersistence(
@@ -44,6 +45,15 @@ public static class SqliteExtensions
         return services;
     }
 
+    /// <summary>
+    /// Registers the SQLite persistence backend on a <see cref="MeshBuilder"/> and wires the mesh
+    /// query core onto the mesh hub.
+    /// </summary>
+    /// <typeparam name="TBuilder">The concrete <see cref="MeshBuilder"/> type, returned for chaining.</typeparam>
+    /// <param name="builder">The mesh builder to configure.</param>
+    /// <param name="connectionString">A Microsoft.Data.Sqlite connection string, e.g.
+    /// <c>Data Source=memex.db</c> (a file) or <c>Data Source=:memory:</c> (tests).</param>
+    /// <returns>The same <paramref name="builder"/> for fluent chaining.</returns>
     public static TBuilder AddPartitionedSqlitePersistence<TBuilder>(
         this TBuilder builder, string connectionString)
         where TBuilder : MeshBuilder
@@ -59,8 +69,11 @@ public static class SqliteExtensions
     /// device with no reachable model server (embeddings stay off; lexical search still works).
     /// Call BEFORE / alongside <see cref="AddPartitionedSqlitePersistence(IServiceCollection,string)"/>.
     /// </summary>
+    /// <param name="services">The service collection to register the embedder into.</param>
     /// <param name="endpoint">OpenAI-compatible base, e.g. <c>http://localhost:11434/v1</c>.</param>
     /// <param name="model">Embedding model, e.g. <c>bge-m3</c> (1024d) or <c>nomic-embed-text</c> (768d).</param>
+    /// <param name="dimensions">Vector dimension override; inferred from <paramref name="model"/> when <c>null</c>.</param>
+    /// <param name="timeout">Embedding request timeout; defaults to the embedder's own default when <c>null</c>.</param>
     public static IServiceCollection AddSqliteOllamaEmbeddings(
         this IServiceCollection services, string? endpoint, string model = "bge-m3",
         int? dimensions = null, TimeSpan? timeout = null)

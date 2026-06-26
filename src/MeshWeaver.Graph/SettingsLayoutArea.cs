@@ -848,37 +848,52 @@ public static class SettingsLayoutArea
 /// </summary>
 public record MeshNodeMetadata
 {
+    /// <summary>The unique identifier of the mesh node (read-only).</summary>
     [Editable(false)]
     public string? Id { get; init; }
 
+    /// <summary>The display name of the mesh node.</summary>
     public string? Name { get; init; }
 
+    /// <summary>The human-readable description of the mesh node.</summary>
     public string? Description { get; init; }
 
+    /// <summary>The namespace (partition-qualified) the node belongs to (read-only).</summary>
     [Editable(false)]
     public string? Namespace { get; init; }
 
+    /// <summary>The node type of the mesh node (read-only).</summary>
     [Editable(false)]
     public string? NodeType { get; init; }
 
+    /// <summary>The category used to group the node in listings.</summary>
     public string? Category { get; init; }
 
+    /// <summary>The icon associated with the mesh node.</summary>
     public string? Icon { get; init; }
 
+    /// <summary>The sort order of the node within its grouping.</summary>
     public int? Order { get; init; }
 
+    /// <summary>The lifecycle state of the mesh node (read-only).</summary>
     [Editable(false)]
     public MeshNodeState State { get; init; }
 
+    /// <summary>The timestamp when the node was created (read-only).</summary>
     [Editable(false)]
     public DateTimeOffset CreatedDate { get; init; }
 
+    /// <summary>The timestamp when the node was last modified (read-only).</summary>
     [Editable(false)]
     public DateTimeOffset LastModified { get; init; }
 
+    /// <summary>The version number of the mesh node (read-only).</summary>
     [Editable(false)]
     public long Version { get; init; }
 
+    /// <summary>Builds a MeshNodeMetadata from a mesh node, capturing its editable metadata.</summary>
+    /// <param name="node">The mesh node to read values from.</param>
+    /// <returns>The populated metadata DTO.</returns>
     public static MeshNodeMetadata FromNode(MeshNode node) => new()
     {
         Id = node.Id,
@@ -895,6 +910,9 @@ public record MeshNodeMetadata
         Version = node.Version,
     };
 
+    /// <summary>Applies the editable metadata values from this DTO onto a mesh node.</summary>
+    /// <param name="node">The mesh node to apply the values onto.</param>
+    /// <returns>The updated mesh node.</returns>
     public MeshNode ApplyTo(MeshNode node) => node with
     {
         Name = Name,

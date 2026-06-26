@@ -39,6 +39,13 @@ internal static class MessageTrace
     }
 }
 
+/// <summary>
+/// Drives a hub's single-threaded message loop. Owns the FIFO turn queue (and a deferred queue for
+/// gate-held messages), routes deliveries hierarchically, applies the post / delivery pipelines,
+/// runs handlers inline on the hub's scheduler, and enforces the storm circuit-breaker, deferral
+/// timeouts and initialization gates. Exactly one turn drains at a time — the actor's single logical
+/// thread. One instance per hub; disposed with the hub.
+/// </summary>
 public class MessageService : IMessageService
 {
     private readonly ILogger<MessageService> logger;
@@ -121,6 +128,16 @@ public class MessageService : IMessageService
         }
     }
 
+    /// <summary>
+    /// Creates the message service for a hub: captures the address and parent hub, picks the per-hub
+    /// turn scheduler (the configured <c>TaskScheduler</c> or <c>TaskScheduler.Default</c>), composes the
+    /// post and delivery pipelines from configuration, wires hierarchical routing and the storm breaker,
+    /// seeds the initialization gates, and arms the startup-timeout timer when one is configured.
+    /// </summary>
+    /// <param name="address">This hub's address.</param>
+    /// <param name="logger">Logger for the message loop.</param>
+    /// <param name="hub">The owning hub instance.</param>
+    /// <param name="parentHub">The parent hub for upward routing, or null for a root hub.</param>
     public MessageService(
         Address address,
         ILogger<MessageService> logger,
@@ -186,6 +203,13 @@ public class MessageService : IMessageService
         deferredDeliveries.Clear();
     }
 
+    /// <summary>
+    /// Opens the named initialization gate. When the last gate closes, the hub transitions to
+    /// Started, the startup timer is disposed, and the deferred queue is drained (FIFO-preserving)
+    /// into the main queue so held messages run before any that arrive afterward.
+    /// </summary>
+    /// <param name="name">The gate name to open.</param>
+    /// <returns>True if the gate existed and was opened; false if it was not found (e.g. already opened).</returns>
     public bool OpenGate(string name)
     {
         lock (gateStateLock)
@@ -279,7 +303,12 @@ public class MessageService : IMessageService
     }
 
 
+    /// <summary>The address (actor identity / routing key) of the hub this service drives.</summary>
     public Address Address { get; }
+    /// <summary>
+    /// The parent hub used for upward (hierarchical) routing, captured at construction so it remains
+    /// available during disposal. Null for a root hub.
+    /// </summary>
     public IMessageHub? ParentHub { get; }
 
     // Tracks what message is currently executing so the disposal diagnostic snapshot
@@ -720,6 +749,11 @@ public class MessageService : IMessageService
 
     private volatile CancellationTokenSource cancellationTokenSource = new();
 
+    /// <summary>
+    /// Cancels in-flight handler execution by swapping in a fresh cancellation token source and
+    /// cancelling the previous one, unblocking handlers observing the token. Safe to call repeatedly;
+    /// a disposed source is ignored.
+    /// </summary>
     public void CancelExecution()
     {
         try
@@ -867,6 +901,14 @@ public class MessageService : IMessageService
         return true;
     }
 
+    /// <summary>
+    /// Posts a message into the hub: wraps it in a delivery, runs the post pipeline (AccessContext
+    /// stamping et al.), and schedules it onto the turn loop. Returns null for a null message.
+    /// </summary>
+    /// <typeparam name="TMessage">The message type being posted.</typeparam>
+    /// <param name="message">The message to post.</param>
+    /// <param name="opt">Post options (target, response correlation, message id, impersonation, etc.).</param>
+    /// <returns>The resulting delivery, or null when <paramref name="message"/> is null.</returns>
     public IMessageDelivery? Post<TMessage>(TMessage message, PostOptions opt)
     {
         lock (locker)
@@ -1019,6 +1061,12 @@ public class MessageService : IMessageService
     }
     private readonly Lock locker = new();
 
+    /// <summary>
+    /// Disposes the message service: opens any remaining gates to release buffered messages, tears
+    /// down the hang-detection and deferral-timeout timers, cancels the pending startup completion,
+    /// and disposes the storm breaker. Does not block on in-flight turns — handlers run inline on this
+    /// loop, so awaiting completion from within a disposal turn would self-deadlock.
+    /// </summary>
     public void Dispose()
     {
         var totalStopwatch = Stopwatch.StartNew();

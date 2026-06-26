@@ -19,7 +19,7 @@ This page is a step-by-step guide for standing up a **prod-like memex portal** o
 | Deploy an Aspire `test`/`prod` environment | Azure Container Apps | [DeploymentContainerApps.md](/Doc/Architecture/DeploymentContainerApps) |
 | Understand how an install updates itself (policy-driven) | Self-update | [ReleaseStrategy.md](/Doc/Architecture/ReleaseStrategy) |
 
-> Because this is the **same Helm chart** as AKS, the in-pod self-updater applies here too: a `Continuous` install patches its own deployment to a newer ACR tag (see [ReleaseStrategy.md](/Doc/Architecture/ReleaseStrategy)). A pure local-build loop (images built straight into Colima's Docker store, never pushed to ACR) has nothing to poll — treat it as `None`.
+> Because this is the **same Helm chart** as AKS, the in-pod self-updater applies here too: a `Continuous` install patches its own deployment to a newer ACR tag (see [ReleaseStrategy.md](/Doc/Architecture/ReleaseStrategy)). **The ACR images are now multi-arch (linux/amd64 + linux/arm64)** — built that way by CI (see §3) — so on this arm64 VM the self-updater pulls the **native arm64** variant of each new tag and it Just Works. A pure local-build loop (images built straight into Colima's Docker store, never pushed to ACR) has nothing to poll — treat it as `None`.
 
 The Colima k3s route is the closest thing to "prod on your laptop": it runs the **`deploy/helm` chart** (the same chart the AKS environments use), terminates TLS at an ingress controller, authenticates through Microsoft Entra, persists Postgres on a PVC, and survives reboots. The trade-off is build time and a one-time setup. For everyday code iteration, prefer the Monolith / Aspire workflow — reach for Colima k3s when you need to validate the *deployment* shape, ingress/TLS, OAuth redirects, or the self-hosted-LLM path.
 
@@ -39,6 +39,8 @@ brew install socket_vmnet
 ```
 
 You also need the **.NET SDK** (10.0) to build the portal image — install from [dotnet.microsoft.com](https://dotnet.microsoft.com/download) or `brew install --cask dotnet-sdk`.
+
+> **Prefer one command?** `deploy/homebrew/` ships a Homebrew formula + a `memex-local` CLI that automates **every step on this page**, idempotently — `brew install` the tap, then `memex-local up` (and `down` / `status` / `logs` / `update`). See `deploy/homebrew/README.md`. The rest of this page is the manual reference the CLI follows 1:1.
 
 The work splits across three areas, which the rest of this page walks through in order:
 
@@ -99,11 +101,24 @@ kubectl get nodes                  # → one Ready node
 
 ---
 
-## 3. Build the portal image natively (arm64)
+## 3. Get the portal image (arm64)
 
-> **🚨 You must build the image locally. Do NOT pull from ACR.** The ACR `memex-portal-ai` / `memex-migration` images are **amd64-only**. Under Colima's arm64 VM they run *emulated*, and .NET's `ConfigurationBinder` throws a spurious `NullReferenceException` (`InvokeStub_GraphStorageConfig.get_ConnectionString`) that crashes the portal on startup. Building natively for arm64 makes the problem disappear entirely.
+You have two ways to get an arm64 image onto the VM. **CI now publishes multi-arch images**, so for an unmodified portal you can just pull from ACR; build locally only when you're iterating on un-pushed source changes.
 
-The verified rebuild loop (a few minutes on an M-series Mac):
+### Option A — pull the multi-arch image from ACR (no local build)
+
+The CONTINUOUS (`main-cd.yml`) and RELEASE (`release-images.yml`) pipelines build `memex-portal-ai`, `memex-portal`, and `memex-migration` as **multi-arch manifest lists** (`linux/amd64` + `linux/arm64`) via the .NET SDK's `ContainerRuntimeIdentifiers="linux-x64;linux-arm64"` (an OCI image index — supported since SDK 8.0.405, and we build on .NET 10). The hand-authored base `memex-portal-ai-base` is likewise built multi-arch with `docker buildx --platform linux/amd64,linux/arm64`. So on this arm64 VM, Docker/k3s pulls the **native arm64** variant automatically — no emulation, and the in-pod self-updater (the blockquote in the intro) can roll forward to new ACR tags on its own.
+
+> **🚨 This only holds for genuinely multi-arch tags.** Tags built before the multi-arch CI change (and any tag hand-built single-arch) are **amd64-only**; run emulated on the arm64 VM they make .NET's `ConfigurationBinder` throw a spurious `NullReferenceException` (`InvokeStub_GraphStorageConfig.get_ConnectionString`) that crashes the portal on startup. Verify a tag is multi-arch before relying on it:
+> ```bash
+> docker manifest inspect meshweaver.azurecr.io/memex-portal-ai:latest \
+>   | grep -A1 '"architecture"'        # expect both "amd64" and "arm64"
+> ```
+> **One-time operator step:** the very first multi-arch roll needs the base rebuilt multi-arch *before* the app build (the app's arm64 leg has no base layer otherwise). `release-images.yml` does this on the next `v*.*.*` tag; to do it by hand into ACR: `az acr build --registry meshweaver --image memex-portal-ai-base:latest --platform linux/amd64 --platform linux/arm64 deploy/base-images/portal-ai` (or `docker buildx ... --push`).
+
+### Option B — build natively (fast inner loop for un-pushed edits)
+
+When you've changed source that isn't in any pushed tag, build straight into Colima's Docker store. The verified rebuild loop (a few minutes on an M-series Mac):
 
 ```bash
 # 1. Publish a native arm64 container image straight into Colima's Docker store.
@@ -129,7 +144,7 @@ docker tag memex-migration-local:latest ghcr.io/systemorph/memex-migration:lates
 
 Notes:
 
-- The local build uses the **default** `mcr.microsoft.com/dotnet/aspnet:10.0` base image, **not** the custom `memex-portal-ai-base` (that base bundles Node / Claude Code / Copilot, is amd64 in ACR, and is unneeded locally).
+- The local build uses the **default** `mcr.microsoft.com/dotnet/aspnet:10.0` base image, **not** the custom `memex-portal-ai-base` (that base bundles Node / Claude Code / Copilot, is now multi-arch in ACR, and is unneeded for the local inner loop).
 - Because k3s runs the Docker runtime (`docker://`), the retag is visible to the cluster immediately — there is no `docker push` / registry step.
 - This is the only step that is slow. Once the image exists, config-only changes (§5) don't need a rebuild.
 
@@ -387,7 +402,7 @@ The result: every device trusts the cert out of the box (no mkcert CA install), 
 
 | Symptom | Cause & fix |
 |---|---|
-| Portal crashes on startup with `NullReferenceException` in `ConfigurationBinder` / `get_ConnectionString` | You're running an **amd64 ACR image emulated** on the arm64 VM. Build the image natively (§3) — do not pull from ACR. |
+| Portal crashes on startup with `NullReferenceException` in `ConfigurationBinder` / `get_ConnectionString` | You're running an **amd64-only image emulated** on the arm64 VM — i.e. a pre-multi-arch (or hand-built single-arch) tag. Confirm with `docker manifest inspect …` (§3 Option A) that the tag carries an `arm64` entry; if not, pull a multi-arch tag or build natively (§3 Option B). |
 | `/login?error=auth_failed`; log shows `Correlation failed` / correlation cookie not found | The `SameSite=None` correlation/nonce cookies were dropped because they weren't `Secure`. Ensure you're on the build with the `SecurePolicy = Always` fix (§9). Verify: `curl -i http://localhost:8080/auth/login?provider=Microsoft` shows `secure; samesite=none` on both Set-Cookie lines. |
 | Page returns empty reply / HTTP 000 after a portal rollout | The `kubectl port-forward` binds **one pod**; a `rollout restart` replaces it and the old forward goes stale. **Restart the port-forward** (or let the launchd agent's `KeepAlive` do it). |
 | A route 404s for ~1 second right after a Helm upgrade or ingress patch | ingress-nginx **reload lag** — the controller is reloading its config. Retry; it clears within a second. |
@@ -402,6 +417,31 @@ curl --cacert "$(mkcert -CAROOT)/rootCA.pem" \
   https://memex.localhost:8443/
 # Expect: http=200  (ssl_verify_result 0 once `mkcert -install` has trusted the CA)
 ```
+
+---
+
+## 15. Playwright E2E test env (`memex-local e2e`)
+
+Browser E2E (Playwright) needs a portal it can **log into without Entra** (DevLogin) that **also has a real language model**. The dev Monolith has DevLogin but no model; this `memex` stack has the model but uses Entra OAuth and holds your real data. `memex-local e2e` stands up a **throwaway, DevLogin portal** built from the **current working tree**, in the **same namespace**, reusing this stack's Postgres, host Ollama and ingress/TLS — but against its **own** database (`memex_e2e`) with DevLogin on, behind the ingress (reverse proxy) at `https://e2e.memex.localhost:8444`. It is **additive**: it never touches the `memex` release, DB, or config.
+
+```bash
+memex-local up                              # the base stack (PG, Ollama, ingress, TLS) — once
+memex-local e2e up                          # build working tree → create memex_e2e → migrate → deploy → reverse-proxy
+memex-local e2e test HomeChatExecuteTest    # run the Playwright E2E (E2E_BASE_URL + DevLogin preset)
+memex-local e2e down                        # delete the e2e objects + drop the e2e DB (--keep-db to keep it)
+```
+
+What `e2e up` does, and why:
+
+| Step | Why |
+|---|---|
+| Build portal + migration image (native arm64) from the working tree | Test the code you're holding, not a stale image. `--skip-build` reuses the last build. |
+| `CREATE DATABASE memex_e2e` in the existing `memex-postgres` | Your own data — never the `memex` DB. |
+| Run the migration `Job` against it | The portal's `DbVersionGate` refuses to start against an un-migrated DB. |
+| Deploy `memex-e2e-portal` (Deployment + Service + Ingress) reusing `memex-portal-config`/`-secrets` via `envFrom` | Proven config; override **only** `ConnectionStrings__memex` → `memex_e2e` and `Authentication__EnableDevLogin=true`. Clustering stays `Localhost` (own in-process silo). `/data` is an ephemeral `emptyDir` (mesh data is in PG). |
+| Ingress for `e2e.memex.localhost` (covered by the `*.memex.localhost` mkcert cert) + a `:443→:8444` port-forward | The reverse proxy Playwright drives. |
+
+`PortalFixture` authenticates via `POST /dev/signin?personId=Roland` and sets `IgnoreHTTPSErrors=true`, so the self-signed cert is fine. The repeatable flow is captured as the [`/playwright`](../../../../.claude/skills/playwright/SKILL.md) skill. **Always deploy on Colima and drive THAT — never run a model E2E against the Monolith (no model) or the `memex` portal (Entra + real data).**
 
 ---
 

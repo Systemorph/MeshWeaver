@@ -31,6 +31,11 @@ public class AzureBlobStorageAdapter : IStorageAdapter
     /// </summary>
     private static readonly string[] SupportedExtensions = [".md", ".json"];
 
+    /// <summary>
+    /// Initializes a new instance of the <c>AzureBlobStorageAdapter</c> class.
+    /// </summary>
+    /// <param name="containerClient">The blob container client backing storage for nodes and partition objects.</param>
+    /// <param name="ioPoolRegistry">Registry used to resolve the blob I/O pool that bridges blob calls to <c>IObservable</c>; when null, an unbounded fallback pool is used.</param>
     public AzureBlobStorageAdapter(BlobContainerClient containerClient, IoPoolRegistry? ioPoolRegistry = null)
     {
         _containerClient = containerClient;
@@ -71,6 +76,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
         return (null, ".json");
     }
 
+    /// <inheritdoc />
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
         => _ioPool.Run(ct => ReadAsyncCore(path, options, ct));
 
@@ -126,6 +132,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
         }
     }
 
+    /// <inheritdoc />
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
         => _ioPool.Run<MeshNode?>(async ct => { await WriteAsyncCore(node, options, ct).ConfigureAwait(false); return node; });
 
@@ -183,6 +190,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
         }
     }
 
+    /// <inheritdoc />
     public IObservable<string> Delete(string path)
         => _ioPool.Run(async ct => { await DeleteAsyncCore(path, ct).ConfigureAwait(false); return path; });
 
@@ -197,6 +205,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
         }
     }
 
+    /// <inheritdoc />
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
         => _ioPool.Run(ct => ListChildPathsAsyncCore(parentPath, ct));
 
@@ -261,6 +270,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
         return (nodePaths.ToList(), directoryPaths.ToList());
     }
 
+    /// <inheritdoc />
     public IObservable<bool> Exists(string path)
         => _ioPool.Run(async ct =>
         {
@@ -280,6 +290,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
             ? $"partitions/{NormalizePath(nodePath)}/"
             : $"partitions/{NormalizePath(nodePath)}/{NormalizePath(subPath)}/";
 
+    /// <inheritdoc />
     public IObservable<object> GetPartitionObjects(string nodePath, string? subPath, JsonSerializerOptions options)
         => _ioPool.RunStream(ct => GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct));
 
@@ -315,6 +326,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
         }
     }
 
+    /// <inheritdoc />
     public IObservable<Unit> SavePartitionObjects(
         string nodePath, string? subPath,
         IReadOnlyCollection<object> objects, JsonSerializerOptions options)
@@ -353,6 +365,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
         }
     }
 
+    /// <inheritdoc />
     public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
         => _ioPool.Run(async ct => { await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct).ConfigureAwait(false); return Unit.Default; });
 
@@ -367,6 +380,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
         }
     }
 
+    /// <inheritdoc />
     public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
         => _ioPool.Run(ct => GetPartitionMaxTimestampAsyncCore(nodePath, subPath, ct));
 

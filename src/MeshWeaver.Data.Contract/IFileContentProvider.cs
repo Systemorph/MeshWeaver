@@ -77,7 +77,13 @@ public record CollectionListingResult
     /// </summary>
     public bool Success => Error == null && Items != null;
 
+    /// <summary>Creates a successful listing result containing the given items.</summary>
+    /// <param name="items">The items found in the collection path.</param>
+    /// <returns>A successful result.</returns>
     public static CollectionListingResult Ok(IReadOnlyCollection<CollectionItemInfo> items) => new() { Items = items };
+    /// <summary>Creates a failed listing result with the given error message.</summary>
+    /// <param name="error">The error message.</param>
+    /// <returns>A failed result.</returns>
     public static CollectionListingResult Fail(string error) => new() { Error = error };
 }
 

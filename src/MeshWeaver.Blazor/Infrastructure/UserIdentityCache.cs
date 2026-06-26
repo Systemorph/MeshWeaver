@@ -23,6 +23,13 @@ public sealed class UserIdentityCache : IDisposable
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly ILogger<UserIdentityCache> _logger;
 
+    /// <summary>
+    /// Subscribes to the live <c>nodeType:User</c> query and builds the email-to-node index.
+    /// The index is ready as soon as the first query emission arrives.
+    /// </summary>
+    /// <param name="mesh">Mesh service used to subscribe to the synced user-node query.</param>
+    /// <param name="hub">Hub whose JSON serializer options are used when deserializing node content.</param>
+    /// <param name="logger">Logger for subscription failures and deserialization warnings.</param>
     public UserIdentityCache(IMeshService mesh, IMessageHub hub, ILogger<UserIdentityCache> logger)
     {
         _jsonOptions = hub.JsonSerializerOptions;
@@ -107,5 +114,6 @@ public sealed class UserIdentityCache : IDisposable
         return false;
     }
 
+    /// <summary>Disposes the underlying query subscription, stopping further cache updates.</summary>
     public void Dispose() => _subscription.Dispose();
 }

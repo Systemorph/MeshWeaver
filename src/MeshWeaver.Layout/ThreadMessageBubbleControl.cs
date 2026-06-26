@@ -75,16 +75,52 @@ public record ThreadMessageBubbleControl() : UiControl<ThreadMessageBubbleContro
     /// <summary>Timestamp of the message.</summary>
     public DateTime? Timestamp { get; init; }
 
+    /// <summary>Returns a copy with <paramref name="role"/> as its Role.</summary>
+    /// <param name="role">The message role, e.g. "user" or "assistant".</param>
+    /// <returns>A new instance with the updated Role.</returns>
     public ThreadMessageBubbleControl WithRole(string role) => this with { Role = role };
+    /// <summary>Returns a copy with <paramref name="model"/> as its ModelName.</summary>
+    /// <param name="model">The model name string, or null to clear it.</param>
+    /// <returns>A new instance with the updated ModelName.</returns>
     public ThreadMessageBubbleControl WithModelName(string? model) => this with { ModelName = model };
+    /// <summary>Returns a copy with <paramref name="ts"/> as its Timestamp.</summary>
+    /// <param name="ts">The message timestamp, or null to clear it.</param>
+    /// <returns>A new instance with the updated Timestamp.</returns>
     public ThreadMessageBubbleControl WithTimestamp(DateTime? ts) => this with { Timestamp = ts };
+    /// <summary>Returns a copy with <paramref name="name"/> as its AuthorName.</summary>
+    /// <param name="name">The display name of the message author.</param>
+    /// <returns>A new instance with the updated AuthorName.</returns>
     public ThreadMessageBubbleControl WithAuthorName(string name) => this with { AuthorName = name };
+    /// <summary>Returns a copy with <paramref name="text"/> as its Text.</summary>
+    /// <param name="text">The message text or a data-bound reference to it.</param>
+    /// <returns>A new instance with the updated Text.</returns>
     public ThreadMessageBubbleControl WithText(object? text) => this with { Text = text };
+    /// <summary>Returns a copy with <paramref name="isExecuting"/> as its IsExecuting.</summary>
+    /// <param name="isExecuting">A boolean or data-bound reference indicating whether the agent is executing.</param>
+    /// <returns>A new instance with the updated IsExecuting.</returns>
     public ThreadMessageBubbleControl WithIsExecuting(object? isExecuting) => this with { IsExecuting = isExecuting };
+    /// <summary>Returns a copy with <paramref name="status"/> as its ExecutionStatus.</summary>
+    /// <param name="status">The execution status text or a data-bound reference to it.</param>
+    /// <returns>A new instance with the updated ExecutionStatus.</returns>
     public ThreadMessageBubbleControl WithExecutionStatus(object? status) => this with { ExecutionStatus = status };
+    /// <summary>Returns a copy with <paramref name="id"/> as its MessageId.</summary>
+    /// <param name="id">The message ID within the thread, or null to clear it.</param>
+    /// <returns>A new instance with the updated MessageId.</returns>
     public ThreadMessageBubbleControl WithMessageId(string? id) => this with { MessageId = id };
+    /// <summary>Returns a copy with <paramref name="path"/> as its ThreadPath.</summary>
+    /// <param name="path">The thread node path used for cancel operations, or null to clear it.</param>
+    /// <returns>A new instance with the updated ThreadPath.</returns>
     public ThreadMessageBubbleControl WithThreadPath(string? path) => this with { ThreadPath = path };
+    /// <summary>Returns a copy with <paramref name="path"/> as its NodePath.</summary>
+    /// <param name="path">The message-node path for live data-binding, or null to use inline data.</param>
+    /// <returns>A new instance with the updated NodePath.</returns>
     public ThreadMessageBubbleControl WithNodePath(string? path) => this with { NodePath = path };
+    /// <summary>Returns a copy with <paramref name="toolCalls"/> as its ToolCalls.</summary>
+    /// <param name="toolCalls">The tool calls list or a data-bound reference to it.</param>
+    /// <returns>A new instance with the updated ToolCalls.</returns>
     public ThreadMessageBubbleControl WithToolCalls(object? toolCalls) => this with { ToolCalls = toolCalls };
+    /// <summary>Returns a copy with <paramref name="updatedNodes"/> as its UpdatedNodes.</summary>
+    /// <param name="updatedNodes">The updated-nodes list or a data-bound reference to it.</param>
+    /// <returns>A new instance with the updated UpdatedNodes.</returns>
     public ThreadMessageBubbleControl WithUpdatedNodes(object? updatedNodes) => this with { UpdatedNodes = updatedNodes };
 }

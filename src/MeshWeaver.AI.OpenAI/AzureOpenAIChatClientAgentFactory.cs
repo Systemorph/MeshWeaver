@@ -31,12 +31,24 @@ public class AzureOpenAIChatClientAgentFactory(
         return config;
     }
 
+    /// <summary>Display name of this provider factory ("Azure OpenAI").</summary>
     public override string Name => "Azure OpenAI";
 
+    /// <summary>Model ids this factory serves, as configured in <c>AzureOpenAIConfiguration</c>.</summary>
     public override IReadOnlyList<string> Models => credentials.Models;
 
+    /// <summary>Selection priority among factories; lower values are preferred. Sourced from configuration.</summary>
     public override int Order => credentials.Order;
 
+    /// <summary>
+    /// Builds an <see cref="IChatClient"/> for an Azure OpenAI deployment. Picks the model
+    /// (composer selection, then the agent's model tier, then the first configured model),
+    /// resolves endpoint + API key via <c>ChatClientCredentialResolver</c> (falling back to
+    /// configured <c>IOptions</c> values), and returns a chat client over that deployment.
+    /// </summary>
+    /// <param name="agentConfig">Agent configuration used to resolve the model tier and for log context.</param>
+    /// <returns>A chat client targeting the resolved Azure OpenAI model deployment.</returns>
+    /// <exception cref="InvalidOperationException">No model is configured, or the endpoint or API key cannot be resolved.</exception>
     protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {
         // Composer selection wins; then the agent's ModelTier; first configured model as a last resort.

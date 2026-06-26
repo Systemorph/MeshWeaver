@@ -413,29 +413,41 @@ internal static class ThreadSubmissionServer
     }
 
     /// <summary>
-    /// Owner-side self-heal for two derived-id invariants that an own-hub write can break
-    /// under load. Runs as an OWN write on the thread hub (serialised by the action block —
-    /// no clobber), idempotent and self-terminating (when nothing is missing the write is
-    /// skipped, and a reconciled node is byte-identical to the next observation so the stream
-    /// dedupes it). It NEVER touches <see cref="MeshThread.PendingUserMessages"/>, so it can
-    /// only ever ADD to the derived id arrays — it cannot re-queue work and therefore cannot
-    /// re-dispatch or storm.
+    /// Owner-side reconciliation for two derived-id invariants that the INHERENT RFC 7396
+    /// array-replace can break under concurrent cross-MIRROR writes. Runs as an OWN write on
+    /// the thread hub (serialised by the action block — no clobber), idempotent and
+    /// self-terminating (when nothing is missing the write is skipped, and a reconciled node is
+    /// byte-identical to the next observation so the stream dedupes it). It NEVER touches
+    /// <see cref="MeshThread.PendingUserMessages"/>, so it can only ever ADD to the derived id
+    /// arrays — it cannot re-queue work and therefore cannot re-dispatch or storm.
     ///
-    /// <para><b>(a) UserMessageIds ⊇ pending ∪ ingested.</b> Cross-mirror submits patch the
-    /// UserMessageIds array off a stale base and RFC 7396 array-replace drops concurrent
-    /// additions; the keyed dict survives, so the owner reconstructs the list.</para>
+    /// <para><b>NOT a stopgap for the lost-message defect.</b> That defect — the non-atomic
+    /// owner-side <c>PatchDataRequest</c> apply that read a handler-time snapshot and committed a
+    /// deferred FULL-NODE replace, clobbering a concurrent writer's just-added field — is FIXED at
+    /// the root in <c>DataExtensions.ApplyMeshNodePatchAtomic</c> (the merge now applies onto the
+    /// LIVE node in one primary-stream turn). See
+    /// <c>CrossHubPatchAtomicityTest.ConcurrentCrossHubPatches_DoNotDropAQueuedMessage</c>.</para>
+    ///
+    /// <para>What REMAINS — and why this reconciliation is still required — is the
+    /// <em>field-format</em> limitation of RFC 7396: a JSON-merge patch carries an ARRAY field as
+    /// a whole value, so it REPLACES the array (only dict/object fields merge key-by-key). The
+    /// atomic apply preserves the merge-safe dict (<c>PendingUserMessages</c>) but cannot stop a
+    /// concurrent submit's array patch — computed off the mirror's optimistic (pre-echo) snapshot —
+    /// from replacing the live array and dropping a sibling submit's id:</para>
+    ///
+    /// <para><b>(a) UserMessageIds ⊇ pending ∪ ingested.</b> Concurrent submits patch the
+    /// UserMessageIds array off a stale mirror base; RFC 7396 array-replace drops a sibling's
+    /// addition, while the keyed dict survives — so the owner reconstructs the list from the dict
+    /// (<c>RapidSubmits</c>, <c>Cancel_WithMultiplePending</c>).</para>
     ///
     /// <para><b>(b) IngestedMessageIds ⊇ (UserMessageIds ∩ Messages).</b>
     /// <see cref="DispatchRound"/>'s <c>CommitRoundAndExecute</c> (and <see cref="InboxTool"/>'s
     /// drain) add a user id to <c>Messages</c> AND <c>IngestedMessageIds</c> in ONE atomic own
-    /// write — so a user message whose satellite cell is in <c>Messages</c> yet is neither
-    /// pending nor ingested was materialised but lost its ingested mark to a non-atomic
-    /// own-hub write under 2-core load (the <c>Cancel_WithPendingMessages</c> / <c>RapidSubmits</c>
-    /// CI reds, where the thread settles with <c>pending=0, ingested=[u1]</c> but the cell exists).
-    /// The message WAS processed (its cell is rendered), so re-mark it ingested. <b>STOPGAP:</b>
-    /// the LogWarning below makes the next CI hit self-diagnosing so the non-atomic-write root
-    /// cause in the framework write path can be pinned and fixed; this restores the user-visible
-    /// invariant (no acknowledged message left un-ingested) in the meantime.</para>
+    /// write. A concurrent cross-mirror patch that replaces the <c>IngestedMessageIds</c> array
+    /// off a stale base (e.g. a resubmit racing a drain) can still strand a materialised cell as
+    /// "in Messages but not ingested". The message WAS processed (its cell is rendered), so
+    /// re-mark it ingested — restoring the user-visible invariant (no acknowledged message left
+    /// un-ingested).</para>
     /// </summary>
     private static void ReconcileUserMessageIds(IMessageHub threadHub, MeshNode? node, ILogger? logger)
     {
@@ -461,7 +473,8 @@ internal static class ThreadSubmissionServer
             logger?.LogWarning(
                 "[SubmissionWatcher] lost-message invariant restored for {ThreadPath}: {Ids} were in "
                 + "Messages+UserMessageIds but neither ingested nor pending — re-marking ingested "
-                + "(non-atomic own-hub write under load; root cause under investigation)",
+                + "(concurrent cross-mirror RFC 7396 array-replace on IngestedMessageIds; the "
+                + "owner-side full-replace clobber is fixed in DataExtensions.ApplyMeshNodePatchAtomic)",
                 threadHub.Address.Path, string.Join(",", ingestedMissing));
 
         threadHub.GetWorkspace().GetMeshNodeStream().Update(n =>

@@ -3,6 +3,10 @@ using MeshWeaver.Layout;
 
 namespace MeshWeaver.Blazor.Portal.Components;
 
+/// <summary>
+/// Blazor view that renders the user-profile page for a <c>UserProfileControl</c>, showing
+/// the user's details and avatar initials derived from the view model's display name.
+/// </summary>
 public partial class UserProfilePageView : BlazorView<UserProfileControl, UserProfilePageView>
 {
     private string GetInitials()

@@ -1,11 +1,33 @@
 ﻿namespace MeshWeaver.Messaging;
 
+/// <summary>
+/// Identity and authorization context of the caller on whose behalf a message is
+/// processed. Carried on every <see cref="IMessageDelivery"/> and used by the
+/// permission evaluator to authorize reads and writes.
+/// </summary>
 public record AccessContext
 {
+    /// <summary>
+    /// Stable unique identifier of the principal (e.g. the Entra object id, or a
+    /// hub's mesh address when <see cref="IsHub"/> is set). Empty when anonymous.
+    /// </summary>
     public string ObjectId { get; init; } = string.Empty;
+    /// <summary>
+    /// Human-readable display name of the principal.
+    /// </summary>
     public string Name { get; init; } = string.Empty;
+    /// <summary>
+    /// Email address of the principal, when available.
+    /// </summary>
     public string Email { get; init; } = string.Empty;
+    /// <summary>
+    /// The roles assigned to the principal, folded into the effective permissions.
+    /// </summary>
     public IReadOnlyCollection<string> Roles { get; init; } = [];
+    /// <summary>
+    /// True when this context represents a virtual (non-interactive) user rather
+    /// than a real signed-in person.
+    /// </summary>
     public bool IsVirtual { get; init; }
 
     /// <summary>

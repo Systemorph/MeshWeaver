@@ -19,13 +19,27 @@ namespace MeshWeaver.Markdown.Export.Layout;
 [Browsable(false)]
 public static class ExportDocumentLayoutArea
 {
+    /// <summary>Area name for the PDF export dialog.</summary>
     public const string PdfArea = "ExportPdf";
+    /// <summary>Area name for the DOCX export dialog.</summary>
     public const string DocxArea = "ExportDocx";
 
+    /// <summary>
+    /// Renders the export dialog with PDF selected as the default format.
+    /// </summary>
+    /// <param name="host">The layout area host providing hub and workspace access.</param>
+    /// <param name="_">The rendering context (unused).</param>
+    /// <returns>An observable stream of the export dialog control.</returns>
     [Browsable(false)]
     public static IObservable<UiControl?> RenderPdf(LayoutAreaHost host, RenderingContext _) =>
         RenderExport(host, defaultFormat: "pdf");
 
+    /// <summary>
+    /// Renders the export dialog with DOCX selected as the default format.
+    /// </summary>
+    /// <param name="host">The layout area host providing hub and workspace access.</param>
+    /// <param name="_">The rendering context (unused).</param>
+    /// <returns>An observable stream of the export dialog control.</returns>
     [Browsable(false)]
     public static IObservable<UiControl?> RenderDocx(LayoutAreaHost host, RenderingContext _) =>
         RenderExport(host, defaultFormat: "docx");

@@ -4,6 +4,12 @@ using MeshWeaver.Reflection;
 namespace MeshWeaver.Messaging;
 
 
+/// <summary>
+/// Internal reflection helpers for wiring message handler plugins into the hub's
+/// reactive rule chain — the set of handler interface types and the
+/// <c>Observable.Return</c> method used to lift synchronous handler results into
+/// the observable handler shape.
+/// </summary>
 public static class MessageHubPluginExtensions
 {
     internal static readonly HashSet<Type> HandlerTypes =

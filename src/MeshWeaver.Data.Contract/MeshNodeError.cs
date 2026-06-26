@@ -89,14 +89,20 @@ public sealed record MeshNodeError(
 /// </summary>
 public sealed class MeshNodeStreamException : System.Exception
 {
+    /// <summary>The structured error this exception was synthesized from.</summary>
     public MeshNodeError Error { get; }
 
+    /// <summary>Creates an exception from the given structured error.</summary>
+    /// <param name="error">The structured mesh-node error.</param>
     public MeshNodeStreamException(MeshNodeError error)
         : base($"MeshNode {error.Code} at '{error.Path}': {error.Message}")
     {
         Error = error;
     }
 
+    /// <summary>Creates an exception from the given structured error and inner exception.</summary>
+    /// <param name="error">The structured mesh-node error.</param>
+    /// <param name="inner">The underlying exception that caused this error.</param>
     public MeshNodeStreamException(MeshNodeError error, System.Exception inner)
         : base($"MeshNode {error.Code} at '{error.Path}': {error.Message}", inner)
     {

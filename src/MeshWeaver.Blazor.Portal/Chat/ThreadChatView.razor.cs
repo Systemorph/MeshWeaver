@@ -23,8 +23,26 @@ using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor.Portal.Chat;
 
-public enum ChatViewMode { Chat, ResumeThreads }
+/// <summary>
+/// Which content <c>ThreadChatView</c> is currently showing: the live conversation,
+/// or the picker for resuming an earlier thread.
+/// </summary>
+public enum ChatViewMode
+{
+    /// <summary>The live chat conversation (default) — message list plus composer.</summary>
+    Chat,
 
+    /// <summary>The picker that lists earlier threads to resume instead of continuing the current one.</summary>
+    ResumeThreads
+}
+
+/// <summary>
+/// The full chat view for a single thread, bound to a <c>ThreadChatControl</c>. Renders the message
+/// list, the composer (agent/model/harness selection, attachments, context chips), sub-thread
+/// delegation headers, and per-round elapsed-time and token chips. Reactive throughout: it data-binds
+/// the thread view-model from the mesh-node stream and keeps live subscriptions for navigation context,
+/// the per-user composer, agent/model snapshots, and individual message cells.
+/// </summary>
 public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatView>
 {
     [Inject] private INavigationService NavigationService { get; set; } = null!;
@@ -283,6 +301,14 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         && !string.IsNullOrEmpty(ThreadViewModel?.CreatedBy)
         && !string.Equals(ThreadViewModel.CreatedBy, _userHome, StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Component initialization: seeds <c>threadPath</c>/<c>initialContext</c> from the view-model,
+    /// hooks side-panel menu actions, starts the 1-second elapsed-time ticker (re-renders only while
+    /// something is executing), subscribes to the navigation-context stream, resolves the composer
+    /// binding (the embedded thread composer for an existing thread, otherwise the per-user
+    /// <c>ThreadComposer</c> singleton), seeds the initial context-attachment chip, and primes the
+    /// agent/model selections. All work is reactive — no <c>await</c>.
+    /// </summary>
     protected override void OnInitialized()
     {
         Logger.LogDebug("[ThreadChat:{InstanceId}] OnInitialized started", _instanceId);
@@ -618,6 +644,11 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         }
     }
 
+    /// <summary>
+    /// Wires the reactive data binding: projects the control's thread view-model from its mesh-node
+    /// stream into <c>ThreadViewModel</c> (via <c>ConvertThreadViewModel</c>) so the view re-renders
+    /// live as the thread changes.
+    /// </summary>
     protected override void BindData()
     {
         base.BindData();
@@ -2716,6 +2747,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// </summary>
     private IDisposable? elapsedTicker;
 
+    /// <summary>
+    /// Tears down the component exactly once: marks it disposed, disposes the elapsed-time ticker and
+    /// every live subscription (resume, connect, navigation context, composer, agent/model snapshots,
+    /// per-message / missing-probe / delegation streams), clears the tracking dictionaries, and unhooks
+    /// the side-panel action handler before delegating to the base implementation.
+    /// </summary>
     public override ValueTask DisposeAsync()
     {
         if (!_isDisposed)

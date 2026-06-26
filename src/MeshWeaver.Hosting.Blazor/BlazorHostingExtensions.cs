@@ -21,8 +21,20 @@ using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Hosting.Blazor;
 
+/// <summary>
+/// Extension methods that wire the Blazor portal into a <c>MeshBuilder</c> and map the
+/// MeshWeaver HTTP endpoints (static content, layout previews) onto a <c>WebApplication</c>.
+/// </summary>
 public static class BlazorHostingExtensions
 {
+    /// <summary>
+    /// Registers the Blazor portal services (content service, FluentUI components, circuit
+    /// access handling, navigation and menu providers) and configures the hub's Blazor layout
+    /// client.
+    /// </summary>
+    /// <param name="builder">The mesh builder to add the Blazor portal to.</param>
+    /// <param name="clientConfig">Optional callback to customize the layout client configuration.</param>
+    /// <returns>The same <paramref name="builder"/> instance for chaining.</returns>
     public static MeshBuilder AddBlazor(this MeshBuilder builder, Func<LayoutClientConfiguration, LayoutClientConfiguration>? clientConfig = null) =>
         builder
             .ConfigureServices(services => services
@@ -40,6 +52,11 @@ public static class BlazorHostingExtensions
             )
             .ConfigureHub(hub => hub.AddBlazor(clientConfig));
 
+    /// <summary>
+    /// Maps the MeshWeaver HTTP endpoints onto the application: the static content endpoint
+    /// and the layout preview stub.
+    /// </summary>
+    /// <param name="app">The web application to map the endpoints onto.</param>
     public static void MapMeshWeaver(this WebApplication app)
     {
         app.MapStaticContent(app.Services);

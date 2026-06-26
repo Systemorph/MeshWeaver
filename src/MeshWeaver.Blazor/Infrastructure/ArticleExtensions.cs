@@ -7,8 +7,12 @@ using MeshWeaver.ContentCollections;
 
 namespace MeshWeaver.Blazor.Infrastructure;
 
+/// <summary>Extension methods for formatting author and article metadata.</summary>
 public static class ArticleExtensions
 {
+    /// <summary>Returns the author's full name, including the middle name when present.</summary>
+    /// <param name="author">The author whose name should be formatted.</param>
+    /// <returns>First Middle Last, or First Last when no middle name is set.</returns>
     public static string FormatName(this Author author)
     {
         if (string.IsNullOrEmpty(author.MiddleName))

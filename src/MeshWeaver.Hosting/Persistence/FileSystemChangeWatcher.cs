@@ -241,6 +241,7 @@ public class FileSystemChangeWatcher : IDisposable
     private static string NormalizePath(string? path) =>
         path?.Trim('/') ?? "";
 
+    /// <inheritdoc />
     public void Dispose()
     {
         if (_disposed)

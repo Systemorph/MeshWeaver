@@ -49,12 +49,21 @@ public partial class ThreadTokenChip : ComponentBase, IDisposable
     private string ChipLabel
         => $"↑{FormatCompact(_totalInput)} ↓{FormatCompact(_totalOutput)} · {FormatCost(_totalCost)}";
 
+    /// <summary>
+    /// Resolves the logger for the chip. Subscription setup is deferred to
+    /// <c>OnParametersSet</c>, which runs once <c>ThreadPath</c> is supplied.
+    /// </summary>
     protected override void OnInitialized()
     {
         base.OnInitialized();
         _logger = Hub.ServiceProvider.GetService<ILogger<ThreadTokenChip>>();
     }
 
+    /// <summary>
+    /// Re-subscribes when <c>ThreadPath</c> changes: disposes any prior subscription, resets the
+    /// displayed totals, collapses the breakdown, and opens a LIVE query of the thread's per-model
+    /// <c>TokenUsage</c> satellites (never <c>.Take(1)</c>) so the chip updates as rounds write usage.
+    /// </summary>
     protected override void OnParametersSet()
     {
         base.OnParametersSet();
@@ -155,6 +164,9 @@ public partial class ThreadTokenChip : ComponentBase, IDisposable
             ? "$" + cost.ToString("0.####", CultureInfo.InvariantCulture)
             : "$" + cost.ToString("0.00", CultureInfo.InvariantCulture);
 
+    /// <summary>
+    /// Marks the chip disposed and tears down the live usage-query subscription.
+    /// </summary>
     public void Dispose()
     {
         _disposed = true;

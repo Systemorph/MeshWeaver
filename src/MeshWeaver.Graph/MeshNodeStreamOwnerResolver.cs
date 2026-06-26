@@ -12,7 +12,7 @@ namespace MeshWeaver.Graph;
 /// MeshNode-aware <see cref="IStreamOwnerResolver"/>: reads the node OWNER (<c>CreatedBy</c>) from the
 /// <see cref="MeshNode"/> carried in a synchronization stream's current value. Registered on every
 /// per-node hub via <c>ConfigureDefaultNodeHub</c>, so
-/// <see cref="SynchronizationStream{TStream}.Update"/> can inject the owner on the cold-start FIRST
+/// <see cref="SynchronizationStream{TStream}.Update(System.Func{TStream, TStream}, System.Action{System.Exception})"/> can inject the owner on the cold-start FIRST
 /// write — before the owning hub has established its standing identity asynchronously. The node is
 /// already in the stream's <c>Current</c> at write time, so this is race-free.
 /// </summary>

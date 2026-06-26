@@ -12,6 +12,11 @@ using Orleans.Serialization.Configuration;
 
 namespace MeshWeaver.Connection.Orleans;
 
+/// <summary>
+/// Shared wiring for Orleans-backed mesh connections: builds the mesh host builder,
+/// registers partitioned persistence and the Orleans routing service, and configures the
+/// Orleans serializer plus type-name filter that the mesh round-trips over grain calls.
+/// </summary>
 public static class OrleansConnectionExtensions
 {
     internal static MeshHostApplicationBuilder CreateOrleansConnectionBuilder(this IHostApplicationBuilder hostBuilder, Address? address = null)

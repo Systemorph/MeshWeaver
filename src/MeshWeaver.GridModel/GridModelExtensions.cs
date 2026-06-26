@@ -2,6 +2,7 @@ using MeshWeaver.Messaging;
 
 namespace MeshWeaver.GridModel;
 
+/// <summary>Extension methods for registering the GridModel types with a <see cref="MessageHubConfiguration"/>.</summary>
 public static class GridModelExtensions
 {
     /// <summary>

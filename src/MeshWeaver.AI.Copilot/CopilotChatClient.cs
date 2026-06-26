@@ -40,6 +40,19 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
     private IObservable<CopilotClient>? connectPromise;
     private bool disposed;
 
+    /// <summary>
+    /// Creates a chat client that bridges the GitHub Copilot CLI/SDK to the Microsoft.Extensions.AI streaming contract.
+    /// </summary>
+    /// <param name="configuration">Copilot CLI configuration (CLI path/url, port).</param>
+    /// <param name="modelName">Optional model id to report in <see cref="Metadata"/>; Copilot self-selects, so this is informational only.</param>
+    /// <param name="logger">Optional logger for session diagnostics.</param>
+    /// <param name="githubToken">The calling user's GitHub token; when null the CLI uses the machine's logged-in user (ambient auth).</param>
+    /// <param name="ioPool">I/O pool that runs the subprocess spawn and SDK round-trips off the hub scheduler; defaults to an unbounded pool when null.</param>
+    /// <param name="agentSkills">Stream of the user's selectable MeshWeaver agents, injected into the Copilot session's system message; resolved per session.</param>
+    /// <param name="mcpBackConnection">Automatic MCP back-connection that exposes the mesh as this CLI's workspace.</param>
+    /// <param name="userId">Calling user's id, forwarded for per-user context.</param>
+    /// <param name="userName">Calling user's display name, forwarded for per-user context.</param>
+    /// <param name="userEmail">Calling user's email, forwarded for per-user context.</param>
     public CopilotChatClient(
         CopilotConfiguration configuration,
         string? modelName = null,

@@ -53,9 +53,15 @@ public record TextAreaControl : InputFormControlBase<TextAreaControl>
 
 }
 
+/// <summary>
+/// Controls which axes the text area can be resized by the user.
+/// </summary>
 public enum TextAreaResize
 {
+    /// <summary>The text area can only be resized horizontally.</summary>
     Horizontal,
+    /// <summary>The text area can only be resized vertically.</summary>
     Vertical,
+    /// <summary>The text area can be resized in both directions.</summary>
     Both
 }

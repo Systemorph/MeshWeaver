@@ -29,11 +29,17 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class NodeTypeLayoutAreas
 {
+    /// <summary>Area name for the NodeType instance Search layout area.</summary>
     public const string SearchArea = "Search";
+    /// <summary>Area name for the NodeType Overview layout area (the default split view with side menu and configuration/code display).</summary>
     public const string OverviewArea = "Overview";
+    /// <summary>Area name for the NodeType Configuration layout area.</summary>
     public const string ConfigurationArea = "Configuration";
+    /// <summary>Area name for the HubConfiguration view layout area.</summary>
     public const string HubConfigViewArea = "HubConfig";
+    /// <summary>Area name for the HubConfiguration edit layout area (Monaco editor).</summary>
     public const string HubConfigEditArea = "HubConfigEdit";
+    /// <summary>Area name for the NodeType Releases layout area.</summary>
     public const string ReleasesArea = "Releases";
 
     /// <summary>
@@ -1864,14 +1870,27 @@ public static class NodeTypeLayoutAreas
 /// </summary>
 public record NodeTypeConfigForm
 {
+    /// <summary>The display name of the NodeType.</summary>
     public string? Name { get; init; }
+    /// <summary>The icon associated with the NodeType.</summary>
     public string? Icon { get; init; }
+    /// <summary>The human-readable description of the NodeType.</summary>
     public string? Description { get; init; }
+    /// <summary>The query used to list instances/children of this NodeType.</summary>
     public string? ChildrenQuery { get; init; }
+    /// <summary>The default namespace applied to new instances of this NodeType.</summary>
     public string? DefaultNamespace { get; init; }
+    /// <summary>The maximum page width used when rendering instances of this NodeType.</summary>
     public string? PageMaxWidth { get; init; }
+    /// <summary>The pending release notes for the next NodeType release.</summary>
     public string? ReleaseNotes { get; init; }
 
+    /// <summary>
+    /// Builds a NodeTypeConfigForm from a mesh node and its optional NodeType definition.
+    /// </summary>
+    /// <param name="node">The mesh node to read values from.</param>
+    /// <param name="def">The optional NodeType definition to read definition-level values from; may be null.</param>
+    /// <returns>The populated configuration form.</returns>
     public static NodeTypeConfigForm FromNode(MeshNode node, NodeTypeDefinition? def) => new()
     {
         Name = node.Name,
