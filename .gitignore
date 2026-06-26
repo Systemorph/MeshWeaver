@@ -383,5 +383,10 @@ samples/Graph/Data/VUser/
 # User activity data
 **/_useractivity/
 
+# Runtime-generated notification satellites the framework writes into the
+# FileSystem-backed sample data during local runs (createdBy=system-security,
+# GUID ids, e.g. "Type 'X' failed to compile") — generated output, not source.
+**/_Notification/
+
 # Claude Code per-user local state (settings.local.json, plans/, scheduled_tasks.lock, etc.)
 .claude/
