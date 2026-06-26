@@ -216,57 +216,43 @@ public static class DelegationTool
                         // after that (Idle / Cancelled / Done) is the genuine
                         // post-execution terminal, NOT the initial-Idle emission
                         // the synced query replays on subscribe.
-                        workspace.GetMeshNodeStream(subThreadPath)
-                            .Select(node => node?.Content as MeshThread)
-                            .Where(t => t is not null)
-                            .Scan(
-                                (sawRunning: false, terminal: (MeshThread?)null),
-                                (state, t) =>
-                                {
-                                    if (t!.Status is ThreadExecutionStatus.Executing
-                                                  or ThreadExecutionStatus.StartingExecution)
-                                        return (true, null);
-                                    // Terminal when we either observed the Running phase OR
-                                    // the node already carries a completed-round Summary. A
-                                    // fast sub-agent can flip Running→Idle inside a single
-                                    // coalesced stream emission, so sawRunning is never set;
-                                    // a non-empty Summary (written atomically with Status→Idle
-                                    // by ExecuteMessageAsync) is the authoritative "this round
-                                    // finished" signal that distinguishes the post-execution
-                                    // Idle from the initial creation Idle (which has none).
-                                    var completed = state.sawRunning
-                                                    || !string.IsNullOrEmpty(t.Summary);
-                                    if (completed && t.Status is ThreadExecutionStatus.Idle
-                                                  or ThreadExecutionStatus.Cancelled
-                                                  or ThreadExecutionStatus.Done)
-                                        return (true, t);
-                                    return state;
-                                })
-                            .Where(s => s.terminal is not null)
-                            .Take(1)
-                            .Timeout(TimeSpan.FromMinutes(10))
+                        // Map the sub-thread's terminal state to the tool result.
+                        // WaitForDelegationResult surfaces a sub-thread that ERRORS
+                        // (its node stream faults — a stuck-init gate failure arrives
+                        // here as a DeliveryFailure ~30s in), TIMES OUT, or ends
+                        // Cancelled without a summary as an "Error: …" string — never
+                        // an empty success. ExtractToolResult keys IsSuccess off the
+                        // "Error" prefix, so the failure lands as a failed tool-call
+                        // entry on the parent thread's output cell instead of telling
+                        // the parent agent the delegation "produced nothing" (the
+                        // 2026-06-26 atioz wedge: a stuck sub-thread init resolved as
+                        // empty success while the wedged sub-hub stormed path-resolution
+                        // until the portal GC-thrashed and liveness wedged).
+                        WaitForDelegationResult(
+                                workspace.GetMeshNodeStream(subThreadPath)
+                                    .Select(node => node?.Content as MeshThread)
+                                    .Where(t => t is not null)
+                                    .Select(t => t!),
+                                agentName, subThreadPath,
+                                TimeSpan.FromMinutes(10), logger)
                             .Subscribe(
-                                s =>
+                                result =>
                                 {
-                                    // Thread.Summary IS the agent's tool-call result —
-                                    // written by ExecuteMessageAsync in the same
-                                    // stream.Update cycle as Status → Idle, so this
-                                    // emission carries the summary atomically.
-                                    var summary = s.terminal!.Summary ?? "";
                                     logger?.LogInformation(
-                                        "Sub-thread {SubPath} Running→Idle: summary len={Len}",
-                                        subThreadPath, summary.Length);
-                                    tcs.TrySetResult(summary);
+                                        "Sub-thread {SubPath} resolved: result len={Len}",
+                                        subThreadPath, result.Length);
+                                    tcs.TrySetResult(result);
                                 },
                                 ex =>
                                 {
-                                    // Primary path failed/timed out — NOW fall back to the
-                                    // chunk aggregate (empty for the reactive path, but at
-                                    // least the parent tool call resolves instead of hanging).
+                                    // WaitForDelegationResult folds failures into an
+                                    // "Error: …" Return, so this fires only on a truly
+                                    // unexpected fault — still surface it, never hang.
                                     logger?.LogWarning(ex,
-                                        "Sub-thread {SubPath} Running→Idle wait failed; falling back to chunk aggregate",
+                                        "Sub-thread {SubPath} result stream faulted unexpectedly",
                                         subThreadPath);
-                                    tcs.TrySetResult(sb.ToString());
+                                    tcs.TrySetResult(
+                                        $"Error: delegation to {agentName} failed — {ex.Message}.");
                                 });
                     });
             }
@@ -376,6 +362,85 @@ public static class DelegationTool
             name: "delegate_to_agent",
             description: description);
     }
+
+    /// <summary>
+    /// Maps a sub-thread's <see cref="Thread"/> status stream to the
+    /// <c>delegate_to_agent</c> tool result.
+    ///
+    /// <para><b>Wedges-to-zero contract.</b> A sub-thread that ERRORS (its node
+    /// stream faults — a stuck-init gate failure surfaces here as a
+    /// <c>DeliveryFailure</c> ~30s in), TIMES OUT, or ends
+    /// <see cref="ThreadExecutionStatus.Cancelled"/> without a summary MUST resolve
+    /// as an <c>"Error: …"</c> string — never an empty success.
+    /// <see cref="ThreadExecution.ExtractToolResult"/> keys <c>IsSuccess</c> off the
+    /// <c>"Error"</c> prefix, so the failed delegation lands as a failed tool-call
+    /// entry on the parent thread's output cell instead of telling the parent agent
+    /// the delegation "produced nothing" (the 2026-06-26 atioz wedge: a stuck
+    /// sub-thread init resolved as empty success while the wedged sub-hub stormed
+    /// path-resolution until the portal GC-thrashed and liveness wedged).</para>
+    ///
+    /// <para>The genuine post-execution terminal is distinguished from the initial
+    /// creation-Idle either by having observed a non-terminal (Executing /
+    /// StartingExecution) status first, OR by the node carrying a completed-round
+    /// <see cref="Thread.Summary"/> (a fast sub-agent can flip Running→Idle inside a
+    /// single coalesced emission — the non-empty Summary, written atomically with
+    /// Status→Idle by <c>ExecuteMessageAsync</c>, is the authoritative finished
+    /// signal).</para>
+    /// </summary>
+    internal static IObservable<string> WaitForDelegationResult(
+        IObservable<MeshThread> subThreadStatus,
+        string agentName,
+        string subThreadPath,
+        TimeSpan timeout,
+        ILogger? logger = null)
+        => subThreadStatus
+            .Scan(
+                (sawRunning: false, terminal: (MeshThread?)null),
+                (state, t) =>
+                {
+                    if (t.Status is ThreadExecutionStatus.Executing
+                                 or ThreadExecutionStatus.StartingExecution)
+                        return (true, null);
+                    var completed = state.sawRunning || !string.IsNullOrEmpty(t.Summary);
+                    if (completed && t.Status is ThreadExecutionStatus.Idle
+                                 or ThreadExecutionStatus.Cancelled
+                                 or ThreadExecutionStatus.Done)
+                        return (true, t);
+                    return state;
+                })
+            .Where(s => s.terminal is not null)
+            .Select(s => s.terminal!)
+            .Take(1)
+            .Timeout(timeout)
+            .Select(t =>
+            {
+                var summary = t.Summary ?? "";
+                // Cancelled before producing anything = the sub-agent did not finish.
+                // Surface as a tool error so the parent doesn't treat "" as a real answer.
+                if (t.Status is ThreadExecutionStatus.Cancelled
+                    && string.IsNullOrWhiteSpace(summary))
+                {
+                    logger?.LogWarning(
+                        "Sub-thread {SubPath} cancelled before producing a summary — surfacing as tool error",
+                        subThreadPath);
+                    return $"Error: delegation to {agentName} was cancelled before completing — the sub-agent did not finish.";
+                }
+                return summary;
+            })
+            .Catch((Exception ex) =>
+            {
+                // Stream faulted (sub-thread init-gate failure → DeliveryFailure) or
+                // the wait timed out. Per wedges-to-zero this is a tool-call FAILURE,
+                // surfaced to the parent thread output — NOT a silent empty success.
+                logger?.LogWarning(ex,
+                    "Sub-thread {SubPath} failed before completing — surfacing as tool error",
+                    subThreadPath);
+                var reason = ex is TimeoutException
+                    ? "timed out waiting for the delegated agent to finish"
+                    : ex.Message;
+                return Observable.Return(
+                    $"Error: delegation to {agentName} failed — {reason}.");
+            });
 
     /// <summary>
     /// Tool that returns a JSON snapshot of currently-active sub-threads (path,
