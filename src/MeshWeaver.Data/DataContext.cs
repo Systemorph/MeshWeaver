@@ -11,12 +11,21 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data;
 
+/// <summary>
+/// Configuration and runtime registry of a workspace's data sources, type sources and reduce
+/// manager. Built up immutably via the With* methods, then <see cref="Initialize"/> wires up every
+/// configured source and registers their types.
+/// </summary>
 public sealed record DataContext : IDisposable
 {
+    /// <summary>Name of the message-hub gate that stays closed until the data context has finished initializing.</summary>
     public const string InitializationGateName = "DataContextInit";
 
+    /// <summary>The type registry that maps CLR types to collection names for this context.</summary>
     public ITypeRegistry TypeRegistry { get; }
 
+    /// <summary>Creates a data context for <paramref name="workspace"/>, wiring its hub, reduce manager and type registry.</summary>
+    /// <param name="workspace">The workspace this context belongs to.</param>
     public DataContext(IWorkspace workspace)
     {
         Hub = workspace.Hub;
@@ -68,38 +77,71 @@ public sealed record DataContext : IDisposable
 
     private Dictionary<Type, ITypeSource> TypeSourcesByType { get; set; } = new();
 
+    /// <summary>All configured data sources.</summary>
     public IEnumerable<IDataSource> DataSources => DataSourcesById.Values;
 
     private ImmutableDictionary<object, IDataSource> DataSourcesById { get; set; } =
         ImmutableDictionary<object, IDataSource>.Empty;
 
+    /// <summary>Looks up a configured data source by its id.</summary>
+    /// <param name="id">Data source id.</param>
+    /// <returns>The matching data source, or null if none is registered.</returns>
     public IDataSource? GetDataSourceForId(object id) => DataSourcesById.GetValueOrDefault(id);
 
+    /// <summary>Finds the data source that owns the given type, walking up the base-type chain if needed.</summary>
+    /// <param name="type">Entity type to resolve.</param>
+    /// <returns>The owning data source, or null if the type is not mapped.</returns>
     public IDataSource? GetDataSourceForType(Type type) => DataSourcesByType.GetValueOrDefault(type)
           ?? (type.BaseType == typeof(object) || type.BaseType == null ? null : GetDataSourceForType(type.BaseType));
 
+    /// <summary>Map of mapped entity type to the data source that owns it.</summary>
     public IReadOnlyDictionary<Type, IDataSource> DataSourcesByType { get; private set; } = new Dictionary<Type, IDataSource>();
+    /// <summary>Map of collection name to the data source that owns it.</summary>
     public IReadOnlyDictionary<string, IDataSource> DataSourcesByCollection { get; private set; } = new Dictionary<string, IDataSource>();
 
+    /// <summary>Returns a copy of this context with an additional data source builder.</summary>
+    /// <param name="dataSourceBuilder">Builder that creates the data source from a hub.</param>
+    /// <returns>A new context including the builder.</returns>
     public DataContext WithDataSource(DataSourceBuilder dataSourceBuilder) =>
         this with { DataSourceBuilders = DataSourceBuilders.Add(dataSourceBuilder), };
 
+    /// <summary>Map of collection name to the type source backing it, populated during initialization.</summary>
     public IReadOnlyDictionary<string, ITypeSource> TypeSources { get; private set; } = new Dictionary<string, ITypeSource>();
 
+    /// <summary>Looks up the type source for a collection name.</summary>
+    /// <param name="collection">Collection name.</param>
+    /// <returns>The type source, or null if the collection is unknown.</returns>
     public ITypeSource? GetTypeSource(string collection) =>
         TypeSources.GetValueOrDefault(collection);
 
+    /// <summary>Finds the type source for a CLR type, walking up the base-type chain if needed.</summary>
+    /// <param name="type">Entity type to resolve.</param>
+    /// <returns>The type source, or null if the type is not mapped.</returns>
     public ITypeSource? GetTypeSource(Type type) =>
         TypeSourcesByType.GetValueOrDefault(type)
         ?? (type.BaseType == typeof(object) || type.BaseType == null ? null : GetTypeSource(type.BaseType));
 
 
+    /// <summary>The data source builders registered on this context; invoked during <see cref="Initialize"/>.</summary>
     public ImmutableList<DataSourceBuilder> DataSourceBuilders { get; set; } =
         ImmutableList<DataSourceBuilder>.Empty;
 
     internal ReduceManager<EntityStore> ReduceManager { get; init; }
-    internal TimeSpan InitializationTimeout { get; set; } = TimeSpan.FromHours(60);
+
+    /// <summary>
+    /// Upper bound on DataContext initialization, consumed by
+    /// <see cref="OpenInitializationGate"/>. A data-source init that HANGS (e.g. a
+    /// stuck NodeType/scope Roslyn compile, or a dependency that never initialises)
+    /// trips this and drives the hub to a terminal FAILED state instead of leaving
+    /// <see cref="InitializationGateName"/> closed forever (the 2026-06-26 atioz
+    /// wedge). Defaults to <c>120s</c> — the same budget top-level hubs get via
+    /// <c>MessageHub.DefaultInitializationTimeout</c> — and is overridable per
+    /// context via <see cref="WithInitializationTimeout"/> (tests set it short).
+    /// </summary>
+    internal TimeSpan InitializationTimeout { get; set; } = TimeSpan.FromSeconds(120);
+    /// <summary>The message hub that owns this context's workspace.</summary>
     public IMessageHub Hub { get; }
+    /// <summary>The workspace this context belongs to.</summary>
     public IWorkspace Workspace { get; }
 
     /// <summary>
@@ -138,15 +180,28 @@ public sealed record DataContext : IDisposable
     public ImmutableList<AccessRestrictionEntry> GlobalAccessRestrictions { get; init; } =
         ImmutableList<AccessRestrictionEntry>.Empty;
 
+    /// <summary>Returns a copy of this context with the given initial-load timeout.</summary>
+    /// <param name="timeout">Maximum time to wait for data sources to finish their initial load.</param>
+    /// <returns>A new context with the timeout applied.</returns>
     public DataContext WithInitializationTimeout(TimeSpan timeout) =>
         this with { InitializationTimeout = timeout };
 
+    /// <summary>Returns a copy of this context with its reduce manager transformed by <paramref name="change"/>.</summary>
+    /// <param name="change">Function that augments the entity-store reduce manager.</param>
+    /// <returns>A new context with the updated reduce manager.</returns>
     public DataContext Configure(
         Func<ReduceManager<EntityStore>, ReduceManager<EntityStore>> change
     ) => this with { ReduceManager = change.Invoke(ReduceManager) };
 
+    /// <summary>Factory that builds an <see cref="IDataSource"/> from the owning hub.</summary>
+    /// <param name="hub">The hub the data source will run on.</param>
+    /// <returns>The constructed data source.</returns>
     public delegate IDataSource DataSourceBuilder(IMessageHub hub);
 
+    /// <summary>
+    /// Builds every configured data source, registers their types with the type registry, populates the
+    /// collection and type lookups, and starts each source's initial load.
+    /// </summary>
     public void Initialize()
     {
         logger.LogDebug("Starting initialization of DataContext for {Address}", Hub.Address);
@@ -212,35 +267,42 @@ public sealed record DataContext : IDisposable
     /// </summary>
     internal void OpenInitializationGate()
     {
-        Task.WhenAll(tasks)
-            .ContinueWith(task =>
+        var allInit = Task.WhenAll(tasks);
+
+        // Observe any eventual fault of a still-running init so a late completion
+        // (after we've already failed the gate on timeout below) never surfaces as
+        // an UnobservedTaskException.
+        _ = allInit.ContinueWith(static t => { _ = t.Exception; },
+            CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+
+        // Bound the wait. The IsFaulted branch below already gives a THROWN init the
+        // wedges-to-zero treatment (fail fast → reject subsequent requests). A HUNG
+        // init (Task.WhenAll never completing) had NO such bound: the gate never
+        // opened and every subsequent message deferred → NACKed → resubscribed
+        // forever, a path-resolution storm that GC-thrashed the portal (2026-06-26
+        // atioz wedge). Time-box it so a hang reaches the SAME terminal failed state
+        // as a fault — mirroring MessageHub.HandleInitialize's .Timeout(StartupTimeout).
+        Task.WhenAny(allInit, Task.Delay(InitializationTimeout))
+            .ContinueWith(_ =>
             {
-                if (task.IsFaulted)
+                Exception? failure = null;
+                if (!allInit.IsCompleted)
                 {
-                    var initException = new InvalidOperationException(
-                        $"Hub '{Hub.Address}' initialization failed", task.Exception);
-                    InitializationError = initException;
-                    logger.LogError(task.Exception, "DataContext initialization failed for {Address}. Hub is now in FAILED state.", Hub.Address);
-
-                    // Register a global rejection handler for all data requests.
-                    // Any subsequent request to this hub will get an immediate DeliveryFailure.
-                    RegisterInitializationFailureHandler(initException);
-
-                    // Also propagate to existing data source streams
-                    foreach (var ds in DataSources)
-                    {
-                        try
-                        {
-                            var stream = ds.GetStreamForPartition(null);
-                            stream?.OnError(initException);
-                        }
-                        catch (Exception ex)
-                        {
-                            logger.LogDebug(ex, "Error propagating init failure to data source {Id}", ds.Id);
-                        }
-                    }
+                    failure = new TimeoutException(
+                        $"Hub '{Hub.Address}' DataContext initialization did not complete within "
+                        + $"{InitializationTimeout.TotalSeconds:F0}s — likely a stuck NodeType compile, "
+                        + "or a data source that never initialised.");
+                    logger.LogError(failure,
+                        "DataContext initialization TIMED OUT for {Address}. Hub is now in FAILED state.", Hub.Address);
                 }
-                else if (task.IsCanceled)
+                else if (allInit.IsFaulted)
+                {
+                    failure = new InvalidOperationException(
+                        $"Hub '{Hub.Address}' initialization failed", allInit.Exception);
+                    logger.LogError(allInit.Exception,
+                        "DataContext initialization failed for {Address}. Hub is now in FAILED state.", Hub.Address);
+                }
+                else if (allInit.IsCanceled)
                 {
                     logger.LogWarning("DataContext initialization was canceled for {Address}", Hub.Address);
                 }
@@ -249,11 +311,37 @@ public sealed record DataContext : IDisposable
                     logger.LogDebug("Finished initialization of DataContext for {Address}", Hub.Address);
                 }
 
+                if (failure is not null)
+                {
+                    InitializationError = failure;
+
+                    // Register a global rejection handler for all data requests: every
+                    // subsequent request to this hub gets an immediate DeliveryFailure,
+                    // so callers (and the MeshNodeStreamCache negative cache) get a
+                    // TERMINAL answer and stop re-subscribing — never the 30s-defer loop.
+                    RegisterInitializationFailureHandler(failure);
+
+                    // Also propagate to existing data source streams.
+                    foreach (var ds in DataSources)
+                    {
+                        try
+                        {
+                            var stream = ds.GetStreamForPartition(null);
+                            stream?.OnError(failure);
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogDebug(ex, "Error propagating init failure to data source {Id}", ds.Id);
+                        }
+                    }
+                }
+
                 // Always open the gate so the hub can process messages.
-                // On failure/cancellation, streams already have errors propagated;
-                // keeping the gate closed would hang the hub forever.
-                logger.LogDebug("DataContext: Opening {GateName} gate for {Address} (IsFaulted={IsFaulted}, IsCanceled={IsCanceled})",
-                    InitializationGateName, Hub.Address, task.IsFaulted, task.IsCanceled);
+                // On failure/timeout, streams already have errors propagated and the
+                // rejection handler is registered; keeping the gate closed would hang
+                // the hub forever.
+                logger.LogDebug("DataContext: Opening {GateName} gate for {Address} (failed={Failed})",
+                    InitializationGateName, Hub.Address, failure is not null);
                 Hub.OpenGate(InitializationGateName);
             }, TaskScheduler.Default);
     }
@@ -282,9 +370,11 @@ public sealed record DataContext : IDisposable
         });
     }
 
+    /// <summary>All entity types mapped by the configured data sources.</summary>
     public IEnumerable<Type> MappedTypes => DataSourcesByType.Keys;
     private readonly List<Task> tasks = new();
     private readonly List<WorkspaceReference> initialized = new();
+    /// <summary>Disposes every configured data source.</summary>
     public void Dispose()
     {
         foreach (var dataSource in DataSourcesById.Values)
@@ -293,6 +383,9 @@ public sealed record DataContext : IDisposable
         }
     }
 
+    /// <summary>Returns the collection name for a mapped type, or null if the type is not mapped.</summary>
+    /// <param name="type">Entity type.</param>
+    /// <returns>The collection name, or null.</returns>
     public string? GetCollectionName(Type type)
         => TypeSourcesByType.GetValueOrDefault(type)?.CollectionName;
 }
