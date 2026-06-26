@@ -81,35 +81,53 @@ public sealed class MauiControlRenderer(MauiViewRegistry registry) : IMauiContro
         };
         IDisposable? sub = null;
 
-        // Tie the area subscription to the host's Loaded/Unloaded lifecycle, re-subscribing each time it
-        // re-enters the visual tree. MAUI fires Unloaded SPURIOUSLY during nested-layout/handler changes
-        // (e.g. when the host sits inside the shell's content frame, several ContentViews deep) — disposing
-        // on Unloaded ALONE killed the subscription before the area's first control ever arrived, leaving a
-        // blank frame. GetControlStream replays the current control to a fresh subscriber, so re-subscribing
-        // on (re)Load restores the content. An immediate subscribe covers hosts that render before Loaded.
-        // Subscribe ONCE and stay subscribed — GetControlStream delivers an area's generator-produced
-        // control on a later Full frame, so a subscription torn down on a spurious Unloaded (the old churn)
-        // missed it. Dispose only when the host is finally removed AND not re-added (deferred check).
+        // 🚨 Once THIS region has rendered a control, we NEVER replace it with an error or spinner. A
+        // layout-area stream stays open and goes QUIET after delivering its content, so a lifetime
+        // timeout (the old `.Timeout(20s)`) would later fire on a perfectly-rendered area and wipe it —
+        // and for the page's ROOT area that wiped the WHOLE page ("area didn't resolve" after a while).
+        // Errors/timeouts are scoped to this host and only surface while the region is still empty.
+        var rendered = false;
+        IDisposable? deadline = null;
+
+        void ShowNotLoaded()
+        {
+            if (rendered) return;   // keep the last good content — don't clobber a region that loaded
+            host.Content = new Label
+            {
+                Text = "⚠ couldn't load this section",
+                TextColor = Colors.OrangeRed, FontSize = 11, Margin = new Thickness(8),
+                LineBreakMode = LineBreakMode.WordWrap,
+            };
+        }
+
+        // INITIAL-LOAD deadline only: if no control arrives within 20s, show the in-region notice
+        // instead of an eternal spinner. Cancelled the instant the first control renders, so it can
+        // never fire on an already-loaded (but quiet) area. NOT a retry/resubscribe watchdog.
+        deadline = Observable.Timer(TimeSpan.FromSeconds(20))
+            .Subscribe(_ => MainThread.BeginInvokeOnMainThread(ShowNotLoaded));
+
+        // Tie the area subscription to the host's Loaded/Unloaded lifecycle. MAUI fires Unloaded
+        // SPURIOUSLY during nested-layout/handler changes; GetControlStream replays the current control
+        // to a fresh subscriber, so a torn-down subscription would miss it. Subscribe ONCE and stay
+        // subscribed; dispose only when the host is finally removed AND not re-added (deferred check).
         sub = stream.GetControlStream(area)
             // Retry transient area errors with backoff until the (possibly nested/remote) area resolves —
-            // the SAME shared helper Blazor's NamedAreaView uses. Without it a nested area that errors
-            // transiently while its node renders it never recovers (the "area didn't resolve" symptom).
+            // the SAME shared helper Blazor's NamedAreaView uses.
             .RetryAreaWithBackoff(AreaErrorClassifier.ShouldRetryArea)
-            // Backstop: if it STILL never arrives, surface WHY (timeout) instead of an eternal spinner.
-            .Timeout(TimeSpan.FromSeconds(20))
             .Subscribe(
                 ctrl => MainThread.BeginInvokeOnMainThread(() =>
-                    host.Content = ctrl is UiControl c ? RenderControl(c, stream, area) : null),
-                ex => MainThread.BeginInvokeOnMainThread(() =>
-                    host.Content = new Label
-                    {
-                        Text = $"⚠ area '{area}' didn't resolve — {ex.GetType().Name}",
-                        TextColor = Colors.OrangeRed, FontSize = 11, Margin = new Thickness(8),
-                        LineBreakMode = LineBreakMode.WordWrap,
-                    }));
+                {
+                    if (ctrl is not UiControl c) return;   // ignore empty frames; keep current content
+                    rendered = true;
+                    deadline?.Dispose();                   // first content in → stop the load deadline
+                    host.Content = RenderControl(c, stream, area);
+                }),
+                // A stream error AFTER content rendered is kept silent (we keep the good content); only an
+                // error before first render surfaces the in-region notice.
+                _ => MainThread.BeginInvokeOnMainThread(ShowNotLoaded));
         host.Unloaded += (_, _) => MainThread.BeginInvokeOnMainThread(() =>
         {
-            if (host.Parent is null) { sub?.Dispose(); sub = null; }   // only if it didn't get re-parented
+            if (host.Parent is null) { sub?.Dispose(); sub = null; deadline?.Dispose(); }   // only if not re-parented
         });
         return host;
     }
