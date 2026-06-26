@@ -2,10 +2,12 @@
 using System.Security.Claims;
 using System.Text.Json;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
 
 namespace Memex.Portal.Shared.Authentication;
 
@@ -14,11 +16,17 @@ namespace Memex.Portal.Shared.Authentication;
 public class DevAuthController : ControllerBase
 {
     private readonly IMeshService _meshQuery;
+    private readonly UserOnboardingService _onboarding;
+    private readonly bool _devLoginEnabled;
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-    public DevAuthController(IMeshService meshQuery)
+    public DevAuthController(IMeshService meshQuery, UserOnboardingService onboarding, IConfiguration configuration)
     {
         _meshQuery = meshQuery;
+        _onboarding = onboarding;
+        // DevLogin is forced OFF in prod (Memex.Portal.Distributed/Program.cs); this gate
+        // ensures the self-provisioning below can NEVER auto-create users in production.
+        _devLoginEnabled = configuration["Authentication:EnableDevLogin"] == "true";
     }
 
     /// <summary>
@@ -27,12 +35,29 @@ public class DevAuthController : ControllerBase
     [HttpPost("signin")]
     public async Task<IActionResult> Login([FromForm] string personId, [FromForm] string? returnUrl)
     {
+        // Resolve the dev user across BOTH user-node shapes (so dev login works on the monolith
+        // AND the distributed portal). The monolith / AddSampleUsers seed the legacy `User/{id}`
+        // node (namespace "User"); the distributed portal's UserOnboardingService writes the
+        // partition-root `{id}` node (namespace "", nodeType "User") and no longer mirrors it under
+        // `User/`. Query nodeType:User and match by id (case-insensitive) or the legacy path.
         // TODO(persistence-cull): framework boundary — review whether this should
         // route through UserIdentityCache (sync) instead of awaiting the observable.
         var change = await _meshQuery
-            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:User/{personId}"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:User"))
             .FirstAsync();
-        var node = change.Items.FirstOrDefault();
+        var node = change.Items.FirstOrDefault(n =>
+            string.Equals(n.Id, personId, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(n.Path, $"User/{personId}", StringComparison.OrdinalIgnoreCase));
+
+        // DevLogin self-provisions (dev only — gated on EnableDevLogin, forced off in prod).
+        // A personId with no User node yet is onboarded on first signin via the SAME reactive
+        // dual-write the Entra onboarding flow runs (UserOnboardingService.CreateUser +
+        // GrantSelfAdmin), writing the partition-root `{id}` User node the lookup above
+        // matches. So a throwaway DevLogin portal (the e2e portal) works for ANY user with no
+        // separate seed step; without it DevLogin 400s on a fresh DB that seeds no users.
+        if ((node?.NodeType != "User" || node.Content == null) && _devLoginEnabled)
+            node = await ProvisionDevUser(personId);
+
         if (node?.NodeType != "User" || node.Content == null)
         {
             return BadRequest("Person not found");
@@ -87,6 +112,25 @@ public class DevAuthController : ControllerBase
             });
 
         return Redirect(returnUrl ?? "/");
+    }
+
+    /// <summary>
+    /// Onboards a brand-new DevLogin user on first signin (dev only): creates the per-user
+    /// partition-root User node and grants self-Admin, reusing the same reactive
+    /// <see cref="UserOnboardingService"/> dual-write as the Entra onboarding flow. Returns
+    /// the partition-root User node the sign-in claims are then built from. The grants run as
+    /// System (the brand-new partition has no caller identity yet — see UserOnboardingService).
+    /// </summary>
+    private async Task<MeshNode> ProvisionDevUser(string personId)
+    {
+        var request = new UserOnboardingRequest(
+            Username: personId,
+            Email: $"{personId.ToLowerInvariant()}@dev.local",
+            FullName: personId,
+            Role: Role.Admin.Id);
+        var userNode = await _onboarding.CreateUser(request).FirstAsync();
+        await _onboarding.GrantSelfAdmin(personId).FirstAsync();
+        return userNode;
     }
 
     /// <summary>
