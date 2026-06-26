@@ -157,14 +157,64 @@ public class MarkdownHtmlRenderer
                     builder.CloseComponent();
                     break;
                 default:
-                    builder.OpenElement(1, node.Name);
-                    foreach (var attribute in node.Attributes)
-                        builder.AddAttribute(2, attribute.Name, attribute.Value);
-                    RenderNodes(builder, node.ChildNodes);
-                    builder.CloseElement();
+                    // 🚨 Markdown/agent HTML is UNTRUSTED — a malformed tag name (e.g.
+                    // "summary\n" from a stray newline inside the tag; agents end every
+                    // response with a <summary> block) would reach the Blazor client as
+                    // document.createElement("summary\n"), throw InvalidCharacterError, fail
+                    // the whole render batch, and KILL the circuit (the 2026-06-26 demo
+                    // crashes: "There was an error applying batch N"). Sanitize: trim the
+                    // tag name and validate it; if it isn't a legal element name, drop the
+                    // wrapper and render the children inline so the content still shows.
+                    var tagName = node.Name?.Trim();
+                    if (IsValidHtmlTagName(tagName))
+                    {
+                        builder.OpenElement(1, tagName!);
+                        foreach (var attribute in node.Attributes)
+                        {
+                            // An invalid attribute name would throw the same way on
+                            // setAttribute — skip it rather than crash the batch.
+                            var attrName = attribute.Name?.Trim();
+                            if (IsValidHtmlAttributeName(attrName))
+                                builder.AddAttribute(2, attrName!, attribute.Value);
+                        }
+                        RenderNodes(builder, node.ChildNodes);
+                        builder.CloseElement();
+                    }
+                    else
+                    {
+                        RenderNodes(builder, node.ChildNodes);
+                    }
                     break;
             }
         }
+    }
+
+    // Conservative HTML element-name validity: starts with an ASCII letter, then ASCII
+    // letters / digits / hyphens. Covers every standard + typical custom element; anything
+    // else (malformed agent/markdown HTML — e.g. a tag name with an embedded newline) is
+    // rendered as inline children instead of crashing the render batch on createElement.
+    private static bool IsValidHtmlTagName(string? name)
+    {
+        if (string.IsNullOrEmpty(name) || !char.IsAsciiLetter(name[0]))
+            return false;
+        foreach (var c in name)
+            if (!char.IsAsciiLetterOrDigit(c) && c != '-')
+                return false;
+        return true;
+    }
+
+    // Attribute names must carry no whitespace / control chars or the structural characters
+    // the DOM tokenizer forbids — any of those would throw the same InvalidCharacterError on
+    // setAttribute and fail the batch.
+    private static bool IsValidHtmlAttributeName(string? name)
+    {
+        if (string.IsNullOrEmpty(name))
+            return false;
+        foreach (var c in name)
+            if (char.IsWhiteSpace(c) || char.IsControl(c)
+                || c is '=' or '"' or '\'' or '>' or '/' or '<')
+                return false;
+        return true;
     }
 
     private void RenderUcrLink(RenderTreeBuilder builder, HtmlNode node)
