@@ -388,5 +388,8 @@ samples/Graph/Data/VUser/
 # GUID ids, e.g. "Type 'X' failed to compile") — generated output, not source.
 **/_Notification/
 
+# Throwaway single-segment scratch partition roots from local sessions (c1, c2, …).
+/samples/Graph/Data/c[1-6].json
+
 # Claude Code per-user local state (settings.local.json, plans/, scheduled_tasks.lock, etc.)
 .claude/
