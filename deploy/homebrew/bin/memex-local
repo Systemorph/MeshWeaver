@@ -1,0 +1,847 @@
+#!/usr/bin/env bash
+# =============================================================================
+# memex-local — stand up the prod-like memex stack on Colima k3s (Mac), 1:1 with
+#               src/MeshWeaver.Documentation/Data/Architecture/LocalColimaMac.md
+# =============================================================================
+# The scripts ORCHESTRATE colima / helm / kubectl / mkcert / ollama — they do
+# NOT reimplement the chart. The deploy/helm chart + values are the source of
+# truth; this CLI just runs the doc's manual sequence end-to-end, idempotently.
+#
+# Subcommands:
+#   up            Bring the whole stack up (colima → image → ingress → mkcert →
+#                 helm → ollama → launchd port-forward). Idempotent.
+#   down          Tear down (uninstall release, stop port-forward). --purge wipes
+#                 data (namespace + PVC); --stop-colima also stops the VM.
+#   status        Show colima / pods / ingress / port-forward / health.
+#   logs          Tail the portal logs (kubectl logs). --migration for migration.
+#   update        Roll the portal+migration to a newer image (build or ACR pull).
+#   port-forward  (Re)start the host:8443 -> ingress:443 forward (troubleshooting).
+#   observability Install Grafana/Loki/Promtail/Prometheus (LocalColimaMac.md §11).
+#   doctor        Preflight: check required tools + cluster reachability.
+#   help | version
+#
+# Each step is annotated with the LocalColimaMac.md section it automates so the
+# 1:1 mapping is auditable.
+# =============================================================================
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Constants (the doc's defaults — same topology, no substitutions)
+# ---------------------------------------------------------------------------
+readonly RELEASE="memex"                       # Helm release name (§4)
+readonly NAMESPACE="memex"                      # portal namespace (§4)
+readonly INGRESS_NS="ingress-nginx"             # ingress-nginx namespace (§5)
+readonly MONITORING_NS="monitoring"             # observability namespace (§11)
+readonly HOSTNAME_LOCAL="memex.localhost"       # default hostname (§6)
+readonly TLS_SECRET="memex-portal-tls"          # ingress TLS secret name (§5)
+readonly HOST_PORT="${MEMEX_PORT:-8443}"        # unprivileged host port (§6/§7)
+readonly COLIMA_CPU="${MEMEX_COLIMA_CPU:-8}"    # VM sizing (§2)
+readonly COLIMA_MEM="${MEMEX_COLIMA_MEM:-16}"   # VM sizing (§2)
+# The chart's portal/migration containers hardcode these image refs with
+# imagePullPolicy: IfNotPresent (deploy/helm/.../deployment.yaml). Both the
+# local-build and ACR-pull paths retag onto these names so k3s finds them (§3).
+readonly PORTAL_IMAGE="ghcr.io/systemorph/memex-portal-ai:latest"
+readonly MIGRATION_IMAGE="ghcr.io/systemorph/memex-migration:latest"
+# ACR source (Option A — §3). Override the tag with `update --acr --tag <tag>`.
+readonly ACR="meshweaver.azurecr.io"
+# Verbose logging for this local install (deployment-config override; never edits
+# committed appsettings*.json). Trace for maximum; Debug is the default.
+readonly LOG_LEVEL="${MEMEX_LOG_LEVEL:-Debug}"
+
+readonly LOCAL_HOME="${MEMEX_LOCAL_HOME:-$HOME/.memex-local}"
+readonly OVERLAY="$LOCAL_HOME/values.local.yaml"
+readonly CERT_FILE="$LOCAL_HOME/${HOSTNAME_LOCAL}.pem"
+readonly KEY_FILE="$LOCAL_HOME/${HOSTNAME_LOCAL}-key.pem"
+readonly PF_SCRIPT="$LOCAL_HOME/port-forward.sh"
+readonly PF_LOG="$LOCAL_HOME/port-forward.log"
+readonly PLIST_LABEL="com.memex.local"
+readonly PLIST_DST="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
+
+# ---------------------------------------------------------------------------
+# Output helpers
+# ---------------------------------------------------------------------------
+if [ -t 1 ]; then
+  C_RESET=$'\033[0m'; C_BLUE=$'\033[1;34m'; C_GREEN=$'\033[1;32m'
+  C_YELLOW=$'\033[1;33m'; C_RED=$'\033[1;31m'
+else
+  C_RESET=""; C_BLUE=""; C_GREEN=""; C_YELLOW=""; C_RED=""
+fi
+step() { printf '%s==>%s %s\n' "$C_BLUE" "$C_RESET" "$*"; }
+info() { printf '    %s\n' "$*"; }
+ok()   { printf '%s ok %s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
+warn() { printf '%swarn%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
+die()  { printf '%serr %s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+
+# ---------------------------------------------------------------------------
+# Asset + chart resolution
+#   - When brew-installs, the wrapper sets MEMEX_LOCAL_SHARE + MEMEX_CHART_DIR.
+#   - When run from a repo checkout, resolve paths relative to this script.
+#   - A live repo chart (MEMEX_REPO / MEMEX_CHART_DIR) always wins, so the
+#     deploy/helm chart stays the single source of truth.
+# ---------------------------------------------------------------------------
+resolve_self_dir() {
+  local src="${BASH_SOURCE[0]}" dir
+  while [ -h "$src" ]; do
+    dir="$(cd -P "$(dirname "$src")" >/dev/null 2>&1 && pwd)"
+    src="$(readlink "$src")"
+    [[ "$src" != /* ]] && src="$dir/$src"
+  done
+  cd -P "$(dirname "$src")" >/dev/null 2>&1 && pwd
+}
+SELF_DIR="$(resolve_self_dir)"; readonly SELF_DIR
+
+resolve_share() {
+  if [ -n "${MEMEX_LOCAL_SHARE:-}" ] && [ -d "$MEMEX_LOCAL_SHARE" ]; then
+    printf '%s' "$MEMEX_LOCAL_SHARE"; return
+  fi
+  if [ -d "$SELF_DIR/../share" ]; then
+    ( cd "$SELF_DIR/../share" && pwd ); return
+  fi
+  die "cannot locate share/ assets (set MEMEX_LOCAL_SHARE)"
+}
+
+resolve_chart() {
+  if [ -n "${MEMEX_CHART_DIR:-}" ] && [ -f "$MEMEX_CHART_DIR/Chart.yaml" ]; then
+    printf '%s' "$MEMEX_CHART_DIR"; return
+  fi
+  if [ -n "${MEMEX_REPO:-}" ] && [ -f "$MEMEX_REPO/deploy/helm/Chart.yaml" ]; then
+    printf '%s' "$MEMEX_REPO/deploy/helm"; return
+  fi
+  # repo checkout: deploy/homebrew/bin/memex-local -> deploy/helm
+  if [ -f "$SELF_DIR/../../helm/Chart.yaml" ]; then
+    ( cd "$SELF_DIR/../../helm" && pwd ); return
+  fi
+  # brew bottle vendored copy: <share>/helm
+  local share; share="$(resolve_share)"
+  if [ -f "$share/helm/Chart.yaml" ]; then
+    printf '%s' "$share/helm"; return
+  fi
+  die "cannot locate the deploy/helm chart (set MEMEX_REPO or MEMEX_CHART_DIR)"
+}
+
+# Resolve the repo root (needed only for the local-build image path, Option B).
+resolve_repo() {
+  if [ -n "${MEMEX_REPO:-}" ] && [ -d "$MEMEX_REPO" ]; then
+    printf '%s' "$MEMEX_REPO"; return 0
+  fi
+  if [ -f "$SELF_DIR/../../../memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj" ]; then
+    ( cd "$SELF_DIR/../../.." && pwd ); return 0
+  fi
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# Preflight
+# ---------------------------------------------------------------------------
+need() { command -v "$1" >/dev/null 2>&1 || die "required tool '$1' not found — install it (see: brew install $2)"; }
+
+preflight() {
+  need colima colima
+  need kubectl kubernetes-cli
+  need helm helm
+  need mkcert mkcert
+  need ollama ollama
+  command -v openssl >/dev/null 2>&1 || die "openssl not found (ships with macOS)"
+}
+
+# ---------------------------------------------------------------------------
+# §1/§4 — ensure the local overlay exists (generate secrets once)
+# ---------------------------------------------------------------------------
+ensure_overlay() {
+  mkdir -p "$LOCAL_HOME"
+  if [ -f "$OVERLAY" ]; then
+    info "overlay exists: $OVERLAY"
+    return
+  fi
+  local share pg_pw ai_key
+  share="$(resolve_share)"
+  step "Generating local overlay with fresh secrets -> $OVERLAY (§4)"
+  pg_pw="$(openssl rand -hex 24)"
+  ai_key="$(openssl rand -base64 32)"
+  sed -e "s|__PG_PASSWORD__|${pg_pw}|g" \
+      -e "s|__AI_MASTER_KEY__|${ai_key}|g" \
+      "$share/values.local.yaml" > "$OVERLAY"
+  chmod 600 "$OVERLAY"
+  warn "Edit $OVERLAY to fill in your Entra ClientId/TenantId/ClientSecret (§9),"
+  warn "or uncomment Authentication__EnableDevLogin for a no-Azure login."
+}
+
+# ---------------------------------------------------------------------------
+# §2 — Colima with k3s
+# ---------------------------------------------------------------------------
+colima_running() { colima status >/dev/null 2>&1; }
+
+start_colima() {
+  if colima_running; then
+    info "Colima already running — leaving it as-is (resize needs a restart)"
+  else
+    step "Starting Colima with k3s, ${COLIMA_CPU} CPU / ${COLIMA_MEM} GiB (§2)"
+    colima start --kubernetes --cpu "$COLIMA_CPU" --memory "$COLIMA_MEM"
+  fi
+  step "Verifying kubectl context + node (§2)"
+  local ctx; ctx="$(kubectl config current-context 2>/dev/null || true)"
+  [ "$ctx" = "colima" ] || warn "kubectl context is '$ctx' (expected 'colima')"
+  kubectl get nodes
+}
+
+# ---------------------------------------------------------------------------
+# §3 — Portal image (Option A: ACR pull · Option B: local native build)
+# Default = Option B (build) when a repo is available — the no-cloud-creds path.
+# ---------------------------------------------------------------------------
+image_build_local() {                                  # §3 Option B
+  local repo
+  repo="$(resolve_repo)" || die "local build (Option B) needs the repo — set MEMEX_REPO to your MeshWeaver checkout, or use 'up --from-acr'"
+  need dotnet "--cask dotnet-sdk"
+  need docker docker
+  step "Building native arm64 portal image into Colima's Docker store (§3 Option B)"
+  dotnet publish "$repo/memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj" \
+    -c Release -t:PublishContainer -p:ContainerRepository=memex-portal-ai-local
+  docker tag memex-portal-ai-local:latest "$PORTAL_IMAGE"
+  step "Building migration image (§3 Option B)"
+  dotnet publish "$repo/memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj" \
+    -c Release -t:PublishContainer -p:ContainerRepository=memex-migration-local
+  docker tag memex-migration-local:latest "$MIGRATION_IMAGE"
+  ok "Images tagged $PORTAL_IMAGE / $MIGRATION_IMAGE (visible to k3s via IfNotPresent)"
+}
+
+image_pull_acr() {                                     # §3 Option A
+  local tag="${1:-latest}"
+  need docker docker
+  step "Pulling multi-arch images from ACR ($ACR, tag=$tag) (§3 Option A)"
+  warn "ACR pull needs creds — run 'az acr login -n meshweaver' first if this fails"
+  info "Verify the tag is multi-arch (must list arm64):"
+  docker manifest inspect "$ACR/memex-portal-ai:$tag" | grep -A1 '"architecture"' || \
+    warn "could not inspect manifest — continuing (amd64-only tags crash on arm64, see §14)"
+  docker pull "$ACR/memex-portal-ai:$tag"
+  docker tag  "$ACR/memex-portal-ai:$tag" "$PORTAL_IMAGE"
+  docker pull "$ACR/memex-migration:$tag"
+  docker tag  "$ACR/memex-migration:$tag" "$MIGRATION_IMAGE"
+  ok "Retagged ACR images onto $PORTAL_IMAGE / $MIGRATION_IMAGE"
+}
+
+# ---------------------------------------------------------------------------
+# §5 — ingress-nginx
+# ---------------------------------------------------------------------------
+install_ingress_nginx() {
+  step "Installing ingress-nginx (no Traefik on k3s here) (§5)"
+  helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx >/dev/null 2>&1 || true
+  helm repo update ingress-nginx >/dev/null 2>&1 || helm repo update >/dev/null 2>&1 || true
+  helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
+    -n "$INGRESS_NS" --create-namespace \
+    --set controller.service.type=ClusterIP \
+    --set controller.admissionWebhooks.enabled=false
+}
+
+# ---------------------------------------------------------------------------
+# §5 — mkcert TLS + the TLS secret the ingress references
+# ---------------------------------------------------------------------------
+setup_tls() {
+  step "Minting locally-trusted TLS with mkcert (§5)"
+  mkcert -install
+  mkdir -p "$LOCAL_HOME"
+  if [ ! -f "$CERT_FILE" ] || [ ! -f "$KEY_FILE" ]; then
+    mkcert -cert-file "$CERT_FILE" -key-file "$KEY_FILE" \
+      "$HOSTNAME_LOCAL" "*.$HOSTNAME_LOCAL"
+  else
+    info "cert already present: $CERT_FILE"
+  fi
+  kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+  kubectl create secret tls "$TLS_SECRET" -n "$NAMESPACE" \
+    --cert="$CERT_FILE" --key="$KEY_FILE" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  ok "TLS secret '$TLS_SECRET' applied in namespace '$NAMESPACE'"
+}
+
+# ---------------------------------------------------------------------------
+# §4 — Helm install/upgrade (chart + local overlay)
+# ---------------------------------------------------------------------------
+helm_deploy() {
+  local chart; chart="$(resolve_chart)"
+  step "helm upgrade --install $RELEASE (chart=$chart) (§4)"
+  helm upgrade --install "$RELEASE" "$chart" \
+    -f "$chart/values.yaml" \
+    -f "$OVERLAY" \
+    -n "$NAMESPACE" --create-namespace
+}
+
+# ---------------------------------------------------------------------------
+# Full logging — deployment-config override (does NOT touch committed appsettings)
+# The chart's portal ConfigMap is a fixed allow-list, so the verbose level is
+# applied as a container `env` entry (wins over envFrom). Idempotent: same value
+# => no rollout.
+# ---------------------------------------------------------------------------
+apply_logging() {
+  step "Applying verbose logging (Logging__LogLevel__Default=$LOG_LEVEL) as a deployment-config override"
+  kubectl set env deployment/memex-portal-deployment -n "$NAMESPACE" \
+    "Logging__LogLevel__Default=$LOG_LEVEL"
+}
+
+# ---------------------------------------------------------------------------
+# §10 — host-native Ollama wired into the cluster by name (ollama:11434)
+# ---------------------------------------------------------------------------
+setup_ollama() {
+  step "Wiring host-native Ollama (Metal GPU) — model qwen3.6 (§10)"
+  if ! curl -fsS "http://127.0.0.1:11434/api/version" >/dev/null 2>&1; then
+    info "Starting 'ollama serve' bound to 0.0.0.0:11434 (so the VM can reach it)"
+    OLLAMA_HOST=0.0.0.0:11434 nohup ollama serve >"$LOCAL_HOME/ollama.log" 2>&1 &
+    # Wait on readiness rather than a fixed sleep.
+    local i=0
+    until curl -fsS "http://127.0.0.1:11434/api/version" >/dev/null 2>&1; do
+      i=$((i+1)); [ "$i" -gt 60 ] && die "ollama did not become ready on :11434"
+      sleep 1
+    done
+  else
+    info "ollama already serving on :11434"
+  fi
+  ollama pull qwen3.6
+  ollama cp qwen3.6 qwen3.6-code 2>/dev/null || info "model alias qwen3.6-code already exists"
+  ok "Ollama ready; portal addresses it as http://ollama:11434/v1"
+}
+
+# ---------------------------------------------------------------------------
+# §7 — launchd port-forward (durable, survives reboot, no sudo)
+# ---------------------------------------------------------------------------
+install_launchd() {
+  local share; share="$(resolve_share)"
+  step "Installing durable launchd port-forward 8443 -> ingress :443 (§7)"
+  install -m 0755 "$share/port-forward.sh" "$PF_SCRIPT"
+  mkdir -p "$HOME/Library/LaunchAgents"
+  sed -e "s|__SCRIPT__|${PF_SCRIPT}|g" \
+      -e "s|__LOG__|${PF_LOG}|g" \
+      "$share/com.memex.local.plist" > "$PLIST_DST"
+  # Reload idempotently.
+  launchctl bootout "gui/$(id -u)" "$PLIST_DST" >/dev/null 2>&1 || true
+  launchctl bootstrap "gui/$(id -u)" "$PLIST_DST"
+  ok "launchd agent '$PLIST_LABEL' loaded (logs: $PF_LOG)"
+}
+
+uninstall_launchd() {
+  if [ -f "$PLIST_DST" ]; then
+    launchctl bootout "gui/$(id -u)" "$PLIST_DST" >/dev/null 2>&1 || true
+    rm -f "$PLIST_DST"
+    ok "launchd agent '$PLIST_LABEL' removed"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# §14 — end-to-end verify
+# ---------------------------------------------------------------------------
+verify_endpoint() {
+  step "Verifying TLS + routing end-to-end (§14)"
+  local caroot; caroot="$(mkcert -CAROOT 2>/dev/null)"
+  local url="https://${HOSTNAME_LOCAL}:${HOST_PORT}/"
+  if curl --cacert "$caroot/rootCA.pem" -sS -o /dev/null \
+       -w 'http=%{http_code} ssl_verify=%{ssl_verify_result}\n' "$url"; then
+    ok "Portal reachable at $url"
+  else
+    warn "Portal not reachable yet at $url — give pods a moment, then 'memex-local status'"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# e2e — a throwaway, DevLogin Playwright test portal (LocalColimaMac.md §15)
+#
+# Playwright E2E needs a portal it can log into WITHOUT Entra (DevLogin) that
+# ALSO has a real model. The `memex` release has the model but uses Entra OAuth
+# and IS the user's data. `e2e` stands up a SECOND portal — built from the
+# current working tree — in the SAME namespace, reusing the existing Postgres,
+# Ollama, ingress and *.memex.localhost TLS, but against its OWN database
+# (memex_e2e) with DevLogin on, fronted by the ingress at
+# https://e2e.memex.localhost:8444. Additive: it never touches the `memex`
+# release/DB/config; `e2e down` deletes only the e2e objects + drops the e2e DB.
+# ---------------------------------------------------------------------------
+readonly E2E_DB="memex_e2e"
+readonly E2E_APP="memex-e2e-portal"
+readonly E2E_MIG_JOB="memex-e2e-migration"
+readonly E2E_HOST="e2e.${HOSTNAME_LOCAL}"            # covered by the *.memex.localhost cert
+readonly E2E_PORT="${MEMEX_E2E_PORT:-8444}"
+readonly E2E_PF_PIDFILE="$LOCAL_HOME/e2e-port-forward.pid"
+readonly E2E_PF_LOG="$LOCAL_HOME/e2e-port-forward.log"
+
+e2e_require_stack() {
+  kubectl get ns "$NAMESPACE" >/dev/null 2>&1 \
+    || die "namespace '$NAMESPACE' not found — run 'memex-local up' first (e2e reuses its stack)"
+  kubectl -n "$NAMESPACE" get statefulset memex-postgres-statefulset >/dev/null 2>&1 \
+    || die "memex-postgres not found — run 'memex-local up' first"
+}
+
+e2e_pg_password() {
+  kubectl -n "$NAMESPACE" get secret memex-postgres-secrets \
+    -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d
+}
+
+# Run psql inside the PG pod, authenticated (the pod is not trust-auth even on its socket).
+e2e_psql() { kubectl -n "$NAMESPACE" exec -i memex-postgres-statefulset-0 -- \
+  env PGPASSWORD="$(e2e_pg_password)" psql -U postgres "$@"; }
+
+# Connection string to OUR database via the in-namespace PG service.
+e2e_conn() {
+  printf 'Host=memex-postgres-service;Port=5432;Username=postgres;Password=%s;Database=%s' \
+    "$(e2e_pg_password)" "$E2E_DB"
+}
+
+e2e_ensure_db() {
+  step "Ensuring database '$E2E_DB' exists (own DB; never the memex one)"
+  if e2e_psql -tAc "SELECT 1 FROM pg_database WHERE datname='$E2E_DB'" 2>/dev/null | grep -q 1; then
+    info "database '$E2E_DB' already exists"
+  else
+    e2e_psql -c "CREATE DATABASE $E2E_DB"
+    ok "created database '$E2E_DB'"
+  fi
+}
+
+e2e_migrate() {
+  step "Migrating '$E2E_DB' (Job $E2E_MIG_JOB)"
+  kubectl -n "$NAMESPACE" delete job "$E2E_MIG_JOB" --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$NAMESPACE" apply -f - <<YAML
+apiVersion: batch/v1
+kind: Job
+metadata: { name: $E2E_MIG_JOB }
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migration
+          image: $MIGRATION_IMAGE
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef: { name: memex-portal-config }
+            - secretRef:    { name: memex-portal-secrets }
+          env:
+            - { name: ConnectionStrings__memex, value: "$(e2e_conn)" }
+YAML
+  kubectl -n "$NAMESPACE" wait --for=condition=complete "job/$E2E_MIG_JOB" --timeout=300s \
+    || { kubectl -n "$NAMESPACE" logs "job/$E2E_MIG_JOB" --tail=50 2>/dev/null || true; die "e2e migration failed"; }
+  ok "migration complete"
+}
+
+e2e_deploy() {
+  step "Deploying e2e portal ($E2E_APP) — DevLogin ON, DB=$E2E_DB, reusing memex config/Ollama/PG/ingress"
+  kubectl -n "$NAMESPACE" apply -f - <<YAML
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: $E2E_APP, labels: { app: $E2E_APP } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: $E2E_APP } }
+  template:
+    metadata: { labels: { app: $E2E_APP } }
+    spec:
+      containers:
+        - name: portal
+          image: $PORTAL_IMAGE
+          imagePullPolicy: IfNotPresent
+          ports: [ { containerPort: 8080 } ]
+          envFrom:
+            - configMapRef: { name: memex-portal-config }
+            - secretRef:    { name: memex-portal-secrets }
+          env:
+            # the ONLY differences from the memex portal:
+            - { name: ConnectionStrings__memex, value: "$(e2e_conn)" }
+            - { name: Authentication__EnableDevLogin, value: "true" }
+            - { name: Portal__InstanceName, value: "E2E" }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 60
+          volumeMounts:
+            # The reused config's Deployment:DataRoot is /data (assembly/nuget/dataprotection
+            # cache; mesh data is in PG). The memex chart mounts a PVC there — give the e2e
+            # portal an ephemeral writable one (throwaway by design).
+            - { name: data, mountPath: /data }
+      volumes:
+        - { name: data, emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: $E2E_APP }
+spec:
+  selector: { app: $E2E_APP }
+  ports: [ { port: 8080, targetPort: 8080 } ]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: $E2E_APP
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [ "$E2E_HOST" ]
+      secretName: $TLS_SECRET
+  rules:
+    - host: $E2E_HOST
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: $E2E_APP, port: { number: 8080 } } }
+YAML
+  step "Waiting for the e2e portal rollout"
+  kubectl -n "$NAMESPACE" rollout status "deploy/$E2E_APP" --timeout=300s \
+    || { kubectl -n "$NAMESPACE" logs "deploy/$E2E_APP" --tail=60 2>/dev/null || true; die "e2e portal did not become ready"; }
+  ok "e2e portal ready"
+}
+
+e2e_forward_stop() {
+  [ -f "$E2E_PF_PIDFILE" ] || return 0
+  kill "$(cat "$E2E_PF_PIDFILE")" >/dev/null 2>&1 || true
+  rm -f "$E2E_PF_PIDFILE"
+}
+
+e2e_forward_start() {
+  e2e_forward_stop
+  step "Reverse-proxy port-forward https://$E2E_HOST:$E2E_PORT → ingress-nginx :443"
+  nohup kubectl -n "$INGRESS_NS" port-forward svc/ingress-nginx-controller "$E2E_PORT:443" \
+    >"$E2E_PF_LOG" 2>&1 &
+  echo $! >"$E2E_PF_PIDFILE"
+  sleep 2
+  ok "port-forward up (pid $(cat "$E2E_PF_PIDFILE"), log: $E2E_PF_LOG)"
+}
+
+e2e_verify() {
+  local caroot; caroot="$(mkcert -CAROOT 2>/dev/null || true)"
+  local code; code="$(curl --cacert "$caroot/rootCA.pem" -sS -o /dev/null -w '%{http_code}' \
+    "https://$E2E_HOST:$E2E_PORT/" 2>/dev/null || echo 000)"
+  [ "$code" = "200" ] && ok "e2e portal reachable at https://$E2E_HOST:$E2E_PORT (HTTP $code)" \
+    || warn "e2e portal not 200 yet (HTTP $code) — give pods a moment, then 'memex-local e2e status'"
+}
+
+cmd_e2e() {
+  local sub="${1:-help}"; shift || true
+  case "$sub" in
+    up)
+      local skip_build="no"
+      [ "${1:-}" = "--skip-build" ] && skip_build="yes"
+      preflight
+      e2e_require_stack
+      [ "$skip_build" = "yes" ] || image_build_local      # §3 Option B — current working tree
+      e2e_ensure_db
+      e2e_migrate
+      e2e_deploy
+      e2e_forward_start
+      e2e_verify
+      echo
+      ok "Playwright env up: https://$E2E_HOST:$E2E_PORT  (DevLogin, DB=$E2E_DB)"
+      info "test:  memex-local e2e test [FilterName]"
+      info "down:  memex-local e2e down"
+      ;;
+    test)
+      local repo filter="${1:-HomeChatExecuteTest}"
+      repo="$(resolve_repo)" || die "e2e test needs the repo — set MEMEX_REPO to your MeshWeaver checkout"
+      [ -f "$E2E_PF_PIDFILE" ] || { warn "port-forward not running — starting it"; e2e_forward_start; }
+      step "Running Playwright filter '$filter' against https://$E2E_HOST:$E2E_PORT"
+      E2E_BASE_URL="https://$E2E_HOST:$E2E_PORT" E2E_USER="${E2E_USER:-Roland}" \
+        dotnet test "$repo/test/MeshWeaver.Portal.E2E.Test/MeshWeaver.Portal.E2E.Test.csproj" \
+          --filter "FullyQualifiedName~$filter"
+      ;;
+    down)
+      local keep_db="no"
+      [ "${1:-}" = "--keep-db" ] && keep_db="yes"
+      e2e_forward_stop
+      step "Deleting e2e portal/service/ingress/job"
+      kubectl -n "$NAMESPACE" delete deployment,service,ingress "$E2E_APP" --ignore-not-found
+      kubectl -n "$NAMESPACE" delete job "$E2E_MIG_JOB" --ignore-not-found
+      if [ "$keep_db" = "no" ]; then
+        step "Dropping database '$E2E_DB'"
+        e2e_psql -c "DROP DATABASE IF EXISTS $E2E_DB WITH (FORCE)" \
+          || warn "drop db failed (a client still connected?)"
+      else
+        info "keeping database '$E2E_DB' (--keep-db)"
+      fi
+      ok "e2e down complete"
+      ;;
+    status)
+      step "e2e pods";    kubectl -n "$NAMESPACE" get pods -l app="$E2E_APP" 2>&1 || true
+      step "e2e ingress"; kubectl -n "$NAMESPACE" get ingress "$E2E_APP" 2>&1 || true
+      step "port-forward"
+      { [ -f "$E2E_PF_PIDFILE" ] && kill -0 "$(cat "$E2E_PF_PIDFILE")" 2>/dev/null \
+          && ok "running (pid $(cat "$E2E_PF_PIDFILE"))"; } || warn "not running"
+      e2e_verify
+      ;;
+    logs) exec kubectl -n "$NAMESPACE" logs -f --tail="${1:-200}" "deploy/$E2E_APP" ;;
+    *) die "e2e: unknown subcommand '$sub' (try: up | test | down | status | logs)" ;;
+  esac
+}
+
+# ===========================================================================
+# Subcommands
+# ===========================================================================
+cmd_up() {
+  local image_source="build" acr_tag="latest" with_obs="no"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --from-acr) image_source="acr" ;;
+      --build)    image_source="build" ;;
+      --skip-image) image_source="skip" ;;
+      --tag) shift; acr_tag="${1:?--tag needs a value}" ;;
+      --with-observability) with_obs="yes" ;;
+      *) die "up: unknown flag '$1'" ;;
+    esac
+    shift
+  done
+
+  preflight
+  ensure_overlay
+  start_colima                                   # §2
+
+  case "$image_source" in                        # §3
+    build) image_build_local ;;
+    acr)   image_pull_acr "$acr_tag" ;;
+    skip)  info "Skipping image step (--skip-image); relying on IfNotPresent/cache" ;;
+  esac
+
+  install_ingress_nginx                           # §5
+  setup_tls                                       # §5
+  helm_deploy                                     # §4
+  apply_logging                                   # full logging override
+  setup_ollama                                    # §10
+
+  step "Waiting for the portal rollout (§4)"
+  kubectl rollout status deploy/memex-portal-deployment -n "$NAMESPACE" --timeout=300s || \
+    warn "portal rollout not complete — check 'memex-local logs' / 'memex-local status'"
+
+  install_launchd                                 # §7
+  [ "$with_obs" = "yes" ] && cmd_observability    # §11 (opt-in)
+  verify_endpoint                                 # §14
+
+  echo
+  ok "memex is up — open https://${HOSTNAME_LOCAL}:${HOST_PORT}"
+  info "logs:   memex-local logs"
+  info "status: memex-local status"
+}
+
+cmd_down() {
+  local purge="no" stop_colima="no"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --purge) purge="yes" ;;
+      --stop-colima) stop_colima="yes" ;;
+      *) die "down: unknown flag '$1'" ;;
+    esac
+    shift
+  done
+
+  uninstall_launchd
+  if colima_running; then
+    if [ "$purge" = "yes" ]; then
+      warn "PURGE: deleting namespace '$NAMESPACE' (Postgres PVC + ALL data) and ingress-nginx"
+      helm uninstall "$RELEASE" -n "$NAMESPACE" >/dev/null 2>&1 || true
+      kubectl delete namespace "$NAMESPACE" --wait=false >/dev/null 2>&1 || true
+      helm uninstall ingress-nginx -n "$INGRESS_NS" >/dev/null 2>&1 || true
+    else
+      step "Uninstalling Helm release '$RELEASE' (keeps the Postgres PVC — data survives)"
+      helm uninstall "$RELEASE" -n "$NAMESPACE" || warn "release '$RELEASE' not found"
+      info "PVC retained. Use 'down --purge' to delete data, or 'up' to redeploy."
+    fi
+  else
+    info "Colima not running — nothing in-cluster to remove"
+  fi
+  if [ "$stop_colima" = "yes" ]; then
+    step "Stopping Colima"
+    colima stop || true
+  fi
+  ok "down complete"
+}
+
+cmd_status() {
+  step "Colima"
+  colima status 2>&1 || true
+  if colima_running; then
+    step "memex pods"
+    kubectl get pods -n "$NAMESPACE" 2>&1 || true
+    step "Ingress + TLS secret"
+    kubectl get ingress -n "$NAMESPACE" 2>&1 || true
+    kubectl get secret "$TLS_SECRET" -n "$NAMESPACE" 2>&1 || true
+    step "ingress-nginx controller"
+    kubectl get pods -n "$INGRESS_NS" 2>&1 || true
+  fi
+  step "launchd port-forward"
+  if launchctl print "gui/$(id -u)/${PLIST_LABEL}" >/dev/null 2>&1; then
+    ok "agent '$PLIST_LABEL' loaded"
+  else
+    warn "agent '$PLIST_LABEL' not loaded"
+  fi
+  step "Health"
+  verify_endpoint
+}
+
+cmd_logs() {
+  local target="deploy/memex-portal-deployment" follow="-f" tail="200"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --migration) target="deploy/memex-migration-deployment" ;;
+      --postgres)  target="statefulset/memex-postgres-statefulset" ;;
+      --no-follow) follow="" ;;
+      --tail) shift; tail="${1:?--tail needs a value}" ;;
+      *) die "logs: unknown flag '$1'" ;;
+    esac
+    shift
+  done
+  step "kubectl logs $target -n $NAMESPACE (tail=$tail) — log level: $LOG_LEVEL"
+  # shellcheck disable=SC2086
+  exec kubectl logs $follow --tail="$tail" "$target" -n "$NAMESPACE"
+}
+
+cmd_update() {
+  local image_source="build" acr_tag="latest"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --from-acr|--acr) image_source="acr" ;;
+      --build) image_source="build" ;;
+      --tag) shift; acr_tag="${1:?--tag needs a value}" ;;
+      *) die "update: unknown flag '$1'" ;;
+    esac
+    shift
+  done
+  preflight
+  colima_running || die "Colima is not running — run 'memex-local up' first"
+
+  step "Rolling memex to a newer image ($image_source)"
+  case "$image_source" in
+    build) image_build_local ;;                  # §3 Option B
+    acr)
+      image_pull_acr "$acr_tag"                  # §3 Option A
+      # For an ACR tag, point the deployments at it directly (the chart's default
+      # image is the ghcr name; ACR pull retags onto it, so a rollout suffices).
+      ;;
+  esac
+  step "Rolling out portal + migration (§3/§4)"
+  kubectl rollout restart deploy/memex-portal-deployment deploy/memex-migration-deployment -n "$NAMESPACE"
+  apply_logging
+  kubectl rollout status deploy/memex-portal-deployment -n "$NAMESPACE" --timeout=300s
+  info "A rollout invalidates the old port-forward binding — refreshing it (§8/§14)"
+  install_launchd
+  ok "update complete"
+  echo
+  info "Self-update note: this same chart carries the in-pod self-updater. With"
+  info "Admin/UpdatePolicy = Continuous (default), a Continuous/RELEASE install"
+  info "auto-rolls to newer ACR tags on its own (see Doc/Architecture/ReleaseStrategy)."
+  info "A pure local-build loop has nothing to poll — treat it as 'None' and use"
+  info "'memex-local update' as the manual path."
+}
+
+cmd_port_forward() {
+  step "Restarting the host:${HOST_PORT} -> ingress:443 port-forward (§7/§14)"
+  install_launchd
+  ok "port-forward (re)started via launchd"
+}
+
+cmd_observability() {                            # §11
+  preflight
+  step "Installing Grafana/Loki/Promtail/Prometheus into '$MONITORING_NS' (§11)"
+  local gpw_file="$LOCAL_HOME/grafana-password.txt" gpw
+  mkdir -p "$LOCAL_HOME"
+  if [ -f "$gpw_file" ]; then
+    gpw="$(cat "$gpw_file")"
+  else
+    gpw="$(openssl rand -base64 18)"
+    printf '%s\n' "$gpw" > "$gpw_file"; chmod 600 "$gpw_file"
+  fi
+  helm repo add grafana https://grafana.github.io/helm-charts >/dev/null 2>&1 || true
+  helm repo update grafana >/dev/null 2>&1 || helm repo update >/dev/null 2>&1 || true
+  helm upgrade --install loki grafana/loki-stack \
+    -n "$MONITORING_NS" --create-namespace \
+    --set grafana.enabled=true,prometheus.enabled=true,promtail.enabled=true \
+    --set grafana.adminPassword="$gpw" --set grafana.service.type=ClusterIP
+  ok "Observability installed. Grafana admin password: $gpw_file"
+  info "View dashboards:  kubectl -n $MONITORING_NS port-forward svc/loki-grafana 3000:80"
+  info "Then open http://localhost:3000  (user: admin)  — query {namespace=\"memex\"}"
+}
+
+cmd_doctor() {
+  step "Checking required tools"
+  local tools=(colima kubectl helm mkcert ollama openssl curl)
+  local t
+  for t in "${tools[@]}"; do
+    if command -v "$t" >/dev/null 2>&1; then ok "$t: $(command -v "$t")"; else warn "$t: MISSING"; fi
+  done
+  if command -v dotnet >/dev/null 2>&1; then
+    ok "dotnet (for local build / Option B): $(command -v dotnet)"
+  else
+    warn "dotnet: MISSING (needed only for the local-build image path / Option B)"
+  fi
+  step "Chart + assets"
+  ok "chart: $(resolve_chart)"
+  ok "share: $(resolve_share)"
+  step "Cluster"
+  if colima_running; then
+    ok "colima running"; kubectl get nodes 2>&1 || warn "kubectl get nodes failed"
+  else
+    warn "colima not running (run 'memex-local up')"
+  fi
+}
+
+cmd_help() {
+  cat <<EOF
+memex-local — local memex on Colima k3s (1:1 with LocalColimaMac.md)
+
+USAGE:
+  memex-local <command> [flags]
+
+COMMANDS:
+  up [--build|--from-acr|--skip-image] [--tag T] [--with-observability]
+                  Bring the whole stack up (idempotent). Default image source:
+                  --build (Option B, native arm64 into Colima's Docker store —
+                  the no-cloud-creds path). --from-acr pulls multi-arch from ACR.
+  down [--purge] [--stop-colima]
+                  Uninstall the release (keeps the Postgres PVC). --purge wipes
+                  data (namespace + PVC + ingress-nginx); --stop-colima stops VM.
+  e2e <up|test|down|status|logs>
+                  Throwaway DevLogin Playwright portal (own DB memex_e2e, reuses
+                  the memex stack), at https://e2e.${HOSTNAME_LOCAL}:${E2E_PORT:-8444}.
+                    e2e up [--skip-build]   build working tree → migrate → deploy → forward
+                    e2e test [Filter]       run the Playwright E2E against it (DevLogin)
+                    e2e down [--keep-db]    delete e2e objects + drop the e2e DB
+  status          colima / pods / ingress / port-forward / health.
+  logs [--migration|--postgres] [--tail N] [--no-follow]
+                  Tail logs (portal by default). Log level: $LOG_LEVEL.
+  update [--build|--from-acr] [--tag T]
+                  Roll portal+migration to a newer image, then refresh forward.
+  port-forward    (Re)start the host:${HOST_PORT} -> ingress:443 forward.
+  observability   Install Grafana/Loki/Promtail/Prometheus (§11).
+  doctor          Preflight: tools, chart/assets, cluster.
+  help | version
+
+ENV OVERRIDES:
+  MEMEX_REPO           Path to the MeshWeaver checkout (for chart + local build).
+  MEMEX_CHART_DIR      Explicit chart dir (defaults to \$MEMEX_REPO/deploy/helm).
+  MEMEX_LOG_LEVEL      Verbose log level (default: Debug; use Trace for max).
+  MEMEX_COLIMA_CPU / MEMEX_COLIMA_MEM   VM sizing (default 8 / 16).
+  MEMEX_PORT           Host port for the forward (default 8443).
+  MEMEX_LOCAL_HOME     State dir (default ~/.memex-local).
+
+Open: https://${HOSTNAME_LOCAL}:${HOST_PORT}
+Docs: Doc/Architecture/LocalColimaMac  ·  deploy/homebrew/README.md
+EOF
+}
+
+cmd_version() { printf 'memex-local 0.1.0 (chart: memex %s)\n' "$(resolve_chart 2>/dev/null || echo '?')"; }
+
+# ===========================================================================
+# Dispatch
+# ===========================================================================
+main() {
+  local cmd="${1:-help}"; shift || true
+  case "$cmd" in
+    up)            cmd_up "$@" ;;
+    e2e)           cmd_e2e "$@" ;;
+    down)          cmd_down "$@" ;;
+    status)        cmd_status "$@" ;;
+    logs)          cmd_logs "$@" ;;
+    update)        cmd_update "$@" ;;
+    port-forward)  cmd_port_forward "$@" ;;
+    observability) cmd_observability "$@" ;;
+    doctor)        cmd_doctor "$@" ;;
+    version|--version|-v) cmd_version ;;
+    help|--help|-h) cmd_help ;;
+    *) die "unknown command '$cmd' (try: memex-local help)" ;;
+  esac
+}
+main "$@"
