@@ -3,6 +3,9 @@ using System.Text.RegularExpressions;
 
 namespace MeshWeaver.Utils;
 
+/// <summary>
+/// String extensions for turning PascalCase identifiers into spaced, human-readable text.
+/// </summary>
 public static class WordifyExtensions
 {
     private static readonly Regex WordifyRegex = new("(?<=[a-z])(?<x>[A-Z])|(?<=.)(?<x>[A-Z])(?=[a-z])");
@@ -24,6 +27,11 @@ public static class WordifyExtensions
         return RedundantWhitespaceRegex.Replace(wordified, " ");
     }
 
+    /// <summary>
+    /// Removes all space characters from the string.
+    /// </summary>
+    /// <param name="displayName">The string to strip spaces from.</param>
+    /// <returns>The string with every space removed.</returns>
     public static string RemoveWhiteSpaces(this string displayName)
     {
         return displayName.Replace(" ", "");

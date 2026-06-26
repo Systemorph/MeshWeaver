@@ -95,7 +95,7 @@ public class KernelScriptMemoryLeakTest(ITestOutputHelper output) : MonolithMesh
     [Fact(Timeout = 120_000)]
     public async Task ScriptState_IsCollected_AfterMeshAndServiceProviderDisposal()
     {
-        RunOneKernelScript();
+        await RunOneKernelScript();
 
         var hub = Mesh;
         hub.Dispose();

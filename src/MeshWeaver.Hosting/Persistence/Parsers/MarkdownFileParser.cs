@@ -27,8 +27,10 @@ public partial class MarkdownFileParser : IFileFormatParser
         .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull | DefaultValuesHandling.OmitDefaults)
         .Build();
 
+    /// <inheritdoc />
     public IReadOnlyList<string> SupportedExtensions => [".md"];
 
+    /// <inheritdoc />
     public MeshNode? Parse(string filePath, string content, string relativePath)
     {
         // Derive id and namespace from path
@@ -187,6 +189,7 @@ public partial class MarkdownFileParser : IFileFormatParser
         return node;
     }
 
+    /// <inheritdoc />
     public string Serialize(MeshNode node)
     {
         var sb = new StringBuilder();
@@ -248,6 +251,7 @@ public partial class MarkdownFileParser : IFileFormatParser
         return sb.ToString();
     }
 
+    /// <inheritdoc />
     public bool CanSerialize(MeshNode node)
     {
         // Handle nodes with NodeType "Markdown", MarkdownContent content, string content,

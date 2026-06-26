@@ -26,8 +26,11 @@ namespace MeshWeaver.GitSync;
 /// </summary>
 public sealed class GitHubCredentialService(IMeshService meshService, IMessageHub hub, ILogger<GitHubCredentialService>? logger = null)
 {
+    /// <summary>The satellite namespace segment under a user that holds connected-provider credentials.</summary>
     public const string ProviderNamespaceSegment = "_Provider";
+    /// <summary>The fixed node id of the GitHub credential within the provider namespace.</summary>
     public const string CredentialId = "GitHub";
+    /// <summary>The <see cref="MeshNode.NodeType"/> used for the stored GitHub credential node.</summary>
     public const string NodeType = "GitHubCredential";
 
     /// <summary>The credential node path for a user: <c>{userId}/_Provider/GitHub</c>.</summary>

@@ -18,7 +18,9 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class ApprovalLayoutAreas
 {
+    /// <summary>Area name for the Overview layout area.</summary>
     public const string OverviewArea = "Overview";
+    /// <summary>Area name for the Thumbnail layout area.</summary>
     public const string ThumbnailArea = "Thumbnail";
 
     /// <summary>

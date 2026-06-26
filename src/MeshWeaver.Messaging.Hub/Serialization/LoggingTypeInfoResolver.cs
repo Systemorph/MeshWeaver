@@ -14,6 +14,16 @@ public class LoggingTypeInfoResolver(IJsonTypeInfoResolver innerResolver) : IJso
 {
     private readonly IJsonTypeInfoResolver _innerResolver = innerResolver ?? throw new ArgumentNullException(nameof(innerResolver));
 
+    /// <summary>
+    /// Resolves type info via the wrapped resolver, then strips any object properties
+    /// annotated with [PreventLogging] so they are omitted from serialized log output.
+    /// </summary>
+    /// <param name="type">The type whose metadata is requested.</param>
+    /// <param name="options">The active serializer options.</param>
+    /// <returns>
+    /// The (possibly filtered) <see cref="JsonTypeInfo"/> from the inner resolver, or
+    /// <c>null</c> if the inner resolver returns none.
+    /// </returns>
     public JsonTypeInfo? GetTypeInfo(Type type, JsonSerializerOptions options)
     {
         var typeInfo = _innerResolver.GetTypeInfo(type, options);

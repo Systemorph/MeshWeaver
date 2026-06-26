@@ -30,6 +30,13 @@ public sealed class ContentIndexingObserver : IContentUploadObserver
     private readonly IIoPool fileSystemPool;
     private readonly ILogger<ContentIndexingObserver> logger;
 
+    /// <summary>
+    /// Initializes a new instance of the <c>ContentIndexingObserver</c> class, resolving the FileSystem
+    /// I/O-pool (falling back to an unbounded pool) and a logger from the hub when none is supplied.
+    /// </summary>
+    /// <param name="hub">The owning message hub; provides the service provider, address and observe surface.</param>
+    /// <param name="indexingService">The service that chunks, embeds, stores and summarises a file's bytes.</param>
+    /// <param name="logger">Optional logger; when null one is created from the hub's <c>ILoggerFactory</c>.</param>
     public ContentIndexingObserver(
         IMessageHub hub,
         ContentIndexingService indexingService,

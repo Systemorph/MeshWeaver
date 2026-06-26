@@ -14,6 +14,7 @@ namespace MeshWeaver.Mesh;
 /// </summary>
 public record EaCredential
 {
+    /// <summary>Stable satellite id; one credential per user, so it is constant.</summary>
     [Browsable(false)]
     [Key]
     public string Id { get; init; } = "ea-credential";   // one per user → stable id

@@ -7,6 +7,13 @@ namespace MeshWeaver.ContentCollections;
 /// </summary>
 public class EmbeddedResourceStreamProviderFactory : IStreamProviderFactory
 {
+    /// <summary>
+    /// Creates an <see cref="EmbeddedResourceStreamProvider"/> from the config's
+    /// <c>AssemblyName</c> and <c>ResourcePrefix</c> settings, resolving the assembly from the
+    /// current app domain.
+    /// </summary>
+    /// <param name="config">The collection configuration carrying the required settings.</param>
+    /// <returns>An observable that emits the constructed stream provider.</returns>
     public IObservable<IStreamProvider> Create(ContentCollectionConfig config)
     {
         var assemblyName = config.Settings?.GetValueOrDefault("AssemblyName")

@@ -98,7 +98,7 @@ The ingress public IP is assigned by Azure. Retrieve it with `kubectl get svc -n
 
 ## 2. Images (Shared ACR)
 
-Three images are pushed to the shared ACR. Grant the AKS kubelet `AcrPull` on the registry (cross-RG if needed).
+Three images are pushed to the shared ACR. Grant the AKS kubelet `AcrPull` on the registry (cross-RG if needed) so nodes can pull. Separately, the in-pod **self-updater** lists ACR tags under a **portal Workload Identity** (a shared UAMI federated to `system:serviceaccount:<ns>:memex-portal-sa`, granted `AcrPull`) — provisioned by `infra/modules/portal-identity.bicep` and wired via `selfUpdate.azureClientId`. See [DeploymentAKS → Portal self-update](/Doc/Architecture/DeploymentAKS).
 
 | Image | Description |
 |---|---|

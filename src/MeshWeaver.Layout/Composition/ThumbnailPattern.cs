@@ -5,7 +5,13 @@ namespace MeshWeaver.Layout.Composition;
 /// </summary>
 public record ThumbnailPattern(Func<string, string> LightUrlFactory, Func<string, string> DarkUrlFactory)
 {
+    /// <summary>Returns the light-mode thumbnail URL for the given <paramref name="areaName"/>.</summary>
+    /// <param name="areaName">The name of the layout area whose thumbnail URL is requested.</param>
+    /// <returns>The light-mode thumbnail URL string.</returns>
     public string GetLightUrl(string areaName) => LightUrlFactory(areaName);
+    /// <summary>Returns the dark-mode thumbnail URL for the given <paramref name="areaName"/>.</summary>
+    /// <param name="areaName">The name of the layout area whose thumbnail URL is requested.</param>
+    /// <returns>The dark-mode thumbnail URL string.</returns>
     public string GetDarkUrl(string areaName) => DarkUrlFactory(areaName);
 
     /// <summary>

@@ -13,6 +13,11 @@ public class ExceptionAssertions<TException>(TException exception) where TExcept
     /// <summary>The caught exception (FA-compatible accessor).</summary>
     public TException And => exception;
 
+    /// <summary>Asserts the exception's message matches the wildcard pattern (<c>*</c> = any run, <c>?</c> = any single char).</summary>
+    /// <param name="wildcardPattern">The wildcard pattern the message must match.</param>
+    /// <param name="because">Optional reason phrase folded into the failure message.</param>
+    /// <param name="becauseArgs">Format arguments for <paramref name="because"/>.</param>
+    /// <returns>A continuation for chaining further assertions on the exception.</returns>
     public AndConstraint<ExceptionAssertions<TException>> WithMessage(string wildcardPattern, string because = "", params object[] becauseArgs)
     {
         Az.Ensure(WildCard.IsMatch(exception.Message, wildcardPattern),
@@ -20,6 +25,11 @@ public class ExceptionAssertions<TException>(TException exception) where TExcept
         return new(this);
     }
 
+    /// <summary>Asserts the exception's inner exception is of type <typeparamref name="TInner"/>, exposing it via <c>Which</c>.</summary>
+    /// <typeparam name="TInner">The expected inner exception type.</typeparam>
+    /// <param name="because">Optional reason phrase folded into the failure message.</param>
+    /// <param name="becauseArgs">Format arguments for <paramref name="because"/>.</param>
+    /// <returns>A continuation exposing the typed inner exception.</returns>
     public AndWhichConstraint<ExceptionAssertions<TException>, TInner> WithInnerException<TInner>(string because = "", params object[] becauseArgs)
         where TInner : Exception
     {
@@ -32,6 +42,11 @@ public class ExceptionAssertions<TException>(TException exception) where TExcept
 /// <summary>Assertions for a synchronous <see cref="Action"/> — whether it throws.</summary>
 public class ActionAssertions(Action subject) : ObjectAssertions<Action, ActionAssertions>(subject)
 {
+    /// <summary>Invokes the action and asserts it throws an exception of type <typeparamref name="TException"/>.</summary>
+    /// <typeparam name="TException">The expected exception type.</typeparam>
+    /// <param name="because">Optional reason phrase folded into the failure message.</param>
+    /// <param name="becauseArgs">Format arguments for <paramref name="because"/>.</param>
+    /// <returns>Assertions over the caught exception.</returns>
     public ExceptionAssertions<TException> Throw<TException>(string because = "", params object[] becauseArgs) where TException : Exception
     {
         Exception? caught = Capture(Subject);
@@ -39,6 +54,10 @@ public class ActionAssertions(Action subject) : ObjectAssertions<Action, ActionA
         return new ExceptionAssertions<TException>((TException)caught!);
     }
 
+    /// <summary>Invokes the action and asserts it completes without throwing.</summary>
+    /// <param name="because">Optional reason phrase folded into the failure message.</param>
+    /// <param name="becauseArgs">Format arguments for <paramref name="because"/>.</param>
+    /// <returns>A continuation for chaining further assertions.</returns>
     public AndConstraint<ActionAssertions> NotThrow(string because = "", params object[] becauseArgs)
     {
         Exception? caught = Capture(Subject);
@@ -67,6 +86,10 @@ public class AsyncFunctionAssertions(Func<Task> subject) : ObjectAssertions<Func
     public ThrowAsyncContinuation<TException> ThrowAsync<TException>(string because = "", params object[] becauseArgs) where TException : Exception
         => new(Subject, because, becauseArgs);
 
+    /// <summary>Awaits the delegate and asserts it completes without throwing.</summary>
+    /// <param name="because">Optional reason phrase folded into the failure message.</param>
+    /// <param name="becauseArgs">Format arguments for <paramref name="because"/>.</param>
+    /// <returns>A task that completes once the assertion has run.</returns>
     public async Task NotThrowAsync(string because = "", params object[] becauseArgs)
     {
         Exception? caught = null;
@@ -95,6 +118,11 @@ public sealed class ThrowAsyncContinuation<TException> where TException : Except
         _becauseArgs = becauseArgs;
     }
 
+    /// <summary>Adds a check that the thrown exception's message matches the wildcard pattern; runs when awaited.</summary>
+    /// <param name="wildcardPattern">The wildcard pattern the message must match.</param>
+    /// <param name="because">Optional reason phrase folded into the failure message.</param>
+    /// <param name="becauseArgs">Format arguments for <paramref name="because"/>.</param>
+    /// <returns>This continuation, for further chaining.</returns>
     public ThrowAsyncContinuation<TException> WithMessage(string wildcardPattern, string because = "", params object[] becauseArgs)
     {
         _messagePattern = wildcardPattern;
@@ -103,6 +131,8 @@ public sealed class ThrowAsyncContinuation<TException> where TException : Except
         return this;
     }
 
+    /// <summary>Makes the continuation awaitable: awaiting runs the throw (and optional message) assertions.</summary>
+    /// <returns>An awaiter yielding assertions over the caught exception.</returns>
     public TaskAwaiter<ExceptionAssertions<TException>> GetAwaiter() => RunAsync().GetAwaiter();
 
     private async Task<ExceptionAssertions<TException>> RunAsync()

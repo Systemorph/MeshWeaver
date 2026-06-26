@@ -23,14 +23,20 @@ public sealed class HttpMeshStorageAdapter : IStorageAdapter
 {
     private readonly IRemoteMeshClient _client;
 
+    /// <summary>
+    /// Creates the adapter over a remote-mesh client.
+    /// </summary>
+    /// <param name="client">The remote-mesh client all CRUD operations route through. Not null.</param>
     public HttpMeshStorageAdapter(IRemoteMeshClient client)
     {
         _client = client ?? throw new ArgumentNullException(nameof(client));
     }
 
+    /// <inheritdoc />
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
         => _client.Get(path);
 
+    /// <inheritdoc />
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
         // Upsert: probe existence then Create or Update; emit the written node.
         => _client.Get(node.Path)
@@ -39,12 +45,15 @@ public sealed class HttpMeshStorageAdapter : IStorageAdapter
                 : _client.Update(node))
             .Select(_ => node);
 
+    /// <inheritdoc />
     public IObservable<string> Delete(string path)
         => _client.Delete(path).Select(_ => path);
 
+    /// <inheritdoc />
     public IObservable<bool> Exists(string path)
         => _client.Get(path).Select(n => n is not null);
 
+    /// <inheritdoc />
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
     {
         // Immediate children only — search by exact namespace, not by subtree.

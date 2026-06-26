@@ -13,8 +13,8 @@ namespace MeshWeaver.Mesh;
 /// <see cref="INodeMenuProvider"/> / <see cref="NodeMenuItemProvider"/>, applies the viewer's effective
 /// permissions, sorts by <see cref="NodeMenuItemDefinition.Order"/>, and writes the resulting
 /// <see cref="MenuControl"/> to the <c>$Menu:{context}</c> slot of the layout-area stream — re-emitting
-/// whenever a provider's inputs change (most importantly the viewer's permissions). <see cref="GetMenu"/>
-/// reads that slot with the SAME stream tech as <see cref="LayoutExtensions.GetControlStream"/> — there is
+/// whenever a provider's inputs change (most importantly the viewer's permissions). <see cref="GetMenu(ISynchronizationStream{JsonElement}, string?)"/>
+/// reads that slot with the SAME stream tech as <see cref="LayoutExtensions.GetControlStream(MeshWeaver.Data.ISynchronizationStream{System.Text.Json.JsonElement}, string)"/> — there is
 /// no Blazor-only <c>IMenuItemsProvider</c> to replicate per renderer. Both the Blazor portal and the
 /// native MAUI shell consume this one observable.
 /// </summary>

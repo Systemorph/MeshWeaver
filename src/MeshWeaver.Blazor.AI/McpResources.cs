@@ -13,6 +13,13 @@ namespace MeshWeaver.Blazor.AI;
 [McpServerResourceType]
 public class McpResources
 {
+    /// <summary>
+    /// Returns the complete mesh tools reference (the embedded
+    /// <c>ToolsReference.md</c> document, with its YAML frontmatter stripped) so
+    /// an MCP client can read the @-path, Search-query, and MeshNode-schema rules
+    /// once instead of rediscovering them through trial-and-error tool calls.
+    /// </summary>
+    /// <returns>The reference Markdown, or a not-found message if the embedded resource is missing.</returns>
     [McpServerResource(UriTemplate = "meshweaver://reference/tools", Name = "tools-reference",
         Title = "MeshWeaver tools reference", MimeType = "text/markdown")]
     [Description("Complete reference for the mesh tools: @-path resolution rules, GitHub-style Search query syntax, MeshNode schema for create/update, unified path prefixes (data/, schema/, content/, area/), content collections, satellite namespaces, and icon rules.")]

@@ -28,19 +28,39 @@ Architecture decisions baked in (see the AGENTS memory + `../helm`):
 - DNS zone for your domain in Azure DNS (here `systemorph.com`, RG `dns`).
 
 ## 1. Build + push images to the shared ACR
+
+Images are **multi-arch** (linux/amd64 + linux/arm64) — one tag serves x86 cloud nodes AND
+Apple-silicon (arm64) local k3s, so every install can pull-and-self-update natively from ACR.
+
 ```bash
-# Base image (node + Claude Code + Copilot CLIs) — Linux builder => correct copilot-linux-x64
-az acr build --registry meshweaver --image memex-portal-ai-base:latest deploy/base-images/portal-ai
-# App image — MUST pass -r linux-x64 (the Copilot SDK keys the CLI binary off the RID)
+# Base image (node + Claude Code + Copilot CLIs) — MULTI-ARCH manifest list.
+# @anthropic-ai/claude-code is pure JS (arch-independent); @github/copilot resolves its
+# per-platform binary via npm optional deps, so each arch's build bakes in the matching CLI.
+az acr build --registry meshweaver --image memex-portal-ai-base:latest \
+  --platform linux/amd64 --platform linux/arm64 deploy/base-images/portal-ai
+# (equivalent local build: `docker buildx build --platform linux/amd64,linux/arm64 \
+#   -t meshweaver.azurecr.io/memex-portal-ai-base:latest --push deploy/base-images/portal-ai`)
+
+# App images — drop `-r linux-x64`; set RuntimeIdentifiers + ContainerRuntimeIdentifiers to both
+# RIDs. With no single RID, the SDK (>= 8.0.405; we're on .NET 10) publishes per-RID and combines
+# them into an OCI Image Index (manifest list). ContainerRuntimeIdentifiers MUST be a subset of
+# RuntimeIdentifiers (set them equal). The arm64 leg layers on the multi-arch base above.
 az acr login --name meshweaver
 dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj \
-  -c Release -r linux-x64 --no-self-contained -t:PublishContainer -p:PublishProfile= \
+  -c Release --no-self-contained -t:PublishContainer -p:PublishProfile= \
+  -p:RuntimeIdentifiers="linux-x64;linux-arm64" -p:ContainerRuntimeIdentifiers="linux-x64;linux-arm64" \
   -p:ContainerRegistry=meshweaver.azurecr.io -p:ContainerRepository=memex-portal-ai \
   -p:ContainerImageTag=latest -p:ContainerBaseImage=meshweaver.azurecr.io/memex-portal-ai-base:latest
 dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj \
-  -c Release -r linux-x64 --no-self-contained -t:PublishContainer -p:PublishProfile= \
+  -c Release --no-self-contained -t:PublishContainer -p:PublishProfile= \
+  -p:RuntimeIdentifiers="linux-x64;linux-arm64" -p:ContainerRuntimeIdentifiers="linux-x64;linux-arm64" \
   -p:ContainerRegistry=meshweaver.azurecr.io -p:ContainerRepository=memex-migration -p:ContainerImageTag=latest
 ```
+
+> **First multi-arch roll:** the multi-arch base (`memex-portal-ai-base:latest`) must exist before
+> the first multi-arch app build — the arm64 leg has no base layer otherwise. Rebuild the base
+> multi-arch once (the `az acr build … --platform …` above), then the app builds (and the
+> continuous self-update path) work for both architectures.
 
 ## 2. Provision the AKS platform (Bicep)
 Edit `infra/main.parameters.json` (region, node size/count within your vCPU quota — swedencentral
@@ -59,6 +79,18 @@ KUBELET=$(az aks show -g memex-aks-rg -n memexaks-cluster --query identityProfil
 az role assignment create --assignee-object-id $KUBELET --assignee-principal-type ServicePrincipal \
   --role AcrPull --scope $(az acr show -n meshweaver --query id -o tsv)
 ```
+Same cross-RG grant for the **portal Workload Identity** (the shared UAMI the in-pod self-updater uses
+to list ACR tags — provisioned by `infra/modules/portal-identity.bicep`, federated to
+`system:serviceaccount:<ns>:memex-portal-sa` for every portal namespace):
+```bash
+PORTAL_MI=$(az identity show -g memex-aks-rg -n memexaks-portal-mi --query principalId -o tsv)
+az role assignment create --assignee-object-id $PORTAL_MI --assignee-principal-type ServicePrincipal \
+  --role AcrPull --scope $(az acr show -n meshweaver --query id -o tsv)
+# Then wire its clientId into selfUpdate.azureClientId for each env (same value everywhere):
+az deployment sub show --name memex-aks-infra-sc --query properties.outputs.portalIdentityClientId.value -o tsv
+```
+(Pure-IaC alternative to both out-of-band grants: deploy with `grantSharedAcrPull=true` for the portal
+UAMI — needs User Access Administrator on `meshweaver-shared`. See [DeploymentAKS → Portal self-update](../../src/MeshWeaver.Documentation/Data/Architecture/DeploymentAKS.md).)
 > Postgres connection uses the **private IP + password + SSL** (the FQDN would trip the portal's
 > `database.azure.com` → Entra-token branch, which doesn't match a password server). Get it with:
 > `az network private-dns record-set a list -g memex-aks-rg -z <pg-private-zone> -o table`.

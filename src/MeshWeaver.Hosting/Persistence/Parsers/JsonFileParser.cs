@@ -11,13 +11,19 @@ public class JsonFileParser : IFileFormatParser
 {
     private readonly JsonSerializerOptions _options;
 
+    /// <summary>
+    /// Creates a JSON parser that serializes and deserializes MeshNode objects.
+    /// </summary>
+    /// <param name="options">Serializer options carrying the $type discriminator and converter configuration used for polymorphic content.</param>
     public JsonFileParser(JsonSerializerOptions options)
     {
         _options = options;
     }
 
+    /// <inheritdoc />
     public IReadOnlyList<string> SupportedExtensions => [".json"];
 
+    /// <inheritdoc />
     public MeshNode? Parse(string filePath, string content, string relativePath)
     {
         try
@@ -30,10 +36,12 @@ public class JsonFileParser : IFileFormatParser
         }
     }
 
+    /// <inheritdoc />
     public string Serialize(MeshNode node)
     {
         return JsonSerializer.Serialize(node, _options);
     }
 
+    /// <inheritdoc />
     public bool CanSerialize(MeshNode node) => true;
 }

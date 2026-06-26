@@ -30,8 +30,7 @@ public sealed class GitWorkingTreeService(
     GitCli git,
     GitHubCredentialService credentials,
     IoPoolRegistry ioPools,
-    IOptions<GitWorkingTreeOptions> options,
-    ILogger<GitWorkingTreeService>? logger = null)
+    IOptions<GitWorkingTreeOptions> options)
 {
     private string Root => options.Value.Root;
     private IIoPool FileSystem => ioPools.Get(IoPoolNames.FileSystem);

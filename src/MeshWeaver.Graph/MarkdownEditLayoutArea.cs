@@ -20,9 +20,21 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class MarkdownEditLayoutArea
 {
+    /// <summary>
+    /// Renders the Edit layout area — a full-page Markdown editor without track changes.
+    /// </summary>
+    /// <param name="host">The layout area host rendering the area.</param>
+    /// <param name="_">The rendering context for the area.</param>
+    /// <returns>The view for the Edit layout area.</returns>
     public static UiControl Edit(LayoutAreaHost host, RenderingContext _)
         => BuildArea(host, trackChanges: false);
 
+    /// <summary>
+    /// Renders the Suggest layout area — a full-page Markdown editor with track changes enabled.
+    /// </summary>
+    /// <param name="host">The layout area host rendering the area.</param>
+    /// <param name="_">The rendering context for the area.</param>
+    /// <returns>The view for the Suggest layout area.</returns>
     public static UiControl Suggest(LayoutAreaHost host, RenderingContext _)
         => BuildArea(host, trackChanges: true);
 

@@ -66,6 +66,15 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
     // subscriber. See IoPoolExtensions and Doc/Architecture/AsynchronousCalls.md.
     private readonly IIoPool _ioPool;
 
+    /// <summary>
+    /// Creates an adapter that surfaces an assembly's embedded resources as mesh nodes,
+    /// indexing matching manifest resources by their derived node path.
+    /// </summary>
+    /// <param name="assembly">Assembly whose manifest resources are exposed.</param>
+    /// <param name="prefix">Manifest-resource name prefix to strip; a trailing dot is appended if missing.</param>
+    /// <param name="seedNodes">Optional in-memory nodes layered ahead of the embedded resources on read and listing.</param>
+    /// <param name="partitionNamespace">Optional namespace prefixed onto derived paths so lookups by full path match.</param>
+    /// <param name="ioPoolRegistry">Optional registry used to resolve the file-system <c>IIoPool</c> that bridges the resource-read leaf to an observable; falls back to an unbounded pool when null.</param>
     public EmbeddedResourceStorageAdapter(
         Assembly assembly,
         string prefix,
@@ -141,6 +150,7 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
         return map;
     }
 
+    /// <inheritdoc />
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
         => _ioPool.Run(ct => ReadAsyncCore(path, options, ct));
 
@@ -183,6 +193,7 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
         return node;
     }
 
+    /// <inheritdoc />
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
         => Observable.Defer(() =>
         {
@@ -191,6 +202,7 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
             return Observable.Return(node);
         });
 
+    /// <inheritdoc />
     public IObservable<string> Delete(string path)
         => Observable.Defer(() =>
         {
@@ -202,6 +214,7 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
             return Observable.Return(path);
         });
 
+    /// <inheritdoc />
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
         => Observable.Defer(() => Observable.Return(ListChildPathsCore(parentPath)));
 
@@ -258,6 +271,7 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
             directoryPaths.Add(prefix + remainder[..firstSlash]);
     }
 
+    /// <inheritdoc />
     public IObservable<bool> Exists(string path)
         => Observable.Defer(() =>
         {
@@ -268,19 +282,23 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
             return Observable.Return(_seedNodes.ContainsKey(normalized) || _entriesByPath.ContainsKey(normalized));
         });
 
+    /// <inheritdoc />
     public IObservable<object> GetPartitionObjects(
         string nodePath, string? subPath, JsonSerializerOptions options)
         // Embedded resources do not host partition sub-objects (no .json
         // collections under a node directory).
         => Observable.Empty<object>();
 
+    /// <inheritdoc />
     public IObservable<Unit> SavePartitionObjects(
         string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
         => Observable.Throw<Unit>(new NotSupportedException("EmbeddedResourceStorageAdapter is read-only."));
 
+    /// <inheritdoc />
     public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
         => Observable.Throw<Unit>(new NotSupportedException("EmbeddedResourceStorageAdapter is read-only."));
 
+    /// <inheritdoc />
     public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
         => Observable.Return<DateTimeOffset?>(null);
 }

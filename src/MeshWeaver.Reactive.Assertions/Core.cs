@@ -81,12 +81,15 @@ public sealed class AssertionScope : IDisposable
     private readonly AssertionScope? _parent;
     private readonly List<string> _failures = [];
 
+    /// <summary>Opens a new failure-collecting scope and makes it the current ambient scope.</summary>
     public AssertionScope()
     {
         _parent = _current;
         _current = this;
     }
 
+    /// <summary>Opens a new scope carrying a descriptive context label (label is accepted for FA compatibility).</summary>
+    /// <param name="context">A human-readable label for the scope.</param>
     public AssertionScope(string context) : this() { }
 
     internal static void Report(string message)
@@ -97,6 +100,7 @@ public sealed class AssertionScope : IDisposable
             throw new AssertionException(message);
     }
 
+    /// <summary>Restores the parent scope and, if any failures were collected, throws a single aggregated <see cref="AssertionException"/>.</summary>
     public void Dispose()
     {
         _current = _parent;

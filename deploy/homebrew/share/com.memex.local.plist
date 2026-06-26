@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  memex-local launchd login agent — 1:1 automation of LocalColimaMac.md §7.
+  Runs ~/.memex-local/port-forward.sh at login (RunAtLoad) and restarts it if it
+  ever drops (KeepAlive), keeping https://memex.localhost:8443 available across
+  reboots with NO sudo (8443 is unprivileged — see §6/§7).
+
+  `memex-local up` writes a copy of this file with the __TOKENS__ substituted to
+  ~/Library/LaunchAgents/com.memex.local.plist and bootstraps it:
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.memex.local.plist
+  `memex-local down` boots it out:
+    launchctl bootout   gui/$(id -u) ~/Library/LaunchAgents/com.memex.local.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.memex.local</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__SCRIPT__</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>__LOG__</string>
+    <key>StandardErrorPath</key>
+    <string>__LOG__</string>
+</dict>
+</plist>

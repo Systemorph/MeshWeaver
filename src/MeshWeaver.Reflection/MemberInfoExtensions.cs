@@ -51,6 +51,13 @@ namespace MeshWeaver.Reflection
             return parameter.IsDefined(typeof(T), inherit);
         }
 
+        /// <summary>
+        /// Gets all attributes of type <typeparamref name="T"/> applied to the <paramref name="member"/> (or an ancestor of the member).
+        /// </summary>
+        /// <typeparam name="T">The type of the attributes to retrieve.</typeparam>
+        /// <param name="member">The member (property, method, field, ...) to inspect.</param>
+        /// <param name="inherit">Flag whether to search ancestors of the member.</param>
+        /// <returns>The list of applied attributes of type <typeparamref name="T"/>; empty if none are present.</returns>
         public static List<T> GetMultipleCustomAttributes<T>(this MemberInfo member, bool inherit = true)
             where T : Attribute
         {

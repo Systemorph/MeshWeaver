@@ -33,6 +33,13 @@ public class MeshQuery : IMeshQueryCore
     private readonly IReadOnlyList<IMeshQueryProvider> providers;
     private readonly IMessageHub hub;
 
+    /// <summary>
+    /// Creates the top-level query fan-out, deduplicating the registered
+    /// providers by <see cref="IMeshQueryProvider.Name"/> so duplicate
+    /// registrations of the same provider class execute only once per query.
+    /// </summary>
+    /// <param name="providers">The registered per-adapter query providers to aggregate.</param>
+    /// <param name="hub">The message hub supplying JSON serializer options and identity context.</param>
     public MeshQuery(IEnumerable<IMeshQueryProvider> providers, IMessageHub hub)
     {
         // Distinct by Name — multiple AddSingleton<IMeshQueryProvider>(factory)
@@ -71,6 +78,16 @@ public class MeshQuery : IMeshQueryCore
         return combined;
     }
 
+    /// <summary>
+    /// Secured fan-out: runs the request against every registered provider
+    /// through the public (access-controlled) surface and merges their
+    /// emissions into a single delta stream — one combined Initial frame,
+    /// then forwarded Added / Updated / Removed changes — deduplicated by
+    /// node path.
+    /// </summary>
+    /// <typeparam name="T">The result element type (typically <c>MeshNode</c>).</typeparam>
+    /// <param name="request">The query request carrying filters, path, scope, paging, and identity.</param>
+    /// <returns>An observable of merged query result changes across all matching providers.</returns>
     public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request)
     {
         var matched = SelectMatchingProviders(NamespacesForRequest(request));
@@ -656,6 +673,15 @@ public class MeshQuery : IMeshQueryCore
         return true;
     }
 
+    /// <summary>
+    /// Reads a single property value of the node at <paramref name="path"/>,
+    /// returning the first non-null match across the provider fan-out (or the
+    /// default value when no provider resolves the node).
+    /// </summary>
+    /// <typeparam name="T">The expected type of the property value.</typeparam>
+    /// <param name="path">The full mesh path of the node to read.</param>
+    /// <param name="property">The name of the property to project from the node.</param>
+    /// <returns>An observable emitting the property value, or default when not found.</returns>
     public IObservable<T?> Select<T>(string path, string property)
     {
         var matched = SelectMatchingProviders(NamespacesForBasePath(path));

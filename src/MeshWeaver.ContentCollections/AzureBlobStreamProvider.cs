@@ -10,6 +10,7 @@ namespace MeshWeaver.ContentCollections;
 /// </summary>
 public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string containerName, string basePrefix = "") : IStreamProvider
 {
+    /// <inheritdoc />
     public string ProviderType => "AzureBlob";
 
     /// <summary>
@@ -37,6 +38,7 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
             : "/" + fullPath;
     }
 
+    /// <inheritdoc />
     public async Task<Stream?> GetStreamAsync(string reference, CancellationToken cancellationToken = default)
     {
         var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
@@ -50,6 +52,7 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
         return await blobClient.OpenReadAsync(cancellationToken: cancellationToken);
     }
 
+    /// <inheritdoc />
     public async Task<(Stream? Stream, string Path, DateTime LastModified)> GetStreamWithMetadataAsync(string path, CancellationToken cancellationToken = default)
     {
         var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
@@ -66,6 +69,7 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
         return (stream, path, properties.Value.LastModified.DateTime);
     }
 
+    /// <inheritdoc />
     public async Task WriteStreamAsync(string reference, Stream content, CancellationToken cancellationToken = default)
     {
         var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
@@ -81,6 +85,7 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
         await blobClient.UploadAsync(content, overwrite: true, cancellationToken: cancellationToken);
     }
 
+    /// <inheritdoc />
     public async IAsyncEnumerable<(Stream? Stream, string Path, DateTime LastModified)> GetStreamsAsync(Func<string, bool> filter, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
@@ -96,6 +101,7 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
         }
     }
 
+    /// <inheritdoc />
     public async IAsyncEnumerable<FolderItem> GetFolders(
         string path,
         [EnumeratorCancellation] CancellationToken ct = default)
@@ -117,6 +123,7 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
         }
     }
 
+    /// <inheritdoc />
     public async IAsyncEnumerable<FileItem> GetFiles(
         string path,
         [EnumeratorCancellation] CancellationToken ct = default)
@@ -140,6 +147,7 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
         }
     }
 
+    /// <inheritdoc />
     public async Task SaveFileAsync(string path, string fileName, Stream content, CancellationToken cancellationToken = default)
     {
         var relativePath = $"{path.TrimStart('/').TrimEnd('/')}/{fileName}".TrimStart('/');
@@ -152,6 +160,7 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
         await blobClient.UploadAsync(content, overwrite: true, cancellationToken: cancellationToken);
     }
 
+    /// <inheritdoc />
     public async Task CreateFolderAsync(string folderPath)
     {
         // Azure Blob Storage uses virtual folders — create a zero-byte placeholder
@@ -165,6 +174,7 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
         await blobClient.UploadAsync(new BinaryData(Array.Empty<byte>()), overwrite: true);
     }
 
+    /// <inheritdoc />
     public async Task DeleteFolderAsync(string folderPath)
     {
         var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
@@ -180,12 +190,14 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
         }
     }
 
+    /// <inheritdoc />
     public async Task DeleteFileAsync(string filePath)
     {
         var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
         await containerClient.DeleteBlobAsync(ToFullPath(filePath));
     }
 
+    /// <inheritdoc />
     public IDisposable? AttachMonitor(Action<string> onChanged)
     {
         // Azure Blob Storage doesn't support file system watching
@@ -193,6 +205,7 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
         return null;
     }
 
+    /// <inheritdoc />
     public async Task<ImmutableDictionary<string, Author>> LoadAuthorsAsync(CancellationToken cancellationToken = default)
     {
         try

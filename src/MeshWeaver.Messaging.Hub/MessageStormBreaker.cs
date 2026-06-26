@@ -133,7 +133,14 @@ public sealed class MessageStormBreaker
     /// deterministically (no wall-clock sleeps). Production uses the parameterless-tuning
     /// overload above; this is how the type is made testable.
     /// </summary>
+    /// <param name="logger">Logger used to emit the LOUD <c>Error</c> tripwire when a key storms or the hub overloads.</param>
+    /// <param name="address">Address of the owning hub, named in the diagnostic log lines.</param>
+    /// <param name="threshold">Per-key trip threshold: identical-tuple messages within one window above which the key trips.</param>
+    /// <param name="window">Length of the per-key measurement window.</param>
+    /// <param name="cooldown">How long a tripped key keeps being dropped before it is re-evaluated.</param>
+    /// <param name="nowTicks">Injectable monotonic clock returning the current time in ticks; enables deterministic time control in tests.</param>
     /// <param name="ticksPerSecond">Ticks-per-second of the injected <paramref name="nowTicks"/> clock.</param>
+    /// <param name="aggregateWatermark">Inbound-queue-depth watermark above which sheddable traffic is shed for aggregate overload.</param>
     public MessageStormBreaker(
         ILogger logger, Address address,
         int threshold, TimeSpan window, TimeSpan cooldown,
@@ -331,8 +338,21 @@ public sealed class MessageStormBreaker
         return message.GetType().HasAttribute<CanBeIgnoredAttribute>();
     }
 
+    /// <summary>
+    /// Diagnostic record emitted once per aggregate-shed decision: the breaker dropped a
+    /// sheddable message because the hub's total inbound queue depth crossed the watermark.
+    /// Carries the shed message's routing tuple and the observed queue depth.
+    /// </summary>
+    /// <param name="Sender">The sender address of the shed message.</param>
+    /// <param name="Target">The target address of the shed message, if any.</param>
+    /// <param name="TypeName">The runtime type name of the shed message.</param>
+    /// <param name="InboundDepth">The hub's inbound queue depth observed when the shed decision was made.</param>
     public readonly record struct AggregateShed(Address Sender, Address? Target, string TypeName, int InboundDepth);
 
+    /// <summary>
+    /// Completes and disposes the diagnostic subjects and clears the per-key counters.
+    /// Called when the owning hub is disposed; the breaker's lifetime IS the hub's.
+    /// </summary>
     public void Dispose()
     {
         try { trips.OnCompleted(); } catch { /* ignore */ }

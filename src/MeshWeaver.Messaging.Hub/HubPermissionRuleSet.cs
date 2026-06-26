@@ -10,8 +10,19 @@ namespace MeshWeaver.Messaging;
 /// </summary>
 public record HubPermissionRuleSet
 {
+    /// <summary>
+    /// The configured rules: each pairs a granted <see cref="Permission"/> with a
+    /// predicate over the delivery and (optional) user id that decides whether the
+    /// grant applies. Immutable — extend via <see cref="Add"/>.
+    /// </summary>
     public IReadOnlyList<(Permission Permission, Func<IMessageDelivery, string?, bool> Check)> Rules { get; init; } = [];
 
+    /// <summary>
+    /// Returns a new rule set with an additional permission rule appended.
+    /// </summary>
+    /// <param name="permission">The permission this rule grants when its predicate matches.</param>
+    /// <param name="rule">Predicate over the delivery and user id deciding whether the grant applies.</param>
+    /// <returns>A new <see cref="HubPermissionRuleSet"/> including the added rule.</returns>
     public HubPermissionRuleSet Add(Permission permission, Func<IMessageDelivery, string?, bool> rule)
         => this with { Rules = [.. Rules, (permission, rule)] };
 
@@ -29,6 +40,10 @@ public record HubPermissionRuleSet
     }
 }
 
+/// <summary>
+/// Configuration extensions for adding hub-level permission rules to a
+/// <see cref="MessageHubConfiguration"/>.
+/// </summary>
 public static class HubPermissionExtensions
 {
     /// <summary>

@@ -21,6 +21,7 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class GlobalSettingsLayoutArea
 {
+    /// <summary>Area name for the GlobalSettings layout area.</summary>
     public const string GlobalSettingsArea = "GlobalSettings";
     internal const string DataSourcesTab = "DataSources";
 

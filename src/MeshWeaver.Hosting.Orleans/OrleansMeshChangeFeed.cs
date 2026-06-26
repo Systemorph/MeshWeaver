@@ -28,6 +28,14 @@ public class OrleansMeshChangeFeed : IMeshChangeFeed, IDisposable
     private readonly Subject<MeshChangeEvent> _broadcastQueue = new();
     private readonly IDisposable _broadcastSubscription;
 
+    /// <summary>
+    /// Initializes a new instance of the <c>OrleansMeshChangeFeed</c> class, wrapping the
+    /// in-process feed and wiring the serial broadcast queue that ships events onto the
+    /// Orleans memory stream in arrival order.
+    /// </summary>
+    /// <param name="localFeed">The in-process change feed serving local subscribers and providing local publish/subscribe.</param>
+    /// <param name="hub">The mesh hub used to resolve the I/O pool and the Orleans cluster client.</param>
+    /// <param name="logger">Optional logger for broadcast diagnostics and failures.</param>
     public OrleansMeshChangeFeed(
         InProcessMeshChangeFeed localFeed,
         IMessageHub hub,
@@ -59,6 +67,7 @@ public class OrleansMeshChangeFeed : IMeshChangeFeed, IDisposable
                     "OrleansMeshChangeFeed: broadcast queue faulted — cross-silo broadcasts stopped"));
     }
 
+    /// <inheritdoc />
     public void Publish(MeshChangeEvent change)
     {
         // Local subscribers get it immediately (synchronous).
@@ -69,6 +78,7 @@ public class OrleansMeshChangeFeed : IMeshChangeFeed, IDisposable
         _broadcastQueue.OnNext(change);
     }
 
+    /// <inheritdoc />
     public IDisposable Subscribe(Action<MeshChangeEvent> handler, MeshChangeKind? filter = null)
         => _local.Subscribe(handler, filter);
 
@@ -91,6 +101,7 @@ public class OrleansMeshChangeFeed : IMeshChangeFeed, IDisposable
         return Unit.Default;
     }
 
+    /// <inheritdoc />
     public void Dispose()
     {
         _broadcastQueue.OnCompleted();

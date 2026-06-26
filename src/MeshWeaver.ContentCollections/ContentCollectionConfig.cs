@@ -3,12 +3,22 @@
 namespace MeshWeaver.ContentCollections;
 
 
+/// <summary>
+/// Declarative configuration for a content collection: which backing store supplies its files,
+/// how it is named and ordered, and which capabilities (editing, static serving, child exposure)
+/// it offers.
+/// </summary>
 public record ContentCollectionConfig
 {
+    /// <summary>The backing store kind (e.g. <c>"FileSystem"</c>, <c>"EmbeddedResource"</c>, <c>"Hub"</c>, <c>"Mapped"</c>) used to select the stream-provider factory.</summary>
     public required string SourceType { get; set; }
+    /// <summary>The collection's unique key within its hub.</summary>
     public required string Name { get; set; }
+    /// <summary>Optional human-friendly name; when <c>null</c> a word-split of <see cref="Name"/> is used.</summary>
     public string? DisplayName { get; set; }
+    /// <summary>Optional base path/prefix into the backing store that scopes this collection's files.</summary>
     public string? BasePath { get; set; }
+    /// <summary>Sort order used when listing collections; lower values come first.</summary>
     public int Order { get; set; }
 
     /// <summary>

@@ -1,8 +1,3 @@
-// <meshweaver>
-// Id: FutuReDataLoader
-// DisplayName: FutuRe Data Loader
-// </meshweaver>
-
 using System.Globalization;
 using System.IO;
 using System.Reactive.Linq;

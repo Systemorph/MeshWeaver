@@ -18,6 +18,7 @@ public sealed record WorkingTreeStatus(string Branch, bool IsClean, IReadOnlyLis
 /// <summary>Raw result of one <c>git</c> invocation. <see cref="Ok"/> is exit code 0.</summary>
 public sealed record GitCommandResult(int ExitCode, string StdOut, string StdErr)
 {
+    /// <summary>True when the command succeeded (exit code 0).</summary>
     public bool Ok => ExitCode == 0;
 
     /// <summary>StdErr if present, else StdOut — the human-facing message for a failed command.</summary>

@@ -21,10 +21,12 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public record Space
 {
+    /// <summary>Display name of the space.</summary>
     [Required]
     [MeshNodeProperty(nameof(MeshNode.Name))]
     public string Name { get; init; } = string.Empty;
 
+    /// <summary>Short description of the space.</summary>
     public string? Description { get; init; }
 
     /// <summary>
@@ -34,21 +36,28 @@ public record Space
     /// </summary>
     public string? Body { get; init; }
 
+    /// <summary>URL of the space's website.</summary>
     public string? Website { get; init; }
 
+    /// <summary>Content reference to the space's logo image.</summary>
     [ContentItem]
     public string? Logo { get; init; }
 
+    /// <summary>Icon used to represent the space; defaults to "Building".</summary>
     [ContentItem]
     [MeshNodeProperty(nameof(MeshNode.Icon))]
     public string Icon { get; init; } = "Building";
 
+    /// <summary>Geographic location of the space.</summary>
     public string? Location { get; init; }
 
+    /// <summary>Contact email address for the space.</summary>
     public string? Email { get; init; }
 
+    /// <summary>Whether the space has been verified.</summary>
     public bool IsVerified { get; init; }
 
+    /// <summary>Timestamp when the space was created.</summary>
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
 }
 
@@ -92,6 +101,7 @@ public record Space
 /// </summary>
 public static class SpaceNodeType
 {
+    /// <summary>The node-type identifier for Space nodes.</summary>
     public const string NodeType = "Space";
 
     /// <summary>
@@ -140,6 +150,14 @@ public static class SpaceNodeType
         ask the assistant in the chat below to draft it — it writes to the same Body field.
         """;
 
+    /// <summary>
+    /// Registers the Space node type on the mesh builder: the type node, content type,
+    /// access rule, post-creation handler (creator-Admin grant), and the last-admin
+    /// invariant validator. Idempotent — a second call is a no-op.
+    /// </summary>
+    /// <typeparam name="TBuilder">The mesh builder type.</typeparam>
+    /// <param name="builder">The mesh builder to register the node type on.</param>
+    /// <returns>The same builder, to allow fluent chaining.</returns>
     public static TBuilder AddSpaceType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         // Idempotent guard: the marker check runs against the LIVE IServiceCollection
@@ -181,6 +199,11 @@ public static class SpaceNodeType
         return builder;
     }
 
+    /// <summary>
+    /// Builds the MeshNode definition for the Space node type, including its content type,
+    /// content collections, layout areas, and partition-owning routing configuration.
+    /// </summary>
+    /// <returns>The Space node-type definition.</returns>
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "Space",

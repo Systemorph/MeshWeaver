@@ -16,6 +16,13 @@ namespace MeshWeaver.Data;
 public record VirtualDataSource(object Id, IWorkspace Workspace)
     : TypeSourceBasedUnpartitionedDataSource<VirtualDataSource, VirtualTypeSource>(Id, Workspace)
 {
+    /// <summary>
+    /// Not supported on a virtual data source — virtual types carry a stream provider and
+    /// must be added with <see cref="WithVirtualType{T}"/> instead. Always throws.
+    /// </summary>
+    /// <typeparam name="T">The type that would be added.</typeparam>
+    /// <param name="config">Ignored.</param>
+    /// <returns>Never returns; always throws <see cref="NotSupportedException"/>.</returns>
     public override VirtualDataSource WithType<T>(Func<ITypeSource, ITypeSource>? config)
     {
         throw new NotSupportedException("VirtualDataSource does not support WithType. Use WithVirtualType instead.");
@@ -42,6 +49,15 @@ public record VirtualDataSource(object Id, IWorkspace Workspace)
         return WithTypeSource(typeof(T), typeSource);
     }
 
+    /// <summary>
+    /// Builds the backing entity-store stream and subscribes to each virtual type source's
+    /// stream updates so later emissions from the provider are pushed into the local mirror.
+    /// Writes are stamped with the System identity because the provider emissions land on a
+    /// background scheduler where the per-request AccessContext is not available.
+    /// </summary>
+    /// <param name="identity">The identity (owner address plus partition) of the stream to set up.</param>
+    /// <param name="config">Configuration applied to the underlying stream.</param>
+    /// <returns>The configured entity-store synchronization stream.</returns>
     protected override ISynchronizationStream<EntityStore> SetupDataSourceStream(
         StreamIdentity identity,
         Func<StreamConfiguration<EntityStore>, StreamConfiguration<EntityStore>> config)
@@ -109,10 +125,15 @@ public record VirtualDataSource(object Id, IWorkspace Workspace)
 /// </summary>
 public abstract record VirtualTypeSource : TypeSource<VirtualTypeSource>
 {
+    /// <summary>Initializes the base virtual type source for the given workspace and entity type.</summary>
+    /// <param name="workspace">The workspace this type source belongs to.</param>
+    /// <param name="type">The CLR entity type produced by this source.</param>
     protected VirtualTypeSource(IWorkspace workspace, Type type) : base(workspace, type)
     {
     }
 
+    /// <summary>Returns an observable that emits the current set of instances whenever the underlying stream changes.</summary>
+    /// <returns>An observable of the type's instances as untyped objects.</returns>
     public abstract IObservable<IEnumerable<object>> GetStreamUpdates();
 }
 
@@ -129,9 +150,18 @@ public record VirtualTypeSource<T>(
     private IObservable<IEnumerable<T>>? cachedStream;
 
     // Override TypeDefinition to use custom CollectionName if provided
+    /// <summary>
+    /// The type definition for <typeparamref name="T"/>, resolved against the optional
+    /// <c>CollectionName</c> so the virtual collection can be named independently of the type.
+    /// </summary>
     public new ITypeDefinition TypeDefinition { get; init; } =
         Workspace.Hub.TypeRegistry.GetTypeDefinition(typeof(T), typeName: CollectionName ?? typeof(T).Name)!;
 
+    /// <summary>
+    /// Returns the cached, replayed, distinct stream of instances produced by the configured
+    /// stream provider. The first subscriber starts the provider; later subscribers share it.
+    /// </summary>
+    /// <returns>A hot, replay-1 observable of the typed instances.</returns>
     public IObservable<IEnumerable<T>> StreamUpdates()
     {
         return cachedStream ??= StreamProvider(Workspace)
@@ -140,6 +170,8 @@ public record VirtualTypeSource<T>(
             .RefCount();
     }
 
+    /// <summary>Returns <see cref="StreamUpdates"/> projected to untyped objects for the base contract.</summary>
+    /// <returns>An observable of the type's instances as untyped objects.</returns>
     public override IObservable<IEnumerable<object>> GetStreamUpdates()
     {
         return StreamUpdates().Select(items => items.Cast<object>());

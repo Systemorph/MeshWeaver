@@ -27,8 +27,15 @@ namespace MeshWeaver.Layout;
 /// </summary>
 public class JsonElementContentComparer : IEqualityComparer<JsonElement>
 {
+    /// <summary>The singleton instance; use this in DistinctUntilChanged calls.</summary>
     public static readonly JsonElementContentComparer Instance = new();
 
+    /// <summary>
+    /// Returns <c>true</c> if <paramref name="x"/> and <paramref name="y"/> have identical raw JSON text,
+    /// or if both are <c>Undefined</c>.
+    /// </summary>
+    /// <param name="x">The first element to compare.</param>
+    /// <param name="y">The second element to compare.</param>
     public bool Equals(JsonElement x, JsonElement y)
     {
         // Both undefined
@@ -43,6 +50,8 @@ public class JsonElementContentComparer : IEqualityComparer<JsonElement>
         return x.GetRawText() == y.GetRawText();
     }
 
+    /// <summary>Returns a hash code based on the element's raw JSON text; returns 0 for Undefined.</summary>
+    /// <param name="obj">The element to hash.</param>
     public int GetHashCode(JsonElement obj)
     {
         if (obj.ValueKind == JsonValueKind.Undefined)
@@ -51,8 +60,20 @@ public class JsonElementContentComparer : IEqualityComparer<JsonElement>
     }
 }
 
+/// <summary>
+/// Extension methods for configuring and working with the layout system: registering layout areas,
+/// layout types, control streams, data streams, and layout clients on a hub.
+/// </summary>
 public static class LayoutExtensions
 {
+    /// <summary>
+    /// Registers the layout system on <paramref name="config"/> and appends
+    /// <paramref name="layoutDefinition"/> as one of the layout-definition configuration lambdas.
+    /// Idempotently wires the area stream factory, type registry, serialization converters, and
+    /// autocomplete provider on the first call.
+    /// </summary>
+    /// <param name="config">The hub configuration to extend.</param>
+    /// <param name="layoutDefinition">A transform that adds renderers and area definitions to the layout.</param>
     public static MessageHubConfiguration AddLayout(
         this MessageHubConfiguration config,
         Func<LayoutDefinition, LayoutDefinition> layoutDefinition
@@ -143,6 +164,12 @@ public static class LayoutExtensions
             .AddDataReferenceView();
     // Note: $Content area is handled by ContentLayoutArea.UnifiedContent from AddContentCollections()
 
+    /// <summary>
+    /// Registers all UI control, skin, and stream-message types from the layout assembly into
+    /// <paramref name="configuration"/>'s type registry, along with key layout infrastructure
+    /// types (LayoutAreaReference, Option, DataGridCellClick, etc.).
+    /// </summary>
+    /// <param name="configuration">The hub configuration to extend.</param>
     public static MessageHubConfiguration AddLayoutTypes(
         this MessageHubConfiguration configuration
     ) =>
@@ -170,6 +197,13 @@ public static class LayoutExtensions
             )
             .WithHandler<GetLayoutAreasRequest>(HandleGetLayoutAreasRequest);
 
+    /// <summary>
+    /// Returns an observable that emits the UiControl rendered at <paramref name="area"/>,
+    /// deserialized from the JSON element stream. Re-emits on every layout snapshot or
+    /// targeted update for that area.
+    /// </summary>
+    /// <param name="synchronizationItems">The JSON element synchronisation stream to read from.</param>
+    /// <param name="area">The area key (e.g. <c>"Overview"</c>) to observe.</param>
     public static IObservable<UiControl?> GetControlStream(
         this ISynchronizationStream<JsonElement> synchronizationItems,
         string area
@@ -183,6 +217,7 @@ public static class LayoutExtensions
     /// such as <c>$Menu:{context}</c> (a <c>MenuControl</c>) or <c>$Dialog</c> (a <c>DialogControl</c>),
     /// instead of the polymorphic <see cref="UiControl"/> base. Yields <c>null</c> while the slot is
     /// absent. Re-emits on every (re-)snapshot, like <see cref="GetControlStream"/>.
+    /// absent. Re-emits on every (re-)snapshot, like <see cref="GetControlStream(MeshWeaver.Data.ISynchronizationStream{System.Text.Json.JsonElement}, string)"/>.
     /// </summary>
     public static IObservable<T?> GetControlStream<T>(
         this ISynchronizationStream<JsonElement> synchronizationItems,
@@ -191,6 +226,14 @@ public static class LayoutExtensions
         synchronizationItems.GetStream<T>(JsonPointer
             .Parse(LayoutAreaReference.GetControlPointer(area)));
 
+    /// <summary>
+    /// Returns an observable that evaluates <paramref name="referencePointer"/> against every
+    /// incoming JSON element snapshot and deserializes the result as <typeparamref name="T"/>.
+    /// Re-emits on Full snapshots and on targeted updates that touch the pointer's collection/id.
+    /// </summary>
+    /// <typeparam name="T">The type to deserialize the pointed-at JSON value to.</typeparam>
+    /// <param name="stream">The JSON element synchronisation stream to read from.</param>
+    /// <param name="referencePointer">The RFC 6901 JSON pointer addressing the value within the stream's JSON.</param>
     public static IObservable<T> GetStream<T>(
         this ISynchronizationStream<JsonElement> stream,
         JsonPointer referencePointer
@@ -278,6 +321,12 @@ public static class LayoutExtensions
         return updateId.ToString() == targetId;
     }
 
+    /// <summary>
+    /// Returns an observable that emits the object rendered at <paramref name="area"/> from
+    /// an EntityStore stream, filtering out null emissions.
+    /// </summary>
+    /// <param name="synchronizationItems">The EntityStore synchronisation stream to read from.</param>
+    /// <param name="area">The area key to look up in the Areas collection.</param>
     public static IObservable<object?> GetControlStream(
         this ISynchronizationStream<EntityStore>? synchronizationItems,
         string area
@@ -334,6 +383,14 @@ public static class LayoutExtensions
             })
             .Where(x => x is not null);
 
+    /// <summary>
+    /// Opens a remote layout-area stream at <paramref name="address"/> for <paramref name="area"/>
+    /// and returns an observable of the controls rendered there.
+    /// </summary>
+    /// <param name="hub">The local hub used to open the remote stream.</param>
+    /// <param name="address">The remote hub address that owns the layout area.</param>
+    /// <param name="area">The area name to subscribe to.</param>
+    /// <param name="id">Optional area id qualifier.</param>
     public static IObservable<object?> GetControlStream(
         this IMessageHub hub,
         Address address,
@@ -344,6 +401,12 @@ public static class LayoutExtensions
         .GetControlStream(area)
 ;
 
+    /// <summary>
+    /// Returns an observable of the data value at <paramref name="reference"/> in the EntityStore
+    /// stream, deserialized as <c>object</c>. Filters out null and undefined JSON values.
+    /// </summary>
+    /// <param name="stream">The EntityStore synchronisation stream to read from.</param>
+    /// <param name="reference">The JSON pointer reference addressing the data item.</param>
     public static IObservable<object?> GetDataStream(
         this ISynchronizationStream<EntityStore> stream,
         JsonPointerReference reference
@@ -353,6 +416,12 @@ public static class LayoutExtensions
             .Where(x => x.Value.ValueKind != JsonValueKind.Null && x.Value.ValueKind != JsonValueKind.Undefined)
             .Select(x => x.Value.Deserialize<object?>(stream.Hub.JsonSerializerOptions));
 
+    /// <summary>
+    /// Returns an observable of the data value stored under <paramref name="id"/> in the Data
+    /// collection of the EntityStore stream. Filters null emissions.
+    /// </summary>
+    /// <param name="stream">The EntityStore synchronisation stream to read from.</param>
+    /// <param name="id">The key in the Data collection to observe.</param>
     public static IObservable<object?> GetDataStream(
         this ISynchronizationStream<EntityStore> stream,
         string id
@@ -360,6 +429,14 @@ public static class LayoutExtensions
         .Where(x => x.Value != null)
         .Select(x => x.Value!);
 
+    /// <summary>
+    /// Returns a strongly-typed observable of the data value stored under <paramref name="id"/>
+    /// in the Data collection, applying DistinctUntilChanged (with JSON-content comparison
+    /// for JsonElement).
+    /// </summary>
+    /// <typeparam name="T">The type to convert each data value to.</typeparam>
+    /// <param name="stream">The EntityStore synchronisation stream to read from.</param>
+    /// <param name="id">The key in the Data collection to observe.</param>
     public static IObservable<T> GetDataStream<T>(
         this ISynchronizationStream<EntityStore> stream,
         string id
@@ -405,6 +482,14 @@ public static class LayoutExtensions
     }
 
 
+    /// <summary>
+    /// Writes <paramref name="value"/> into the Data collection under <paramref name="id"/>
+    /// through the stream's serialised action block.
+    /// </summary>
+    /// <param name="stream">The EntityStore synchronisation stream to write to.</param>
+    /// <param name="id">The Data collection key; must not be null.</param>
+    /// <param name="value">The value to store; null clears the item.</param>
+    /// <param name="changedBy">Identifies the writer for change-tracking; pass null to use an empty string.</param>
     public static void SetData(
         this ISynchronizationStream<EntityStore> stream,
         string id,
@@ -431,12 +516,25 @@ public static class LayoutExtensions
         stream.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(LayoutExtensions)).LogWarning(exception, "Rendering failed");
     }
 
+    /// <summary>
+    /// Returns the control at <paramref name="area"/> from the EntityStore, cast to
+    /// <typeparamref name="TControl"/>. Returns <c>null</c> if the area is not present.
+    /// </summary>
+    /// <typeparam name="TControl">The expected UiControl subtype.</typeparam>
+    /// <param name="store">The EntityStore snapshot to read from.</param>
+    /// <param name="area">The area key to look up.</param>
     public static TControl GetLayoutArea<TControl>(this EntityStore store, string area)
         where TControl : UiControl =>
         store.Collections.TryGetValue(LayoutAreaReference.Areas, out var instances) &&
            instances.Instances.TryGetValue(area, out var ret)
             ? (TControl)ret
             : null!;
+    /// <summary>
+    /// Returns an observable of the data value at <paramref name="reference"/> in the JSON element
+    /// stream, deserialized as <c>object</c>. Filters null and undefined JSON values.
+    /// </summary>
+    /// <param name="stream">The JSON element synchronisation stream to read from.</param>
+    /// <param name="reference">The JSON pointer reference addressing the data item.</param>
     public static IObservable<object> GetDataStream(
         this ISynchronizationStream<JsonElement> stream,
         JsonPointerReference reference
@@ -446,6 +544,13 @@ public static class LayoutExtensions
             .Where(x => x.Value.ValueKind != JsonValueKind.Null && x.Value.ValueKind != JsonValueKind.Undefined)
             .Select(x => x.Value.Deserialize<object>(stream.Hub.JsonSerializerOptions)!);
 
+    /// <summary>
+    /// Returns a strongly-typed observable of the value at <paramref name="reference"/> in the
+    /// JSON element stream. Emits <c>default</c> for undefined positions.
+    /// </summary>
+    /// <typeparam name="T">The type to deserialize the value to.</typeparam>
+    /// <param name="stream">The JSON element synchronisation stream to read from.</param>
+    /// <param name="reference">The JSON pointer reference addressing the value.</param>
     public static IObservable<T> GetDataStream<T>(
         this ISynchronizationStream<JsonElement> stream,
         JsonPointerReference reference
@@ -458,6 +563,12 @@ public static class LayoutExtensions
                     : x.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions)!
             );
 
+    /// <summary>
+    /// Registers the layout client on <paramref name="config"/>, including layout types, the
+    /// ILayoutClient singleton, view configuration, and the Option serialization converter.
+    /// </summary>
+    /// <param name="config">The hub configuration to extend.</param>
+    /// <param name="configuration">Optional transform applied to the layout client configuration.</param>
     public static MessageHubConfiguration AddLayoutClient(
         this MessageHubConfiguration config,
         Func<LayoutClientConfiguration, LayoutClientConfiguration>? configuration = null
@@ -477,6 +588,13 @@ public static class LayoutExtensions
             );
     }
 
+    /// <summary>
+    /// Appends <paramref name="configuration"/> as an additional view-configuration transform on
+    /// <paramref name="config"/>. Transforms are applied in registration order when the layout
+    /// client is initialized.
+    /// </summary>
+    /// <param name="config">The hub configuration to extend.</param>
+    /// <param name="configuration">The view-configuration transform to append; null is treated as identity.</param>
     public static MessageHubConfiguration AddViews(
         this MessageHubConfiguration config,
         Func<LayoutClientConfiguration, LayoutClientConfiguration>? configuration) =>
@@ -489,6 +607,13 @@ public static class LayoutExtensions
         config.Get<ImmutableList<Func<LayoutClientConfiguration, LayoutClientConfiguration>>>()
         ?? ImmutableList<Func<LayoutClientConfiguration, LayoutClientConfiguration>>.Empty;
 
+    /// <summary>
+    /// Returns a copy of <paramref name="obj"/> with the value at <paramref name="pointer"/>
+    /// replaced (or added if absent) with <paramref name="value"/> via a JSON Patch operation.
+    /// </summary>
+    /// <param name="obj">The JSON element to modify.</param>
+    /// <param name="pointer">An RFC 6901 JSON pointer string identifying the target location.</param>
+    /// <param name="value">The JSON node to set at the pointer location.</param>
     public static JsonElement SetPointer(this JsonElement obj, string pointer, JsonNode value)
     {
         var jsonPath = JsonPointer.Parse(pointer);

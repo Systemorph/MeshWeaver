@@ -43,6 +43,17 @@ public sealed class NuGetAssemblyResolver(
     private readonly NuGetLogger _nugetLogger = new(logger);
     private readonly INuGetPackageCache _packageCache = packageCache ?? NullNuGetPackageCache.Instance;
 
+    /// <summary>
+    /// Resolves the <paramref name="requested"/> packages (and their transitive dependencies) to
+    /// assembly paths. Results are memoized per (packages, framework) key; faulted or cancelled
+    /// resolutions are evicted so a transient feed failure does not poison the cache. The shared
+    /// resolution runs uncancellable so one caller's cancellation cannot abort it for others; the
+    /// per-caller <paramref name="ct"/> is projected onto the awaited result instead.
+    /// </summary>
+    /// <param name="requested">The package references to resolve.</param>
+    /// <param name="targetFramework">The target framework to resolve assets for; defaults to <c>net10.0</c> when <c>null</c>.</param>
+    /// <param name="ct">Token used to cancel this caller's wait for the resolution.</param>
+    /// <returns>A <c>ResolvedPackageSet</c> describing the resolved assemblies, probing directories and versions.</returns>
     public Task<ResolvedPackageSet> ResolveAsync(
         IReadOnlyCollection<NuGetPackageReference> requested,
         NuGetFramework? targetFramework = null,

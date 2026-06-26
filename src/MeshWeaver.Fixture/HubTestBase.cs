@@ -9,25 +9,52 @@ using Xunit;
 
 namespace MeshWeaver.Fixture;
 
+/// <summary>
+/// Base class for message-routing tests. Sets up a mesh hub with hosted host and client
+/// hubs, all posting as <see cref="PostingIdentity.System"/>, so subclasses can exercise
+/// courier/routing behaviour without an authenticated user.
+/// </summary>
 public class HubTestBase : TestBase
 {
 
+    /// <summary>The address type used for the mesh (router) hub.</summary>
     protected const string MeshType = AddressExtensions.MeshType;
+    /// <summary>The address type used for hosted host hubs.</summary>
     protected const string HostType = "host";
+    /// <summary>The address type used for hosted client hubs.</summary>
     protected const string ClientType = "client";
 
+    /// <summary>Creates a mesh hub address, defaulting the id to <c>"1"</c>.</summary>
+    /// <param name="id">Optional address id; defaults to <c>"1"</c> when null.</param>
+    /// <returns>The mesh hub <see cref="Address"/>.</returns>
     protected static Address CreateMeshAddress(string? id = null) => new(MeshType, id ?? "1");
+    /// <summary>Creates a host hub address, defaulting the id to <c>"1"</c>.</summary>
+    /// <param name="id">Optional address id; defaults to <c>"1"</c> when null.</param>
+    /// <returns>The host hub <see cref="Address"/>.</returns>
     protected static Address CreateHostAddress(string? id = null) => new(HostType, id ?? "1");
+    /// <summary>
+    /// Creates a client hub address. When <paramref name="id"/> is null a unique id is
+    /// generated per call to avoid leaked server-side sync streams from prior tests'
+    /// client hubs flooding a shared client address's action block.
+    /// </summary>
+    /// <param name="id">Optional address id; a unique id is generated when null.</param>
+    /// <returns>The client hub <see cref="Address"/>.</returns>
     // Unique-per-call when id is null. See MonolithMeshTestBase.CreateClientAddress
     // for the routing-table partitioning rationale (leaked server-side sync streams
     // from prior tests' client hubs flooding the latest client/1's action block).
     protected static Address CreateClientAddress(string? id = null) => new(ClientType, id ?? Guid.NewGuid().ToString("N")[..12]);
 
+    /// <summary>The mesh (router) hub injected by the fixture's service provider.</summary>
     [Inject]
     protected IMessageHub Mesh = null!;
+    /// <summary>The logger for this test base, injected by the fixture's service provider.</summary>
     [Inject]
     protected ILogger<HubTestBase> Logger = null!;
 
+    /// <summary>
+    /// Initializes a new instance and registers the mesh hub in the service collection.
+    /// </summary>
+    /// <param name="output">The xUnit output helper for the running test.</param>
     protected HubTestBase(ITestOutputHelper output)
         : base(output)
     {
@@ -37,6 +64,12 @@ public class HubTestBase : TestBase
         );
     }
 
+    /// <summary>
+    /// Configures the mesh hub, wiring routes to hosted host and client hubs and applying
+    /// the <see cref="PostingIdentity.System"/> posting identity for plumbing-only tests.
+    /// </summary>
+    /// <param name="conf">The mesh hub configuration to extend.</param>
+    /// <returns>The extended configuration.</returns>
     protected virtual MessageHubConfiguration ConfigureMesh(MessageHubConfiguration conf)
     {
         // 🚨 Never-null AccessContext invariant (feedback_access_context_always_set):
@@ -58,14 +91,32 @@ public class HubTestBase : TestBase
             .WithPostingIdentity(PostingIdentity.System);
     }
 
+    /// <summary>
+    /// Hook for subclasses to configure the hosted host hub. The base implementation returns
+    /// the configuration unchanged.
+    /// </summary>
+    /// <param name="configuration">The host hub configuration to extend.</param>
+    /// <returns>The (possibly extended) configuration.</returns>
     protected virtual MessageHubConfiguration ConfigureHost(
         MessageHubConfiguration configuration
     ) => configuration;
 
+    /// <summary>
+    /// Hook for subclasses to configure the hosted client hub. The base implementation returns
+    /// the configuration unchanged.
+    /// </summary>
+    /// <param name="configuration">The client hub configuration to extend.</param>
+    /// <returns>The (possibly extended) configuration.</returns>
     protected virtual MessageHubConfiguration ConfigureClient(
         MessageHubConfiguration configuration
     ) => configuration;
 
+    /// <summary>
+    /// Resolves the hosted host hub, applying the default System posting identity unless an
+    /// explicit configuration is supplied.
+    /// </summary>
+    /// <param name="configuration">Optional configuration override; the caller's config wins when supplied.</param>
+    /// <returns>The hosted host <see cref="IMessageHub"/>.</returns>
     protected virtual IMessageHub GetHost(Func<MessageHubConfiguration, MessageHubConfiguration>? configuration = default)
     {
         // Default path: plumbing fixture → System posting identity (see ConfigureMesh).
@@ -75,11 +126,22 @@ public class HubTestBase : TestBase
             configuration ?? (c => ConfigureHost(c).WithPostingIdentity(PostingIdentity.System)));
     }
 
+    /// <summary>
+    /// Resolves a hosted client hub at a unique address, applying the default System posting
+    /// identity unless an explicit configuration is supplied.
+    /// </summary>
+    /// <param name="configuration">Optional configuration override; the caller's config wins when supplied.</param>
+    /// <returns>The hosted client <see cref="IMessageHub"/>.</returns>
     protected virtual IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration>? configuration = default)
     {
         return Mesh.GetHostedHub(CreateClientAddress(),
             configuration ?? (c => ConfigureClient(c).WithPostingIdentity(PostingIdentity.System)));
     }
+    /// <summary>
+    /// Disposes the mesh hub with a 10 second hang-detection timeout, logging diagnostics if
+    /// disposal does not complete in time, then chains to the base disposal.
+    /// </summary>
+    /// <returns>A <see cref="ValueTask"/> that completes when disposal finishes.</returns>
     public override async ValueTask DisposeAsync()
     {
         // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract

@@ -1,6 +1,15 @@
 # Copy to values.deploy.yaml, fill in REAL values, and keep it OUT of git (it holds secrets —
 # stage it under artifacts/ or source the secrets from Key Vault via CSI in production).
 # Layered last by deploy.sh: helm ... -f values.yaml -f values.aks.yaml -f values.deploy.yaml
+
+# --- Self-update / ACR polling (Workload Identity) --------------------------
+# Client id of the shared portal UAMI federated to system:serviceaccount:memex:memex-portal-sa and
+# granted AcrPull on the registry — the `portalIdentityClientId` output of infra/main.bicep. Arms the
+# in-pod self-updater's ACR tag-list call (the in-cluster deployment PATCH works without it). Leave it
+# in this git-ignored deploy file (not values.aks.yaml) since the id is deployment-specific.
+selfUpdate:
+  azureClientId: "<PORTAL_UAMI_CLIENT_ID>"
+
 secrets:
   memex_migration:
     memex_postgres_password: "<PG_PASSWORD>"

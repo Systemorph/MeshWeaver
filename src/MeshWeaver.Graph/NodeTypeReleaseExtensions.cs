@@ -20,7 +20,7 @@ namespace MeshWeaver.Graph;
 ///   <item><b>Authorization is the USER's.</b> Creating a release is a privileged user
 ///     action gated by <see cref="Permission.Compile"/> (Space editors hold it by default).
 ///     This method checks the CALLER has <c>Compile</c> on the target NodeType and refuses
-///     cleanly — no release, <paramref name="onError"/> invoked — when they don't. The
+///     cleanly — no release, <c>onError</c> invoked — when they don't. The
 ///     request is stamped with the caller's id (<see cref="NodeTypeDefinition.RequestedReleaseBy"/>)
 ///     so the resulting <c>Release</c> MeshNode is attributable to its author (owner = caller).</item>
 ///   <item><b>Execution is the SYSTEM's.</b> The actual compilation that fills the assembly

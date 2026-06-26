@@ -16,9 +16,19 @@ namespace MeshWeaver.Graph.Configuration;
 /// </summary>
 public static class PartitionNodeType
 {
+    /// <summary>The node-type identifier string for Partition nodes.</summary>
     public const string NodeType = "Partition";
+
+    /// <summary>The namespace under which Partition nodes live (Admin/Partition).</summary>
     public const string Namespace = "Admin/Partition";
 
+    /// <summary>
+    /// Registers the Partition node type on the mesh builder: adds the MeshNode definition,
+    /// wires the static node providers and the partition access rule, and grants public read.
+    /// </summary>
+    /// <typeparam name="TBuilder">The mesh builder type.</typeparam>
+    /// <param name="builder">The mesh builder to configure.</param>
+    /// <returns>The same builder, to allow fluent chaining.</returns>
     public static TBuilder AddPartitionType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
@@ -42,6 +52,12 @@ public static class PartitionNodeType
         }
     }
 
+    /// <summary>
+    /// Builds the MeshNode definition for the Partition node type, including its default
+    /// namespace, excluded contexts, and hub configuration (data source, default layout
+    /// areas, the Partitions global-settings menu item, and the search default area).
+    /// </summary>
+    /// <returns>The Partition MeshNode definition.</returns>
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "Partition",

@@ -16,8 +16,17 @@ namespace MeshWeaver.Graph.Configuration;
 /// </summary>
 public static class KernelNodeType
 {
+    /// <summary>The node-type identifier string for Kernel session nodes.</summary>
     public const string NodeType = "kernel";
 
+    /// <summary>
+    /// Registers the Kernel node type on the mesh builder: adds the MeshNode definition,
+    /// excludes it from autocomplete, registers kernel message types at mesh level, and
+    /// wires the satellite access rule and the kernel hub configurator.
+    /// </summary>
+    /// <typeparam name="TBuilder">The mesh builder type.</typeparam>
+    /// <param name="builder">The mesh builder to configure.</param>
+    /// <returns>The same builder, to allow fluent chaining.</returns>
     public static TBuilder AddKernel<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());

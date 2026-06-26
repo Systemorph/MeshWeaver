@@ -19,6 +19,10 @@ public sealed class IoPoolRegistry : IDisposable
     private readonly ConcurrentDictionary<string, IoPool> _pools = new(StringComparer.Ordinal);
     private readonly IoPoolOptions _options;
 
+    /// <summary>
+    /// Creates the registry with the given per-resource-class concurrency options.
+    /// </summary>
+    /// <param name="options">Concurrency caps per pool name; defaults are used when null.</param>
     public IoPoolRegistry(IoPoolOptions? options = null)
     {
         _options = options ?? new IoPoolOptions();
@@ -62,6 +66,7 @@ public sealed class IoPoolRegistry : IDisposable
             .Timeout(timeout)
             .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default));
 
+    /// <summary>Disposes every created pool and clears the registry; called when the mesh is torn down.</summary>
     public void Dispose()
     {
         foreach (var pool in _pools.Values)

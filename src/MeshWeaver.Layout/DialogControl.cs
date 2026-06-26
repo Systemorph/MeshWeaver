@@ -16,6 +16,7 @@ public record DialogControl
     }
 
 
+    /// <summary>Initializes a <see cref="DialogControl"/> with default placeholder content.</summary>
     public DialogControl()
         : this("Dialog content")
     {
@@ -43,6 +44,9 @@ public record DialogControl
     public NamedAreaControl ContentArea { get; init; } =
         new($"{DialogArea}/{nameof(ContentArea)}") { ShowProgress = true };
 
+    /// <summary>Returns a copy with <paramref name="content"/> as its dialog body.</summary>
+    /// <param name="content">The content to display inside the dialog; may be a <see cref="UiControl"/> or a plain value.</param>
+    /// <returns>A new <see cref="DialogControl"/> with the updated content.</returns>
     public DialogControl WithContent(object content)
         => this with { Content = content };
 
@@ -117,6 +121,14 @@ public record DialogControl
             return Task.CompletedTask;
         });
 
+    /// <summary>
+    /// Renders the dialog's content and optional actions sub-areas into the entity store.
+    /// Called by the framework during layout-area rendering; not for direct use.
+    /// </summary>
+    /// <param name="host">The layout area host that owns the rendering stream.</param>
+    /// <param name="context">The rendering context for the current area.</param>
+    /// <param name="store">The entity store to update with rendered controls.</param>
+    /// <returns>The updated store and incremental change set.</returns>
     protected override EntityStoreAndUpdates Render(LayoutAreaHost host, RenderingContext context, EntityStore store)
     {
         var ret = base.Render(host, context, store);

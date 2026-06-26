@@ -12,6 +12,15 @@ namespace MeshWeaver.Data.Completion;
 /// </summary>
 public static class ChatCompletionOrchestratorExtensions
 {
+    /// <summary>
+    /// Adapts the orchestrator's observable completion stream to an <see cref="IAsyncEnumerable{T}"/>
+    /// of completion batches for backwards-compatible callers.
+    /// </summary>
+    /// <param name="orchestrator">The orchestrator producing completions.</param>
+    /// <param name="query">The partial input to complete.</param>
+    /// <param name="currentNamespace">The namespace context for resolving relative completions, or <c>null</c>.</param>
+    /// <param name="ct">Token used to cancel enumeration.</param>
+    /// <returns>An async sequence of completion batches.</returns>
     public static IAsyncEnumerable<CompletionBatch> GetCompletionsAsync(
         this IChatCompletionOrchestrator orchestrator,
         string query,

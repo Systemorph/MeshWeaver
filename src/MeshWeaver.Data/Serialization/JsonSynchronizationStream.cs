@@ -20,9 +20,18 @@ namespace MeshWeaver.Data.Serialization;
 /// </summary>
 public sealed class StaleStreamStateException : InvalidOperationException
 {
+    /// <summary>
+    /// Initializes a new instance of the <see cref="StaleStreamStateException"/> class.
+    /// </summary>
+    /// <param name="message">A message describing the drift that was detected.</param>
     public StaleStreamStateException(string message) : base(message) { }
 }
 
+/// <summary>
+/// JSON-patch helpers that translate between an entity store's JSON projection and typed
+/// <see cref="ChangeItem{TStream}"/>/<see cref="EntityUpdate"/> changes, including RFC 6901 pointer
+/// encoding/decoding used to address entities by collection and id.
+/// </summary>
 public static class JsonSynchronizationStream
 {
     // Mirror of MeshWeaver.Mesh.Security.WellKnownUsers.System — Data sits below
@@ -678,6 +687,16 @@ public static class JsonSynchronizationStream
 
 
 
+    /// <summary>
+    /// Applies the stream's registered patch function to produce a typed change from a JSON patch.
+    /// </summary>
+    /// <typeparam name="TReduced">The reduced stream's state type.</typeparam>
+    /// <param name="stream">The synchronization stream whose reduce manager supplies the patch function.</param>
+    /// <param name="currentState">The current typed state of the stream.</param>
+    /// <param name="currentJson">The current state serialized as JSON.</param>
+    /// <param name="patch">The JSON patch to apply, or null for a full update.</param>
+    /// <param name="changedBy">Identifier of the principal that made the change.</param>
+    /// <returns>The resulting change item, or null when no patch function is registered.</returns>
     public static ChangeItem<TReduced>? ToChangeItem<TReduced>(
         this ISynchronizationStream<TReduced> stream,
         TReduced currentState,
@@ -689,6 +708,17 @@ public static class JsonSynchronizationStream
     }
 
 
+    /// <summary>
+    /// Converts a JSON patch over a whole entity-store projection into per-entity
+    /// <see cref="EntityUpdate"/>s, normalizing collection names through the optional type registry and
+    /// capturing both the old and new value for each affected entity.
+    /// </summary>
+    /// <param name="current">The store projection before the patch (source of old values).</param>
+    /// <param name="updated">The store projection after the patch (source of new values).</param>
+    /// <param name="patch">The JSON patch describing the changes.</param>
+    /// <param name="options">Serializer options used to decode pointer segments.</param>
+    /// <param name="typeRegistry">Optional registry used to normalize raw collection names to their short form.</param>
+    /// <returns>One distinct update per affected entity (deduplicated by id and collection).</returns>
     public static IReadOnlyCollection<EntityUpdate> ToEntityUpdates(
         this JsonElement current,
         JsonElement updated,
@@ -931,6 +961,16 @@ public static class JsonSynchronizationStream
         }
         return current;
     }
+    /// <summary>
+    /// Converts a JSON patch scoped to a single collection into per-entity <see cref="EntityUpdate"/>s,
+    /// resolving each entity's old value from the supplied collection snapshot.
+    /// </summary>
+    /// <param name="current">The collection snapshot before the patch (source of old values).</param>
+    /// <param name="reference">The reference identifying the collection being patched.</param>
+    /// <param name="updated">The collection projection after the patch (source of new values).</param>
+    /// <param name="patch">The JSON patch describing the changes.</param>
+    /// <param name="options">Serializer options used to decode entity ids.</param>
+    /// <returns>One distinct update per affected entity (deduplicated by id and collection).</returns>
     public static IReadOnlyCollection<EntityUpdate> ToEntityUpdates(
         this InstanceCollection current,
         CollectionReference reference,
@@ -1174,6 +1214,12 @@ public static class JsonSynchronizationStream
             _ => throw new InvalidOperationException($"Unsupported operation: {original.Op}")
         };
     }
+    /// <summary>
+    /// Encodes a key into a JSON-pointer path segment by serializing it to its JSON representation.
+    /// </summary>
+    /// <param name="segment">The key to encode; a null key yields an empty segment.</param>
+    /// <param name="options">Serializer options used to serialize the key.</param>
+    /// <returns>The encoded pointer segment.</returns>
     public static string EncodePointerSegment(string? segment, JsonSerializerOptions options)
     {
         if (segment is null) return string.Empty;
@@ -1182,6 +1228,13 @@ public static class JsonSynchronizationStream
         // RFC 6901: escape ~ as ~0 and / as ~1
         return ret;
     }
+    /// <summary>
+    /// Decodes a JSON-pointer path segment back into a key object, unescaping RFC 6901 sequences
+    /// (<c>~0</c>, <c>~1</c>) and deserializing the JSON value.
+    /// </summary>
+    /// <param name="segment">The pointer segment to decode; a null segment yields null.</param>
+    /// <param name="options">Serializer options used to deserialize the key.</param>
+    /// <returns>The decoded key object, or null when the segment is null.</returns>
     public static object? DecodePointerSegment(string? segment, JsonSerializerOptions options)
     {
         if (segment is null) return null;

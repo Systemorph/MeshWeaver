@@ -10,6 +10,10 @@ namespace MeshWeaver.Data;
 /// </summary>
 public record LayoutAreaReference : WorkspaceReference<EntityStore>
 {
+    /// <summary>
+    /// Creates a reference to the named layout area.
+    /// </summary>
+    /// <param name="area">The name of the layout area, or null.</param>
     public LayoutAreaReference(string? area)
     {
         Area = area;
@@ -166,6 +170,11 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
         return segment.Replace("~", "~0").Replace("/", "~1");
     }
 
+    /// <summary>
+    /// JSON-encodes an id for use as a layout-area reference segment.
+    /// </summary>
+    /// <param name="id">The id to encode.</param>
+    /// <returns>The JSON-encoded id.</returns>
     public static string Encode(string id)
         => JsonSerializer.Serialize(id);
 
@@ -207,6 +216,12 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
         return ret;
     }
 
+    /// <summary>
+    /// Builds an application href from the given address parts and this reference's area/id.
+    /// </summary>
+    /// <param name="addressType">The address type segment.</param>
+    /// <param name="addressId">The address id segment.</param>
+    /// <returns>The href in the form <c>addressType/addressId/areaName[/areaId]</c>.</returns>
     public string ToHref(string addressType, string addressId)
     {
         // Format: addressType/addressId/areaName[/areaId] (area is default, no keyword needed)
@@ -221,14 +236,30 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
     }
 
     private readonly Lazy<IReadOnlyDictionary<string, string?>> parameters = new();
+    /// <summary>
+    /// Returns the value of the query parameter parsed from <see cref="Id"/>, or null if absent.
+    /// </summary>
+    /// <param name="name">The parameter name (case-insensitive).</param>
+    /// <returns>The parameter value, or null.</returns>
     public string? GetParameterValue(string name)
     {
         return parameters.Value.GetValueOrDefault(name);
     }
 
+    /// <summary>
+    /// Returns true if the parameter with the given name is present in <see cref="Id"/>.
+    /// </summary>
+    /// <param name="name">The parameter name (case-insensitive).</param>
+    /// <returns>True if the parameter is present; otherwise false.</returns>
     public bool HasParameter(string name) => parameters.Value.ContainsKey(name);
 
     // Override the generated Equals and GetHashCode to exclude the parameters field
+    /// <summary>
+    /// Determines equality by <see cref="Area"/>, <see cref="Id"/> and <see cref="Layout"/>,
+    /// deliberately excluding the parsed parameters field.
+    /// </summary>
+    /// <param name="other">The reference to compare against.</param>
+    /// <returns>True if the references are equal; otherwise false.</returns>
     public virtual bool Equals(LayoutAreaReference? other)
     {
         if (ReferenceEquals(null, other)) return false;
@@ -238,6 +269,8 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
                string.Equals(Layout, other.Layout, StringComparison.Ordinal);
     }
 
+    /// <summary>Returns a hash code derived from <see cref="Area"/>, <see cref="Id"/> and <see cref="Layout"/>.</summary>
+    /// <returns>The hash code.</returns>
     public override int GetHashCode()
     {
         return HashCode.Combine(

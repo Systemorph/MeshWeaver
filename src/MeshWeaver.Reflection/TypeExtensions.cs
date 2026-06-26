@@ -242,6 +242,11 @@ namespace MeshWeaver.Reflection
             return IntegerTypes.Contains(type) || (underlyingType != null && IntegerTypes.Contains(underlyingType));
         }
 
+        /// <summary>
+        /// Tests whether the given <paramref name="type"/> is a nullable wrapper (<see cref="Nullable{T}"/>) over an integer type.
+        /// </summary>
+        /// <param name="type">The type to test.</param>
+        /// <returns><c>true</c> if the type is a nullable integer type.</returns>
         public static bool IsNullableIntegerType(this Type type)
         {
             var underlyingType = Nullable.GetUnderlyingType(type);
@@ -260,6 +265,11 @@ namespace MeshWeaver.Reflection
             return RealTypes.Contains(type) || (underlyingType != null && RealTypes.Contains(underlyingType));
         }
 
+        /// <summary>
+        /// Tests whether the given <paramref name="type"/> is a nullable wrapper (<see cref="Nullable{T}"/>) over a real-number type.
+        /// </summary>
+        /// <param name="type">The type to test.</param>
+        /// <returns><c>true</c> if the type is a nullable real-number type.</returns>
         public static bool IsNullableRealType(this Type type)
         {
             var underlyingType = Nullable.GetUnderlyingType(type);
@@ -267,6 +277,9 @@ namespace MeshWeaver.Reflection
         }
 
 
+        /// <summary>
+        /// The set of primitive integer types (signed and unsigned) recognized by the integer-type predicates.
+        /// </summary>
         public static readonly List<Type> IntegerTypes = new List<Type>
                                                          {
                                                              typeof(Byte),
@@ -279,6 +292,9 @@ namespace MeshWeaver.Reflection
                                                              typeof(Int64)
                                                          };
 
+        /// <summary>
+        /// The set of primitive real-number types (decimal, double, single) recognized by the real-type predicates.
+        /// </summary>
         public static readonly List<Type> RealTypes = new List<Type>
                                                           {
                                                                   typeof(Decimal),

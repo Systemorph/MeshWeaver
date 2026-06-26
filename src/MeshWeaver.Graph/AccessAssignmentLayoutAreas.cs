@@ -21,6 +21,11 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class AccessAssignmentLayoutAreas
 {
+    /// <summary>
+    /// Registers the AccessAssignment layout-area views (Thumbnail, Overview, Delete) on the hub configuration.
+    /// </summary>
+    /// <param name="configuration">The message hub configuration to register the views on.</param>
+    /// <returns>The same configuration with the AccessAssignment views added, for chaining.</returns>
     public static MessageHubConfiguration AddAccessAssignmentViews(this MessageHubConfiguration configuration)
         => configuration.AddLayout(layout => layout
             .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail)

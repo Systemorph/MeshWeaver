@@ -24,11 +24,19 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data;
 
+/// <summary>
+/// Default <see cref="IWorkspace"/> implementation: builds the data context from the hub's
+/// configuration, caches remote synchronization streams (evicting them when their owner node
+/// changes), and routes reads, writes and disposal through the owning message hub.
+/// </summary>
 public class Workspace : IWorkspace
 {
     private readonly ILogger<Workspace> _logger;
     private readonly IDisposable? _changeFeedSubscription;
 
+    /// <summary>Creates the workspace, builds and initializes its data context, and subscribes to the mesh change feed for remote-stream cache eviction.</summary>
+    /// <param name="hub">The message hub that owns this workspace.</param>
+    /// <param name="logger">Logger for workspace lifecycle and stream-cache diagnostics.</param>
     public Workspace(IMessageHub hub, ILogger<Workspace> logger)
     {
         Hub = hub;
@@ -142,9 +150,11 @@ public class Workspace : IWorkspace
     }
 
 
+    /// <inheritdoc />
     public IReadOnlyCollection<Type> MappedTypes => DataContext.MappedTypes.ToArray();
 
 
+    /// <inheritdoc />
     public IObservable<IEnumerable<TType>>? GetRemoteStream<TType>(Address address)
     {
         ThrowIfMeshNode(typeof(TType));
@@ -174,6 +184,7 @@ public class Workspace : IWorkspace
                 + "sanctioned GetRemoteStreamUnchecked escape hatch.");
     }
 
+    /// <inheritdoc />
     public IObservable<T[]?>? GetStream<T>()
     {
         var collection = DataContext.GetTypeSource(typeof(T));
@@ -193,6 +204,7 @@ public class Workspace : IWorkspace
             .Select(x => x.Value?.Collections.SingleOrDefault().Value?.Instances.Values.Cast<T>().ToArray());
     }
 
+    /// <inheritdoc />
     public ISynchronizationStream<TReduced> GetRemoteStream<TReduced>(
         Address id,
         WorkspaceReference<TReduced> reference
@@ -216,6 +228,7 @@ public class Workspace : IWorkspace
         );
 
 
+    /// <inheritdoc />
     public ISynchronizationStream<TReduced> GetRemoteStream<TReduced, TReference>(
         Address owner,
         TReference reference
@@ -320,6 +333,7 @@ public class Workspace : IWorkspace
 
 
 
+    /// <inheritdoc />
     public void Update(IReadOnlyCollection<object> instances, UpdateOptions updateOptions, Activity? activity, IMessageDelivery request) =>
         RequestChange(
             new DataChangeRequest()
@@ -332,11 +346,13 @@ public class Workspace : IWorkspace
 
 
 
+    /// <inheritdoc />
     public void Delete(IReadOnlyCollection<object> instances, Activity? activity, IMessageDelivery request) =>
         RequestChange(
             new DataChangeRequest { Deletions = instances.ToImmutableList(), ChangedBy = null }, activity, request
         );
 
+    /// <inheritdoc />
     public ISynchronizationStream<TReduced> GetStream<TReduced>(
         WorkspaceReference<TReduced> reference,
         Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>? configuration
@@ -349,6 +365,7 @@ public class Workspace : IWorkspace
         ) ?? throw new InvalidOperationException("Failed to create stream");
     }
 
+    /// <inheritdoc />
     public ISynchronizationStream<EntityStore> GetStream(params Type[] types)
         => (ISynchronizationStream<EntityStore>?)
             ReduceManager.ReduceStream<EntityStore>(
@@ -361,14 +378,19 @@ public class Workspace : IWorkspace
         ).ToArray()!),
     x => x) ?? throw new InvalidOperationException("Failed to create stream");
 
+    /// <inheritdoc />
     public ReduceManager<EntityStore> ReduceManager => DataContext.ReduceManager;
 
+    /// <inheritdoc />
     public IMessageHub Hub { get; }
+    /// <summary>The workspace identity, equal to the owning hub's address.</summary>
     public object Id => Hub.Address;
 
 
+    /// <inheritdoc />
     public DataContext DataContext { get; }
 
+    /// <inheritdoc />
     public void RequestChange(DataChangeRequest change, Activity? activity, IMessageDelivery? request)
     {
         this.Change(change, activity, request);
@@ -376,6 +398,12 @@ public class Workspace : IWorkspace
 
     private bool isDisposing;
 
+    /// <summary>
+    /// Disposes the workspace: drains registered sync and async disposables, disposes cached and
+    /// evicted remote streams (tearing down their per-stream sync hubs), disposes the data context,
+    /// and unsubscribes from the change feed. Idempotent.
+    /// </summary>
+    /// <returns>A task that completes when disposal finishes.</returns>
     public async ValueTask DisposeAsync()
     {
         _logger.LogInformation("Workspace {WorkspaceId} starting DisposeAsync, Thread: {ThreadId}",
@@ -477,16 +505,19 @@ public class Workspace : IWorkspace
     private readonly ConcurrentBag<IDisposable> disposables = new();
     private readonly ConcurrentBag<IAsyncDisposable> asyncDisposables = new();
 
+    /// <inheritdoc />
     public void AddDisposable(IDisposable disposable)
     {
         disposables.Add(disposable);
     }
 
+    /// <inheritdoc />
     public void AddDisposable(IAsyncDisposable disposable)
     {
         asyncDisposables.Add(disposable);
     }
 
+    /// <inheritdoc />
     public ISynchronizationStream<EntityStore>? GetStream(StreamIdentity identity)
     {
         var ds = DataContext.GetDataSourceForId(identity.Owner);
@@ -494,6 +525,12 @@ public class Workspace : IWorkspace
     }
 
 
+    /// <summary>
+    /// Handles a <see cref="DataChangeResponse"/>: marks the delivery processed when the change
+    /// committed, otherwise ignores it.
+    /// </summary>
+    /// <param name="response">The data change response delivery to handle.</param>
+    /// <returns>The processed or ignored delivery.</returns>
     protected IMessageDelivery HandleCommitResponse(IMessageDelivery<DataChangeResponse> response)
     {
         if (response.Message.Status == DataChangeStatus.Committed)

@@ -1,8 +1,3 @@
-// <meshweaver>
-// Id: TransactionMapping
-// DisplayName: Transaction Mapping
-// </meshweaver>
-
 using System.ComponentModel.DataAnnotations;
 using MeshWeaver.Domain;
 

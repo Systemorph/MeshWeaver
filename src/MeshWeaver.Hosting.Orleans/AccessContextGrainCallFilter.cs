@@ -11,6 +11,7 @@ namespace MeshWeaver.Hosting.Orleans;
 public class AccessContextGrainCallFilter(ILogger<AccessContextGrainCallFilter> logger)
     : IIncomingGrainCallFilter
 {
+    /// <inheritdoc />
     public async Task Invoke(IIncomingGrainCallContext context)
     {
         try

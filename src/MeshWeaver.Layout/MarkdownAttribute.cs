@@ -7,6 +7,10 @@ namespace MeshWeaver.Layout;
 [AttributeUsage(AttributeTargets.Property)]
 public class MarkdownAttribute : UiControlAttribute
 {
+    /// <summary>
+    /// Initializes the attribute with MarkdownControl for display and MarkdownEditorControl for editing,
+    /// and enables the separate-edit-view mode by default.
+    /// </summary>
     public MarkdownAttribute()
         : base(typeof(MarkdownControl), typeof(MarkdownEditorControl))
     {

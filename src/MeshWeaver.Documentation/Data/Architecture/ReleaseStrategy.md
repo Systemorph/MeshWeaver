@@ -164,7 +164,38 @@ The decision logic (which tag each policy picks; "is newer") is unit-pinned in
 
 ---
 
-## 8. See also
+## 8. Cut a release — operator runbook
+
+Three operator actions, two independent channels, and **steady state is self-update**: you *push
+images* (by merging or tagging) and installs roll **themselves** per `Admin/UpdatePolicy` — you do
+not `kubectl set image` by hand. The manual [AKS runbook](/Doc/Architecture/DeploymentAKS) is the
+**bootstrap / break-glass** path (first install, or forcing a specific tag).
+
+| Step | Action | What ships | Who rolls to it |
+|---|---|---|---|
+| **a** | **Merge to `main`** (preconditions §1 green) | `main-cd.yml` builds the **multi-arch** image set (amd64 + arm64), tags it `3.0.0-ci.<run#>` (+ short SHA + moving `main`), pushes to **ACR** | **Continuous** installs (dev/test) |
+| **b** | **Push tag `v3.0.0`** | `release-images.yml` + `release-packages.yml` build the clean `3.0.0` multi-arch images (GHCR, mirrored into **ACR** via `az acr import`) + NuGet packages | **Stable** installs (prod) |
+| **c** | **Bump `PlatformVersion`** to the next line (`3.1.0`) in `Directory.Build.props` | continuous builds become `3.1.0-ci.<n>` | opens the next development line |
+
+```bash
+# (a) ship a continuous build — just merge; CI builds + pushes the image set
+git switch main && git pull
+
+# (b) cut the official release — push an immutable, annotated tag
+git tag v3.0.0 && git push origin v3.0.0
+
+# (c) open the next line — the ONLY time you edit Directory.Build.props:
+#     <PlatformVersion …>3.1.0</PlatformVersion>   (commit on a normal PR)
+```
+
+(a) and (b) are **independent**: a merge always ships a continuous build; a tag always ships a
+clean release. (c) follows (b) once per release line. The version mechanics behind each step are in
+[Release Process & Versioning](/Doc/Architecture/ReleaseProcess); §2 above covers the same cut from
+the version-scheme angle.
+
+---
+
+## 9. See also
 
 - [Release Process & Versioning](/Doc/Architecture/ReleaseProcess) — the version-number mechanics.
 - [Deployment](/Doc/Architecture/Deployment) — the two deploy routes (AKS vs Container Apps).

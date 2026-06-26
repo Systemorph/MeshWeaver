@@ -16,8 +16,17 @@ namespace MeshWeaver.Graph.Configuration;
 /// </summary>
 public static class ActivityNodeType
 {
+    /// <summary>The node-type identifier string for Activity nodes.</summary>
     public const string NodeType = "Activity";
 
+    /// <summary>
+    /// Registers the Activity node type on the mesh builder: adds the MeshNode definition,
+    /// excludes it from autocomplete, and wires the satellite access rule that delegates
+    /// access to the parent (MainNode).
+    /// </summary>
+    /// <typeparam name="TBuilder">The mesh builder type.</typeparam>
+    /// <param name="builder">The mesh builder to configure.</param>
+    /// <returns>The same builder, to allow fluent chaining.</returns>
     public static TBuilder AddActivityType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
@@ -31,6 +40,12 @@ public static class ActivityNodeType
         return builder;
     }
 
+    /// <summary>
+    /// Builds the MeshNode definition for the Activity node type, including its
+    /// satellite settings, excluded contexts, and hub configuration (activity views,
+    /// kernel handlers, and the polymorphic content types the hub round-trips).
+    /// </summary>
+    /// <returns>The Activity MeshNode definition.</returns>
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "Activity",

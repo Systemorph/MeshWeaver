@@ -43,8 +43,11 @@ public static class PartitionSyncAdminLayoutArea
     /// </summary>
     public sealed record PartitionSyncRow
     {
+        /// <summary>The partition namespace/root id.</summary>
         public string Partition { get; init; } = string.Empty;
+        /// <summary>Human-readable list of the source type name(s) that materialize into the partition.</summary>
         public string Source { get; init; } = string.Empty;
+        /// <summary>The partition's current sync status ("Synced" or "Not synced").</summary>
         public string Status { get; init; } = string.Empty;
     }
 

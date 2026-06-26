@@ -20,8 +20,11 @@ public sealed record GitHubOAuthOptions
     /// <summary>OAuth scopes to request. <c>repo</c> grants read/write to private + public repos.</summary>
     public string Scopes { get; init; } = "repo";
 
+    /// <summary>GitHub's authorize endpoint the browser is redirected to (start of the flow).</summary>
     public string AuthorizeUrl { get; init; } = "https://github.com/login/oauth/authorize";
+    /// <summary>GitHub's token endpoint where the callback <c>code</c> is exchanged for an access token.</summary>
     public string TokenUrl { get; init; } = "https://github.com/login/oauth/access_token";
+    /// <summary>GitHub's authenticated-user API endpoint, used to resolve the connected login.</summary>
     public string UserApiUrl { get; init; } = "https://api.github.com/user";
 
     /// <summary>True when both client id and secret are configured and the flow can run.</summary>

@@ -15,7 +15,7 @@ namespace MeshWeaver.Hosting;
 ///
 /// The CRUD observables use <c>Observable.Create(observer =&gt; ...)</c> and signal all outcomes —
 /// success, handler rejection, and routing <see cref="DeliveryFailure"/> — via
-/// <c>observer.OnNext</c> / <c>observer.OnError</c>. <b>Never <see cref="Observable.FromAsync"/></b>
+/// <c>observer.OnNext</c> / <c>observer.OnError</c>. <b>Never <see cref="Observable.FromAsync(System.Func{System.Threading.Tasks.Task})"/></b>
 /// (FromAsync wraps a Task and blocks a thread-pool thread), <b>never Task return types</b> on the
 /// public surface, <b>never <see cref="Task"/>.<see cref="Task.FromResult{TResult}(TResult)"/></b>
 /// inside callbacks (use the <see cref="SyncDelivery"/> overload of RegisterCallback instead).

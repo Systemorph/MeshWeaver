@@ -1,8 +1,3 @@
-// <meshweaver>
-// Id: ExchangeRate
-// DisplayName: Exchange Rate
-// </meshweaver>
-
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using MeshWeaver.Domain;

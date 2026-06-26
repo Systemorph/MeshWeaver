@@ -12,6 +12,10 @@
         /// </summary>
         public object? Path { get; init; }
 
+        /// <summary>
+        /// When set to <c>true</c>, instructs the browser to create the path if it does not
+        /// already exist. Set via <see cref="CreatePath"/>.
+        /// </summary>
         public object? PathCreation { get; init; }
 
         /// <summary>
@@ -36,12 +40,17 @@
         /// </summary>
         public string? CollectionSettings { get; init; }
 
+        /// <summary>Returns a copy that instructs the browser to create the path on the collection if it does not exist.</summary>
         public FileBrowserControl CreatePath()
             => this with { PathCreation = true };
 
+        /// <summary>Returns a copy with <paramref name="path"/> as the top-level path the browser is restricted to.</summary>
+        /// <param name="path">The top-level mesh or file-system path; the browser cannot navigate above this.</param>
         public FileBrowserControl WithTopLevel(string path)
             => this with { TopLevelPath = path };
 
+        /// <summary>Returns a copy with <paramref name="config"/> as the collection configuration used to initialise the collection when it does not exist.</summary>
+        /// <param name="config">The collection configuration object (e.g. a blob or file-system config).</param>
         public FileBrowserControl WithCollectionConfiguration(object config)
             => this with { CollectionConfiguration = config };
 
@@ -58,6 +67,7 @@
                     : null
             };
 
+        /// <summary>The top-level path the browser is anchored to; navigation cannot go above this path.</summary>
         public string? TopLevelPath { get; init; }
 
         /// <summary>
@@ -66,6 +76,8 @@
         /// </summary>
         public bool ReadOnly { get; init; }
 
+        /// <summary>Returns a copy with <paramref name="readOnly"/> controlling whether mutating operations (upload, create, delete) are hidden.</summary>
+        /// <param name="readOnly">When <c>true</c>, only read operations are available in the browser UI.</param>
         public FileBrowserControl WithReadOnly(bool readOnly = true)
             => this with { ReadOnly = readOnly };
     }

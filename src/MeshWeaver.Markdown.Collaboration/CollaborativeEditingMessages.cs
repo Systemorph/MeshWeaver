@@ -55,6 +55,10 @@ public record ApplyTextEditResponse
 /// </summary>
 public record TextChangedEvent : StreamMessage
 {
+    /// <summary>
+    /// Initializes a new instance of the <c>TextChangedEvent</c> class.
+    /// </summary>
+    /// <param name="streamId">Identifier of the document stream this change belongs to.</param>
     public TextChangedEvent(string streamId) : base(streamId) { }
 
     /// <summary>
@@ -114,9 +118,24 @@ public record CreateCommentRequest : IRequest<CreateCommentResponse>
 /// </summary>
 public record CreateCommentResponse
 {
+    /// <summary>
+    /// Whether the comment was created successfully.
+    /// </summary>
     public bool Success { get; init; }
+
+    /// <summary>
+    /// Identifier of the newly created comment, when successful.
+    /// </summary>
     public string? CommentId { get; init; }
+
+    /// <summary>
+    /// Identifier of the marker embedded in the markdown content anchoring the comment.
+    /// </summary>
     public string? MarkerId { get; init; }
+
+    /// <summary>
+    /// Error message if the comment could not be created.
+    /// </summary>
     public string? Error { get; init; }
 }
 

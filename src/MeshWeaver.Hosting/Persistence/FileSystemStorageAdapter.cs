@@ -40,6 +40,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
     /// </summary>
     /// <param name="baseDirectory">Base directory for file storage</param>
     /// <param name="writeOptionsModifier">Optional modifier for JsonSerializerOptions when writing (e.g., to enable WriteIndented)</param>
+    /// <param name="ioPoolRegistry">Optional I/O pool registry; the <c>FileSystem</c> pool bridges async file I/O to <c>IObservable</c>. When <c>null</c>, the unbounded pool is used.</param>
     public FileSystemStorageAdapter(
         string baseDirectory,
         Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null,
@@ -51,6 +52,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
         Directory.CreateDirectory(baseDirectory);
     }
 
+    /// <inheritdoc />
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
         => _ioPool.Run(ct => ReadAsyncCore(path, options, ct));
 
@@ -170,6 +172,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
         return node;
     }
 
+    /// <inheritdoc />
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
         => _ioPool.Run<MeshNode?>(async ct => { await WriteAsyncCore(node, options, ct).ConfigureAwait(false); return node; });
 
@@ -227,6 +230,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
         CleanupOtherExtensions(node.Path, extension);
     }
 
+    /// <inheritdoc />
     public IObservable<string> Delete(string path)
         => Observable.Defer(() => { DeleteCore(path); return Observable.Return(path); });
 
@@ -281,6 +285,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
         }
     }
 
+    /// <inheritdoc />
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
         => Observable.Defer(() => Observable.Return(ListChildPathsCore(parentPath)));
 
@@ -348,6 +353,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
         return (nodePaths, directoryPaths);
     }
 
+    /// <inheritdoc />
     public IObservable<bool> Exists(string path)
         => Observable.Defer(() =>
         {
@@ -355,6 +361,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
             return Observable.Return(filePath != null && File.Exists(filePath));
         });
 
+    /// <inheritdoc />
     public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
         => Observable.Defer(() => Observable.Return(ListPartitionSubPathsCore(nodePath)));
 
@@ -425,6 +432,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
     // load (hub init), the continuation queues behind the blocked thread and
     // the stream never emits — the grain wedge. Pinned by
     // PartitionObjectsSubscriberIndependenceTest.
+    /// <inheritdoc />
     public IObservable<object> GetPartitionObjects(
         string nodePath, string? subPath, JsonSerializerOptions options)
         => _ioPool.InvokeStream(ct => GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct));
@@ -538,6 +546,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
         return obj;
     }
 
+    /// <inheritdoc />
     public IObservable<Unit> SavePartitionObjects(
         string nodePath, string? subPath,
         IReadOnlyCollection<object> objects, JsonSerializerOptions options)
@@ -578,6 +587,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
         }
     }
 
+    /// <inheritdoc />
     public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
         => Observable.Defer(() => { DeletePartitionObjectsCore(nodePath, subPath); return Observable.Return(Unit.Default); });
 
@@ -640,6 +650,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
         return $"{typeName}_{hash}.json";
     }
 
+    /// <inheritdoc />
     public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
         => Observable.Defer(() => Observable.Return(GetPartitionMaxTimestampCore(nodePath, subPath)));
 

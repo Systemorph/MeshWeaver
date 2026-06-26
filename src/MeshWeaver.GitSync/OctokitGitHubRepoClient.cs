@@ -52,6 +52,12 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
     private static string StripGit(string repo) =>
         repo.EndsWith(".git", StringComparison.OrdinalIgnoreCase) ? repo[..^4] : repo;
 
+    /// <summary>
+    /// Mirrors the request's files into the repo as a single commit (blob → tree → commit →
+    /// update ref), creating the repo and/or branch when missing per the request flags.
+    /// </summary>
+    /// <param name="request">The push/mirror request (repo, branch, files, author, token, create flags).</param>
+    /// <returns>An observable emitting the push outcome (commit SHA, files written/deleted, repo-created flag).</returns>
     public IObservable<GitHubPushResult> Push(GitHubPushRequest request)
     {
         var (owner, repo) = ParseRepoUrl(request.RepositoryUrl);
@@ -120,6 +126,15 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
                 }));
     }
 
+    /// <summary>
+    /// Reads a repo snapshot at a commitish: resolves the commit, lists its blobs (optionally
+    /// confined to <paramref name="subdirectory"/>) and downloads their decoded content.
+    /// </summary>
+    /// <param name="repositoryUrl">The repository URL to read from.</param>
+    /// <param name="commitish">A branch name or commit SHA to snapshot.</param>
+    /// <param name="subdirectory">The repo subdirectory to confine the snapshot to; null/empty reads the whole repo.</param>
+    /// <param name="accessToken">The user's OAuth access token.</param>
+    /// <returns>An observable emitting the resolved commit SHA and its files (paths made subdirectory-relative).</returns>
     public IObservable<RepoSnapshot> Fetch(
         string repositoryUrl, string commitish, string? subdirectory, string accessToken)
     {
@@ -148,6 +163,9 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
             });
     }
 
+    /// <summary>Creates a branch from an existing ref (branch name or SHA) resolved to its commit.</summary>
+    /// <param name="request">The create-branch request (repo, new branch, base ref, token).</param>
+    /// <returns>An observable emitting the new branch name and the commit SHA it points at.</returns>
     public IObservable<GitHubBranchResult> CreateBranch(GitHubCreateBranchRequest request)
     {
         var (owner, repo) = ParseRepoUrl(request.RepositoryUrl);
@@ -168,6 +186,9 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
             });
     }
 
+    /// <summary>Opens a pull request <c>head → base</c> on GitHub.</summary>
+    /// <param name="request">The open-PR request (repo, title, body, head/base branches, token).</param>
+    /// <returns>An observable emitting the opened pull request's number, URL and state.</returns>
     public IObservable<GitHubPullRequestInfo> OpenPullRequest(GitHubOpenPullRequestRequest request)
     {
         var (owner, repo) = ParseRepoUrl(request.RepositoryUrl);
@@ -183,6 +204,11 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
             .Select(ToInfo);
     }
 
+    /// <summary>Reads a pull request's current live state (open / closed / merged) from GitHub.</summary>
+    /// <param name="repositoryUrl">The repository URL the pull request belongs to.</param>
+    /// <param name="number">The pull request number.</param>
+    /// <param name="accessToken">The user's OAuth access token.</param>
+    /// <returns>An observable emitting the pull request's number, URL and current merged state.</returns>
     public IObservable<GitHubPullRequestInfo> GetPullRequestStatus(
         string repositoryUrl, int number, string accessToken)
     {

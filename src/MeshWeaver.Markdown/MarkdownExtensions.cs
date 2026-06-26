@@ -5,6 +5,10 @@ using Markdig.Extensions.Emoji;
 
 namespace MeshWeaver.Markdown;
 
+/// <summary>
+/// Factory and cache for the MeshWeaver Markdig pipeline (math, emoji, layout-area, image-path,
+/// link-cleanup, and executable-code-block extensions), plus static-href helpers.
+/// </summary>
 public static class MarkdownExtensions
 {
     // Emoji + smiley mapping that keeps EVERY emoji :shortcode: and EVERY ASCII smiley
@@ -38,6 +42,13 @@ public static class MarkdownExtensions
 
     private static readonly ConcurrentDictionary<(string?, string?), MarkdownPipeline> PipelineCache = new();
 
+    /// <summary>
+    /// Returns the configured Markdig pipeline for the given content collection and node path, served
+    /// from a bounded cache (built once per distinct key — see the caching notes above).
+    /// </summary>
+    /// <param name="collection">The content collection used to build static image hrefs, or null.</param>
+    /// <param name="currentNodePath">The current node path used to resolve relative references, or null.</param>
+    /// <returns>A cached, immutable, reusable markdown pipeline.</returns>
     public static MarkdownPipeline CreateMarkdownPipeline(
         object? collection,
         string? currentNodePath = null)
@@ -68,6 +79,12 @@ public static class MarkdownExtensions
             .Use(new ExecutableCodeBlockExtension())
             .Build();
 
+    /// <summary>
+    /// Builds the static-content href for an asset path within a collection (<c>static/{collection}/{path}</c>).
+    /// </summary>
+    /// <param name="path">The asset path relative to the collection.</param>
+    /// <param name="collection">The content collection the asset belongs to.</param>
+    /// <returns>The static href string.</returns>
     public static string ToStaticHref(string path, object? collection)
         => $"static/{collection}/{path}";
 

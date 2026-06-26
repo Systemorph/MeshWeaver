@@ -75,6 +75,45 @@ Container names are `memex-portal` and `memex-migration`; deployments are `memex
 - **Portal serves:** `curl -sS -o /dev/null -w '%{http_code}' https://<NS>.meshweaver.cloud/` → `200`.
 - **Schema/index applied** (when the change was a migration): spot-check via `az aks command invoke … "kubectl -n <NS> exec deployment/memex-portal-deployment -- …"` or an MCP query.
 
+## Portal self-update — Workload Identity for ACR polling
+
+Steady state is **self-update** (see [ReleaseStrategy.md](/Doc/Architecture/ReleaseStrategy)): the portal polls ACR and patches its own Deployment to a newer image. The in-cluster PATCH uses the `memex-portal-sa` service-account token (RBAC ships in the Helm chart and works everywhere). **Listing the ACR tags** to discover a newer image needs an Azure credential — that is wired with **AKS Workload Identity**, mirroring the existing pgBackRest wiring (`infra/modules/storage.bicep`).
+
+**What the Helm chart already does** (no edits needed): when `selfUpdate.azureClientId` is set it annotates `memex-portal-sa` with `azure.workload.identity/client-id`, labels the pod `azure.workload.identity/use: "true"`, and sets `AZURE_CLIENT_ID`. The self-updater (`AcrTagLister`) then uses `ManagedIdentityCredential(AZURE_CLIENT_ID)` → AAD token → ACR token.
+
+**What the Azure side provides** (`infra/modules/portal-identity.bicep`, wired from `infra/main.bicep`): a **single shared** user-assigned managed identity (`<namePrefix>-portal-mi`) with **one federated credential per portal namespace** — subject `system:serviceaccount:<ns>:memex-portal-sa`, issuer = the cluster OIDC issuer, audience `api://AzureADTokenExchange` — for `memex`, `atioz`, and `memex-cloud` (the `portalNamespaces` param). The UAMI gets **AcrPull** on `meshweaver.azurecr.io` (AcrPull includes the `metadata_read` the tag-list call needs). One UAMI → one AcrPull grant → the **same** `portalIdentityClientId` wired into `selfUpdate.azureClientId` for every namespace.
+
+### One-time setup
+
+1. **Provision the UAMI + federated credentials** — included in the infra deploy (`deployPortalIdentity` defaults `true`). Read the client id back:
+   ```bash
+   az deployment sub show --name memex-aks-infra \
+     --query "properties.outputs.{clientId:portalIdentityClientId.value, principalId:portalIdentityPrincipalId.value}" -o jsonc
+   ```
+2. **Grant AcrPull on the shared registry.** The ACR (`meshweaver.azurecr.io`, RG `meshweaver-shared`) is **cross-RG** from `memex-aks-rg`, so — exactly like the cluster kubelet's AcrPull — grant it out-of-band:
+   ```bash
+   PORTAL_MI_OID=$(az identity show -g memex-aks-rg -n memexaks-portal-mi --query principalId -o tsv)
+   az role assignment create --assignee-object-id "$PORTAL_MI_OID" --assignee-principal-type ServicePrincipal \
+     --role AcrPull --scope $(az acr show -n meshweaver --query id -o tsv)
+   ```
+   (IaC alternative: deploy with `grantSharedAcrPull=true` — authors this via `infra/modules/acr-role-assignment.bicep` in the registry's RG; needs User Access Administrator on `meshweaver-shared`. A *per-deployment* ACR instead of the shared one is granted in-bicep automatically.)
+3. **Set `selfUpdate.azureClientId`** to `portalIdentityClientId` for each environment (the in-pod patch works without it; this only authenticates the tag-list). Same value everywhere:
+   - `memex` → the git-ignored `scripts/values.deploy.yaml` (see `values.deploy.example.yaml`), or `helm upgrade --set selfUpdate.azureClientId=<clientId>`.
+   - `atioz` / `memex-cloud` → the git-ignored `envs/<env>/values.<env>.yaml`.
+
+> Adding a **new** portal namespace? It needs its own federated credential on the shared UAMI — add the namespace to `portalNamespaces` and re-run the infra deploy (idempotent), or `az identity federated-credential create` (see [OnboardingNewEnvironment.md](/Doc/Architecture/OnboardingNewEnvironment)). The subject must be exactly `system:serviceaccount:<ns>:memex-portal-sa`.
+
+## Migration under self-update
+
+A self-update is **not portal-only.** When an install rolls itself to a new tag (per `Admin/UpdatePolicy`), the in-pod updater patches **both** Deployments in one pass — `memex-portal-deployment` (container `memex-portal`) **and** `memex-migration-deployment` (container `memex-migration`) — exactly as the manual §2 roll-out does. **No operator action is required**; Kubernetes performs the rolling update on both.
+
+- **The migration re-runs on every roll.** `memex-migration-deployment` runs the DB migrations, applies any new schema, bumps `admin.mesh_nodes.db_version`, then exits 0. The Deployment restarts the exited pod, so a *benign* `CrashLoopBackOff` on `memex-migration` is expected (same as §3) — read the log (`Database migration completed. Version: N`); don't treat the status as a failure.
+- **Ordering is migration-before-portal.** The portal must never serve a schema it hasn't migrated to, so two gates enforce the order even though both Deployments roll together:
+  - the portal pod's `wait-for-postgres` **initContainer** blocks startup until the database is reachable, and
+  - the portal's **`DbVersionGate`** hosted service holds the app from serving until `db_version` matches the version the running code expects.
+
+  So the new portal goes live only after the new migration has bumped `db_version` — the roll is safe regardless of which pod's image is pulled first.
+
 ## First-time environment setup ≠ code update
 
 `deploy/aks/envs/<env>/deploy.sh` provisions a **new** environment: `helm install` of the chart, PVCs, the Key Vault `SecretProviderClass`, ingress, and the connection-string patch. **Do not run it for a code update** — it re-applies the whole chart and can reset live ConfigMaps (e.g. the email config). Use it only when standing up a brand-new namespace.

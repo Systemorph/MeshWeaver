@@ -3,6 +3,17 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Messaging;
 
+/// <summary>
+/// Holds and propagates the current user's <see cref="AccessContext"/> for the
+/// messaging layer. The request-scoped <see cref="Context"/> and the
+/// session-scoped <see cref="CircuitContext"/> are both stored as
+/// <c>AsyncLocal</c> so that each in-flight message delivery or Blazor circuit
+/// observes the correct identity without cross-contamination. Provides
+/// scoped impersonation helpers (<see cref="SwitchAccessContext"/>,
+/// <see cref="ImpersonateAsHub"/>, <see cref="ImpersonateAsSystem"/>) that
+/// restore the previous value on dispose, and guards against hub-shaped
+/// addresses ever being set as a user identity.
+/// </summary>
 public class AccessService
 {
     /// <summary>
@@ -45,8 +56,17 @@ public class AccessService
 
     private readonly ILogger? _logger;
 
+    /// <summary>
+    /// Creates an access service with no logger. Hub-shaped-principal leak
+    /// detection still runs but its diagnostics are silently dropped.
+    /// </summary>
     public AccessService() { }
 
+    /// <summary>
+    /// Creates an access service that logs context transitions and leak
+    /// diagnostics through the <c>MeshWeaver.AccessContext</c> category.
+    /// </summary>
+    /// <param name="loggerFactory">Factory used to create the diagnostic logger; may be null, in which case no logging occurs.</param>
     public AccessService(ILoggerFactory? loggerFactory)
     {
         _logger = loggerFactory?.CreateLogger("MeshWeaver.AccessContext");

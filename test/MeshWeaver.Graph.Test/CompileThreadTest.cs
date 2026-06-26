@@ -20,19 +20,20 @@ namespace MeshWeaver.Graph.Test;
 public class CompileThreadTest
 {
     [Fact]
-    public void Run_ExecutesWork_OnADedicatedThread_NotTheThreadPool()
+    public async Task Run_ExecutesWork_OnADedicatedThread_NotTheThreadPool()
     {
-        var onDedicatedThread = CompileThread
-            .Run(() => Thread.CurrentThread.IsThreadPoolThread)
-            .GetAwaiter().GetResult();
+        // await (not .GetAwaiter().GetResult()) — the assertion is on the bool captured INSIDE the
+        // work delegate (its thread affinity), so the continuation's scheduler is irrelevant; this
+        // just avoids the blocking-wait deadlock risk the xUnit1031 analyzer flags.
+        var onDedicatedThread = await CompileThread
+            .Run(() => Thread.CurrentThread.IsThreadPoolThread);
         onDedicatedThread.Should().BeFalse(
             "the synchronous compile leaf must run on a dedicated thread — never a ThreadPool "
             + "worker the reactive scheduler needs to deliver cross-hub responses");
 
         // Control: Task.Run (what the leaf used before) runs ON the ThreadPool — the exact
         // starvation source we are moving compiles off of.
-        var onPoolThread = Task.Run(() => Thread.CurrentThread.IsThreadPoolThread)
-            .GetAwaiter().GetResult();
+        var onPoolThread = await Task.Run(() => Thread.CurrentThread.IsThreadPoolThread);
         onPoolThread.Should().BeTrue(
             "control: Task.Run schedules on the shared ThreadPool — a burst of multi-second "
             + "compiles there is what starved the reactive continuations");

@@ -1,8 +1,3 @@
-// <meshweaver>
-// Id: Currency
-// DisplayName: Currency Reference Data
-// </meshweaver>
-
 using System.ComponentModel.DataAnnotations;
 using MeshWeaver.Domain;
 

@@ -33,6 +33,8 @@ namespace MeshWeaver.Mesh;
 /// </summary>
 public sealed class OwnerlessActivityException : InvalidOperationException
 {
+    /// <summary>Creates the exception with a message naming the offending top-level segment.</summary>
+    /// <param name="message">Human-readable description of which satellite segment was anchored ownerless.</param>
     public OwnerlessActivityException(string message) : base(message) { }
 }
 

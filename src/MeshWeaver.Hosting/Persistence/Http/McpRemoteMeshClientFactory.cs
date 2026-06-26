@@ -21,6 +21,12 @@ public sealed class McpRemoteMeshClientFactory : IRemoteMeshClientFactory
     // fallback still offloads off the hub scheduler (never worse than bare FromAsync).
     private readonly IIoPool _httpPool;
 
+    /// <summary>
+    /// Creates the factory, capturing the hub's serializer options and resolving the
+    /// mesh-scoped Http I/O pool that every produced client routes its calls through.
+    /// </summary>
+    /// <param name="hub">Local message hub; supplies the JSON serializer options and the I/O pool registry.</param>
+    /// <param name="loggerFactory">Optional logger factory passed to each created client.</param>
     public McpRemoteMeshClientFactory(IMessageHub hub, ILoggerFactory? loggerFactory = null)
     {
         _jsonOptions = hub.JsonSerializerOptions;
@@ -29,6 +35,7 @@ public sealed class McpRemoteMeshClientFactory : IRemoteMeshClientFactory
                     ?? IoPool.Unbounded;
     }
 
+    /// <inheritdoc />
     public IRemoteMeshClient Create(string remoteBaseUrl, string remoteToken) =>
         new McpRemoteMeshClient(remoteBaseUrl, remoteToken, _jsonOptions, _loggerFactory, _httpPool);
 }

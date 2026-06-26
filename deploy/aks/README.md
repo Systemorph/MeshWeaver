@@ -166,6 +166,10 @@ az deployment sub show --name memex-aks-infra \
 | `vpnClientAddressPool` | `172.16.201.0/24` | **must not overlap the VNet** |
 | `vpnClientRootCertData` | `""` | base64 root public cert (can add later) |
 | `deployBackupStorage` | `false` | self-managed pgBackRest blob; **off** because we use the managed private Flexible Server instead |
+| `deployPortalIdentity` | `true` | portal Workload Identity (UAMI + one federated credential per `portalNamespaces` entry) for the in-pod self-updater's **ACR polling**. Output `portalIdentityClientId` → `selfUpdate.azureClientId`. |
+| `portalNamespaces` | `["memex","atioz","memex-cloud"]` | namespaces that run the portal; one federated credential each (subject `system:serviceaccount:<ns>:memex-portal-sa`). Add a namespace here for a new env. |
+| `grantSharedAcrPull` | `false` | author the portal UAMI's AcrPull on the **shared** cross-RG ACR in-bicep (needs UAA on `meshweaver-shared`); default = grant out-of-band like the kubelet. A per-deployment ACR is granted in-bicep regardless. |
+| `sharedAcrResourceGroup` | `meshweaver-shared` | RG of the shared ACR; used only when `grantSharedAcrPull=true`. |
 | `deployContentFileShares` | `true` | Azure Files account + named shares for **static** PV binding (dynamic provisioning needs no shares) |
 | `deployPostgresFlexible` | `true` | **PRIVATE (VNet-injected) PostgreSQL Flexible Server** with pgvector + managed PITR |
 | `postgresAdminPassword` | *(required, `@secure`)* | pass at deploy time: `--parameters postgresAdminPassword=...` — never commit |
@@ -245,7 +249,12 @@ experience without a standing VM.
 ## Step 3 — Image strategy
 
 The chart references `ghcr.io/systemorph/memex-portal-ai` and
-`ghcr.io/systemorph/memex-migration`. Two options:
+`ghcr.io/systemorph/memex-migration`. Both are **multi-arch** (linux/amd64 +
+linux/arm64): the release path builds the base with
+`docker buildx --platform linux/amd64,linux/arm64 --push` and the app images with
+`-p:RuntimeIdentifiers="linux-x64;linux-arm64" -p:ContainerRuntimeIdentifiers="linux-x64;linux-arm64"`
+(no `-r linux-x64`), so one tag is an OCI image index that serves both architectures.
+Two options:
 
 **Option A — pull from GHCR directly** (simplest; needs node egress to ghcr.io,
 which the default `outboundType: loadBalancer` provides). Keep
@@ -262,6 +271,12 @@ az acr import --name $ACR --source ghcr.io/systemorph/memex-migration:latest    
 az acr import --name $ACR --source ghcr.io/systemorph/memex-portal:latest         --image memex-portal:latest
 az acr import --name $ACR --source ghcr.io/systemorph/memex-portal-ai-base:latest --image memex-portal-ai-base:latest
 ```
+
+> `az acr import` **preserves the manifest list** — it copies the whole multi-arch
+> OCI image index (all per-platform child manifests) referenced by the source tag,
+> so the ACR copy stays multi-arch (amd64 + arm64); it does not flatten to one
+> architecture. (This is the same server-side copy `release-images.yml` uses to
+> mirror released images from GHCR into ACR.)
 
 Then set `image.registry: <acrName>.azurecr.io` in `values.aks.yaml` (and, since
 the generic chart hardcodes the GHCR path in its templates, repoint the running

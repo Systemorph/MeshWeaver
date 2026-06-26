@@ -78,7 +78,7 @@ public enum Permission
     /// editors can ship releases; absent from <c>Viewer</c>/<c>Commenter</c>.
     /// <para>
     /// Deliberately EXCLUDED from <see cref="All"/> (same reasoning as <see cref="Sync"/>):
-    /// <see cref="HubPermissionExtensions.IsGlobalAdmin"/> is <c>HasFlag(All)</c>, and a
+    /// <c>HubPermissionExtensions.IsGlobalAdmin</c> is <c>HasFlag(All)</c>, and a
     /// read-only-capped Admin's effective set is folded against the role int — folding a new
     /// bit into <c>All</c> would silently demand it be re-materialized into the PG
     /// <c>user_effective_permissions</c> table before any admin check passes again (the

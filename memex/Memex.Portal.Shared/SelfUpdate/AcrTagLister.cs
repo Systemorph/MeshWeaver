@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Runtime.Versioning;
 using System.Text.Json;
 using Azure.Core;
 using Azure.Identity;
@@ -25,6 +26,12 @@ public interface IAcrTagLister
 /// install the AAD acquisition fails and the caller's error sink logs + skips (those installs cannot
 /// pull from ACR anyway).
 /// </summary>
+/// <remarks>Server-only (never runs in a Blazor WASM browser host): the Azure.Identity credential
+/// chain and HttpClient TLS APIs below are <c>[UnsupportedOSPlatform("browser")]</c>. The concrete
+/// class is resolved only via DI in the hosted-service path (<c>AddSelfUpdate</c>), which never
+/// executes on browser, so declaring the same unsupported platform is accurate and silences CA1416
+/// without a runtime guard.</remarks>
+[UnsupportedOSPlatform("browser")]
 public sealed class AcrTagLister(SelfUpdateOptions options, ILogger<AcrTagLister>? logger = null) : IAcrTagLister
 {
     // Instance-scoped (never static): the registry's identity hole lives here, owned by the mesh.
@@ -38,7 +45,7 @@ public sealed class AcrTagLister(SelfUpdateOptions options, ILogger<AcrTagLister
         var clientId = Environment.GetEnvironmentVariable("AZURE_CLIENT_ID");
         return string.IsNullOrEmpty(clientId)
             ? new DefaultAzureCredential()
-            : new ManagedIdentityCredential(clientId);
+            : new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(clientId));
     }
 
     public async Task<IReadOnlyList<string>> ListTagsAsync(string repository, CancellationToken ct)

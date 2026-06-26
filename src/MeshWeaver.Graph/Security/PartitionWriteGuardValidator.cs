@@ -82,6 +82,11 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
     private static readonly ImmutableHashSet<string> ReservedMirrorPartitions =
         ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase, "User", "Auth");
 
+    /// <summary>
+    /// Initializes a new instance of the partition write-guard validator.
+    /// </summary>
+    /// <param name="hub">The message hub providing static-node lookup and partition storage providers.</param>
+    /// <param name="logger">The logger used to record blocked writes and probe failures.</param>
     public PartitionWriteGuardValidator(
         IMessageHub hub,
         ILogger<PartitionWriteGuardValidator> logger)
@@ -94,6 +99,13 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
     public IReadOnlyCollection<NodeOperation> SupportedOperations =>
         [NodeOperation.Create, NodeOperation.Update];
 
+    /// <summary>
+    /// Validates a create or update, enforcing the partition invariants: system-managed
+    /// mirror partitions are middleware-only, writes never implicitly create a partition,
+    /// and only partition-owning node types may be created at the top level.
+    /// </summary>
+    /// <param name="context">The validation context describing the node and operation.</param>
+    /// <returns>An observable that emits the validation result for the operation.</returns>
     public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
         var userId = GetUserId(context);

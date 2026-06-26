@@ -15,6 +15,12 @@ public class QueryEvaluator
 {
     private readonly FuzzyScorer _fuzzyScorer;
 
+    /// <summary>
+    /// Creates an in-memory query evaluator, using the supplied fuzzy scorer
+    /// for text-search ranking or a default <c>FuzzyScorer</c> when none is
+    /// provided.
+    /// </summary>
+    /// <param name="fuzzyScorer">Optional scorer for ranking text-search matches; a default is created when <see langword="null"/>.</param>
     public QueryEvaluator(FuzzyScorer? fuzzyScorer = null)
     {
         _fuzzyScorer = fuzzyScorer ?? new FuzzyScorer();

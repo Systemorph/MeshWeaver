@@ -1,8 +1,3 @@
-// <meshweaver>
-// Id: FutuReDataCube
-// DisplayName: FutuRe Data Cube
-// </meshweaver>
-
 using System.ComponentModel.DataAnnotations;
 using MeshWeaver.Domain;
 

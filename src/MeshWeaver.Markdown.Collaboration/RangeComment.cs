@@ -79,6 +79,10 @@ public record CommentReply(
     DateTimeOffset CreatedAt
 )
 {
+    /// <summary>
+    /// Initializes a new instance of the <c>CommentReply</c> record with a generated identifier,
+    /// empty author and text, and the current timestamp.
+    /// </summary>
     public CommentReply() : this(Guid.NewGuid().ToString(), string.Empty, string.Empty, DateTimeOffset.UtcNow) { }
 }
 

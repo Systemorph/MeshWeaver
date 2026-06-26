@@ -13,8 +13,15 @@ namespace MeshWeaver.ContentCollections;
 /// </summary>
 public class HubStreamProviderFactory(IMessageHub hub) : IStreamProviderFactory
 {
+    /// <summary>The source-type discriminator for hub-backed (remote) collections.</summary>
     public const string SourceType = "Hub";
 
+    /// <summary>
+    /// Queries the remote hub at the config's address for the collection's configuration, then
+    /// delegates to the stream-provider factory matching the remote collection's source type.
+    /// </summary>
+    /// <param name="config">The collection configuration; its <c>Address</c> must be set.</param>
+    /// <returns>An observable that emits the stream provider resolved from the remote collection.</returns>
     public IObservable<IStreamProvider> Create(ContentCollectionConfig config)
     {
         if (config.Address == null)

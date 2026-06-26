@@ -8,9 +8,21 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Messaging;
 
+/// <summary>
+/// Owns the child ("hosted") hubs created beneath a parent hub, keyed by
+/// <see cref="Address"/>. Provides lock-free reads, per-address single-flight
+/// construction (so concurrent creators of the same address share one hub
+/// without convoying unrelated lookups), and a fully reactive disposal that
+/// tears down every child and signals collective completion. Disposable: its
+/// lifetime is the owning hub's.
+/// </summary>
+/// <param name="serviceProvider">Service provider used to construct hosted hubs and resolve the logger.</param>
+/// <param name="address">Address of the host (parent) hub that owns this collection.</param>
 public class HostedHubsCollection(IServiceProvider serviceProvider, Address address) : IDisposable
 {
+    /// <summary>The currently registered hosted hubs (live snapshot of the registry's values).</summary>
     public IEnumerable<IMessageHub> Hubs => messageHubs.Values;
+    /// <summary>Address of the host (parent) hub that owns this collection.</summary>
     public Address Host { get; } = address;
     private readonly ILogger logger = serviceProvider.GetRequiredService<ILogger<HostedHubsCollection>>();
 
@@ -27,6 +39,17 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     /// </summary>
     public IObservable<IMessageHub> HubAdded => _hubAdded.AsObservable();
 
+    /// <summary>
+    /// Looks up the hosted hub for <paramref name="address"/>, optionally creating
+    /// it. Existing-hub lookups and <see cref="HostedHubCreation.Never"/> probes
+    /// are lock-free pure reads; creation is single-flighted per address and runs
+    /// the hub constructor outside any global lock, so a creation burst cannot
+    /// convoy unrelated routed messages.
+    /// </summary>
+    /// <param name="address">Address of the hosted hub to find or create.</param>
+    /// <param name="config">Configuration transform applied when a new hub is constructed.</param>
+    /// <param name="create">Whether to create the hub when absent, or only read.</param>
+    /// <returns>The existing or newly created hub, or null if absent (read-only), refused during disposal, or construction failed.</returns>
     public IMessageHub? GetHub(Address address, Func<MessageHubConfiguration, MessageHubConfiguration> config, HostedHubCreation create)
     {
         if (messageHubs.TryGetValue(address, out var hub))
@@ -90,6 +113,12 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     /// </summary>
     private readonly ConcurrentDictionary<Address, Lazy<IMessageHub?>> creations = new(AddressComparer.Instance);
 
+    /// <summary>
+    /// Registers an externally constructed hub under its own address, wires its
+    /// removal from the registry on disposal, and notifies <see cref="HubAdded"/>
+    /// subscribers.
+    /// </summary>
+    /// <param name="hub">The hub to add; indexed by its <c>Address</c>.</param>
     public void Add(IMessageHub hub)
     {
         messageHubs[hub.Address] = hub;
@@ -137,6 +166,12 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     /// </summary>
     public IObservable<Unit> DisposalCompleted => disposalCompleted.AsObservable();
 
+    /// <summary>
+    /// Begins disposal of the collection (idempotent — only the first call takes
+    /// effect). Marks the collection as disposing so further creation is refused,
+    /// then kicks off the reactive teardown of every hosted hub. Completion is
+    /// observable via <see cref="DisposalCompleted"/>.
+    /// </summary>
     public void Dispose()
     {
         lock (locker)

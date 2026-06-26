@@ -13,6 +13,7 @@ namespace MeshWeaver.Mesh;
 /// </summary>
 public sealed record EmailOptions
 {
+    /// <summary>Configuration section name these options bind from.</summary>
     public const string SectionName = "Email";
 
     /// <summary>When false, the no-op sender is registered (no mail leaves the process).</summary>

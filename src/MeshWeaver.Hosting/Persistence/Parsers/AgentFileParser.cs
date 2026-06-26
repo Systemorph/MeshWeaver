@@ -32,6 +32,7 @@ public class AgentFileParser : IFileFormatParser
         .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull | DefaultValuesHandling.OmitDefaults)
         .Build();
 
+    /// <inheritdoc />
     public IReadOnlyList<string> SupportedExtensions => [".md"];
 
     /// <summary>
@@ -59,6 +60,7 @@ public class AgentFileParser : IFileFormatParser
         }
     }
 
+    /// <inheritdoc />
     public MeshNode? Parse(string filePath, string content, string relativePath)
     {
         // Derive id and namespace from path
@@ -140,6 +142,7 @@ public class AgentFileParser : IFileFormatParser
         return node;
     }
 
+    /// <inheritdoc />
     public string Serialize(MeshNode node)
     {
         var sb = new StringBuilder();
@@ -209,6 +212,7 @@ public class AgentFileParser : IFileFormatParser
         return sb.ToString();
     }
 
+    /// <inheritdoc />
     public bool CanSerialize(MeshNode node)
     {
         // Handle nodes with NodeType "Agent" or AgentConfiguration content

@@ -30,6 +30,13 @@ public class FileSystemVersionStore : IVersionQuery
     // Doc/Architecture/AsynchronousCalls.md.
     private readonly IIoPool _ioPool;
 
+    /// <summary>
+    /// Creates a version store rooted at a <c>.versions</c> folder under the
+    /// given data directory.
+    /// </summary>
+    /// <param name="baseDirectory">Data directory whose <c>.versions</c> subfolder holds the snapshots.</param>
+    /// <param name="writeOptionsModifier">Optional modifier for JsonSerializerOptions when writing snapshots (e.g., to enable WriteIndented).</param>
+    /// <param name="ioPoolRegistry">Optional I/O pool registry; the <c>FileSystem</c> pool bridges async file I/O to <c>IObservable</c>. When <c>null</c>, the unbounded pool is used.</param>
     public FileSystemVersionStore(
         string baseDirectory,
         Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null,
@@ -73,6 +80,7 @@ public class FileSystemVersionStore : IVersionQuery
             return node;
         });
 
+    /// <inheritdoc />
     public IObservable<MeshNodeVersion> GetVersions(string path)
         => Observable.Defer(() =>
         {
@@ -101,6 +109,7 @@ public class FileSystemVersionStore : IVersionQuery
             return versions.ToObservable();
         });
 
+    /// <inheritdoc />
     public IObservable<MeshNode?> GetVersion(string path, long version, JsonSerializerOptions options)
         => _ioPool.Run(async ct =>
         {
@@ -112,6 +121,7 @@ public class FileSystemVersionStore : IVersionQuery
             return JsonSerializer.Deserialize<MeshNode>(json, options);
         });
 
+    /// <inheritdoc />
     public IObservable<MeshNode?> GetVersionBefore(string path, long beforeVersion, JsonSerializerOptions options)
         => Observable.Defer(() =>
         {

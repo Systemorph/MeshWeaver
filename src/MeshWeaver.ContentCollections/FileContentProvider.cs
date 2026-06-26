@@ -17,6 +17,13 @@ public class FileContentProvider : IFileContentProvider
     private readonly IEnumerable<IContentTransformer> transformers;
     private readonly IIoPool _ioPool;
 
+    /// <summary>
+    /// Initializes the provider with the content service, the available document transformers,
+    /// and the file-system I/O pool used to run file access off the hub.
+    /// </summary>
+    /// <param name="contentService">The service used to resolve collections and file streams.</param>
+    /// <param name="transformers">Transformers that convert binary documents to markdown.</param>
+    /// <param name="ioPoolRegistry">Registry supplying the file-system I/O pool; falls back to an unbounded pool when <c>null</c>.</param>
     public FileContentProvider(
         IContentService contentService,
         IEnumerable<IContentTransformer> transformers,
@@ -27,6 +34,7 @@ public class FileContentProvider : IFileContentProvider
         _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
     }
 
+    /// <inheritdoc />
     public IObservable<FileContentResult> GetFileContent(
         string collectionName,
         string filePath,
@@ -94,6 +102,7 @@ public class FileContentProvider : IFileContentProvider
         }
     }
 
+    /// <inheritdoc />
     public IObservable<FileOperationResult> SaveFileContent(
         string collectionName,
         string filePath,
@@ -124,6 +133,7 @@ public class FileContentProvider : IFileContentProvider
         }
     }
 
+    /// <inheritdoc />
     public IObservable<FileOperationResult> DeleteFile(
         string collectionName,
         string filePath) =>
@@ -149,6 +159,7 @@ public class FileContentProvider : IFileContentProvider
         }
     }
 
+    /// <inheritdoc />
     public IObservable<CollectionListingResult> ListCollectionItems(
         string collectionName,
         string path) =>

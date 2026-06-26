@@ -20,6 +20,11 @@ using Namotion.Reflection;
 
 namespace MeshWeaver.Data;
 
+/// <summary>
+/// Extension methods that wire the data plugin onto a message hub (<c>AddData</c>) and register
+/// data sources on a <see cref="DataContext"/>, plus the unified-path/reference resolution and
+/// data-message handlers that back workspace reads, writes and patches.
+/// </summary>
 public static class DataExtensions
 {
     /// <summary>
@@ -61,9 +66,18 @@ public static class DataExtensions
 
     extension(MessageHubConfiguration config)
     {
+        /// <summary>Adds the data plugin to the hub configuration with no extra data-context configuration.</summary>
+        /// <returns>The updated hub configuration.</returns>
         public MessageHubConfiguration AddData() =>
             config.AddData(x => x);
 
+        /// <summary>
+        /// Adds the data plugin to the hub configuration. The first call installs the default
+        /// configuration (workspace registration, serialization, routing and handlers); each call
+        /// appends a data-context configurator that runs when the workspace is built.
+        /// </summary>
+        /// <param name="dataPluginConfiguration">Configurator applied to the data context (e.g. to register data sources).</param>
+        /// <returns>The updated hub configuration.</returns>
         public MessageHubConfiguration AddData(Func<DataContext, DataContext> dataPluginConfiguration)
         {
 
@@ -281,21 +295,35 @@ public static class DataExtensions
 
     extension(DataContext dataContext)
     {
+        /// <summary>Registers a partitioned, hub-backed data source on the data context.</summary>
+        /// <typeparam name="TPartition">The partition key type.</typeparam>
+        /// <param name="configuration">Configurator for the partitioned hub data source (e.g. to add types).</param>
+        /// <param name="id">Optional data-source id; a fresh <see cref="DefaultId"/> is used when null.</param>
+        /// <returns>The updated data context.</returns>
         public DataContext AddPartitionedHubSource<TPartition>(Func<PartitionedHubDataSource<TPartition>, PartitionedHubDataSource<TPartition>> configuration,
             object? id = null) =>
             dataContext.WithDataSource(_ => configuration.Invoke(new PartitionedHubDataSource<TPartition>(id ?? DefaultId, dataContext.Workspace)));
 
+        /// <summary>Registers an unpartitioned data source backed by a remote hub address.</summary>
+        /// <param name="address">The address of the hub that owns the source data.</param>
+        /// <param name="configuration">Configurator for the hub data source (e.g. to add types).</param>
+        /// <returns>The updated data context.</returns>
         public DataContext AddHubSource(Address address,
             Func<UnpartitionedHubDataSource, IUnpartitionedDataSource> configuration
         ) =>
             dataContext.WithDataSource(_ => configuration.Invoke(new UnpartitionedHubDataSource(address, dataContext.Workspace)));
 
+        /// <summary>Registers a generic, in-memory unpartitioned data source on the data context.</summary>
+        /// <param name="configuration">Configurator for the generic data source (e.g. to add types and initial data).</param>
+        /// <param name="id">Optional data-source id; a fresh <see cref="DefaultId"/> is used when null.</param>
+        /// <returns>The updated data context.</returns>
         public DataContext AddSource(Func<GenericUnpartitionedDataSource, IUnpartitionedDataSource> configuration,
             object? id = null
         ) =>
             dataContext.WithDataSource(_ => configuration.Invoke(new GenericUnpartitionedDataSource(id ?? DefaultId, dataContext.Workspace)));
     }
 
+    /// <summary>A freshly generated, unique data-source id (a new GUID rendered as a short string).</summary>
     public static object DefaultId => Guid.NewGuid().AsString();
 
     #region Workspace Reference Stream Factories
@@ -646,6 +674,20 @@ public static class DataExtensions
         IMessageDelivery<PatchDataRequest> request)
     {
         var hubPath = hub.Address.ToString();
+
+        // 🚨 MeshNode cross-hub patches apply ATOMICALLY against live state — see
+        // ApplyMeshNodePatchAtomic. The deferred read→RequestChange path below dropped
+        // concurrently-added fields (queued user messages) under back-to-back patches /
+        // patch-vs-own-write races; the atomic path closes that window. Other reduced
+        // types keep the (unchanged) deferred path.
+        if (typeof(T).FullName == "MeshWeaver.Mesh.MeshNode"
+            && hub.GetWorkspace().DataContext.GetDataSourceForType(typeof(T))
+                ?.GetStreamForPartition(null) is { } meshPrimary)
+        {
+            ApplyMeshNodePatchAtomic(stream, meshPrimary, patchText, jsonOpts, version, hub, request);
+            return;
+        }
+
         stream
             .Take(1)
             .Subscribe(change =>
@@ -786,6 +828,151 @@ public static class DataExtensions
                         o => o.ResponseFor(request));
                 }
             });
+    }
+
+    /// <summary>
+    /// ATOMIC owner-side apply for a MeshNode cross-hub <see cref="PatchDataRequest"/>: reads
+    /// the current node, applies the RFC 7396 merge, and writes the merged node back in ONE
+    /// turn on the PRIMARY data-source stream — the SAME stream (and action-block turn) the
+    /// owner's own-writes (<c>MeshNodeStreamHandle.UpdateOwn</c>) use.
+    ///
+    /// <para><b>Why.</b> <see cref="ApplyJsonMergePatchAndUpdate{T}"/>'s generic path reads the
+    /// merge base at HANDLER time but DEFERS the write to a separate <c>workspace.RequestChange</c>
+    /// turn. Two cross-hub patches that queue back-to-back at the owner (or a patch racing an
+    /// owner own-write) each read pre-the-other's-write state, then the later FULL-NODE write
+    /// (<c>collection.Merge({id: merged})</c>) replaces the entity wholesale and DROPS the earlier
+    /// writer's just-committed field — a queued user message vanishes from
+    /// <c>PendingUserMessages</c> + <c>UserMessageIds</c> entirely. That is the message-loss
+    /// flake behind <c>InboxToolIntegrationTest.Cancel_WithPendingMessages</c>,
+    /// <c>RapidSubmits_PileUpAndAllIngest</c>, and the Hammer repro. Applying the merge INSIDE the
+    /// primary stream's atomic update closes the read→write window: the merge base is the LIVE
+    /// entity at the write turn, serialised with every other writer to this node, so concurrent
+    /// additions survive (RFC 7396 dict-merge keeps sibling keys; the array fields are re-derived
+    /// against the live arrays, not a stale snapshot).</para>
+    /// </summary>
+    private static void ApplyMeshNodePatchAtomic<T>(
+        ISynchronizationStream<T> stream,
+        ISynchronizationStream<EntityStore> primary,
+        string patchText,
+        System.Text.Json.JsonSerializerOptions jsonOpts,
+        long version,
+        IMessageHub hub,
+        IMessageDelivery<PatchDataRequest> request)
+    {
+        var hubPath = hub.Address.ToString();
+        var collectionName = typeof(T).Name; // "MeshNode"
+        var idKey = jsonOpts.PropertyNamingPolicy?.ConvertName("Id") ?? "Id";
+        var versionKey = jsonOpts.PropertyNamingPolicy?.ConvertName("Version") ?? "Version";
+
+        var ackPosted = 0;
+        void AckOnce(bool success, MeshNodeError? error = null)
+        {
+            if (System.Threading.Interlocked.Exchange(ref ackPosted, 1) != 0) return;
+            var resp = new PatchDataResponse(success, hub.Version);
+            if (error is not null)
+                resp = resp with { Error = error.Message, NodeError = error };
+            hub.Post(resp, o => o.ResponseFor(request));
+        }
+
+        // Resolve the target entity id ONCE from the reduced own-node read (Id is immutable),
+        // then do the read-merge-write atomically against the LIVE store at the write turn.
+        stream
+            .Take(1)
+            .Subscribe(
+                change =>
+                {
+                    try
+                    {
+                        var current = change.Value;
+                        if (current is null)
+                        {
+                            AckOnce(false, new MeshNodeError(
+                                MeshNodeErrorCode.NotFound, hubPath,
+                                "Target MeshNode not found for patch apply"));
+                            return;
+                        }
+                        var currentObj = System.Text.Json.JsonSerializer
+                            .SerializeToNode(current, current.GetType(), jsonOpts)
+                            as System.Text.Json.Nodes.JsonObject;
+                        var entityId =
+                            (currentObj?[idKey] ?? currentObj?["Id"] ?? currentObj?["id"])
+                            ?.GetValue<string>();
+                        if (string.IsNullOrEmpty(entityId))
+                        {
+                            AckOnce(false, new MeshNodeError(
+                                MeshNodeErrorCode.Validation, hubPath,
+                                "Could not resolve MeshNode Id for patch apply"));
+                            return;
+                        }
+
+                        // Post-commit ack chained off DURABLE persistence — same
+                        // read-after-write guarantee as the deferred path. Subscribed to the
+                        // reduced stream BEFORE the write so the commit tick is never missed.
+                        var postSub = stream
+                            .Skip(1)
+                            .Take(1)
+                            .Timeout(TimeSpan.FromSeconds(5))
+                            .Subscribe(
+                                committed =>
+                                {
+                                    var flush = hub.ServiceProvider.GetService<IPostCommitFlush>();
+                                    if (flush is null)
+                                    {
+                                        AckOnce(true);
+                                        return;
+                                    }
+                                    var flushSub = flush.Flush(committed.Value!)
+                                        .Take(1)
+                                        .Timeout(TimeSpan.FromSeconds(10))
+                                        .Subscribe(
+                                            _ => AckOnce(true),
+                                            ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
+                                    hub.RegisterForDisposal(flushSub);
+                                },
+                                ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
+                        hub.RegisterForDisposal(postSub);
+
+                        // 🚨 ATOMIC read-merge-write on the primary stream's action-block turn.
+                        primary.Update(
+                            store =>
+                            {
+                                var s = store ?? new EntityStore();
+                                var liveEntity = s.GetCollection(collectionName)
+                                    ?.Instances.GetValueOrDefault(entityId);
+                                if (liveEntity is null)
+                                    return null; // entity gone — no-op (postSub times out → NACK)
+
+                                var currentNode = System.Text.Json.JsonSerializer
+                                    .SerializeToNode(liveEntity, liveEntity.GetType(), jsonOpts)
+                                    as System.Text.Json.Nodes.JsonObject
+                                    ?? new System.Text.Json.Nodes.JsonObject();
+                                var patchNode = System.Text.Json.Nodes.JsonNode.Parse(patchText)
+                                    as System.Text.Json.Nodes.JsonObject
+                                    ?? throw new InvalidOperationException("Patch must be a JSON object");
+                                MergePatchRecursive(currentNode, patchNode);
+                                // The OWNER mints the monotonic Version on apply (same rule as
+                                // the deferred path — see its remarks).
+                                currentNode[versionKey] = version;
+                                var merged = System.Text.Json.JsonSerializer
+                                    .Deserialize<T>(currentNode.ToJsonString(jsonOpts), jsonOpts);
+                                if (merged is null)
+                                    throw new System.Text.Json.JsonException(
+                                        "Merged value deserialised to null");
+
+                                var newStore = s.Update(collectionName, c => c.Update(entityId, merged));
+                                return primary.ApplyChanges(new EntityStoreAndUpdates(
+                                    newStore,
+                                    [new EntityUpdate(collectionName, entityId, merged) { OldValue = liveEntity }],
+                                    primary.StreamId));
+                            },
+                            ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
+                    }
+                    catch (Exception ex)
+                    {
+                        AckOnce(false, ClassifyPatchException(ex, hubPath));
+                    }
+                },
+                ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
     }
 
     private static Type? WalkBaseForGeneric(Type type, Type genericDef)

@@ -30,6 +30,7 @@ namespace MeshWeaver.GitSync;
 /// </summary>
 public static class GitHubSyncSettingsTab
 {
+    /// <summary>The settings-menu item id for the GitHub Sync tab.</summary>
     public const string TabId = "GitHubSync";
 
     private const string ResultId = "ghSyncResult";

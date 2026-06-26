@@ -13,12 +13,19 @@ public record RepoFile(string Path, string Content);
 /// </summary>
 public record GitHubPushRequest
 {
+    /// <summary>The target repository URL (e.g. <c>https://github.com/owner/repo</c>).</summary>
     public required string RepositoryUrl { get; init; }
+    /// <summary>The branch to commit onto. Defaults to <c>main</c>.</summary>
     public string Branch { get; init; } = "main";
+    /// <summary>The repo subdirectory the mirror is confined to; null/empty mirrors the whole repo.</summary>
     public string? Subdirectory { get; init; }
+    /// <summary>The files to mirror into the repo (within <see cref="Subdirectory"/>) as the commit.</summary>
     public ImmutableList<RepoFile> Files { get; init; } = ImmutableList<RepoFile>.Empty;
+    /// <summary>The commit message for the single mirror commit.</summary>
     public required string CommitMessage { get; init; }
+    /// <summary>The display name to record as the commit author/committer.</summary>
     public required string AuthorName { get; init; }
+    /// <summary>The email to record as the commit author/committer.</summary>
     public required string AuthorEmail { get; init; }
     /// <summary>The committing user's OAuth access token (decrypted).</summary>
     public required string AccessToken { get; init; }
@@ -59,6 +66,7 @@ public record GitHubToken(
 /// <summary>A request to create a branch in a repository from an existing ref (branch or SHA).</summary>
 public record GitHubCreateBranchRequest
 {
+    /// <summary>The repository URL the branch is created in.</summary>
     public required string RepositoryUrl { get; init; }
     /// <summary>The new branch's short name (e.g. <c>feature/x</c>) — no <c>refs/heads/</c> prefix.</summary>
     public required string NewBranch { get; init; }
@@ -74,8 +82,11 @@ public record GitHubBranchResult(string Branch, string CommitSha);
 /// <summary>A request to open a pull request <see cref="HeadBranch"/> → <see cref="BaseBranch"/>.</summary>
 public record GitHubOpenPullRequestRequest
 {
+    /// <summary>The repository URL the pull request is opened in.</summary>
     public required string RepositoryUrl { get; init; }
+    /// <summary>The pull request title.</summary>
     public required string Title { get; init; }
+    /// <summary>The pull request body (markdown); null for no description.</summary>
     public string? Body { get; init; }
     /// <summary>The branch the changes live on (the PR head).</summary>
     public required string HeadBranch { get; init; }

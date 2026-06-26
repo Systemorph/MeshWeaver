@@ -20,7 +20,9 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class CommentLayoutAreas
 {
+    /// <summary>Area name for the Overview layout area.</summary>
     public const string OverviewArea = "Overview";
+    /// <summary>Area name for the Edit layout area.</summary>
     public const string EditArea = "Edit";
 
     /// <summary>

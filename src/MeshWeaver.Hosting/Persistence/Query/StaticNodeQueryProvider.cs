@@ -66,6 +66,16 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
     /// <inheritdoc/>
     public bool Matches(IReadOnlyList<string> queryNamespaces) => _matches(queryNamespaces);
 
+    /// <summary>
+    /// Creates the static-node query provider over the supplied static node
+    /// sources and seed configuration, pre-computing the provider/config node
+    /// buckets and the node-type index used to short-circuit non-matching
+    /// queries.
+    /// </summary>
+    /// <param name="providers">The static node providers (built-in roles, type definitions, etc.).</param>
+    /// <param name="matches">Predicate deciding whether a scoped query's namespaces are owned by this provider.</param>
+    /// <param name="meshConfiguration">Optional mesh configuration supplying seed (<c>AddMeshNodes</c>) nodes and context-exclusion rules; may be <see langword="null"/>.</param>
+    /// <param name="loggerFactory">Optional logger factory; diagnostics are suppressed when <see langword="null"/>.</param>
     public StaticNodeQueryProvider(
         IEnumerable<IStaticNodeProvider> providers,
         Func<IReadOnlyList<string>, bool> matches,
@@ -218,6 +228,7 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         return ordered.Take(limit).ToList();
     }
 
+    /// <inheritdoc />
     public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request, JsonSerializerOptions options)
     {
         // Static nodes are purely in-memory (no I/O) and never change.
@@ -419,6 +430,7 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         };
     }
 
+    /// <inheritdoc />
     public IObservable<T?> Select<T>(string path, string property, JsonSerializerOptions options)
     {
         // Pure in-memory — no I/O, so a single completed Observable.Return.

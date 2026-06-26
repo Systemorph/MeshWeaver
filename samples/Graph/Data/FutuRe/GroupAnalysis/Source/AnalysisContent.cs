@@ -1,8 +1,3 @@
-// <meshweaver>
-// Id: AnalysisContent
-// DisplayName: Analysis Content
-// </meshweaver>
-
 using System.ComponentModel.DataAnnotations;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh;

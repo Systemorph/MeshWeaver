@@ -10,12 +10,15 @@ namespace MeshWeaver.ContentCollections;
 /// </summary>
 public class FileSystemStreamProvider(string basePath) : IStreamProvider
 {
+    /// <summary>The source-type discriminator for file-system collections.</summary>
     public const string SourceType = "FileSystem";
 
     private FileSystemWatcher? watcher;
 
+    /// <inheritdoc />
     public string ProviderType => SourceType;
 
+    /// <inheritdoc />
     public Task<Stream?> GetStreamAsync(string reference, CancellationToken cancellationToken = default)
     {
         var fullPath = Path.Combine(basePath, reference.TrimStart('/'));
@@ -35,6 +38,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         return Task.FromResult<Stream?>(stream);
     }
 
+    /// <inheritdoc />
     public Task<(Stream? Stream, string Path, DateTime LastModified)> GetStreamWithMetadataAsync(string path, CancellationToken cancellationToken = default)
     {
         var fullPath = Path.Combine(basePath, path.TrimStart('/'));
@@ -47,6 +51,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
             (stream, path, File.GetLastWriteTime(fullPath)));
     }
 
+    /// <inheritdoc />
     public async Task WriteStreamAsync(string reference, Stream content, CancellationToken cancellationToken = default)
     {
         var fullPath = Path.IsPathRooted(reference) ? reference : Path.Combine(basePath, reference.TrimStart('/'));
@@ -67,6 +72,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         await content.CopyToAsync(fileStream, cancellationToken);
     }
 
+    /// <inheritdoc />
     public IAsyncEnumerable<(Stream? Stream, string Path, DateTime LastModified)> GetStreamsAsync(Func<string, bool> filter, CancellationToken cancellationToken = default)
     {
         // A brand-new collection (e.g. a freshly-created Space) has no backing directory
@@ -87,6 +93,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         return items.ToAsyncEnumerable();
     }
 
+    /// <inheritdoc />
     public async IAsyncEnumerable<FolderItem> GetFolders(
         string path,
         [EnumeratorCancellation] CancellationToken ct = default)
@@ -113,6 +120,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         }
     }
 
+    /// <inheritdoc />
     public async IAsyncEnumerable<FileItem> GetFiles(
         string path,
         [EnumeratorCancellation] CancellationToken ct = default)
@@ -137,6 +145,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         }
     }
 
+    /// <inheritdoc />
     public async Task SaveFileAsync(string path, string fileName, Stream content, CancellationToken cancellationToken = default)
     {
         var fullPath = Path.Combine(basePath, path.TrimStart('/'), fileName);
@@ -149,6 +158,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         await content.CopyToAsync(fileStream, cancellationToken);
     }
 
+    /// <inheritdoc />
     public Task CreateFolderAsync(string folderPath)
     {
         var fullPath = Path.Combine(basePath, folderPath.TrimStart('/'));
@@ -159,6 +169,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         return Task.CompletedTask;
     }
 
+    /// <inheritdoc />
     public Task DeleteFolderAsync(string folderPath)
     {
         var fullPath = Path.Combine(basePath, folderPath.TrimStart('/'));
@@ -186,6 +197,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         return Task.CompletedTask;
     }
 
+    /// <inheritdoc />
     public Task DeleteFileAsync(string filePath)
     {
         var fullPath = Path.Combine(basePath, filePath.TrimStart('/'));
@@ -213,6 +225,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         return Task.CompletedTask;
     }
 
+    /// <inheritdoc />
     public IDisposable? AttachMonitor(Action<string> onChanged)
     {
         // A brand-new collection (freshly-created Space) has no backing dir yet, and
@@ -345,6 +358,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         }
     }
 
+    /// <inheritdoc />
     public async Task<ImmutableDictionary<string, Author>> LoadAuthorsAsync(CancellationToken cancellationToken = default)
     {
         try

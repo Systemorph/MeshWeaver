@@ -13,6 +13,10 @@ namespace MeshWeaver.Markdown;
 /// </summary>
 public class LinkUrlCleanupExtension(string? currentNodePath = null) : IMarkdownExtension
 {
+    /// <summary>
+    /// Hooks the link-URL cleanup into the pipeline's document-processed event.
+    /// </summary>
+    /// <param name="pipeline">The pipeline builder being configured.</param>
     public void Setup(MarkdownPipelineBuilder pipeline)
     {
         pipeline.DocumentProcessed += ResolveLinks;
@@ -66,6 +70,11 @@ public class LinkUrlCleanupExtension(string? currentNodePath = null) : IMarkdown
         }
     }
 
+    /// <summary>
+    /// No-op: this extension operates on the parsed document, not the renderer.
+    /// </summary>
+    /// <param name="pipeline">The built pipeline.</param>
+    /// <param name="renderer">The renderer being configured.</param>
     public void Setup(MarkdownPipeline pipeline, IMarkdownRenderer renderer)
     {
     }

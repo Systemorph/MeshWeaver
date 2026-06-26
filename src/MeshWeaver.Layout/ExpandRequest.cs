@@ -8,6 +8,7 @@ namespace MeshWeaver.Layout;
 /// Represents an event that occurs when an area is clicked.
 /// </summary>
 /// <param name="Area">The area that was clicked.</param>
+/// <param name="StreamId">The identifier of the stream that owns this event.</param>
 public record ClickedEvent(string Area, string StreamId) : StreamMessage(StreamId)
 {
     /// <summary>

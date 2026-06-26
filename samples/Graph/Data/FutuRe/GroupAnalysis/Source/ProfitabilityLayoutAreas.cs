@@ -1,8 +1,3 @@
-// <meshweaver>
-// Id: ProfitabilityLayoutAreas
-// DisplayName: Profitability Areas
-// </meshweaver>
-
 using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using System.Text;

@@ -5,6 +5,10 @@ using MeshWeaver.Mesh.Security;
 
 namespace MeshWeaver.Documentation;
 
+/// <summary>
+/// Mesh-builder extensions that register the built-in MeshWeaver platform
+/// documentation partition and its embedded content collections.
+/// </summary>
 public static class DocumentationExtensions
 {
     /// <summary>

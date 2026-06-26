@@ -413,7 +413,9 @@ public static class MeshDataSourceExtensions
     /// </summary>
     public sealed class OwnNodeCache
     {
+        /// <summary>The currently cached own-node snapshot (null until first emission).</summary>
         public volatile MeshNode? Current;
+        /// <summary>Whether the cached node has been deleted.</summary>
         public volatile bool IsDeleted;
     }
 
@@ -1196,6 +1198,12 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
     public Type? ContentType { get; private init; }
 
 
+    /// <summary>
+    /// Initializes a new instance of the data source, resolving the storage adapter
+    /// and logger from the workspace's hub and capturing the hub's path (segments only).
+    /// </summary>
+    /// <param name="id">The data-source identifier.</param>
+    /// <param name="workspace">The workspace this data source belongs to.</param>
     public MeshDataSource(object id, IWorkspace workspace) : base(id, workspace)
     {
         _persistenceCore = workspace.Hub.ServiceProvider.GetService<IStorageAdapter>();

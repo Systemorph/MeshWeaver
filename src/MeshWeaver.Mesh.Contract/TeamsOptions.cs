@@ -8,6 +8,7 @@ namespace MeshWeaver.Mesh;
 /// </summary>
 public sealed class TeamsOptions
 {
+    /// <summary>Configuration section name these options bind from.</summary>
     public const string SectionName = "Teams";
 
     /// <summary>Master switch. False = the Teams bot endpoint + reply sender do nothing.</summary>

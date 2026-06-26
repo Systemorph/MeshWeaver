@@ -1,8 +1,3 @@
-// <meshweaver>
-// Id: AmountType
-// DisplayName: Amount Type Reference Data
-// </meshweaver>
-
 using System.ComponentModel.DataAnnotations;
 using MeshWeaver.Domain;
 

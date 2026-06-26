@@ -36,6 +36,14 @@ public sealed class PersistenceService : IStorageAdapter
     private readonly IReadOnlyList<IPartitionStorageProvider> _writable;
     private readonly ILogger<PersistenceService>? _logger;
 
+    /// <summary>
+    /// Builds the ordered provider chain: fixed-namespace ("specific") providers
+    /// iterate before wildcard ones, each band sorted by descending
+    /// <c>Priority</c> (registration order breaks ties). Caches the writable
+    /// subset and merges every provider's <c>Changes</c> feed into one stream.
+    /// </summary>
+    /// <param name="providers">All registered partition storage providers.</param>
+    /// <param name="logger">Optional logger for write-claim diagnostics; may be <c>null</c>.</param>
     public PersistenceService(
         IEnumerable<IPartitionStorageProvider> providers,
         ILogger<PersistenceService>? logger = null)
@@ -227,6 +235,7 @@ public sealed class PersistenceService : IStorageAdapter
                 })
             .Select(acc => ((IEnumerable<string>)acc.Nodes, (IEnumerable<string>)acc.Dirs));
 
+    /// <inheritdoc />
     public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
         => _allOrdered
             .Select(p => p.Adapter.ListPartitionSubPaths(nodePath))
@@ -240,6 +249,7 @@ public sealed class PersistenceService : IStorageAdapter
                 })
             .Select(acc => (IEnumerable<string>)acc);
 
+    /// <inheritdoc />
     public IObservable<object> GetPartitionObjects(
         string nodePath, string? subPath, JsonSerializerOptions options)
         => _allOrdered
@@ -247,6 +257,7 @@ public sealed class PersistenceService : IStorageAdapter
             .SelectMany(p => p.Adapter.GetPartitionObjects(nodePath, subPath, options)
                 .Catch<object, Exception>(_ => Observable.Empty<object>()));
 
+    /// <inheritdoc />
     public IObservable<Unit> SavePartitionObjects(
         string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
         => _writable
@@ -255,12 +266,14 @@ public sealed class PersistenceService : IStorageAdapter
             .Take(1)
             .DefaultIfEmpty(Unit.Default);
 
+    /// <inheritdoc />
     public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
         => _writable
             .Select(p => p.Adapter.DeletePartitionObjects(nodePath, subPath))
             .Merge()
             .Aggregate(Unit.Default, (acc, _) => acc);
 
+    /// <inheritdoc />
     public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
         => _allOrdered
             .Select(p => p.Adapter.GetPartitionMaxTimestamp(nodePath, subPath))

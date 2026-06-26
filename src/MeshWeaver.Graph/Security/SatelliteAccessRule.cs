@@ -17,11 +17,21 @@ namespace MeshWeaver.Graph.Security;
 /// </summary>
 public class SatelliteAccessRule(string nodeType, IMessageHub hub) : INodeTypeAccessRule
 {
+    /// <summary>The node-type identifier this access rule applies to.</summary>
     public string NodeType => nodeType;
 
+    /// <summary>The node operations this rule applies to: Read, Create, Update, and Delete.</summary>
     public IReadOnlyCollection<NodeOperation> SupportedOperations =>
         [NodeOperation.Read, NodeOperation.Create, NodeOperation.Update, NodeOperation.Delete];
 
+    /// <summary>
+    /// Determines whether the user may perform the operation on the satellite node by
+    /// delegating the permission check to its MainNode (parent), falling back to a
+    /// path-based check when the MainNode is absent or self-referencing.
+    /// </summary>
+    /// <param name="context">The validation context describing the node and operation.</param>
+    /// <param name="userId">The identifier of the user requesting access, or null if anonymous.</param>
+    /// <returns>An observable that emits whether access is permitted.</returns>
     public IObservable<bool> HasAccess(NodeValidationContext context, string? userId)
     {
         if (string.IsNullOrEmpty(userId))

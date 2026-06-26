@@ -9,15 +9,32 @@ using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Markdown;
 
+/// <summary>
+/// Markdig extension that turns fenced code blocks into <see cref="ExecutableCodeBlock"/> instances,
+/// enabling <c>--execute</c>/<c>--render</c> code submission and <c>layout</c> area embedding.
+/// </summary>
 public class ExecutableCodeBlockExtension : IMarkdownExtension
 {
+    /// <summary>The fenced-code-block parser that produces <see cref="ExecutableCodeBlock"/> nodes.</summary>
     public ExecutableCodeBlockParser Parser { get; } = new();
+
+    /// <summary>The HTML renderer for executable code blocks.</summary>
     public ExecutableCodeBlockRenderer Renderer { get; } = new();
 
+    /// <summary>
+    /// Replaces Markdig's default fenced-code-block parser with <see cref="Parser"/>.
+    /// </summary>
+    /// <param name="pipeline">The pipeline builder being configured.</param>
     public void Setup(MarkdownPipelineBuilder pipeline)
     {
         pipeline.BlockParsers.Replace<FencedCodeBlockParser>(Parser);
     }
+
+    /// <summary>
+    /// Replaces the default HTML code-block renderer with <see cref="Renderer"/> when rendering to HTML.
+    /// </summary>
+    /// <param name="pipeline">The built pipeline.</param>
+    /// <param name="renderer">The renderer being configured.</param>
     public void Setup(MarkdownPipeline pipeline, IMarkdownRenderer renderer)
     {
         if (renderer is HtmlRenderer htmlRenderer)
@@ -26,8 +43,16 @@ public class ExecutableCodeBlockExtension : IMarkdownExtension
 
 }
 
+/// <summary>
+/// Fenced-code-block parser that produces <see cref="ExecutableCodeBlock"/> instances instead of plain ones.
+/// </summary>
 public class ExecutableCodeBlockParser : FencedCodeBlockParser
 {
+    /// <summary>
+    /// Creates an <see cref="ExecutableCodeBlock"/> for a fenced code fence, carrying over indentation and trivia.
+    /// </summary>
+    /// <param name="processor">The block processor at the current fence.</param>
+    /// <returns>The created executable code block.</returns>
     protected override FencedCodeBlock CreateFencedBlock(BlockProcessor processor)
     {
         var codeBlock = new ExecutableCodeBlock(this)
@@ -46,17 +71,42 @@ public class ExecutableCodeBlockParser : FencedCodeBlockParser
 
 }
 
+/// <summary>
+/// A fenced code block that carries parsed fence arguments and may be executed against a kernel
+/// (<c>--execute</c>/<c>--render</c>) or rendered as an embedded layout area (<c>layout</c> info string).
+/// </summary>
+/// <param name="parser">The block parser that created this block.</param>
 public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
 {
     private readonly BlockParser parser = parser;
+
+    /// <summary>Fence argument name for silent execution (<c>--execute</c>).</summary>
     public const string Execute = "execute";
+
+    /// <summary>Fence argument name for execute-and-stream-to-area (<c>--render</c>).</summary>
     public const string Render = "render";
+
+    /// <summary>Fence argument name that disables execution (<c>--no-execute</c>).</summary>
     public const string NoExecute = "no-execute";
+
+    /// <summary>Parsed fence arguments (key → optional value). Populated by <see cref="Initialize"/>.</summary>
     public IReadOnlyDictionary<string, string?> Args { get; set; } = ImmutableDictionary<string,string?>.Empty;
+
+    /// <summary>The code submission derived from this block, or null when the block is documentation-only.</summary>
     public SubmitCodeRequest? SubmitCode { get; set; }
+
+    /// <summary>The embedded layout-area component when the block's info string is <c>layout</c>; otherwise null.</summary>
     public LayoutAreaComponentInfo? LayoutAreaComponent { get; set; }
+
+    /// <summary>Validation error from parsing a <c>layout</c> block, or null when parsing succeeded.</summary>
     public string? LayoutAreaError { get; set; }
 
+    /// <summary>
+    /// Parses a fence argument string (e.g. <c>--execute id --render Area</c>) into key/value pairs.
+    /// Flags without a following value yield a null value.
+    /// </summary>
+    /// <param name="arguments">The raw argument string after the language info, or null.</param>
+    /// <returns>The parsed argument key/value pairs.</returns>
     public static IEnumerable<KeyValuePair<string, string?>> ParseArguments(string? arguments)
     {
         var linear = (arguments ?? string.Empty).Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
@@ -82,6 +132,11 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
 
     }
 
+    /// <summary>
+    /// Determines the <see cref="SubmitCodeRequest"/> for this block based on its fence arguments:
+    /// <c>--execute</c> or <c>--render</c> produce a submission; bare code blocks are documentation-only (null).
+    /// </summary>
+    /// <returns>The submission to send to the kernel, or null when the block should not execute.</returns>
     public SubmitCodeRequest? GetSubmitCodeRequest()
     {
         if (Info == "layout")
@@ -100,6 +155,12 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
         return null;
     }
 
+    /// <summary>
+    /// Parses a <c>layout</c> fenced block (YAML-like <c>address</c>/<c>area</c>/<c>id</c> fields, or a
+    /// legacy bare address path) into a <see cref="LayoutAreaComponentInfo"/>. On failure, sets
+    /// <see cref="LayoutAreaError"/> and returns null. Returns null for non-<c>layout</c> blocks.
+    /// </summary>
+    /// <returns>The embedded layout-area component, or null when the block is not a valid layout block.</returns>
     public LayoutAreaComponentInfo? GetLayoutAreaComponent()
     {
         if (Info != "layout")
@@ -216,6 +277,11 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
         return $"{address}/{area}/{id}";
     }
 
+    /// <summary>
+    /// (Re)computes the derived state of the block — <see cref="Args"/>, <see cref="SubmitCode"/>,
+    /// <see cref="LayoutAreaError"/>, and <see cref="LayoutAreaComponent"/> — from the raw fence content.
+    /// Safe to call multiple times; the rendering and extraction paths call it before use.
+    /// </summary>
     public void Initialize()
     {
         Args = ParseArguments(Arguments).ToDictionary();

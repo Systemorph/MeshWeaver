@@ -16,7 +16,7 @@ namespace MeshWeaver.Data.Test;
 /// NOT the host's global clock (<c>Host.Version</c>), which can sit still while
 /// the stream keeps ticking. Consequence to protect: consecutive updates to a
 /// stream carry <b>strictly increasing</b> versions, so the monotonicity guard
-/// in <see cref="SynchronizationStream{TStream}"/> never drops a fresh frame.
+/// in <see cref="MeshWeaver.Data.Serialization.SynchronizationStream{TStream}"/> never drops a fresh frame.
 ///
 /// <para>Without this, a stale/equal version on a real update is mistaken for a
 /// reordered straggler and dropped — the "view doesn't refresh / blank layout"

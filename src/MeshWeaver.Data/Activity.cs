@@ -8,11 +8,23 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data;
 
+/// <summary>
+/// A unit of work that accumulates progress, log messages and sub-activities into an
+/// <see cref="ActivityLog"/>. Each activity owns a hosted hub so every mutation is serialised on a
+/// single action block, and it implements <see cref="ILogger"/> so standard logging is captured.
+/// </summary>
 public class Activity : ILogger, IDisposable
 {
     private readonly ILogger logger;
     private bool autoClose;
 
+    /// <summary>
+    /// Creates an activity hosted under <paramref name="parentHub"/>, inheriting the parent's posting
+    /// identity so the activity hub's own posts resolve the same way.
+    /// </summary>
+    /// <param name="category">Category label recorded on the activity log.</param>
+    /// <param name="parentHub">Hub that hosts this activity and supplies the posting identity.</param>
+    /// <param name="autoClose">When true, the activity completes automatically once all sub-activities finish.</param>
     public Activity(string category, IMessageHub parentHub, bool autoClose = true)
     {
         Category = category;
@@ -31,30 +43,55 @@ public class Activity : ILogger, IDisposable
         activityLog = new(category) { StartVersion = (int)parentHub.Version };
     }
 
+    /// <summary>The hosted hub that serialises all mutation of this activity.</summary>
     public IMessageHub Hub { get; }
     private IMessageHub ParentHub { get; }
 
+    /// <summary>Category label that classifies this activity in its log.</summary>
     public string Category { get; }
 
+    /// <summary>Unique identifier of this activity.</summary>
     public string Id { get; }
+    /// <summary>Mesh address of this activity's hosted hub.</summary>
     public Address Address { get; }
 
+    /// <summary>Child activities started under this one; their completion gates this activity's own completion.</summary>
     public ConcurrentBag<Activity> SubActivities { get; } = new();
 
+    /// <summary>
+    /// Completes the activity with the given status, scheduling completion on the activity hub's action block.
+    /// </summary>
+    /// <param name="activityStatus">Terminal status to apply, or null to derive it from the log and sub-activities.</param>
+    /// <param name="completeAction">Optional callback invoked with the final log once completion settles.</param>
     public void Complete(ActivityStatus? activityStatus, Action<ActivityLog>? completeAction)
         => Hub.InvokeAsync(() => HandleComplete(activityStatus, completeAction));
 
+    /// <summary>Completes the activity, deriving the terminal status automatically.</summary>
+    /// <param name="completeAction">Optional callback invoked with the final log once completion settles.</param>
     public void Complete(Action<ActivityLog>? completeAction = null)
         => Complete(null, completeAction);
 
 
+    /// <summary>Records an error-level message on the activity log.</summary>
+    /// <param name="message">Message text.</param>
+    /// <param name="scopes">Optional structured scopes attached to the message.</param>
     public void LogError(string message, IReadOnlyCollection<KeyValuePair<string, object>>? scopes = null)
         => LogMessage(message, LogLevel.Error, scopes);
+    /// <summary>Records a warning-level message on the activity log.</summary>
+    /// <param name="message">Message text.</param>
+    /// <param name="scopes">Optional structured scopes attached to the message.</param>
     public void LogWarning(string message, IReadOnlyCollection<KeyValuePair<string, object>>? scopes = null)
         => LogMessage(message, LogLevel.Warning, scopes);
+    /// <summary>Records an information-level message on the activity log.</summary>
+    /// <param name="message">Message text.</param>
+    /// <param name="scopes">Optional structured scopes attached to the message.</param>
     public void LogInformation(string message, IReadOnlyCollection<KeyValuePair<string, object>>? scopes = null)
         => LogMessage(message, LogLevel.Information, scopes);
 
+    /// <summary>Records a message at the given level on the activity log.</summary>
+    /// <param name="message">Message text.</param>
+    /// <param name="logLevel">Severity of the message.</param>
+    /// <param name="scopes">Optional structured scopes attached to the message.</param>
     public void LogMessage(string message, LogLevel logLevel, IReadOnlyCollection<KeyValuePair<string, object>>? scopes = null)
         => MutateLog(log => log with { Messages = log.Messages.Add(new LogMessage(message, logLevel) { Scopes = scopes }) });
 
@@ -74,16 +111,40 @@ public class Activity : ILogger, IDisposable
             return System.Reactive.Disposables.Disposable.Empty;
         });
 
+    /// <summary>Adds mesh node paths that this activity changed to the log's affected-paths set.</summary>
+    /// <param name="paths">Paths affected by the activity.</param>
     public void RecordAffectedPaths(IEnumerable<string> paths)
         => MutateLog(log => log with { AffectedPaths = log.AffectedPaths.AddRange(paths) });
 
+    /// <summary>
+    /// <see cref="ILogger"/> entry point: formats <paramref name="state"/> and records it as a message on the log.
+    /// </summary>
+    /// <typeparam name="TState">Type of the state object being logged.</typeparam>
+    /// <param name="logLevel">Severity of the entry.</param>
+    /// <param name="eventId">Event identifier (part of the logger contract).</param>
+    /// <param name="state">State to log.</param>
+    /// <param name="exception">Optional exception associated with the entry.</param>
+    /// <param name="formatter">Function that renders <paramref name="state"/> and <paramref name="exception"/> to text.</param>
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
         => MutateLog(log => log with { Messages = log.Messages.Add(new LogMessage(formatter.Invoke(state, exception), logLevel)) });
 
+    /// <summary>Returns whether the given log level is enabled on the underlying logger.</summary>
+    /// <param name="logLevel">Level to test.</param>
+    /// <returns>True if the level is enabled.</returns>
     public bool IsEnabled(LogLevel logLevel) => logger.IsEnabled(logLevel);
 
+    /// <summary>Begins a logical logging scope on the underlying logger.</summary>
+    /// <typeparam name="TState">Type of the scope state.</typeparam>
+    /// <param name="state">Scope state.</param>
+    /// <returns>A disposable that ends the scope, or null.</returns>
     public IDisposable? BeginScope<TState>(TState state) where TState : notnull => logger.BeginScope(state);
 
+    /// <summary>
+    /// Starts a child activity whose log is merged into this activity's log; when all sub-activities
+    /// finish and auto-close is set, this activity completes.
+    /// </summary>
+    /// <param name="category">Category label for the sub-activity.</param>
+    /// <returns>The newly started sub-activity.</returns>
     public Activity StartSubActivity(string category)
     {
         var subActivity = new Activity(category, ParentHub);
@@ -114,6 +175,7 @@ public class Activity : ILogger, IDisposable
         });
     }
 
+    /// <summary>Disposes the activity's hosted hub unless the hub is already tearing down hosted hubs.</summary>
     public void Dispose()
     {
         if (Hub.RunLevel < MessageHubRunLevel.DisposeHostedHubs)

@@ -22,6 +22,11 @@ using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.TestBase;
 
+/// <summary>
+/// Base class for integration tests that run against a full in-process monolith mesh
+/// (persistence, messaging, DI, routing). Builds a per-test-class mesh, exposes the mesh hub
+/// and routing service, hands out isolated client hubs, and enforces quiescing/dispose deadlines.
+/// </summary>
 public abstract class MonolithMeshTestBase : Fixture.TestBase
 {
     // Unique-per-call. Prior versions returned the fixed `client/1` address;
@@ -34,6 +39,12 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     // table so leaked traffic from a prior test lands at a dead slot and is
     // dropped harmlessly. PageLoadingTest.ConcurrentRequests + the AI/Threading
     // suite hangs both traced to this.
+    /// <summary>
+    /// Creates a unique <c>client/{guid}</c> address. Each call returns a distinct address so leaked
+    /// traffic from a prior test lands at a dead routing slot and is dropped harmlessly (see the note
+    /// above for the shared-mesh hang this prevents).
+    /// </summary>
+    /// <returns>A fresh, process-unique client address.</returns>
     protected static Address CreateClientAddress() => new("client", Guid.NewGuid().ToString("N")[..12]);
 
     /// <summary>
@@ -93,6 +104,14 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         Path.GetTempPath(),
         $"meshweaver-test-mesh-cache-{Environment.ProcessId}-{Guid.NewGuid():N}");
 
+    /// <summary>
+    /// Base mesh configuration shared by every test: monolith mesh, in-memory persistence, row-level
+    /// security, Graph + Space node types, the <c>TestData</c> partition, an isolated assembly store and
+    /// compilation cache, and the test quiesce/request timeouts. Security tests call this directly to
+    /// opt out of the default public-admin access added by <c>ConfigureMesh</c>.
+    /// </summary>
+    /// <param name="builder">The mesh builder to configure.</param>
+    /// <returns>The same builder, configured, for fluent chaining.</returns>
     protected MeshBuilder ConfigureMeshBase(MeshBuilder builder)
         => builder
             .UseMonolithMesh()
@@ -131,6 +150,11 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         => ConfigureMeshBase(builder)
             .AddMeshNodes(TestUsers.PublicAdminAccess());
 
+    /// <summary>
+    /// Initializes the test base, wiring xUnit output and building (or reusing, in shared-mesh mode)
+    /// the per-test-class mesh.
+    /// </summary>
+    /// <param name="output">xUnit output helper for the running test.</param>
     protected MonolithMeshTestBase(ITestOutputHelper output) : base(output)
     {
         // In shared-mesh mode, ConfigureMesh runs only on the FIRST instance of
@@ -588,6 +612,10 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// <summary>Hard cap — anything above this throws at DisposeAsync, failing the test class.</summary>
     protected virtual TimeSpan TestHardDeadline => TimeSpan.FromSeconds(60);
 
+    /// <summary>
+    /// xUnit async lifecycle hook run before each test: records the start time and performs any
+    /// per-test setup (including access-rights setup) before the test body executes.
+    /// </summary>
     public override async ValueTask InitializeAsync()
     {
         var sw = Stopwatch.StartNew();
@@ -704,7 +732,9 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// </summary>
     protected virtual Task SetupAccessRightsAsync() => Task.CompletedTask;
 
+    /// <summary>The mesh hub for the test-class mesh (the server-side message hub under test).</summary>
     protected IMessageHub Mesh => ServiceProvider.GetRequiredService<IMessageHub>();
+    /// <summary>The mesh routing service, used to inspect or address per-node hubs in tests.</summary>
     protected IRoutingService RoutingService => ServiceProvider.GetRequiredService<IRoutingService>();
 
     /// <summary>
@@ -871,6 +901,12 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// </summary>
     private readonly List<IMessageHub> _clientsCreated = new();
 
+    /// <summary>
+    /// Creates a fresh client hub connected to the test mesh at a unique address, tracked for
+    /// deterministic teardown at dispose. This is the standard way a test obtains a client.
+    /// </summary>
+    /// <param name="config">Optional override of the client hub configuration; defaults to <c>ConfigureClient</c>.</param>
+    /// <returns>The newly created client message hub.</returns>
     protected IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration>? config = null)
     {
         var client = Mesh.ServiceProvider.CreateMessageHub(CreateClientAddress(), config ?? ConfigureClient)!;
@@ -901,6 +937,12 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         TestPhaseTrace(testName, "DISPOSE_CLIENTS_DONE", sw.ElapsedMilliseconds);
     }
 
+    /// <summary>
+    /// Default client-hub configuration: registers the types a test client needs in its type registry
+    /// and applies the test request timeout. Override to customize a test's client hub.
+    /// </summary>
+    /// <param name="configuration">The client hub configuration to mutate.</param>
+    /// <returns>The configured client hub configuration.</returns>
     protected virtual MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
         configuration.TypeRegistry.WithType(typeof(MeshNodeReference), nameof(MeshNodeReference));
@@ -948,6 +990,11 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// </summary>
     private static readonly TimeSpan DisposeProgressInterval = TimeSpan.FromSeconds(3);
 
+    /// <summary>
+    /// xUnit async lifecycle hook run after each test: disposes the clients created during the test,
+    /// tears down the mesh (unless shared), and enforces the dispose/quiesce deadlines — failing the
+    /// test class on a leaked subscription or an over-budget dispose.
+    /// </summary>
     public override async ValueTask DisposeAsync()
     {
         var testName = GetType().Name;

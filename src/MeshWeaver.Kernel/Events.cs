@@ -14,7 +14,15 @@ namespace MeshWeaver.Kernel;
 /// </summary>
 public record SubmitCodeRequest(string Code) : IRequest<SubmitCodeResponse>
 {
+    /// <summary>
+    /// Optional URL of the iframe/host surface that originated the submission,
+    /// used to associate output with the requesting client view. Null when not applicable.
+    /// </summary>
     public string? IFrameUrl { get; init; }
+    /// <summary>
+    /// Unique identifier for this submission, echoed back as
+    /// <c>SubmitCodeResponse.SubmissionId</c>. Defaults to a freshly generated GUID.
+    /// </summary>
     public string Id { get; init; } = Guid.NewGuid().AsString();
 
     /// <summary>
@@ -42,6 +50,9 @@ public record SubmitCodeRequest(string Code) : IRequest<SubmitCodeResponse>
 /// </summary>
 public record SubmitCodeResponse(string SubmissionId, bool Success)
 {
+    /// <summary>
+    /// Failure message when <c>Success</c> is <c>false</c>; null on success.
+    /// </summary>
     public string? Error { get; init; }
 }
 

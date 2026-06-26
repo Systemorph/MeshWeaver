@@ -9,6 +9,9 @@ using Xunit;
 
 namespace MeshWeaver.Fixture;
 
+/// <summary>
+/// Extension methods that register an xUnit-backed logger provider on an <see cref="ILoggingBuilder"/>.
+/// </summary>
 public static class LoggingBuilderExtensions
 {
     /// <summary>
@@ -35,11 +38,22 @@ public static class LoggingBuilderExtensions
     }
 }
 
+/// <summary>
+/// Holds the current test's <see cref="ITestOutputHelper"/> so loggers resolved from DI
+/// can route log lines to the active test's output.
+/// </summary>
 public class TestOutputHelperAccessor
 {
+    /// <summary>The output helper for the currently running test, or null when none is active.</summary>
     public ITestOutputHelper? OutputHelper { get; set; }
 }
 
+/// <summary>
+/// <see cref="ILoggerProvider"/> that creates <see cref="XUnitLogger"/> instances routing
+/// output to the current test via a <see cref="TestOutputHelperAccessor"/>.
+/// </summary>
+/// <param name="testOutputHelperAccessor">Accessor providing the active test's output helper.</param>
+/// <param name="filterOptions">Monitor for log-level filter options bound from configuration.</param>
 [ProviderAlias("XUnitLogger")]
 public class XUnitLoggerProvider(TestOutputHelperAccessor testOutputHelperAccessor, IOptionsMonitor<LoggerFilterOptions> filterOptions)
     : ILoggerProvider, ISupportExternalScope
@@ -55,6 +69,11 @@ public class XUnitLoggerProvider(TestOutputHelperAccessor testOutputHelperAccess
 
     void IDisposable.Dispose() { }
 
+    /// <summary>
+    /// Returns a cached <see cref="XUnitLogger"/> for the given category, creating one if needed.
+    /// </summary>
+    /// <param name="categoryName">The logger category name.</param>
+    /// <returns>The logger for the category.</returns>
     public ILogger CreateLogger(string categoryName)
     {
         return loggers.GetOrAdd(
@@ -64,6 +83,14 @@ public class XUnitLoggerProvider(TestOutputHelperAccessor testOutputHelperAccess
     }
 }
 
+/// <summary>
+/// An <see cref="ILogger"/> that writes formatted log lines to the active test's output,
+/// honouring log-level rules bound from configuration.
+/// </summary>
+/// <param name="categoryName">The logger category name.</param>
+/// <param name="testOutputHelperAccessor">Accessor providing the active test's output helper.</param>
+/// <param name="scopeProvider">Provider for external logging scopes.</param>
+/// <param name="filterOptions">Monitor for log-level filter options bound from configuration.</param>
 public class XUnitLogger(
     string categoryName,
     TestOutputHelperAccessor testOutputHelperAccessor,
@@ -71,6 +98,12 @@ public class XUnitLogger(
     IOptionsMonitor<LoggerFilterOptions> filterOptions)
     : ILogger
 {
+    /// <summary>
+    /// Determines whether logging is enabled for the given level, applying the most specific
+    /// configured category rule.
+    /// </summary>
+    /// <param name="logLevel">The level to test.</param>
+    /// <returns><c>true</c> if logging is enabled for <paramref name="logLevel"/>; otherwise <c>false</c>.</returns>
     public bool IsEnabled(LogLevel logLevel)
     {
         if (logLevel == LogLevel.None)
@@ -118,8 +151,23 @@ public class XUnitLogger(
         return specificLevel ?? options.MinLevel;
     }
 
+    /// <summary>
+    /// Begins a logical logging scope.
+    /// </summary>
+    /// <typeparam name="TState">The type of the scope state.</typeparam>
+    /// <param name="state">The scope state.</param>
+    /// <returns>A disposable that ends the scope when disposed.</returns>
     public IDisposable BeginScope<TState>(TState state) where TState: notnull => scopeProvider.Push(state);
 
+    /// <summary>
+    /// Writes a log entry to the active test's output when the level is enabled.
+    /// </summary>
+    /// <typeparam name="TState">The type of the state object being logged.</typeparam>
+    /// <param name="logLevel">The severity level of the entry.</param>
+    /// <param name="eventId">The event id of the entry.</param>
+    /// <param name="state">The state to be logged.</param>
+    /// <param name="exception">An optional exception associated with the entry.</param>
+    /// <param name="formatter">Function that produces the log message from <paramref name="state"/> and <paramref name="exception"/>.</param>
     public void Log<TState>(
         LogLevel logLevel,
         EventId eventId,

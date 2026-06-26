@@ -60,6 +60,15 @@ public sealed class McpRemoteMeshClient : IRemoteMeshClient, IAsyncDisposable
     private readonly object _connectLock = new();
     private IObservable<McpClient>? _connect;
 
+    /// <summary>
+    /// Creates a remote-mesh client targeting a portal's <c>/mcp</c> endpoint. The
+    /// MCP connection is opened lazily on first use, not in the constructor.
+    /// </summary>
+    /// <param name="remoteBaseUrl">Base URL of the remote MeshWeaver portal; <c>/mcp</c> is appended. Required.</param>
+    /// <param name="remoteToken">API token sent as <c>Authorization: Bearer</c> on every request. Required.</param>
+    /// <param name="jsonOptions">Serializer options used to (de)serialize nodes on the wire.</param>
+    /// <param name="loggerFactory">Optional logger factory; a null factory is used when omitted.</param>
+    /// <param name="pool">Optional Http I/O pool the connect handshake and every call route through; the unbounded pool is used when omitted.</param>
     public McpRemoteMeshClient(
         string remoteBaseUrl,
         string remoteToken,
@@ -79,6 +88,7 @@ public sealed class McpRemoteMeshClient : IRemoteMeshClient, IAsyncDisposable
         _pool = pool ?? IoPool.Unbounded;
     }
 
+    /// <inheritdoc />
     public IObservable<MeshNode?> Get(string path) =>
         Connect().SelectMany(client =>
             _pool.Invoke(async ct =>
@@ -96,6 +106,7 @@ public sealed class McpRemoteMeshClient : IRemoteMeshClient, IAsyncDisposable
                 return JsonSerializer.Deserialize<MeshNode>(text, _jsonOptions);
             }));
 
+    /// <inheritdoc />
     public IObservable<Unit> Create(MeshNode node) =>
         Connect().SelectMany(client =>
             _pool.Invoke(async ct =>
@@ -109,6 +120,7 @@ public sealed class McpRemoteMeshClient : IRemoteMeshClient, IAsyncDisposable
                 return Unit.Default;
             }));
 
+    /// <inheritdoc />
     public IObservable<Unit> Update(MeshNode node) =>
         Connect().SelectMany(client =>
             _pool.Invoke(async ct =>
@@ -122,6 +134,7 @@ public sealed class McpRemoteMeshClient : IRemoteMeshClient, IAsyncDisposable
                 return Unit.Default;
             }));
 
+    /// <inheritdoc />
     public IObservable<Unit> Delete(string path) =>
         Connect().SelectMany(client =>
             _pool.Invoke(async ct =>
@@ -134,6 +147,7 @@ public sealed class McpRemoteMeshClient : IRemoteMeshClient, IAsyncDisposable
                 return Unit.Default;
             }));
 
+    /// <inheritdoc />
     public IObservable<IReadOnlyList<string>> SearchPaths(string query) =>
         Connect().SelectMany(client =>
             _pool.Invoke(async ct =>
@@ -226,6 +240,7 @@ public sealed class McpRemoteMeshClient : IRemoteMeshClient, IAsyncDisposable
             (string.IsNullOrEmpty(detail) ? "(no error detail returned)" : detail));
     }
 
+    /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
         // Snapshot + clear the connect promise so no leaf composes off a disposing

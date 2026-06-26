@@ -1,8 +1,16 @@
 ﻿#nullable enable
 namespace MeshWeaver.Utils;
 
+/// <summary>
+/// String extension methods for converting between PascalCase and camelCase.
+/// </summary>
 public static class CamelCaseExtensions
 {
+    /// <summary>
+    /// Converts the first character of the string to upper case (PascalCase).
+    /// </summary>
+    /// <param name="s">The string to convert; may be <c>null</c> or empty.</param>
+    /// <returns>The string with its first character upper-cased, or the original value when <c>null</c> or empty.</returns>
     public static string? ToPascalCase(this string? s) => s is null || s.Length < 1 ? s : char.ToUpperInvariant(s[0]) + s.Substring(1);
 
     /// <summary>

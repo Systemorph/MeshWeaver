@@ -6,6 +6,12 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.ContentCollections;
 
+/// <summary>
+/// Default <see cref="IContentService"/> implementation. Aggregates collection configs from all
+/// registered providers, lazily instantiates and caches <see cref="ContentCollection"/> instances,
+/// resolves mapped collections, and falls back to the parent hub's content service when a
+/// collection is not found locally.
+/// </summary>
 public class ContentService : IContentService
 {
     private readonly IMessageHub hub;
@@ -22,6 +28,12 @@ public class ContentService : IContentService
     private bool parentResolved;
     private readonly Lock parentLock = new();
     private readonly ILogger<ContentService> logger;
+    /// <summary>
+    /// Initializes the content service, collecting collection configurations from every
+    /// registered <see cref="IContentCollectionConfigProvider"/> (later registrations win).
+    /// </summary>
+    /// <param name="hub">The owning message hub.</param>
+    /// <param name="accessService">The access service used for permission checks.</param>
     public ContentService(IMessageHub hub, AccessService accessService)
     {
         this.hub = hub;
@@ -174,6 +186,7 @@ public class ContentService : IContentService
     }
 
 
+    /// <inheritdoc />
     public async Task<ContentCollection?> GetCollectionAsync(string collection, CancellationToken ct)
     {
         // Try local collections first (matches GetCollectionConfig's local-first pattern)
@@ -229,6 +242,7 @@ public class ContentService : IContentService
 
     }
 
+    /// <inheritdoc />
     public ContentCollectionConfig? GetCollectionConfig(string collection)
     {
         // Try local configs first
@@ -250,6 +264,7 @@ public class ContentService : IContentService
         return null;
     }
 
+    /// <inheritdoc />
     public IReadOnlyCollection<ContentCollectionConfig> GetAllCollectionConfigs()
     {
         // Get local configs, resolving any mapped configs
@@ -279,6 +294,7 @@ public class ContentService : IContentService
         return configs;
     }
 
+    /// <inheritdoc />
     public void AddConfiguration(ContentCollectionConfig contentCollectionConfig)
     {
         var name = contentCollectionConfig.Name;
@@ -313,6 +329,7 @@ public class ContentService : IContentService
 
 
 
+    /// <inheritdoc />
     public async Task<Stream?> GetContentAsync(string collection, string path, CancellationToken ct = default)
     {
         var coll = await GetCollectionAsync(collection, ct);
@@ -321,6 +338,7 @@ public class ContentService : IContentService
         return await coll.GetContentAsync(path, ct);
     }
 
+    /// <inheritdoc />
     public IAsyncEnumerable<ContentCollection> GetCollectionsAsync()
     {
         return collections.Values.ToAsyncEnumerable().Select(async x => await x).OfType<ContentCollection>();

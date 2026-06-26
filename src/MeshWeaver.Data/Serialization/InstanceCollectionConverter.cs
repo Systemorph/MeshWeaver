@@ -7,9 +7,18 @@ using MeshWeaver.Domain;
 
 namespace MeshWeaver.Data.Serialization;
 
+/// <summary>
+/// <see cref="JsonConverter{T}"/> for <see cref="InstanceCollection"/>: serializes each instance as a JSON
+/// property keyed by its (JSON-encoded) identity, with a leading <c>$type</c> property naming the collection.
+/// Keys are resolved back to their CLR type via the key function registered in <paramref name="typeRegistry"/>.
+/// </summary>
+/// <param name="typeRegistry">The type registry used to resolve the key type for a collection.</param>
 public class InstanceCollectionConverter(ITypeRegistry typeRegistry)
     : JsonConverter<InstanceCollection>
 {
+    /// <summary>
+    /// Name of the JSON property that carries the collection (type) discriminator. Must be written first.
+    /// </summary>
     public const string CollectionProperty = "$type";
 
     private JsonNode Serialize(InstanceCollection instances, JsonSerializerOptions options)
@@ -51,6 +60,13 @@ public class InstanceCollectionConverter(ITypeRegistry typeRegistry)
         return JsonSerializer.Deserialize(keyString, keyType, options) ?? keyString;
     }
 
+    /// <summary>
+    /// Reads an <see cref="InstanceCollection"/> from JSON, decoding each property name into a typed key.
+    /// </summary>
+    /// <param name="reader">The reader positioned at the start of the collection object.</param>
+    /// <param name="typeToConvert">The type being converted (always <see cref="InstanceCollection"/>).</param>
+    /// <param name="options">The serializer options to use for keys and values.</param>
+    /// <returns>The deserialized collection, or null when the JSON is not an object.</returns>
     public override InstanceCollection? Read(
         ref Utf8JsonReader reader,
         Type typeToConvert,
@@ -79,6 +95,12 @@ public class InstanceCollectionConverter(ITypeRegistry typeRegistry)
         };
     }
 
+    /// <summary>
+    /// Writes an <see cref="InstanceCollection"/> to JSON.
+    /// </summary>
+    /// <param name="writer">The writer to emit the collection to.</param>
+    /// <param name="value">The collection to serialize.</param>
+    /// <param name="options">The serializer options to use for keys and values.</param>
     public override void Write(
         Utf8JsonWriter writer,
         InstanceCollection value,

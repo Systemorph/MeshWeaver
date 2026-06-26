@@ -76,14 +76,14 @@ public record NodeTypeDefinition
     /// <summary>
     /// For a <b>built-in / static-linked</b> NodeType node — a NodeType-catalog partition root
     /// such as <c>@Harness</c> (<c>nodeType:NodeType</c>, id = the type name) — the name of the
-    /// registered static C# NodeType whose <see cref="MeshNode.HubConfiguration"/> this node
+    /// registered static C# NodeType whose <see cref="Mesh.MeshNode.HubConfiguration"/> this node
     /// links to. When set, enrichment resolves the node's hub configuration from the static
     /// registry by THIS name — NOT compiled from <see cref="Configuration"/>/<see cref="Sources"/>,
-    /// and NOT via the node's own <see cref="MeshNode.NodeType"/> (which is <c>"NodeType"</c> and
+    /// and NOT via the node's own <see cref="Mesh.MeshNode.NodeType"/> (which is <c>"NodeType"</c> and
     /// would otherwise activate the NodeType editor). It is the persisted half of the
     /// NodeType-catalog dissociation: Postgres owns the single node at the bare partition path,
     /// while the in-memory static definition (registered definition-only — see
-    /// <see cref="MeshNode.IsDefinitionOnly"/>) still supplies the non-serialisable delegate.
+    /// <see cref="Mesh.MeshNode.IsDefinitionOnly"/>) still supplies the non-serialisable delegate.
     /// <c>null</c> for ordinary NodeTypes (framework built-ins served in-memory, or dynamic types
     /// compiled from <see cref="Configuration"/>/<see cref="Sources"/>).
     /// See <c>Doc/Architecture/NodeTypeCatalogs.md</c>.
@@ -350,7 +350,7 @@ public record NodeTypeDefinition
 
     /// <summary>
     /// The user id that requested the current release (the caller of
-    /// <c>hub.RequestNodeTypeRelease(...)</c>, who passed the <see cref="Permission.Compile"/>
+    /// <c>hub.RequestNodeTypeRelease(...)</c>, who passed the <see cref="Mesh.Security.Permission.Compile"/>
     /// gate at the entry point). Carried on the NodeType node so the credential split holds
     /// across the watcher → compile → release-node-create chain: the "pure" compilation that
     /// fills the assembly cache runs as <b>System</b> (it must succeed on read-only partitions),

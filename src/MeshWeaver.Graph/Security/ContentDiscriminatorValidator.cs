@@ -53,6 +53,11 @@ public sealed class ContentDiscriminatorValidator : INodeValidator
     private readonly IMessageHub _hub;
     private readonly ILogger<ContentDiscriminatorValidator> _logger;
 
+    /// <summary>
+    /// Initializes a new instance of the content-discriminator validator.
+    /// </summary>
+    /// <param name="hub">The message hub providing the type registry and static-node lookup.</param>
+    /// <param name="logger">The logger used to record blocked writes.</param>
     public ContentDiscriminatorValidator(
         IMessageHub hub,
         ILogger<ContentDiscriminatorValidator> logger)
@@ -65,6 +70,13 @@ public sealed class ContentDiscriminatorValidator : INodeValidator
     public IReadOnlyCollection<NodeOperation> SupportedOperations =>
         [NodeOperation.Create, NodeOperation.Update];
 
+    /// <summary>
+    /// Validates a create or update, rejecting it when the node's content carries a
+    /// polymorphic <c>$type</c> discriminator that no registry can resolve for a built-in
+    /// node type — content that would persist as an untyped blob.
+    /// </summary>
+    /// <param name="context">The validation context describing the node and operation.</param>
+    /// <returns>An observable that emits the validation result for the operation.</returns>
     public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
         var node = context.Node;

@@ -206,6 +206,20 @@ public static class EquivalencyEngine
 /// </summary>
 public static class EquivalencyAssertionExtensions
 {
+    /// <summary>
+    /// Asserts the subject is structurally equivalent to <paramref name="expectation"/> by comparing their
+    /// JSON projections (rather than reference or default equality).
+    /// </summary>
+    /// <typeparam name="TSubject">The type of the value under assertion.</typeparam>
+    /// <typeparam name="TAssertions">The concrete assertion type the call chains from.</typeparam>
+    /// <typeparam name="TExpectation">The type of the expected value.</typeparam>
+    /// <param name="assertions">The assertion chain whose subject is compared.</param>
+    /// <param name="expectation">The expected value to compare against.</param>
+    /// <param name="options">Serializer options used to project both values to JSON; for mesh objects must come from the owning hub so <c>$type</c> discriminators align.</param>
+    /// <param name="config">Optional configuration of equivalency options (e.g. excluding members).</param>
+    /// <param name="because">Optional reason phrase folded into the failure message.</param>
+    /// <param name="becauseArgs">Format arguments for <paramref name="because"/>.</param>
+    /// <returns>A continuation for chaining further assertions.</returns>
     public static AndConstraint<TAssertions> BeEquivalentTo<TSubject, TAssertions, TExpectation>(
         this ObjectAssertions<TSubject, TAssertions> assertions,
         TExpectation expectation,

@@ -19,56 +19,174 @@ using System.Text.Json;
 
 namespace MeshWeaver.Layout;
 
+/// <summary>
+/// Extension methods for building form editors and toolbars from typed instances or observables,
+/// with overloads for <see cref="LayoutAreaHost"/>, <see cref="IMessageHub"/>, and <see cref="IServiceProvider"/>.
+/// </summary>
 public static class EditorExtensions
 {
     #region editor overloads
+    /// <summary>
+    /// Renders an auto-generated editor for <paramref name="instance"/> and a companion control
+    /// built by <paramref name="result"/>, stacked vertically.
+    /// </summary>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="instance">The object to edit.</param>
+    /// <param name="result">Factory that produces a companion control from the current instance value.</param>
+    /// <returns>A stacked control containing the editor and the companion.</returns>
     public static UiControl Edit<T>(this LayoutAreaHost host, T instance,
         Func<T, UiControl> result)
         => host.Hub.ServiceProvider.Edit(Observable.Return(instance), (i, _, _) => result(i));
+    /// <summary>
+    /// Renders an auto-generated editor for <paramref name="type"/> bound to the data context keyed by <paramref name="id"/>.
+    /// </summary>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="type">The CLR type whose properties are reflected into form fields.</param>
+    /// <param name="id">Data context key used to read and write field values.</param>
+    /// <returns>An <see cref="EditorControl"/> bound to the data at <paramref name="id"/>.</returns>
     public static UiControl Edit(this LayoutAreaHost host, Type type, string id)
         => host.Hub.ServiceProvider.Edit(type, id);
+    /// <summary>
+    /// Renders an auto-generated editor for <paramref name="instance"/> bound to the data context keyed by <paramref name="id"/>.
+    /// </summary>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="instance">The initial value placed in the data context.</param>
+    /// <param name="id">Data context key used to read and write field values.</param>
+    /// <returns>An <see cref="EditorControl"/> bound to the data at <paramref name="id"/>.</returns>
     public static UiControl Edit<T>(this LayoutAreaHost host, T instance, string id)
         => host.Hub.ServiceProvider.Edit(Observable.Return(instance), id);
+    /// <summary>
+    /// Renders an auto-generated editor for <paramref name="instance"/> and an observable companion
+    /// control built by <paramref name="result"/>, stacked vertically.
+    /// </summary>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="instance">The object to edit.</param>
+    /// <param name="result">Factory that returns an observable companion control from the current instance value.</param>
+    /// <returns>A stacked control containing the editor and the companion.</returns>
     public static UiControl Edit<T>(this LayoutAreaHost host, T instance,
         Func<T, IObservable<UiControl>> result)
         => host.Hub.ServiceProvider.Edit(Observable.Return(instance), (i, _, _) => result(i));
+    /// <summary>
+    /// Renders an auto-generated editor for <paramref name="instance"/> using reflected properties.
+    /// </summary>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="instance">The object to edit.</param>
+    /// <returns>An <see cref="EditorControl"/> with one field per public property of <typeparamref name="T"/>.</returns>
     public static UiControl Edit<T>(this LayoutAreaHost host, T instance)
         => host.Hub.ServiceProvider.Edit(Observable.Return(instance));
+    /// <summary>
+    /// Renders an auto-generated editor for <paramref name="instance"/> and a companion control
+    /// built by <paramref name="result"/>, stacked vertically.
+    /// </summary>
+    /// <param name="hub">The message hub providing the service provider.</param>
+    /// <param name="instance">The object to edit.</param>
+    /// <param name="result">Factory that produces a companion control from the current instance value.</param>
+    /// <returns>A stacked control containing the editor and the companion.</returns>
     public static UiControl Edit<T>(this IMessageHub hub, T instance,
         Func<T, UiControl> result)
         => hub.ServiceProvider.Edit(Observable.Return(instance), (i, _, _) => result(i));
+    /// <summary>
+    /// Renders an auto-generated editor for values emitted by <paramref name="observable"/> and a companion
+    /// control built by <paramref name="result"/>, stacked vertically.
+    /// </summary>
+    /// <param name="hub">The message hub providing the service provider.</param>
+    /// <param name="observable">Observable stream of the object being edited.</param>
+    /// <param name="result">Factory that produces a companion control from the current emitted value.</param>
+    /// <returns>A stacked control containing the editor and the companion.</returns>
     public static UiControl Edit<T>(this IMessageHub hub, IObservable<T> observable,
         Func<T, UiControl> result)
         => hub.ServiceProvider.Edit(observable, (i, _, _) => result(i));
+    /// <summary>
+    /// Renders an auto-generated editor for <paramref name="instance"/> and a context-aware companion
+    /// control built by <paramref name="result"/>, stacked vertically.
+    /// </summary>
+    /// <param name="hub">The message hub providing the service provider.</param>
+    /// <param name="instance">The object to edit.</param>
+    /// <param name="result">Factory receiving the value, host, and rendering context to produce a companion control.</param>
+    /// <returns>A stacked control containing the editor and the companion.</returns>
     public static UiControl Edit<T>(this IMessageHub hub, T instance,
         Func<T, LayoutAreaHost, RenderingContext, UiControl> result)
         => hub.ServiceProvider.Edit(Observable.Return(instance), result);
+    /// <summary>
+    /// Renders an auto-generated editor for <paramref name="instance"/> and a context-aware companion
+    /// control built by <paramref name="result"/>, stacked vertically.
+    /// </summary>
+    /// <param name="serviceProvider">Service provider for resolving dependencies.</param>
+    /// <param name="instance">The object to edit.</param>
+    /// <param name="result">Factory receiving the value, host, and rendering context to produce a companion control.</param>
+    /// <returns>A stacked control containing the editor and the companion.</returns>
     public static UiControl Edit<T>(this IServiceProvider serviceProvider, T instance,
         Func<T, LayoutAreaHost, RenderingContext, UiControl> result)
         => serviceProvider.Edit(Observable.Return(instance), result);
 
+    /// <summary>
+    /// Renders an auto-generated editor for values emitted by <paramref name="observable"/> and a context-aware
+    /// companion control built by <paramref name="result"/>, stacked vertically.
+    /// </summary>
+    /// <param name="hub">The message hub providing the service provider.</param>
+    /// <param name="observable">Observable stream of the object being edited.</param>
+    /// <param name="result">Factory receiving the value, host, and rendering context to produce a companion control.</param>
+    /// <returns>A stacked control containing the editor and the companion.</returns>
     public static UiControl Edit<T>(this IMessageHub hub, IObservable<T> observable,
         Func<T, LayoutAreaHost, RenderingContext, UiControl> result)
     => hub.ServiceProvider.Edit(observable, result);
 
+    /// <summary>
+    /// Renders an auto-generated editor for <paramref name="instance"/> bound to an auto-assigned data context key.
+    /// </summary>
+    /// <param name="serviceProvider">Service provider for resolving dependencies.</param>
+    /// <param name="instance">The object to edit.</param>
+    /// <param name="id">Optional data context key; a new GUID string is used when null.</param>
+    /// <returns>An <see cref="EditorControl"/> bound to the resolved data context.</returns>
     public static UiControl Edit<T>(
         this IServiceProvider serviceProvider, T instance,
         string? id = null)
         => serviceProvider.Edit(Observable.Return(instance), id!);
+    /// <summary>
+    /// Renders an auto-generated editor for <paramref name="type"/> bound to the data context keyed by <paramref name="id"/>.
+    /// </summary>
+    /// <param name="hub">The message hub providing the service provider.</param>
+    /// <param name="type">The CLR type whose properties are reflected into form fields.</param>
+    /// <param name="id">Data context key used to read and write field values.</param>
+    /// <returns>An <see cref="EditorControl"/> bound to the data at <paramref name="id"/>.</returns>
     public static UiControl Edit(
         this IMessageHub hub, Type type,
         string id)
         => hub.ServiceProvider.Edit(type, id);
+    /// <summary>
+    /// Renders an auto-generated editor for <paramref name="instance"/> bound to an auto-assigned data context key.
+    /// </summary>
+    /// <param name="hub">The message hub providing the service provider.</param>
+    /// <param name="instance">The object to edit.</param>
+    /// <param name="id">Optional data context key; a new GUID string is used when null.</param>
+    /// <returns>An <see cref="EditorControl"/> bound to the resolved data context.</returns>
     public static UiControl Edit<T>(
         this IMessageHub hub, T instance,
         string? id = null)
         => hub.ServiceProvider.Edit(Observable.Return(instance), id!);
 
+    /// <summary>
+    /// Renders an auto-generated editor for values emitted by <paramref name="observable"/> bound to an
+    /// auto-assigned data context key.
+    /// </summary>
+    /// <param name="hub">The message hub providing the service provider.</param>
+    /// <param name="observable">Observable stream of the object being edited.</param>
+    /// <param name="id">Optional data context key; a new GUID string is used when null.</param>
+    /// <returns>An <see cref="EditorControl"/> bound to the resolved data context.</returns>
     public static UiControl Edit<T>(
         this IMessageHub hub,
         IObservable<T> observable,
         string? id = null)
         => hub.ServiceProvider.Edit(observable, id!);
+    /// <summary>
+    /// Primary implementation: renders an auto-generated editor for values emitted by <paramref name="observable"/>
+    /// bound to the data context keyed by <paramref name="id"/>. One form field is generated per public property
+    /// of <typeparamref name="T"/>.
+    /// </summary>
+    /// <param name="serviceProvider">Service provider for resolving dependencies.</param>
+    /// <param name="observable">Observable stream supplying the initial (and subsequent) value.</param>
+    /// <param name="id">Data context key used to read and write field values.</param>
+    /// <returns>An <see cref="EditorControl"/> bound to the data at <paramref name="id"/>.</returns>
     public static EditorControl Edit<T>(
         this IServiceProvider serviceProvider,
         IObservable<T> observable
@@ -78,6 +196,14 @@ public static class EditorExtensions
                     .Aggregate(new EditorControl() { Style = "width: 100%;" },
                         serviceProvider.MapToControl<EditorControl, EditorSkin>),
             id);
+    /// <summary>
+    /// Primary type-based implementation: renders an auto-generated editor for <paramref name="type"/>
+    /// bound to the data context keyed by <paramref name="id"/>. One form field is generated per public property.
+    /// </summary>
+    /// <param name="serviceProvider">Service provider for resolving dependencies.</param>
+    /// <param name="type">The CLR type whose properties are reflected into form fields.</param>
+    /// <param name="id">Data context key used to read and write field values.</param>
+    /// <returns>An <see cref="EditorControl"/> bound to the data at <paramref name="id"/>.</returns>
     public static EditorControl Edit(this IServiceProvider serviceProvider, Type type, string id)
         => type.GetProperties()
                     .Aggregate(new EditorControl(),
@@ -86,6 +212,14 @@ public static class EditorExtensions
 
 
     private static readonly int DebounceWindow = 20; // milliseconds
+    /// <summary>
+    /// Renders an auto-generated editor for values emitted by <paramref name="observable"/> and stacks
+    /// a context-aware companion control produced by <paramref name="result"/> below it, refreshed on each emission.
+    /// </summary>
+    /// <param name="serviceProvider">Service provider for resolving dependencies.</param>
+    /// <param name="observable">Observable stream of the object being edited.</param>
+    /// <param name="result">Factory receiving the value, host, and rendering context to produce a companion control.</param>
+    /// <returns>A stacked control containing the editor and the reactive companion.</returns>
     public static UiControl Edit<T>(
         this IServiceProvider serviceProvider,
         IObservable<T> observable,
@@ -101,6 +235,14 @@ public static class EditorExtensions
                     .ThrottleImmediate(TimeSpan.FromMilliseconds(DebounceWindow))
                     .Select(x => result.Invoke(x, host, ctx)));
     }
+    /// <summary>
+    /// Renders an auto-generated editor for values emitted by <paramref name="observable"/> and stacks
+    /// an observable companion control produced by <paramref name="result"/> below it, refreshed on each emission.
+    /// </summary>
+    /// <param name="serviceProvider">Service provider for resolving dependencies.</param>
+    /// <param name="observable">Observable stream of the object being edited.</param>
+    /// <param name="result">Factory returning an observable companion control from the value, host, and context.</param>
+    /// <returns>A stacked control containing the editor and the reactive companion.</returns>
     public static UiControl Edit<T>(
         this IServiceProvider serviceProvider,
         IObservable<T> observable,
@@ -119,60 +261,178 @@ public static class EditorExtensions
 
     #endregion
     #region Toolbar overloads
+    /// <summary>
+    /// Renders an auto-generated toolbar for <paramref name="instance"/> and a companion control
+    /// built by <paramref name="result"/>, stacked vertically.
+    /// </summary>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="instance">The object whose properties populate the toolbar.</param>
+    /// <param name="result">Factory that produces a companion control from the current instance value.</param>
+    /// <returns>A stacked control containing the toolbar and the companion.</returns>
     public static UiControl Toolbar<T>(this LayoutAreaHost host, T instance,
         Func<T, UiControl> result)
         => host.Hub.ServiceProvider.Toolbar(Observable.Return(instance), (i, _, _) => result(i));
+    /// <summary>
+    /// Renders an auto-generated toolbar for <paramref name="instance"/> and an observable companion
+    /// control built by <paramref name="result"/>, stacked vertically.
+    /// </summary>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="instance">The object whose properties populate the toolbar.</param>
+    /// <param name="result">Factory returning an observable companion control from the current instance value.</param>
+    /// <returns>A stacked control containing the toolbar and the companion.</returns>
     public static UiControl Toolbar<T>(this LayoutAreaHost host, T instance,
         Func<T, IObservable<UiControl>> result)
         => host.Hub.ServiceProvider.Toolbar(Observable.Return(instance), (i, _, _) => result(i));
+    /// <summary>
+    /// Renders an auto-generated toolbar for <paramref name="instance"/> and a context-aware companion
+    /// control built by <paramref name="result"/>, stacked vertically.
+    /// </summary>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="instance">The object whose properties populate the toolbar.</param>
+    /// <param name="result">Factory receiving the value, host, and rendering context to produce a companion control.</param>
+    /// <returns>A stacked control containing the toolbar and the companion.</returns>
     public static UiControl Toolbar<T>(this LayoutAreaHost host, T instance,
         Func<T, LayoutAreaHost, RenderingContext, UiControl> result)
         => host.Hub.ServiceProvider.Toolbar(Observable.Return(instance), result);
+    /// <summary>
+    /// Renders an auto-generated toolbar for <paramref name="instance"/> and a context-aware observable companion
+    /// control built by <paramref name="result"/>, stacked vertically.
+    /// </summary>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="instance">The object whose properties populate the toolbar.</param>
+    /// <param name="result">Factory returning an observable companion control from the value, host, and context.</param>
+    /// <returns>A stacked control containing the toolbar and the companion.</returns>
     public static UiControl Toolbar<T>(this LayoutAreaHost host, T instance,
         Func<T, LayoutAreaHost, RenderingContext, IObservable<UiControl>> result)
         => host.Hub.ServiceProvider.Toolbar(Observable.Return(instance), result);
+    /// <summary>
+    /// Renders an auto-generated toolbar for <paramref name="instance"/> and a companion control
+    /// built by <paramref name="result"/>, stacked vertically.
+    /// </summary>
+    /// <param name="hub">The message hub providing the service provider.</param>
+    /// <param name="instance">The object whose properties populate the toolbar.</param>
+    /// <param name="result">Factory that produces a companion control from the current instance value.</param>
+    /// <returns>A stacked control containing the toolbar and the companion.</returns>
     public static UiControl Toolbar<T>(this IMessageHub hub, T instance,
         Func<T, UiControl> result)
         => hub.ServiceProvider.Toolbar(Observable.Return(instance), (i, _, _) => result(i));
+    /// <summary>
+    /// Renders an auto-generated toolbar for values emitted by <paramref name="observable"/> and a companion
+    /// control built by <paramref name="result"/>, stacked vertically.
+    /// </summary>
+    /// <param name="hub">The message hub providing the service provider.</param>
+    /// <param name="observable">Observable stream of the object whose properties populate the toolbar.</param>
+    /// <param name="result">Factory that produces a companion control from the current emitted value.</param>
+    /// <returns>A stacked control containing the toolbar and the companion.</returns>
     public static UiControl Toolbar<T>(this IMessageHub hub, IObservable<T> observable,
         Func<T, UiControl> result)
         => hub.ServiceProvider.Toolbar(observable, (i, _, _) => result(i));
+    /// <summary>
+    /// Renders an auto-generated toolbar for <paramref name="instance"/> and a context-aware companion
+    /// control built by <paramref name="result"/>, stacked vertically.
+    /// </summary>
+    /// <param name="hub">The message hub providing the service provider.</param>
+    /// <param name="instance">The object whose properties populate the toolbar.</param>
+    /// <param name="result">Factory receiving the value, host, and rendering context to produce a companion control.</param>
+    /// <returns>A stacked control containing the toolbar and the companion.</returns>
     public static UiControl Toolbar<T>(this IMessageHub hub, T instance,
         Func<T, LayoutAreaHost, RenderingContext, UiControl> result)
         => hub.ServiceProvider.Toolbar(Observable.Return(instance), result);
+    /// <summary>
+    /// Renders an auto-generated toolbar for <paramref name="instance"/> and a context-aware companion
+    /// control built by <paramref name="result"/>, stacked vertically.
+    /// </summary>
+    /// <param name="serviceProvider">Service provider for resolving dependencies.</param>
+    /// <param name="instance">The object whose properties populate the toolbar.</param>
+    /// <param name="result">Factory receiving the value, host, and rendering context to produce a companion control.</param>
+    /// <returns>A stacked control containing the toolbar and the companion.</returns>
     public static UiControl Toolbar<T>(this IServiceProvider serviceProvider, T instance,
         Func<T, LayoutAreaHost, RenderingContext, UiControl> result)
         => serviceProvider.Toolbar(Observable.Return(instance), result);
 
+    /// <summary>
+    /// Renders an auto-generated toolbar for values emitted by <paramref name="observable"/> and a context-aware
+    /// companion control built by <paramref name="result"/>, stacked vertically.
+    /// </summary>
+    /// <param name="hub">The message hub providing the service provider.</param>
+    /// <param name="observable">Observable stream of the object whose properties populate the toolbar.</param>
+    /// <param name="result">Factory receiving the value, host, and rendering context to produce a companion control.</param>
+    /// <returns>A stacked control containing the toolbar and the companion.</returns>
     public static UiControl Toolbar<T>(this IMessageHub hub, IObservable<T> observable,
         Func<T, LayoutAreaHost, RenderingContext, UiControl> result)
     => hub.ServiceProvider.Toolbar(observable, result);
 
+    /// <summary>
+    /// Renders an auto-generated toolbar for <paramref name="instance"/> bound to an auto-assigned data context key.
+    /// </summary>
+    /// <param name="serviceProvider">Service provider for resolving dependencies.</param>
+    /// <param name="instance">The object whose properties populate the toolbar.</param>
+    /// <param name="id">Optional data context key; a new GUID string is used when null.</param>
+    /// <returns>A <see cref="ToolbarControl"/> bound to the resolved data context.</returns>
     public static UiControl Toolbar<T>(
         this IServiceProvider serviceProvider, T instance,
         string? id = null)
         => serviceProvider.Toolbar(Observable.Return(instance), id!);
+    /// <summary>
+    /// Renders an auto-generated toolbar for <paramref name="instance"/> bound to an auto-assigned data context key.
+    /// </summary>
+    /// <param name="hub">The message hub providing the service provider.</param>
+    /// <param name="instance">The object whose properties populate the toolbar.</param>
+    /// <param name="id">Optional data context key; a new GUID string is used when null.</param>
+    /// <returns>A <see cref="ToolbarControl"/> bound to the resolved data context.</returns>
     public static UiControl Toolbar<T>(
         this IMessageHub hub, T instance,
         string? id = null)
         => hub.ServiceProvider.Toolbar(Observable.Return(instance), id!);
 
+    /// <summary>
+    /// Renders an auto-generated toolbar for values emitted by <paramref name="observable"/> bound to an
+    /// auto-assigned data context key.
+    /// </summary>
+    /// <param name="hub">The message hub providing the service provider.</param>
+    /// <param name="observable">Observable stream of the object whose properties populate the toolbar.</param>
+    /// <param name="id">Optional data context key; a new GUID string is used when null.</param>
+    /// <returns>A <see cref="ToolbarControl"/> bound to the resolved data context.</returns>
     public static UiControl Toolbar<T>(
         this IMessageHub hub,
         IObservable<T> observable,
         string? id = null)
         => hub.ServiceProvider.Toolbar(observable, id!);
+    /// <summary>
+    /// Renders an auto-generated toolbar for <paramref name="instance"/> bound to the data context keyed by <paramref name="id"/>.
+    /// </summary>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="instance">The object whose properties populate the toolbar.</param>
+    /// <param name="id">Data context key used to read and write field values.</param>
+    /// <returns>A <see cref="ToolbarControl"/> bound to the data at <paramref name="id"/>.</returns>
     public static UiControl Toolbar<T>(
         this LayoutAreaHost host,
         T instance,
         string id)
         => host.Hub.ServiceProvider.Toolbar(Observable.Return(instance), id);
 
+    /// <summary>
+    /// Renders an auto-generated toolbar for values emitted by <paramref name="observable"/> bound to an
+    /// auto-assigned data context key.
+    /// </summary>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="observable">Observable stream of the object whose properties populate the toolbar.</param>
+    /// <param name="id">Optional data context key; a new GUID string is used when null.</param>
+    /// <returns>A <see cref="ToolbarControl"/> bound to the resolved data context.</returns>
     public static UiControl Toolbar<T>(
         this LayoutAreaHost host,
         IObservable<T> observable,
         string? id = null)
         => host.Hub.ServiceProvider.Toolbar(observable, id!);
+    /// <summary>
+    /// Primary implementation: renders an auto-generated toolbar for values emitted by <paramref name="observable"/>
+    /// bound to the data context keyed by <paramref name="id"/>. One toolbar field is generated per public property
+    /// of <typeparamref name="T"/>.
+    /// </summary>
+    /// <param name="serviceProvider">Service provider for resolving dependencies.</param>
+    /// <param name="observable">Observable stream supplying the initial (and subsequent) value.</param>
+    /// <param name="id">Data context key used to read and write field values.</param>
+    /// <returns>A <see cref="ToolbarControl"/> bound to the data at <paramref name="id"/>.</returns>
     public static ToolbarControl Toolbar<T>(
         this IServiceProvider serviceProvider,
         IObservable<T> observable,
@@ -184,11 +444,27 @@ public static class EditorExtensions
             id);
 
 
+    /// <summary>
+    /// Renders an auto-generated toolbar for values emitted by <paramref name="observable"/> and stacks
+    /// a context-aware companion control produced by <paramref name="result"/> below it, refreshed on each emission.
+    /// </summary>
+    /// <param name="serviceProvider">Service provider for resolving dependencies.</param>
+    /// <param name="observable">Observable stream of the object whose properties populate the toolbar.</param>
+    /// <param name="result">Factory receiving the value, host, and rendering context to produce a companion control.</param>
+    /// <returns>A stacked control containing the toolbar and the reactive companion.</returns>
     public static UiControl Toolbar<T>(
         this IServiceProvider serviceProvider,
         IObservable<T> observable,
         Func<T, LayoutAreaHost, RenderingContext, UiControl> result)
         => serviceProvider.Toolbar(observable, (t, host, ctx) => Observable.Return(result.Invoke(t, host, ctx)));
+    /// <summary>
+    /// Renders an auto-generated toolbar for values emitted by <paramref name="observable"/> and stacks
+    /// an observable companion control produced by <paramref name="result"/> below it, refreshed on each emission.
+    /// </summary>
+    /// <param name="serviceProvider">Service provider for resolving dependencies.</param>
+    /// <param name="observable">Observable stream of the object whose properties populate the toolbar.</param>
+    /// <param name="result">Factory returning an observable companion control from the value, host, and context.</param>
+    /// <returns>A stacked control containing the toolbar and the reactive companion.</returns>
     public static UiControl Toolbar<T>(
         this IServiceProvider serviceProvider,
         IObservable<T> observable,
@@ -208,6 +484,15 @@ public static class EditorExtensions
 
     #endregion
 
+    /// <summary>
+    /// Appends a form field for <paramref name="propertyInfo"/> to <paramref name="editor"/>,
+    /// choosing the appropriate input control (text, number, datetime, checkbox, select, etc.)
+    /// based on property type and attributes.
+    /// </summary>
+    /// <param name="serviceProvider">Service provider for resolving dependencies such as the type registry.</param>
+    /// <param name="editor">The container control accumulating fields; returned with the new field appended.</param>
+    /// <param name="propertyInfo">The property to convert into a form field.</param>
+    /// <returns><paramref name="editor"/> with the field for <paramref name="propertyInfo"/> appended.</returns>
     public static T MapToControl<T>(
         this IServiceProvider serviceProvider,
         T editor,
@@ -256,6 +541,15 @@ public static class EditorExtensions
 
     }
 
+    /// <summary>
+    /// Appends a form field for <paramref name="propertyInfo"/> to <paramref name="editor"/>,
+    /// choosing the appropriate input control based on property type and attributes, and applying
+    /// a <see cref="PropertySkin"/> with the property's label and description.
+    /// </summary>
+    /// <param name="serviceProvider">Service provider for resolving dependencies such as the type registry.</param>
+    /// <param name="editor">The container control accumulating fields; returned with the new field appended.</param>
+    /// <param name="propertyInfo">The property to convert into a form field.</param>
+    /// <returns><paramref name="editor"/> with the skinned field for <paramref name="propertyInfo"/> appended.</returns>
     public static T MapToControl<T, TSkin>(
         this IServiceProvider serviceProvider,
         T editor,
@@ -537,6 +831,7 @@ public static class EditorExtensions
     /// <param name="canEdit">Whether editing is allowed based on permissions.</param>
     /// <param name="host">The layout area host.</param>
     /// <param name="isToggleable">If true (default), starts read-only and toggles on click/blur. If false, stays in edit mode.</param>
+    /// <param name="boundDataContext">When supplied, field read/writes go directly to this node-bound data context path instead of the layout-area /data/{dataId} pointer.</param>
     /// <returns>A reactive control that switches between read and edit modes.</returns>
     public static UiControl MapToToggleableControl(
         this IServiceProvider serviceProvider,
@@ -871,6 +1166,7 @@ public static class EditorExtensions
     /// <param name="dataId">The data ID used for data binding.</param>
     /// <param name="editStateId">The edit state ID for toggling.</param>
     /// <param name="isToggleable">If true, blur switches back to read-only mode. If false, stays in edit mode.</param>
+    /// <param name="boundDataContext">When supplied, field read/writes go directly to this node-bound data context path instead of the layout-area /data/{dataId} pointer.</param>
     private static UiControl BuildEditControl(
         LayoutAreaHost host,
         PropertyInfo property,
@@ -1104,15 +1400,14 @@ public static class EditorExtensions
     }
 
     /// <summary>
-    /// Builds a markdown section with full width, title, and Done button for edit mode.
-    /// </summary>
-    /// <param name="host">The layout area host.</param>
-    /// <param name="property">The property to create the control for.</param>
-    /// <summary>
     /// Builds a full-width section for a collection property marked with [MeshNodeCollection].
     /// Renders items inline as chips/tags from the bound data.
     /// If editable, adds x buttons per item for deletion and a + button to add new items.
     /// </summary>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="property">The collection property to render.</param>
+    /// <param name="dataId">The data ID used for data binding.</param>
+    /// <param name="isEditable">Whether delete and add controls are shown.</param>
     private static UiControl BuildCollectionSection(
         LayoutAreaHost host,
         PropertyInfo property,
@@ -1404,11 +1699,14 @@ public static class EditorExtensions
             .FirstOrDefault();
     }
 
+    /// <param name="host">The layout area host.</param>
+    /// <param name="property">The markdown property to render.</param>
     /// <param name="dataId">The data ID used for data binding.</param>
     /// <param name="editStateId">The edit state ID for toggling.</param>
     /// <param name="editStateStream">Observable stream of edit state.</param>
     /// <param name="isEditable">Whether the property is editable.</param>
     /// <param name="isToggleable">If true, allows toggling between read/edit. If false, stays in edit mode.</param>
+    /// <param name="boundDataContext">When supplied, field read/writes go directly to this node-bound data context path instead of the layout-area /data/{dataId} pointer.</param>
     private static UiControl BuildMarkdownToggle(
         LayoutAreaHost host,
         PropertyInfo property,

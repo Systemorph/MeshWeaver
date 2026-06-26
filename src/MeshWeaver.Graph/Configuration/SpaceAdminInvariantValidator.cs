@@ -40,9 +40,17 @@ public sealed class SpaceAdminInvariantValidator(IMessageHub hub, ILogger<SpaceA
     private const string AccessAssignmentNodeType = "AccessAssignment";
     private const string AccessSegment = "/_Access";
 
+    /// <summary>The node operations this validator applies to: Delete and Update.</summary>
     public IReadOnlyCollection<NodeOperation> SupportedOperations =>
         [NodeOperation.Delete, NodeOperation.Update];
 
+    /// <summary>
+    /// Validates a delete or update of an AccessAssignment, blocking the removal or
+    /// demotion of the last non-denied Admin assignment on a partition's <c>_Access</c>
+    /// subtree so a space is never left without an administrator.
+    /// </summary>
+    /// <param name="context">The validation context describing the node and operation.</param>
+    /// <returns>An observable that emits the validation result for the operation.</returns>
     public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
         var node = context.Node;

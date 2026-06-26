@@ -1,8 +1,3 @@
-// <meshweaver>
-// Id: Country
-// DisplayName: Country Reference Data
-// </meshweaver>
-
 using System.ComponentModel.DataAnnotations;
 using MeshWeaver.Domain;
 

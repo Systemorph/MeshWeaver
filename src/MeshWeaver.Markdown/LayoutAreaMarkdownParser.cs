@@ -5,16 +5,33 @@ using Markdig.Syntax;
 
 namespace MeshWeaver.Markdown;
 
+/// <summary>
+/// Markdig block parser for layout-area unified content references that begin with <c>@</c>
+/// (hyperlink) or <c>@@</c> (inline render). Supports direct, quoted, and parenthesised path syntax,
+/// resolving relative paths against the current node path.
+/// </summary>
 public class LayoutAreaMarkdownParser : BlockParser
 {
     private readonly string? _currentNodePath;
 
+    /// <summary>
+    /// Initializes the parser with the node path used to resolve relative references.
+    /// </summary>
+    /// <param name="currentNodePath">The current node path for relative-path resolution, or null.</param>
     public LayoutAreaMarkdownParser(string? currentNodePath = null)
     {
         _currentNodePath = currentNodePath;
         OpeningCharacters = ['@'];
     }
 
+    /// <summary>
+    /// Attempts to open a layout-area block at the current line, parsing the reference token and pushing
+    /// a <see cref="LayoutAreaComponentInfo"/> block on success.
+    /// </summary>
+    /// <param name="processor">The block processor positioned at the candidate <c>@</c>.</param>
+    /// <returns>
+    /// <see cref="BlockState.ContinueDiscard"/> when a reference was parsed; <see cref="BlockState.None"/> otherwise.
+    /// </returns>
     public override BlockState TryOpen(BlockProcessor processor)
     {
         // We expect no indentation for a figure block.

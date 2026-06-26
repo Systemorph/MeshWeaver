@@ -34,7 +34,7 @@ Copy an existing env folder under `deploy/aks/envs/` to `deploy/aks/envs/<env>/`
 
 | File | What to change |
 |---|---|
-| `values.<env>.yaml` | host, `MEMEX_DATABASENAME`, TLS `secretName`, AI + auth config, resources |
+| `values.<env>.yaml` | host, `MEMEX_DATABASENAME`, TLS `secretName`, AI + auth config, resources, `selfUpdate.azureClientId` (the shared `portalIdentityClientId` — same value for every env) |
 | `portal-pvcs.yaml` | `namespace: <env>` on every PVC |
 | `portal-ingress.yaml` | `namespace`, host, TLS secret, affinity cookie name |
 | `secretproviderclass.yaml` | `namespace`, synced secret name `<env>-portal-ai-secrets`, KV `objectName`s |
@@ -64,7 +64,22 @@ az ad app credential reset --id <appId> --display-name <env> --years 1   # -> cl
 #    source's master key (else stored enc: provider keys become undecryptable).
 az keyvault secret set --vault-name $KV --name <env>-Ai-KeyProtection-MasterKey --value "$(openssl rand -base64 32)"
 az keyvault secret set --vault-name $KV --name <env>-Authentication-Microsoft-ClientSecret --value "<entra-secret>"
+# 5. Self-update (ACR polling): federate the SHARED portal UAMI to THIS namespace's memex-portal-sa
+#    so the in-pod self-updater can list ACR tags. Preferred: add the namespace to `portalNamespaces`
+#    in infra/main.bicep and re-run the (idempotent) infra deploy. Quick out-of-band equivalent:
+ISSUER=$(az aks show -g $RG -n memexaks-cluster --query oidcIssuerProfile.issuerURL -o tsv)
+az identity federated-credential create -g $RG --identity-name memexaks-portal-mi \
+  --name "memex-portal-<env>" --issuer "$ISSUER" \
+  --subject "system:serviceaccount:<env>:memex-portal-sa" --audience "api://AzureADTokenExchange"
+# The shared UAMI already has AcrPull on meshweaver.azurecr.io — set its clientId as
+# selfUpdate.azureClientId in values.<env>.yaml (same value as every other env):
+PORTAL_MI_CLIENT_ID=$(az identity show -g $RG -n memexaks-portal-mi --query clientId -o tsv); echo "$PORTAL_MI_CLIENT_ID"
 ```
+
+> **`<env>` is the Kubernetes namespace.** The federated-credential subject must be EXACTLY
+> `system:serviceaccount:<env>:memex-portal-sa` — a mismatch silently fails the ACR token exchange
+> (the in-pod deployment PATCH still works; only tag discovery is blocked). See
+> [DeploymentAKS → Portal self-update](/Doc/Architecture/DeploymentAKS).
 
 ## 3. Deploy + issue TLS
 
@@ -79,6 +94,31 @@ curl -sS -k -o /dev/null -w "%{http_code}\n" --resolve <host>:443:$INGRESS_IP ht
 # Then issue the cert (needs the A-record to resolve publicly):
 ( cd deploy/aks/envs/<env> && az aks command invoke -g memex-aks-rg -n memexaks-cluster --command "bash tls.sh" --file tls.sh )
 ```
+
+## Self-update: first-install checklist
+
+A new environment should run on **self-update from day one** — that is the steady state.
+The manual [AKS runbook](/Doc/Architecture/DeploymentAKS) (`kubectl set image` + rollout) is the
+**bootstrap / break-glass** path only (the very first install, or forcing a specific tag). Once per
+environment, in this order:
+
+1. **Deploy the `portal-identity` bicep.** It provisions the shared portal UAMI
+   (`memexaks-portal-mi`) + one federated credential per portal namespace
+   (`deployPortalIdentity: true`, default). For a brand-new namespace, add it to `portalNamespaces`
+   and re-run the (idempotent) infra deploy, or create the federated credential out-of-band
+   (§2 step 5). The subject must be exactly `system:serviceaccount:<env>:memex-portal-sa`.
+2. **Grant the portal UAMI `AcrPull` on the shared ACR.** `meshweaver.azurecr.io` lives in
+   `meshweaver-shared` — cross-RG from `memex-aks-rg` — so grant it out-of-band exactly like the
+   kubelet's grant (or set `grantSharedAcrPull=true` for pure-IaC). One grant covers every namespace
+   (one shared UAMI). Without it the in-pod Deployment PATCH still works; only ACR tag discovery is
+   blocked.
+3. **Set `selfUpdate.azureClientId`** in `values.<env>.yaml` to the shared `portalIdentityClientId`
+   (the **same** value for every env). This authenticates the tag-list call; the chart wires the
+   workload-identity annotation/label + `AZURE_CLIENT_ID` from it.
+4. **Set `Admin/UpdatePolicy` for the env.** Settings → Updates (platform admin) writes the
+   `Admin/UpdatePolicy` node. Recommended: **Continuous for dev/test** (always rolls to the newest
+   build-numbered image), **Stable for prod** (rolls only to the newest clean release). See
+   [Release & Self-Update Strategy](/Doc/Architecture/ReleaseStrategy).
 
 ## Sign-in, invitations, email
 

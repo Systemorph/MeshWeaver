@@ -19,11 +19,23 @@ public sealed class InMemoryChunkedContentVectorStore : IChunkedContentVectorSto
     // (collectionPath, filePath) -> the file's ordered chunks (the whole set, replaced atomically).
     private readonly ConcurrentDictionary<(string Collection, string File), ImmutableArray<ContentChunk>> _chunks = new();
 
+    /// <summary>Returns the recorded content hash for a file, or <c>null</c> when the file has none.</summary>
+    /// <param name="collectionPath">The collection the file belongs to.</param>
+    /// <param name="filePath">The file's path within the collection.</param>
+    /// <returns>A cold observable emitting the stored hash, or <c>null</c> if the file is not recorded.</returns>
     public IObservable<string?> GetFileHash(string collectionPath, string filePath) =>
         Observable.Defer(() =>
             Observable.Return(
                 _fileHashes.TryGetValue((collectionPath, filePath), out var hash) ? hash : null));
 
+    /// <summary>
+    /// Atomically replaces all stored chunks for a file with the supplied set and updates the file's
+    /// recorded hash (an empty set clears both the chunks and the hash).
+    /// </summary>
+    /// <param name="collectionPath">The collection the file belongs to.</param>
+    /// <param name="filePath">The file's path within the collection.</param>
+    /// <param name="chunks">The new ordered chunk set; pass an empty list to remove the file's chunks.</param>
+    /// <returns>A cold observable that performs the replacement on subscribe and emits a single <see cref="Unit"/>.</returns>
     public IObservable<Unit> ReplaceFileChunks(
         string collectionPath, string filePath, IReadOnlyList<ContentChunk> chunks) =>
         Observable.Defer(() =>
@@ -44,6 +56,13 @@ public sealed class InMemoryChunkedContentVectorStore : IChunkedContentVectorSto
             return Observable.Return(Unit.Default);
         });
 
+    /// <summary>
+    /// Ranks the collection's chunks by cosine similarity to the query vector and returns the top matches.
+    /// </summary>
+    /// <param name="collectionPath">The collection to search within.</param>
+    /// <param name="query">The query embedding vector.</param>
+    /// <param name="topK">The maximum number of chunks to return, highest similarity first.</param>
+    /// <returns>A cold observable emitting the ranked chunks (at most <paramref name="topK"/>).</returns>
     public IObservable<IReadOnlyList<ContentChunk>> Search(
         string collectionPath, float[] query, int topK) =>
         Observable.Defer(() =>
@@ -61,6 +80,11 @@ public sealed class InMemoryChunkedContentVectorStore : IChunkedContentVectorSto
             return Observable.Return<IReadOnlyList<ContentChunk>>(ranked);
         });
 
+    /// <summary>Returns a single chunk of a file by its chunk index, or <c>null</c> when not found.</summary>
+    /// <param name="collectionPath">The collection the file belongs to.</param>
+    /// <param name="filePath">The file's path within the collection.</param>
+    /// <param name="chunkIndex">The zero-based index of the chunk to retrieve.</param>
+    /// <returns>A cold observable emitting the matching <see cref="ContentChunk"/>, or <c>null</c> if absent.</returns>
     public IObservable<ContentChunk?> GetChunk(string collectionPath, string filePath, int chunkIndex) =>
         Observable.Defer(() =>
         {
@@ -73,6 +97,10 @@ public sealed class InMemoryChunkedContentVectorStore : IChunkedContentVectorSto
             return Observable.Return(chunk);
         });
 
+    /// <summary>Returns the number of chunks stored for a file (0 when the file has none).</summary>
+    /// <param name="collectionPath">The collection the file belongs to.</param>
+    /// <param name="filePath">The file's path within the collection.</param>
+    /// <returns>A cold observable emitting the stored chunk count for the file.</returns>
     public IObservable<int> GetChunkCount(string collectionPath, string filePath) =>
         Observable.Defer(() =>
             Observable.Return(

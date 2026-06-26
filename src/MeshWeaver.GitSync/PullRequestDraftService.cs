@@ -43,12 +43,15 @@ public sealed class PullRequestDraftService : IPullRequestDraftService
     private readonly IServiceProvider services;
     private readonly ILogger<PullRequestDraftService>? logger;
 
+    /// <summary>Initializes a new instance of the <c>PullRequestDraftService</c> class.</summary>
+    /// <param name="services">The service provider used to build a per-call <see cref="AgentChatClient"/> and resolve the logger.</param>
     public PullRequestDraftService(IServiceProvider services)
     {
         this.services = services;
         logger = (ILogger<PullRequestDraftService>?)services.GetService(typeof(ILogger<PullRequestDraftService>));
     }
 
+    /// <inheritdoc />
     public IObservable<PullRequestDraft> DraftAsync(
         string spaceName, string? spaceSummary, string headBranch, string baseBranch,
         CancellationToken ct = default)

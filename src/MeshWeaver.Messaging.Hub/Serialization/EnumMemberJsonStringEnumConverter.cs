@@ -43,8 +43,20 @@ public sealed class EnumMemberJsonStringEnumConverter<
 [RequiresDynamicCode("Requires dynamic code generation.")]
 public sealed class EnumMemberJsonStringEnumConverter : JsonConverterFactory
 {
+    /// <summary>
+    /// Indicates that this factory produces converters for any enum type.
+    /// </summary>
+    /// <param name="typeToConvert">The candidate type.</param>
+    /// <returns><c>true</c> when <paramref name="typeToConvert"/> is an enum; otherwise <c>false</c>.</returns>
     public override bool CanConvert(Type typeToConvert) => typeToConvert.IsEnum;
 
+    /// <summary>
+    /// Builds the strongly-typed <see cref="EnumMemberJsonStringEnumConverter{TEnum}"/> for the
+    /// requested enum type so that its <see cref="EnumMemberAttribute"/> values are honored.
+    /// </summary>
+    /// <param name="typeToConvert">The enum type to create a converter for.</param>
+    /// <param name="options">The active serializer options.</param>
+    /// <returns>A converter instance specialized for <paramref name="typeToConvert"/>.</returns>
     public override JsonConverter? CreateConverter(Type typeToConvert, JsonSerializerOptions options)
     {
         var typedFactory = typeof(EnumMemberJsonStringEnumConverter<>).MakeGenericType(typeToConvert);

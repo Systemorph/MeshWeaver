@@ -16,8 +16,11 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class ActivityLayoutAreas
 {
+    /// <summary>Area name for the Overview layout area.</summary>
     public const string OverviewArea = "Overview";
+    /// <summary>Area name for the Thumbnail layout area.</summary>
     public const string ThumbnailArea = "Thumbnail";
+    /// <summary>Area name for the Cancel layout area.</summary>
     public const string CancelArea = "Cancel";
 
     /// <summary>
@@ -43,6 +46,7 @@ public static class ActivityLayoutAreas
                 .WithView(ProgressArea, Progress)
                 .WithView(CancelArea, CancelButton));
 
+    /// <summary>Area name for the Progress layout area.</summary>
     public const string ProgressArea = "Progress";
 
     /// <summary>

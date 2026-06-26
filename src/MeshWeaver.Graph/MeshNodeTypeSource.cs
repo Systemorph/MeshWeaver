@@ -158,6 +158,15 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         });
     }
 
+    /// <summary>
+    /// Diffs the incoming instance collection against the last-saved snapshot and
+    /// dispatches the resulting persistence work: creates and deletes are queued onto
+    /// the debounce flush, updates are version-stamped and re-emitted (the workspace's
+    /// own-node persistence sampler saves them). Also opens the MeshNode init gate when
+    /// the own node becomes Active/Transient. Returns the (possibly re-stamped) collection.
+    /// </summary>
+    /// <param name="instances">The instance collection to persist/update.</param>
+    /// <returns>The instance collection to store as the new authoritative snapshot.</returns>
     protected override InstanceCollection UpdateImpl(InstanceCollection instances)
     {
         instances = MergePartialUpdates(instances);

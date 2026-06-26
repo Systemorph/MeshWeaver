@@ -370,6 +370,12 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
                && ContentEquals(Content, other.Content);
     }
 
+    /// <summary>
+    /// Hashes a cheap, stable subset of the equality fields (id, namespace, node type, version,
+    /// last-modified, state). The subset guarantees equal nodes always hash equal without paying
+    /// the cost of hashing the full <c>Content</c> payload on every lookup.
+    /// </summary>
+    /// <returns>A hash code consistent with the type's equality.</returns>
     public override int GetHashCode()
     {
         // Cheap, stable SUBSET of the equality fields — must be a subset so equal nodes

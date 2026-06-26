@@ -10,11 +10,27 @@ namespace MeshWeaver.Messaging.Serialization;
 /// </summary>
 public class MetadataStrippingConverter<T> : JsonConverter<T>
 {
+    /// <summary>
+    /// Determines whether this converter can handle the requested type, i.e. whether
+    /// <typeparamref name="T"/> is assignable from <paramref name="typeToConvert"/>.
+    /// </summary>
+    /// <param name="typeToConvert">The type being considered for conversion.</param>
+    /// <returns><c>true</c> if the type can be converted by this converter; otherwise <c>false</c>.</returns>
     public override bool CanConvert(Type typeToConvert)
     {
         return typeof(T).IsAssignableFrom(typeToConvert);
     }
 
+    /// <summary>
+    /// Reads JSON into a <typeparamref name="T"/>, first stripping reference-handling
+    /// metadata properties ($id, $ref, $values, $defs) from objects so that JSON carrying
+    /// these properties in unexpected positions still deserializes cleanly. Deserialization
+    /// runs against a copy of the options with this converter removed to avoid infinite recursion.
+    /// </summary>
+    /// <param name="reader">The reader positioned at the value to deserialize.</param>
+    /// <param name="typeToConvert">The target type to deserialize into.</param>
+    /// <param name="options">The serializer options in effect.</param>
+    /// <returns>The deserialized <typeparamref name="T"/> instance.</returns>
     public override T Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         // Parse the JSON into a JsonNode first
@@ -54,6 +70,14 @@ public class MetadataStrippingConverter<T> : JsonConverter<T>
         return JsonSerializer.Deserialize<T>(json, newOptionsSimple)!;
     }
 
+    /// <summary>
+    /// Writes <paramref name="value"/> as JSON using a copy of the options with this converter
+    /// removed, so the value serializes with the default behaviour and without re-entering this
+    /// converter (which would cause infinite recursion).
+    /// </summary>
+    /// <param name="writer">The writer to emit JSON to.</param>
+    /// <param name="value">The value to serialize.</param>
+    /// <param name="options">The serializer options in effect.</param>
     public override void Write(Utf8JsonWriter writer, T value, JsonSerializerOptions options)
     {
         // Create new options without this converter to avoid infinite recursion

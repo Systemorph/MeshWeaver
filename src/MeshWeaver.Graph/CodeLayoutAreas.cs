@@ -27,8 +27,11 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class CodeLayoutAreas
 {
+    /// <summary>Area name for the Content layout area.</summary>
     public const string ContentArea = "Content";
+    /// <summary>Area name for the Overview layout area.</summary>
     public const string OverviewArea = "Overview";
+    /// <summary>Area name for the Edit layout area.</summary>
     public const string EditArea = "Edit";
 
     private const string CodeDataId = "code";

@@ -11,14 +11,27 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.ContentCollections;
 
+/// <summary>
+/// A live, named collection of content files backed by an <see cref="IStreamProvider"/>.
+/// Parses its markdown files into a synchronization stream on initialization, keeps them in
+/// sync via a file monitor, and exposes read/write operations over the underlying store.
+/// </summary>
 public class ContentCollection : IDisposable
 {
     private readonly ISynchronizationStream<InstanceCollection> markdownStream;
     private readonly IStreamProvider provider;
+    /// <summary>The configuration that defines this collection (name, source type, base path, etc.).</summary>
     public readonly ContentCollectionConfig Config;
+    /// <summary>The hub address this collection belongs to, or <c>null</c> if it is not address-scoped.</summary>
     public Address? Address => Config.Address;
     private IDisposable? monitorDisposable;
 
+    /// <summary>
+    /// Initializes a new <see cref="ContentCollection"/> over the given stream provider.
+    /// </summary>
+    /// <param name="config">Configuration describing the collection.</param>
+    /// <param name="provider">The backing store that supplies file streams and change notifications.</param>
+    /// <param name="hub">The message hub that owns the collection's synchronization stream.</param>
     public ContentCollection(ContentCollectionConfig config, IStreamProvider provider, IMessageHub hub)
     {
         Hub = hub;
@@ -39,10 +52,19 @@ public class ContentCollection : IDisposable
     }
 
 
+    /// <summary>The message hub that owns this collection's synchronization stream.</summary>
     public IMessageHub Hub { get; }
+    /// <summary>The collection's unique name (from <see cref="ContentCollectionConfig.Name"/>).</summary>
     public string Collection => Config.Name!;
+    /// <summary>Human-friendly display name; falls back to a word-split of <see cref="Collection"/> when none is configured.</summary>
     public string DisplayName => Config.DisplayName ?? Config.Name!.Wordify();
 
+    /// <summary>
+    /// Returns a live stream of the parsed markdown element at <paramref name="path"/>
+    /// (the <c>.md</c> suffix is optional), emitting <c>null</c> when no such article exists.
+    /// </summary>
+    /// <param name="path">The path of the markdown file within the collection.</param>
+    /// <returns>An observable that emits the article and re-emits on every change.</returns>
     public IObservable<object?> GetMarkdown(string path)
         => markdownStream
             .Reduce(new InstanceReference(path.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
@@ -52,6 +74,12 @@ public class ContentCollection : IDisposable
             .Select(x => x.Value);
 
 
+    /// <summary>
+    /// Opens a read stream for the raw file at <paramref name="path"/>, or <c>null</c> if it does not exist.
+    /// </summary>
+    /// <param name="path">The file path within the collection.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>A readable stream, or <c>null</c> when the file is not found.</returns>
     public Task<Stream?> GetContentAsync(string path, CancellationToken ct = default)
         => provider.GetStreamAsync(path, ct);
 
@@ -86,18 +114,29 @@ public class ContentCollection : IDisposable
 
 
 
+    /// <summary>Stops the change monitor and disposes the underlying markdown synchronization stream.</summary>
     public virtual void Dispose()
     {
         monitorDisposable?.Dispose();
         markdownStream.Dispose();
     }
 
+    /// <summary>Streams the immediate sub-folders at <paramref name="path"/> from the backing store.</summary>
+    /// <param name="path">The folder path within the collection.</param>
+    /// <param name="ct">Cancellation token.</param>
     public IAsyncEnumerable<FolderItem> GetFolders(string path, CancellationToken ct = default)
         => provider.GetFolders(path, ct);
 
+    /// <summary>Streams the files directly under <paramref name="path"/> from the backing store.</summary>
+    /// <param name="path">The folder path within the collection.</param>
+    /// <param name="ct">Cancellation token.</param>
     public IAsyncEnumerable<FileItem> GetFiles(string path, CancellationToken ct = default)
         => provider.GetFiles(path, ct);
 
+    /// <summary>Saves <paramref name="openReadStream"/> as a file in the backing store.</summary>
+    /// <param name="path">The destination folder path within the collection.</param>
+    /// <param name="fileName">The file name to write.</param>
+    /// <param name="openReadStream">The content to persist.</param>
     public Task SaveFileAsync(string path, string fileName, Stream openReadStream)
         => provider.SaveFileAsync(path, fileName, openReadStream);
 
@@ -116,9 +155,18 @@ public class ContentCollection : IDisposable
             yield return file;
     }
 
+    /// <summary>Filter predicate that selects markdown (<c>.md</c>) files.</summary>
+    /// <param name="name">The file name or path to test.</param>
+    /// <returns><c>true</c> if the name ends with <c>.md</c> (case-insensitive).</returns>
     protected static bool MarkdownFilter(string name)
         => name.EndsWith(".md", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Parses every markdown file in the backing store into the synchronization stream and
+    /// attaches the change monitor. Call once before reading from the collection.
+    /// </summary>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The initial collection of parsed articles.</returns>
     public virtual async Task<InstanceCollection> InitializeAsync(CancellationToken ct)
     {
         var parsedArticles = new Dictionary<object, object>();
@@ -137,6 +185,12 @@ public class ContentCollection : IDisposable
         return ret;
     }
 
+    /// <summary>
+    /// Re-reads and re-parses the markdown file at <paramref name="path"/> off the hub (via the
+    /// file-system I/O pool) and merges the updated article into the synchronization stream.
+    /// Invoked by the change monitor when a file is created or modified.
+    /// </summary>
+    /// <param name="path">The path of the changed markdown file.</param>
     protected void UpdateArticle(string path)
     {
         // The file read + parse is the IO leaf — pooled OFF the hub; only the parsed
@@ -192,20 +246,33 @@ public class ContentCollection : IDisposable
         );
     }
 
+    /// <summary>Subscribes the collection to backing-store change notifications, routing each to <see cref="UpdateArticle"/>.</summary>
     protected void AttachMonitor()
     {
         monitorDisposable = provider.AttachMonitor(UpdateArticle);
     }
 
+    /// <summary>Creates a folder in the backing store.</summary>
+    /// <param name="folderPath">The folder path to create within the collection.</param>
     public Task CreateFolderAsync(string folderPath)
         => provider.CreateFolderAsync(folderPath);
 
+    /// <summary>Deletes a folder (and its contents) from the backing store.</summary>
+    /// <param name="folderPath">The folder path to delete within the collection.</param>
     public Task DeleteFolderAsync(string folderPath)
         => provider.DeleteFolderAsync(folderPath);
 
+    /// <summary>Deletes a single file from the backing store.</summary>
+    /// <param name="filePath">The file path to delete within the collection.</param>
     public Task DeleteFileAsync(string filePath)
         => provider.DeleteFileAsync(filePath);
 
+    /// <summary>
+    /// Resolves the MIME content type for a file path from its extension, defaulting to
+    /// <c>text/markdown</c> for extensionless paths and <c>application/octet-stream</c> for unknown types.
+    /// </summary>
+    /// <param name="path">The file path whose content type is needed.</param>
+    /// <returns>The MIME type string.</returns>
     public virtual string GetContentType(string path)
     {
         var extension = Path.GetExtension(path).ToLowerInvariant();

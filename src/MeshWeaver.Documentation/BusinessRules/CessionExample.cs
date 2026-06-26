@@ -95,6 +95,10 @@ public static class CessionEngine
 // 3. SAMPLE DATA
 // ═══════════════════════════════════════════════════════
 
+/// <summary>
+/// Deterministic sample inputs for the cession example: one Excess-of-Loss
+/// layer and a set of motor claims spanning below, within, and above the layer.
+/// </summary>
 public static class CessionSampleData
 {
     /// <summary>

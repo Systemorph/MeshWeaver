@@ -17,6 +17,12 @@ public class RlsDataValidator : IDataValidator
     private readonly AccessService _accessService;
     private readonly ILogger<RlsDataValidator> _logger;
 
+    /// <summary>
+    /// Creates the validator.
+    /// </summary>
+    /// <param name="workspace">Workspace whose data context supplies the type sources and global access restrictions.</param>
+    /// <param name="accessService">Access service supplying the current user/circuit context when none is on the request.</param>
+    /// <param name="logger">Logger for access grant/denial diagnostics.</param>
     public RlsDataValidator(
         IWorkspace workspace,
         AccessService accessService,
@@ -35,6 +41,15 @@ public class RlsDataValidator : IDataValidator
     public IReadOnlyCollection<DataOperation> SupportedOperations =>
         [DataOperation.Create, DataOperation.Update, DataOperation.Delete];
 
+    /// <summary>
+    /// Evaluates the global and type-level access restrictions for the requested operation and entity,
+    /// granting access only if every restriction allows it.
+    /// </summary>
+    /// <param name="context">The validation context carrying the operation, entity, entity type, and access context.</param>
+    /// <returns>
+    /// An observable yielding a single <see cref="DataValidationResult"/>: valid when all restrictions pass,
+    /// otherwise an unauthorized result naming the failing rule.
+    /// </returns>
     public IObservable<DataValidationResult> Validate(DataValidationContext context)
     {
         var action = AccessAction.FromOperation(context.Operation);

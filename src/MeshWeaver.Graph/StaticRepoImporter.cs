@@ -264,6 +264,17 @@ public static class StaticRepoImporter
             HostedHubCreation.Always)!;
     }
 
+    /// <summary>
+    /// Imports a single static-repo source into its partition: provisions the partition
+    /// schema, acquires the content-addressed import activity lock (idempotent — a prior
+    /// Succeeded activity for the same fingerprint short-circuits), then upserts every
+    /// source node, prunes stale ones, and syncs content imports. Runs on the supplied
+    /// (dedicated import) hub. Reactive — Subscribe to run.
+    /// </summary>
+    /// <param name="hub">The hub the import runs on (typically the dedicated import hub).</param>
+    /// <param name="source">The static-repo source to materialize.</param>
+    /// <param name="logger">Optional logger; resolved from the hub when null.</param>
+    /// <returns>An observable that emits the import outcome for the partition.</returns>
     public static IObservable<StaticRepoImportResult> Import(
         IMessageHub hub, IStaticRepoSource source, ILogger? logger = null)
     {

@@ -296,8 +296,10 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
             nodeAddress,
             reference);
 
-        var rootControl = await stream.GetControlStream(reference.Area!)
-            .Should().Within(15.Seconds()).Match(c => c is StackControl s && s.Areas?.Count >= 4)!;
+        // Match throws on timeout, so a completed await is provably the matched (non-null)
+        // StackControl; the ! narrows UiControl? → UiControl for the CollectControls(root) calls.
+        var rootControl = (await stream.GetControlStream(reference.Area!)
+            .Should().Within(15.Seconds()).Match(c => c is StackControl s && s.Areas?.Count >= 4))!;
 
         // The inline add row renders a user picker scoped to root-namespace users…
         var pickers = await CollectControls<MeshNodePickerControl>(stream, rootControl, reference.Area!);
@@ -333,8 +335,10 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
             nodeAddress,
             reference);
 
-        var rootControl = await stream.GetControlStream(reference.Area!)
-            .Should().Within(15.Seconds()).Match(c => c is StackControl s && s.Areas?.Count >= 4)!;
+        // Match throws on timeout, so a completed await is provably the matched (non-null)
+        // StackControl; the ! narrows UiControl? → UiControl for the CollectControls(root) calls.
+        var rootControl = (await stream.GetControlStream(reference.Area!)
+            .Should().Within(15.Seconds()).Match(c => c is StackControl s && s.Areas?.Count >= 4))!;
 
         var pickers = await CollectControls<MeshNodePickerControl>(stream, rootControl, reference.Area!);
         var userPicker = pickers.Select(p => p.Control)

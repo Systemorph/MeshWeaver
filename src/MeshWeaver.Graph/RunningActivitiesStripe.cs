@@ -29,8 +29,14 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class RunningActivitiesStripe
 {
+    /// <summary>Area name for the RunningActivities layout area.</summary>
     public const string AreaName = "RunningActivities";
 
+    /// <summary>
+    /// Registers the running-activities stripe view on the hub configuration.
+    /// </summary>
+    /// <param name="configuration">The message hub configuration to register on.</param>
+    /// <returns>The configuration with the running-activities stripe view registered.</returns>
     public static MessageHubConfiguration AddRunningActivitiesStripe(this MessageHubConfiguration configuration)
         => configuration.AddLayout(layout => layout.WithView(AreaName, Render));
 
