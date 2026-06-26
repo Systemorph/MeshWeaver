@@ -832,23 +832,41 @@ public static class DataExtensions
 
     /// <summary>
     /// ATOMIC owner-side apply for a MeshNode cross-hub <see cref="PatchDataRequest"/>: reads
-    /// the current node, applies the RFC 7396 merge, and writes the merged node back in ONE
+    /// the LIVE node, applies the RFC 7396 merge, and writes the merged node back in ONE
     /// turn on the PRIMARY data-source stream — the SAME stream (and action-block turn) the
     /// owner's own-writes (<c>MeshNodeStreamHandle.UpdateOwn</c>) use.
     ///
-    /// <para><b>Why.</b> <see cref="ApplyJsonMergePatchAndUpdate{T}"/>'s generic path reads the
-    /// merge base at HANDLER time but DEFERS the write to a separate <c>workspace.RequestChange</c>
-    /// turn. Two cross-hub patches that queue back-to-back at the owner (or a patch racing an
-    /// owner own-write) each read pre-the-other's-write state, then the later FULL-NODE write
-    /// (<c>collection.Merge({id: merged})</c>) replaces the entity wholesale and DROPS the earlier
-    /// writer's just-committed field — a queued user message vanishes from
-    /// <c>PendingUserMessages</c> + <c>UserMessageIds</c> entirely. That is the message-loss
-    /// flake behind <c>InboxToolIntegrationTest.Cancel_WithPendingMessages</c>,
-    /// <c>RapidSubmits_PileUpAndAllIngest</c>, and the Hammer repro. Applying the merge INSIDE the
-    /// primary stream's atomic update closes the read→write window: the merge base is the LIVE
-    /// entity at the write turn, serialised with every other writer to this node, so concurrent
-    /// additions survive (RFC 7396 dict-merge keeps sibling keys; the array fields are re-derived
-    /// against the live arrays, not a stale snapshot).</para>
+    /// <para><b>Atomicity (invariant A).</b> <see cref="ApplyJsonMergePatchAndUpdate{T}"/>'s
+    /// generic path reads the merge base at HANDLER time but DEFERS the write to a separate
+    /// <c>workspace.RequestChange</c> turn. Two cross-hub patches that queue back-to-back at the
+    /// owner (or a patch racing an owner own-write) each read pre-the-other's-write state, then
+    /// the later FULL-NODE write replaces the entity wholesale and DROPS the earlier writer's
+    /// just-committed field — a queued user message vanishes from <c>PendingUserMessages</c> +
+    /// <c>UserMessageIds</c> entirely (the message-loss flake behind
+    /// <c>InboxToolIntegrationTest.Cancel_WithPendingMessages</c> / <c>RapidSubmits</c> /
+    /// <c>CrossHubPatchAtomicityTest</c>). Reading the merge base from the LIVE store INSIDE the
+    /// primary stream's atomic update closes that window: concurrent additions survive.</para>
+    ///
+    /// <para><b>Non-starvation + emit-onstart (invariant B).</b> The turn is a PURE, bounded
+    /// transform — no awaiting, no nested <c>Subscribe</c> that re-enters the owner, no
+    /// synchronous wait on another hub. Two earlier traits caused the atioz wedge
+    /// (<c>SubscribeRequest → AgenticPension/ArbeitsanweisungenListe2</c> timed out after 60s) and
+    /// are deliberately gone:
+    /// <list type="bullet">
+    ///   <item>The entity id is read SYNCHRONOUSLY from <c>stream.Current</c> instead of via a
+    ///     nested <c>stream.Take(1).Subscribe</c> on the owner-side reduced stream.</item>
+    ///   <item>The <see cref="PatchDataResponse"/> ack is posted ON ACCEPT (the merge is computed
+    ///     and is committing in THIS turn), per the cross-hub-Update emit-onstart contract
+    ///     (<c>MeshNodeStreamHandle.UpdateResponseWaitBound</c>). It is NO LONGER chained off a
+    ///     post-commit <c>stream.Skip(1).Take(1)</c> observer that subscribed a DURABLE
+    ///     <c>IPostCommitFlush</c> (in prod <c>adapter.Write</c> = <c>Observable.FromAsync</c>) on
+    ///     the stream turn — that pinned the per-node hub doing flush IO under a storm of patches
+    ///     and deferred the ack past the caller's optimistic bound.</item>
+    /// </list>
+    /// Durability is unchanged and off-turn: <c>primary.ApplyChanges → SetCurrent</c> triggers the
+    /// data source's <c>DataSourceWithStorage.Synchronize</c> (System-identity persistence hub) —
+    /// the exact path EVERY own-write already persists through — so no read-after-write guarantee
+    /// or persisted state is lost by dropping the explicit flush.</para>
     /// </summary>
     private static void ApplyMeshNodePatchAtomic<T>(
         ISynchronizationStream<T> stream,
@@ -874,105 +892,86 @@ public static class DataExtensions
             hub.Post(resp, o => o.ResponseFor(request));
         }
 
-        // Resolve the target entity id ONCE from the reduced own-node read (Id is immutable),
-        // then do the read-merge-write atomically against the LIVE store at the write turn.
-        stream
-            .Take(1)
-            .Subscribe(
-                change =>
+        // Resolve the target entity id SYNCHRONOUSLY from the reduced stream's Current (Id is
+        // immutable) — NEVER a nested stream.Take(1).Subscribe that re-enters the owner. The patch
+        // arrived because the node exists, so the reduced stream is live and Current is populated;
+        // if it is not yet, the write turn below resolves the per-node hub's single own node.
+        string? preReadId = null;
+        var currentSnapshot = stream.Current is { } cur ? cur.Value : default;
+        if (currentSnapshot is not null)
+        {
+            var snapObj = System.Text.Json.JsonSerializer
+                .SerializeToNode(currentSnapshot, currentSnapshot.GetType(), jsonOpts)
+                as System.Text.Json.Nodes.JsonObject;
+            preReadId = (snapObj?[idKey] ?? snapObj?["Id"] ?? snapObj?["id"])?.GetValue<string>();
+        }
+
+        // 🚨 ATOMIC read-merge-write on the primary stream's action-block turn — a PURE, bounded
+        // transform. The ack is posted ON ACCEPT (emit-onstart): as soon as the merge is computed
+        // and is committing in THIS turn — never deferred to a durable flush. Durability follows
+        // off-turn via DataSourceWithStorage.Synchronize (see remarks).
+        primary.Update(
+            store =>
+            {
+                try
                 {
-                    try
+                    var s = store ?? new EntityStore();
+                    var collection = s.GetCollection(collectionName);
+
+                    var entityId = preReadId;
+                    object? liveEntity = string.IsNullOrEmpty(entityId)
+                        ? null
+                        : collection?.Instances.GetValueOrDefault(entityId);
+                    // Cold reduced stream (Current was null): the MeshNodeReference patch targets
+                    // the per-node hub's single own node — resolve it directly from the store.
+                    if (liveEntity is null && collection is { Instances.Count: 1 })
                     {
-                        var current = change.Value;
-                        if (current is null)
-                        {
-                            AckOnce(false, new MeshNodeError(
-                                MeshNodeErrorCode.NotFound, hubPath,
-                                "Target MeshNode not found for patch apply"));
-                            return;
-                        }
-                        var currentObj = System.Text.Json.JsonSerializer
-                            .SerializeToNode(current, current.GetType(), jsonOpts)
-                            as System.Text.Json.Nodes.JsonObject;
-                        var entityId =
-                            (currentObj?[idKey] ?? currentObj?["Id"] ?? currentObj?["id"])
-                            ?.GetValue<string>();
-                        if (string.IsNullOrEmpty(entityId))
-                        {
-                            AckOnce(false, new MeshNodeError(
-                                MeshNodeErrorCode.Validation, hubPath,
-                                "Could not resolve MeshNode Id for patch apply"));
-                            return;
-                        }
-
-                        // Post-commit ack chained off DURABLE persistence — same
-                        // read-after-write guarantee as the deferred path. Subscribed to the
-                        // reduced stream BEFORE the write so the commit tick is never missed.
-                        var postSub = stream
-                            .Skip(1)
-                            .Take(1)
-                            .Timeout(TimeSpan.FromSeconds(5))
-                            .Subscribe(
-                                committed =>
-                                {
-                                    var flush = hub.ServiceProvider.GetService<IPostCommitFlush>();
-                                    if (flush is null)
-                                    {
-                                        AckOnce(true);
-                                        return;
-                                    }
-                                    var flushSub = flush.Flush(committed.Value!)
-                                        .Take(1)
-                                        .Timeout(TimeSpan.FromSeconds(10))
-                                        .Subscribe(
-                                            _ => AckOnce(true),
-                                            ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
-                                    hub.RegisterForDisposal(flushSub);
-                                },
-                                ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
-                        hub.RegisterForDisposal(postSub);
-
-                        // 🚨 ATOMIC read-merge-write on the primary stream's action-block turn.
-                        primary.Update(
-                            store =>
-                            {
-                                var s = store ?? new EntityStore();
-                                var liveEntity = s.GetCollection(collectionName)
-                                    ?.Instances.GetValueOrDefault(entityId);
-                                if (liveEntity is null)
-                                    return null; // entity gone — no-op (postSub times out → NACK)
-
-                                var currentNode = System.Text.Json.JsonSerializer
-                                    .SerializeToNode(liveEntity, liveEntity.GetType(), jsonOpts)
-                                    as System.Text.Json.Nodes.JsonObject
-                                    ?? new System.Text.Json.Nodes.JsonObject();
-                                var patchNode = System.Text.Json.Nodes.JsonNode.Parse(patchText)
-                                    as System.Text.Json.Nodes.JsonObject
-                                    ?? throw new InvalidOperationException("Patch must be a JSON object");
-                                MergePatchRecursive(currentNode, patchNode);
-                                // The OWNER mints the monotonic Version on apply (same rule as
-                                // the deferred path — see its remarks).
-                                currentNode[versionKey] = version;
-                                var merged = System.Text.Json.JsonSerializer
-                                    .Deserialize<T>(currentNode.ToJsonString(jsonOpts), jsonOpts);
-                                if (merged is null)
-                                    throw new System.Text.Json.JsonException(
-                                        "Merged value deserialised to null");
-
-                                var newStore = s.Update(collectionName, c => c.Update(entityId, merged));
-                                return primary.ApplyChanges(new EntityStoreAndUpdates(
-                                    newStore,
-                                    [new EntityUpdate(collectionName, entityId, merged) { OldValue = liveEntity }],
-                                    primary.StreamId));
-                            },
-                            ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
+                        var only = collection.Instances.First();
+                        entityId = only.Key?.ToString();
+                        liveEntity = only.Value;
                     }
-                    catch (Exception ex)
+                    if (liveEntity is null || string.IsNullOrEmpty(entityId))
                     {
-                        AckOnce(false, ClassifyPatchException(ex, hubPath));
+                        AckOnce(false, new MeshNodeError(
+                            MeshNodeErrorCode.NotFound, hubPath,
+                            "Target MeshNode not found for patch apply"));
+                        return null; // entity gone — no-op
                     }
-                },
-                ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
+
+                    var currentNode = System.Text.Json.JsonSerializer
+                        .SerializeToNode(liveEntity, liveEntity.GetType(), jsonOpts)
+                        as System.Text.Json.Nodes.JsonObject
+                        ?? new System.Text.Json.Nodes.JsonObject();
+                    var patchNode = System.Text.Json.Nodes.JsonNode.Parse(patchText)
+                        as System.Text.Json.Nodes.JsonObject
+                        ?? throw new InvalidOperationException("Patch must be a JSON object");
+                    MergePatchRecursive(currentNode, patchNode);
+                    // The OWNER mints the monotonic Version on apply (same rule as the deferred path).
+                    currentNode[versionKey] = version;
+                    var merged = System.Text.Json.JsonSerializer
+                        .Deserialize<T>(currentNode.ToJsonString(jsonOpts), jsonOpts);
+                    if (merged is null)
+                        throw new System.Text.Json.JsonException("Merged value deserialised to null");
+
+                    var newStore = s.Update(collectionName, c => c.Update(entityId, merged));
+                    var changeItem = primary.ApplyChanges(new EntityStoreAndUpdates(
+                        newStore,
+                        [new EntityUpdate(collectionName, entityId, merged) { OldValue = liveEntity }],
+                        primary.StreamId));
+
+                    // 🚨 Ack ON ACCEPT — the patch is merged and committing in THIS turn. The
+                    // caller's cross-hub Update emits immediately (emit-onstart) rather than waiting
+                    // on durable persistence; the durable write follows via Synchronize, off-turn.
+                    AckOnce(true);
+                    return changeItem;
+                }
+                catch (Exception ex)
+                {
+                    AckOnce(false, ClassifyPatchException(ex, hubPath));
+                    return null;
+                }
+            },
+            ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
     }
 
     private static Type? WalkBaseForGeneric(Type type, Type genericDef)

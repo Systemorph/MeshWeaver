@@ -441,7 +441,7 @@ What `e2e up` does, and why:
 | Deploy `memex-e2e-portal` (Deployment + Service + Ingress) reusing `memex-portal-config`/`-secrets` via `envFrom` | Proven config; override **only** `ConnectionStrings__memex` → `memex_e2e` and `Authentication__EnableDevLogin=true`. Clustering stays `Localhost` (own in-process silo). `/data` is an ephemeral `emptyDir` (mesh data is in PG). |
 | Ingress for `e2e.memex.localhost` (covered by the `*.memex.localhost` mkcert cert) + a `:443→:8444` port-forward | The reverse proxy Playwright drives. |
 
-`PortalFixture` authenticates via `POST /dev/signin?personId=Roland` and sets `IgnoreHTTPSErrors=true`, so the self-signed cert is fine. The repeatable flow is captured as the [`/playwright`](../../../../.claude/skills/playwright/SKILL.md) skill. **Always deploy on Colima and drive THAT — never run a model E2E against the Monolith (no model) or the `memex` portal (Entra + real data).**
+`PortalFixture` authenticates via `POST /dev/signin?personId=Roland` and sets `IgnoreHTTPSErrors=true`, so the self-signed cert is fine. The repeatable flow is captured as the `/playwright` skill. **Always deploy on Colima and drive THAT — never run a model E2E against the Monolith (no model) or the `memex` portal (Entra + real data).**
 
 ---
 

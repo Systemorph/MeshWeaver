@@ -70,9 +70,10 @@ public class SpaceResolveSpaceTest
 
     // ---------- BuildBodyContent carries the Space path as NodePath ----------
     // The body markdown is a child of the Overview area; its stream owner is not a reliable
-    // node-path source, so the relative @@("area:Search") in the welcome would render an
-    // unaddressed (dead) layout area. BuildBodyContent must stamp NodePath = the Space path
-    // so MarkdownView resolves the embed.
+    // node-path source, so a relative @@-embed in an authored body would render an unaddressed
+    // (dead) layout area. BuildBodyContent must stamp NodePath = the Space path so MarkdownView
+    // resolves the embed. (The default welcome no longer ships @@("area:Search") — the catalog is
+    // a fixed section via BuildNavigation — but NodePath is still stamped for authored bodies.)
 
     [Fact]
     public void BuildBodyContent_DefaultWelcome_CarriesSpacePathAsNodePath()
@@ -81,8 +82,8 @@ public class SpaceResolveSpaceTest
 
         var md = Assert.IsType<MarkdownControl>(control);
         md.NodePath.Should().Be("Acme",
-            "the welcome body must carry the Space path so @@(\"area:Search\") resolves");
-        md.Markdown.ToString()!.Should().Contain("area:Search", "the welcome ships the catalog embed");
+            "the welcome body must carry the Space path so authored @@-embeds resolve");
+        md.Markdown.ToString()!.Should().Contain("Welcome", "the default welcome placeholder is shown");
     }
 
     [Fact]
