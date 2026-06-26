@@ -76,6 +76,20 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     private readonly bool _bypassCache;
     private readonly JsonSerializerOptions _jsonOptions;
 
+    // 🚨 How long a cross-hub Update waits for the OWNER's PatchDataResponse before
+    // falling back to the optimistic snapshot. Deliberately SHORT (not the old 30s):
+    // a content write must EMIT AS SOON AS THE ACTIVITY IS STARTED (the message is
+    // received / the patch is accepted), NEVER block until the round finishes. Fast
+    // failures — RLS denial (DeliveryFailure Unauthorized) and validation rejection —
+    // are posted by the AccessControlPipeline gate AHEAD of the owner's action block,
+    // so they come back within this bound and still fault the caller (fail-fast). Only
+    // the SUCCESS ack can queue behind a long round on the busy owner; on that timeout
+    // we emit the optimistic snapshot (the patch applies when the owner drains its
+    // queue) — this is exactly what kills the 30s GUI "Response did not arrive in time"
+    // stall during thread execution. Callers needing the reconciled state follow the
+    // shared GetMeshNodeStream(path) handle.
+    private static readonly TimeSpan UpdateResponseWaitBound = TimeSpan.FromSeconds(2);
+
     internal MeshNodeStreamHandle(IWorkspace workspace, string? path = null,
         IMeshNodeStreamCache? cache = null, bool bypassCache = false)
     {
@@ -468,6 +482,17 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             var dsStream = dataSource.GetStreamForPartition(null)
                 ?? throw new InvalidOperationException("No stream for MeshNode partition");
 
+            // 🚨 Single-emit guard shared by the post-write stream echo AND the no-op
+            // short-circuit below. Without it a no-op write would either hang (echo never
+            // arrives) or, defensively, a late echo could OnNext after OnCompleted.
+            var emitted = 0;
+            void EmitOnce(MeshNode node)
+            {
+                if (System.Threading.Interlocked.Exchange(ref emitted, 1) != 0) return;
+                observer.OnNext(node);
+                observer.OnCompleted();
+            }
+
             // Subscribe before applying the partition write so the post-update emission
             // is never missed. Baseline = pre-write version; first emission past it wins.
             long? baseline = null;
@@ -480,10 +505,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                 }
                 if (change.Version <= baseline.Value) return;
                 if (change.Value is { } node)
-                {
-                    observer.OnNext(node);
-                    observer.OnCompleted();
-                }
+                    EmitOnce(node);
             }, observer.OnError);
 
             // Resolve the target Path: an explicit _path wins, otherwise default to the
@@ -515,6 +537,21 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             $"MeshNode '{targetPath ?? "<own>"}' not found. Available: [{string.Join(", ", collection.Instances.Keys.Select(k => k.ToString()))}]");
 
                     var updated = update(current);
+                    // 🚨 No-op completion. When the update makes no net change to the node
+                    // (a guard `return node`, or an empty drain), the reduced stream emits
+                    // nothing: DistinctUntilChanged drops an identical value, and the Version
+                    // restamp below is ALSO a no-op whenever Hub.Version has not advanced since
+                    // the last write to this node (no intervening hub activity). The refStream
+                    // subscription above then never sees a second emission and this observable
+                    // HANGS forever — the host-hang behind check_inbox's no-timeout TCS
+                    // (InboxToolIntegrationTest.CheckInbox_TwoCallsBackToBack exceeded the 90s
+                    // blame-hang deadline → test-host crash → shard abort). Complete the
+                    // observable directly with the unchanged node and skip the meaningless write.
+                    if (ReferenceEquals(updated, current) || Equals(updated, current))
+                    {
+                        EmitOnce(current);
+                        return null; // nothing to apply — true no-op
+                    }
                     // 🚨 Version is the ONE reliable ordering field and it is stamped
                     // by the OWNING hub here (this is an own write on the owner).
                     // DateTime/LastModified is NOT a cross-machine clock, so it must
@@ -818,25 +855,6 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                 return;
                             }
 
-                            // Defer the terminal emission to the OWNER's
-                            // PatchDataResponse so structured failures surface on
-                            // the Rx OnError stream (RLS denial → caller sees it)
-                            // and a read-after-write sees the committed state (the
-                            // subscription stays alive until the owner has actually
-                            // applied the patch — the eager-emit + Take(1) used to
-                            // tear `composite` down before the round-trip landed).
-                            //
-                            // 🚨 Deadlock-safe: the patch was ALREADY posted above
-                            // (fire-and-forget side effect), so writers that don't
-                            // await completion are unaffected — only the terminal
-                            // OnNext/OnCompleted defers. The emission fires from the
-                            // reactive `Hub.Observe(delivery)` Subscribe callback,
-                            // NOT a synchronous `.Wait()/.FirstAsync()` bridge on a
-                            // hub action block (the shape the old comment warned
-                            // against). The 30s Timeout falls back to the optimistic
-                            // snapshot so a slow-but-eventually-applied patch
-                            // (Orleans cold-start) still completes successfully.
-                            //
                             // 🚨 Restore the caller's identity around OnNext: we're
                             // on the remote-stream emission thread (opened under
                             // ImpersonateAsSystem), so SwitchAccessContext back to
@@ -860,16 +878,31 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                 }
                             }
 
+                            // 🚨 BOUNDED response wait — emit as soon as the activity is
+                            // STARTED (the patch is accepted), fail-fast on errors, and NEVER
+                            // wait for the round to finish. We still observe the owner's
+                            // PatchDataResponse so a genuine rejection surfaces fail-fast on the
+                            // caller's OnError (RLS denial → UnauthorizedAccessException;
+                            // validation → MeshNodeStreamException) — denials are posted by the
+                            // AccessControlPipeline gate AHEAD of the owner's action block, so a
+                            // busy round does NOT delay them. But the SUCCESS ack can queue
+                            // behind a long round on the busy owner; capping the wait at
+                            // UpdateResponseWaitBound and falling back to the optimistic snapshot
+                            // on timeout is what kills the old 30s GUI "Response did not arrive
+                            // in time" stall (the patch was already posted; it applies when the
+                            // owner drains its queue). The emitted value is the locally-computed
+                            // optimistic snapshot — the RFC 7396 patch is deterministic, so
+                            // `updated` matches the owner's reconciled state. Callers needing the
+                            // reconciled state follow the shared GetMeshNodeStream(path) handle.
                             var responseSub = _workspace.Hub.Observe(delivery)
-                                .Timeout(TimeSpan.FromSeconds(30))
+                                .Timeout(UpdateResponseWaitBound)
                                 .Take(1)
                                 .Subscribe(
                                     d =>
                                     {
-                                        // Owner posted a structured rejection
-                                        // (deserialization / validation gate) as
-                                        // PatchDataResponse.NodeError, or a non-success
-                                        // ack → surface as a typed MeshNodeStreamException.
+                                        // Owner posted a structured rejection (deserialization /
+                                        // validation gate) as PatchDataResponse.NodeError, or a
+                                        // non-success ack → surface as a typed exception (fail-fast).
                                         if (d.Message is PatchDataResponse resp
                                             && (resp.NodeError is not null || !resp.Success))
                                         {
@@ -883,9 +916,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                         }
                                         else
                                         {
-                                            // Success ack — patch committed. The RFC 7396
-                                            // patch is deterministic, so `updated` matches
-                                            // the owner's reconciled state.
+                                            // Success ack — patch accepted; the activity is started.
                                             EmitTerminal();
                                         }
                                     },
@@ -894,9 +925,9 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                         // RLS denial: the AccessControlPipeline's
                                         // [RequiresPermission(Update)] gate posts
                                         // DeliveryFailure(Unauthorized) → surfaced here as
-                                        // DeliveryFailureException. Map to
-                                        // UnauthorizedAccessException; its Message already
-                                        // reads "Access denied: user '…' lacks Update …".
+                                        // DeliveryFailureException. Map to UnauthorizedAccessException
+                                        // (fail-fast); its Message already reads
+                                        // "Access denied: user '…' lacks Update …".
                                         if (ex is DeliveryFailureException dfx
                                             && dfx.Failure?.ErrorType == ErrorType.Unauthorized)
                                         {
@@ -908,17 +939,18 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                         }
                                         else if (ex is TimeoutException)
                                         {
-                                            // No response within 30s — optimistic fallback
-                                            // (Orleans cold-start tolerance). The patch was
-                                            // posted; it applies when the owner activates.
-                                            diagLogger?.LogWarning(
-                                                "[UpdateRemote] RESPONSE_TIMEOUT hub={Hub} target={Path} — optimistic fallback",
+                                            // No ack within the bound — the owner is busy (a round
+                                            // is running). Emit the optimistic snapshot now rather
+                                            // than wait for the activity to finish; the patch is
+                                            // posted and applies when the owner drains its queue.
+                                            diagLogger?.LogDebug(
+                                                "[UpdateRemote] RESPONSE_TIMEOUT hub={Hub} target={Path} — optimistic emit (owner busy)",
                                                 _workspace.Hub.Address, _path);
                                             EmitTerminal();
                                         }
                                         else
                                         {
-                                            // Other owner-side / delivery error → surface it.
+                                            // Other owner-side / delivery error → surface it (fail-fast).
                                             diagLogger?.LogWarning(ex,
                                                 "[UpdateRemote] response wait errored hub={Hub} target={Path}",
                                                 _workspace.Hub.Address, _path);
