@@ -14,6 +14,13 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class MarkdownOverviewLayoutArea
 {
+    /// <summary>
+    /// Renders the read-only Overview layout area for a Markdown node, including the
+    /// collaborative markdown body, children, approvals, and inline comments.
+    /// </summary>
+    /// <param name="host">The layout area host rendering the area.</param>
+    /// <param name="_">The rendering context for the area.</param>
+    /// <returns>An observable stream of the view for the Overview layout area.</returns>
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
@@ -33,7 +40,8 @@ public static class MarkdownOverviewLayoutArea
         var nodePath = node?.Path ?? host.Hub.Address.ToString();
         var rawContent = GetMarkdownContent(node);
 
-        var container = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host));
+        // Markdown pages render full width (max-width: 100%), not the centered 1200px reading column.
+        var container = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host, maxWidthOverride: "100%"));
 
         // Standard header with title/icon
         container = container.WithView(MeshNodeLayoutAreas.BuildHeader(host, node, false));
@@ -85,6 +93,12 @@ public static class MarkdownOverviewLayoutArea
         return Controls.Html("<p style=\"color: var(--neutral-foreground-hint); font-style: italic;\">No content yet. Use the menu to start editing.</p>");
     }
 
+    /// <summary>
+    /// Renders the Thumbnail layout area — a compact card representation of the Markdown node.
+    /// </summary>
+    /// <param name="host">The layout area host rendering the area.</param>
+    /// <param name="_">The rendering context for the area.</param>
+    /// <returns>The view for the Thumbnail layout area.</returns>
     public static UiControl Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
