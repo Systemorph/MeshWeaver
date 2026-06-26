@@ -187,7 +187,21 @@ builder.UseOrleansMeshServer(address, silo =>
             configureDataSource: connectionString.Contains("database.azure.com")
                 ? dsb =>
                 {
-                    var credential = new DefaultAzureCredential();
+                    // In an AKS pod only the SERVER-SIDE credentials exist (Environment,
+                    // Workload Identity, Managed Identity). Excluding the dev-machine
+                    // credentials stops DefaultAzureCredential from probing — and dumping a
+                    // ~30-line CredentialUnavailableException stack trace for — Azure CLI /
+                    // PowerShell / azd / Visual Studio on every token acquisition (the
+                    // credential-chain log noise on the portal pods). The credential that
+                    // actually succeeds (Workload/Managed Identity) is unchanged.
+                    var credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions
+                    {
+                        ExcludeAzureCliCredential = true,
+                        ExcludeAzurePowerShellCredential = true,
+                        ExcludeAzureDeveloperCliCredential = true,
+                        ExcludeVisualStudioCredential = true,
+                        ExcludeInteractiveBrowserCredential = true,
+                    });
                     dsb.UsePeriodicPasswordProvider(async (_, ct) =>
                     {
                         var token = await credential.GetTokenAsync(
