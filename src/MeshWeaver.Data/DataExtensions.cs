@@ -866,7 +866,17 @@ public static class DataExtensions
     /// Durability is unchanged and off-turn: <c>primary.ApplyChanges → SetCurrent</c> triggers the
     /// data source's <c>DataSourceWithStorage.Synchronize</c> (System-identity persistence hub) —
     /// the exact path EVERY own-write already persists through — so no read-after-write guarantee
-    /// or persisted state is lost by dropping the explicit flush.</para>
+    /// or persisted state is lost by dropping the explicit flush.
+    ///
+    /// <para><b>Feed publish (invariant C).</b> The dropped post-commit flush did TWO things:
+    /// persist (above, now via Synchronize) AND publish the <c>IMeshChangeFeed.Updated</c> event
+    /// that evicts the Workspace <c>_remoteStreamCache</c> + refreshes synced-query providers. The
+    /// feed publish is NOT durability, so Synchronize does not cover it; without it a fresh
+    /// subscriber after a cross-hub MeshNode update reads a STALE cached snapshot
+    /// (<c>WorkspaceCacheEviction.NewSubscriber_AfterUpdate</c>). It is restored feed-only via
+    /// <see cref="IPostCommitFlush.PublishUpdated"/> on accept (a synchronous, non-re-entrant
+    /// <c>Subject.OnNext</c> — no IO, no wedge), NOT a full <c>Flush</c> (which would double-write
+    /// against Synchronize).</para>
     /// </summary>
     private static void ApplyMeshNodePatchAtomic<T>(
         ISynchronizationStream<T> stream,
@@ -963,6 +973,15 @@ public static class DataExtensions
                     // caller's cross-hub Update emits immediately (emit-onstart) rather than waiting
                     // on durable persistence; the durable write follows via Synchronize, off-turn.
                     AckOnce(true);
+
+                    // Publish the Updated change event (feed-ONLY — NOT a durable Flush; Synchronize
+                    // persists off-turn, so Flush here would double-write). The post-commit Flush this
+                    // atomic path dropped (to keep the ack emit-onstart) was ALSO what published the
+                    // IMeshChangeFeed.Updated event that evicts the Workspace _remoteStreamCache — so
+                    // without this a fresh subscriber after a cross-hub MeshNode update reads a stale
+                    // cached snapshot (WorkspaceCacheEviction.NewSubscriber_AfterUpdate). Synchronous
+                    // Subject.OnNext — no IO, no re-entrancy — so it does not reintroduce the wedge.
+                    hub.ServiceProvider.GetService<IPostCommitFlush>()?.PublishUpdated(merged);
                     return changeItem;
                 }
                 catch (Exception ex)

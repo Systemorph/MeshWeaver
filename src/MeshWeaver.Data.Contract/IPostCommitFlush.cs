@@ -23,4 +23,16 @@ public interface IPostCommitFlush
     /// for entity types this hook does not persist.
     /// </summary>
     IObservable<bool> Flush(object committed);
+
+    /// <summary>
+    /// Publish a <c>MeshChangeKind.Updated</c> change event for <paramref name="committed"/>
+    /// to the <c>IMeshChangeFeed</c> — WITHOUT a durable write. The feed drives the
+    /// Workspace's <c>_remoteStreamCache</c> eviction (so a fresh <c>GetRemoteStream</c> after
+    /// the update sees the new snapshot, not a cached pre-update one) and refreshes synced-query
+    /// providers. Use this on a write path that already persists by another route (the MeshNode
+    /// cross-hub atomic apply persists off-turn via <c>DataSourceWithStorage.Synchronize</c>, so
+    /// <see cref="Flush"/> would double-write — but its feed publish must still happen). No-op for
+    /// entity types this hook does not own. Synchronous, non-blocking; never chained to the ack.
+    /// </summary>
+    void PublishUpdated(object committed);
 }

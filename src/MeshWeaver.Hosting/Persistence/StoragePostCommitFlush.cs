@@ -39,4 +39,18 @@ internal sealed class StoragePostCommitFlush(IMessageHub hub) : IPostCommitFlush
             .Select(_ => true)
             .DefaultIfEmpty(true);
     }
+
+    // Feed-only publish for the MeshNode cross-hub ATOMIC apply (ApplyMeshNodePatchAtomic),
+    // which persists off-turn via DataSourceWithStorage.Synchronize and so must NOT call Flush
+    // (that would double-write). The atomic path dropped the post-commit Flush to keep the ack
+    // emit-onstart — but Flush was ALSO what published the Updated event that evicts the
+    // Workspace's _remoteStreamCache. Without this, a fresh subscriber after a cross-hub MeshNode
+    // update reads a stale cached snapshot (WorkspaceCacheEviction.NewSubscriber_AfterUpdate).
+    // A plain Subject.OnNext — no IO, no re-entrancy — so it never reintroduces the atioz wedge.
+    public void PublishUpdated(object committed)
+    {
+        if (committed is not MeshNode node)
+            return;
+        hub.ServiceProvider.GetService<IMeshChangeFeed>()?.Publish(MeshChangeEvent.Updated(node));
+    }
 }
