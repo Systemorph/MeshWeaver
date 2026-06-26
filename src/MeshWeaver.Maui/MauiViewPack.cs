@@ -235,6 +235,20 @@ public sealed class LayoutAreaView : ContentView
     }
 }
 
+/// <summary>
+/// Mesh-scoped holder for the per-user "real" sub-hub (<c>portal/device-user</c>) that the native
+/// interactive-markdown view starts kernel activities FROM — NEVER the top-level mesh hub (an activity
+/// created from the root hub is ownerless/unroutable and storms the router; activities must always start
+/// from a real sub-hub). Populated once at startup in <c>MauiProgram</c>; read by
+/// <see cref="MauiCollaborativeMarkdownView"/>. <see cref="OwnerPath"/> is the owner partition (the
+/// device user's home) under which the <c>_Activity</c> satellite is created.
+/// </summary>
+public sealed class MauiMarkdownExecutionHub
+{
+    public IMessageHub? Hub { get; set; }
+    public string? OwnerPath { get; set; }
+}
+
 public static class MauiViewPackExtensions
 {
     /// <summary>
@@ -247,7 +261,9 @@ public static class MauiViewPackExtensions
             .AddLayoutClient()
             .WithServices(services => services
                 .AddSingleton(BuildRegistry())
-                .AddSingleton<IMauiControlRenderer, MauiControlRenderer>());
+                .AddSingleton<IMauiControlRenderer, MauiControlRenderer>()
+                // Holder for the per-user execution sub-hub; MauiProgram populates it at startup.
+                .AddSingleton<MauiMarkdownExecutionHub>());
 
     private static MauiViewRegistry BuildRegistry() => new MauiViewRegistry()
         // Wave 1 — leaves (containers resolve to ContainerView via the IContainerControl fallback).
@@ -255,6 +271,8 @@ public static class MauiViewPackExtensions
         .Register<ButtonControl, ButtonView>()
         .Register<HtmlControl, HtmlView>()
         .Register<MarkdownControl, MarkdownView>()
+        // Interactive markdown (Doc pages): renders the body + executes code blocks via the kernel.
+        .Register<CollaborativeMarkdownControl, MauiCollaborativeMarkdownView>()
         .Register<IconControl, IconView>()
         .Register<ProgressControl, ProgressView>()
         .Register<NamedAreaControl, NamedAreaView>()
@@ -414,6 +432,130 @@ public sealed class MarkdownView : MauiView<MarkdownControl>
         var html = Markdig.Markdown.ToHtml(markdown, pipeline);
         return MauiHtmlDocument.ForBody(html);
     }
+}
+
+/// <summary>
+/// Interactive markdown — the Overview area of Markdown/Doc nodes emits a
+/// <see cref="CollaborativeMarkdownControl"/>. Renders the body natively (the same dark/sans WebView shell
+/// as <see cref="MarkdownView"/>) AND, on JIT platforms, EXECUTES every code block: it creates a per-view
+/// Activity from the REAL per-user sub-hub (<see cref="MauiMarkdownExecutionHub"/> — never the top-level
+/// mesh hub) via the framework's <see cref="MarkdownViewLogic.CreateActivityAndSubmit"/>, and embeds each
+/// kernel result area as a native <see cref="LayoutAreaView"/> over the activity address. Kernel/compile
+/// failures surface through that embedded area (the kernel writes a <c>**Execution failed**</c> control +
+/// flips the activity log to Failed); a create/route failure paints a red notice; on iOS (no JIT) the body
+/// renders read-only with an "execution unavailable" notice — never a silent spinner. Emancipated from
+/// Blazor: reuses <see cref="MarkdownViewLogic"/>; no <c>Microsoft.AspNetCore.App</c>.
+/// <para>Collaborative overlays (inline comments, tracked-changes accept/reject, view-mode switch) are a
+/// separate Blazor-only feature and are intentionally not reproduced here — Doc pages are read-only.</para>
+/// </summary>
+public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdownControl>
+{
+    private VerticalStackLayout _root = null!;
+    private bool _submitted;
+
+    protected override View CreateView() => _root = new VerticalStackLayout { Spacing = 8 };
+
+    protected override void Bind() =>
+        Bind<object>(Model.Value, v => Rebuild(MarkdownViewLogic.CoerceString(v) ?? ""));
+
+    private void Rebuild(string markdown)
+    {
+        _root.Children.Clear();
+        if (string.IsNullOrWhiteSpace(markdown)) return;
+
+        // Same framework pipeline the Blazor views use: HTML (kernel placeholders intact) + typed submissions.
+        var result = MarkdownViewLogic.Render(markdown, collection: null, currentNodePath: Model.NodePath);
+
+        // No executable blocks (the common + all read-only case) → one WebView for the whole doc.
+        if (result.CodeSubmissions is not { Count: > 0 })
+        {
+            _root.Children.Add(NewHtmlChunk(result.Html));
+            return;
+        }
+
+        // Real per-user sub-hub to start the activity FROM (never the top-level mesh hub).
+        var exec = Stream?.Hub.ServiceProvider.GetService<MauiMarkdownExecutionHub>();
+        var senderHub = exec?.Hub;
+        var ownerPath = exec?.OwnerPath;
+
+        // Segment the HTML into ordered (html | kernel-area) parts; build the stack with placeholders.
+        var pending = new List<(ContentView Host, string SubmissionId)>();
+        foreach (var (html, submissionId) in MarkdownViewLogic.SplitKernelResultAreas(result.Html))
+        {
+            if (submissionId is not null)
+            {
+                var host = new ContentView { Content = Notice("Starting interactive kernel…", Colors.Gray) };
+                pending.Add((host, submissionId));
+                _root.Children.Add(host);
+            }
+            else if (!string.IsNullOrEmpty(html))
+                _root.Children.Add(NewHtmlChunk(html!));
+        }
+
+        if (_submitted) return;
+        _submitted = true;
+
+        // iOS has no JIT → Roslyn can't run; surface that instead of an eternal spinner.
+        if (OperatingSystem.IsIOS())
+        {
+            SetAll(pending, "Interactive code execution is unavailable on this device (no JIT).", Colors.Gray);
+            return;
+        }
+        if (senderHub is null || string.IsNullOrEmpty(ownerPath))
+        {
+            SetAll(pending, "Interactive code execution unavailable — no owning hub.", Colors.OrangeRed);
+            return;
+        }
+
+        var meshService = senderHub.ServiceProvider.GetRequiredService<IMeshService>();
+        var kernelId = Guid.NewGuid().ToString("N");
+        var activityAddress = new Address($"{ownerPath}/_Activity/markdown-{kernelId}");
+
+        MarkdownViewLogic.CreateActivityAndSubmit(
+            senderHub, meshService, activityAddress, ownerPath, kernelId, result.CodeSubmissions!,
+            // Activity is routable → embed the live kernel result areas (subscribe-after-create).
+            onReady: () => MainThread.BeginInvokeOnMainThread(() =>
+            {
+                var workspace = Stream!.Hub.GetWorkspace();
+                foreach (var (host, submissionId) in pending)
+                    host.Content = new LayoutAreaView(
+                        workspace, activityAddress, new LayoutAreaReference(submissionId), Renderer);
+            }),
+            // Create/route failed → surface it (no silent spinner).
+            onError: ex => MainThread.BeginInvokeOnMainThread(() =>
+                SetAll(pending, $"⚠ Could not start interactive kernel — {ex.GetType().Name}: {ex.Message}",
+                    Colors.OrangeRed)));
+    }
+
+    // A WebView chunk in MarkdownView's dark/sans shell, auto-sized to its content (JS scrollHeight).
+    private static View NewHtmlChunk(string bodyHtml)
+    {
+        var web = new WebView { HeightRequest = 80, BackgroundColor = Colors.Transparent };
+        web.Source = MauiHtmlDocument.ForBody(bodyHtml);
+        web.Navigated += async (_, _) =>
+        {
+            try
+            {
+                var h = await web.EvaluateJavaScriptAsync("document.body.scrollHeight");
+                if (double.TryParse(h, System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out var px) && px > 0)
+                    MainThread.BeginInvokeOnMainThread(() => web.HeightRequest = px + 8);
+            }
+            catch { /* keep the fallback height */ }
+        };
+        return web;
+    }
+
+    private static void SetAll(List<(ContentView Host, string SubmissionId)> pending, string text, Color color)
+    {
+        foreach (var (host, _) in pending) host.Content = Notice(text, color);
+    }
+
+    private static View Notice(string text, Color color) => new Label
+    {
+        Text = text, FontSize = 12, TextColor = color,
+        Margin = new Thickness(8), LineBreakMode = LineBreakMode.WordWrap,
+    };
 }
 
 /// <summary>Badge → a pill-styled <see cref="Label"/> in a <see cref="Border"/>.</summary>

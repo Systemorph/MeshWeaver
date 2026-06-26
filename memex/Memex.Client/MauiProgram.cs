@@ -4,6 +4,8 @@ using Memex.Client.Services;
 using Memex.Client.Voice;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
+using MeshWeaver.AI;
+using MeshWeaver.Documentation;
 using MeshWeaver.Layout;
 using MeshWeaver.Maui;
 using MeshWeaver.Graph;
@@ -91,6 +93,15 @@ public static class MauiProgram
                 .AddSingleton<MeshWeaver.NuGet.INuGetAssemblyResolver, NoOpNuGetAssemblyResolver>())
             .AddGraph()
             .AddSpaceType()
+            // 🌐 Public catalogs served OFFLINE from the embedded resources shipped in THIS distro —
+            // no GitHub fetch, no static-repo import, no Postgres. AddAI registers the Agent / Skill /
+            // Harness / Provider / Model node types plus their in-memory BuiltIn*Provider read-only
+            // surfaces; AddDocumentation registers the embedded "Doc" partition + DocContent. Both are
+            // mesh-only (plain Microsoft.NET.Sdk, no AspNetCore) so the maccatalyst/iOS build stays
+            // AspNetCore-free. Empty serveFromPartition ⇒ served straight from memory off the embedded
+            // .md (the DB-sync/shadow path is only for the PG portals; the SQLite mesh never imports).
+            .AddAI()
+            .AddDocumentation()
             // Connectable-mesh node type; THIS instance is a MemexInstance node too.
             .AddMemexInstanceType()
             // Layered application preferences (Device → User → Space → System cascade) + UI zoom.
@@ -193,13 +204,31 @@ public static class MauiProgram
         var hub = app.Services.GetRequiredService<IMessageHub>();
         var osName = Environment.UserName;
         if (string.IsNullOrWhiteSpace(osName)) osName = "Device User";
-        hub.ServiceProvider.GetRequiredService<AccessService>()
-            .SetCircuitContext(new AccessContext { ObjectId = DeviceUserId, Name = osName });
+        var deviceUser = new AccessContext { ObjectId = DeviceUserId, Name = osName };
+        hub.ServiceProvider.GetRequiredService<AccessService>().SetCircuitContext(deviceUser);
         // Onboarding is now INTERACTIVE (OnboardingPage): on first launch the user fills in their full
         // name + bio, and "Get started" runs DeviceOnboarding (creates the User node → framework provisions
         // the user partition + self-admin, then global admin in Admin/_Access). A returning launch detects
         // the existing User node and goes straight to the shell.
         SeedOwnInstance(hub);
+
+        // 🌐 A REAL per-user sub-hub (portal/device-user) to start kernel ACTIVITIES from. Activities must
+        // NEVER be created on the top-level mesh hub — an ownerless/root-hub activity is unroutable and
+        // storms the router. Mirrors the Blazor PortalApplication: a post-pipeline stamps the device user
+        // on every post (so CreateNode/SubmitCode are attributed and RLS lets them write under the user's
+        // own partition), and RegisterStream makes the hub routable. The native interactive-markdown view
+        // (MauiCollaborativeMarkdownView) reads this hub from MauiMarkdownExecutionHub.
+        var routing = hub.ServiceProvider.GetRequiredService<IRoutingService>();
+        var portalHub = hub.GetHostedHub(
+            AddressExtensions.CreatePortalAddress(DeviceUserId),
+            cfg => cfg
+                .AddPostPipeline(sync => sync.AddPipeline((d, next) =>
+                    next(d.AccessContext is null ? d.SetAccessContext(deviceUser) : d)))
+                .WithInitialization(h => h.RegisterForDisposal(routing.RegisterStream(h))));
+        portalHub!.ServiceProvider.GetRequiredService<AccessService>().SetCircuitContext(deviceUser);
+        var execHolder = hub.ServiceProvider.GetRequiredService<MeshWeaver.Maui.MauiMarkdownExecutionHub>();
+        execHolder.Hub = portalHub;
+        execHolder.OwnerPath = DeviceUserId;
 
         return app;
     }

@@ -107,6 +107,10 @@
     <ItemGroup>
       <ProjectReference Include="..\..\src\MeshWeaver.Connection.SignalR\MeshWeaver.Connection.SignalR.csproj" />
       <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
+      <!-- Public catalogs shipped IN THE DISTRO (offline, no GitHub, no import): MeshWeaver.AI already
+           embeds the Agent/Skill/Harness/Provider .md; MeshWeaver.Documentation embeds the Doc pages
+           + DocContent. Both are plain Microsoft.NET.Sdk (no AspNetCore) → MAUI/iOS/MacCatalyst-safe. -->
+      <ProjectReference Include="..\..\src\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />
       <!-- Local-first mesh: this client hosts its own in-process monolith mesh on SQLite.
            (Hosting.Monolith brings MeshWeaver.Hosting transitively — AddRowLevelSecurity lives there.) -->
       <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
