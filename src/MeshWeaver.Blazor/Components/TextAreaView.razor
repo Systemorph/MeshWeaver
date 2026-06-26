@@ -2,7 +2,7 @@
 @inherits InputBase<TextAreaControl,TextAreaView, string>
 
 <FluentTextArea @bind-Value="Value" Placeholder="@Placeholder" Label="@Label" Autofocus="@AutoFocus"
-    Disabled="@Disabled" Immediate="@Immediate" ImmediateDelay="@ImmediateDelay" Style="@Style" Class="@Class"
+    Disabled="@Disabled" Immediate="@Immediate" ImmediateDelay="@ImmediateDelay" Style="@EffectiveStyle" Class="@Class"
     Readonly="@Readonly" Required="@Required" Size="@Size" MinLength="@MinLength" MaxLength="@MaxLength" Rows="@Rows"
     Cols="@Cols" Resize="@Resize" @onfocusout="OnBlur">
     @if (IconStart is not null)
@@ -20,6 +20,14 @@
     private int Rows { get; set; } = 3;
     private int? Cols { get; set; }
     private TextAreaResize? Resize { get; set; }
+
+    // A text area should fill its container (forms, the chat composer, …) — FluentTextArea is NOT
+    // full-width by default (only dialogs forced it). Default to width:100% unless the author set an
+    // explicit char width via Cols; an explicit Style still wins (it comes last).
+    private string? EffectiveStyle =>
+        Cols.HasValue ? Style
+        : string.IsNullOrEmpty(Style) ? "width: 100%;"
+        : $"width: 100%; {Style}";
 
     protected override void BindData()
     {
