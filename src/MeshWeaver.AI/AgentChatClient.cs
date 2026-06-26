@@ -840,20 +840,17 @@ public class AgentChatClient : IAgentChat
         var tools = functionInvoker?.AdditionalTools is { Count: > 0 } additionalTools
             ? additionalTools.ToList()
             : new List<AITool>();
-        // Always inject check_inbox so the agent can poll for user messages
-        // queued during the in-flight turn. The tool drains
-        // Thread.PendingUserMessages atomically and returns the texts so the
-        // agent can fold them into the current response — see InboxTool.
-        // 🚫 Mid-round inbox (check_inbox) is DISABLED. Follow-up messages typed while a
-        // round is in flight queue in MeshThread.PendingUserMessages and are ingested ONLY
-        // after the round finishes: ThreadSubmissionServer.InstallServerWatcher observes
-        // Status == Idle with pending messages and dispatches the next round. The mid-round
-        // check_inbox tool bridged a TaskCompletionSource onto the hub action-block scheduler
-        // (a hand-woven async gate — the very shape the actor model deadlocks on) to deliver
-        // messages inline; it's the suspected thread-deadlock/"thread disappears" source.
-        // Removed in favour of the simpler, race-free "ingest at the round boundary" model.
-        // To re-introduce mid-round steering, do it WITHOUT a TCS gate (a better design: a
-        // notification channel the round consumes reactively — see ThreadOperations.md).
+        // Mid-round inbox: inject check_inbox so the agent can drain follow-up messages
+        // queued DURING the in-flight round and fold them inline into the current response.
+        // This is the reactive two-stage channel the prior disable-note prescribed — NOT the
+        // old TCS-on-hub-scheduler gate that deadlocked. Stage 1: the submission watcher
+        // OFFERS newly-pending messages into the per-thread ThreadInboxChannel (in-memory,
+        // no node write). Stage 2: check_inbox DRAINS that channel SYNCHRONOUSLY — no
+        // stream.Update, no Subscribe onto the hub action-block scheduler — so the
+        // TaskCompletionSource bridge can no longer resume a continuation on the hub thread
+        // (the old deadlock/"thread disappears" cause is gone). The thread node is written
+        // only at round boundaries (start commit + terminal fold). See ThreadInboxChannel.
+        tools.Add(InboxTool.CreateCheckInboxTool(hub, logger));
         chatOptions.Tools = tools;
         // Tools marked [HiddenTool] are internal plumbing: their calls must not reach the chat
         // UI as tool-call chrome nor the Information logs. The filter stays generic; with the

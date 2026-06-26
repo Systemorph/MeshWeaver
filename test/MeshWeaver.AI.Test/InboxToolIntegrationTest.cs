@@ -69,32 +69,41 @@ public class InboxToolIntegrationTest : AITestBase
     }
 
     [Fact]
-    public async Task CheckInbox_OnePending_ReturnsItAndDrainsTheQueue()
+    public async Task CheckInbox_OnePending_DeliversInline_DoesNotWriteNodeMidRound()
     {
         var ct = TestContext.Current.CancellationToken;
         var threadPath = await SeedEmptyThreadAsync(ct);
         var threadHub = await GetThreadHubAsync(threadPath, ct);
 
-        // Atomically enter a genuine mid-execution state WITH the message queued,
-        // gated on the tool's own stream (see SeedPendingMidExecutionAsync).
+        // Atomically enter a genuine mid-execution state WITH the message queued.
+        // The submission watcher's OfferFromNode buffers the pending message into the
+        // in-memory inbox channel (Stage 1) — no node write. (Gated on the own stream
+        // showing the pending message, so OfferFromNode has run before we drain.)
         var msgId = (await SeedPendingMidExecutionAsync(threadHub, ct, "hello mid-stream"))[0];
 
         var tool = InboxTool.CreateCheckInboxTool(threadHub);
         var result = (await tool.InvokeAsync(new AIFunctionArguments(), ct))?.ToString();
 
+        // Stage 2: check_inbox drains the channel and delivers the text inline.
         result.Should().Contain("hello mid-stream");
         result.Should().Contain("💬", "in-flight messages are returned with the user-input marker (no boilerplate framing)");
 
-        // Verify state: PendingUserMessages drained, msgId added to IngestedMessageIds.
-        var afterDrain = await WaitForOwnAsync(threadHub,
-            t => t.IngestedMessageIds.Contains(msgId)
-                 && !t.PendingUserMessages.ContainsKey(msgId),
-            15_000, ct);
-
-        afterDrain.PendingUserMessages.Should().NotContainKey(msgId);
-        afterDrain.IngestedMessageIds.Should().Contain(msgId);
-        // IsExecuting unchanged â€” drain doesn't flip lifecycle flags.
+        // 🚨 The core invariant: check_inbox does NOT write the thread node mid-round.
+        // Pending is NOT cleared and the id is NOT ingested by the drain — that folding
+        // happens only at the round's terminal boundary (no real round here, so it never
+        // happens). The message is delivered purely from the in-memory channel.
+        var afterDrain = await WaitForOwnAsync(threadHub, t => t.IsExecuting, 15_000, ct);
+        afterDrain.PendingUserMessages.Should().ContainKey(msgId,
+            "check_inbox must not clear PendingUserMessages mid-round — the fold happens at round-end");
+        afterDrain.IngestedMessageIds.Should().NotContain(msgId,
+            "check_inbox must not write IngestedMessageIds mid-round");
         afterDrain.IsExecuting.Should().BeTrue();
+
+        // Second call: the channel was drained and the id was channeled, so it is NOT
+        // re-delivered even though it is still in PendingUserMessages on the node.
+        var second = (await tool.InvokeAsync(new AIFunctionArguments(), ct))?.ToString();
+        second.Should().Be("(no new messages)",
+            "once delivered from the channel a message must not be re-delivered (channeled guard)");
     }
 
     [Fact]
@@ -123,13 +132,21 @@ public class InboxToolIntegrationTest : AITestBase
         secondIdx.Should().BeGreaterThan(firstIdx, "second should follow first in order");
         thirdIdx.Should().BeGreaterThan(secondIdx, "third should follow second in order");
 
-        var after = await WaitForOwnAsync(threadHub,
-            t => t.IngestedMessageIds.Count >= 3 && t.PendingUserMessages.IsEmpty,
-            15_000, ct);
-
+        // 🚨 check_inbox delivers all three inline from the in-memory channel WITHOUT
+        // writing the node: they stay pending and un-ingested until the round-end fold
+        // (no real round here). Drained-in-order is the contract; node mutation is not.
+        var after = await WaitForOwnAsync(threadHub, t => t.IsExecuting, 15_000, ct);
         foreach (var id in ids)
-            after.IngestedMessageIds.Should().Contain(id);
-        after.PendingUserMessages.Should().BeEmpty();
+        {
+            after.PendingUserMessages.Should().ContainKey(id,
+                "check_inbox must not clear pending mid-round — the fold happens at round-end");
+            after.IngestedMessageIds.Should().NotContain(id,
+                "check_inbox must not write IngestedMessageIds mid-round");
+        }
+
+        // Second call: all three were drained + channeled, so nothing is re-delivered.
+        var second = (await tool.InvokeAsync(new AIFunctionArguments(), ct))?.ToString();
+        second.Should().Be("(no new messages)");
     }
 
     [Fact]
@@ -140,17 +157,16 @@ public class InboxToolIntegrationTest : AITestBase
         var threadHub = await GetThreadHubAsync(threadPath, ct);
 
         // Atomically enter mid-execution WITH the message queued (one own-stream write).
-        var msgId = (await SeedPendingMidExecutionAsync(threadHub, ct, "only one"))[0];
+        await SeedPendingMidExecutionAsync(threadHub, ct, "only one");
 
         var tool = InboxTool.CreateCheckInboxTool(threadHub);
         var first = (await tool.InvokeAsync(new AIFunctionArguments(), ct))?.ToString();
         first.Should().Contain("only one");
 
-        // Wait on the OWN stream (the tool's drain commit lands there) before the
-        // second poll — the workspace round-trip is fire-and-forget inside the tool.
-        await WaitForOwnAsync(threadHub,
-            t => t.IngestedMessageIds.Contains(msgId), 15_000, ct);
-
+        // The drain is purely in-memory now (no workspace round-trip, no node write) — the
+        // first call already dequeued + channeled the message synchronously, so the second
+        // call needs no propagation wait. The id is still in PendingUserMessages on the
+        // node (folded only at round-end), but the channeled guard prevents re-delivery.
         var second = (await tool.InvokeAsync(new AIFunctionArguments(), ct))?.ToString();
         second.Should().Be("(no new messages)",
             "once a message has been delivered to the agent it must NOT be redelivered on the next call");
@@ -189,22 +205,29 @@ public class InboxToolIntegrationTest : AITestBase
             .Where(txt => !string.IsNullOrEmpty(txt) && txt!.Contains("Generating response"))
             .Take(1).Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
 
-        // Queue a follow-up while round 1 streams.
+        // Queue a follow-up while round 1 streams. Gate on the thread hub's OWN stream so
+        // the submission watcher's OfferFromNode (Stage 1, subscribed to the same own
+        // stream) has buffered it into the in-memory channel before we drain.
         client.SubmitMessage(threadPath, "Follow-up while you work",
             modelName: "inbox-fake-slow", createdBy: "rbuergi@systemorph.com");
-        var queued = await WaitForThreadAsync(threadPath,
+        var queued = await WaitForOwnAsync(threadHub,
             t => t.PendingUserMessages.Count > 0, 5_000, ct);
         var u2 = queued.PendingUserMessages.Keys.Single();
 
-        // Mid-execution check_inbox → drain + inline delivery (no split).
+        // Mid-execution check_inbox → in-memory drain + inline delivery (no split, no node write).
         var tool = InboxTool.CreateCheckInboxTool(threadHub);
         var toolResult = (await tool.InvokeAsync(new AIFunctionArguments(), ct))?.ToString();
         toolResult.Should().Contain("Follow-up", "the tool returns the in-flight message text to the agent");
 
-        // The follow-up drained (pending → ingested) — same drain guarantee as the idle path.
-        var afterDrain = await WaitForThreadAsync(threadPath,
-            t => t.IngestedMessageIds.Contains(u2), 10_000, ct);
-        afterDrain.PendingUserMessages.Should().NotContainKey(u2);
+        // 🚨 During the round (still Executing) the follow-up is STILL pending on the node —
+        // check_inbox delivered it in-memory and did NOT write the thread node. The fold
+        // (pending → ingested) happens only at the round-end terminal write.
+        var stillExecuting = await WaitForOwnAsync(threadHub,
+            t => t.IsExecuting && t.PendingUserMessages.ContainsKey(u2), 5_000, ct);
+        stillExecuting.PendingUserMessages.Should().ContainKey(u2,
+            "check_inbox must not clear pending mid-round");
+        stillExecuting.IngestedMessageIds.Should().NotContain(u2,
+            "the follow-up is ingested only at the round-end fold, not by check_inbox");
 
         // The round completes on R1 itself — no fresh cell was created (the old A7 split would
         // have frozen R1 with partial text and streamed "slow ack" into a separate R2).
@@ -214,6 +237,84 @@ public class InboxToolIntegrationTest : AITestBase
             .Take(1).Timeout(TimeSpan.FromSeconds(15)).ToTask(ct);
         r1Final!.Text.Should().Contain("slow ack",
             "the agent's continuation streams into the SAME cell and completes there (no split)");
+
+        // Round-end fold: the consumed follow-up is now in IngestedMessageIds and pending is
+        // empty — delivered inline, never lost, and never re-dispatched as a fresh round.
+        var afterRound = await WaitForThreadAsync(threadPath,
+            t => !t.IsExecuting && t.IngestedMessageIds.Contains(u2), 10_000, ct);
+        afterRound.PendingUserMessages.Should().NotContainKey(u2,
+            "the consumed follow-up is folded out of pending at round-end");
+        afterRound.IngestedMessageIds.Should().Contain(u2);
+    }
+
+    /// <summary>
+    /// Focused two-stage-channel guard. While a slow round streams, TWO follow-ups arrive
+    /// and the agent calls <c>check_inbox</c>: both are delivered INLINE from the in-memory
+    /// channel, the thread node is NOT written by the drain (pending stays non-empty while
+    /// Executing — the indirect proof that check_inbox no longer mutates the node mid-round),
+    /// and at round-end both are folded into <c>IngestedMessageIds</c> with pending empty and
+    /// nothing lost.
+    /// </summary>
+    [Fact]
+    public async Task CheckInbox_TwoFollowUps_DeliveredInline_FoldedAtRoundEnd_NoMidRoundWrite()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var threadPath = await SeedEmptyThreadAsync(ct);
+        var threadHub = await GetThreadHubAsync(threadPath, ct);
+        var client = GetClient();
+
+        // Round 1 — slow fake keeps the round Executing (~5 s).
+        client.SubmitMessage(threadPath, "First",
+            modelName: "inbox-fake-slow", createdBy: "rbuergi@systemorph.com");
+        await WaitForThreadAsync(threadPath,
+            t => t.IsExecuting && !string.IsNullOrEmpty(t.ActiveMessageId), 10_000, ct);
+
+        // Two follow-ups, submitted serially so each lands cleanly in PendingUserMessages
+        // (avoids the separate concurrent-submit array-replace race — out of scope here).
+        // Gate each on the thread hub's OWN stream so the submission watcher's OfferFromNode
+        // (Stage 1) has buffered it into the channel.
+        client.SubmitMessage(threadPath, "Follow-up ONE",
+            modelName: "inbox-fake-slow", createdBy: "rbuergi@systemorph.com");
+        var afterFirst = await WaitForOwnAsync(threadHub,
+            t => t.IsExecuting && t.PendingUserMessages.Count >= 1, 5_000, ct);
+        var u2 = afterFirst.PendingUserMessages.Keys.First();
+
+        client.SubmitMessage(threadPath, "Follow-up TWO",
+            modelName: "inbox-fake-slow", createdBy: "rbuergi@systemorph.com");
+        var afterSecond = await WaitForOwnAsync(threadHub,
+            t => t.IsExecuting && t.PendingUserMessages.Count >= 2, 5_000, ct);
+        var bothPending = afterSecond.PendingUserMessages.Keys.ToHashSet();
+
+        // check_inbox: both delivered inline from the channel.
+        var tool = InboxTool.CreateCheckInboxTool(threadHub);
+        var toolResult = (await tool.InvokeAsync(new AIFunctionArguments(), ct))?.ToString();
+        toolResult.Should().Contain("Follow-up ONE");
+        toolResult.Should().Contain("Follow-up TWO");
+        toolResult.Should().Contain("💬");
+
+        // 🚨 Indirect no-mid-round-write proof: while Status is still Executing and after
+        // check_inbox returned the steering text, BOTH follow-ups are STILL in
+        // PendingUserMessages on the node and neither is ingested — the drain wrote nothing.
+        var midRound = await WaitForOwnAsync(threadHub,
+            t => t.IsExecuting, 5_000, ct);
+        foreach (var id in bothPending)
+        {
+            midRound.PendingUserMessages.Should().ContainKey(id,
+                "check_inbox must not clear pending mid-round");
+            midRound.IngestedMessageIds.Should().NotContain(id,
+                "check_inbox must not ingest mid-round — folding is at round-end");
+        }
+
+        // Round-end fold: both follow-ups land in IngestedMessageIds, pending empty, none lost.
+        var afterRound = await WaitForThreadAsync(threadPath,
+            t => !t.IsExecuting
+                 && bothPending.All(id => t.IngestedMessageIds.Contains(id)),
+            20_000, ct);
+        afterRound.PendingUserMessages.Should().BeEmpty(
+            "both consumed follow-ups are folded out of pending at round-end");
+        afterRound.IngestedMessageIds.Should().Contain(u2);
+        foreach (var id in bothPending)
+            afterRound.IngestedMessageIds.Should().Contain(id, "no follow-up may be lost");
     }
 
     // â”€â”€â”€ Cancel-then-restart: ESC with pending messages â”€â”€â”€

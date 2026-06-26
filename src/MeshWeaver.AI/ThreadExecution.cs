@@ -584,6 +584,50 @@ internal static class ThreadExecution
             tc.Result is null && !string.IsNullOrEmpty(tc.DelegationPath));
 
     /// <summary>
+    /// Round-end reconcile for the in-memory inbox channel: folds the ids
+    /// <c>check_inbox</c> drained this round (delivered INLINE) into the SAME terminal
+    /// thread-node write — removes them from <see cref="MeshThread.PendingUserMessages"/>
+    /// and adds them to <see cref="MeshThread.IngestedMessageIds"/> (de-duplicated,
+    /// order preserved). This is the ONLY place the consumed follow-ups touch the node;
+    /// <c>check_inbox</c> itself writes nothing mid-round.
+    ///
+    /// <para>🚨 Deliberately does NOT add the ids to <see cref="MeshThread.Messages"/>:
+    /// an inline-delivered follow-up gets no satellite cell, and a dangling Messages ref
+    /// without a backing node re-triggers the missing-node NotFound storm this work
+    /// fixes. Messages that were channeled but NOT consumed (or arrived after the last
+    /// <c>check_inbox</c>) are left in <c>PendingUserMessages</c> so the submission
+    /// watcher dispatches a fresh round for them — nothing is lost.</para>
+    ///
+    /// <para>Called with a snapshot captured ONCE before the (possibly retried) terminal
+    /// <c>Update</c> lambda, so the fold is deterministic across optimistic-concurrency
+    /// retries.</para>
+    /// </summary>
+    private static MeshThread FoldConsumedInbox(MeshThread t, ImmutableList<string> consumedIds)
+    {
+        if (consumedIds.IsEmpty) return t;
+        var pending = t.PendingUserMessages;
+        foreach (var id in consumedIds)
+            pending = pending.Remove(id);
+        var ingested = t.IngestedMessageIds;
+        foreach (var id in consumedIds)
+            if (!ingested.Contains(id))
+                ingested = ingested.Add(id);
+        // Restore UserMessageIds ⊇ IngestedMessageIds (a consumed id should already be in
+        // UserMessageIds, but be defensive like CommitRoundAndExecute — a concurrent
+        // cross-mirror RFC 7396 array-replace can have dropped it from the derived list).
+        var userIds = t.UserMessageIds;
+        foreach (var id in ingested)
+            if (!userIds.Contains(id))
+                userIds = userIds.Add(id);
+        return t with
+        {
+            PendingUserMessages = pending,
+            IngestedMessageIds = ingested,
+            UserMessageIds = userIds
+        };
+    }
+
+    /// <summary>
     /// Wake-up branch for a thread that has a pending <c>RequestedStatus =
     /// Cancelled</c> the previous activation never got to honor. Stamps the
     /// active response cell <see cref="ThreadMessageStatus.Cancelled"/> (marking
@@ -1888,10 +1932,16 @@ internal static class ThreadExecution
                         _ => { },
                         ex => execLogger?.LogWarning(ex,
                             "RecordUsage(Completed) failed for {ThreadPath}", threadPath));
-                    UpdateThreadExecution(t => t.ResetExecution() with
+                    // 🚨 Round-end inbox reconcile: fold the ids check_inbox drained this round
+                    // (delivered inline, no node write) into THIS single terminal write — pending
+                    // -= consumed, ingested ∪= consumed. Snapshot captured ONCE so the fold is
+                    // deterministic across optimistic-concurrency retries of the lambda. The
+                    // channel is Reset in the finally below (covers all terminal paths).
+                    var completedConsumedIds = ThreadInboxChannel.For(parentHub).TakeConsumedIds();
+                    UpdateThreadExecution(t => FoldConsumedInbox(t.ResetExecution() with
                     {
                         Summary = summaryText
-                    }).Subscribe(
+                    }, completedConsumedIds)).Subscribe(
                         _ => { },
                         ex =>
                         {
@@ -1967,13 +2017,18 @@ internal static class ThreadExecution
                             _ => { },
                             ex => execLogger?.LogWarning(ex,
                                 "RecordUsage(Cancelled) failed for {ThreadPath}", threadPath));
-                        UpdateThreadExecution(t => t with
+                        // Round-end inbox reconcile (see Completed branch): fold the consumed
+                        // follow-ups into THIS terminal write. A cancelled round may still have
+                        // delivered follow-ups inline via check_inbox; they're treated as ingested
+                        // (not re-queued) — the user can resubmit. Reset happens in the finally.
+                        var cancelledConsumedIds = ThreadInboxChannel.For(parentHub).TakeConsumedIds();
+                        UpdateThreadExecution(t => FoldConsumedInbox(t with
                         {
                             Status = ThreadExecutionStatus.Cancelled, RequestedStatus = null,
                             ExecutionStatus = null, ActiveMessageId = null,
                             ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null,
                             Summary = cancelSummary
-                        }).Subscribe(
+                        }, cancelledConsumedIds)).Subscribe(
                             _ => { },
                             ex =>
                             {
@@ -2053,12 +2108,17 @@ internal static class ThreadExecution
                                     _ => { },
                                     recEx => execLogger?.LogWarning(recEx,
                                         "RecordUsage(Error) failed for {ThreadPath}", threadPath));
-                                UpdateThreadExecution(t => t with
+                                // Round-end inbox reconcile (see Completed branch): fold the
+                                // consumed follow-ups into THIS terminal write so they are not
+                                // double-delivered (once inline, once as a fresh round's input).
+                                // Reset happens in the finally.
+                                var errorConsumedIds = ThreadInboxChannel.For(parentHub).TakeConsumedIds();
+                                UpdateThreadExecution(t => FoldConsumedInbox(t with
                                 {
                                     Status = ThreadExecutionStatus.Idle, ExecutionStatus = null, ActiveMessageId = null,
                                     ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null,
                                     Summary = errorSummary
-                                }).Subscribe(
+                                }, errorConsumedIds)).Subscribe(
                                     _ => { },
                                     updEx =>
                                     {
@@ -2090,6 +2150,14 @@ internal static class ThreadExecution
                         // rounds can't split on a dead StringBuilder (the guard
                         // also requires IsExecuting + matching ActiveMessageId).
                         segment.ResponseText = null;
+                        // 🚨 Round-end: clear ALL per-round inbox channel state — the consumed
+                        // ids were folded into the terminal node write above; any offered-but-not-
+                        // consumed messages remain in PendingUserMessages (the watcher dispatches a
+                        // next round for them) and are dropped from the queue so they re-offer
+                        // cleanly. Runs for Completed/Cancelled/Error alike (this finally covers
+                        // every terminal path); the fold lambdas captured their consumed snapshot
+                        // BEFORE this, so Reset here cannot lose a fold.
+                        ThreadInboxChannel.For(parentHub).Reset();
                         parentHub.Set<CancellationTokenSource>(null!);
                         executionCts.Dispose();
                         // No per-_Exec stream handle to dispose — writes went through

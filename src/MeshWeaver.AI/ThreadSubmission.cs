@@ -279,6 +279,13 @@ internal static class ThreadSubmissionServer
         // ActivityControlPlaneExtensions.WatchControlPlane.
         var serial = new System.Reactive.Disposables.SerialDisposable();
         var disposed = false;
+        // 🚨 Stage 1 of the in-memory inbox channel. Resolve-or-create the per-thread
+        // ThreadInboxChannel here (thread-hub init — single threaded, before any round),
+        // so check_inbox (Stage 2) and the round-end reconcile resolve the same instance.
+        // On EVERY node emission below we OfferFromNode (READ ONLY) to buffer follow-up
+        // messages that arrive mid-round WITHOUT writing the thread node — the node write
+        // that used to happen here (and in check_inbox) is what raced the round and wedged.
+        var inboxChannel = ThreadInboxChannel.For(threadHub);
         void Establish() => serial.Disposable = threadHub.GetWorkspace().GetMeshNodeStream()
             // 🚨 React ONLY to control-plane changes — Status, and the pending / ingested /
             // user-message id sets. A running round emits hundreds of StreamingText / Messages
@@ -298,6 +305,13 @@ internal static class ThreadSubmissionServer
                         "[SubmissionWatcher] OBSERVE {ThreadPath} status={Status} pending={Pending} ingested={Ingested} userIds={UserIds}",
                         threadPath, t.Status, t.PendingUserMessages.Count,
                         t.IngestedMessageIds.Count, t.UserMessageIds.Count);
+                    // 🚨 Stage 1: buffer mid-round follow-ups into the in-memory channel —
+                    // READ ONLY, no node write. OfferFromNode is a no-op unless the round is
+                    // Executing (messages pending at round start are the round's own input,
+                    // drained by CommitRoundAndExecute), and enqueues each pending id at most
+                    // once. check_inbox (Stage 2) consumes the channel; the consumed ids are
+                    // folded into the node only at the round's terminal boundary.
+                    inboxChannel.OfferFromNode(t);
                 }
                 // 🚨 Survive the rapid-submit storm. Each cross-mirror SubmitMessage patches
                 // the UserMessageIds ARRAY off its own (stale) base; RFC 7396 REPLACES arrays,
