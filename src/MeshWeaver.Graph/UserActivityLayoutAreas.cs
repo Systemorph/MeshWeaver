@@ -18,6 +18,7 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class UserActivityLayoutAreas
 {
+    /// <summary>Area name for the Activity layout area.</summary>
     public const string ActivityArea = "Activity";
 
     private const string ThinScrollbar = "scrollbar-width: thin; scrollbar-color: rgba(128,128,128,0.3) transparent;";
@@ -78,7 +79,17 @@ public static class UserActivityLayoutAreas
 
         var syncStream = host.Workspace.GetStream(new MeshNodeReference());
 
-        return syncStream!
+        // For the OWNER, ensure the per-user {owner}/Chat node exists before embedding its Overview
+        // area (the side-panel chat composer). Built HERE — in the handler body where the viewer
+        // AccessContext is still set (see the capture note above) — so the create is attributed to the
+        // owner; idempotent (a benign already-exists is swallowed) and bounded so the dashboard never
+        // blocks on it. The visitor profile carries no composer, so no node is created for visitors.
+        var ready = isOwner
+            ? EnsureChatNode(host, ChatPath(nodeOwnerId))
+            : Observable.Return(System.Reactive.Unit.Default);
+
+        return ready
+            .SelectMany(_ => syncStream!)
             .Select(change =>
             {
                 var ownerNode = change.Value;
@@ -176,10 +187,13 @@ public static class UserActivityLayoutAreas
         // (c) The fluent catalog — the declarative TabsControl + MeshSearches.
         dashboard = dashboard.WithView(BuildCatalog(nodePath, nodeOwnerId));
 
-        // (d) Chat composer pinned at the bottom — the EXISTING data-bound composer area embedded as
-        // a layout area (the same area the chat side panel uses). Declared by PATH because
-        // MeshWeaver.Graph cannot reference MeshWeaver.AI, which owns ThreadComposer.
-        dashboard = dashboard.WithView(Controls.LayoutArea(ComposerPath(nodeOwnerId), string.Empty));
+        // (d) Chat composer pinned at the bottom — the per-user {owner}/Chat node's "Overview" area,
+        // which returns the SAME ThreadChatControl the side panel mounts for a new chat (Monaco editor,
+        // harness/agent/model selectors, attachments, Send) so the home composer is 1:1 the side-panel
+        // composer. Sending with no thread yet starts one (ThreadChatView → StartThread). Declared by
+        // PATH + area name because MeshWeaver.Graph cannot reference MeshWeaver.AI, which owns the Chat
+        // node type; the node is ensure-created in Activity above so this area always resolves.
+        dashboard = dashboard.WithView(Controls.LayoutArea(ChatPath(nodeOwnerId), ChatOverviewArea));
 
         return dashboard;
     }
@@ -243,12 +257,42 @@ public static class UserActivityLayoutAreas
                     .WithMaxColumns(2).WithItemLimit(50).WithMaxRows(4).WithReactiveMode(true));
 
     /// <summary>
-    /// Path of the per-user chat-input (composer) node: <c>{owner}/_Thread/ThreadComposer</c> —
-    /// mirrors <c>MeshWeaver.AI.ThreadComposerNodeType.PathFor(owner)</c>. Spelled by literal here
-    /// because <c>MeshWeaver.Graph</c> cannot depend on <c>MeshWeaver.AI</c> (AI references Graph).
-    /// The node is seeded for every user at onboarding, so the embedded composer area always resolves.
+    /// Path of the per-user home chat node: <c>{owner}/Chat</c> — mirrors
+    /// <c>MeshWeaver.AI.ChatNodeType.PathFor(owner)</c>. Spelled by literal here because
+    /// <c>MeshWeaver.Graph</c> cannot depend on <c>MeshWeaver.AI</c> (AI references Graph). Its
+    /// "Overview" area returns the side-panel <c>ThreadChatControl</c>; the node is ensure-created on
+    /// render (see <see cref="EnsureChatNode"/>) so the embedded area always resolves.
     /// </summary>
-    private static string ComposerPath(string nodeOwnerId) => $"{nodeOwnerId}/_Thread/ThreadComposer";
+    private static string ChatPath(string nodeOwnerId) => $"{nodeOwnerId}/Chat";
+
+    /// <summary>NodeType of the per-user home chat node — mirrors <c>MeshWeaver.AI.ChatNodeType.NodeType</c>.</summary>
+    private const string ChatNodeType = "Chat";
+
+    /// <summary>Default area of the Chat node — mirrors <c>MeshWeaver.AI.ChatNodeType.OverviewArea</c>.</summary>
+    private const string ChatOverviewArea = "Overview";
+
+    /// <summary>
+    /// Ensures the per-user <c>{owner}/Chat</c> node exists so its embedded "Overview" area (the
+    /// side-panel chat composer) always resolves — create-if-absent, for brand-new and pre-existing
+    /// users alike (no onboarding back-fill needed). Reactive and idempotent: a benign already-exists
+    /// (or any create error) is swallowed and we still proceed to render; bounded by a timeout so the
+    /// dashboard never blocks on the create. MUST be invoked from the area-handler body (not lazily
+    /// inside a later Rx hop) so <c>CreateNode</c> captures the owner's <see cref="AccessContext"/>.
+    /// </summary>
+    private static IObservable<System.Reactive.Unit> EnsureChatNode(LayoutAreaHost host, string chatPath)
+    {
+        var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService is null)
+            return Observable.Return(System.Reactive.Unit.Default);
+
+        return meshService
+            .CreateNode(MeshNode.FromPath(chatPath) with { NodeType = ChatNodeType, Name = "Chat" })
+            .Select(_ => System.Reactive.Unit.Default)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))
+            // Already-exists is the common, benign case; any other failure must not wedge the dashboard.
+            .Catch<System.Reactive.Unit, Exception>(_ => Observable.Return(System.Reactive.Unit.Default));
+    }
 
     /// <summary>
     /// Public profile shown to visitors — UserProfileControl (rendered by Blazor)
