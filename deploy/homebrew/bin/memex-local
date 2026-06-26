@@ -436,6 +436,14 @@ spec:
         - name: portal
           image: $PORTAL_IMAGE
           imagePullPolicy: IfNotPresent
+          # Bound the throwaway portal. Unbounded it ballooned to ~8Gi on a
+          # compile/warmup spike (.NET grows its heap lazily when no limit tells it
+          # to stay small), pushing the Colima VM to ~86% and risking an OOM of the
+          # real memex portal. With a memory LIMIT, .NET reads the cgroup cap and
+          # holds its GC heap under it — bounded AND leaner at steady state.
+          resources:
+            requests: { cpu: "250m", memory: "1Gi" }
+            limits:   { cpu: "2",    memory: "4Gi" }
           ports: [ { containerPort: 8080 } ]
           envFrom:
             - configMapRef: { name: memex-portal-config }
