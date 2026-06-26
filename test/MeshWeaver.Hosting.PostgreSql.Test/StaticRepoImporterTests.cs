@@ -305,6 +305,48 @@ public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelpe
         (page.Content as MarkdownContent)!.Content.Should().NotContain("SOURCE CHANGED");
     }
 
+    /// <summary>
+    /// SELF-HEALING content sync: a prior Succeeded import marks the partition "done" — but if the
+    /// CONTENT nodes are later dropped (a cross-partition prune, a manual delete, a botched migration)
+    /// while the <c>_Activity/import-*</c> marker survives, the old marker short-circuit skipped the
+    /// re-import and left the partition's content MISSING FOREVER ("a user didn't see the core app
+    /// skills", atioz). The importer now verifies a CONTENT sentinel before skipping; a missing
+    /// sentinel forces a full (idempotent) re-import EVEN THOUGH the fingerprint is unchanged.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task Reimport_SameFingerprint_ButContentDeleted_SelfHeals()
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+
+        // First import — content present + a Succeeded import marker written.
+        (await Import()).Single(r => r.Partition == _partition).Outcome.Should().Be("Imported");
+        (await Read($"{_partition}/Page1")).Should().NotBeNull();
+
+        // The content node is dropped AFTER the import (manual delete / prune / migration) — but the
+        // {partition}/_Activity/import-* marker SURVIVES (DeleteNode only removes Page1).
+        await meshService.DeleteNode($"{_partition}/Page1").Should().Within(30.Seconds()).Emit();
+
+        // Wait until the SAME query the self-heal uses sees Page1 gone, so the re-import below
+        // observes the deletion deterministically (no index-lag race).
+        await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
+            .SelectMany(_ => meshService.Query<MeshNode>(
+                MeshQueryRequest.FromQuery($"path:{_partition}/Page1")).Take(1))
+            .Where(c => !c.Items.Any())
+            .FirstAsync().Timeout(30.Seconds())
+            .Should().Within(35.Seconds()).Emit();
+
+        // Re-import with the SAME source (unchanged fingerprint → the Succeeded marker still matches).
+        // The OLD behaviour skipped on the marker and left the content gone forever; self-heal must
+        // detect the missing content sentinel and re-import.
+        (await Import()).Single(r => r.Partition == _partition).Outcome.Should().Be("Imported",
+            "a Succeeded import marker whose content is actually MISSING must self-heal via a full "
+            + "re-import, not skip on the stale marker");
+
+        // The dropped content is back.
+        (await Read($"{_partition}/Page1")).Should().NotBeNull(
+            "the content sentinel was missing despite the marker → the importer re-imported (self-healed)");
+    }
+
     /// <summary>Mutable in-memory repo: children + a customizable Space root.</summary>
     private sealed class FakeRepoSource(string partition) : IStaticRepoSource
     {

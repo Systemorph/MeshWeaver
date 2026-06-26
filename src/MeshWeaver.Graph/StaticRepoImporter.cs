@@ -308,18 +308,16 @@ public static class StaticRepoImporter
             .SelectMany(change =>
             {
                 var existing = change.Items.FirstOrDefault();
-                if (existing?.Content is ActivityLog { Status: ActivityStatus.Succeeded })
+
+                // The content-skip path: the content fingerprint matches a prior Succeeded import, so
+                // re-ensure ONLY the CRITICAL governance (partition ROOT + its read-only _Policy —
+                // Harness/Agent/Skill/Provider PublicRead). These MUST exist on every boot: if dropped
+                // after a prior import (a cross-partition prune, a manual delete, a botched migration)
+                // the content-skip would otherwise leave the partition UNREADABLE FOREVER (the "user
+                // 'rbuergi' lacks Read permission on 'harness'" composer denial). EnsureRoot + the
+                // _Policy upsert are idempotent; best-effort so a self-heal hiccup never fails the import.
+                IObservable<StaticRepoImportResult> SkipWithGovernanceHeal()
                 {
-                    // 🚨 Self-heal the CRITICAL governance even when the content fingerprint matches and
-                    // we skip the bulk re-import. The partition ROOT + its access governance (the
-                    // read-only _Policy — e.g. the Harness/Agent/Skill/Provider PublicRead) MUST exist
-                    // on every boot: if they were dropped after a prior successful import (a
-                    // cross-partition prune, a manual delete, a botched migration), the content-skip
-                    // would otherwise leave the partition UNREADABLE FOREVER — the "user 'rbuergi' lacks
-                    // Read permission on 'harness'" composer denial, where the fingerprint says "done"
-                    // so the missing _Policy never comes back. EnsureRoot + the _Policy upsert are
-                    // idempotent (no-op when already present); best-effort so a self-heal hiccup can
-                    // never fail the import.
                     var governance = nodes
                         .Where(n => n.NodeType == "PartitionAccessPolicy"
                                     || n.Segments.Skip(1).Any(seg => seg.StartsWith('_')))
@@ -344,39 +342,66 @@ public static class StaticRepoImporter
                         });
                 }
 
-                var activityNode = new MeshNode(activityId, activityNamespace)
+                // The full (re-)import path. Acquire/refresh the import lock via the IDEMPOTENT Upsert
+                // (which tolerates a stale "already exists"). This RECLAIMS a dead lock left by a
+                // crashed/raced prior import (Status=Running that never finished — e.g. a rollout
+                // briefly running two pods, or a materialization fault) instead of skipping forever
+                // ("AlreadyRunning", 0 nodes): the atioz Agent/Harness/Command wedge. Under System
+                // (Upsert wraps AsSystem) so the lock write authorizes on read-only-_Policy partitions.
+                IObservable<StaticRepoImportResult> Reimport()
                 {
-                    Name = $"Import {source.Partition} ({nodes.Count} nodes)",
-                    NodeType = ActivityNodeType.NodeType,
-                    MainNode = source.Partition,
-                    State = MeshNodeState.Active,
-                    Content = new ActivityLog(ActivityCategory.Import)
+                    var activityNode = new MeshNode(activityId, activityNamespace)
                     {
-                        Id = activityId,
-                        HubPath = source.Partition,
-                        Status = ActivityStatus.Running
-                    }
-                };
+                        Name = $"Import {source.Partition} ({nodes.Count} nodes)",
+                        NodeType = ActivityNodeType.NodeType,
+                        MainNode = source.Partition,
+                        State = MeshNodeState.Active,
+                        Content = new ActivityLog(ActivityCategory.Import)
+                        {
+                            Id = activityId,
+                            HubPath = source.Partition,
+                            Status = ActivityStatus.Running
+                        }
+                    };
+                    return Upsert(hub, activityNode)
+                        .SelectMany(_ => Run(hub, source, nodes, root, activityPath, fingerprint, logger))
+                        .Catch<StaticRepoImportResult, Exception>(ex =>
+                        {
+                            logger?.LogInformation(
+                                "[StaticRepoImport] {Partition} ({Fingerprint}) import failed: {Message}",
+                                source.Partition, fingerprint, ex.Message);
+                            return Observable.Return(
+                                new StaticRepoImportResult(source.Partition, fingerprint, "Failed"));
+                        });
+                }
 
-                // 🚨 Acquire/refresh the import lock via the IDEMPOTENT Upsert (which tolerates a stale
-                // "already exists" — see Upsert). This RECLAIMS a dead lock left by a crashed/raced
-                // prior import (Status=Running that never finished — e.g. a rollout briefly running two
-                // pods, or a materialization fault) instead of skipping forever ("AlreadyRunning", 0
-                // nodes): the atioz Agent/Harness/Command wedge. A plain CreateNode faulted on the
-                // stale lock; delete-then-create raced the eventually-consistent exists-check (Agent
-                // stayed wedged). Single-execution is preserved by the Succeeded short-circuit above; a
-                // genuinely-concurrent replica re-runs the idempotent materialize — wasteful, not wrong.
-                // `existing` is read only for that short-circuit. Under System (Upsert wraps AsSystem)
-                // so the lock write authorizes on read-only-_Policy partitions and persists on PG.
-                return Upsert(hub, activityNode)
-                    .SelectMany(_ => Run(hub, source, nodes, root, activityPath, fingerprint, logger))
-                    .Catch<StaticRepoImportResult, Exception>(ex =>
+                // No Succeeded marker → import.
+                if (existing?.Content is not ActivityLog { Status: ActivityStatus.Succeeded })
+                    return Reimport();
+
+                // 🚨 SELF-HEAL CONTENT, not just governance. A Succeeded marker means "imported once" —
+                // but the content NODES can be dropped after the fact (a cross-partition prune, a manual
+                // delete, a botched migration) while the marker + _Policy survive, leaving the partition's
+                // skills MISSING FOREVER ("a user didn't see the core app skills", atioz). Cheaply verify
+                // a CONTENT sentinel is still present; if it's gone, fall through to the full idempotent
+                // re-import instead of skipping. Eventually-consistent query: a stale miss re-imports
+                // idempotently (wasteful, not wrong; the activity lock still serialises concurrent runs).
+                var contentSentinel = nodes.FirstOrDefault(n =>
+                    n.NodeType != "PartitionAccessPolicy"
+                    && !n.Segments.Skip(1).Any(seg => seg.StartsWith('_')));
+                if (contentSentinel is null)
+                    return SkipWithGovernanceHeal(); // governance-only source — no content to verify
+
+                return meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{contentSentinel.Path}"))
+                    .Take(1)
+                    .SelectMany(sentinelChange =>
                     {
-                        logger?.LogInformation(
-                            "[StaticRepoImport] {Partition} ({Fingerprint}) import failed: {Message}",
-                            source.Partition, fingerprint, ex.Message);
-                        return Observable.Return(
-                            new StaticRepoImportResult(source.Partition, fingerprint, "Failed"));
+                        if (sentinelChange.Items.Any())
+                            return SkipWithGovernanceHeal();
+                        logger?.LogWarning(
+                            "[StaticRepoImport] {Partition}: marker at {Fingerprint} says imported, but content sentinel '{Path}' is MISSING — self-healing via full re-import.",
+                            source.Partition, fingerprint, contentSentinel.Path);
+                        return Reimport();
                     });
             });
     }
