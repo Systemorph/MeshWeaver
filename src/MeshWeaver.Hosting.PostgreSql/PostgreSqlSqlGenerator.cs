@@ -668,9 +668,25 @@ public class PostgreSqlSqlGenerator
         if (hasNamespace)
             parameters["@nsPrefix"] = $"{namespacePath!.Trim('/')}/";
 
+        // 🔀 HYBRID recall: when the user typed a term, a row is eligible if it has an embedding
+        // (semantic neighbour) OR it lexically matches the term on name/id/description — so turning on
+        // an embedding provider NEVER hides un-embedded content that is still findable lexically (the
+        // "existing content vanishes from search until re-embedded" trap). Pure-semantic queries (no
+        // term) keep the embedding-only filter. The lexical tier in the ORDER BY then ranks exact/prefix
+        // name matches ahead of pure-semantic neighbours, with NULL cosine distance sorting last.
+        var hasLex = !string.IsNullOrEmpty(lexicalTerm);
+        if (hasLex) parameters["@lexTerm"] = lexicalTerm!;
+        const string lexMatch =
+            "LOWER(COALESCE(n.name,'')) LIKE '%' || LOWER(@lexTerm) || '%' " +
+            "OR LOWER(COALESCE(n.id,'')) LIKE '%' || LOWER(@lexTerm) || '%' " +
+            "OR LOWER(COALESCE(n.description,'')) LIKE '%' || LOWER(@lexTerm) || '%'";
+
         // ── Branch 1: existing mesh nodes (real embeddings on mesh_nodes) ──
         var meshTable = QualifyTable("mesh_nodes");
-        var meshClauses = new List<string> { "n.embedding IS NOT NULL" };
+        var meshClauses = new List<string>
+        {
+            hasLex ? $"(n.embedding IS NOT NULL OR {lexMatch})" : "n.embedding IS NOT NULL"
+        };
 
         if (filterQuery != null)
         {
