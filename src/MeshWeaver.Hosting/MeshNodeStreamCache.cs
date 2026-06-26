@@ -127,15 +127,16 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     private readonly ConcurrentDictionary<IDisposable, byte> _inflightWrites = new();
 
     // 🚨 How long the per-path serial Update queue waits for the CURRENT write's first
-    // owner signal before letting the NEXT queued write proceed. After the RLS commit
-    // switched entry.Handle.Update to UpdateRemote (which awaits the owner's
-    // PatchDataResponse, up to 30s), a lost response — the owner mid-dispose handles the
-    // patch but its reply never routes back — blocked the queue for the full 30s and
-    // starved every retry (the ResubscribeOnOwnerDispose deadlock). This bound caps that.
-    // It sits above a normal owner round-trip (ms-to-low-seconds) so a healthy write
-    // still advances the queue on its real terminal, not the bound — the queue only
-    // "gives up waiting" for a genuinely stuck/lost response. The caller's result is
-    // unaffected: it still receives the real terminal whenever it arrives.
+    // owner signal before letting the NEXT queued write proceed. entry.Handle.Update is
+    // UpdateRemote, which now bounds its OWN owner-response wait (UpdateResponseWaitBound,
+    // ~2s) and falls back to an optimistic emit — so a healthy or busy-owner write always
+    // produces a terminal quickly and the queue advances on that. This bound stays as a
+    // backstop for the pathological case where the post itself stalls (a lost response —
+    // the owner mid-dispose handled the patch but its reply never routed back — used to
+    // block the queue for the full 30s and starve every retry: the ResubscribeOnOwnerDispose
+    // deadlock). It sits above a normal owner round-trip (ms-to-low-seconds), so the queue
+    // only "gives up waiting" for a genuinely stuck post. The caller's result is unaffected:
+    // it receives the real terminal (value / fail-fast RLS denial / optimistic fallback).
     private static readonly TimeSpan QueueAdvanceBound = TimeSpan.FromSeconds(5);
 
     // 🚨 Per-path serial Update queue. Concurrent mirror-side Updates on the
@@ -739,14 +740,17 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     ? entry.Handle.Overwrite(req.FullNode)
                     : entry.Handle.Update(req.Update);
 
-                // 🚨 Deliver the owner's FULL terminal (value / RLS denial / completion)
-                // to the caller's result on a subscription whose lifetime is INDEPENDENT
-                // of the queue slot. After the RLS commit, entry.Handle.Update is
-                // UpdateRemote, which AWAITS the owner's PatchDataResponse (up to 30s). The
-                // RLS-denial surfacing + read-after-write that the commit added are
-                // preserved untouched — the caller still gets the real terminal whenever
-                // it arrives. Tracked in _inflightWrites for mid-flight cache disposal;
-                // self-removes on terminal so it never accumulates.
+                // 🚨 Deliver the write's terminal to the caller's result on a subscription
+                // whose lifetime is INDEPENDENT of the queue slot. entry.Handle.Update is
+                // UpdateRemote, which now BOUNDS its wait for the owner's PatchDataResponse
+                // (UpdateResponseWaitBound, ~2s): it emits as soon as the activity is STARTED
+                // (the patch is accepted) and fails fast on a denial/rejection, but on a
+                // busy-owner timeout it falls back to the optimistic snapshot rather than
+                // wait for the round to finish — killing the old 30s "Response did not arrive
+                // in time" GUI stall. RLS is still enforced authoritatively by the owner and a
+                // genuine denial still surfaces fail-fast on the caller's OnError. Tracked in
+                // _inflightWrites for mid-flight cache disposal; self-removes on terminal so
+                // it never accumulates.
                 var inflight = new System.Reactive.Disposables.SingleAssignmentDisposable();
                 _inflightWrites[inflight] = 0;
                 void Settle()
@@ -789,14 +793,14 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                         Settle();
                     });
 
-                // 🚨 Advance the per-path queue on the FIRST owner signal OR
-                // QueueAdvanceBound — NEVER UpdateRemote's full 30s response wait. A lost
-                // owner response (owner mid-dispose handled the patch but its reply never
-                // routed back) otherwise blocked this serial queue for 30s and starved
-                // every retry (the ResubscribeOnOwnerDispose deadlock). Observe req.Result
-                // (already fed above) instead of opening a SECOND subscription to the cold
-                // update (which would post the patch twice). Complete without emitting so
-                // Concat moves to the next queued write.
+                // 🚨 Advance the per-path queue on the FIRST signal OR QueueAdvanceBound.
+                // UpdateRemote now bounds its owner-response wait (~2s) and falls back to an
+                // optimistic emit, so req.Result fires promptly (on the ack, a fail-fast
+                // error, or the bound) — the queue advances without the old 30s stall. The
+                // QueueAdvanceBound stays as a backstop for a write whose post itself stalls.
+                // Observe req.Result (already fed above) instead of opening a SECOND
+                // subscription to the cold update (which would post the patch twice). Complete
+                // without emitting so Concat moves to the next queued write.
                 return req.Result
                     .Materialize()
                     .Select(_ => System.Reactive.Unit.Default)
@@ -839,12 +843,13 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
 
         // RLS on the write is enforced authoritatively by the OWNER: the
         // [RequiresPermission(Permission.Update)] gate on PatchDataRequest posts
-        // DeliveryFailure(Unauthorized) on denial, which UpdateRemote now surfaces
-        // as UnauthorizedAccessException on the Rx OnError stream (see
-        // MeshNodeStreamExtensions.UpdateRemote). The previous cache-only client gate
-        // here was a stopgap for when UpdateRemote emitted optimistically and swallowed
-        // the denial — it only fired on a warm permission cache (cold-write miss = no
-        // surfacing, a CI-flake source) and used a non-canonical message. Now redundant.
+        // DeliveryFailure(Unauthorized) on denial, which UpdateRemote surfaces fail-fast
+        // as UnauthorizedAccessException on the caller's Rx OnError (the denial is posted
+        // by the pipeline gate ahead of the owner's action block, so it returns within
+        // UpdateRemote's short response bound even while a round is running). The previous
+        // cache-only client gate here was a stopgap for when UpdateRemote emitted purely
+        // optimistically and swallowed the denial — redundant now that UpdateRemote bounds
+        // (not eliminates) its wait and re-surfaces the denial.
         return UpdateRaw(path, wrapped);
     }
 
