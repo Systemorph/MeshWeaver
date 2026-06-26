@@ -54,7 +54,6 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
                     "config => config.WithContentType<LinkedInProfile>()" +
                     ".AddDefaultLayoutAreas()" +
                     ".AddLayout(layout => layout.WithView(\"PullPastPosts\", LinkedInPullActions.PullPastPosts))",
-                ShowChildrenInDetails = false,
             }
         }).Should().Within(30.Seconds()).Emit();
 

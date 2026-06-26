@@ -34,7 +34,6 @@ public static class ApiCredentialNodeType
         Content = new NodeTypeDefinition
         {
             Description = "OAuth credentials for a platform (LinkedIn, X). Stored under {profile}/_ApiCredentials/.",
-            ShowChildrenInDetails = false,
         },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source

@@ -48,11 +48,6 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
     public const string CatalogArea = "Catalog";
 
     /// <summary>
-    /// Well-known area name for the Children view (thumbnails without search).
-    /// </summary>
-    public const string ChildrenArea = "Children";
-
-    /// <summary>
     /// Well-known area name for the NodeTypes view.
     /// </summary>
     public const string NodeTypesArea = "NodeTypes";
@@ -64,15 +59,6 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
     /// <returns>A LayoutAreaControl configured for the Catalog area.</returns>
     public static LayoutAreaControl Catalog(IMessageHub hub)
         => new(hub.Address, new LayoutAreaReference(CatalogArea));
-
-    /// <summary>
-    /// Creates a LayoutAreaControl for the Children area of the specified hub.
-    /// Shows child nodes as thumbnails without search bar.
-    /// </summary>
-    /// <param name="hub">The message hub.</param>
-    /// <returns>A LayoutAreaControl configured for the Children area.</returns>
-    public static LayoutAreaControl Children(IMessageHub hub)
-        => new(hub.Address, new LayoutAreaReference(ChildrenArea));
 
     /// <summary>
     /// Creates a LayoutAreaControl for the NodeTypes area of the specified hub.

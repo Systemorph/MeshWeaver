@@ -85,7 +85,6 @@ public class LinkedInProfileLayoutAreaTest(ITestOutputHelper output) : MonolithM
                 Configuration = "config => config.WithContentType<LinkedInProfile>()" +
                                 ".AddDefaultLayoutAreas()" +
                                 ".AddLayout(layout => layout.WithView(\"Overview\", LinkedInProfileLayoutAreas.Overview))",
-                ShowChildrenInDetails = false,
             }
         }).Should().Emit();
 

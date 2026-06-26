@@ -51,12 +51,9 @@ public static class MarkdownOverviewLayoutArea
         // walking through an intermediate Stack wrapper.
         container = container.WithView(BuildMarkdownReadView(host, nodePath, rawContent, canComment, canEdit));
 
-        // Standard children section — separated from main content
-        container = container.WithView(
-            Controls.Stack
-                .WithWidth("100%")
-                .WithStyle("margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--neutral-stroke-rest);")
-                .WithView(LayoutAreaControl.Children(host.Hub).WithShowProgress(false)));
+        // No hardcoded children section: a node page is a markdown space — children (or any other
+        // content) are injected INLINE with the @@(query) operator, never auto-listed (that doubled
+        // the children on every page that already referenced them).
 
         // Approvals section (only if enabled and approvals exist)
         if (host.Hub.Configuration.HasApprovals())
