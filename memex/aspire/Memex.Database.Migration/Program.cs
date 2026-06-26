@@ -42,10 +42,14 @@ builder.Services.Configure<PostgreSqlStorageOptions>(o =>
     o.ConnectionString = connectionString;
     o.VectorDimensions = embeddingOptions.Dimensions;
 });
-// Register the embedding provider so the documentation backfill can vector-index docs.
-// No-ops (registers nothing) when Endpoint/ApiKey are absent — backfill then writes
-// NULL embeddings and docs are still full-text searchable.
-builder.Services.AddAzureFoundryEmbeddings(embeddingOptions);
+// Register the embedding provider so the documentation + mesh-node backfills can vector-index.
+// 🚨 Use the PROVIDER-AWARE dispatcher (AddEmbeddings), NOT AddAzureFoundryEmbeddings — the latter
+// is Azure/Cohere-only (needs an ApiKey) and silently ignores Provider="Ollama", so a local
+// Ollama (bge-m3) embedding config registered nothing → "embeddings OFF". AddEmbeddings dispatches
+// on EmbeddingOptions.Provider (Ollama / OpenAICompatible → on-host /v1/embeddings; else Azure).
+// No-ops (registers nothing) when Endpoint is absent — backfills then write NULL embeddings and
+// content is still full-text/hybrid searchable.
+builder.Services.AddEmbeddings(embeddingOptions);
 
 Console.WriteLine("[Migration] Building host...");
 var host = builder.Build();
@@ -155,6 +159,13 @@ var finalVersion = await runner.RunAsync(ctx);
 // so the searchable-schemas refresh picks up `doc`. Full replace + incremental embedding.
 var embeddingProvider = host.Services.GetService<IEmbeddingProvider>();
 await DocumentationBackfill.RunAsync(dataSource, options, connectionString, embeddingProvider, logger);
+
+// ── General mesh-node embedding backfill (always runs when an embedding provider is configured):
+// reconcile EVERY partition schema's mesh_nodes.embedding column to the provider's dimension and
+// embed any row that has none yet. The general counterpart of DocumentationBackfill (doc-only) —
+// without it, enabling an embedding provider leaves existing content un-embedded (the hybrid query
+// still surfaces it lexically, but semantic ranking is empty until this runs). No-op without a provider.
+await MeshNodeEmbeddingBackfill.RunAsync(dataSource, options, connectionString, embeddingProvider, logger);
 
 // ── Orleans clustering (always runs): create the membership tables in the dedicated `orleans`
 // database (same server, separate DB) so the portal silo can use Postgres-backed AdoNet
