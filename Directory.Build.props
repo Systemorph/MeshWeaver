@@ -13,7 +13,19 @@
          missing typeparam doc) — filling those is opportunistic, thousands of members. Doc-QUALITY
          warnings (broken/ambiguous crefs, bad paramrefs, malformed XML) are real bugs and are fixed,
          not suppressed. -->
-    <NoWarn>649;CA2255;NU5104;CS1591;CS1573;CS1712;$(NoWarn)</NoWarn>
+    <!-- NU1510: "PackageReference X will not be pruned / likely unnecessary" — fired for the three
+         security-override packages forced as direct refs below (so the Directory.Packages.props pin
+         applies). Removing them would regress the pinned-CVE fix, so the advisory is suppressed; it is
+         a restore advisory, not a code-quality warning, and must not fail the -warnaserror gate. -->
+    <NoWarn>649;CA2255;NU5104;NU1510;CS1591;CS1573;CS1712;$(NoWarn)</NoWarn>
+    <!-- The -warnaserror merge gate (ReleaseStrategy.md precondition a) targets CODE warnings. CI
+         restores in a SEPARATE step (without -warnaserror) and then builds the already-restored tree
+         with -warnaserror, so NuGet restore advisories (incl. dependency VULNERABILITY warnings
+         NU1901..NU1904, e.g. a transitive CVE) surface during restore but do NOT fail the compiler
+         gate. That is deliberate: a newly-disclosed CVE on an existing transitive must not fail every
+         unrelated PR; fix those with a version override (see the security-override ItemGroup below),
+         not by blocking merges. -->
+
     <!-- Generate XML doc files for all assemblies (IntelliSense + NuGet). The doc-completeness
          warning family (CS1591 missing member doc, CS1573 missing param, CS1574 unresolved cref,
          CS1570 malformed XML, CS1712 missing typeparam) is suppressed centrally so enabling
@@ -53,6 +65,17 @@
     <_SecondsToday>$([System.DateTime]::UtcNow.TimeOfDay.TotalSeconds.ToString("F0"))</_SecondsToday>
     <_BuildNumber Condition="'$(CIRun)' == 'true'">$([MSBuild]::Divide($(_SecondsToday), 2).ToString("F0"))</_BuildNumber>
     <_BuildNumber Condition="'$(CIRun)' != 'true'">0</_BuildNumber>
+    <!-- 🔴 MONOTONIC build number for the .ci.N pre-release suffix (and thus the image tag). The
+         self-updater (ReleaseStrategy.md) picks the NEWEST version off the registry, so the .ci.N
+         number MUST increase build-over-build — the seconds-since-midnight $(_BuildNumber) above
+         RESETS at midnight and would make a morning build sort BELOW the previous evening's. Use the
+         GitHub Actions run number ($(GITHUB_RUN_NUMBER), monotonic per workflow) when present; fall
+         back to the seconds value off-GHA; 0 locally. AssemblyVersion below keeps the bounded
+         seconds value (it only needs to change per build for the copy heuristic, not be monotonic,
+         and its UInt16 components can't hold an ever-growing run number). -->
+    <_CiBuildNumber Condition="'$(CIRun)' == 'true' and '$(GITHUB_RUN_NUMBER)' != ''">$(GITHUB_RUN_NUMBER)</_CiBuildNumber>
+    <_CiBuildNumber Condition="'$(CIRun)' == 'true' and '$(GITHUB_RUN_NUMBER)' == ''">$(_BuildNumber)</_CiBuildNumber>
+    <_CiBuildNumber Condition="'$(CIRun)' != 'true'">0</_CiBuildNumber>
     <!-- Numeric version core: PlatformVersion with the -rc label stripped (3.0.0-rc1 → 3.0.0). -->
     <_VersionDash>$(PlatformVersion.IndexOf('-'))</_VersionDash>
     <_VersionNumeric Condition="'$(_VersionDash)' == '-1'">$(PlatformVersion)</_VersionNumeric>
@@ -62,7 +85,7 @@
     <_CiSep Condition="'$(_VersionDash)' == '-1'">-</_CiSep>
     <_CiSep Condition="'$(_VersionDash)' != '-1'">.</_CiSep>
     <Version Condition="'$(PublicRelease)' == 'true'">$(PlatformVersion)</Version>
-    <Version Condition="'$(PublicRelease)' != 'true'">$(PlatformVersion)$(_CiSep)ci.$(_BuildNumber)</Version>
+    <Version Condition="'$(PublicRelease)' != 'true'">$(PlatformVersion)$(_CiSep)ci.$(_CiBuildNumber)</Version>
     <!-- CI appends +build.<ticks> so each continuous build's InformationalVersion is unique; LOCAL
          keeps it stable (= $(Version)) so AssemblyInfo isn't regenerated every build. ABI identity
          is the Graph MVID now, not this string, so a stable local value is safe. -->

@@ -144,6 +144,7 @@
     <PackageVersion Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageVersion Include="NuGet.Protocol" Version="7.3.1" />
     <PackageVersion Include="NuGet.Packaging" Version="7.3.1" />
+    <PackageVersion Include="NuGet.Versioning" Version="7.3.1" />
     <PackageVersion Include="NuGet.Resolver" Version="7.3.1" />
     <PackageVersion Include="NuGet.DependencyResolver.Core" Version="7.3.1" />
     <PackageVersion Include="NuGet.Frameworks" Version="7.3.1" />

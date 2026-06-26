@@ -2,6 +2,7 @@
 using Memex.Portal.Shared.Api;
 using Memex.Portal.Shared.Authentication;
 using Memex.Portal.Shared.Email;
+using Memex.Portal.Shared.SelfUpdate;
 using Memex.Portal.Shared.Settings;
 using Memex.Portal.Shared.Social;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -659,6 +660,8 @@ public static class MemexConfiguration
                         // Permission.All: Invitations + Inbox.
                         .AddInvitationsSettingsTab()
                         .AddInboxSettingsTab()
+                        // Platform auto-update strategy (Admin/UpdatePolicy) — stable/continuous/none.
+                        .AddUpdatePolicySettingsTab()
                         // Token-usage analytics (per-model _Usage satellites): filter by period,
                         // group by model / person / thread, cost from ModelPricing.
                         .AddTokenUsageSettingsTab()
@@ -674,7 +677,11 @@ public static class MemexConfiguration
                 // SignalR mesh transport — external participants (native clients) join over a WebSocket.
                 .AddSignalRHub()
                 // MemexClient node type — per-installation client config under {user}/Client/{id}.
-                .AddMemexClientType();
+                .AddMemexClientType()
+                // Platform self-update: the Admin/UpdatePolicy node + the poller that watches ACR and
+                // (on Kubernetes) patches the portal+migration deployments to the newest version per
+                // policy. On a non-k8s host it degrades to detect-and-notify. See ReleaseStrategy.md.
+                .AddSelfUpdate();
         }
 
         /// <summary>

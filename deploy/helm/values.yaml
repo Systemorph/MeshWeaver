@@ -1,4 +1,12 @@
 parameters: {}
+# ---- Self-update (in-pod patch of the portal's own deployment) -------------
+# The portal polls the registry and, on Kubernetes, patches its own deployment to a newer image per
+# the Admin/UpdatePolicy node (see Doc/Architecture/ReleaseStrategy). The chart always creates the
+# ServiceAccount + RBAC so the pod CAN patch its own deployments (works on local k3s too). For ACR
+# polling on AKS, set azureClientId to the workload-identity UAMI client id (AcrPull on the registry);
+# leave empty for local/self-host (the in-cluster patch still works; ACR polling just won't auth).
+selfUpdate:
+  azureClientId: ""
 # ---- External Ollama (local self-host) ------------------------------------
 # Front a host-native Ollama with an in-cluster Service so the portal addresses
 # it by name (http://ollama:11434/v1) instead of a host-gateway IP. On macOS the

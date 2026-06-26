@@ -15,6 +15,10 @@ public enum MeshNodeEditorFieldKind
     Text,
     /// <summary>Boolean checkbox.</summary>
     Bool,
+    /// <summary>Single-choice dropdown over a fixed option set (an enum). Options are carried on
+    /// <see cref="MeshNodeEditorField.Options"/>; the stored value is the option name (enums
+    /// serialize as their string name — see <c>EnumMemberJsonStringEnumConverter</c>).</summary>
+    Enum,
 }
 
 /// <summary>
@@ -25,24 +29,35 @@ public enum MeshNodeEditorFieldKind
 /// </summary>
 public record MeshNodeEditorField(string Key, string Label, MeshNodeEditorFieldKind Kind)
 {
+    /// <summary>For an <see cref="MeshNodeEditorFieldKind.Enum"/> field, the selectable option names
+    /// (the enum member names). Empty for every other kind.</summary>
+    public ImmutableList<string> Options { get; init; } = ImmutableList<string>.Empty;
+
     /// <summary>
     /// Builds the editable field list from a content record type: <c>[Browsable(false)]</c>
     /// properties are skipped, <c>[Description]</c>/<c>[Display]</c>/<c>[DisplayName]</c> supply the
     /// label (else the wordified property name), the key is the camelCase property name, and the
-    /// kind follows the property type (bool → checkbox, everything else → text).
+    /// kind follows the property type (bool → checkbox, enum → dropdown, everything else → text).
     /// </summary>
     public static ImmutableList<MeshNodeEditorField> FromType(Type contentType) =>
         contentType.GetProperties()
             .Where(p => p.GetCustomAttribute<BrowsableAttribute>()?.Browsable != false)
-            .Select(p => new MeshNodeEditorField(
-                p.Name.ToCamelCase()!,
-                p.GetCustomAttribute<DescriptionAttribute>()?.Description
+            .Select(p =>
+            {
+                var label = p.GetCustomAttribute<DescriptionAttribute>()?.Description
                     ?? p.GetCustomAttribute<DisplayAttribute>()?.Name
                     ?? p.GetCustomAttribute<DisplayNameAttribute>()?.DisplayName
-                    ?? p.Name.Wordify(),
-                p.PropertyType == typeof(bool) || p.PropertyType == typeof(bool?)
-                    ? MeshNodeEditorFieldKind.Bool
-                    : MeshNodeEditorFieldKind.Text))
+                    ?? p.Name.Wordify();
+                var key = p.Name.ToCamelCase()!;
+                var t = Nullable.GetUnderlyingType(p.PropertyType) ?? p.PropertyType;
+                if (t.IsEnum)
+                    return new MeshNodeEditorField(key, label, MeshNodeEditorFieldKind.Enum)
+                    {
+                        Options = Enum.GetNames(t).ToImmutableList(),
+                    };
+                var kind = t == typeof(bool) ? MeshNodeEditorFieldKind.Bool : MeshNodeEditorFieldKind.Text;
+                return new MeshNodeEditorField(key, label, kind);
+            })
             .ToImmutableList();
 }
 

@@ -69,9 +69,20 @@ jobs:
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 10.0.x
-      - name: Compute image tag (short SHA)
+      # The image is tagged with the VERSION (3.0.0-ci.<run#>) AND the short SHA AND the moving `main`.
+      # The version tag is what each install's self-updater (ReleaseStrategy.md) compares to decide a
+      # rollout — so it MUST be the monotonic $(Version) (Directory.Build.props derives the .ci.<n>
+      # suffix from $GITHUB_RUN_NUMBER). -getProperty:Version prints the computed version without
+      # building; CIRun=true so it matches the version baked into the published binaries below.
+      - name: Compute image tags (version + short SHA)
         id: vars
-        run: echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          VERSION=$(dotnet msbuild memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj \
+            -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Computed image version: $VERSION (run #$GITHUB_RUN_NUMBER)"
       # OIDC federated login — no client secret stored. Requires a federated credential on the
       # Azure AD app scoped to this repo's main branch (see the README block at the bottom).
       - name: Azure login (OIDC)
@@ -95,7 +106,7 @@ jobs:
           -p:CIRun=true
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=memex-portal-ai
-          -p:ContainerImageTags="${{ steps.vars.outputs.sha }};main"
+          -p:ContainerImageTags="${{ steps.vars.outputs.version }};${{ steps.vars.outputs.sha }};main"
           -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:latest
       - name: Build + push migration
         run: >
@@ -104,7 +115,7 @@ jobs:
           -p:CIRun=true
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=memex-migration
-          -p:ContainerImageTags="${{ steps.vars.outputs.sha }};main"
+          -p:ContainerImageTags="${{ steps.vars.outputs.version }};${{ steps.vars.outputs.sha }};main"
 
   # ───────────────────────────────── DEPLOY ──────────────────────────────────
   # One leg per environment (namespace) on the shared private cluster. Each leg points the

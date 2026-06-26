@@ -132,6 +132,9 @@ We stay in **pre-release** (`-rcN`) and iterate until it's right, then graduate.
 
 ## 5. See also
 
+- [ReleaseStrategy.md](/Doc/Architecture/ReleaseStrategy) — the end-to-end model this versioning
+  feeds: merge preconditions, CI producing all images to ACR by version, and the policy-driven
+  **self-update** (each install rolls itself per `Admin/UpdatePolicy`).
 - [DataSyncSetup.md](/Doc/Architecture/DataSyncSetup) — the platform version doubles as the
   content-version for static-repo / GitHub data-sync.
 - [Deployment.md](/Doc/Architecture/Deployment) — where the built images go (AKS vs Container Apps).

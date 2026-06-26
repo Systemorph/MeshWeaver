@@ -14,7 +14,17 @@ spec:
         app.kubernetes.io/name: "{{ .Chart.Name }}"
         app.kubernetes.io/component: "memex-portal"
         app.kubernetes.io/instance: "{{ .Release.Name }}"
+        {{- with .Values.selfUpdate }}
+        {{- if .azureClientId }}
+        # Opt the pod into the Azure workload-identity webhook (injects the federated token so the
+        # self-updater can list ACR tags). Only when a client id is configured.
+        azure.workload.identity/use: "true"
+        {{- end }}
+        {{- end }}
     spec:
+      # The in-pod self-updater patches this deployment via the Kubernetes API using this SA's
+      # projected token (RBAC in rbac.yaml). See Doc/Architecture/ReleaseStrategy.
+      serviceAccountName: "memex-portal-sa"
       initContainers:
         # Postgres and the portal start concurrently on a fresh install; the portal's hub
         # init FAILS (and the host aborts) if Postgres isn't yet accepting connections.
@@ -33,6 +43,15 @@ spec:
                 name: "memex-portal-config"
             - secretRef:
                 name: "memex-portal-secrets"
+          {{- with .Values.selfUpdate }}
+          {{- if .azureClientId }}
+          env:
+            # Explicit AZURE_CLIENT_ID for the self-updater's ACR credential (the workload-identity
+            # webhook also injects this; set here so it's correct even without the webhook).
+            - name: "AZURE_CLIENT_ID"
+              value: "{{ .azureClientId }}"
+          {{- end }}
+          {{- end }}
           ports:
             - name: "http"
               protocol: "TCP"

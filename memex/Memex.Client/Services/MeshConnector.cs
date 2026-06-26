@@ -76,5 +76,11 @@ public sealed class MeshConnector
                 ex => _logger?.LogWarning(ex, "instance existence check failed for {Path}", path));
 
         _logger?.LogInformation("Connecting to mesh {MeshId} at {Url}", meshId, url);
+
+        // Detect-and-notify: if the remote runs a newer platform version than this bundled app, prompt
+        // the user to update + relaunch (a sandboxed app can't self-replace). Best-effort, error-sunk.
+        new UpdateNotificationService(
+                _hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<UpdateNotificationService>())
+            .CheckRemote(workspace, meshId);
     }
 }
