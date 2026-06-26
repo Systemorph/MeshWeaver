@@ -125,9 +125,16 @@ public static class PostgreSqlSchemaInitializer
             DECLARE
                 schema_rec RECORD;
                 union_sql  TEXT := '';
+                -- 🚨 embedding is DELIBERATELY excluded. The matview is a top-level-node lookup
+                -- (autocomplete by name/id/path — PostgreSqlCrossSchemaQueryProvider; it never reads
+                -- the vector). Including it made the matview DEPEND on every partition's embedding
+                -- column, so changing the embedding model/dimension (ALTER COLUMN embedding TYPE
+                -- vector(N)) failed with "cannot alter type of a column used by a view or rule", and a
+                -- cross-partition UNION of differing vector dims can't even rebuild. Dropping it makes
+                -- embedding-dimension changes free. See memory embedding-column-resize-matview-block.
                 cols       TEXT := 'id, namespace, name, node_type, description, category, icon, '
                                 || 'display_order, last_modified, version, state, content, '
-                                || 'desired_id, main_node, path, embedding';
+                                || 'desired_id, main_node, path';
             BEGIN
                 FOR schema_rec IN SELECT schema_name FROM public.searchable_schemas ORDER BY schema_name
                 LOOP
