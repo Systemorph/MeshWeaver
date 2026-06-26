@@ -867,23 +867,43 @@ internal static class NodeTypeEnrichmentHelpers
     }
 
     private static UiControl BuildCompilationErrorMarkdown(string errorMessage, string? guidance)
+        => Controls.Stack
+            // Card-style emergency page: an error accent, a comfortable reading
+            // width and generous padding so a broken instance gets a real
+            // "here's what went wrong and how to fix it" PAGE — not a blank
+            // spinner or a terse one-liner.
+            .WithStyle(
+                "max-width: 820px; margin: 1.5rem auto; padding: 24px 28px; " +
+                "border: 1px solid var(--error, #d13438); border-left: 4px solid var(--error, #d13438); " +
+                "border-radius: 8px; background: var(--neutral-layer-2);")
+            .WithView(Controls.Markdown(BuildCompilationErrorMarkdownText(errorMessage, guidance)));
+
+    /// <summary>
+    /// Builds the markdown body of the emergency compile-error page: a friendly
+    /// headline, a one-line plain-language reason, the compiler diagnostics in a code
+    /// block, and a clear "correct the code" call to action. Pure string builder so it
+    /// can be unit-tested directly (<c>CompileErrorPageTest</c>). The <c>⚠</c> and
+    /// <c>compilation</c> tokens are part of the overlay contract
+    /// <c>CompileErrorOverviewTest</c> asserts — keep them.
+    /// </summary>
+    internal static string BuildCompilationErrorMarkdownText(string errorMessage, string? guidance)
     {
         var newlineIdx = errorMessage.IndexOf('\n');
         var header = newlineIdx >= 0 ? errorMessage[..newlineIdx].TrimEnd(':') : errorMessage;
         var body = newlineIdx >= 0 ? errorMessage[(newlineIdx + 1)..].TrimEnd() : string.Empty;
 
         var sb = new System.Text.StringBuilder();
-        sb.Append("> **⚠ ").Append(header).Append("**\n>\n> ");
-        sb.Append(guidance ?? DefaultCompilationErrorGuidance);
-        // Only emit the diagnostics code fence when there's actually a body to
-        // show. A single-line message (the generic "Compilation failed" fallback
-        // or the framework-stale prompt) previously rendered an EMPTY ```text```
-        // block here — the confusing artifact users reported.
+        sb.Append("# ⚠ This page can't be displayed\n\n");
+        sb.Append("There was a **compilation error** in this item's code, so its page couldn't be built.\n\n");
+        sb.Append("**").Append(header).Append("**\n");
+        // Only emit the diagnostics code fence when there's actually a body to show.
+        // A single-line message (the generic "Compilation failed" fallback or the
+        // framework-stale prompt) would otherwise render an EMPTY ```text``` block —
+        // the confusing artifact users reported.
         if (!string.IsNullOrEmpty(body))
-            sb.Append("\n\n```text\n").Append(body).Append("\n```");
-
-        return Controls.Stack
-            .WithStyle("padding: 16px;")
-            .WithView(Controls.Markdown(sb.ToString()));
+            sb.Append("\n```text\n").Append(body).Append("\n```\n");
+        sb.Append("\n---\n\n");
+        sb.Append("**Please correct the code.** ").Append(guidance ?? DefaultCompilationErrorGuidance).Append('\n');
+        return sb.ToString();
     }
 }

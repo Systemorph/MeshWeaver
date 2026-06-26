@@ -127,4 +127,47 @@ public class CompileErrorPageTest
         views.Should().HaveCount(2, "only the one LOCATED diagnostic's file produces a link + editor");
         ((CodeEditorControl)views[1]).Diagnostics!.Should().ContainSingle(m => m.Code == "CS0103");
     }
+
+    // ── The per-INSTANCE emergency overlay page (NodeTypeEnrichmentHelpers) ──
+    // When you navigate to an INSTANCE of a broken NodeType, its Overview area comes
+    // back as the emergency overlay built by BuildCompilationErrorMarkdownText. It
+    // must read as a real error PAGE — a plain-language headline, the actual compiler
+    // diagnostics, and a clear "correct the code" call to action — not a terse line.
+
+    [Fact]
+    public void InstanceOverlayPage_HasHeadline_RealDiagnostics_AndFixCallToAction()
+    {
+        var error = "Compilation failed for 'Acme/Widget'\n"
+            + "CS0103 error (line 9): 'Chart' does not exist in the current context";
+
+        var md = NodeTypeEnrichmentHelpers.BuildCompilationErrorMarkdownText(error, guidance: null);
+
+        md.Should().Contain("⚠");
+        md.Should().Contain("can't be displayed",
+            "the page leads with a plain-language headline, not a raw one-liner");
+        md.Should().Contain("compilation error",
+            "the overlay contract (CompileErrorOverviewTest) keeps the word 'compilation'");
+        md.Should().Contain("Compilation failed for 'Acme/Widget'",
+            "the specific failure header is shown");
+        md.Should().Contain("CS0103",
+            "the actual compiler diagnostics are shown so the author can fix them");
+        md.Should().Contain("```text",
+            "diagnostics render in a code block, not inline prose");
+        md.Should().Contain("Please correct the code",
+            "the page ends with a clear call to action to fix the source");
+    }
+
+    [Fact]
+    public void InstanceOverlayPage_SingleLineMessage_OmitsEmptyDiagnosticsFence_UsesCallerGuidance()
+    {
+        // A single-line message (no diagnostics body) must NOT render an empty ```text``` block,
+        // and caller-supplied guidance is used verbatim when provided.
+        var md = NodeTypeEnrichmentHelpers.BuildCompilationErrorMarkdownText(
+            "Compilation failed", guidance: "Edit the source and recompile.");
+
+        md.Should().NotContain("```text", "no diagnostics body → no empty code fence");
+        md.Should().Contain("Please correct the code");
+        md.Should().Contain("Edit the source and recompile.",
+            "caller-supplied guidance is used when provided");
+    }
 }
