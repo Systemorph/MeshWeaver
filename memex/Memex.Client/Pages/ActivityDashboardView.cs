@@ -28,10 +28,13 @@ public sealed class ActivityDashboardView : ContentView
     private readonly IMessageHub _hub;
     private readonly HorizontalStackLayout _tabBar = new() { Spacing = 4, VerticalOptions = LayoutOptions.Center };
     private readonly NodeCardListView _cards;
-    private readonly Entry _composer = new()
+    // The proper chat composer — the same WebView-hosted Monaco editor the chat uses (ChatView),
+    // not a single-line message box. Fills its container width: the Monaco HTML is width:100% with
+    // automaticLayout, and the hosting WebView is HorizontalOptions=Fill, so it spans 100%.
+    private readonly MonacoEditorView _composer = new(language: "markdown", placeholder: "Start a new thread…")
     {
-        Placeholder = "Start a new thread…", ReturnType = ReturnType.Send,
-        FontSize = 15, TextColor = Colors.White, VerticalOptions = LayoutOptions.Center,
+        HeightRequest = 92,
+        HorizontalOptions = LayoutOptions.Fill,
     };
     private string _activeTab = Tabs[0].Name;
 
@@ -69,19 +72,22 @@ public sealed class ActivityDashboardView : ContentView
             Content = _tabBar,
         };
 
-        _composer.Completed += (_, _) => SendComposer();
-        var send = new Button { Text = "Send", FontSize = 14, BackgroundColor = Colors.RoyalBlue, TextColor = Colors.White, CornerRadius = 14, Padding = new Thickness(14, 0), HeightRequest = 34 };
+        var send = new Button
+        {
+            Text = "Send", FontSize = 14, BackgroundColor = Colors.RoyalBlue, TextColor = Colors.White,
+            CornerRadius = 14, Padding = new Thickness(18, 0), HeightRequest = 34,
+            HorizontalOptions = LayoutOptions.End,
+        };
         send.Clicked += (_, _) => SendComposer();
-        var composerGrid = new Grid { ColumnSpacing = 6, ColumnDefinitions = { new(GridLength.Star), new(GridLength.Auto) } };
-        composerGrid.Add(_composer, 0);
-        composerGrid.Add(send, 1);
+        // Editor on top (full width) with Send beneath, right-aligned — same shape as the chat composer.
+        // The VerticalStackLayout stretches the editor to the full bar width.
         var composerBar = new Border
         {
             StrokeThickness = 1, Stroke = Color.FromArgb("#3A3A3C"),
             BackgroundColor = Color.FromArgb("#1C1C1E"),
-            StrokeShape = new RoundRectangle { CornerRadius = 20 },
-            Margin = new Thickness(16, 6, 16, 12), Padding = new Thickness(14, 3, 4, 3),
-            Content = composerGrid,
+            StrokeShape = new RoundRectangle { CornerRadius = 16 },
+            Margin = new Thickness(16, 6, 16, 12), Padding = new Thickness(10),
+            Content = new VerticalStackLayout { Spacing = 8, Children = { _composer, send } },
         };
 
         var grid = new Grid
@@ -147,11 +153,11 @@ public sealed class ActivityDashboardView : ContentView
         };
     }
 
-    private void SendComposer()
+    private async void SendComposer()
     {
-        var text = _composer.Text?.Trim();
+        var text = (await _composer.GetTextAsync()).Trim();
         if (string.IsNullOrEmpty(text)) return;
-        _composer.Text = "";
+        _composer.SetText("");
         // hub.StartThread is fire-and-forget (void); the thread node is created reactively and onCreated
         // fires with it. Open it, and refresh the Threads tab so it shows in the catalog.
         _hub.StartThread(DeviceOnboarding.DeviceUserId, text,
