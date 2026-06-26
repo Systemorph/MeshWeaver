@@ -221,4 +221,54 @@ public class PgOnlyProdShapeTests(PostgreSqlFixture fixture, ITestOutputHelper o
         resolution!.Prefix.Should().Be(ns, "first path segment maps to the partition root / main node");
         resolution.Remainder.Should().Be("Files", "the area suffix becomes the resolution Remainder");
     }
+
+    /// <summary>
+    /// THE FIX (42P01 / junk-schema storm): a single-segment path whose partition does NOT
+    /// exist — a mistyped/garbage URL like <c>markdown</c>, <c>code</c>, <c>search?q=…</c>,
+    /// <c>login?returnurl=…</c> — must resolve to NULL (a clean 404), NOT a synthetic partition
+    /// root. The synthetic root used to activate a grain that queried the never-provisioned
+    /// <c>&lt;segment&gt;.mesh_nodes</c> schema → <c>Npgsql 42P01: relation does not exist</c>,
+    /// and the bogus segment leaked into a junk partition schema (atioz log storm). With the
+    /// existence gate, the writable PG provider's definitive <c>false</c> suppresses synthesis.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ResolvePath_NonExistentPartition_DoesNotSynthesize_ReturnsNull()
+    {
+        var garbage = $"pg9a_nope_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
+        var resolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
+
+        // No schema provisioned for `garbage` → PostgreSqlPartitionStorageProvider.PartitionExists
+        // answers a definitive false → synthesis is suppressed → the resolver emits null.
+        var resolution = await resolver.ResolvePath(garbage)
+            .Take(1).Timeout(15.Seconds())
+            .Should().Within(30.Seconds()).Emit();
+
+        resolution.Should().BeNull(
+            "a single-segment path to a NON-provisioned partition must 404, not synthesize a root that " +
+            "activates a grain querying the missing '{0}.mesh_nodes' schema (42P01) and provisions a junk schema",
+            garbage);
+    }
+
+    /// <summary>
+    /// NO REGRESSION: the existence gate must NOT touch the real home-page fast path. A
+    /// PROVISIONED partition whose bare root has no MeshNode yet (the /rbuergi-before-first-write
+    /// shape) must STILL synthesize a placeholder root so the grain activates and the page renders
+    /// — the very hang the synthetic was introduced to cure (blank /rbuergi, 30s timeout).
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ResolvePath_ProvisionedPartitionRoot_NoNode_StillSynthesizes()
+    {
+        var ns = $"pg9a_root_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
+        await ProvisionPartition(ns); // schema exists → PartitionExists(ns) == true; no root node written
+
+        var resolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
+        var resolution = await resolver.ResolvePath(ns)
+            .Take(1).Timeout(15.Seconds())
+            .Should().Within(30.Seconds()).Emit();
+
+        resolution.Should().NotBeNull(
+            "a provisioned partition's bare root (no MeshNode yet) must still synthesize a placeholder " +
+            "so the grain activates — the existence gate only suppresses NON-existent partitions");
+        resolution!.Prefix.Should().Be(ns);
+    }
 }

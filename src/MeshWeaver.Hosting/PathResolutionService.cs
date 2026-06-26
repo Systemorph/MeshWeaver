@@ -50,6 +50,7 @@ internal class PathResolutionService : IPathResolver
     private readonly IMeshQueryCore _queryCore;
     private readonly AccessService? _accessService;
     private readonly ILogger<PathResolutionService>? _logger;
+    private readonly IReadOnlyList<IPartitionStorageProvider> _writablePartitionProviders;
     private readonly bool _hasWritablePartitionProvider;
 
     public PathResolutionService(
@@ -68,8 +69,12 @@ internal class PathResolutionService : IPathResolver
         // bogus paths). In tests + monolith this is typically the wildcard
         // InMemoryPartitionStorageProvider; in prod it's the Postgres per-user
         // schema provider. Read-only seed providers (EmbeddedResource,
-        // StaticNode) don't count — they can't accept new partitions.
-        _hasWritablePartitionProvider = partitionProviders.Any(p => !p.IsReadOnly);
+        // StaticNode) don't count — they can't accept new partitions, and they
+        // answer PartitionExists with the indeterminate default (null), which
+        // would dilute the confirmed-absent vote below. Keep only the writable
+        // set so the existence probe reflects the providers that could own it.
+        _writablePartitionProviders = partitionProviders.Where(p => !p.IsReadOnly).ToList();
+        _hasWritablePartitionProvider = _writablePartitionProviders.Count > 0;
     }
 
     public IObservable<AddressResolution?> ResolvePath(string path)
@@ -165,21 +170,70 @@ internal class PathResolutionService : IPathResolver
             // full Orleans response budget — prod symptom: /rbuergi start
             // screen blank, 30s "Response did not arrive on time".
             // Repro: PartitionRootActivationTest.BarePartitionPath_NoMeshNode_RespondsToPing.
-            .Select(resolution =>
+            .SelectMany(resolution =>
             {
-                if (resolution is not null) return resolution;
+                if (resolution is not null)
+                    return Observable.Return<AddressResolution?>(resolution);
                 if (segments.Length != 1
                     || string.IsNullOrEmpty(segments[0])
                     || !_hasWritablePartitionProvider)
-                    return null;
+                    return Observable.Return<AddressResolution?>(null);
                 var partitionPath = segments[0];
-                var synthetic = new MeshNode(partitionPath)
-                {
-                    Name = partitionPath,
-                    State = MeshNodeState.Active
-                };
-                return BuildResolution(partitionPath, segments, matchedSegments: 1, matchedNode: synthetic);
+                // 🚨 Synthesize a placeholder root ONLY for a partition that actually
+                // exists. A single-segment path that matches no node AND no provisioned
+                // partition — a mistyped/garbage URL like `markdown`, `code`,
+                // `search?q=…`, `login?returnurl=…` — must resolve to NotFound (a clean
+                // 404), NOT a synthetic root. The synthetic activated a grain that queried
+                // the never-provisioned `<segment>.mesh_nodes` schema → Npgsql 42P01, and
+                // the bogus segment leaked into a junk partition schema (atioz log storm).
+                // Existence is a global OR across the WRITABLE providers: synthesize unless
+                // a provider that could own it definitively says it is absent (some `false`,
+                // none `true`). `true`/`null` (indeterminate, InMemory test, probe hiccup)
+                // still synthesize, so the real-partition home-page fast path (`/rbuergi`)
+                // is never regressed.
+                return PartitionConfirmedAbsent(partitionPath)
+                    .Select<bool, AddressResolution?>(confirmedAbsent => confirmedAbsent
+                        ? null
+                        : BuildResolution(partitionPath, segments, matchedSegments: 1,
+                            matchedNode: new MeshNode(partitionPath)
+                            {
+                                Name = partitionPath,
+                                State = MeshNodeState.Active
+                            }));
             });
+    }
+
+    /// <summary>
+    /// Reactive existence vote over the WRITABLE partition providers (the same set
+    /// that gates synthesis). Mirrors <c>PartitionWriteGuardValidator</c>'s
+    /// global-OR semantics but answers the synthesis question: a partition is
+    /// CONFIRMED ABSENT only when at least one writable provider says <c>false</c>
+    /// (it knows its store and the partition is not there) AND none says
+    /// <c>true</c>. Indeterminate probes (<c>null</c>: a provider that can't answer,
+    /// a 5s timeout, or an errored probe) never confirm absence — they fail OPEN to
+    /// synthesis, so a probe hiccup can never turn a real partition's root into a 404.
+    /// </summary>
+    private IObservable<bool> PartitionConfirmedAbsent(string partition)
+    {
+        if (_writablePartitionProviders.Count == 0)
+            return Observable.Return(false);
+
+        var probes = _writablePartitionProviders
+            .Select(p => p.PartitionExists(partition)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(5))
+                .Catch<bool?, Exception>(ex =>
+                {
+                    _logger?.LogDebug(ex,
+                        "PathResolution: partition existence probe for '{Partition}' via {Provider} failed; treating as indeterminate",
+                        partition, p.Name);
+                    return Observable.Return<bool?>(null);
+                }))
+            .ToList();
+
+        return Observable.CombineLatest(probes)
+            .Take(1)
+            .Select(results => results.Any(r => r == false) && !results.Any(r => r == true));
     }
 
     private static AddressResolution BuildResolution(
