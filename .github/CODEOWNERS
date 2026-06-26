@@ -1,0 +1,8 @@
+# Code owners — drives "Require review from Code Owners" branch protection (merge precondition c).
+#
+# Replace the owner below with the real team/user handle for this repo (e.g. @Systemorph/maintainers
+# or an individual @handle). A non-existent owner silently does NOT enforce review, so keep this
+# accurate. AI review satisfies precondition (c) too — we don't care whether the approving review is
+# from a human or an AI reviewer; this file just ensures SOMEONE is requested.
+
+* @Systemorph/maintainers

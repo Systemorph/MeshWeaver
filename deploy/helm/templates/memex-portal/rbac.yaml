@@ -1,0 +1,36 @@
+---
+# Least-privilege RBAC for the in-pod self-updater: it may GET and PATCH ONLY the portal + migration
+# deployments (scoped by resourceNames), nothing else. This is what lets the portal "change the image
+# version from inside the memex" (ReleaseStrategy.md). Without this the PATCH returns 403 and the
+# poller logs + keeps ticking (no crash).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: "memex-portal-self-update"
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "memex-portal"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames:
+      - "memex-portal-deployment"
+      - "memex-migration-deployment"
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: "memex-portal-self-update"
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "memex-portal"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: "memex-portal-self-update"
+subjects:
+  - kind: ServiceAccount
+    name: "memex-portal-sa"

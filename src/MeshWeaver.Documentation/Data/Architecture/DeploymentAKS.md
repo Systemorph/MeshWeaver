@@ -13,6 +13,8 @@ This is **one of two deploy routes** for MeshWeaver. Use it for the shared porta
 
 A **code update** is three steps: build the images, point the Deployments at the new tag, restart. It is **not** `tools/deploy.sh` and **not** `aspire deploy` — those are the Container Apps route.
 
+> **Steady state is self-update, not this runbook.** Once an environment runs, it rolls *itself* to new images per `Admin/UpdatePolicy` (default Continuous) — the portal patches its own Deployment from inside the pod. This manual runbook is the **bootstrap / break-glass** path (first install, or to force a specific tag). See [ReleaseStrategy.md](/Doc/Architecture/ReleaseStrategy), which also covers the one-time RBAC + workload-identity (AcrPull) setup the in-pod updater needs.
+
 ## 1. Build + push the images
 
 ```bash

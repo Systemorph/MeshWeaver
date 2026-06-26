@@ -63,6 +63,8 @@ public partial class MeshNodeContentEditorView
             if (f.Kind == MeshNodeEditorFieldKind.Bool)
                 _bool[f.Key] = value is JsonValue jb && jb.TryGetValue<bool>(out var b) && b;
             else
+                // Enum + Text both hold a string (the enum member NAME for Enum — enums serialize
+                // as their string name, so the dropdown value matches the option set directly).
                 _text[f.Key] = value is JsonValue js ? js.ToString() : value?.ToString();
         }
     }
@@ -86,6 +88,14 @@ public partial class MeshNodeContentEditorView
     {
         _bool[f.Key] = value;
         Persist(f.Key, JsonValue.Create(value));
+    }
+
+    private void OnEnumChanged(MeshNodeEditorField f, string? value)
+    {
+        _text[f.Key] = value;
+        // Persist the enum member NAME as a JSON string — round-trips through the typed content
+        // because enums serialize as their string name (EnumMemberJsonStringEnumConverter).
+        Persist(f.Key, value is null ? null : JsonValue.Create(value));
     }
 
     /// <summary>

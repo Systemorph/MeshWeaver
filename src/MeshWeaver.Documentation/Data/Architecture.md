@@ -76,7 +76,7 @@ The catalog below lists every page; these are the load-bearing reads per theme.
 | **Node types** | [Adding a New Node Type](AddingANewNodeType) | [Node Type Compilation](NodeTypeCompilation) · [Language Services](LanguageServices) · [Extensible Defaults](ExtensibleDefaults) |
 | **Reliability & wedges** | [Error Propagation & Wedges](ErrorPropagationAndWedges) — drive wedges to 0 | [Action-Block Wedge Prevention](ActionBlockWedgePrevention) · [Hub Initialization Failure](HubInitializationFailure) |
 | **Testing & debugging** | [Writing Tests](WritingTests) | [Reactive Test Assertions](ReactiveTestAssertions) · [Test State Isolation](TestStateIsolation) · [Debugging Message Flow](DebuggingMessageFlow) · [Debugging Disposal & Leaks](DebuggingDisposalAndLeaks) |
-| **Deployment & ops** | [Deployment](Deployment) (the router) | [AKS](DeploymentAKS) · [Container Apps](DeploymentContainerApps) · [Local Dev Workflow](LocalDevWorkflow) · [Onboarding a New Environment](OnboardingNewEnvironment) · [Release Process](ReleaseProcess) |
+| **Deployment & ops** | [Deployment](Deployment) (the router) | [AKS](DeploymentAKS) · [Container Apps](DeploymentContainerApps) · [Local Dev Workflow](LocalDevWorkflow) · [Onboarding a New Environment](OnboardingNewEnvironment) · [Release & Self-Update Strategy](ReleaseStrategy) · [Release Process](ReleaseProcess) |
 | **Contributing docs** | [Authoring Documentation](AuthoringDocumentation) | [Specifying Software](SpecifyingSoftware) · [Glossary](/Doc/Glossary) |
 
 ## Getting started

@@ -23,6 +23,19 @@ else
                                     Disabled="@(!CanEdit)"
                                     Label="@f.Label" />
                 }
+                else if (f.Kind == MeshNodeEditorFieldKind.Enum)
+                {
+                    <FluentLabel Typo="Microsoft.FluentUI.AspNetCore.Components.Typography.Body"
+                                 Weight="Microsoft.FluentUI.AspNetCore.Components.FontWeight.Bold">@f.Label</FluentLabel>
+                    <FluentSelect TOption="string"
+                                  Items="@f.Options"
+                                  OptionValue="@(o => o)"
+                                  OptionText="@(o => o)"
+                                  Value="@TextOf(f)"
+                                  ValueChanged="(string? v) => OnEnumChanged(f, v)"
+                                  Disabled="@(!CanEdit)"
+                                  Style="width: 100%; max-width: 320px;" />
+                }
                 else
                 {
                     <FluentLabel Typo="Microsoft.FluentUI.AspNetCore.Components.Typography.Body"

@@ -17,6 +17,9 @@ This page is a step-by-step guide for standing up a **prod-like memex portal** o
 | A **prod-like** stack on your Mac — real k8s, Helm chart, ingress/TLS, Postgres PVC, OAuth, local LLM | **This page** (Colima k3s) | — |
 | Ship a code update to the shared `memex` portal | AKS | [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS) |
 | Deploy an Aspire `test`/`prod` environment | Azure Container Apps | [DeploymentContainerApps.md](/Doc/Architecture/DeploymentContainerApps) |
+| Understand how an install updates itself (policy-driven) | Self-update | [ReleaseStrategy.md](/Doc/Architecture/ReleaseStrategy) |
+
+> Because this is the **same Helm chart** as AKS, the in-pod self-updater applies here too: a `Continuous` install patches its own deployment to a newer ACR tag (see [ReleaseStrategy.md](/Doc/Architecture/ReleaseStrategy)). A pure local-build loop (images built straight into Colima's Docker store, never pushed to ACR) has nothing to poll — treat it as `None`.
 
 The Colima k3s route is the closest thing to "prod on your laptop": it runs the **`deploy/helm` chart** (the same chart the AKS environments use), terminates TLS at an ingress controller, authenticates through Microsoft Entra, persists Postgres on a PVC, and survives reboots. The trade-off is build time and a one-time setup. For everyday code iteration, prefer the Monolith / Aspire workflow — reach for Colima k3s when you need to validate the *deployment* shape, ingress/TLS, OAuth redirects, or the self-hosted-LLM path.
 
