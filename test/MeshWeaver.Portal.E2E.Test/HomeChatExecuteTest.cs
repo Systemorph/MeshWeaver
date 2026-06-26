@@ -22,7 +22,9 @@ public class HomeChatExecuteTest(PortalFixture fixture)
         var page = await context.NewPageAsync();
         await page.SetViewportSizeAsync(1400, 1000);
 
-        await page.GotoAsync($"{fixture.BaseUrl}/User/Roland",
+        // Navigate to the post-login home (the portal lands a signed-in user on their own home,
+        // whatever its URL shape) rather than a hardcoded /User/{id} — the home embeds the composer.
+        await page.GotoAsync($"{fixture.BaseUrl}/",
             new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle, Timeout = 90_000 });
 
         // The home composer IS the side-panel chat view. Assert its tell-tale chrome, all of which only

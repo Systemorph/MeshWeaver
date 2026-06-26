@@ -357,6 +357,8 @@ readonly E2E_HOST="e2e.${HOSTNAME_LOCAL}"            # covered by the *.memex.lo
 readonly E2E_PORT="${MEMEX_E2E_PORT:-8444}"
 readonly E2E_PF_PIDFILE="$LOCAL_HOME/e2e-port-forward.pid"
 readonly E2E_PF_LOG="$LOCAL_HOME/e2e-port-forward.log"
+readonly E2E_USER="${E2E_USER:-Roland}"              # the DevLogin person id Playwright uses
+readonly E2E_BOOTSTRAP_SECRET="e2e-bootstrap"        # secret-gated first-admin seed (throwaway env)
 
 e2e_require_stack() {
   kubectl get ns "$NAMESPACE" >/dev/null 2>&1 \
@@ -442,6 +444,7 @@ spec:
             # the ONLY differences from the memex portal:
             - { name: ConnectionStrings__memex, value: "$(e2e_conn)" }
             - { name: Authentication__EnableDevLogin, value: "true" }
+            - { name: Bootstrap__Secret, value: "$E2E_BOOTSTRAP_SECRET" }
             - { name: Portal__InstanceName, value: "E2E" }
           readinessProbe:
             httpGet: { path: /healthz, port: 8080 }
@@ -483,6 +486,8 @@ spec:
             pathType: Prefix
             backend: { service: { name: $E2E_APP, port: { number: 8080 } } }
 YAML
+  # Force a fresh pod so a rebuilt same-tag image is picked up (IfNotPresent never re-pulls `latest`).
+  kubectl -n "$NAMESPACE" rollout restart "deploy/$E2E_APP" >/dev/null 2>&1 || true
   step "Waiting for the e2e portal rollout"
   kubectl -n "$NAMESPACE" rollout status "deploy/$E2E_APP" --timeout=300s \
     || { kubectl -n "$NAMESPACE" logs "deploy/$E2E_APP" --tail=60 2>/dev/null || true; die "e2e portal did not become ready"; }
@@ -505,9 +510,33 @@ e2e_forward_start() {
   ok "port-forward up (pid $(cat "$E2E_PF_PIDFILE"), log: $E2E_PF_LOG)"
 }
 
+# Seed the DevLogin user. A fresh memex_e2e DB has no users and DevLogin (DevAuthController)
+# resolves an existing nodeType:User node — it does NOT onboard. The secret-gated bootstrap
+# materialises one via the real onboarding path. Idempotent (a pre-existing user is success).
+e2e_seed_user() {
+  step "Seeding DevLogin user '$E2E_USER' via bootstrap (a fresh DB has no users)"
+  local code
+  code="$(curl -k -sS -o /dev/null -w '%{http_code}' -X POST \
+    "https://$E2E_HOST:$E2E_PORT/bootstrap/first-admin?secret=$E2E_BOOTSTRAP_SECRET&username=$E2E_USER&email=$E2E_USER@e2e.local&name=$E2E_USER" \
+    2>/dev/null || echo 000)"
+  [ "$code" = "200" ] && ok "bootstrap returned 200" \
+    || warn "bootstrap seed returned $code — relying on DevLogin self-provisioning"
+
+  # The seed write is eventually consistent — a Playwright run right after `up` would 400 until the
+  # user is query-resolvable. Poll DevLogin (302 = resolved) so `up` only declares ready when it is.
+  step "Waiting for DevLogin to resolve '$E2E_USER'"
+  local i=0
+  until [ "$(curl -k -sS -o /dev/null -w '%{http_code}' -X POST "https://$E2E_HOST:$E2E_PORT/dev/signin" \
+              -H 'content-type: application/x-www-form-urlencoded' \
+              --data "personId=$E2E_USER&returnUrl=%2F" 2>/dev/null)" = "302" ]; do
+    i=$((i+1)); [ "$i" -gt 45 ] && { warn "DevLogin still not resolving '$E2E_USER' — check 'e2e logs'"; return; }
+    sleep 2
+  done
+  ok "DevLogin resolves '$E2E_USER' — Playwright can sign in"
+}
+
 e2e_verify() {
-  local caroot; caroot="$(mkcert -CAROOT 2>/dev/null || true)"
-  local code; code="$(curl --cacert "$caroot/rootCA.pem" -sS -o /dev/null -w '%{http_code}' \
+  local code; code="$(curl -k -sS -o /dev/null -w '%{http_code}' \
     "https://$E2E_HOST:$E2E_PORT/" 2>/dev/null || echo 000)"
   [ "$code" = "200" ] && ok "e2e portal reachable at https://$E2E_HOST:$E2E_PORT (HTTP $code)" \
     || warn "e2e portal not 200 yet (HTTP $code) — give pods a moment, then 'memex-local e2e status'"
@@ -526,6 +555,7 @@ cmd_e2e() {
       e2e_migrate
       e2e_deploy
       e2e_forward_start
+      e2e_seed_user
       e2e_verify
       echo
       ok "Playwright env up: https://$E2E_HOST:$E2E_PORT  (DevLogin, DB=$E2E_DB)"
@@ -537,7 +567,8 @@ cmd_e2e() {
       repo="$(resolve_repo)" || die "e2e test needs the repo — set MEMEX_REPO to your MeshWeaver checkout"
       [ -f "$E2E_PF_PIDFILE" ] || { warn "port-forward not running — starting it"; e2e_forward_start; }
       step "Running Playwright filter '$filter' against https://$E2E_HOST:$E2E_PORT"
-      E2E_BASE_URL="https://$E2E_HOST:$E2E_PORT" E2E_USER="${E2E_USER:-Roland}" \
+      export E2E_USER                                  # already resolved (readonly) — mark for the child
+      E2E_BASE_URL="https://$E2E_HOST:$E2E_PORT" \
         dotnet test "$repo/test/MeshWeaver.Portal.E2E.Test/MeshWeaver.Portal.E2E.Test.csproj" \
           --filter "FullyQualifiedName~$filter"
       ;;
