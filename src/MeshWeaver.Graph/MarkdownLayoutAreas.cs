@@ -41,6 +41,5 @@ public static class MarkdownLayoutAreas
                 .WithView(NotebookArea, MarkdownNotebookLayoutArea.Notebook)
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, MarkdownOverviewLayoutArea.Thumbnail)
             .WithView(MeshNodeLayoutAreas.CreateNodeArea, CreateLayoutArea.Create)
-            .WithView(MeshNodeLayoutAreas.DeleteArea, DeleteLayoutArea.Delete)
-            .WithView(MeshNodeLayoutAreas.ChildrenArea, MeshNodeLayoutAreas.Children));
+            .WithView(MeshNodeLayoutAreas.DeleteArea, DeleteLayoutArea.Delete));
 }

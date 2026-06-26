@@ -77,6 +77,60 @@ public class OverviewHeaderRenderTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
+    /// Double-content regression: a node WITH a markdown body lists its children INLINE in the
+    /// rendered body, so <see cref="MeshNodeLayoutAreas.BuildDetailsContent"/> must NOT also append
+    /// the hardcoded <see cref="LayoutAreaControl.Children"/> section — that rendered the children
+    /// TWICE on a Space/Doc page. A node with NO markdown body keeps the section as the browse
+    /// fallback. The unique marker is the section's <c>LayoutAreaReference</c> to the
+    /// <c>"Children"</c> area embedded as a layout-area control.
+    /// </summary>
+    [Fact(Timeout = 40000)]
+    public async Task Overview_MarkdownBody_OmitsHardcodedChildren_NoBody_KeepsIt()
+    {
+        var withBody = $"{TestPartition}/children-withbody-{System.Guid.NewGuid():N}"[..40];
+        await NodeFactory.CreateNode(new MeshNode(withBody[(TestPartition.Length + 1)..], TestPartition)
+        {
+            Name = "Has Body", NodeType = "Markdown",
+            Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Has body\n\nInline content lists children." }
+        }).Should().Emit();
+
+        var noBody = $"{TestPartition}/children-nobody-{System.Guid.NewGuid():N}"[..40];
+        await NodeFactory.CreateNode(new MeshNode(noBody[(TestPartition.Length + 1)..], TestPartition)
+        {
+            Name = "No Body", NodeType = "Group"
+        }).Should().Emit();
+
+        var withBodyJson = await RenderOverviewJson(withBody);
+        var noBodyJson = await RenderOverviewJson(noBody);
+
+        // The children query/area is removed ENTIRELY — a node page is a markdown space and children
+        // (or any content) are injected INLINE via @@(query), never auto-listed. So NO page emits a
+        // hardcoded Children section (the Space/Doc double-content).
+        ChildrenSectionCount(withBodyJson).Should().Be(0,
+            "a page with a markdown body must not auto-embed a Children section");
+        ChildrenSectionCount(noBodyJson).Should().Be(0,
+            "even a node with no markdown body must not auto-embed a Children section — the children query is unsupported");
+    }
+
+    // Counts the hardcoded children section: a layout-area control whose reference targets the
+    // "Children" area. Robust to nav links (those are anchors/hrefs, not a Children area-reference).
+    private static int ChildrenSectionCount(string json) =>
+        System.Text.RegularExpressions.Regex.Matches(json,
+            "\"area\"\\s*:\\s*\"Children\"", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count;
+
+    private async Task<string> RenderOverviewJson(string nodePath)
+    {
+        var client = GetClient(c => c.AddData(data => data));
+        var address = new Address(nodePath);
+        await client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
+        var workspace = client.GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            address, new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea));
+        var value = await stream.Should().Within(20.Seconds()).Emit();
+        return value.Value.ToString();
+    }
+
+    /// <summary>
     /// Newly created nodes must have <see cref="MeshNode.CreatedDate"/> and
     /// <see cref="MeshNode.LastModified"/> stamped at creation time. The Overview meta
     /// row only shows them when they are non-default, and the user specifically asked

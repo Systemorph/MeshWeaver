@@ -66,8 +66,6 @@ public static class MeshNodeLayoutAreas
     public const string SearchArea = "Search";
     /// <summary>Area name for the node Files layout area.</summary>
     public const string FilesArea = "Files";
-    /// <summary>Area name for the Children layout area (child nodes grouped by type).</summary>
-    public const string ChildrenArea = "Children";
     /// <summary>Area name for the NodeTypes layout area.</summary>
     public const string NodeTypesArea = "NodeTypes";
     /// <summary>Area name for the Access Control layout area.</summary>
@@ -172,7 +170,6 @@ public static class MeshNodeLayoutAreas
             .WithView(SettingsArea, SettingsLayoutArea.Settings)
             .WithView(SearchArea, Search)
             .WithView(FilesArea, Files)
-            .WithView(ChildrenArea, Children)
             .WithView(ThreadsArea, Threads)
             .WithView(ChatArea, Chat)
             .WithView(NodeTypesArea, NodeTypes)
@@ -290,15 +287,11 @@ public static class MeshNodeLayoutAreas
         if (markdownBody != null)
             outer = outer.WithView(markdownBody);
 
-        // Children — full page width, outside the constrained container
-        if (typeDef?.ShowChildrenInDetails ?? true)
-        {
-            outer = outer.WithView(
-                Controls.Stack
-                    .WithWidth("100%")
-                    .WithStyle("margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--neutral-stroke-rest);")
-                    .WithView(LayoutAreaControl.Children(host.Hub)));
-        }
+        // No hardcoded children section. A node page is a MARKDOWN SPACE: it shows exactly what its
+        // body contains, and children (or any other content) are injected INLINE with the @@(query)
+        // operator. Appending a hardcoded LayoutAreaControl.Children here rendered the children twice
+        // on any page that already listed them inline (the Space/Doc double-content). Browsing child
+        // nodes is still available via the Catalog / Search areas.
 
         // Comments — back in constrained width
         if (host.Hub.Configuration.HasComments())
@@ -1013,15 +1006,6 @@ public static class MeshNodeLayoutAreas
             : Controls.Stack.WithWidth("100%").WithView(crumbs).WithView(catalog);
     }
 
-    /// <summary>
-    /// Legacy catalog area, kept as a thin alias of the unified <see cref="Search"/> view with default
-    /// options (<c>groupBy=namespace</c>): child nodes by namespace hierarchy (lazy drilldown). New
-    /// content should embed the Search area instead — e.g. <c>@@/{node}/area/Search</c> — and use
-    /// <c>?groupBy=</c> etc. Shares <see cref="BuildCatalog"/> so the two never drift.
-    /// </summary>
-    [Browsable(false)]
-    public static UiControl Children(LayoutAreaHost host, RenderingContext _)
-        => BuildCatalog(host.Hub.Address.ToString(), new CatalogOptions());
 
     /// <summary>
     /// Renders the Threads catalog showing child Thread nodes using MeshSearchControl.

@@ -95,7 +95,6 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             {
                 Description = "Regression test for the explicit compile flow.",
                 Configuration = "config => config.AddDefaultLayoutAreas().AddLayout(layout => layout.WithView(\"Overview\", CodeEditLayoutAreas.Overview))",
-                ShowChildrenInDetails = false,
             }
         }).Should().Within(30.Seconds()).Emit();
 
@@ -255,7 +254,6 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             {
                 Description = "Regression test for RequestedReleasePath pinning.",
                 Configuration = "config => config.AddDefaultLayoutAreas().AddLayout(layout => layout.WithView(\"Overview\", CodeEditLayoutAreas.Overview))",
-                ShowChildrenInDetails = false,
             }
         }).Should().Within(30.Seconds()).Emit();
 
@@ -410,7 +408,6 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             {
                 Description = "IsDirty state-machine regression.",
                 Configuration = "config => config.AddDefaultLayoutAreas().AddLayout(layout => layout.WithView(\"Overview\", CodeEditLayoutAreas.Overview))",
-                ShowChildrenInDetails = false,
             }
         }).Should().Within(30.Seconds()).Emit();
 
@@ -484,7 +481,6 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             {
                 Description = "Failed-compile regression.",
                 Configuration = "config => config.AddDefaultLayoutAreas().AddLayout(layout => layout.WithView(\"Overview\", CodeEditLayoutAreas.Overview))",
-                ShowChildrenInDetails = false,
             }
         }).Should().Within(30.Seconds()).Emit();
 
@@ -568,7 +564,6 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             {
                 Description = "Compile-button regression.",
                 Configuration = "config => config.AddDefaultLayoutAreas().AddLayout(layout => layout.WithView(\"Overview\", CodeEditLayoutAreas.Overview))",
-                ShowChildrenInDetails = false,
             }
         }).Should().Within(30.Seconds()).Emit();
         await NodeFactory.CreateNode(new MeshNode("code", $"{TestPartition}/ButtonType/Source")

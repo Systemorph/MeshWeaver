@@ -60,8 +60,7 @@ public static class HtmlLayoutAreas
                 Controls.Html("<p style=\"color: var(--neutral-foreground-hint); font-style: italic;\">No content yet.</p>"));
         }
 
-        // Standard children section
-        container = container.WithView(LayoutAreaControl.Children(host.Hub).WithShowProgress(false));
+        // No hardcoded children section — children are injected inline with @@(query), never auto-listed.
 
         return container;
     }

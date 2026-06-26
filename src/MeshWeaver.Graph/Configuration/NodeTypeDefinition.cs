@@ -105,18 +105,6 @@ public record NodeTypeDefinition
     public List<ContentCollectionConfig>? ContentCollections { get; init; }
 
     /// <summary>
-    /// Whether to show children section in the Details view.
-    /// Default: true (show children if ChildrenQuery is set or has children).
-    /// </summary>
-    public bool ShowChildrenInDetails { get; init; } = true;
-
-    /// <summary>
-    /// Maximum number of children to show in the Details view before "Show more" link.
-    /// Default: 10.
-    /// </summary>
-    public int DetailsChildrenLimit { get; init; } = 10;
-
-    /// <summary>
     /// Explicit list of NodeType paths that can be created from instances of this type.
     /// If null, computed automatically from hierarchy (child NodeTypes).
     /// Example: ["ACME/Project/Todo", "ACME/Project/Story"]

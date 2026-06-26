@@ -95,7 +95,6 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
                     "config => config.WithContentType<LinkedInProfile>()" +
                     ".AddDefaultLayoutAreas()" +
                     ".AddLayout(layout => layout.WithView(\"ImportTelemetry\", LinkedInTelemetryImport.ImportTelemetry))",
-                ShowChildrenInDetails = false,
             }
         }).Should().Emit();
 
