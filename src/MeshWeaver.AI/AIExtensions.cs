@@ -16,9 +16,20 @@ namespace MeshWeaver.AI;
 /// </summary>
 public static class AIExtensions
 {
+    /// <typeparam name="TBuilder">The mesh builder type being configured.</typeparam>
+    /// <param name="builder">The mesh builder to extend.</param>
     extension<TBuilder>(TBuilder builder)
     where TBuilder : MeshBuilder
     {
+        /// <summary>
+        /// Registers the AI node types (Agent, Model, Harness, Skill, Thread, ThreadMessage,
+        /// TokenUsage, ThreadComposer, AiSettings) and chat services on the builder, wiring the
+        /// AI types into both the mesh hub and the default per-node hub.
+        /// </summary>
+        /// <param name="serveFromPartition">Partitions (e.g. "Agent", "Model") whose static
+        /// content is DB-synced via static-repo import; for those the read-only in-memory
+        /// partition provider is skipped so Postgres serves them. Null/empty = in-memory serving.</param>
+        /// <returns>The same builder, for chaining.</returns>
         public TBuilder AddAI(IReadOnlySet<string>? serveFromPartition = null)
         {
             // Register AI types in type registry and chat services. serveFromPartition lists the
@@ -34,6 +45,7 @@ public static class AIExtensions
                     .AddHarnessType(serveFromPartition)
                     .AddSkillType(serveFromPartition)
                     .AddThreadComposerType()
+                    .AddChatType()
                     .AddAiSettingsType()
                     .ConfigureServices(services => services.AddAgentChatServices())
                     // Register AI types on the MESH hub (for MeshQuery deserialization of Thread content)
@@ -78,6 +90,13 @@ public static class AIExtensions
         return delivery.Processed();
     }
 
+    /// <summary>
+    /// Registers every AI content type (agent/model/thread/usage/skill/tool-call and the
+    /// related payloads) on the type registry so they serialise correctly across the routing,
+    /// mesh and per-node hubs.
+    /// </summary>
+    /// <param name="typeRegistry">The type registry to populate.</param>
+    /// <returns>The same type registry, for chaining.</returns>
     public static ITypeRegistry AddAITypes(this ITypeRegistry typeRegistry)
         => typeRegistry.WithType(typeof(AgentConfiguration), nameof(AgentConfiguration))
             .WithType(typeof(Harness), nameof(Harness))
