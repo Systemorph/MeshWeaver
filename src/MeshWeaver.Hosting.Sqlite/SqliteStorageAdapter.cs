@@ -6,6 +6,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Sqlite;
 
@@ -25,12 +26,17 @@ public sealed class SqliteStorageAdapter : IStorageAdapter, IDisposable
 {
     private readonly SqliteConnection _connection;
     private readonly IIoPool _ioPool;
+    private readonly ITextEmbedder? _embedder;
+    private readonly ILogger? _logger;
     private readonly object _gate = new();
     private readonly Subject<DataChangeNotification> _changes = new();
 
-    public SqliteStorageAdapter(string connectionString, IIoPool? ioPool = null)
+    public SqliteStorageAdapter(string connectionString, IIoPool? ioPool = null,
+        ITextEmbedder? embedder = null, ILogger<SqliteStorageAdapter>? logger = null)
     {
         _ioPool = ioPool ?? IoPool.Unbounded;
+        _embedder = embedder;
+        _logger = logger;
         // One dedicated connection held for the adapter's lifetime — pooling is pointless and would
         // retain the file handle past Dispose (so the DB file can't be deleted/reopened cleanly).
         var csb = new SqliteConnectionStringBuilder(connectionString) { Pooling = false };
@@ -45,24 +51,45 @@ public sealed class SqliteStorageAdapter : IStorageAdapter, IDisposable
 
     private void EnsureSchema()
     {
-        using var cmd = _connection.CreateCommand();
-        cmd.CommandText = """
-            CREATE TABLE IF NOT EXISTS mesh_nodes (
-                path       TEXT PRIMARY KEY,
-                namespace  TEXT NOT NULL,
-                id         TEXT NOT NULL,
-                node_type  TEXT,
-                data       TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS ix_mesh_nodes_namespace ON mesh_nodes(namespace);
-            CREATE INDEX IF NOT EXISTS ix_mesh_nodes_node_type ON mesh_nodes(node_type);
-            CREATE TABLE IF NOT EXISTS partition_objects (
-                partition_key TEXT PRIMARY KEY,
-                data          TEXT NOT NULL,
-                last_modified TEXT NOT NULL
-            );
-            """;
-        cmd.ExecuteNonQuery();
+        using (var cmd = _connection.CreateCommand())
+        {
+            // embedding BLOB = the node's vector (raw little-endian float[]), populated on write
+            // when an ITextEmbedder is wired. NULL when embeddings are off — vector search simply
+            // skips those rows (WHERE embedding IS NOT NULL), the same contract as Postgres.
+            cmd.CommandText = """
+                CREATE TABLE IF NOT EXISTS mesh_nodes (
+                    path       TEXT PRIMARY KEY,
+                    namespace  TEXT NOT NULL,
+                    id         TEXT NOT NULL,
+                    node_type  TEXT,
+                    data       TEXT NOT NULL,
+                    embedding  BLOB
+                );
+                CREATE INDEX IF NOT EXISTS ix_mesh_nodes_namespace ON mesh_nodes(namespace);
+                CREATE INDEX IF NOT EXISTS ix_mesh_nodes_node_type ON mesh_nodes(node_type);
+                CREATE TABLE IF NOT EXISTS partition_objects (
+                    partition_key TEXT PRIMARY KEY,
+                    data          TEXT NOT NULL,
+                    last_modified TEXT NOT NULL
+                );
+                """;
+            cmd.ExecuteNonQuery();
+        }
+
+        // A DB created before the embedding column existed: CREATE TABLE IF NOT EXISTS won't add
+        // it, so ALTER — idempotent, guarded by a column probe (SQLite has no ADD COLUMN IF NOT EXISTS).
+        bool hasEmbedding;
+        using (var probe = _connection.CreateCommand())
+        {
+            probe.CommandText = "SELECT 1 FROM pragma_table_info('mesh_nodes') WHERE name = 'embedding'";
+            hasEmbedding = probe.ExecuteScalar() is not null;
+        }
+        if (!hasEmbedding)
+        {
+            using var alter = _connection.CreateCommand();
+            alter.CommandText = "ALTER TABLE mesh_nodes ADD COLUMN embedding BLOB";
+            alter.ExecuteNonQuery();
+        }
     }
 
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
@@ -80,28 +107,96 @@ public sealed class SqliteStorageAdapter : IStorageAdapter, IDisposable
         });
 
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
-        => _ioPool.InvokeBlocking<MeshNode?>(_ =>
+    {
+        var path = Norm(node.Path);
+        if (path.Length == 0) return Observable.Return<MeshNode?>(node);
+
+        // The embedding is an async I/O leaf (HTTP to a model server); the SQLite insert is a
+        // sync-blocking leaf. Run the embed on the pool FIRST (best-effort — a failure stores a
+        // NULL embedding, never wedges the write), then the blocking insert. Embedding text mirrors
+        // the Postgres adapter exactly ("{Name} {NodeType}") so the two backends share a contract.
+        var embedText = EmbeddingText(node);
+        var embedding = _embedder is { } embedder && !string.IsNullOrEmpty(embedText)
+            ? _ioPool.Invoke(ct => EmbedSafe(embedder, embedText!, ct))
+            : Observable.Return<float[]?>(null);
+
+        return embedding.SelectMany(vector => _ioPool.InvokeBlocking<MeshNode?>(_ =>
         {
-            var path = Norm(node.Path);
-            if (path.Length == 0) return node;
             var data = JsonSerializer.Serialize(node, options);
             lock (_gate)
             {
                 using var cmd = _connection.CreateCommand();
                 cmd.CommandText = """
-                    INSERT INTO mesh_nodes(path, namespace, id, node_type, data)
-                    VALUES ($p, $ns, $id, $nt, $d)
-                    ON CONFLICT(path) DO UPDATE SET namespace = $ns, id = $id, node_type = $nt, data = $d
+                    INSERT INTO mesh_nodes(path, namespace, id, node_type, data, embedding)
+                    VALUES ($p, $ns, $id, $nt, $d, $emb)
+                    ON CONFLICT(path) DO UPDATE SET namespace = $ns, id = $id, node_type = $nt, data = $d, embedding = $emb
                     """;
                 cmd.Parameters.AddWithValue("$p", path);
                 cmd.Parameters.AddWithValue("$ns", node.Namespace ?? "");
                 cmd.Parameters.AddWithValue("$id", node.Id ?? "");
                 cmd.Parameters.AddWithValue("$nt", (object?)node.NodeType ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$d", data);
+                cmd.Parameters.AddWithValue("$emb", vector is null ? DBNull.Value : ToBlob(vector));
                 cmd.ExecuteNonQuery();
             }
             try { _changes.OnNext(DataChangeNotification.Updated(path, node)); } catch { /* never throw */ }
             return node;
+        }));
+    }
+
+    /// <summary>Embedding text — Name + NodeType, identical to the Postgres adapter's contract.</summary>
+    private static string EmbeddingText(MeshNode node)
+        => string.Join(" ", new[] { node.Name, node.NodeType }.Where(s => !string.IsNullOrEmpty(s)));
+
+    private async Task<float[]?> EmbedSafe(ITextEmbedder embedder, string text, CancellationToken ct)
+    {
+        try { return await embedder.EmbedAsync(text, ct).ConfigureAwait(false); }
+        catch (Exception ex)
+        {
+            // Embeddings are a best-effort search index, not data: a transient embed failure must
+            // NOT fail the write. Surface it (don't silently swallow) — the row stores a NULL
+            // embedding and becomes searchable on its next write.
+            _logger?.LogWarning(ex, "[Sqlite] embedding failed; storing NULL embedding for the node");
+            return null;
+        }
+    }
+
+    private static byte[] ToBlob(float[] vector)
+    {
+        var bytes = new byte[vector.Length * sizeof(float)];
+        Buffer.BlockCopy(vector, 0, bytes, 0, bytes.Length);
+        return bytes;
+    }
+
+    private static float[] FromBlob(byte[] blob)
+    {
+        var vector = new float[blob.Length / sizeof(float)];
+        Buffer.BlockCopy(blob, 0, vector, 0, blob.Length);
+        return vector;
+    }
+
+    /// <summary>
+    /// Snapshot of every node that carries an embedding, paired with its vector — the brute-force
+    /// candidate set for <see cref="SqliteVectorMeshQuery"/>'s cosine ranking. One pooled scan;
+    /// fine at the local/single-user scale SQLite targets.
+    /// </summary>
+    public IObservable<IReadOnlyList<(MeshNode Node, float[] Embedding)>> AllEmbeddings(JsonSerializerOptions options)
+        => _ioPool.InvokeBlocking<IReadOnlyList<(MeshNode, float[])>>(_ =>
+        {
+            var result = new List<(MeshNode, float[])>();
+            lock (_gate)
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = "SELECT data, embedding FROM mesh_nodes WHERE embedding IS NOT NULL";
+                using var r = cmd.ExecuteReader();
+                while (r.Read())
+                {
+                    if (r.IsDBNull(1)) continue;
+                    if (JsonSerializer.Deserialize<MeshNode>(r.GetString(0), options) is not { } node) continue;
+                    result.Add((node, FromBlob((byte[])r[1])));
+                }
+            }
+            return result;
         });
 
     public IObservable<string> Delete(string path)
