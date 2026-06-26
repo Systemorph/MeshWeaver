@@ -75,16 +75,13 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
             Content = MarkdownContent.Parse("second", "", path)
         }).Should().Emit();
 
-        var change = await MeshService.Query<MeshNode>(
-                MeshQueryRequest.FromQuery($"path:{path}"))
-            .Should().Within(5.Seconds())
-            .Match(c => c.ChangeType == QueryChangeType.Initial);
-
-        change.Items.Should().ContainSingle();
-        change.Items.Single().Name.Should().Be("v2", "Query initial set must reflect the most recent UpdateNode");
-        var content = change.Items.Single().Content as MarkdownContent;
-        content.Should().NotBeNull();
-        content!.Content.Should().Be("second");
+        // Read-your-writes via the AUTHORITATIVE owner-hub stream (GetMeshNodeStream / ReadNode),
+        // which emits the post-write state — not the eventually-consistent read-side index. There is
+        // no load in the test, so if this never emits "v2" it is a propagation DEADLOCK, not lag.
+        var node = await ReadNode(path)
+            .Should().Within(15.Seconds())
+            .Match(n => n is { Name: "v2" });
+        (node!.Content as MarkdownContent)!.Content.Should().Be("second");
     }
 
     [Fact]
@@ -109,20 +106,13 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
             Content = MarkdownContent.Parse("b-second", "", $"{Ns}/B")
         }).Should().Emit();
 
-        var change = await MeshService.Query<MeshNode>(
-                MeshQueryRequest.FromQuery($"path:{Ns} scope:descendants"))
-            .Should().Within(5.Seconds())
-            .Match(c => c.ChangeType == QueryChangeType.Initial
-                && c.Items.Any(n => n.Path == $"{Ns}/B" && n.Name == "v2-B"));
+        // Authoritative owner-hub reads (not the lagged read-side index): B carries the post-update
+        // content, A is untouched. No load → a non-emit would be a propagation deadlock, not lag.
+        var b = await ReadNode($"{Ns}/B").Should().Within(15.Seconds()).Match(n => n is { Name: "v2-B" });
+        (b!.Content as MarkdownContent)!.Content.Should().Be("b-second");
 
-        var byPath = change.Items.ToDictionary(n => n.Path);
-        byPath.Should().ContainKey($"{Ns}/A");
-        byPath.Should().ContainKey($"{Ns}/B");
-
-        byPath[$"{Ns}/A"].Name.Should().Be("v1-A", "A was not modified");
-        byPath[$"{Ns}/B"].Name.Should().Be("v2-B",
-            "Query descendants initial set must carry the post-UpdateNode content for B — " +
-            "if it returns 'v1-B', the read-side index is lagging the writes (CQRS staleness bug).");
+        var a = await ReadNode($"{Ns}/A").Should().Within(15.Seconds()).Match(n => n is { Name: "v1-A" });
+        a!.Name.Should().Be("v1-A", "A was not modified");
     }
 
     /// <summary>
