@@ -121,6 +121,16 @@ public static class MauiProgram
                 .AddLayout(layout => layout.WithView("home", LocalPortal.Home)))
             .ConfigureServices(s => s.AddFileSystemAssemblyStore(Path.Combine(appData, "assembly-store")));
 
+#if MACCATALYST
+        // Local embeddings via the host's Ollama (Mac dev): writes embed each node and the
+        // SqliteVectorMeshQuery ranks free-text search + autocomplete by cosine similarity.
+        // localhost reaches the host Ollama from MacCatalyst; on iOS/Android there is no local model
+        // server so this stays OFF (no-op when the endpoint is unreachable — lexical search still
+        // works, Ollama-not-running fails fast as connection-refused, no per-write stall).
+        meshBuilder.ConfigureServices(s => s.AddSqliteOllamaEmbeddings(
+            "http://localhost:11434/v1", model: "bge-m3", timeout: TimeSpan.FromSeconds(10)));
+#endif
+
         builder.Services.AddSingleton(meshBuilder.BuildHub);
 
         // Device-persisted feature flags (e.g. the macOS "apple-gpu" CoreML path).
