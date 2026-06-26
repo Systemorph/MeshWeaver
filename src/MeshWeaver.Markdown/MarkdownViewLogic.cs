@@ -244,6 +244,46 @@ public static class MarkdownViewLogic
     }
 
     /// <summary>
+    /// Splits rendered HTML (with kernel-address placeholders still embedded) into an ORDERED list of
+    /// segments: each is either a plain HTML chunk (<c>SubmissionId == null</c>) or a kernel result-area
+    /// marker (<c>Html == null</c>, <c>SubmissionId</c> = the executable block's submission id, i.e. the
+    /// layout-area name the kernel writes its result into). A view pack that cannot host a nested view
+    /// inside an HTML blob (the native MAUI pack — a <c>WebView</c> can't contain native children) uses
+    /// this to render HTML chunks and live kernel areas side by side. Pure + unit-testable.
+    /// <para>No placeholder present ⇒ a single <c>(html, null)</c> segment; empty input ⇒ empty list.
+    /// The Blazor pack does NOT use this — it embeds the live area inline via the <c>RenderLayoutArea</c>
+    /// render-tree path; the split is the framework-shared equivalent for non-Blazor view packs.</para>
+    /// </summary>
+    public static IReadOnlyList<(string? Html, string? SubmissionId)> SplitKernelResultAreas(string? html)
+    {
+        if (string.IsNullOrEmpty(html))
+            return Array.Empty<(string?, string?)>();
+        if (!html.Contains(ExecutableCodeBlockRenderer.KernelAddressPlaceholder))
+            return new (string?, string?)[] { (html, null) };
+
+        // The div is emitted single-line by LayoutAreaMarkdownRenderer.GetLayoutAreaDiv as
+        // <div class='layout-area' data-address='__KERNEL_ADDRESS__' data-area='{submissionId}' …></div>;
+        // capture data-area (the submission id = the kernel's result-area name).
+        var pattern = "<div class='layout-area' data-address='"
+            + System.Text.RegularExpressions.Regex.Escape(ExecutableCodeBlockRenderer.KernelAddressPlaceholder)
+            + "' data-area='([^']*)'[^>]*></div>";
+
+        var segments = new List<(string? Html, string? SubmissionId)>();
+        var lastIndex = 0;
+        foreach (System.Text.RegularExpressions.Match m in
+                 System.Text.RegularExpressions.Regex.Matches(html, pattern))
+        {
+            if (m.Index > lastIndex)
+                segments.Add((html[lastIndex..m.Index], null));
+            segments.Add((null, m.Groups[1].Value));
+            lastIndex = m.Index + m.Length;
+        }
+        if (lastIndex < html.Length)
+            segments.Add((html[lastIndex..], null));
+        return segments;
+    }
+
+    /// <summary>
     /// Submits each code block to the target hub <em>in order</em>, waiting for
     /// the previous submission's <see cref="SubmitCodeResponse"/> before posting
     /// the next. Required for blocks that share REPL state: e.g. block #1 sets
@@ -321,6 +361,11 @@ public static class MarkdownViewLogic
     /// only AFTER the activity exists (closing the subscribe-before-create race — see
     /// <see cref="RenderKernelResultAreas"/>). Never fires if the activity fails to become routable;
     /// the view then keeps showing the non-subscribing "starting" placeholder.</param>
+    /// <param name="onError">Invoked (on the subscribe thread) if the Activity never becomes routable
+    /// — i.e. create or routing failed and the submissions were NOT posted. A view that has shown a
+    /// non-subscribing "starting" placeholder uses this to surface the failure to the user (and to the
+    /// activity log) instead of leaving an eternal spinner. Optional; Blazor callers rely on the
+    /// kernel-area gate and pass nothing.</param>
     public static void CreateActivityAndSubmit(
         IMessageHub senderHub,
         IMeshService meshService,
@@ -328,7 +373,8 @@ public static class MarkdownViewLogic
         string? ownerPath,
         string kernelId,
         IReadOnlyCollection<SubmitCodeRequest> submissions,
-        Action? onReady = null)
+        Action? onReady = null,
+        Action<Exception>? onError = null)
     {
         var activityNamespace = string.IsNullOrEmpty(ownerPath)
             ? "_Activity"
@@ -379,9 +425,13 @@ public static class MarkdownViewLogic
                     onReady?.Invoke();
                     SubmitCode(senderHub, activityAddress, submissions);
                 },
-                ex => logger?.LogWarning(ex,
-                    "Markdown kernel activity {Path} did not become routable; code submissions not posted",
-                    activityPath));
+                ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "Markdown kernel activity {Path} did not become routable; code submissions not posted",
+                        activityPath);
+                    onError?.Invoke(ex);
+                });
     }
 
     private static IReadOnlyList<SubmitCodeRequest>? ExtractSubmissions(MarkdownDocument document)
