@@ -52,34 +52,61 @@ public record PageLayoutOptions
 /// </summary>
 public static class MeshNodeLayoutAreas
 {
+    /// <summary>Area name for the node Overview layout area (the default view showing main content and the action menu).</summary>
     public const string OverviewArea = "Overview";
+    /// <summary>Area name for the node Thumbnail layout area (compact card view for catalogs and lists).</summary>
     public const string ThumbnailArea = "Thumbnail";
+    /// <summary>Area name for the node Metadata layout area (name, type, path and related metadata).</summary>
     public const string MetadataArea = "Metadata";
+    /// <summary>Area name for the node Settings layout area.</summary>
     public const string SettingsArea = "Settings";
+    /// <summary>Area name for the node Comments layout area.</summary>
     public const string CommentsArea = "Comments";
+    /// <summary>Area name for the node Search layout area.</summary>
     public const string SearchArea = "Search";
+    /// <summary>Area name for the node Files layout area.</summary>
     public const string FilesArea = "Files";
+    /// <summary>Area name for the Children layout area (child nodes grouped by type).</summary>
     public const string ChildrenArea = "Children";
+    /// <summary>Area name for the NodeTypes layout area.</summary>
     public const string NodeTypesArea = "NodeTypes";
+    /// <summary>Area name for the Access Control layout area.</summary>
     public const string AccessControlArea = "AccessControl";
+    /// <summary>Area name for the Groups layout area.</summary>
     public const string GroupsArea = "Groups";
+    /// <summary>Area name for the Create node layout area.</summary>
     public const string CreateNodeArea = "Create";
+    /// <summary>Area name for the Edit node layout area.</summary>
     public const string EditArea = "Edit";
+    /// <summary>Area name for the Delete node layout area.</summary>
     public const string DeleteArea = "Delete";
+    /// <summary>Area name for the Threads layout area.</summary>
     public const string ThreadsArea = "Threads";
+    /// <summary>Area name for the Chat layout area.</summary>
     public const string ChatArea = "Chat";
+    /// <summary>Area name for the Import mesh nodes layout area.</summary>
     public const string ImportMeshNodesArea = "ImportMeshNodes";
+    /// <summary>Area name for the Export layout area.</summary>
     public const string ExportArea = "Export";
+    /// <summary>Area name for the Copy node layout area.</summary>
     public const string CopyArea = "Copy";
+    /// <summary>Area name for the Move node layout area.</summary>
     public const string MoveArea = "Move";
+    /// <summary>Area name for the Recycle layout area.</summary>
     public const string RecycleArea = "Recycle";
+    /// <summary>Area name for the Versions layout area.</summary>
     public const string VersionsArea = "Versions";
+    /// <summary>Area name for the Version diff layout area.</summary>
     public const string VersionDiffArea = "VersionDiff";
 
     // UCR (Unified Content Reference) special areas
+    /// <summary>Area name for the UCR Content layout area.</summary>
     public const string ContentArea = "$Content";
+    /// <summary>Area name for the UCR Data layout area.</summary>
     public const string DataArea = "$Data";
+    /// <summary>Area name for the UCR Schema layout area.</summary>
     public const string SchemaArea = "$Schema";
+    /// <summary>Area name for the UCR Model layout area.</summary>
     public const string ModelArea = "$Model";
 
     /// <summary>
@@ -129,6 +156,14 @@ public static class MeshNodeLayoutAreas
             .AddLayout(layout => layout.AddDefaultLayoutAreas());
     }
 
+    /// <summary>
+    /// Registers all default mesh node layout areas (Overview, Thumbnail, Settings, Search, Files, Children,
+    /// Threads, Chat, NodeTypes, Access Control, Groups, Create, Edit, Import, Export, Copy, Move, Recycle,
+    /// Versions, Delete, pinning, sync, and the UCR Data/Schema/Model areas) onto the given layout definition,
+    /// with Overview as the default area.
+    /// </summary>
+    /// <param name="layout">The layout definition to register the default areas onto.</param>
+    /// <returns>The same layout definition with the default areas registered.</returns>
     public static LayoutDefinition AddDefaultLayoutAreas(this LayoutDefinition layout)
         => layout
             .WithDefaultArea(OverviewArea)
@@ -212,9 +247,10 @@ public static class MeshNodeLayoutAreas
                 }));
     }
 
-    internal static string GetContainerStyle(LayoutAreaHost host, NodeTypeDefinition? typeDef = null)
+    internal static string GetContainerStyle(LayoutAreaHost host, NodeTypeDefinition? typeDef = null, string? maxWidthOverride = null)
     {
-        var pageMaxWidth = typeDef?.PageMaxWidth
+        var pageMaxWidth = maxWidthOverride
+            ?? typeDef?.PageMaxWidth
             ?? host.Hub.Configuration.Get<PageLayoutOptions>()?.MaxWidth
             ?? "1200px";
         return $"position: relative; max-width: {pageMaxWidth}; margin: 0 auto; padding: 0 24px;";
@@ -1699,13 +1735,20 @@ public static class MeshNodeLayoutAreas
 /// </summary>
 public record CommentViewModel
 {
+    /// <summary>The unique identifier of the comment.</summary>
     public string Id { get; init; } = string.Empty;
+    /// <summary>The display name of the comment's author.</summary>
     public string Author { get; init; } = string.Empty;
+    /// <summary>The comment body text.</summary>
     public string Text { get; init; } = string.Empty;
+    /// <summary>The comment creation timestamp, formatted for display.</summary>
     public string CreatedAt { get; init; } = string.Empty;
 
+    /// <summary>Initializes a new, empty instance of the CommentViewModel record.</summary>
     public CommentViewModel() { }
 
+    /// <summary>Initializes a new instance of the CommentViewModel record from a comment.</summary>
+    /// <param name="comment">The comment to project into the view model.</param>
     public CommentViewModel(Comment comment)
     {
         Id = comment.Id;

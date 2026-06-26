@@ -32,7 +32,7 @@ public record ThreadComposer
 {
     /// <summary>The in-progress composer text — the message currently being typed.</summary>
     [Description("Message")]
-    [UiControl<TextAreaControl>]
+    [UiControl<TextAreaControl>(Style = "width: 100%;")]
     public string? MessageContent { get; init; }
 
     /// <summary>Selected harness node path (a <c>nodeType:Harness</c> catalog node).</summary>
