@@ -131,9 +131,11 @@ if (builder.Configuration["Authentication:EnableDevLogin"] != "true")
 // Add web portal services
 builder.ConfigureMemexServices();
 
-// Register embedding provider if configured (Cohere embed-v4 via Azure Foundry)
+// Register embedding provider if configured. Provider="AzureFoundry" (default) = Cohere
+// embed-v4 via Azure Foundry; Provider="Ollama" = local on-host /v1/embeddings (bge-m3 etc.).
+// No endpoint ⇒ no provider ⇒ search falls back to ILIKE.
 var embeddingOptions = builder.Configuration.GetSection("Embedding").Get<EmbeddingOptions>() ?? new EmbeddingOptions();
-builder.Services.AddAzureFoundryEmbeddings(embeddingOptions);
+builder.Services.AddEmbeddings(embeddingOptions);
 
 // Configure Orleans clustering (co-hosted silo + web).
 //  - "AzureTables" (default): Aspire injects Azure Table clustering via config — no

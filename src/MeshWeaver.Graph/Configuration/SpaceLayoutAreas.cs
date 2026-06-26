@@ -15,7 +15,10 @@ namespace MeshWeaver.Graph;
 public static class SpaceLayoutAreas
 {
     private const string ThinScrollbar = "scrollbar-width: thin; scrollbar-color: rgba(128,128,128,0.3) transparent;";
-    private const string ContentMaxWidth = "max-width: 1280px; margin: 0 auto; padding: 0 24px;";
+    // Full-bleed: the space page uses the whole viewport width (just a comfortable side
+    // inset), not a centered reading column — so the markdown body and the bottom navigation
+    // catalog fill the screen instead of a ~1/3 stripe on wide displays.
+    private const string ContentInset = "max-width: 100%; padding: 0 32px;";
 
     /// <summary>
     /// GitHub-style space header view with live dashboard below.
@@ -191,10 +194,12 @@ public static class SpaceLayoutAreas
         if (IsSystemorph(spacePath))
             shell = shell.WithView(BuildSystemorphHighlights(spacePath));
 
-        // The catalog is NOT hard-wired here. It lives in the body markdown as a
-        // deletable @@-embed (the default welcome ships one; an author can move or
-        // remove it — see SpaceNodeType.WelcomeMarkdown). Rendering it as a fixed
-        // LayoutArea here would take that control away from the space owner.
+        // Navigation catalog, pinned full-width at the BOTTOM of every space page. The default
+        // welcome no longer carries an in-body @@("area:Search") embed (that rendered inside the
+        // narrow reading column); the catalog is a fixed bottom section so it's consistently the
+        // last thing on the page. An author can still @@-embed extra catalogs in their own body.
+        shell = shell.WithView(BuildNavigation(spacePath));
+
         return shell;
     }
 
@@ -215,7 +220,7 @@ public static class SpaceLayoutAreas
 
         var headerRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
-            .WithStyle($"gap: 24px; align-items: flex-start; width: 100%; {ContentMaxWidth}");
+            .WithStyle($"gap: 24px; align-items: flex-start; width: 100%; {ContentInset}");
 
         // Logo (large, rounded square like GitHub)
         UiControl logoControl;
@@ -294,7 +299,7 @@ public static class SpaceLayoutAreas
 
         // Divider
         container = container.WithView(Controls.Html(
-            $"<div style=\"{ContentMaxWidth}\"><hr style=\"border: none; border-top: 1px solid var(--neutral-stroke-rest); margin: 16px 0 0 0;\" /></div>"));
+            $"<div style=\"{ContentInset}\"><hr style=\"border: none; border-top: 1px solid var(--neutral-stroke-rest); margin: 16px 0 0 0;\" /></div>"));
 
         return container;
     }
@@ -306,7 +311,7 @@ public static class SpaceLayoutAreas
     {
         // Generous bottom padding so the in-body catalog @@-embed has vertical breathing
         // room below it (the catalog is no longer a fixed LayoutArea — see BuildSpaceView).
-        var bodyStyle = $"{ContentMaxWidth} padding-top: 24px; padding-bottom: 48px;";
+        var bodyStyle = $"{ContentInset} padding-top: 24px; padding-bottom: 48px;";
 
         if (!string.IsNullOrWhiteSpace(node?.PreRenderedHtml))
             return new MarkdownControl("") { Html = node.PreRenderedHtml }.WithStyle(bodyStyle);
@@ -322,6 +327,29 @@ public static class SpaceLayoutAreas
     }
 
     /// <summary>
+    /// The space's content catalog — the node's <see cref="MeshNodeLayoutAreas.SearchArea"/> —
+    /// rendered as a fixed full-width section at the BOTTOM of the page (the standard "browse
+    /// what's in this space" navigation). Embedded via <see cref="LayoutAreaControl"/>, the same
+    /// way <see cref="BuildEventCalendar"/> embeds a child area.
+    /// </summary>
+    private static UiControl BuildNavigation(string spacePath)
+    {
+        var heading = Controls.Html(
+            $"<div style=\"{ContentInset} padding-top: 24px;\">" +
+            "<h2 style=\"margin: 0 0 12px 0; font-size: 1.35rem; border-bottom: 1px solid var(--neutral-stroke-rest); padding-bottom: 8px;\">In this space</h2></div>");
+
+        var catalog = new LayoutAreaControl(spacePath, new LayoutAreaReference(MeshNodeLayoutAreas.SearchArea))
+            .WithShowProgress(false)
+            .WithStyle($"{ContentInset} display: block; padding-bottom: 48px; width: 100%;");
+
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("width: 100%;")
+            .WithView(heading)
+            .WithView(catalog);
+    }
+
+    /// <summary>
     /// Dashboard grid mirroring the UserActivity layout but scoped to this space's partition:
     /// Latest Threads, Activity Feed, Recent Updates. The content catalog is NOT
     /// hard-wired here anymore — it ships as a deletable <c>@@("area:Search")</c>
@@ -332,7 +360,7 @@ public static class SpaceLayoutAreas
     private static UiControl BuildDashboardGrid(string spacePath)
     {
         var grid = Controls.LayoutGrid
-            .WithStyle($"{ContentMaxWidth} padding-top: 24px; padding-bottom: 24px; gap: 24px; width: 100%;");
+            .WithStyle($"{ContentInset} padding-top: 24px; padding-bottom: 24px; gap: 24px; width: 100%;");
 
         // Latest Threads — full width
         grid = grid.WithView(BuildLatestThreads(spacePath), skin => skin.WithXs(12));
@@ -354,7 +382,7 @@ public static class SpaceLayoutAreas
     private static UiControl BuildSystemorphHighlights(string spacePath)
     {
         var stack = Controls.Stack
-            .WithStyle($"{ContentMaxWidth} padding-top: 24px; padding-bottom: 24px; gap: 32px; width: 100%;");
+            .WithStyle($"{ContentInset} padding-top: 24px; padding-bottom: 24px; gap: 32px; width: 100%;");
 
         stack = stack.WithView(BuildFeaturedStories(spacePath));
         stack = stack.WithView(BuildEventCalendar(spacePath));

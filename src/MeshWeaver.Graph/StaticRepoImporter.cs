@@ -417,17 +417,28 @@ public static class StaticRepoImporter
             .SelectMany(_ => EnsureRoot(hub, source, root, activityPath, logger))
             .SelectMany(_ => existingSubtrees)
             .Take(1)
-            .SelectMany(existingItems =>
+            // Authoritatively read each partition ROOT's claim (GetMeshNodeStream, NOT the lagged query
+            // snapshot above): a just-set "sync: none" (ExcludeThisAndChildren) must be honoured even
+            // before the eventually-consistent read-model catches up, or the next import silently
+            // re-enables sync on the freshly-decoupled partition. CQRS: never decide on a single node's
+            // content from the query. EnsureRoot already ensured the root exists, so this resolves promptly.
+            .SelectMany(existingItems => ReadClaimedRoots(hub, partitions)
+                .Select(claimedRoots => (existingItems, claimedRoots)))
+            .SelectMany(snapshot =>
             {
-                var existing = existingItems
+                var existing = snapshot.existingItems
                     .Where(n => !string.IsNullOrEmpty(n.Path))
                     .GroupBy(n => n.Path, StringComparer.OrdinalIgnoreCase)
                     .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
-                // Subtrees a user has claimed wholesale — nothing at or under these paths is synced.
+                // Subtrees claimed wholesale — nothing at or under these paths is synced. A claimed
+                // partition ROOT (authoritative read above) decouples its WHOLE subtree; a child claimed
+                // in the snapshot decouples its own subtree.
                 var excludedRoots = existing.Values
                     .Where(n => n.SyncBehavior == SyncBehavior.ExcludeThisAndChildren)
                     .Select(n => n.Path)
+                    .Concat(snapshot.claimedRoots)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToArray();
 
                 bool IsClaimed(string path, MeshNode? target) =>
@@ -604,6 +615,31 @@ public static class StaticRepoImporter
     }
 
     /// <summary>
+    /// Authoritatively read each partition ROOT and return the paths claimed with
+    /// <see cref="SyncBehavior.ExcludeThisAndChildren"/> ("sync: none"). Uses the authoritative
+    /// single-node read (<c>GetMeshNodeStream</c>), NOT <c>meshService.Query</c>: the
+    /// eventually-consistent query LAGS a just-set claim, so a freshly decoupled partition would be
+    /// silently re-synced on the next import (the atioz Provider key clobber, 2026-06-25). EnsureRoot
+    /// has already ensured each root exists, so each read resolves promptly.
+    /// </summary>
+    private static IObservable<string[]> ReadClaimedRoots(IMessageHub hub, string[] partitions)
+    {
+        if (partitions.Length == 0)
+            return Observable.Return(Array.Empty<string>());
+        var workspace = hub.GetWorkspace();
+        return Observable.Zip(partitions.Select(p =>
+                workspace.GetMeshNodeStream(p)
+                    .Where(n => n is not null)
+                    .Take(1)
+                    .Timeout(TimeSpan.FromSeconds(10))
+                    .Catch((Exception _) => Observable.Return<MeshNode?>(null))))
+            .Select(roots => roots
+                .Where(r => r is { SyncBehavior: SyncBehavior.ExcludeThisAndChildren })
+                .Select(r => r!.Path)
+                .ToArray());
+    }
+
+    /// <summary>
     /// Ensures the partition root exists as a proper <c>Space</c>. Read by EXACT path (not
     /// <c>scope:descendants</c>, which emits <c>LIKE 'P/%'</c> and never matches the
     /// <c>namespace=""</c> root). Absent → create through the canonical pipeline (a <c>Space</c>
@@ -616,12 +652,35 @@ public static class StaticRepoImporter
         IMessageHub hub, IStaticRepoSource source, MeshNode root,
         string activityPath, ILogger? logger)
     {
-        NodeTypeCompilationActivity.AppendLog(
-            hub, activityPath, $"Ensuring Space root {source.Partition}…", logger!);
-        // Upsert through the canonical verb — creating a Space triggers eager schema provisioning +
-        // the partition-definition/routing prime + the admin grant; an existing root is updated
-        // (owner preserves identity). Same path as every other node.
-        return Upsert(hub, Materialize(root));
+        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        // 🚨 Honour an admin's "stop sync" claim on the partition ROOT. If the EXISTING root carries a
+        // non-Include SyncBehavior (ExcludeThisAndChildren = "sync: none" for the whole partition),
+        // leave it ENTIRELY untouched: re-materialising it from the static source would reset its
+        // SyncBehavior back to Include and silently re-enable sync — clobbering the admin's decouple,
+        // and (via excludedRoots in Run) re-opening overwrite of every child. The root's schema /
+        // routing / admin grant already exist (it is not absent), so skipping the upsert is safe.
+        // Mirrors the per-node IsClaimed skip in Run; this is what makes setting a partition root to
+        // ExcludeThisAndChildren a DURABLE, partition-wide decouple ("sync: none").
+        return meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{source.Partition}"))
+            .Take(1)
+            .SelectMany(change =>
+            {
+                var existing = change.Items.FirstOrDefault(n =>
+                    string.Equals(n.Path, source.Partition, StringComparison.OrdinalIgnoreCase));
+                if (existing is { SyncBehavior: not SyncBehavior.Include })
+                {
+                    logger?.LogDebug(
+                        "[StaticRepoImport] {Partition}: root claimed (SyncBehavior={Behavior}) — leaving untouched.",
+                        source.Partition, existing.SyncBehavior);
+                    return Observable.Return(0);
+                }
+                NodeTypeCompilationActivity.AppendLog(
+                    hub, activityPath, $"Ensuring Space root {source.Partition}…", logger!);
+                // Upsert through the canonical verb — creating a Space triggers eager schema provisioning
+                // + the partition-definition/routing prime + the admin grant; an existing (Include) root
+                // is updated (owner preserves identity). Same path as every other node.
+                return Upsert(hub, Materialize(root));
+            });
     }
 
     /// <summary>
