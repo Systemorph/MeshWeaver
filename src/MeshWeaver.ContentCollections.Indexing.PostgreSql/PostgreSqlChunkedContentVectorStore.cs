@@ -284,6 +284,73 @@ public sealed class PostgreSqlChunkedContentVectorStore : IChunkedContentVectorS
     }
 
     /// <inheritdoc/>
+    public IObservable<IReadOnlyList<ContentChunk>> SearchSubtree(
+        string collectionPathPrefix, float[] query, int topK)
+    {
+        // Every collection nested under the prefix shares the prefix's first path segment, so it lives
+        // in the SAME partition schema — a single-schema query with a path-prefix predicate suffices,
+        // no cross-schema fan-out. Match the exact collection OR any deeper collection path.
+        var schema = SchemaFor(collectionPathPrefix);
+        return EnsureProvisioned(schema).SelectMany(_ => _pool.Invoke<IReadOnlyList<ContentChunk>>(async ct =>
+        {
+            await using var cmd = _dataSource.CreateCommand($"""
+                SELECT collection_path, file_path, chunk_index, content_hash, chunk_text, metadata, embedding
+                FROM "{schema}".content_chunks
+                WHERE (collection_path = $1 OR collection_path LIKE $2 ESCAPE '\') AND embedding IS NOT NULL
+                ORDER BY embedding <=> $3
+                LIMIT $4
+                """);
+            cmd.Parameters.AddWithValue(collectionPathPrefix);
+            cmd.Parameters.AddWithValue(LikeChildPrefix(collectionPathPrefix));
+            cmd.Parameters.AddWithValue(new Vector(query));
+            cmd.Parameters.AddWithValue(Math.Max(0, topK));
+
+            var results = new List<ContentChunk>();
+            await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                ImmutableDictionary<string, string>? metadata = null;
+                if (!await reader.IsDBNullAsync(5, ct).ConfigureAwait(false))
+                {
+                    var json = reader.GetString(5);
+                    var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+                    if (dict is { Count: > 0 })
+                        metadata = dict.ToImmutableDictionary(StringComparer.Ordinal);
+                }
+
+                float[]? embedding = null;
+                if (!await reader.IsDBNullAsync(6, ct).ConfigureAwait(false))
+                    embedding = reader.GetFieldValue<Vector>(6).ToArray();
+
+                results.Add(new ContentChunk(
+                    CollectionPath: reader.GetString(0),
+                    FilePath: reader.GetString(1),
+                    ChunkIndex: reader.GetInt32(2),
+                    Text: await reader.IsDBNullAsync(4, ct).ConfigureAwait(false) ? string.Empty : reader.GetString(4),
+                    ContentHash: await reader.IsDBNullAsync(3, ct).ConfigureAwait(false) ? string.Empty : reader.GetString(3),
+                    Embedding: embedding,
+                    Metadata: metadata));
+            }
+
+            return results;
+        }));
+    }
+
+    /// <summary>
+    /// Builds the <c>LIKE</c> pattern matching every collection nested under <paramref name="prefix"/>
+    /// (<c>prefix/%</c>), escaping the LIKE wildcards <c>\ % _</c> in the prefix so a collection path
+    /// that happens to contain them still matches literally (used with <c>ESCAPE '\'</c>).
+    /// </summary>
+    internal static string LikeChildPrefix(string prefix)
+    {
+        var escaped = prefix
+            .Replace("\\", "\\\\")
+            .Replace("%", "\\%")
+            .Replace("_", "\\_");
+        return escaped + "/%";
+    }
+
+    /// <inheritdoc/>
     public IObservable<ContentChunk?> GetChunk(string collectionPath, string filePath, int chunkIndex)
     {
         if (chunkIndex < 0)

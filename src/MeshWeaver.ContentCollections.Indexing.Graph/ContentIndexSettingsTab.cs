@@ -1,5 +1,6 @@
 using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
+using MeshWeaver.ContentCollections.Indexing;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
@@ -35,6 +36,13 @@ public static class ContentIndexSettingsTab
     // to it and Cancel flips its RequestedStatus.
     private const string ActivityPathId = "ciActivityPath";
     private const string ResultId = "ciResult";
+
+    // ── Explore-index state ──
+    // The live search box's query text (pre-filled with `namespace:{collection} scope:subtree `).
+    private const string ExploreQueryId = "ciExploreQuery";
+    // The selected chunk to expand, encoded as `collection<US>file<US>index` (empty = none).
+    private const string ExploreSelectedId = "ciExploreSelected";
+    private const char SelSep = '\u001f';
 
     /// <summary>Registers the Content Indexing settings tab (shown on Space nodes when indexing is active).</summary>
     public static MessageHubConfiguration AddContentIndexSettingsTab(this MessageHubConfiguration config)
@@ -132,8 +140,184 @@ public static class ContentIndexSettingsTab
             "<code>@document &lt;query&gt;</code> in any editor to find them by content, or search the mesh " +
             "for <code>nodeType:Document</code>.</p>"));
 
+        // ── Explore the index (live chunk search + tool-call inspector) ───────
+        stack = BuildExploreSection(host, stack, collectionPath);
+
         return stack;
     }
+
+    /// <summary>
+    /// The "Explore index" section: a pre-filled search box over this space's content index, the equivalent
+    /// <c>search_chunks</c> tool call for the current query, the ranked chunk hits, and an expandable chunk
+    /// reader (<c>get_chunk</c> with prev/next). Reactive — the box drives the results live; clicking a hit
+    /// opens the chunk below. Calls the SAME <see cref="ContentChunkSearch"/> engine the agent/MCP
+    /// <c>search_chunks</c> tool uses, so the "maps to" claim is exact, not a mock.
+    /// </summary>
+    private static StackControl BuildExploreSection(LayoutAreaHost host, StackControl stack, string collectionPath)
+    {
+        stack = stack.WithView(Section("Explore index"));
+        stack = stack.WithView(Controls.Html(
+            "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);\">Search this space's indexed " +
+            "content by meaning. The query uses mesh search syntax — <code>namespace:&lt;node&gt;/&lt;collection&gt;</code> " +
+            "picks the collection and <code>scope:subtree</code> (the default) checks only that collection and " +
+            "anything nested under it; add free-text terms after it. Each search maps to the same " +
+            "<code>search_chunks</code> tool the agents call; click a hit to read the full chunk " +
+            "(<code>get_chunk</code>) and step through neighbours.</p>"));
+
+        // Pre-fill the box with this collection + the subtree scope, and start with no chunk expanded.
+        host.UpdateData(ExploreQueryId, $"namespace:{collectionPath} scope:subtree ");
+        host.UpdateData(ExploreSelectedId, "");
+
+        stack = stack.WithView(new TextFieldControl(new JsonPointerReference(""))
+            .WithPlaceholder("namespace:<node>/<collection> scope:subtree <free-text terms>")
+            .WithImmediate(true) with
+        { DataContext = LayoutAreaReference.GetDataPointer(ExploreQueryId) });
+
+        // Live results: re-run on every (throttled, distinct) query change; Switch drops the superseded
+        // search so a fast typist never sees a stale result land late.
+        stack = stack.WithView((h, _) => h.Stream.GetDataStream<string>(ExploreQueryId)
+            .Throttle(TimeSpan.FromMilliseconds(400))
+            .DistinctUntilChanged()
+            .Select(q => BuildExploreResults(h, collectionPath, q))
+            .Switch()
+            .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
+
+        // The expanded chunk reader (bound to the selected hit; empty until one is clicked).
+        stack = stack.WithView((h, _) => h.Stream.GetDataStream<string>(ExploreSelectedId)
+            .DistinctUntilChanged()
+            .Select(sel => BuildSelectedChunk(h, sel))
+            .Switch()
+            .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
+
+        return stack;
+    }
+
+    /// <summary>Runs the content search for the current query and renders the tool-call line + hit rows.</summary>
+    private static IObservable<UiControl?> BuildExploreResults(LayoutAreaHost host, string collectionPath, string? query)
+    {
+        var store = host.Hub.ServiceProvider.GetService<IChunkedContentVectorStore>();
+        var embedder = host.Hub.ServiceProvider.GetService<IChunkEmbedder>();
+        return ContentChunkSearch
+            .SearchContent(store, embedder, query ?? "", limit: 20, defaultNamespace: collectionPath)
+            .Select(result => (UiControl?)BuildResultsPanel(result))
+            .Catch<UiControl?, Exception>(ex => Observable.Return((UiControl?)Controls.Html(Err(ex.Message))));
+    }
+
+    private static UiControl BuildResultsPanel(ContentSearchResult result)
+    {
+        var panel = Controls.Stack.WithWidth("100%").WithStyle("gap:8px; margin-top:8px;");
+
+        // Tool-call inspector — the exact search_chunks call this query maps to.
+        panel = panel.WithView(Controls.Html(
+            "<div style=\"font-size:0.8rem;color:var(--neutral-foreground-hint);margin-bottom:2px;\">Maps to tool call</div>" +
+            $"<pre style=\"margin:0;padding:8px 12px;background:var(--neutral-layer-2);border-radius:6px;" +
+            $"font-family:monospace;font-size:0.8rem;white-space:pre-wrap;word-break:break-word;\">{Esc(result.ToolCall)}</pre>"));
+
+        if (!string.IsNullOrEmpty(result.Message))
+            return panel.WithView(Controls.Html(Note(result.Message)));
+
+        if (result.Hits.Count == 0)
+            return panel.WithView(Controls.Html(Note("No matching chunks. Try different terms or a broader scope.")));
+
+        var list = Controls.Stack.WithWidth("100%").WithStyle(
+            "gap:0; margin-top:4px; border:1px solid var(--neutral-stroke-rest);border-radius:6px;" +
+            "max-height:320px;overflow:auto;");
+        foreach (var hit in result.Hits)
+            list = list.WithView(BuildHitRow(hit));
+        return panel.WithView(list);
+    }
+
+    /// <summary>One clickable hit row: rank · file · chunk index header + snippet. Click expands the chunk.</summary>
+    private static UiControl BuildHitRow(ChunkHit hit)
+    {
+        var row = Controls.Stack.WithWidth("100%").WithStyle(
+            "gap:2px; padding:6px 8px; border-bottom:1px solid var(--neutral-stroke-rest);");
+        row = row.WithView(Controls.Button($"#{hit.Rank}  {hit.FilePath} · chunk {hit.ChunkIndex}")
+            .WithAppearance(Appearance.Lightweight)
+            .WithClickAction(c =>
+            {
+                c.Host.UpdateData(ExploreSelectedId, EncodeSelection(hit.CollectionPath, hit.FilePath, hit.ChunkIndex));
+                return Task.CompletedTask;
+            }));
+        row = row.WithView(Controls.Html(
+            $"<div style=\"font-size:0.8rem;color:var(--neutral-foreground-hint);padding-left:8px;\">{Esc(hit.Snippet)}</div>"));
+        return row;
+    }
+
+    // ── Expanded chunk reader (get_chunk + prev/next) ──
+
+    private static IObservable<UiControl?> BuildSelectedChunk(LayoutAreaHost host, string? encoded)
+    {
+        if (string.IsNullOrEmpty(encoded))
+            return Observable.Return((UiControl?)Controls.Stack.WithWidth("100%"));
+
+        var parts = encoded.Split(SelSep);
+        if (parts.Length != 3 || !int.TryParse(parts[2], out var index))
+            return Observable.Return((UiControl?)Controls.Stack.WithWidth("100%"));
+        var collection = parts[0];
+        var file = parts[1];
+
+        var store = host.Hub.ServiceProvider.GetService<IChunkedContentVectorStore>();
+        if (store is null)
+            return Observable.Return((UiControl?)Controls.Stack.WithWidth("100%"));
+
+        return store.GetChunk(collection, file, index)
+            .SelectMany(chunk => store.GetChunkCount(collection, file)
+                .Select(total => (UiControl?)BuildChunkPanel(collection, file, index, chunk, total)))
+            .Catch<UiControl?, Exception>(ex => Observable.Return((UiControl?)Controls.Html(Err(ex.Message))));
+    }
+
+    private static UiControl BuildChunkPanel(
+        string collection, string file, int index, ContentChunk? chunk, int total)
+    {
+        var stack = Controls.Stack.WithWidth("100%").WithStyle(
+            "gap:6px; margin-top:8px; padding:12px; background:var(--neutral-layer-2);border-radius:6px;");
+
+        stack = stack.WithView(Controls.Html(
+            $"<div style=\"font-weight:600;font-size:0.9rem;\">{Esc(file)} · chunk {index}" +
+            (total > 0 ? $" / {total}" : "") + "</div>" +
+            "<div style=\"font-size:0.78rem;color:var(--neutral-foreground-hint);margin-top:2px;\">Maps to tool call</div>" +
+            $"<pre style=\"margin:2px 0 0 0;padding:6px 10px;background:var(--neutral-layer-1);border-radius:6px;" +
+            $"font-family:monospace;font-size:0.78rem;white-space:pre-wrap;word-break:break-word;\">" +
+            $"{Esc($"get_chunk(collectionPath: \"{collection}\", filePath: \"{file}\", chunkIndex: {index})")}</pre>"));
+
+        if (chunk is null)
+        {
+            stack = stack.WithView(Controls.Html(Note(total == 0
+                ? $"No chunks indexed for '{file}'."
+                : $"No chunk at index {index}; valid range is 0..{total - 1}.")));
+            return stack;
+        }
+
+        // The chunk text verbatim (HtmlEncoded preformatted block — genuinely-text display, not structured data).
+        stack = stack.WithView(Controls.Html(
+            "<pre style=\"margin:0;padding:10px 12px;background:var(--neutral-layer-1);border-radius:6px;" +
+            "font-size:0.82rem;white-space:pre-wrap;word-break:break-word;max-height:280px;overflow:auto;\">" +
+            $"{Esc(chunk.Text)}</pre>"));
+
+        // Prev / next / close stepping.
+        var nav = Controls.Stack.WithWidth("100%").WithStyle("flex-direction:row; gap:8px;");
+        if (index > 0)
+            nav = nav.WithView(Controls.Button("← Prev")
+                .WithAppearance(Appearance.Outline)
+                .WithClickAction(c => { c.Host.UpdateData(ExploreSelectedId, EncodeSelection(collection, file, index - 1)); return Task.CompletedTask; }));
+        if (index < total - 1)
+            nav = nav.WithView(Controls.Button("Next →")
+                .WithAppearance(Appearance.Outline)
+                .WithClickAction(c => { c.Host.UpdateData(ExploreSelectedId, EncodeSelection(collection, file, index + 1)); return Task.CompletedTask; }));
+        nav = nav.WithView(Controls.Button("Close")
+            .WithAppearance(Appearance.Stealth)
+            .WithClickAction(c => { c.Host.UpdateData(ExploreSelectedId, ""); return Task.CompletedTask; }));
+        stack = stack.WithView(nav);
+
+        return stack;
+    }
+
+    private static string EncodeSelection(string collection, string file, int index) =>
+        string.Join(SelSep, collection, file, index.ToString());
+
+    private static string Note(string message) =>
+        $"<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);margin:4px 0;\">{Esc(message)}</p>";
 
     // ── Activity progress panel (binds to the running re-index activity node) ──
 

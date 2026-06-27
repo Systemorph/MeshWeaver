@@ -48,10 +48,14 @@ public class ContentCollectionPlugin(IMessageHub hub, IAgentChat chat) : IAgentP
         "returns the matching chunks themselves WITH their (collectionPath, filePath, chunkIndex) so you " +
         "can read the exact window or step through neighbours with get_chunk. Use this to FIND relevant " +
         "passages and gather context; use Get on the Document for whole-document reads (e.g. table " +
-        "extraction). Returns {count, results:[{documentPath, collectionPath, filePath, chunkIndex, rank, snippet}]}.")]
+        "extraction). Scope it two ways: anchored (the `scope` node path plus each ANCESTOR-prefix " +
+        "collection), or targeted by putting `namespace:<node>/<collection>` (with optional " +
+        "`scope:subtree|exact|ancestorsandself`) in the query to search ONE collection — `scope:subtree` " +
+        "(the default when a namespace is given) checks only that collection and anything nested under it. " +
+        "Returns {count, results:[{documentPath, collectionPath, filePath, chunkIndex, rank, snippet}]}.")]
     public Task<string> SearchChunks(
-        [Description("Free-text query. Matched semantically against indexed chunk text (1000-char windows, 150-char overlap).")] string query,
-        [Description("Node path to anchor the search at — this path AND each ancestor prefix are searched (e.g. 'ACME/Reports'). Optional: defaults to the agent's current context. If neither is set an empty result with a hint is returned.")] string? scope = null,
+        [Description("Free-text query (matched semantically against indexed chunk text — 1000-char windows, 150-char overlap). May also carry `namespace:<node>/<collection>` and `scope:subtree|exact|ancestorsandself` to target one collection.")] string query,
+        [Description("Node path to anchor the search at — this path AND each ancestor prefix are searched (e.g. 'ACME/Reports'). Defaults to the agent's current context; ignored when the query carries a `namespace:` token.")] string? scope = null,
         [Description("Maximum number of chunk hits to return (1-200, default 20). Not deduped by file — chunk-level hits are the point.")] int limit = 20)
     {
         var scopePath = !string.IsNullOrWhiteSpace(scope)

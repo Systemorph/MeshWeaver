@@ -529,10 +529,18 @@ Indexed content files are split into overlapping **chunks** (1000-char windows, 
 
 ```
 search_chunks('accrued benefit obligation', '@ACME/Reports')
+search_chunks('namespace:ACME/content scope:subtree accrued benefit obligation')   // one named collection
 get_chunk('ACME/Reports', 'pension/2025.txt', 4)   // → text + prevIndex 3 + nextIndex 5
 ```
 
-`search_chunks` is scoped: the `scope` path AND each ancestor prefix are searched (e.g. `@ACME/Reports` also searches `@ACME`); with no scope an empty result with a hint is returned. **Chunks are for retrieval and context** — to extract a whole table or read a full document, use `Get` on the Document instead (a chunk window can start or end mid-table).
+`search_chunks` scopes its search two ways:
+
+- **Anchored** (pass `scope` as a node path): that path AND each *ancestor* prefix are searched (e.g. `@ACME/Reports` also searches `@ACME`) — good when you don't know exactly which collection holds the content.
+- **Targeted** (put `namespace:<node>/<collection>` in the query): search ONE named collection, with an optional `scope:` qualifier — `scope:subtree` (the **default** when a namespace is given) checks only that collection and anything nested under it; `scope:exact` only the collection itself; `scope:ancestorsandself` reproduces the anchored walk. The `namespace:` form wins and the `scope` parameter is ignored.
+
+With neither a `scope` path nor a `namespace:` token there is no collection to search, so an empty result with a hint is returned. **Chunks are for retrieval and context** — to extract a whole table or read a full document, use `Get` on the Document instead (a chunk window can start or end mid-table).
+
+The in-portal **Content Indexing** settings tab (on Space nodes) has an *Explore index* search box that drives this exact tool and shows the `search_chunks(...)` / `get_chunk(...)` call each query maps to.
 
 ## Satellite Namespaces
 
