@@ -18,6 +18,7 @@ using MeshWeaver.Messaging;
 using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.TestBase;
@@ -83,6 +84,15 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// <c>(path, version)</c> and serve each other's compiled bytes. Process-pid
     /// scoping wasn't enough because all test classes share one xUnit process.
     /// Under the temp directory so OS cleanup reclaims at reboot.
+    /// <para>🚨 This isolation only takes effect because <see cref="ConfigureMeshBase"/>
+    /// REPLACES (RemoveAll + AddSingleton) the <see cref="IAssemblyStore"/> registration
+    /// rather than <c>TryAdd</c>-ing it. <c>AddInMemoryPersistence</c> →
+    /// <c>RegisterDefaultAssemblyStore</c> already <c>TryAddSingleton</c>s a PROCESS-PID-scoped
+    /// store (<c>MeshWeaver-AssemblyStore-pid{pid}</c>) FIRST, so a second <c>TryAdd</c> here was a
+    /// no-op and every test class shared that one pid store — two classes compiling the same path
+    /// at a colliding version then served each other's bytes (the bulk-only "compiles but renders
+    /// the wrong/empty area" failure: LinkedInProfile ↔ LinkedInTelemetry both use
+    /// <c>Systemorph/LinkedInProfile</c>; the victim was whichever ran second).</para>
     /// </summary>
     private readonly string _assemblyStoreRoot = Path.Combine(
         Path.GetTempPath(),
@@ -125,7 +135,15 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // so tests that also call it explicitly are unaffected.
             .AddSpaceType()
             .AddMeshNodes(new MeshNode(TestPartition) { Name = "Test Data", NodeType = "Markdown" })
-            .ConfigureServices(s => s.AddFileSystemAssemblyStore(_assemblyStoreRoot))
+            // 🚨 REPLACE, don't TryAdd. AddInMemoryPersistence already TryAddSingleton'd the
+            // pid-scoped default IAssemblyStore, so a TryAdd here would be a no-op and every test
+            // class would share ONE process store (cross-class DLL contamination — see
+            // _assemblyStoreRoot). RemoveAll the default first, then register the per-class store.
+            .ConfigureServices(s =>
+            {
+                s.RemoveAll<IAssemblyStore>();
+                return s.AddFileSystemAssemblyStore(_assemblyStoreRoot);
+            })
             // Isolate the legacy CompilationCacheService disk cache to a
             // per-test-class directory. See _compilationCacheDir for the
             // file-lock contention this prevents.
