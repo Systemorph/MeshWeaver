@@ -177,16 +177,20 @@ public static class InboxTool
     {
         ArgumentNullException.ThrowIfNull(threadHub);
 
-        // 🚨 check_inbox is "fake async" — it awaits NO real I/O leaf (no hub round-trip,
-        // no stream.Update, no pool slot). It is invoked from INSIDE the round's streaming
-        // loop while that loop is PAUSED on this tool call (no concurrent pushes).
+        // 🚨 check_inbox is FULLY SYNCHRONOUS — a pure in-memory dequeue from the per-thread
+        // ThreadInboxChannel (Stage 1 — the submission watcher — already buffered the pending
+        // messages into the channel with NO node write). The AIFunction delegate returns a
+        // string DIRECTLY: no Task, no TaskCompletionSource, no CancellationToken gate, no
+        // Subscribe, no pool slot, no hub round-trip. That is the whole point of the channel —
+        // the old TCS-bridged-onto-the-hub-action-block drain (which resumed the LLM pump's
+        // continuation on the hub scheduler → the "thread disappears" deadlock) is gone. It is
+        // invoked from INSIDE the round's streaming loop while that loop is PAUSED on the tool
+        // call (no concurrent pushes), and it returns instantly, so there is nothing to cancel.
         //
-        // The drain is now a pure in-memory dequeue from the per-thread ThreadInboxChannel
-        // (Stage 1 — the submission watcher — already buffered the pending messages into the
-        // channel with NO node write). check_inbox does NOT touch the thread node: the
-        // consumed ids are folded into PendingUserMessages → IngestedMessageIds at the
-        // round's terminal boundary (ThreadExecution), so the node is written only at round
-        // boundaries — never mid-stream where it races the round + the submission watcher.
+        // check_inbox does NOT touch the thread node: the consumed ids are folded into
+        // PendingUserMessages → IngestedMessageIds at the round's terminal boundary
+        // (ThreadExecution), so the node is written only at round boundaries — never mid-stream
+        // where it races the round + the submission watcher.
         //
         // In-flight (mid-round) messages are delivered Claude-Code-style: the drained text is
         // appended inline to the live response output with a marker denoting user input — no
@@ -198,51 +202,33 @@ public static class InboxTool
             // poll, not a user action. AgentChatClient reads this marker (via the AIFunction's
             // UnderlyingMethod) and suppresses its tool-call chrome + logs so the chat UI
             // doesn't flash "Calling check_inbox…" on every step. See HiddenToolAttribute.
-            method: [Attributes.HiddenTool] (CancellationToken ct) =>
+            method: [Attributes.HiddenTool] () =>
             {
                 var threadPath = threadHub.Address.Path;
-                // 🚨 RunContinuationsAsynchronously kept as the sanctioned "fake-async" bridge
-                // shape: the LLM pump awaits this Task inside its OWN streaming pump (on the
-                // pool). The drain itself is synchronous + in-memory, so the result is set
-                // before the Task is returned — but the flag stays load-bearing if a caller
-                // ever resumes the await on a hub-captured scheduler.
-                var tcs = new TaskCompletionSource<string>(
-                    TaskCreationOptions.RunContinuationsAsynchronously);
-                // A cancelled round (Stop button → executionCts) must not leave the LLM pump
-                // awaiting this tool Task forever — propagate the token.
-                var ctRegistration = ct.Register(() => tcs.TrySetCanceled(ct));
                 try
                 {
-                    // Stage 2: consume the channel. No node write, no Subscribe, no pool slot.
+                    // Stage 2: consume the channel — pure in-memory dequeue. No node write, no
+                    // Subscribe, no pool slot, no Task/TCS gate.
                     var drained = ThreadInboxChannel.For(threadHub).DrainPending();
                     if (drained.IsEmpty)
-                    {
-                        tcs.TrySetResult("(no new messages)");
-                    }
-                    else
-                    {
-                        var steering = FormatInFlight(drained.Select(m => m.Text).ToImmutableList());
-                        // Append inline to the live output (Claude-Code style). Race-free for
-                        // TWO load-bearing reasons: (a) the streaming loop is PAUSED on this
-                        // tool call, so no concurrent Append; and (b) the Sample(...) snapshot
-                        // pipeline pushes MATERIALIZED strings — it never reads this
-                        // StringBuilder lazily on the timer thread. If snapshots ever start
-                        // reading the accumulator directly, this append becomes a data race.
-                        var segment = threadHub.Get<ThreadExecution.ActiveResponseSegment>();
-                        segment?.ResponseText?.Append("\n\n" + steering + "\n\n");
-                        tcs.TrySetResult(steering);
-                    }
+                        return "(no new messages)";
+
+                    var steering = FormatInFlight(drained.Select(m => m.Text).ToImmutableList());
+                    // Append inline to the live output (Claude-Code style). Race-free for TWO
+                    // load-bearing reasons: (a) the streaming loop is PAUSED on this tool call,
+                    // so no concurrent Append; and (b) the Sample(...) snapshot pipeline pushes
+                    // MATERIALIZED strings — it never reads this StringBuilder lazily on the
+                    // timer thread. If snapshots ever start reading the accumulator directly,
+                    // this append becomes a data race.
+                    var segment = threadHub.Get<ThreadExecution.ActiveResponseSegment>();
+                    segment?.ResponseText?.Append("\n\n" + steering + "\n\n");
+                    return steering;
                 }
                 catch (Exception ex)
                 {
                     logger?.LogWarning(ex, "[InboxTool] check_inbox drain failed for {Path}", threadPath);
-                    tcs.TrySetResult($"(error reading inbox: {ex.Message})");
+                    return $"(error reading inbox: {ex.Message})";
                 }
-                finally
-                {
-                    ctRegistration.Dispose();
-                }
-                return tcs.Task;
             },
             name: ToolName,
             description: ToolDescription);
