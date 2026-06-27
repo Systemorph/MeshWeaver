@@ -2238,19 +2238,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     // SyncMessageSubscriptions opening one IMeshNodeStreamCache subscription
     // per visible id. Razor template iterates ThreadMessages and renders
     // each bubble inline using messageStates[id].
-    private record MessageBubbleState(
-        string Role,
-        string AuthorName,
-        string? ModelName,
-        DateTime? Timestamp,
-        string? Text,
-        IReadOnlyList<ToolCallEntry>? ToolCalls,
-        IReadOnlyList<NodeChangeEntry>? UpdatedNodes,
-        string? Status = null,
-        DateTime? CompletedAt = null,
-        string? Harness = null,
-        int? InputTokens = null,
-        int? OutputTokens = null);
+    // MessageBubbleState moved to its own file (MessageBubbleState.cs) with SEQUENCE-based
+    // value equality so the UpdateMessageState dedup actually fires on re-emissions — see the
+    // "vanishes when pushing the output message" render-storm fix.
 
     private readonly Dictionary<string, MessageBubbleState> messageStates = new();
     private readonly Dictionary<string, IDisposable> messageSubs = new();
