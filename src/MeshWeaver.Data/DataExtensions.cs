@@ -664,6 +664,78 @@ public static class DataExtensions
         }
     }
 
+    /// <summary>
+    /// 🚨 Out-of-order / stale cross-hub patch guard for MeshNode MONOTONIC control fields.
+    /// Applied to the parsed patch (against the LIVE node) BEFORE <see cref="MergePatchRecursive"/>.
+    ///
+    /// <para>A cross-hub <c>stream.Update</c> ships an RFC 7396 merge patch that the owner applies
+    /// last-write-wins per field — correct for ordinary edits (two writers touching DIFFERENT fields
+    /// both land). But a STRICTLY-INCREASING control trigger
+    /// (<c>NodeTypeDefinition.RequestedReleaseAt</c> — every writer sets it to
+    /// <c>DateTimeOffset.UtcNow</c>; never backward, never null) breaks under that rule when two such
+    /// patches apply OUT OF ORDER at the owner under load: the later-arriving but chronologically
+    /// OLDER patch overwrites the newer trigger, the field FLAPS BACK, and the release watcher
+    /// (<c>NodeTypeCompilationHelpers.InstallReleaseRequestWatcher</c>) sees a value at/below its
+    /// last-handled stamp and SKIPS the recompile — the compile-heavy-test flake (and the dropped
+    /// FrameworkStale recompile so <c>CompiledFrameworkVersion</c> never lands).</para>
+    ///
+    /// <para>Surgical fix: for this ONE known monotonic field, DROP the patch's value when it would
+    /// move the live value BACKWARD, leaving the live (newer) value untouched. This changes NOTHING
+    /// for any other field (last-write-wins preserved), never affects a forward move, a first set
+    /// (no live value to compare), or a clear (null patch ⇒ RFC 7396 remove, handled by the merge).
+    /// Backward movement of a strictly-increasing trigger is ALWAYS a reordered/stale patch, never an
+    /// intentional write — so dropping it is the correct merge, not a band-aid. Scoped to MeshNode by
+    /// the caller; the field key is resolved through the same naming policy used elsewhere here.</para>
+    /// </summary>
+    internal static void DropStaleMonotonicTriggers(
+        System.Text.Json.Nodes.JsonObject currentNode,
+        System.Text.Json.Nodes.JsonObject patchNode,
+        System.Text.Json.JsonSerializerOptions jsonOpts,
+        ILogger? logger,
+        string hubPath)
+    {
+        var contentKey = jsonOpts.PropertyNamingPolicy?.ConvertName("Content") ?? "Content";
+        if (patchNode[contentKey] is not System.Text.Json.Nodes.JsonObject patchContent
+            || currentNode[contentKey] is not System.Text.Json.Nodes.JsonObject liveContent)
+            return;
+
+        var triggerKey = jsonOpts.PropertyNamingPolicy?.ConvertName("RequestedReleaseAt")
+            ?? "RequestedReleaseAt";
+        if (!TryReadDateTimeOffset(patchContent, triggerKey, out var patchAt)
+            || !TryReadDateTimeOffset(liveContent, triggerKey, out var liveAt))
+            return;
+
+        if (patchAt < liveAt)
+        {
+            logger?.LogWarning(
+                "[MergeGuard] {HubPath}: dropping stale/reordered {Key} patch ({PatchAt:o} < live {LiveAt:o}) — "
+                + "a strictly-increasing release trigger must not move backward; keeping the live value.",
+                hubPath, triggerKey, patchAt, liveAt);
+            patchContent.Remove(triggerKey);
+        }
+    }
+
+    /// <summary>Reads an ISO-8601 trigger timestamp from <paramref name="obj"/> at
+    /// <paramref name="key"/>. Robust across JsonValue backings (parsed JSON element vs CLR value):
+    /// tries the typed accessor first, falls back to a round-trip string parse. Absent / null /
+    /// unparsable ⇒ <c>false</c> (no guard — the field isn't a comparable trigger).</summary>
+    private static bool TryReadDateTimeOffset(
+        System.Text.Json.Nodes.JsonObject obj, string key, out DateTimeOffset value)
+    {
+        value = default;
+        if (!obj.TryGetPropertyValue(key, out var node) || node is null)
+            return false;
+        if (node is System.Text.Json.Nodes.JsonValue jv
+            && jv.TryGetValue<DateTimeOffset>(out var dto))
+        {
+            value = dto;
+            return true;
+        }
+        return DateTimeOffset.TryParse(node.ToString(),
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.RoundtripKind, out value);
+    }
+
     private static void ApplyJsonMergePatchAndUpdate<T>(
         ISynchronizationStream<T> stream,
         string patchText,
@@ -703,6 +775,15 @@ public static class DataExtensions
                         ?? new System.Text.Json.Nodes.JsonObject();
                     var patchNode = System.Text.Json.Nodes.JsonNode.Parse(patchText) as System.Text.Json.Nodes.JsonObject
                         ?? throw new InvalidOperationException("Patch must be a JSON object");
+
+                    // 🚨 Stale/reordered monotonic-trigger guard (MeshNode only). See
+                    // DropStaleMonotonicTriggers — drops a RequestedReleaseAt patch that would move
+                    // the live trigger backward, so an out-of-order cross-hub write can't flap it.
+                    if (typeof(T).FullName == "MeshWeaver.Mesh.MeshNode")
+                        DropStaleMonotonicTriggers(currentNode, patchNode, jsonOpts,
+                            hub.ServiceProvider.GetService<ILoggerFactory>()
+                                ?.CreateLogger("MeshWeaver.Data.MergeGuard"),
+                            hubPath);
 
                     MergePatchRecursive(currentNode, patchNode);
 
@@ -860,6 +941,8 @@ public static class DataExtensions
         var collectionName = typeof(T).Name; // "MeshNode"
         var versionKey = jsonOpts.PropertyNamingPolicy?.ConvertName("Version") ?? "Version";
         var idKey = jsonOpts.PropertyNamingPolicy?.ConvertName("Id") ?? "Id";
+        var mergeGuardLogger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Data.MergeGuard");
 
         var ackPosted = 0;
         void AckOnce(bool success, MeshNodeError? error = null)
@@ -943,6 +1026,10 @@ public static class DataExtensions
                     var patchNode = System.Text.Json.Nodes.JsonNode.Parse(patchText)
                         as System.Text.Json.Nodes.JsonObject
                         ?? throw new InvalidOperationException("Patch must be a JSON object");
+                    // 🚨 Stale/reordered monotonic-trigger guard. This is the MeshNode-only path,
+                    // so apply unconditionally — drops a RequestedReleaseAt patch that would move
+                    // the live trigger backward (out-of-order cross-hub write) so it can't flap.
+                    DropStaleMonotonicTriggers(currentNode, patchNode, jsonOpts, mergeGuardLogger, hubPath);
                     MergePatchRecursive(currentNode, patchNode);
                     // The OWNER mints the monotonic Version on apply (same rule as the deferred path).
                     currentNode[versionKey] = version;
