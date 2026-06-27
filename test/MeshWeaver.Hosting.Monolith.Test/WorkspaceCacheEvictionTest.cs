@@ -139,6 +139,53 @@ public class WorkspaceCacheEvictionTest(ITestOutputHelper output) : MonolithMesh
             .Should().Within(15.Seconds()).Match(n => n == "Updated");
     }
 
+    /// <summary>
+    /// ROOT-CAUSE REPRO for the intermittent <see cref="NewClient_AfterCrossHubUpdate_EventuallyConverges"/>
+    /// (and siblings) line-133 read timeout. The intermediate <c>ReadNode</c> is
+    /// <c>Mesh.GetMeshNode</c>, which posts a <see cref="GetDataRequest"/> and only THEN registers the
+    /// response subject (<c>hub.Observe(delivery)</c>). The hub DROPS any response whose requestId has
+    /// no registered subject yet ("No subject found for response … treating as processed",
+    /// <c>MessageHub.HandleCallbacks</c>). When the owning per-node hub is WARM it answers in
+    /// sub-millisecond time; if the posting thread is preempted between Post and Observe — routine
+    /// under bulk thread-pool contention — the warm reply lands before the subject exists, is dropped,
+    /// and the read hangs to its timeout. Here the preemption is made explicit (an awaited delay) so
+    /// the race is DETERMINISTIC:
+    ///   • register-AFTER-post (the old GetMeshNode shape) → reply dropped → the read never emits.
+    ///   • register-BEFORE-post (<c>Observe&lt;TResponse&gt;</c>, the fix) → the AsyncSubject buffers the
+    ///     reply and replays it to the late subscriber → the read emits.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task GetMeshNode_WarmOwner_DropsResponse_WhenSubjectRegisteredAfterPost()
+    {
+        var path = $"{TestPartition}/getnode-race";
+        await NodeFactory.CreateNode(
+            new MeshNode("getnode-race", TestPartition) { Name = "Warm", NodeType = "Markdown" }).Should().Emit();
+
+        // WARM the owning per-node hub so a GetDataRequest is answered in sub-ms — the precondition
+        // under which the post-then-observe window can lose the reply.
+        await Mesh.GetMeshNode(path).Should().Match(n => n is not null);
+
+        var addr = new Address(path);
+
+        // (1) OLD shape — register the response subject AFTER posting, with a deliberate preemption
+        //     between Post and Observe. The warm owner replies during the delay; the hub has no
+        //     subject for that requestId yet, so it drops the reply. Observing afterwards never emits.
+        var droppedDelivery = Mesh.Post(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(addr));
+        droppedDelivery.Should().NotBeNull();
+        await Task.Delay(300); // force the warm round-trip to complete before we register the subject
+        await Mesh.Observe(droppedDelivery!).Select(d => (object?)d.Message)
+            .Should().NotEmit(within: 2.Seconds());
+
+        // (2) FIX shape — Observe<TResponse> registers the subject BEFORE posting, so the same
+        //     preemption is harmless: the reply is buffered in the AsyncSubject and replayed to the
+        //     late subscriber.
+        var safe = Mesh.Observe<GetDataResponse>(
+            new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(addr));
+        await Task.Delay(300); // same preemption — but the subject was registered before the post
+        await safe.Select(d => d.Message.Data as MeshNode)
+            .Should().Within(5.Seconds()).Match(n => n is not null);
+    }
+
     [Fact(Timeout = 30000)]
     public async Task NewSubscriber_AfterRecreate_GetsFreshSnapshot()
     {

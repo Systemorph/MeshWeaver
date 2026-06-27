@@ -1181,16 +1181,23 @@ public static class MeshNodeStreamExtensions
 
             try
             {
-                var delivery = hub.Post(
-                    new GetDataRequest(new MeshNodeReference()),
-                    o => o.WithTarget(new Address(path)));
-                if (delivery == null)
-                {
-                    EmitOnce(null);
-                    return Disposable.Create(() => cts.Dispose());
-                }
-
-                innerSubscription = hub.Observe(delivery)
+                // 🚨 Register the response subject BEFORE posting. Observe<TResponse> pre-registers the
+                // callback (WithMessageId) and only then posts — see MessageHub.Observe(object, options):
+                // "registering the subject BEFORE posting avoids the race where a synchronously-handled
+                // response arrives before the subscription is in place."
+                //
+                // The previous Post(request) + Observe(delivery) ordering registered the subject AFTER the
+                // post. The hub DROPS any response whose requestId has no registered subject yet ("No
+                // subject found for response ... treating as processed", HandleCallbacks). A WARM owning
+                // per-node hub answers in sub-millisecond time, so under thread-pool contention a
+                // preemption between Post and Observe let the reply land before the subject existed -> the
+                // reply was dropped and this read hung to its timeout. That was the intermittent bulk flake
+                // in WorkspaceCacheEvictionTest (ReadNode -> GetMeshNode), proven deterministically by
+                // GetMeshNode_WarmOwner_DropsResponse_WhenSubjectRegisteredAfterPost.
+                innerSubscription = hub
+                    .Observe<GetDataResponse>(
+                        new GetDataRequest(new MeshNodeReference()),
+                        o => o.WithTarget(new Address(path)))
                     .Subscribe(
                         d =>
                         {
