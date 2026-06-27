@@ -139,6 +139,36 @@ internal sealed class MeshService(
         => Observable.Defer(() => NodeUpdatePipeline.UpdateWithValidation(hub, node))
             .CarryAccessContext(hub.ServiceProvider);
 
+    public IObservable<MeshNode> CreateOrUpdateNode(MeshNode node)
+    {
+        // Eager-capture the caller's identity (same reasoning as CreateNode): pin it onto the request as
+        // RequestedBy so a System/user write authorises even after the cross-hub post + a Subscribe that
+        // lands on an emission thread where the AsyncLocal is gone. The owner's CreateOrUpdate handler
+        // checks Create (absent) or Update (present) dynamically — race-free, unlike a client-side
+        // CreateNode/UpdateNode split.
+        var captured = CaptureContext();
+        return Observable.Defer(() =>
+        {
+            var request = new CreateOrUpdateNodeRequest(node);
+            if (string.IsNullOrEmpty(request.RequestedBy)
+                && captured?.ObjectId is { Length: > 0 } callerId)
+                request = request with { RequestedBy = callerId };
+            return hub.Observe(request, o => ConfigurePost(o, captured))
+                .SelectMany(d =>
+                {
+                    var r = d.Message;
+                    if (r.Success && r.Node != null)
+                        return Observable.Return(r.Node);
+                    return Observable.Throw<MeshNode>(r.RejectionReason switch
+                    {
+                        NodeUpsertRejectionReason.Unauthorized or NodeUpsertRejectionReason.ValidationFailed =>
+                            new UnauthorizedAccessException(r.Error ?? "Access denied"),
+                        _ => new InvalidOperationException(r.Error ?? "Node upsert failed")
+                    });
+                });
+        }).CarryAccessContext(hub.ServiceProvider);
+    }
+
     public IObservable<bool> DeleteNode(string path)
     {
         // Same eager-capture as CreateNode: pin the caller's identity as DeletedBy at the call

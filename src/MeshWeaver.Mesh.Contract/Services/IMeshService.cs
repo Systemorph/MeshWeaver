@@ -31,6 +31,18 @@ public interface IMeshService
     IObservable<MeshNode> UpdateNode(MeshNode node);
 
     /// <summary>
+    /// ATOMIC create-or-update: routes through the single <c>CreateOrUpdateNodeRequest</c> verb so the
+    /// OWNING hub decides create-vs-update by existence (and checks Create or Update permission
+    /// accordingly). Use this — NOT a client-side <c>CreateNode().Catch(already-exists → UpdateNode())</c>
+    /// — for idempotent writes that may run concurrently or re-run: the hand-rolled split races (the
+    /// create's exists-check lags a concurrent create → the update patches a not-yet-materialized node →
+    /// "NotFound … for patch apply" → error storm). The owner serialises both branches, so the upsert is
+    /// race-free. Identity is captured eagerly at call time (as <c>RequestedBy</c>). Same path
+    /// <c>StaticRepoImporter</c>/<c>NodeCopyHelper</c> use.
+    /// </summary>
+    IObservable<MeshNode> CreateOrUpdateNode(MeshNode node);
+
+    /// <summary>
     /// Deletes a node and all its descendants (bottom to top).
     /// Routes through DeleteNodeRequest for proper security enforcement.
     /// </summary>
