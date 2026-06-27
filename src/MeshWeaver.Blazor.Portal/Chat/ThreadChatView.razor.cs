@@ -874,8 +874,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             // ROUTE partition (login, welcome, …): that partition has no write policy, so StartThread there
             // is denied → onError → no thread → the side-panel chat tears down (the "login" symptom). Strip
             // a reserved nav-namespace / context and fall back to the user's own namespace.
-            var navNs = MeshWeaver.AI.AgentPickerProjection.IsReservedPartition(NavigationService.CurrentNamespace)
-                ? null : NavigationService.CurrentNamespace;
+            // 🎯 A thread must anchor under a real OWNER node, NEVER a satellite. CurrentNamespace
+            // is the raw current-page address — when the user starts a chat while viewing a satellite
+            // (another thread, an activity, a comment), that namespace IS the satellite, so anchoring
+            // there would NEST the new thread under it (e.g. a thread under a thread). Resolve to the
+            // MAIN NODE: prefer the nav context's PrimaryPath (Node.MainNode when the node is loaded),
+            // fall back to CurrentNamespace, then strip any residual satellite segment.
+            // NormalizeContextPath also drops reserved route partitions (login/welcome/…) to "".
+            var navMainNode = _currentNavContext?.PrimaryPath ?? NavigationService.CurrentNamespace;
+            var navNs = NormalizeContextPath(navMainNode ?? string.Empty);
             var safeContext = MeshWeaver.AI.AgentPickerProjection.IsReservedPartition(initialContext)
                 ? null : initialContext;
             var ns = !string.IsNullOrEmpty(navNs)
