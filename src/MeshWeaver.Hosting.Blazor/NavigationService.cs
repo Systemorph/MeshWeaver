@@ -550,6 +550,23 @@ internal class NavigationService : INavigationService
             var currentNodePath = context.PrimaryPath ?? "";
             if (currentNodePath != _lastLoadedNodePath)
                 LoadCreatableTypes(currentNodePath);
+        },
+        ex =>
+        {
+            // The load FAILED (not just returned null): the target hub did not TREAT the request —
+            // a DeliveryFailure with ErrorType.Ignored (no handler matched) or ErrorType.NotFound —
+            // or a timeout/other error. Surface page-not-found rather than leaking an unobserved Rx
+            // exception / hanging the page. This is the Blazor end of "MessageIgnored → page not found":
+            // a hub that doesn't treat the navigation message turns into the existing NotFound UI.
+            var targetIgnored = ex is DeliveryFailureException dfe
+                && dfe.Failure.ErrorType is ErrorType.Ignored or ErrorType.NotFound;
+            _logger?.LogDebug(ex,
+                "Navigation load failed for {Route} (targetIgnored={Ignored}) — showing page-not-found", route, targetIgnored);
+            IsResolving = false;
+            Context = null;
+            CurrentNamespace = null;
+            _navigationContext.OnNext(null);
+            _status.OnNext(NavigationStatus.NotFound(route));
         });
     }
 

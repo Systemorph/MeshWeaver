@@ -254,7 +254,7 @@ public class MessageService : IMessageService
     }
 
 
-    private IMessageDelivery ReportFailure(IMessageDelivery delivery)
+    private IMessageDelivery ReportFailure(IMessageDelivery delivery, ErrorType errorType = ErrorType.Unknown)
     {
         var error = delivery.Properties.TryGetValue("Error", out var e) ? e?.ToString() : null;
         logger.LogWarning(
@@ -285,7 +285,11 @@ public class MessageService : IMessageService
             try
             {
                 var message = error ?? $"Message delivery failed in address {Address}";
-                Post(new DeliveryFailure(delivery, message), new PostOptions(Address).ResponseFor(delivery));
+                // Tag the failure type so the sender (and Blazor navigation) can tell "the target hub did
+                // not handle this" (ErrorType.Ignored) from a timeout/exception. Default Unknown preserves
+                // every other caller's behaviour. See /async + the no-handler path in MessageHub.FinishDelivery.
+                Post(new DeliveryFailure(delivery, message) { ErrorType = errorType },
+                    new PostOptions(Address).ResponseFor(delivery));
             }
             catch (Exception ex)
             {
@@ -823,7 +827,8 @@ public class MessageService : IMessageService
                     if (!isDisposing && handled is { State: MessageDeliveryState.Ignored, Message: not DeliveryFailure }
                                             && (ignoredTargetWithoutHost == null || ignoredTargetWithoutHost.Equals(hub.Address))
                                             && !handled.Message.GetType().HasAttribute<CanBeIgnoredAttribute>())
-                        ReportFailure(handled.WithProperty("Error", $"No handler found for delivery {handled.Message.GetType().FullName}: {handled.Message}"));
+                        ReportFailure(handled.WithProperty("Error", $"No handler found for delivery {handled.Message.GetType().FullName}: {handled.Message}"),
+                            ErrorType.Ignored);
                     if (traceEnabled)
                         logger.LogTrace("MESSAGE_FLOW: EXECUTION_COMPLETED | {MessageType} | Hub: {Address} | Duration: {Duration}ms",
                             messageTypeName, Address, executionStopwatch.ElapsedMilliseconds);
