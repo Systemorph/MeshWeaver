@@ -114,10 +114,24 @@ public class FrameworkStaleInstanceRenderTest(ITestOutputHelper output) : Monoli
             Content = new CodeConfiguration { Code = source, Language = "csharp" }
         }).Should().Emit();
 
+        // 🔎 SELF-DIAGNOSING (kept — this area has a history of intermittent compile stalls):
+        // log every compile-state transition with elapsed ms. xUnit buffers test output and only
+        // surfaces it on FAILURE, so this is free on a green run and turns the next "timeout" into
+        // an immediate diagnosis — does the compile reach Error (with diagnostics), stall at
+        // Compiling, or does content stay an untyped JsonElement (Content not NodeTypeDefinition)?
+        var workspace = Mesh.GetWorkspace();
+        var diagSw = System.Diagnostics.Stopwatch.StartNew();
+        using var compileDiag = workspace.GetMeshNodeStream(nodeTypePath)
+            .Subscribe(n => Output.WriteLine(
+                n?.Content is NodeTypeDefinition d
+                    ? $"[compile-diag +{diagSw.ElapsedMilliseconds}ms] Status={d.CompilationStatus} "
+                      + $"fv='{d.CompiledFrameworkVersion}' asm={(string.IsNullOrEmpty(d.LatestAssemblyPath) ? "none" : "set")}"
+                      + (d.CompilationError is { Length: > 0 } e ? $"  ERROR={e.Replace("\n", " | ")}" : "")
+                    : $"[compile-diag +{diagSw.ElapsedMilliseconds}ms] Content is {n?.Content?.GetType().Name ?? "null"} "
+                      + "(NOT NodeTypeDefinition — untyped JsonElement?)"));
+
         await Mesh.Observe(new GetCompilationPathRequest(), o => o.WithTarget(new Address(nodeTypePath)))
             .Should().Within(90.Seconds()).Emit();
-
-        var workspace = Mesh.GetWorkspace();
         await workspace.GetMeshNodeStream(nodeTypePath)
             .Should().Within(60.Seconds())
             .Match(n => n.Content is NodeTypeDefinition d

@@ -604,8 +604,8 @@ internal static class NodeTypeEnrichmentHelpers
         }
 
         // HasUsableBuild was false. Before overlaying an error, distinguish the
-        // framework-stale sub-case: Status=Ok AND the assembly fields ARE
-        // populated, so the ONLY HasUsableBuild condition that failed is the
+        // framework-stale sub-case: the assembly fields ARE populated, so the
+        // ONLY HasUsableBuild condition that failed is the
         // CompiledFrameworkVersion == FrameworkVersion equality — i.e. the DLL
         // was built against a PREVIOUS MeshWeaver build (a redeploy changed the
         // FrameworkVersion hash). The bytes are ABI-incompatible, not absent.
@@ -616,7 +616,17 @@ internal static class NodeTypeEnrichmentHelpers
         // terminal state — bounded by MaxRecompileAttempts. Without this, every
         // dynamic NodeType shows a bare "Compilation failed" overlay after every
         // deploy until an operator manually recompiles it.
-        if (def.CompilationStatus == CompilationStatus.Ok
+        //
+        // 🚨 Accept Status=Error here too, not just Ok. LatestAssembly{Collection,
+        // Path} are ONLY ever written by a SUCCESSFUL compile, so an Error that
+        // still carries them is a TRANSIENT recompile failure layered on a prior
+        // good build (e.g. the concurrent-self-heal "corrupt cached .dll" load
+        // collision) — NOT a genuine source error (which would leave those fields
+        // null). A second concurrent enrichment call that subscribes mid-heal can
+        // snap that transient Error via BuildSlowPath's settle predicate; treating
+        // it as a genuine failure overlaid the instance. Route it into the same
+        // requireUsableBuild heal so it waits for the healed Ok instead.
+        if (def.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error
             && !string.IsNullOrEmpty(def.LatestAssemblyCollection)
             && !string.IsNullOrEmpty(def.LatestAssemblyPath)
             && compilationService is not null)
@@ -726,11 +736,32 @@ internal static class NodeTypeEnrichmentHelpers
                                              or CompilationStatus.Compiling)
                         return false;
 
-                    if (d.CompilationStatus == CompilationStatus.Error)
-                        return true;
-
+                    // 🚨 Framework-stale heal: the ONLY acceptable terminal is a
+                    // GENUINELY USABLE build (the framework version now matches).
+                    // This MUST be checked BEFORE the Error short-circuit below.
+                    // While a stale-Ok type is rebuilt, a CONCURRENT self-heal
+                    // recompile (the instance is enriched twice — routing AND
+                    // activation — so two Ok→Pending flips race) can collide and
+                    // transiently flip the NodeType to Error ("Failed to load
+                    // assembly … corrupt cached .dll") for a few ms before the next
+                    // compile lands the healed Ok. Settling on that transient Error
+                    // (the old `if Error return true` ordering) froze the INSTANCE on
+                    // the compilation-error overlay for its whole lifetime — even
+                    // though the NodeType reaches Ok ~80ms later — because enrichment
+                    // binds HubConfiguration ONCE and never re-observes. That is the
+                    // exact rbuergi/CatBond/AtlanticBond symptom this test pins
+                    // (FrameworkStaleInstanceRenderTest line 182). The source is
+                    // known-good (it produced the stale-but-valid assembly), so an
+                    // Error here is transient — ride through it to HasUsableBuild
+                    // rather than giving up (the /debug "re-establish, never give up
+                    // on a non-terminal-for-your-purpose state" rule). If the rebuild
+                    // genuinely never lands, the Timeout below surfaces the overlay
+                    // (the graceful sink) — never a longer hang.
                     if (requireUsableBuild)
                         return NodeTypeCompilationHelpers.HasUsableBuild(typeNode, d);
+
+                    if (d.CompilationStatus == CompilationStatus.Error)
+                        return true;
 
                     return (typeNode.HubConfiguration != null
                             && !string.IsNullOrEmpty(d.LatestAssemblyPath))
