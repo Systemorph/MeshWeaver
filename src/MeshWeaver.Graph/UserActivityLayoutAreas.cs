@@ -180,7 +180,7 @@ public static class UserActivityLayoutAreas
             "Search supports the full [query syntax](/Doc/DataMesh/QuerySyntax)."));
 
         // (b) Pinned band — its own always-visible section above the tabs (when the owner has pins).
-        var pinned = BuildPinnedItems(ownerNode);
+        var pinned = BuildPinnedItems(ownerNode, host.Hub.JsonSerializerOptions);
         if (pinned != null)
             dashboard = dashboard.WithView(pinned);
 
@@ -376,9 +376,12 @@ public static class UserActivityLayoutAreas
     /// Each card is rendered via <see cref="PinLayoutArea.PinnedThumbnailArea"/>, which overlays
     /// an unpin icon so owners can remove items inline. Returns <c>null</c> when nothing is pinned.
     /// </summary>
-    private static UiControl? BuildPinnedItems(MeshNode? ownerNode)
+    private static UiControl? BuildPinnedItems(MeshNode? ownerNode, JsonSerializerOptions options)
     {
-        var pinnedPaths = (ownerNode?.Content as User)?.PinnedPaths;
+        // ContentAs (deserialize), not `as User`: the owner-node stream alternates typed↔JsonElement,
+        // and `as` → null on the JsonElement frames makes the pinned band flip in/out → the
+        // PinnedThumbnail/Activity render storm that vanished the home dashboard on chat launch.
+        var pinnedPaths = ownerNode.ContentAs<User>(options)?.PinnedPaths;
         if (pinnedPaths == null || pinnedPaths.Count == 0)
             return null;
 
