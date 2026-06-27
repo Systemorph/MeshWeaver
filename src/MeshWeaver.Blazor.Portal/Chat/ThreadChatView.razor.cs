@@ -369,12 +369,17 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         // that ViewModel.InitialContext carries (e.g. the user's home partition rbuergi). Overriding
         // here makes the composer context follow what the user is LOOKING AT. An existing thread keeps
         // its stored subject. Satellite→owner, reserved/route→none (NavigationContextProjection).
-        if (string.IsNullOrEmpty(threadPath))
-        {
-            var navContext = MeshWeaver.AI.NavigationContextProjection.ResolveContext(_currentNavContext);
-            if (!string.IsNullOrEmpty(navContext))
-                initialContext = navContext;
-        }
+        // THE composer context decision (pure, tested). A NEW composer pins the viewed page's MAIN
+        // NODE (the live nav context); an existing thread keeps its stored subject. This OVERRIDES the
+        // ViewModel.InitialContext default seeded above — that is the composer node's own home
+        // partition (e.g. rbuergi), which must NOT win over what the user is looking at. Pinned by
+        // NavigationContextProjectionTest.ResolveComposerContext_*.
+        initialContext = MeshWeaver.AI.NavigationContextProjection.ResolveComposerContext(
+            threadPath, ViewModel.InitialContext, _currentNavContext);
+        Logger.LogDebug(
+            "[ThreadChat:{InstanceId}] Composer context resolved: threadPath={ThreadPath} vmInitial={VmInitial} navPrimary={NavPrimary} navPath={NavPath} → initialContext={InitialContext}",
+            _instanceId, threadPath ?? "(none)", ViewModel.InitialContext ?? "(none)",
+            _currentNavContext?.PrimaryPath ?? "(none)", _currentNavContext?.Path ?? "(none)", initialContext);
 
         // Seed initial context attachment from NavigationService (already resolved, no query).
         if (string.IsNullOrEmpty(initialContext))
@@ -1773,9 +1778,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (_isDisposed) return;
         if (ctx is null || string.IsNullOrEmpty(ctx.PrimaryPath) || ctx.Path == "chat") return;
 
-        // Resolve to the viewed page's MAIN NODE (satellite→owner, reserved/route→none) via the
-        // same tested projection the composer seed uses — so a live navigation re-pins the context.
-        var newPath = MeshWeaver.AI.NavigationContextProjection.ResolveContext(ctx);
+        // Re-pin via the SAME tested decision the seed uses: a new composer follows the viewed page's
+        // main node; an existing thread keeps its subject (so a nav elsewhere never re-pins it).
+        var newPath = MeshWeaver.AI.NavigationContextProjection.ResolveComposerContext(
+            threadPath, ViewModel.InitialContext, ctx);
         if (newPath == initialContext) return;
 
         var name = ctx.Node?.Name ?? ctx.Node?.Id;

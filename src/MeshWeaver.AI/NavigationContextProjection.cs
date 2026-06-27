@@ -139,6 +139,42 @@ public static class NavigationContextProjection
     }
 
     /// <summary>
+    /// THE composer context decision (pure). For a NEW composer (<paramref name="threadPath"/> empty)
+    /// the chat context is ALWAYS the viewed page's main node (the live <paramref name="navContext"/>)
+    /// — NEVER the composer node's own MainNode that <paramref name="composerDefaultContext"/> carries
+    /// (the user's home partition). An existing thread keeps its stored subject. Falls back to the
+    /// composer default only when there is no usable navigation context.
+    /// </summary>
+    /// <param name="threadPath">The thread being shown; empty/null for a new (out-of-thread) composer.</param>
+    /// <param name="composerDefaultContext">ViewModel.InitialContext — the composer node's own MainNode.</param>
+    /// <param name="navContext">The page the user is currently viewing.</param>
+    public static string ResolveComposerContext(
+        string? threadPath, string? composerDefaultContext, NavigationContext? navContext)
+    {
+        if (string.IsNullOrEmpty(threadPath))
+        {
+            var nav = ResolveContext(navContext);
+            if (!string.IsNullOrEmpty(nav))
+                return nav;
+        }
+
+        return NormalizeContextString(composerDefaultContext);
+    }
+
+    /// <summary>
+    /// Normalizes an already-known context PATH string: strips satellite segments off it and drops
+    /// reserved ROUTE partitions to <see cref="string.Empty"/>. The string equivalent of
+    /// <see cref="ResolveContext"/> for a path that did not come from a live <see cref="NavigationContext"/>.
+    /// </summary>
+    public static string NormalizeContextString(string? path)
+    {
+        var stripped = StripSatelliteSegments(path);
+        return string.IsNullOrEmpty(stripped) || AgentPickerProjection.IsReservedPartition(stripped)
+            ? string.Empty
+            : stripped;
+    }
+
+    /// <summary>
     /// The OWNER (main) node of the current navigation target. Prefers the loaded node's
     /// authoritative <see cref="MeshWeaver.Mesh.MeshNode.MainNode"/>; falls back to stripping
     /// satellite segments off the resolved namespace when the node hasn't loaded yet.

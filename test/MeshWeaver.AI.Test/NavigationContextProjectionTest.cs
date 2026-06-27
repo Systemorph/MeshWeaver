@@ -236,6 +236,64 @@ public class NavigationContextProjectionTest
         Assert.Equal(string.Empty, NavigationContextProjection.ResolveContext(null));
     }
 
+    // ── ResolveComposerContext: the actual decision the composer makes ──────────────────────────
+
+    [Fact]
+    public void ResolveComposerContext_NewComposer_ViewingNode_UsesViewedNode_NotHomePartition()
+    {
+        // 🚨 THE bug: the per-user composer's own MainNode (the home partition, e.g. rbuergi) must
+        // NOT win over the page the user is currently viewing.
+        var node = MeshNode.FromPath("Doc/Architecture/Page") with { MainNode = "Doc/Architecture/Page" };
+        var result = NavigationContextProjection.ResolveComposerContext(
+            threadPath: null, composerDefaultContext: "rbuergi", navContext: Nav("Doc/Architecture/Page", node));
+        Assert.Equal("Doc/Architecture/Page", result);
+    }
+
+    [Fact]
+    public void ResolveComposerContext_NewComposer_ViewingSatellite_UsesOwner()
+    {
+        var node = MeshNode.FromPath("rbuergi/_Thread/hi") with { MainNode = "rbuergi" };
+        Assert.Equal("rbuergi", NavigationContextProjection.ResolveComposerContext(
+            null, "rbuergi", Nav("rbuergi/_Thread/hi", node)));
+    }
+
+    [Fact]
+    public void ResolveComposerContext_NewComposer_NoNav_FallsBackToComposerDefault()
+    {
+        Assert.Equal("rbuergi", NavigationContextProjection.ResolveComposerContext(null, "rbuergi", null));
+    }
+
+    [Fact]
+    public void ResolveComposerContext_NewComposer_ReservedNav_FallsBackToComposerDefault()
+    {
+        Assert.Equal("rbuergi", NavigationContextProjection.ResolveComposerContext(null, "rbuergi", Nav("login")));
+    }
+
+    [Fact]
+    public void ResolveComposerContext_ExistingThread_KeepsStoredSubject_IgnoresNav()
+    {
+        // An existing thread keeps its subject even if the user has navigated elsewhere.
+        var navElsewhere = Nav("Doc/Other", MeshNode.FromPath("Doc/Other") with { MainNode = "Doc/Other" });
+        Assert.Equal("Doc/Subject", NavigationContextProjection.ResolveComposerContext(
+            threadPath: "rbuergi/_Thread/hi", composerDefaultContext: "Doc/Subject", navContext: navElsewhere));
+    }
+
+    [Fact]
+    public void ResolveComposerContext_ComposerDefaultSatellite_NormalizedToOwner()
+    {
+        Assert.Equal("rbuergi", NavigationContextProjection.ResolveComposerContext(
+            threadPath: "rbuergi/_Thread/hi", composerDefaultContext: "rbuergi/_Thread/ThreadComposer", navContext: null));
+    }
+
+    [Fact]
+    public void NormalizeContextString_StripsSatellite_DropsReserved()
+    {
+        Assert.Equal("rbuergi", NavigationContextProjection.NormalizeContextString("rbuergi/_Thread/hi"));
+        Assert.Equal("Doc/Page", NavigationContextProjection.NormalizeContextString("Doc/Page"));
+        Assert.Equal(string.Empty, NavigationContextProjection.NormalizeContextString("login"));
+        Assert.Equal(string.Empty, NavigationContextProjection.NormalizeContextString(null));
+    }
+
     [Fact]
     public void ServerSideAssembly_MergesMainNodePathReferenceAndNode()
     {
