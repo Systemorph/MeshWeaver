@@ -340,10 +340,6 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     InvokeAsync(StateHasChanged);
             });
 
-        // Track navigation changes — subscribe to the reactive NavigationContext stream.
-        _navContextSubscription = NavigationService.NavigationContext
-            .Subscribe(ctx => { _currentNavContext = ctx; OnNavigationContextChanged(ctx); });
-
         // Set initial title
         UpdateSidePanelTitle();
 
@@ -364,56 +360,41 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             EnsureComposer();
         }
 
-        // 🎯 New composer (no thread yet): the chat context is ALWAYS the MAIN NODE of the page the
-        // user is currently viewing (the live nav context) — NEVER the composer node's own MainNode
-        // that ViewModel.InitialContext carries (e.g. the user's home partition rbuergi). Overriding
-        // here makes the composer context follow what the user is LOOKING AT. An existing thread keeps
-        // its stored subject. Satellite→owner, reserved/route→none (NavigationContextProjection).
-        // THE composer context decision (pure, tested). A NEW composer pins the viewed page's MAIN
-        // NODE (the live nav context); an existing thread keeps its stored subject. This OVERRIDES the
-        // ViewModel.InitialContext default seeded above — that is the composer node's own home
-        // partition (e.g. rbuergi), which must NOT win over what the user is looking at. Pinned by
-        // NavigationContextProjectionTest.ResolveComposerContext_*.
-        initialContext = MeshWeaver.AI.NavigationContextProjection.ResolveComposerContext(
-            threadPath, ViewModel.InitialContext, _currentNavContext);
-        Logger.LogDebug(
-            "[ThreadChat:{InstanceId}] Composer context resolved: threadPath={ThreadPath} vmInitial={VmInitial} navPrimary={NavPrimary} navPath={NavPath} → initialContext={InitialContext}",
-            _instanceId, threadPath ?? "(none)", ViewModel.InitialContext ?? "(none)",
-            _currentNavContext?.PrimaryPath ?? "(none)", _currentNavContext?.Path ?? "(none)", initialContext);
-
-        // Seed initial context attachment from NavigationService (already resolved, no query).
-        if (string.IsNullOrEmpty(initialContext))
-        {
-            var ctx = _currentNavContext;
-            if (ctx is not null && !string.IsNullOrEmpty(ctx.PrimaryPath) && ctx.Path != "chat")
+        // 🎯 Composer context — FULLY REACTIVE (the chip subscribes to the stream; nothing imperative,
+        // no snapshot read, no one-shot lookup). NavigationService.NavigationContext is a ReplaySubject(1)
+        // (NavigationServiceTest.NavigationContext_ReplaysLastValueToLateSubscriber), so this late
+        // subscriber immediately gets the last navigation context. Pipeline:
+        //   nav context → the composer context DECISION (the viewed page's MAIN node; an existing thread
+        //   keeps its subject) → the main node's LIVE display name (its OWN node stream, so a rename
+        //   re-labels the chip) → the context chip + initialContext.
+        // ResolveComposerContext / DisplayNameOf are pure + unit-tested. _currentNavContext is kept as a
+        // snapshot ONLY for the picker projection and the submit-time read.
+        _navContextSubscription = NavigationService.NavigationContext
+            .Do(ctx => _currentNavContext = ctx)
+            .Select(ctx => MeshWeaver.AI.NavigationContextProjection.ResolveComposerContext(
+                threadPath, ViewModel.InitialContext, ctx))
+            .DistinctUntilChanged()
+            .Select(path => string.IsNullOrEmpty(path)
+                ? System.Reactive.Linq.Observable.Return((Path: (string?)null, Name: (string?)null))
+                : Hub.GetMeshNodeStream(path)
+                    .Select(node => (Path: (string?)path,
+                        Name: (string?)MeshWeaver.AI.NavigationContextProjection.DisplayNameOf(node, path))))
+            .Switch()
+            .DistinctUntilChanged()
+            .Subscribe(chip =>
             {
-                var normalized = NormalizeContextPath(ctx.PrimaryPath);
-                initialContext = normalized;
-                // normalized is "" for a reserved route partition (login, …) — no context chip.
-                if (!string.IsNullOrEmpty(normalized) && !attachments.Any(a => a.IsContext && a.Path == normalized))
-                    attachments.Add(new AttachmentInfo(normalized, ctx.Node?.Name ?? ctx.Node?.Id, IsContext: true));
-            }
-        }
-        else
-        {
-            // ViewModel.InitialContext passed the raw path (e.g., side panel with ctx.PrimaryPath).
-            // Look up the display name via GetDataRequest + RegisterCallback — never await.
-            var capturedContext = NormalizeContextPath(initialContext);
-            initialContext = capturedContext;
-            // capturedContext is "" for a reserved route partition (login, …) — no context chip / read.
-            if (!string.IsNullOrEmpty(capturedContext) && !attachments.Any(a => a.IsContext && a.Path == capturedContext))
-            {
-                attachments.Add(new AttachmentInfo(capturedContext, null, IsContext: true));
-                RequestDisplayName(capturedContext, name => InvokeAsync(() =>
+                // initialContext set SYNCHRONOUSLY so a submit immediately after navigation reads the
+                // current context; the chip render is marshalled onto the renderer.
+                initialContext = chip.Path;
+                InvokeAsync(() =>
                 {
                     if (_isDisposed) return;
-                    var idx = attachments.FindIndex(a => a.IsContext && a.Path == capturedContext);
-                    if (idx >= 0)
-                        attachments[idx] = attachments[idx] with { DisplayName = name };
+                    attachments.RemoveAll(a => a.IsContext);
+                    if (!string.IsNullOrEmpty(chip.Path))
+                        attachments.Insert(0, new AttachmentInfo(chip.Path, chip.Name, IsContext: true));
                     StateHasChanged();
-                }));
-            }
-        }
+                });
+            });
 
         try
         {
@@ -1768,41 +1749,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 });
     }
 
-    /// <summary>
-    /// Reacts to navigation context changes from INavigationService.
-    /// NavigationService owns path resolution — we just read Context.PrimaryPath and Context.Node.
-    /// No query, no await.
-    /// </summary>
-    private void OnNavigationContextChanged(NavigationContext? ctx)
-    {
-        if (_isDisposed) return;
-        if (ctx is null || string.IsNullOrEmpty(ctx.PrimaryPath) || ctx.Path == "chat") return;
-
-        // Re-pin via the SAME tested decision the seed uses: a new composer follows the viewed page's
-        // main node; an existing thread keeps its subject (so a nav elsewhere never re-pins it).
-        var newPath = MeshWeaver.AI.NavigationContextProjection.ResolveComposerContext(
-            threadPath, ViewModel.InitialContext, ctx);
-        if (newPath == initialContext) return;
-
-        var name = ctx.Node?.Name ?? ctx.Node?.Id;
-
-        InvokeAsync(() =>
-        {
-            if (_isDisposed) return;
-            if (newPath == initialContext) return;
-
-            Logger.LogDebug("[ThreadChat:{InstanceId}] Context changed from {OldContext} to {NewContext}",
-                _instanceId, initialContext, newPath);
-
-            initialContext = newPath;
-            attachments.RemoveAll(a => a.IsContext);
-            // newPath is "" when the context is a reserved route partition (login, …) — clear the
-            // context chip rather than pinning an empty/rogue one.
-            if (!string.IsNullOrEmpty(newPath))
-                attachments.Insert(0, new AttachmentInfo(newPath, name, IsContext: true));
-            StateHasChanged();
-        });
-    }
+    // Navigation-context → composer-context chip is now a single reactive pipeline in OnInitialized
+    // (NavigationService.NavigationContext → ResolveComposerContext → GetMeshNodeStream → chip). The
+    // old imperative OnNavigationContextChanged handler was removed — the stream owns the chip.
 
     /// <summary>
     /// Normalizes a node path by stripping any satellite-partition suffix

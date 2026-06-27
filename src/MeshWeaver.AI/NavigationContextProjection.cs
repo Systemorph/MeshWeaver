@@ -191,6 +191,17 @@ public static class NavigationContextProjection
     }
 
     /// <summary>
+    /// The display LABEL for a context node: its <see cref="MeshWeaver.Mesh.MeshNode.Name"/>, else its
+    /// <see cref="MeshWeaver.Mesh.MeshNode.Id"/>, else the path itself. Used to label the composer's
+    /// context chip from the MAIN node — never the navigated satellite, whose name (e.g. a thread
+    /// title "hi") is the wrong label once the context has been resolved to its owner.
+    /// </summary>
+    public static string DisplayNameOf(MeshNode? node, string fallbackPath)
+        => string.IsNullOrEmpty(node?.Name)
+            ? (string.IsNullOrEmpty(node?.Id) ? fallbackPath : node!.Id)
+            : node!.Name;
+
+    /// <summary>
     /// Returns everything before the first satellite segment (a path segment starting with
     /// <c>_</c>, e.g. <c>_Thread</c>/<c>_Comment</c>/<c>_Activity</c>). Returns the path
     /// unchanged when it has no satellite segment.

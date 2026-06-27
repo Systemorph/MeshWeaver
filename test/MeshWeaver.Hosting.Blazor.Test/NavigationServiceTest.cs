@@ -1075,6 +1075,30 @@ public class NavigationServiceTest
 
     #endregion
 
+    [Fact]
+    public async Task NavigationContext_ReplaysLastValueToLateSubscriber()
+    {
+        // 🚨 The composer subscribes to NavigationContext LATE (it inits after navigation has already
+        // resolved). NavigationContext MUST be a ReplaySubject(1) so the late subscriber immediately
+        // gets the last context — otherwise the composer's reactive context pipeline never fires.
+        var service = CreateService();
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(
+                new AddressResolution("rbuergi/Projects/Alpha", null)));
+        service.Initialize();
+        _navigationManager.SimulateLocationChanged("http://localhost/rbuergi/Projects/Alpha");
+
+        // First subscriber: navigation resolves.
+        await service.NavigationContext.Should().Within(WaitTimeout)
+            .Match(c => c?.Namespace == "rbuergi/Projects/Alpha");
+
+        // LATE subscriber: a ReplaySubject(1) hands it the last value immediately — FirstAsync returns
+        // WITHOUT a new navigation. If it were not a replay stream, this would hang past the timeout.
+        var late = await service.NavigationContext.FirstAsync().ToTask().WaitAsync(WaitTimeout);
+        late.Should().NotBeNull();
+        late!.Namespace.Should().Be("rbuergi/Projects/Alpha");
+    }
+
     #region Mock Navigation Manager
 
     /// <summary>

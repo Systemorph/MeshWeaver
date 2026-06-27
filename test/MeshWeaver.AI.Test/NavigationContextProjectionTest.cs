@@ -295,6 +295,27 @@ public class NavigationContextProjectionTest
     }
 
     [Fact]
+    public void DisplayNameOf_PrefersNodeName()
+    {
+        // The chip labels the MAIN node — its name, NOT the navigated satellite's name.
+        var mainNode = MeshNode.FromPath("rbuergi") with { Name = "Roland" };
+        Assert.Equal("Roland", NavigationContextProjection.DisplayNameOf(mainNode, "rbuergi"));
+    }
+
+    [Fact]
+    public void DisplayNameOf_NullNode_UsesFallbackPath()
+    {
+        Assert.Equal("rbuergi", NavigationContextProjection.DisplayNameOf(null, "rbuergi"));
+    }
+
+    [Fact]
+    public void DisplayNameOf_NoName_DoesNotReturnEmpty()
+    {
+        var node = MeshNode.FromPath("Doc/Page") with { Name = null };
+        Assert.False(string.IsNullOrEmpty(NavigationContextProjection.DisplayNameOf(node, "Doc/Page")));
+    }
+
+    [Fact]
     public void ServerSideAssembly_MergesMainNodePathReferenceAndNode()
     {
         // ThreadExecution path: main node resolved (the context path), the carried reference
