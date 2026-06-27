@@ -37,6 +37,20 @@ public enum ChatViewMode
 }
 
 /// <summary>
+/// Layout of the in-thread navigation menu (hierarchy + sub-threads + other open threads + context
+/// chip). Cycles <see cref="TopBar"/> → <see cref="LeftRail"/> → <see cref="Hidden"/>.
+/// </summary>
+public enum ThreadNavLayout
+{
+    /// <summary>A horizontal bar across the top of the thread.</summary>
+    TopBar,
+    /// <summary>A vertical rail down the left of the conversation.</summary>
+    LeftRail,
+    /// <summary>Collapsed — only a small reveal toggle shows.</summary>
+    Hidden
+}
+
+/// <summary>
 /// The full chat view for a single thread, bound to a <c>ThreadChatControl</c>. Renders the message
 /// list, the composer (agent/model/harness selection, attachments, context chips), sub-thread
 /// delegation headers, and per-round elapsed-time and token chips. Reactive throughout: it data-binds
@@ -148,6 +162,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     _templatePath = value.ThreadPath;
                     OpenComposerProjection(value.ThreadPath);
                 }
+
+                // Keep the nav menu's sub-thread (children) list bound to the current thread.
+                if (!string.IsNullOrEmpty(value.ThreadPath))
+                    SetupChildThreadsSubscription(value.ThreadPath);
             }
 
             // Open per-message cache subscriptions AFTER threadPath is set —
@@ -246,6 +264,18 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private IReadOnlyList<MeshNode> resumeThreads = [];
     private IDisposable? resumeSubscription;
     private bool resumeLoading;
+
+    // ─── In-thread navigation menu ───
+    // A navigation surface WITHIN the thread: the context chip, this thread's position in the
+    // hierarchy (ancestors → current → sub-threads), and the user's OTHER open threads across ALL
+    // partitions. Toggles between a horizontal top bar, a vertical left rail, and hidden; Option-Tab
+    // cycles through the other open threads. Both lists are live-bound to the synced Hub.GetQuery
+    // surface (same write-consistent, RLS-aware snapshot stream the Resume picker uses).
+    private ThreadNavLayout _navLayout = ThreadNavLayout.TopBar;
+    private IReadOnlyList<MeshNode> myThreads = [];        // my open threads, all partitions
+    private IDisposable? myThreadsSubscription;
+    private IReadOnlyList<MeshNode> childThreads = [];     // sub-threads (delegations) of THIS thread
+    private IDisposable? childThreadsSubscription;
 
     // Agent/model lists — fed by AgentPickerProjection; consumed by the /agent and /model
     // slash commands + @-reference agent detection. The visible harness/agent/model SELECTION
@@ -419,6 +449,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         {
             Logger.LogWarning(ex, "[ThreadChat:{InstanceId}] Failed to initialize agent/model selections", _instanceId);
         }
+
+        // In-thread navigation menu: my other open threads (all partitions) is independent of the
+        // current thread, so subscribe once here; this thread's sub-threads bind once the path is known.
+        SetupMyThreadsSubscription();
+        if (!string.IsNullOrEmpty(threadPath))
+            SetupChildThreadsSubscription(threadPath);
 
         Logger.LogDebug("[ThreadChat:{InstanceId}] OnInitialized completed", _instanceId);
     }
@@ -2139,6 +2175,142 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         return Task.CompletedTask;
     }
 
+    // ─── In-thread navigation menu: data + actions ───
+
+    /// <summary>
+    /// Live subscription to MY open threads across EVERY partition — the "other open threads" the nav
+    /// menu lists and Option-Tab cycles. Factored as its own query (the user's request): the synced
+    /// <c>Hub.GetQuery</c> surface, server-filtered to non-Done threads, then client-filtered to the
+    /// ones I created. RLS already scopes the snapshot to what I can read. Independent of the current
+    /// thread, so it's set up once in <see cref="OnInitialized"/>.
+    /// </summary>
+    private void SetupMyThreadsSubscription()
+    {
+        myThreadsSubscription?.Dispose();
+        var me = _userHome;
+        myThreadsSubscription = Hub.GetQuery("my-threads", "nodeType:Thread -content.status:Done sort:LastModified-desc")
+            .Subscribe(
+                snapshot => InvokeAsync(() =>
+                {
+                    if (_isDisposed) return;
+                    myThreads = snapshot
+                        .Where(n => !string.IsNullOrEmpty(n.Path)
+                            && string.Equals(n.NodeType, ThreadNodeType.NodeType, StringComparison.OrdinalIgnoreCase)
+                            && (string.IsNullOrEmpty(me)
+                                || string.Equals(n.CreatedBy, me, StringComparison.OrdinalIgnoreCase)))
+                        .OrderByDescending(n => n.LastModified)
+                        .ToList();
+                    StateHasChanged();
+                }),
+                ex => Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] my-threads query failed", _instanceId));
+    }
+
+    /// <summary>
+    /// Live subscription to THIS thread's sub-threads (delegations) — the "children" in the hierarchy.
+    /// Delegations nest at <c>{threadPath}/{responseMsgId}/{subThreadId}</c>, so we query descendants,
+    /// not immediate children. Re-opened whenever the thread path changes.
+    /// </summary>
+    private string? _childThreadsPath;
+    private void SetupChildThreadsSubscription(string path)
+    {
+        if (string.Equals(_childThreadsPath, path, StringComparison.OrdinalIgnoreCase))
+            return;                                       // already subscribed for this thread
+        _childThreadsPath = path;
+        childThreadsSubscription?.Dispose();
+        childThreads = [];
+        if (string.IsNullOrEmpty(path))
+            return;
+        childThreadsSubscription = Hub.GetQuery($"child-threads|{path}",
+                $"namespace:{path} scope:descendants nodeType:Thread sort:LastModified-desc")
+            .Subscribe(
+                snapshot => InvokeAsync(() =>
+                {
+                    if (_isDisposed) return;
+                    childThreads = snapshot
+                        .Where(n => !string.IsNullOrEmpty(n.Path)
+                            && !string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase)
+                            && string.Equals(n.NodeType, ThreadNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
+                        .OrderByDescending(n => n.LastModified)
+                        .ToList();
+                    StateHasChanged();
+                }),
+                ex => Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] child-threads query failed", _instanceId));
+    }
+
+    /// <summary>
+    /// This thread's ancestors (root → … → immediate parent), derived purely from the path. A sub-thread
+    /// path is <c>{parentThread}/{8-hex responseMsgId}/{subThreadId}</c>; walking up two segments at a
+    /// time yields each ancestor thread. Empty for a top-level thread.
+    /// </summary>
+    private IReadOnlyList<(string Path, string Label)> ThreadAncestors()
+    {
+        var result = new List<(string, string)>();
+        var path = threadPath;
+        while (!string.IsNullOrEmpty(path))
+        {
+            var segs = path.Split('/');
+            if (segs.Length < 3) break;
+            var parentMsgId = segs[^2];
+            if (parentMsgId.Length != 8) break;          // not a delegation boundary → stop
+            var parent = string.Join('/', segs[..^2]);
+            if (string.IsNullOrEmpty(parent)) break;
+            result.Insert(0, (parent, LastSegment(parent) ?? parent));
+            path = parent;
+        }
+        return result;
+    }
+
+    /// <summary>My other open threads (all partitions) — <see cref="myThreads"/> minus the current one.</summary>
+    private IReadOnlyList<MeshNode> OtherOpenThreads() =>
+        myThreads.Where(n => !string.Equals(n.Path, threadPath, StringComparison.OrdinalIgnoreCase)).ToList();
+
+    /// <summary>True when the in-thread navigation menu should render — the full-page thread view with
+    /// a real thread (never the side panel / new-chat composer).</summary>
+    private bool ShowThreadNav => ViewModel.ShowFullHeader && !string.IsNullOrEmpty(threadPath);
+
+    /// <summary>Cycles the nav-menu layout: TopBar → LeftRail → Hidden → TopBar.</summary>
+    private void CycleNavLayout()
+    {
+        _navLayout = _navLayout switch
+        {
+            ThreadNavLayout.TopBar => ThreadNavLayout.LeftRail,
+            ThreadNavLayout.LeftRail => ThreadNavLayout.Hidden,
+            _ => ThreadNavLayout.TopBar
+        };
+        StateHasChanged();
+    }
+
+    /// <summary>Opens a thread in the MAIN view (full-page navigation).</summary>
+    private void NavigateToThread(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return;
+        NavigationManager.NavigateTo($"/{path}");
+    }
+
+    /// <summary>
+    /// Option-Tab handler: cycles to the NEXT of my other open threads and opens it. Wraps around;
+    /// no-op when there are none. Bound on the thread container's keydown (Alt+Tab / Option-Tab).
+    /// </summary>
+    private void CycleToNextOpenThread()
+    {
+        var others = OtherOpenThreads();
+        if (others.Count == 0) return;
+        // Anchor on the current thread's position in the FULL list so repeated Option-Tab walks forward.
+        var all = myThreads.ToList();
+        var idx = all.FindIndex(n => string.Equals(n.Path, threadPath, StringComparison.OrdinalIgnoreCase));
+        var next = all.Count > 0 ? all[(idx + 1 + all.Count) % all.Count] : others[0];
+        if (string.Equals(next.Path, threadPath, StringComparison.OrdinalIgnoreCase))
+            next = others[0];
+        NavigateToThread(next.Path);
+    }
+
+    /// <summary>Keydown on the thread shell — Option/Alt+Tab cycles to the next open thread.</summary>
+    private void OnThreadShellKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
+    {
+        if (e.AltKey && string.Equals(e.Key, "Tab", StringComparison.OrdinalIgnoreCase))
+            CycleToNextOpenThread();
+    }
+
     // Thread creation is handled server-side via CreateNodeRequest.
 
     private CompletionProviderConfig GetCompletionConfig()
@@ -2856,6 +3028,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             _isDisposed = true;
             elapsedTicker?.Dispose();
             resumeSubscription?.Dispose();
+            myThreadsSubscription?.Dispose();
+            childThreadsSubscription?.Dispose();
             _connectSub?.Dispose();
             _navContextSubscription?.Dispose();
             composerSubscription?.Dispose();

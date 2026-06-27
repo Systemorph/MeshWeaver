@@ -49,6 +49,91 @@
 }
 else
 {
+    @* ─── In-thread navigation menu ──────────────────────────────────────
+       The thread's position in the hierarchy (ancestors → current → sub-threads),
+       my OTHER open threads (all partitions), and the context chip. Toggles between
+       a horizontal top bar, a vertical left rail, and hidden (CycleNavLayout); the
+       whole shell captures Option-Tab to cycle the other open threads. Only on the
+       full-page thread view (ShowFullHeader + a real thread). *@
+    <div class="thread-nav-shell nav-@(_navLayout.ToString().ToLowerInvariant())" tabindex="0" @onkeydown="OnThreadShellKeyDown">
+    @if (ShowThreadNav && _navLayout != ThreadNavLayout.Hidden)
+    {
+        var ancestors = ThreadAncestors();
+        var others = OtherOpenThreads();
+        var navCtx = ThreadViewModel?.InitialContext;
+        <nav class="thread-nav-menu">
+            <div class="thread-nav-toolbar">
+                <button class="thread-nav-cycle" @onclick="CycleNavLayout"
+                        title="@($"Navigation: {_navLayout} — click for next (top bar → left rail → hidden)")">
+                    <FluentIcon Value="@(new Icons.Regular.Size16.Navigation())" Color="Color.Neutral" />
+                </button>
+                <span class="thread-nav-title">Threads</span>
+            </div>
+
+            @if (!string.IsNullOrEmpty(navCtx))
+            {
+                <div class="thread-nav-section">
+                    <button type="button" class="thread-context-chip thread-nav-context"
+                            title="@($"Context: {navCtx} — click to open")"
+                            @onclick="@(() => OnContextChipClicked(navCtx))">
+                        <FluentIcon Value="@(new Icons.Regular.Size16.Location())" Color="Color.Accent" />
+                        <span class="thread-context-chip-text">@(ThreadViewModel?.InitialContextDisplayName ?? LastSegment(navCtx))</span>
+                    </button>
+                </div>
+            }
+
+            <div class="thread-nav-section thread-nav-hierarchy">
+                <div class="thread-nav-section-label">This thread</div>
+                @foreach (var anc in ancestors)
+                {
+                    <a class="thread-nav-item thread-nav-ancestor" href="/@anc.Path" title="@anc.Path">
+                        <span class="thread-nav-item-glyph">&#8593;</span>
+                        <span class="thread-nav-item-text">@anc.Label</span>
+                    </a>
+                }
+                <div class="thread-nav-item thread-nav-current" title="@threadPath">
+                    <span class="thread-nav-item-glyph">&#9679;</span>
+                    <span class="thread-nav-item-text">@(string.IsNullOrWhiteSpace(ThreadViewModel?.Name) ? "This thread" : ThreadViewModel!.Name)</span>
+                </div>
+                @foreach (var child in childThreads)
+                {
+                    <a class="thread-nav-item thread-nav-child" href="/@child.Path" title="@child.Path">
+                        <span class="thread-nav-item-glyph">&#8627;</span>
+                        <span class="thread-nav-item-text">@(child.Name ?? child.Id)</span>
+                    </a>
+                }
+            </div>
+
+            <div class="thread-nav-section thread-nav-others">
+                <div class="thread-nav-section-label">
+                    <span>Other open threads</span>
+                    @if (others.Count > 0) { <span class="thread-nav-count">@others.Count</span> }
+                    <span class="thread-nav-hint" title="Option-Tab cycles through them">&#8997;&#8677;</span>
+                </div>
+                @if (others.Count == 0)
+                {
+                    <div class="thread-nav-empty">No other open threads</div>
+                }
+                else
+                {
+                    @foreach (var t in others.Take(30))
+                    {
+                        <a class="thread-nav-item" href="/@t.Path" title="@t.Path">
+                            <span class="thread-nav-item-glyph">&#9211;</span>
+                            <span class="thread-nav-item-text">@(t.Name ?? t.Id)</span>
+                        </a>
+                    }
+                }
+            </div>
+        </nav>
+    }
+    else if (ShowThreadNav)
+    {
+        <button class="thread-nav-reveal" @onclick="CycleNavLayout" title="Show thread navigation">
+            <FluentIcon Value="@(new Icons.Regular.Size16.Navigation())" Color="Color.Neutral" />
+        </button>
+    }
+    <div class="thread-nav-body">
     <!-- Message history display (hidden in compact/dashboard mode) -->
     @if (!ViewModel.HideEmptyState)
     {
@@ -738,6 +823,8 @@ else
     </div>
     }
     </div> @* /thread-chat-bottom *@
+    </div> @* /thread-nav-body *@
+    </div> @* /thread-nav-shell *@
 }
 
 </div>
