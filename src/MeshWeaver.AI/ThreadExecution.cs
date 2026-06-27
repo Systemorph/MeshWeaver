@@ -195,7 +195,11 @@ internal static class ThreadExecution
             // Pair each emission with its current Status so DistinctUntilChanged
             // dedupes on the Status field only — concurrent field updates that
             // happen while Status stays StartingExecution must NOT re-fire.
-            .Select(n => new { Node = n, Status = (n?.Content as MeshThread)?.Status })
+            // ContentAs (deserialize), not `as`: the own stream is NOT guaranteed typed-Content —
+            // when the polymorphic $type doesn't resolve it stays a JsonElement, and `as` → null
+            // flip-flops Status StartingExecution↔null, defeating DistinctUntilChanged(Status) and
+            // re-firing the claim (mitigated by the idempotent CAS, but still wrong).
+            .Select(n => new { Node = n, Status = n.ContentAs<MeshThread>(parentHub.JsonSerializerOptions)?.Status })
             .DistinctUntilChanged(x => x.Status)
             .Where(x => x.Status == ThreadExecutionStatus.StartingExecution)
             .Select(x => x.Node)

@@ -6,6 +6,7 @@ using MeshWeaver.Domain;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -49,7 +50,10 @@ public static class ThreadMessageLayoutAreas
         return syncStream!
             .Select(change =>
             {
-                var msg = change.Value?.Content as ThreadMessage;
+                // ContentAs (deserialize), not `as`: the sync stream alternates typed↔JsonElement,
+                // and `as` → null on the JsonElement frames flip-flops this control real↔null,
+                // defeating the framework RenderArea dedup → output-message render storm.
+                var msg = change.Value.ContentAs<ThreadMessage>(host.Hub.JsonSerializerOptions);
                 if (msg == null) return (UiControl?)null;
 
                 var stack = Controls.Stack
