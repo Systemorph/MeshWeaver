@@ -76,7 +76,7 @@ public partial class CompileProgressIndicator : IDisposable
             // through IMeshNodeStreamCache — process-wide shared handle,
             // joined by every GUI watching the same NodeType.
             compileObs = Hub.GetMeshNodeStream(NodeTypePath)
-                .Select(n => n?.Content is NodeTypeDefinition def
+                .Select(n => n.ContentAs<NodeTypeDefinition>(Hub.JsonSerializerOptions) is { } def
                              && def.CompilationStatus is CompilationStatus.Compiling or CompilationStatus.Error
                     ? new CompileState(NodeTypePath, def.CompilationStatus,
                         def.LastCompilationActivityPath, def.CompilationError)
@@ -93,11 +93,11 @@ public partial class CompileProgressIndicator : IDisposable
             compileObs = workspace.GetQuery("nodetypes-compiling", "nodeType:NodeType")
                 .Select(snapshot =>
                 {
-                    var node = snapshot.FirstOrDefault(n => n.Content is NodeTypeDefinition d
+                    var node = snapshot.FirstOrDefault(n => n.ContentAs<NodeTypeDefinition>(Hub.JsonSerializerOptions) is { } d
                             && d.CompilationStatus == CompilationStatus.Compiling)
-                        ?? snapshot.FirstOrDefault(n => n.Content is NodeTypeDefinition d
+                        ?? snapshot.FirstOrDefault(n => n.ContentAs<NodeTypeDefinition>(Hub.JsonSerializerOptions) is { } d
                             && d.CompilationStatus == CompilationStatus.Error);
-                    return node?.Content is NodeTypeDefinition def
+                    return node.ContentAs<NodeTypeDefinition>(Hub.JsonSerializerOptions) is { } def
                         ? new CompileState(node.Path, def.CompilationStatus,
                             def.LastCompilationActivityPath, def.CompilationError)
                         : new CompileState(null, null, null, null);
@@ -144,7 +144,7 @@ public partial class CompileProgressIndicator : IDisposable
         if (!active || string.IsNullOrEmpty(activityPath)) return;
 
         _activitySub = Hub.GetMeshNodeStream(activityPath)
-            .Select(n => (n?.Content as ActivityLog)?.Messages is { Count: > 0 } msgs
+            .Select(n => n.ContentAs<ActivityLog>(Hub.JsonSerializerOptions)?.Messages is { Count: > 0 } msgs
                 ? msgs[^1].Message
                 : null)
             .DistinctUntilChanged()

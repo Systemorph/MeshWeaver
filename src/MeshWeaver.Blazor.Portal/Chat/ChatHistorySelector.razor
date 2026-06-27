@@ -240,7 +240,7 @@
                 {
                     var items = change.Items
                         .OrderByDescending(n => n.LastModified)
-                        .Select(n => new ThreadItem(n.Path ?? n.Id, n, n.Content as MeshThread ?? new MeshThread()))
+                        .Select(n => new ThreadItem(n.Path ?? n.Id, n, n.ContentAs<MeshThread>(Hub.JsonSerializerOptions) ?? new MeshThread()))
                         .Where(c => Scope == null || GetPathScope(c.Path) == Scope)
                         .ToList();
 

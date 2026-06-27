@@ -1,8 +1,10 @@
 @using Microsoft.FluentUI.AspNetCore.Components.Icons.Regular
 @using MeshWeaver.Mesh
 @using MeshWeaver.Mesh.Services
+@using MeshWeaver.Messaging
 @implements IDisposable
 @inject IDialogService DialogService
+@inject IMessageHub Hub
 
 <FluentButton BackgroundColor="transparent" OnClick="ToggleNotificationCenterAsync" Title="Notifications">
     @if (unreadCount > 0)
@@ -44,7 +46,7 @@
             {
                 var items = change.Items ?? Array.Empty<MeshNode>();
                 var newCount = items.Count(n =>
-                    (n.Content as Notification)?.IsRead == false);
+                    n.ContentAs<Notification>(Hub.JsonSerializerOptions)?.IsRead == false);
                 if (newCount != unreadCount)
                 {
                     unreadCount = newCount;

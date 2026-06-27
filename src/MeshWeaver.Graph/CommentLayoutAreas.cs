@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
@@ -105,7 +106,11 @@ public static class CommentLayoutAreas
         string editStateId, bool[] initialized, string currentUser,
         bool canComment = true, bool canDelete = true)
     {
-        var comment = node?.Content as Comment;
+        // ContentAs (deserialize), not `as Comment`: this view is data-bound via CombineLatest on
+        // GetMeshNodeStream, whose frames alternate typed↔JsonElement; `as` → null on JsonElement
+        // frames would flip the whole overview to the "No comment content" placeholder and back →
+        // render storm.
+        var comment = node.ContentAs<Comment>(host.Hub.JsonSerializerOptions);
         if (comment == null)
         {
             return Controls.Html("<div style=\"color: var(--neutral-foreground-hint); padding: 8px;\">No comment content</div>");
@@ -553,7 +558,10 @@ public static class CommentLayoutAreas
             return stack.WithView(Controls.Html("<p style=\"color: var(--warning-color);\">Comment not found.</p>"));
         }
 
-        var comment = node.Content as Comment;
+        // ContentAs (deserialize), not `as Comment`: this view is data-bound via CombineLatest on
+        // GetMeshNodeStream; `as` → null on the JsonElement frames flips the author/permission gates
+        // and re-renders → storm.
+        var comment = node.ContentAs<Comment>(host.Hub.JsonSerializerOptions);
 
         // Permission check — need Comment permission
         if (!canComment)
@@ -608,12 +616,15 @@ public static class CommentLayoutAreas
     public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
         return host.Workspace.GetMeshNodeStream()
-            .Select(node => BuildThumbnail(node));
+            .Select(node => BuildThumbnail(node, host.Hub.JsonSerializerOptions));
     }
 
-    internal static UiControl BuildThumbnail(MeshNode? node)
+    internal static UiControl BuildThumbnail(MeshNode? node, JsonSerializerOptions options)
     {
-        var comment = node?.Content as Comment;
+        // ContentAs (deserialize), not `as Comment`: data-bound via .Select on GetMeshNodeStream,
+        // whose frames alternate typed↔JsonElement; `as` → null on JsonElement frames would flip the
+        // author/preview text to "Unknown"/empty and back → thumbnail render storm.
+        var comment = node.ContentAs<Comment>(options);
         var author = comment?.Author ?? "Unknown";
         var preview = comment?.Text ?? "";
         if (preview.Length > 50) preview = preview[..47] + "...";
