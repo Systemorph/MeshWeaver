@@ -62,6 +62,30 @@ spec:
             - name: "memex-users"
               mountPath: "/mnt/users"
           imagePullPolicy: "IfNotPresent"
+          # 🚦 Zero-502 rollouts. Without a readiness probe a pod counts as "Ready" the moment its
+          # container starts — long before the app serves (Orleans + mesh + static-repo import take
+          # tens of seconds) — so a rollout sends traffic to a still-booting pod → 502. /health
+          # (all health checks pass) is the "actually serving" signal; combined with maxUnavailable:0
+          # below the old pod is kept until the new one passes /health.
+          startupProbe:
+            # Generous window for a cold boot (schema provisioning + static import). While this is
+            # failing, readiness/liveness are suspended, so a slow boot is never flagged unhealthy.
+            httpGet: { path: /health, port: 8080 }
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /health, port: 8080 }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            # Self-heal a genuinely wedged pod (the connection-exhaustion wedge we hit). Conservative
+            # — only a sustained /alive failure restarts it, so a transient blip never loops.
+            httpGet: { path: /alive, port: 8080 }
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 6
       volumes:
         - name: "memex-data"
           emptyDir: {}
@@ -77,5 +101,9 @@ spec:
   strategy:
     rollingUpdate:
       maxSurge: 1
-      maxUnavailable: 1
+      # 0 → the OLD pod is kept serving until the NEW pod passes its readiness probe (/health). With
+      # a single replica this is what turns a rollout from "brief outage" into zero-downtime: traffic
+      # only moves once the replacement actually serves. (If the new pod can't come up — e.g. the PG
+      # connection-exhaustion wedge — the rollout simply stalls with the old pod still serving, no 502.)
+      maxUnavailable: 0
     type: "RollingUpdate"
