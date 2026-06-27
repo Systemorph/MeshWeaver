@@ -61,11 +61,20 @@ public static class PartitionSourceFingerprint
     }
 
     /// <summary>
-    /// A stable per-node token for the unversioned case: the display metadata plus the serialised
-    /// <see cref="MeshNode.Content"/>, SHA-256'd. Generalises the per-doc hash
-    /// <c>DocumentationBackfill.ComputeHash</c> used. The serialised content (not the live object)
-    /// is what makes the token change when the authored markdown changes. Length-prefix framing
-    /// keeps it injective even though the JSON field can contain arbitrary characters.
+    /// A stable per-node token for the unversioned case: ALL source-meaningful properties plus the
+    /// serialised <see cref="MeshNode.Content"/>, SHA-256'd. Capturing every source prop (not just the
+    /// display fields) means ANY authored change re-imports — e.g. stamping <see cref="MeshNode.Order"/>
+    /// on the harness nodes now changes the fingerprint, so existing deployments pick the fix up on the
+    /// next deploy instead of silently keeping the stale import.
+    ///
+    /// <para>Deliberately NOT <c>node.GetHashCode()</c>: a record's hash folds <c>string.GetHashCode()</c>
+    /// (per-process randomised since .NET Core) and hashes collection props by reference, so it differs
+    /// every process — a non-deterministic fingerprint would re-import on every pod/restart. We hash a
+    /// DETERMINISTIC serialisation instead. Runtime/audit fields (CreatedDate/By, LastModified/By,
+    /// Version) and the un-serialisable <c>Func</c> config fields (HubConfiguration,
+    /// GlobalServiceConfigurations) are EXCLUDED — they are not source content. The derived
+    /// <c>PreRenderedHtml</c> cache is excluded for the same reason (it is computed from Content).
+    /// Length-prefix framing keeps the concatenation injective.</para>
     /// </summary>
     private static string NodeContentToken(MeshNode node, JsonSerializerOptions? options)
     {
@@ -78,6 +87,14 @@ public static class PartitionSourceFingerprint
         AppendFramed(sb, node.Category ?? string.Empty);
         AppendFramed(sb, node.Icon ?? string.Empty);
         AppendFramed(sb, node.NodeType ?? string.Empty);
+        AppendFramed(sb, node.MainNode ?? string.Empty);
+        AppendFramed(sb, node.Order?.ToString(CultureInfo.InvariantCulture) ?? string.Empty);
+        AppendFramed(sb, node.State.ToString());
+        AppendFramed(sb, node.SyncBehavior.ToString());
+        AppendFramed(sb, node.IsDefinitionOnly ? "1" : "0");
+        AppendFramed(sb, node.IsSatelliteType ? "1" : "0");
+        AppendFramed(sb, node.DesiredId ?? string.Empty);
+        AppendFramed(sb, node.ExcludeFromContext is null ? string.Empty : string.Join(",", node.ExcludeFromContext));
         AppendFramed(sb, contentJson);
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString())));
     }
