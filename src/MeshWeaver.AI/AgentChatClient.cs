@@ -469,20 +469,29 @@ public class AgentChatClient : IAgentChat
         // Dynamic part: context (changes per navigation)
         if (Context != null)
         {
-            var contextPath = Context.Path ?? Context.Address?.ToString();
             messageText.AppendLine("# Current Application Context");
             messageText.AppendLine();
+            messageText.AppendLine(
+                "The node, layout area, and query parameters the user is viewing right now (JSON, serialized with the mesh's standard options). This is a REFERENCE — load node CONTENT on demand with the Get tool; it is NOT inlined here.");
+            messageText.AppendLine("```json");
+            // 🎯 JSON-serialize the navigation context with the mesh's normal options: the OWNER
+            // (main-node) address, the layout area + id, the optional query parameters as KVP, and
+            // the current node's IDENTITY (path/type/name) — never its content (reference + tool-load).
+            messageText.AppendLine(JsonSerializer.Serialize(new
+            {
+                address = Context.Address?.ToString() ?? Context.Context,
+                area = Context.LayoutArea?.Area,
+                areaId = Context.LayoutArea?.Id,
+                parameters = Context.Parameters,
+                node = Context.Node is null
+                    ? null
+                    : new { path = Context.Node.Path, nodeType = Context.Node.NodeType, name = Context.Node.Name }
+            }, hub.JsonSerializerOptions));
+            messageText.AppendLine("```");
+            messageText.AppendLine();
 
-            // Show the current node
             if (Context.Node != null)
-            {
-                messageText.AppendLine($"**Current node:** `{Context.Node.Path}` (type: {Context.Node.NodeType}, name: {Context.Node.Name})");
-                messageText.AppendLine("This node already exists. To modify it, use Get then Update — do NOT Create it again.");
-            }
-            else if (!string.IsNullOrEmpty(contextPath))
-            {
-                messageText.AppendLine($"**Current path:** `{contextPath}`");
-            }
+                messageText.AppendLine("The current node already exists. To modify it, use Get then Update — do NOT Create it again.");
             messageText.AppendLine();
 
             // 🚨 No await foreach over IMeshService.QueryAsync here.

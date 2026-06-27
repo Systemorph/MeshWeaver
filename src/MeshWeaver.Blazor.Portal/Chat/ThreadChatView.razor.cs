@@ -885,6 +885,13 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             var navNs = NormalizeContextPath(navMainNode ?? string.Empty);
             var safeContext = MeshWeaver.AI.AgentPickerProjection.IsReservedPartition(initialContext)
                 ? null : initialContext;
+            // 🎯 Carry the FULL navigation reference to the agent: the layout area + the optional
+            // query parameters as KVP (the main-node address rides as safeContext/contextPath).
+            // JSON-serialized with the mesh's standard options; the agent loads node content via Get.
+            var navReference = MeshWeaver.AI.NavigationContextProjection.ToReference(_currentNavContext);
+            var contextReference = navReference is null
+                ? null
+                : System.Text.Json.JsonSerializer.Serialize(navReference, Hub.JsonSerializerOptions);
             var ns = !string.IsNullOrEmpty(navNs)
                 ? navNs
                 : !string.IsNullOrEmpty(safeContext)
@@ -935,7 +942,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                         Harness = boundHarness,
                         AgentName = boundAgentPath,
                         ModelName = modelForThread,
-                        ContextPath = safeContext
+                        ContextPath = safeContext,
+                        ContextReference = contextReference
                     },
                     onCreated: node =>
                     {

@@ -748,7 +748,8 @@ internal static class ThreadExecution
         string? ModelName,
         string? Harness,
         string? ContextPath,
-        IReadOnlyList<string>? Attachments);
+        IReadOnlyList<string>? Attachments,
+        string? ContextReference = null);
 
     /// <summary>
     /// Runs ONE agent round as a cold observable that completes when the round's terminal
@@ -1207,12 +1208,27 @@ internal static class ThreadExecution
                 {
                     if (!string.IsNullOrEmpty(request.ContextPath))
                     {
-                        client.SetContext(new AgentContext
+                        // Deserialize the carried navigation reference (layout area + query params
+                        // as KVP) and assemble the full agent context: main-node address + area +
+                        // params + the loaded node identity. Reference only — content via Get.
+                        NavigationReference? navRef = null;
+                        if (!string.IsNullOrEmpty(request.ContextReference))
                         {
-                            Address = new Address(request.ContextPath),
-                            Context = request.ContextPath,
-                            Node = contextNode
-                        });
+                            try
+                            {
+                                navRef = JsonSerializer.Deserialize<NavigationReference>(
+                                    request.ContextReference, parentHub.JsonSerializerOptions);
+                            }
+                            catch (Exception ex)
+                            {
+                                logger.LogWarning(ex,
+                                    "[ThreadExec] Failed to parse ContextReference for {ContextPath}; shipping address+node only",
+                                    request.ContextPath);
+                            }
+                        }
+
+                        client.SetContext(
+                            NavigationContextProjection.ToAgentContext(request.ContextPath, navRef, contextNode));
                     }
 
                 if (!string.IsNullOrEmpty(request.AgentName))

@@ -141,6 +141,68 @@ public class NavigationContextProjectionTest
     }
 
     [Fact]
+    public void ToReference_CapturesAreaAndParameters()
+    {
+        var ctx = Nav("Doc/Page", area: "VersionDiff", id: "v12",
+            args: new Dictionary<string, string> { ["from"] = "5", ["to"] = "8" });
+
+        var reference = NavigationContextProjection.ToReference(ctx);
+
+        Assert.NotNull(reference);
+        Assert.Equal("VersionDiff", reference!.Area);
+        Assert.Equal("v12", reference.AreaId);
+        Assert.Equal("5", reference.Parameters!["from"]);
+    }
+
+    [Fact]
+    public void ToReference_NoAreaNoParameters_IsNull()
+    {
+        // Nothing extra to carry beyond the main-node address (which rides as the context path).
+        Assert.Null(NavigationContextProjection.ToReference(Nav("Doc/Page")));
+        Assert.Null(NavigationContextProjection.ToReference(null));
+    }
+
+    [Fact]
+    public void NavigationReference_RoundTripsThroughJson()
+    {
+        // The reference is JSON-serialized into the carry field and deserialized at the round.
+        // Pin the wire round-trip so a serialization change can't silently drop area/params.
+        var reference = NavigationContextProjection.ToReference(
+            Nav("Doc/Page", area: "VersionDiff", id: "v12",
+                args: new Dictionary<string, string> { ["from"] = "5", ["to"] = "8" }));
+
+        var json = JsonSerializer.Serialize(reference, new JsonSerializerOptions());
+        var back = JsonSerializer.Deserialize<NavigationReference>(json, new JsonSerializerOptions());
+
+        Assert.NotNull(back);
+        Assert.Equal("VersionDiff", back!.Area);
+        Assert.Equal("v12", back.AreaId);
+        Assert.Equal("8", back.Parameters!["to"]);
+    }
+
+    [Fact]
+    public void ServerSideAssembly_MergesMainNodePathReferenceAndNode()
+    {
+        // ThreadExecution path: main node resolved (the context path), the carried reference
+        // (area + params), and the loaded node identity combine into the shipped context.
+        var reference = new NavigationReference
+        {
+            Area = "VersionDiff",
+            AreaId = "v12",
+            Parameters = new Dictionary<string, string> { ["from"] = "5" }.ToImmutableDictionary(),
+        };
+        var node = MeshNode.FromPath("Doc/Page") with { NodeType = "Markdown", Name = "Page" };
+
+        var agentContext = NavigationContextProjection.ToAgentContext("Doc/Page", reference, node);
+
+        Assert.Equal("Doc/Page", agentContext.Address!.ToString());
+        Assert.Equal("VersionDiff", agentContext.LayoutArea!.Area);
+        Assert.Equal("v12", agentContext.LayoutArea.Id);
+        Assert.Equal("5", agentContext.Parameters!["from"]);
+        Assert.Same(node, agentContext.Node);
+    }
+
+    [Fact]
     public void SerializesWithStandardOptions_CarryingAddressAreaAndParameters()
     {
         // The context object is JSON-serialized with the mesh's normal options before it is

@@ -70,6 +70,15 @@ public record ThreadComposer
     public string? ContextPath { get; init; }
 
     /// <summary>
+    /// The serialized navigation REFERENCE (layout area + optional query parameters as KVP) the
+    /// next thread should carry, JSON of <see cref="NavigationReference"/>. The main-node address
+    /// travels separately as <see cref="ContextPath"/>; this adds the area + params so the agent
+    /// knows the exact view the user submitted from. Reference only — content is loaded via Get.
+    /// </summary>
+    [Editable(false)]
+    public string? ContextReference { get; init; }
+
+    /// <summary>
     /// Path of the thread the composer's last Send created — the data-bound "navigate here"
     /// signal. Stamped by the Send click in the SAME composer write that empties the draft;
     /// the side panel observes the composer node, opens the thread, and clears this field.
@@ -94,6 +103,7 @@ public record ThreadComposer
                && AgentName == other.AgentName
                && ModelName == other.ModelName
                && ContextPath == other.ContextPath
+               && ContextReference == other.ContextReference
                && OpenThreadPath == other.OpenThreadPath
                && (Attachments ?? []).SequenceEqual(other.Attachments ?? []);
     }
@@ -107,6 +117,7 @@ public record ThreadComposer
         hash.Add(AgentName);
         hash.Add(ModelName);
         hash.Add(ContextPath);
+        hash.Add(ContextReference);
         hash.Add(OpenThreadPath);
         foreach (var attachment in Attachments ?? [])
             hash.Add(attachment);

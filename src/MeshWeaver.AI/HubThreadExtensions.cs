@@ -67,7 +67,8 @@ public static class HubThreadExtensions
         string? mainNode = null,
         string? speakingId = null,
         string? harness = null,
-        ThreadComposer? composer = null)
+        ThreadComposer? composer = null,
+        string? contextReference = null)
     {
         ArgumentNullException.ThrowIfNull(hub);
         if (string.IsNullOrEmpty(namespacePath))
@@ -115,7 +116,8 @@ public static class HubThreadExtensions
                 AgentName = agentName,
                 ModelName = modelName,
                 Harness = harness,
-                ContextPath = contextPath
+                ContextPath = contextPath,
+                ContextReference = contextReference
             })
             with { MessageContent = null, Attachments = null, OpenThreadPath = null };
 

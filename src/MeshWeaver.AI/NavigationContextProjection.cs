@@ -1,8 +1,28 @@
+using System.Collections.Immutable;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.AI;
+
+/// <summary>
+/// The serializable navigation REFERENCE carried from the composer to the agent round alongside
+/// the main-node path (<c>ContextPath</c>): the layout <see cref="Area"/> / <see cref="AreaId"/>
+/// and the optional query parameters as key/value pairs. JSON-serialized with the mesh's standard
+/// options. The address is NOT here — it travels as the plain main-node path. The agent loads node
+/// CONTENT on demand via its Get tool; this is reference only.
+/// </summary>
+public sealed record NavigationReference
+{
+    /// <summary>The layout area name the user is viewing (e.g. <c>Overview</c>, <c>VersionDiff</c>).</summary>
+    public string? Area { get; init; }
+
+    /// <summary>The layout area id, when the area is parameterized.</summary>
+    public string? AreaId { get; init; }
+
+    /// <summary>The optional query parameters as key/value pairs (the <c>?k=v&amp;…</c> on the URL).</summary>
+    public ImmutableDictionary<string, string>? Parameters { get; init; }
+}
 
 /// <summary>
 /// Projects the page the user is currently viewing (<see cref="NavigationContext"/>) into the
@@ -46,6 +66,52 @@ public static class NavigationContextProjection
             Parameters = parameters,
             // Reference only — the node identity (path/type/name); content is loaded via Get.
             Node = ctx.Node,
+        };
+    }
+
+    /// <summary>
+    /// Extracts the serializable navigation reference (area + params) from the current context,
+    /// or <see langword="null"/> when there is neither an area nor any parameters to carry.
+    /// The main-node address is carried separately as the plain context path.
+    /// </summary>
+    public static NavigationReference? ToReference(NavigationContext? ctx)
+    {
+        if (ctx is null)
+            return null;
+
+        var area = string.IsNullOrWhiteSpace(ctx.Area) ? null : ctx.Area;
+        var parameters = ctx.Args is { Count: > 0 } ? ctx.Args : null;
+
+        if (area is null && parameters is null)
+            return null;
+
+        return new NavigationReference
+        {
+            Area = area,
+            AreaId = area is null ? null : ctx.Id,
+            Parameters = parameters,
+        };
+    }
+
+    /// <summary>
+    /// Builds the <see cref="AgentContext"/> from the resolved main-node path plus a carried
+    /// <see cref="NavigationReference"/> (area + params). Used server-side at round execution where
+    /// the main node is already resolved (the context path) and the node has been loaded.
+    /// </summary>
+    public static AgentContext ToAgentContext(string? mainNodePath, NavigationReference? reference, MeshNode? node)
+    {
+        if (string.IsNullOrEmpty(mainNodePath))
+            return new AgentContext { Node = node };
+
+        return new AgentContext
+        {
+            Address = new Address(mainNodePath),
+            Context = mainNodePath,
+            LayoutArea = string.IsNullOrEmpty(reference?.Area)
+                ? null
+                : new LayoutAreaReference(reference.Area) { Id = reference.AreaId },
+            Parameters = reference?.Parameters,
+            Node = node,
         };
     }
 

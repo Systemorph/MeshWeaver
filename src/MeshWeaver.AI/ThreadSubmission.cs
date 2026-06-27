@@ -121,7 +121,8 @@ internal static class ThreadSubmission
             lastDrained?.ModelName ?? composer?.ModelName,
             lastDrained?.Harness ?? composer?.Harness,
             lastDrained?.ContextPath ?? composer?.ContextPath,
-            lastDrained?.Attachments);
+            lastDrained?.Attachments,
+            composer?.ContextReference);
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -210,7 +211,8 @@ internal sealed record RoundDispatch(
     string? ModelName,
     string? Harness,
     string? ContextPath,
-    IReadOnlyList<string>? Attachments);
+    IReadOnlyList<string>? Attachments,
+    string? ContextReference = null);
 
 /// <summary>
 /// Server-side watcher: reactively dispatches an execution round whenever the thread
@@ -980,7 +982,8 @@ internal static class ThreadSubmissionServer
                             ModelName: dispatch.ModelName,
                             Harness: dispatch.Harness,
                             ContextPath: dispatch.ContextPath,
-                            Attachments: dispatch.Attachments),
+                            Attachments: dispatch.Attachments,
+                            ContextReference: dispatch.ContextReference),
                         userCtx)
                         .Subscribe(
                             _ => { },
