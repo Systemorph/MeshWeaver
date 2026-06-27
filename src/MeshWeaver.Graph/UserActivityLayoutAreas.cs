@@ -187,6 +187,21 @@ public static class UserActivityLayoutAreas
         // (c) The fluent catalog — the declarative TabsControl + MeshSearches.
         dashboard = dashboard.WithView(BuildCatalog(nodePath, nodeOwnerId));
 
+        // (c2) Search area — a full, always-visible search box over the owner's OWN items, shown right
+        // under the catalog (My Items). This lives in the LIVE dashboard template, so an un-customized
+        // home always serves the latest version of it; a future per-user override (the Space.Body
+        // pattern) would replace this whole dashboard, in which case it is no longer served.
+        dashboard = dashboard
+            .WithView(Controls.Markdown("### Search my items"))
+            .WithView(Controls.MeshSearch
+                .WithHiddenQuery($"namespace:{nodeOwnerId} is:main context:search sort:LastModified-desc")
+                .WithPlaceholder("Search your items…")
+                .WithRenderMode(MeshSearchRenderMode.Grouped)
+                .WithSectionCounts(true)
+                .WithMaxColumns(4)
+                .WithItemLimit(50)
+                .WithReactiveMode(true));
+
         // (d) Chat composer pinned at the bottom — the per-user {owner}/Chat node's "Overview" area,
         // which returns the SAME ThreadChatControl the side panel mounts for a new chat (Monaco editor,
         // harness/agent/model selectors, attachments, Send) so the home composer is 1:1 the side-panel

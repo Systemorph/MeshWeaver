@@ -456,6 +456,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (!string.IsNullOrEmpty(threadPath))
             SetupChildThreadsSubscription(threadPath);
 
+        // New-chat composer mounting (e.g. opened by "new thread from cell" while the panel was closed):
+        // pick up a one-shot pending draft. Harmless in every other case (no-op when there's no draft).
+        SeedPendingDraftIfAny();
+
         Logger.LogDebug("[ThreadChat:{InstanceId}] OnInitialized completed", _instanceId);
     }
 
@@ -1439,6 +1443,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             try { await _descEditField.Element.FocusAsync(); }
             catch { /* field may not be focusable yet — harmless */ }
         }
+        if (_seedMonacoOnRender && monacoEditor is not null)
+        {
+            _seedMonacoOnRender = false;
+            try { await monacoEditor.SetValueAsync(MessageText ?? ""); }
+            catch { /* editor may not be ready yet — the Value binding still seeds it */ }
+        }
     }
 
     /// <summary>
@@ -2097,6 +2107,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 case "New":
                     viewMode = ChatViewMode.Chat;
                     SidePanelState.SetContentPath(null);
+                    // Pick up a one-shot draft from "new thread from cell" (already-mounted composer case).
+                    SeedPendingDraftIfAny();
                     break;
                 case "Resume":
                     _ = SwitchToResumeModeAsync();
@@ -2309,6 +2321,38 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     {
         if (e.AltKey && string.Equals(e.Key, "Tab", StringComparison.OrdinalIgnoreCase))
             CycleToNextOpenThread();
+    }
+
+    // ─── New thread from a cell ───
+
+    /// <summary>
+    /// "New thread from this cell": opens the side-panel composer PREFILLED with the cell's text — the
+    /// thread is created only when the user submits. The CURRENT thread stays open in the main view. The
+    /// draft rides through <see cref="SidePanelState"/>; the side-panel new-chat composer consumes it.
+    /// </summary>
+    private void NewThreadFromCell(string msgId)
+    {
+        var text = GetMessageState(msgId)?.Text;
+        if (string.IsNullOrWhiteSpace(text)) return;
+        SidePanelState.OpenNewThreadWithDraft(text);
+    }
+
+    private bool _seedMonacoOnRender;
+
+    /// <summary>
+    /// Seeds the composer (Monaco) from a one-shot pending draft on <see cref="SidePanelState"/>, if any —
+    /// the "new thread from cell" hand-off. ONE-SHOT (the draft is cleared on read) and only in NEW-CHAT
+    /// mode (no thread) with an empty editor, so it never clobbers what the user is typing.
+    /// </summary>
+    private void SeedPendingDraftIfAny()
+    {
+        if (!string.IsNullOrEmpty(threadPath) || !string.IsNullOrEmpty(MessageText))
+            return;
+        var draft = SidePanelState.ConsumePendingComposerDraft();
+        if (string.IsNullOrEmpty(draft)) return;
+        MessageText = draft;
+        _seedMonacoOnRender = true;   // push into Monaco after render (it may not be mounted yet)
+        StateHasChanged();
     }
 
     // Thread creation is handled server-side via CreateNodeRequest.

@@ -303,13 +303,17 @@ else
                             {
                                 <MarkdownView ViewModel="@(new MarkdownControl(state.Text).WithStyle("background: transparent;"))"
                                               Stream="@Stream" Area="@($"md-{msgId}")" />
-                            }
-                            @if (isUser && !IsReadOnlyThread)
-                            {
+                                @* Hover actions. Edit/Resubmit/Delete only for the user's OWN cells; "New
+                                   thread from this cell" is available on ANY input/output cell — it opens a
+                                   fresh side-panel composer prefilled with this cell's text (created on submit). *@
                                 <div class="thread-msg-inline-actions">
-                                    <button class="thread-msg-action-btn" @onclick="() => StartEdit(msgId)" title="Edit">&#9998;</button>
-                                    <button class="thread-msg-action-btn" @onclick="() => ResubmitMessage(msgId)" title="Resubmit">&#8635;</button>
-                                    <button class="thread-msg-action-btn" @onclick="() => DeleteFromMessage(msgId)" title="Delete from here">&#128465;</button>
+                                    @if (isUser && !IsReadOnlyThread)
+                                    {
+                                        <button class="thread-msg-action-btn" @onclick="() => StartEdit(msgId)" title="Edit">&#9998;</button>
+                                        <button class="thread-msg-action-btn" @onclick="() => ResubmitMessage(msgId)" title="Resubmit">&#8635;</button>
+                                        <button class="thread-msg-action-btn" @onclick="() => DeleteFromMessage(msgId)" title="Delete from here">&#128465;</button>
+                                    }
+                                    <button class="thread-msg-action-btn" @onclick="() => NewThreadFromCell(msgId)" title="New thread from this cell">&#8599;</button>
                                 </div>
                             }
                         }
