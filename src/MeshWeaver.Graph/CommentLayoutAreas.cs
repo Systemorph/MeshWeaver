@@ -66,7 +66,7 @@ public static class CommentLayoutAreas
         var currentUser = accessService?.Context?.Name ?? "";
 
         var editStateId = $"editState_comment_{hubPath.Replace("/", "_")}";
-        var initialized = new[] { false, false }; // [0]=editState, [1]=repliesExpanded
+        var initialized = new[] { false, false, false }; // [0]=editState, [1]=repliesExpanded, [2]=replyForm
 
         var parentPath = hubPath.Contains('/') ? hubPath[..hubPath.LastIndexOf('/')] : hubPath;
         var permissionsStream = host.Hub.GetEffectivePermissions(parentPath);
@@ -192,6 +192,31 @@ public static class CommentLayoutAreas
                 container = container.WithView(new MarkdownControl(comment.Text)
                     .WithStyle("font-size: 0.85rem; line-height: 1.4;"));
             }
+        }
+
+        // Inline reply create-form — surfaces when the ↩ Reply button writes the replyPath_* data item
+        // (see BuildReplyButton). Mirrors the edit toggle above: the click sets a data item, this view
+        // reacts and renders the editor. Without this wiring the ↩ click created a transient reply node
+        // but no editor ever rendered — BuildReplyCreateForm was orphaned (defined, never called). Gated
+        // on canAct (a logged-in user), matching the Reply button's own visibility gate. When no reply
+        // is in progress the view emits null → the area renders nothing (cleared after Cancel/Create).
+        if (canAct)
+        {
+            var replyPathStateId = $"replyPath_{hubPath.Replace("/", "_")}";
+            container = container.WithView((h, _) =>
+            {
+                if (!initialized[2])
+                {
+                    h.UpdateData(replyPathStateId, "");
+                    initialized[2] = true;
+                }
+
+                return h.Stream.GetDataStream<string>(replyPathStateId)
+                    .DistinctUntilChanged()
+                    .Select(replyPath => string.IsNullOrEmpty(replyPath)
+                        ? (UiControl?)null
+                        : BuildReplyCreateForm(h, replyPath, replyPathStateId));
+            });
         }
 
         // Replies section — data-bound from comment.Replies (same pattern as Thread.Messages)
