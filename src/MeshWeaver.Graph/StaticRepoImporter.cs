@@ -1,5 +1,7 @@
+using System.Collections.Immutable;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
@@ -474,6 +476,15 @@ public static class StaticRepoImporter
                     .GroupBy(n => n.Path, StringComparer.OrdinalIgnoreCase)
                     .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
+                // Per-node incremental diff. The previous import stored each source node's token in the
+                // manifest ({partition}/_Activity/import-manifest — an ActivityLog whose ReturnValue holds
+                // the {path→token} map). It's a descendant of the subtree we already read, so parse it from
+                // `existing` — no extra query. A node whose token still matches AND is present is upserted-
+                // skipped below; a missing/empty manifest (first import, or a wipe) hashes everything as
+                // changed → full import (safe). This is what makes a one-node edit re-import one node.
+                var manifest = ParseManifest(
+                    existing.GetValueOrDefault(ManifestPath(source.Partition)), hub.JsonSerializerOptions);
+
                 // Subtrees claimed wholesale — nothing at or under these paths is synced. A claimed
                 // partition ROOT (authoritative read above) decouples its WHOLE subtree; a child claimed
                 // in the snapshot decouples its own subtree.
@@ -501,6 +512,20 @@ public static class StaticRepoImporter
                         {
                             logger?.LogDebug(
                                 "[StaticRepoImport] {Partition}: skip claimed {Path}", source.Partition, path);
+                            return Observable.Return((Imported: 0, Failed: 0));
+                        }
+
+                        // Incremental skip: unchanged since the last import (same source token) AND the
+                        // node is actually present (so a drifted/deleted node still re-imports). Skips the
+                        // expensive cross-hub upsert + owner re-render. Token is over the RAW source node,
+                        // matching what the manifest stored.
+                        var token = PartitionSourceFingerprint.ComputeNodeToken(sourceNode, hub.JsonSerializerOptions);
+                        if (target is not null
+                            && manifest.TryGetValue(path, out var prevToken)
+                            && string.Equals(prevToken, token, StringComparison.Ordinal))
+                        {
+                            logger?.LogDebug(
+                                "[StaticRepoImport] {Partition}: unchanged, skipping {Path}", source.Partition, path);
                             return Observable.Return((Imported: 0, Failed: 0));
                         }
 
@@ -571,7 +596,10 @@ public static class StaticRepoImporter
                     return pruned.SelectMany(prunedCount =>
                         // Sync content-collection files (the assets behind @@content/<file> embeds)
                         // collection→collection into each owning node — AFTER the node upsert.
-                        SyncContentImports(hub, source, logger).Select(contentCount =>
+                        SyncContentImports(hub, source, logger).SelectMany(contentCount =>
+                        // Persist the per-node manifest LAST (after upserts + prune) so the NEXT import's
+                        // diff sees exactly what's now in the partition. One write; survives prune (_Activity).
+                        WriteManifest(hub, source.Partition, nodes, hub.JsonSerializerOptions, logger).Select(_ =>
                         {
                             // 🚨 Terminal status reflects per-file outcomes: ANY failed upsert →
                             // Warning (the ⚠ lines above pinpoint which files), all-clear →
@@ -597,7 +625,7 @@ public static class StaticRepoImporter
                                 source.Partition, count.Imported, failed, prunedCount, contentCount, fingerprint);
                             return new StaticRepoImportResult(source.Partition, fingerprint,
                                 failed > 0 ? "ImportedWithErrors" : "Imported", count.Imported);
-                        }));
+                        })));
                 });
             })
             .Catch<StaticRepoImportResult, Exception>(ex =>
@@ -818,6 +846,73 @@ public static class StaticRepoImporter
         return access is null
             ? Observable.Defer(write)
             : Observable.Using(() => access.ImpersonateAsSystem(), _ => write());
+    }
+
+    private const string ManifestId = "import-manifest";
+
+    /// <summary>Path of a partition's per-node import manifest (an <c>_Activity</c> node; survives prune).</summary>
+    private static string ManifestPath(string partition) => $"{partition}/_Activity/{ManifestId}";
+
+    /// <summary>
+    /// Parses the <c>{path → source-token}</c> map a prior import stored in the manifest node's
+    /// <see cref="ActivityLog.ReturnValue"/>. Empty on absence / any parse failure → the next import is a
+    /// full (non-incremental) import, never a wrong one.
+    /// </summary>
+    private static ImmutableDictionary<string, string> ParseManifest(MeshNode? manifestNode, JsonSerializerOptions opts)
+    {
+        if (manifestNode is null) return ImmutableDictionary<string, string>.Empty;
+        try
+        {
+            var log = manifestNode.ContentAs<ActivityLog>(opts);
+            if (log?.ReturnValue is not { } rv) return ImmutableDictionary<string, string>.Empty;
+            var map = rv.Deserialize<Dictionary<string, string>>(opts);
+            return map is null
+                ? ImmutableDictionary<string, string>.Empty
+                : map.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return ImmutableDictionary<string, string>.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Writes the partition's per-node import manifest — an <c>_Activity</c> node whose
+    /// <see cref="ActivityLog.ReturnValue"/> is the <c>{path → source-token}</c> map for the CURRENT source
+    /// set. Read back on the next import to upsert only the delta. Best-effort: a failed manifest write only
+    /// makes the next import non-incremental, never incorrect.
+    /// </summary>
+    private static IObservable<int> WriteManifest(
+        IMessageHub hub, string partition, IReadOnlyList<MeshNode> nodes, JsonSerializerOptions opts, ILogger? logger)
+    {
+        var map = nodes
+            .Where(n => !string.IsNullOrEmpty(n.Path))
+            .GroupBy(n => n.Path, StringComparer.OrdinalIgnoreCase)
+            .ToImmutableDictionary(
+                g => g.Key,
+                g => PartitionSourceFingerprint.ComputeNodeToken(g.First(), opts),
+                StringComparer.OrdinalIgnoreCase);
+
+        var node = new MeshNode(ManifestId, $"{partition}/_Activity")
+        {
+            Name = $"Import manifest ({partition})",
+            NodeType = ActivityNodeType.NodeType,
+            MainNode = partition,
+            State = MeshNodeState.Active,
+            Content = new ActivityLog(ActivityCategory.Import)
+            {
+                Status = ActivityStatus.Succeeded,
+                ReturnValue = JsonSerializer.SerializeToElement((IReadOnlyDictionary<string, string>)map, opts),
+            },
+        };
+
+        return Upsert(hub, node)
+            .Catch<int, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "[StaticRepoImport] {Partition}: manifest write failed (next import non-incremental).", partition);
+                return Observable.Return(0);
+            });
     }
 
     /// <summary>

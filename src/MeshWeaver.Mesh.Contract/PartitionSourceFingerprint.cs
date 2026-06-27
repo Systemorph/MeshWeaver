@@ -61,6 +61,18 @@ public static class PartitionSourceFingerprint
     }
 
     /// <summary>
+    /// The deterministic per-node source token (the same value folded into the partition fingerprint) —
+    /// exposed so the static-repo import can diff each source node against the per-node hash it stored on
+    /// the previous import (the manifest) and upsert ONLY the changed nodes. Computed over the RAW source
+    /// node (pre-materialisation) so both imports hash the same shape. See <see cref="NodeContentToken"/>.
+    /// </summary>
+    public static string ComputeNodeToken(MeshNode node, JsonSerializerOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        return NodeContentToken(node, options);
+    }
+
+    /// <summary>
     /// A stable per-node token for the unversioned case: ALL source-meaningful properties plus the
     /// serialised <see cref="MeshNode.Content"/>, SHA-256'd. Capturing every source prop (not just the
     /// display fields) means ANY authored change re-imports — e.g. stamping <see cref="MeshNode.Order"/>
