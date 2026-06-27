@@ -555,10 +555,24 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
                     typeDef.Type.Name, node.Path);
                 return node with { Content = deserialized };
             }
+            // Deserialize returned null (no exception) — content stays an untyped JsonElement.
+            _logger?.LogWarning(
+                "MeshNodeTypeSource: deserialized {Type} content to NULL for {Path} — content stays "
+                + "an untyped JsonElement (every 'Content is {TypeName}' consumer will fail).",
+                typeDef.Type.Name, node.Path, typeDef.Type.Name);
         }
         catch (Exception ex)
         {
-            _logger?.LogDebug(ex, "MeshNodeTypeSource: Failed to resolve JsonElement content for {Path}", node.Path);
+            // 🚨 Surfaced at Warning (NOT Debug): a content-deserialization FAILURE leaves the node
+            // as an untyped JsonElement, so every downstream `Content is {Type}` check fails — the
+            // node "renders empty" and a reactive wait for the typed shape "times out" with no
+            // visible cause (the secretly-errors-as-a-timeout class). The cause is real (a stale or
+            // wrong assembly under type/version collision, or a schema mismatch), so it must be
+            // visible in production logs, not hidden at Debug. Permanent on purpose.
+            _logger?.LogWarning(ex,
+                "MeshNodeTypeSource: FAILED to deserialize JsonElement content to {Type} for {Path} — "
+                + "content stays an untyped JsonElement; downstream 'Content is {TypeName}' will fail.",
+                typeDef.Type.Name, node.Path, typeDef.Type.Name);
         }
 
         return node;
