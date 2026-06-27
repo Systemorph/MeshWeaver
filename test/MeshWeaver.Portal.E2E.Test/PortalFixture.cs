@@ -37,6 +37,15 @@ public sealed class PortalFixture : IAsyncLifetime
     /// </summary>
     public string UserPartition => User.ToLowerInvariant();
 
+    /// <summary>
+    /// The DevLogin user's id EXACTLY as the User node / circuit identity carries it (the personId,
+    /// not lower-cased) — this is the user's <c>ObjectId</c> / home partition. The per-user registry
+    /// namespaces are <c>{UserId}/Skill</c>, <c>{UserId}/Agent</c>, … and an AccessAssignment granting
+    /// this user a role uses <c>accessObject = UserId</c>. (Distinct from <see cref="UserPartition"/>,
+    /// which is the lower-cased schema name.)
+    /// </summary>
+    public string UserId => User;
+
     /// <summary>True when a portal + browser are available, i.e. the tests should run.</summary>
     public bool Available => BaseUrl is not null && _browser is not null;
 
@@ -97,28 +106,43 @@ public sealed class PortalFixture : IAsyncLifetime
     public string? VideoDir { get; private set; }
 
     /// <summary>
-    /// Creates a fresh browser context authenticated as the DevLogin user. The auth cookie is minted
-    /// by POSTing the <c>/dev/signin</c> form through the context's request API (shared cookie jar),
-    /// so subsequent page navigations in the context are logged in.
+    /// Creates a fresh browser context authenticated as a DevLogin user (the default <see cref="User"/>,
+    /// or <paramref name="personId"/> when given). The auth cookie is minted by POSTing the
+    /// <c>/dev/signin</c> form through the context's request API (shared cookie jar), so subsequent page
+    /// navigations in the context are logged in. DevLogin self-provisions any unknown <paramref name="personId"/>
+    /// (EnableDevLogin is on for the e2e portal), so a second user (e.g. a space owner) is created on demand.
     /// </summary>
-    public async Task<IBrowserContext> NewAuthenticatedContextAsync()
+    public async Task<IBrowserContext> NewAuthenticatedContextAsync(string? personId = null)
     {
+        var person = string.IsNullOrWhiteSpace(personId) ? User : personId!;
         var context = await _browser!.NewContextAsync(new BrowserNewContextOptions
         {
             IgnoreHTTPSErrors = true,
             RecordVideoDir = VideoDir
         });
-        var response = await context.APIRequest.PostAsync($"{BaseUrl}/dev/signin", new APIRequestContextOptions
+
+        // Success is a 302 redirect with the auth cookie. A 4xx means the dev user does not exist
+        // (fail fast — bad E2E_USER). A 5xx is a transient: a freshly-rolled portal briefly 500s on
+        // /dev/signin while DevLogin self-provisioning settles (the per-user partition + _Access grant).
+        // Retry the 5xx a few times — this is the same cold-start readiness the WaitForPortalAsync gate
+        // handles for the root URL, applied to the auth endpoint.
+        IAPIResponse? response = null;
+        for (var attempt = 0; attempt < 6; attempt++)
         {
-            Headers = new Dictionary<string, string> { ["content-type"] = "application/x-www-form-urlencoded" },
-            Data = $"personId={Uri.EscapeDataString(User)}&returnUrl=%2F",
-            MaxRedirects = 0
-        });
-        // Success is a 302 redirect with the auth cookie. A 4xx means the dev user does not exist —
-        // set E2E_USER to a valid User node id.
-        if ((int)response.Status >= 400)
+            response = await context.APIRequest.PostAsync($"{BaseUrl}/dev/signin", new APIRequestContextOptions
+            {
+                Headers = new Dictionary<string, string> { ["content-type"] = "application/x-www-form-urlencoded" },
+                Data = $"personId={Uri.EscapeDataString(person)}&returnUrl=%2F",
+                MaxRedirects = 0
+            });
+            if ((int)response.Status < 500)
+                break;
+            await Task.Delay(2000);
+        }
+        if (response is null || (int)response.Status >= 400)
             throw new InvalidOperationException(
-                $"DevLogin for user '{User}' failed ({response.Status}). Set E2E_USER to a valid User node id.");
+                $"DevLogin for user '{person}' failed ({response?.Status}). " +
+                "A 4xx means E2E_USER is not a valid User node id; a persistent 5xx means the portal is unhealthy.");
         return context;
     }
 
@@ -152,6 +176,69 @@ public sealed class PortalFixture : IAsyncLifetime
             || body.Contains("Invalid", StringComparison.OrdinalIgnoreCase)
             || body.Contains("Error creating", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"Seeding node failed ({resp.Status}): {body}");
+    }
+
+    /// <summary>
+    /// Reads a node by path via <c>POST /api/mesh/get</c> (Bearer auth) and returns true when the node
+    /// is readable by the token's user. The mesh API returns an <c>"Error: …"</c> sentinel (not a 4xx)
+    /// when the path is missing or RLS denies it, so we branch on the body. Used to poll until an
+    /// access grant has propagated (partition_access sync is eventually consistent) BEFORE driving the UI.
+    /// </summary>
+    public async Task<bool> CanReadNodeAsync(IBrowserContext context, string token, string path)
+    {
+        var resp = await context.APIRequest.PostAsync($"{BaseUrl}/api/mesh/get", new APIRequestContextOptions
+        {
+            Headers = new Dictionary<string, string> { ["authorization"] = $"Bearer {token}" },
+            DataObject = new { Path = path }
+        });
+        if ((int)resp.Status >= 400)
+            return false;
+        var body = await resp.TextAsync();
+        // A readable node serializes its JSON (contains its path); a denial/miss is an "Error:"/"not found" string.
+        return body.Contains($"\"{path}\"", StringComparison.Ordinal)
+               && !body.StartsWith("\"Error", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Polls <see cref="CanReadNodeAsync"/> until it returns true or the timeout elapses.</summary>
+    public async Task<bool> WaitUntilReadableAsync(IBrowserContext context, string token, string path,
+        TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (await CanReadNodeAsync(context, token, path))
+                return true;
+            await Task.Delay(500);
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Applies an RFC 7396 JSON-merge patch to a node via <c>POST /api/mesh/patch</c> (Bearer auth).
+    /// <paramref name="fieldsJson"/> is the merge document, e.g. <c>{"content":{"harness":"MeshWeaver"}}</c>.
+    /// </summary>
+    /// <summary>Deletes a node via <c>POST /api/mesh/delete</c> (Bearer auth). Missing-node is tolerated.</summary>
+    public async Task DeleteNodeAsync(IBrowserContext context, string token, string path)
+    {
+        await context.APIRequest.PostAsync($"{BaseUrl}/api/mesh/delete", new APIRequestContextOptions
+        {
+            Headers = new Dictionary<string, string> { ["authorization"] = $"Bearer {token}" },
+            DataObject = new { Paths = path }
+        });
+        // Best-effort: a not-found / already-deleted node is fine for test setup.
+    }
+
+    public async Task PatchNodeAsync(IBrowserContext context, string token, string path, string fieldsJson)
+    {
+        var resp = await context.APIRequest.PostAsync($"{BaseUrl}/api/mesh/patch", new APIRequestContextOptions
+        {
+            Headers = new Dictionary<string, string> { ["authorization"] = $"Bearer {token}" },
+            DataObject = new { Path = path, Fields = fieldsJson }
+        });
+        var body = await resp.TextAsync();
+        if ((int)resp.Status >= 400 || body.StartsWith("\"Error", StringComparison.OrdinalIgnoreCase)
+            || body.StartsWith("Error", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Patching '{path}' failed ({resp.Status}): {body}");
     }
 
     private static Process? TryLaunchPortal(string url)
