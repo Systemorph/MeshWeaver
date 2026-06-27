@@ -235,7 +235,12 @@ public static class DelegationTool
                         // until the portal GC-thrashed and liveness wedged).
                         WaitForDelegationResult(
                                 workspace.GetMeshNodeStream(subThreadPath)
-                                    .Select(node => node?.Content as MeshThread)
+                                    // ContentAs (not `Content as`): a degraded JsonElement
+                                    // (unresolved $type) LOGS loud here instead of silently
+                                    // never matching `as MeshThread` → a 10-min WaitForDelegationResult
+                                    // hang ("secret error as a timeout"). Null only on a genuine,
+                                    // now-logged, unrecoverable failure.
+                                    .Select(node => node.ContentAs<MeshThread>(workspace.Hub.JsonSerializerOptions, logger))
                                     .Where(t => t is not null)
                                     .Select(t => t!),
                                 agentName, subThreadPath,

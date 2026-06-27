@@ -91,10 +91,13 @@ public class MeshOperations
         // Slow path: subscribe to the NodeType's live stream, wait for a
         // settled CompilationStatus emission, then read the CompilationError.
         return hub.GetWorkspace().GetMeshNodeStream(nodeTypePath)
-            .Where(n => n?.Content is Graph.Configuration.NodeTypeDefinition d && IsSettled(d))
+            // JsonElement-tolerant settle check + error read: a degraded NodeType node
+            // (Content stayed a JsonElement) still satisfies the wait and yields its real
+            // error, instead of hanging to the 5s timeout then reporting a null error.
+            .Where(n => IsSettled(ReadCompilationStatusFromNode(n)))
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(5))
-            .Select(n => (n!.Content as Graph.Configuration.NodeTypeDefinition)?.CompilationError)
+            .Select(ReadCompilationError)
             .Catch<string?, Exception>(_ => Observable.Return<string?>(null));
     }
 
@@ -1928,18 +1931,30 @@ public class MeshOperations
                 // read in lockstep with the writer; without it we'd race against
                 // the Compiling → Ok/Error write-back and return stale state.
                 return hub.GetWorkspace().GetMeshNodeStream(nodeTypePath)
-                    .Where(n => n?.Content is Graph.Configuration.NodeTypeDefinition d && IsSettled(d))
+                    // JsonElement-tolerant settle check: a degraded NodeType node (Content
+                    // stayed a JsonElement because the per-node hub's TypeRegistry lacked the
+                    // NodeTypeDefinition $type) still satisfies the wait, instead of hanging to
+                    // the 5s timeout and then reporting "Unknown".
+                    .Where(n => IsSettled(ReadCompilationStatusFromNode(n)))
                     .Take(1)
                     .Timeout(TimeSpan.FromSeconds(5))
                     .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
                     .Select(typeNode =>
                     {
                         var def = typeNode?.Content as Graph.Configuration.NodeTypeDefinition;
-                        if (def is null)
-                            return JsonSerializer.Serialize(
-                                new { status = "Unknown", message = $"NodeType '{nodeTypePath}' has no definition" },
+                        if (def is not null)
+                            return FormatDiagnosticsFromDef(def, nodeTypePath);
+                        // Degraded JsonElement content: format from the tolerant readers so a
+                        // settled-but-degraded node reports its real status/error rather than
+                        // "has no definition".
+                        var status = ReadCompilationStatusFromNode(typeNode);
+                        if (status is not null)
+                            return FormatDiagnostics(status.Value, nodeTypePath,
+                                ReadCompilationError(typeNode), startedAt: null, lastCompiledAt: null,
                                 hub.JsonSerializerOptions);
-                        return FormatDiagnosticsFromDef(def, nodeTypePath);
+                        return JsonSerializer.Serialize(
+                            new { status = "Unknown", message = $"NodeType '{nodeTypePath}' has no definition" },
+                            hub.JsonSerializerOptions);
                     });
             });
     }
@@ -1952,10 +1967,17 @@ public class MeshOperations
     /// write rather than report a half-baked state.
     /// </summary>
     private static bool IsSettled(Graph.Configuration.NodeTypeDefinition def)
-    {
-        var status = def.CompilationStatus;
-        return status == CompilationStatus.Ok || status == CompilationStatus.Error;
-    }
+        => IsSettled(def.CompilationStatus);
+
+    /// <summary>
+    /// Settled check over a raw <see cref="CompilationStatus"/> read via the
+    /// JsonElement-tolerant <see cref="ReadCompilationStatusFromNode"/> — so a
+    /// settled-but-DEGRADED node (Content stayed a JsonElement because the per-node
+    /// hub's TypeRegistry lacked the NodeTypeDefinition <c>$type</c>) still satisfies
+    /// the compile-settle wait instead of hanging until the 5s timeout.
+    /// </summary>
+    private static bool IsSettled(CompilationStatus? status)
+        => status == CompilationStatus.Ok || status == CompilationStatus.Error;
 
     private string FormatDiagnosticsFromDef(
         Graph.Configuration.NodeTypeDefinition def, string nodeTypePath)

@@ -132,17 +132,11 @@ public sealed class GitHubCredentialService(IMeshService meshService, IMessageHu
             });
     }
 
+    // ContentAs (tolerant): typed → as-is, degraded JsonElement → recovered, otherwise
+    // null and LOGGED LOUD. Replaces a bare `catch { return null; }` that silently
+    // no-op'd GitHub sync on a degraded credential node.
     private GitHubCredential? ExtractCredential(MeshNode? node)
-    {
-        if (node?.Content is null) return null;
-        if (node.Content is GitHubCredential typed) return typed;
-        if (node.Content is System.Text.Json.JsonElement je)
-        {
-            try { return System.Text.Json.JsonSerializer.Deserialize<GitHubCredential>(je.GetRawText(), hub.JsonSerializerOptions); }
-            catch { return null; }
-        }
-        return null;
-    }
+        => node.ContentAs<GitHubCredential>(hub.JsonSerializerOptions, logger);
 
     private string? Protect(string? plaintext)
     {

@@ -533,7 +533,9 @@ internal static class ThreadExecution
         //     stale sub-thread), so we skip threads with an unfinished delegation.
         var watchdog = workspace.GetMeshNodeStream()
             .Throttle(StuckGracePeriod)
-            .Select(n => n?.Content as MeshThread)
+            // ContentAs (not `Content as`): a degraded JsonElement own-node would make the
+            // cast silently null → the watchdog goes inert and a wedged round never recovers.
+            .Select(n => n.ContentAs<MeshThread>(hub.JsonSerializerOptions, logger))
             .Where(t => t is { IsExecuting: true } && !HasUnfinishedDelegation(t))
             .Subscribe(
                 _ =>
@@ -543,7 +545,9 @@ internal static class ThreadExecution
                         "for {Grace:F0}s — forcing Idle (guarantee terminal).",
                         threadPath, StuckGracePeriod.TotalSeconds);
                     workspace.GetMeshNodeStream().Update(node =>
-                        node.Content is MeshThread t && t.IsExecuting && !HasUnfinishedDelegation(t)
+                    {
+                        var t = node.ContentAs<MeshThread>(hub.JsonSerializerOptions, logger);
+                        return t is { IsExecuting: true } && !HasUnfinishedDelegation(t)
                             ? node with
                             {
                                 LastModified = DateTime.UtcNow,
@@ -557,7 +561,8 @@ internal static class ThreadExecution
                                     StreamingToolCalls = null,
                                 }
                             }
-                            : node)
+                            : node;
+                    })
                         .Subscribe(_ => { }, ex => logger?.LogWarning(ex,
                             "[ThreadExec] Init watchdog: force-Idle Update failed for {ThreadPath}", threadPath));
                 },
@@ -2582,9 +2587,11 @@ internal static class ThreadExecution
         var threadPath = hub.Address.Path;
 
         var sub = hub.GetWorkspace().GetMeshNodeStream()
-            .Where(n => n?.Content is MeshThread t
-                && t.RequestedStatus == ThreadExecutionStatus.Cancelled
-                && t.IsExecuting)
+            // ContentAs (not `Content is`): a degraded JsonElement own-node would silently fail
+            // the type test → the cancel watcher (and the No-CTS claim-window fallback) goes
+            // inert and a user cancel never settles the round. ContentAs logs the degrade loud.
+            .Select(n => (Node: n, Thread: n.ContentAs<MeshThread>(hub.JsonSerializerOptions, logger)))
+            .Where(x => x.Thread is { RequestedStatus: ThreadExecutionStatus.Cancelled, IsExecuting: true })
             // Dedup per round — distinct ExecutionStartedAt, so the cancel is handled at most
             // once per round. The round's OWN cancellation is now driven by its per-round
             // RequestedStatus self-cancel (ExecuteMessageAsync), which replays the current value
@@ -2592,11 +2599,11 @@ internal static class ThreadExecution
             // longer needs to re-arm on CTS availability (the old (ExecutionStartedAt, HasCts)
             // key). It only (a) propagates the cancel to sub-threads and (b) covers the pure
             // claim-window case (Status stuck at StartingExecution) via the No-CTS fallback below.
-            .DistinctUntilChanged(n => ((MeshThread)n!.Content!).ExecutionStartedAt)
+            .DistinctUntilChanged(x => x.Thread!.ExecutionStartedAt)
             .Subscribe(
-                node =>
+                x =>
                 {
-                    var thread = (MeshThread)node!.Content!;
+                    var thread = x.Thread!;
 
                     // Propagate to every active delegation sub-thread via the
                     // canonical IMeshNodeStreamCache. The sub-thread is a
@@ -2706,7 +2713,9 @@ internal static class ThreadExecution
         return hub.GetMeshNodeStream(threadPath)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(10))
-            .Select(threadNode => threadNode.Content as MeshThread)
+            // ContentAs (not `Content as`): a degraded JsonElement thread node LOGS instead
+            // of silently failing the cast → an empty history submitted as a "secret" degrade.
+            .Select(threadNode => threadNode.ContentAs<MeshThread>(hub.JsonSerializerOptions, logger))
             .Where(t => t != null)
             .SelectMany(thread =>
             {
@@ -2795,7 +2804,9 @@ internal static class ThreadExecution
         return hub.GetMeshNodeStream(threadPath)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(10))
-            .Select(threadNode => threadNode.Content as MeshThread)
+            // ContentAs (not `Content as`): a degraded JsonElement thread node LOGS instead
+            // of silently failing the cast → an empty prior-message set on a "secret" degrade.
+            .Select(threadNode => threadNode.ContentAs<MeshThread>(hub.JsonSerializerOptions, logger))
             .Where(t => t != null)
             .SelectMany(thread =>
             {
