@@ -1081,6 +1081,19 @@ public static class MeshNodeStreamExtensions
             || string.Equals(path, workspace.Hub.Address.ToString(), StringComparison.Ordinal))
             return new MeshNodeStreamHandle(workspace);
 
+        // 🚨 HOSTED-HUB ROUTING (respect it; never go through the cache for a hub we already host).
+        // A layout area's nested sync streams ARE hosted hubs of that layout area. When the path's hub
+        // is already HOSTED here, it is the authoritative owner — pull its stream DIRECTLY off that hub.
+        // Routing a locally-hosted hub through IMeshNodeStreamCache opens a SEPARATE cross-hub handle
+        // (sync subscription + JSON-merge patch) that bypasses the hosted hub's OWN sync stream and its
+        // ClickedEvent handler — so nested layout-area renders never emit and nested-area click actions
+        // (e.g. the per-comment ↩ reply / ✎ / ✓ / ✗) silently no-op (GetControl(Area) misses on the
+        // wrong host). HostedHubCreation.Never is a pure dictionary read — it constructs nothing and
+        // no-ops for genuinely remote paths, which fall through to the cache below as before.
+        var hostedHub = workspace.Hub.GetHostedHub(new Address(path), HostedHubCreation.Never);
+        if (hostedHub?.ServiceProvider.GetService(typeof(IWorkspace)) is IWorkspace hostedWorkspace)
+            return new MeshNodeStreamHandle(hostedWorkspace);
+
         var cache = workspace.Hub.ServiceProvider.GetService(typeof(IMeshNodeStreamCache))
             as IMeshNodeStreamCache;
         return new MeshNodeStreamHandle(workspace, path, cache);
