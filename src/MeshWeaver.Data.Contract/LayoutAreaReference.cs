@@ -265,7 +265,7 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
         if (ReferenceEquals(null, other)) return false;
         if (ReferenceEquals(this, other)) return true;
         return string.Equals(Area, other.Area, StringComparison.Ordinal) &&
-               Equals(Id, other.Id) &&
+               IdEquals(Id, other.Id) &&
                string.Equals(Layout, other.Layout, StringComparison.Ordinal);
     }
 
@@ -275,8 +275,29 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
     {
         return HashCode.Combine(
             Area ?? string.Empty,
-            Id ?? string.Empty,
+            NormalizeId(Id) ?? string.Empty,
             Layout ?? string.Empty
         );
     }
+
+    // 🚨 Id is an `object?` that ROUND-TRIPS THROUGH JSON (the area reference is serialized to the
+    // client and back). A deserialized Id is a System.Text.Json.JsonElement, which has NO structural
+    // equality: `Equals(jsonElement, "v12")` and even `Equals(jsonElementA, jsonElementB)` for
+    // byte-identical content are ALWAYS false. With the raw `Equals(Id, other.Id)` a freshly-built
+    // reference (string Id) never equalled the deserialized one (JsonElement Id), so LayoutAreaView's
+    // `!AreaStream.Reference.Equals(ViewModel.Reference)` was perpetually true → it disposed and
+    // re-subscribed the whole area on every parent render → the 448×-render FullHeader storm that
+    // saturated the circuit. Normalize both sides to their scalar string form before comparing.
+    private static bool IdEquals(object? a, object? b)
+        => ReferenceEquals(a, b)
+           || string.Equals(NormalizeId(a), NormalizeId(b), StringComparison.Ordinal);
+
+    private static string? NormalizeId(object? id) => id switch
+    {
+        null => null,
+        JsonElement { ValueKind: JsonValueKind.Null } => null,
+        JsonElement { ValueKind: JsonValueKind.String } je => je.GetString(),
+        JsonElement je => je.GetRawText(),
+        _ => id.ToString()
+    };
 }
