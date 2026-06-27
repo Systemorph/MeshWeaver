@@ -155,8 +155,21 @@
             <AuthorizeView>
                 <Authorized>
                     <div class="side-panel-toggle">
-                        <FluentButton BackgroundColor="transparent" OnClick="ToggleSidePanel" Title="Chat">
-                            <FluentIcon Value="@(new Icons.Regular.Size20.Chat())" Color="Color.Neutral" />
+                        @* Context-aware icon: open → close-panel; closed on a thread → show-context;
+                           closed elsewhere → chat (open a new conversation). *@
+                        <FluentButton BackgroundColor="transparent" OnClick="ToggleSidePanel" Title="@SidePanelToggleTitle">
+                            @if (IsSidePanelVisible)
+                            {
+                                <FluentIcon Value="@(new Icons.Regular.Size20.PanelRightContract())" Color="Color.Neutral" />
+                            }
+                            else if (HasThreadContext)
+                            {
+                                <FluentIcon Value="@(new Icons.Regular.Size20.PanelRightExpand())" Color="Color.Neutral" />
+                            }
+                            else
+                            {
+                                <FluentIcon Value="@(new Icons.Regular.Size20.Chat())" Color="Color.Neutral" />
+                            }
                         </FluentButton>
                     </div>
                 </Authorized>

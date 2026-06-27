@@ -295,6 +295,13 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     }
 
     /// <summary>
+    /// Sentinel <see cref="NodeMenuItemDefinition.Area"/> for the AI menu's "New thread" item. It carries
+    /// NO Href, so it is handled imperatively in <see cref="HandleMenuItemClick"/> (open the chat panel in
+    /// new-thread mode) instead of navigating. Lives here so the menu seed and the handler agree.
+    /// </summary>
+    public const string AiNewThreadAction = "ai-new-thread";
+
+    /// <summary>
     /// Handles a click on a dynamic menu item.
     /// Uses Href for absolute navigation when set, otherwise constructs URL from Area.
     /// </summary>
@@ -303,10 +310,33 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         isNodeMenuOpen = false;
         isMeshMenuOpen = false;
         isAiMenuOpen = false;
+        // Imperative actions (no Href): the AI menu's "New thread" opens the chat panel fresh.
+        if (string.Equals(item.Area, AiNewThreadAction, StringComparison.Ordinal))
+        {
+            _ = OpenNewThreadInSidePanel();
+            return;
+        }
         if (!string.IsNullOrEmpty(item.Href))
             NavigationManager.NavigateTo(item.Href);
         else
             NavigateToArea(item.Area);
+    }
+
+    /// <summary>
+    /// Opens the chat side panel ready for a brand-new thread: clears any shown content (so the new-chat
+    /// composer renders), signals a mounted composer to reset to chat mode, and shows the panel (applying
+    /// the persisted size). Same end state as the side panel's existing New-thread button.
+    /// </summary>
+    private async Task OpenNewThreadInSidePanel()
+    {
+        SidePanelState.SetContentPath(null);
+        SidePanelState.SetTitle(null);
+        SidePanelState.RequestAction("New");
+        if (!SidePanelState.IsVisible)
+        {
+            SidePanelState.SetVisible(true);
+            await ApplyPersistedSizeAsync();
+        }
     }
 
     /// <summary>
@@ -482,6 +512,18 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     {
         _currentNavContext = ctx;
 
+        // New model: while a thread is open in the MAIN view, a VISIBLE side panel peeks that thread's
+        // MAIN (context) node. Keep that peek in sync as the user moves between threads — but only when
+        // the panel is ALREADY peeking a context (its content is a non-thread node), NEVER replacing a
+        // side-panel CHAT the user is in. Visibility is untouched (collapsed stays collapsed); the
+        // toggle is what opens the peek (ToggleSidePanel). When this handles the navigation we skip the
+        // hide rule below, which only governs a panel holding a chat/thread.
+        if (TrySyncContextPeek(ctx))
+        {
+            InvokeAsync(StateHasChanged);
+            return;
+        }
+
         // A thread lives in EITHER the main view OR the side panel, never both — but ONLY
         // close the side panel when the user opened a DIFFERENT thread full-screen than the
         // one already shown in the panel. Closing on the SAME thread (or on a brand-new
@@ -496,6 +538,30 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         }
 
         InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>
+    /// Keeps a VISIBLE context-peek panel pointed at the current main thread's context node as the user
+    /// navigates between threads. Returns true when it owns the navigation (panel is peeking a context),
+    /// so the caller skips the "hide on different thread" rule (which only governs a panel holding a
+    /// chat). No-op (false) when not on a thread, or the panel is hidden / empty (new chat) / holding a
+    /// thread-chat — those keep their existing behavior.
+    /// </summary>
+    private bool TrySyncContextPeek(NavigationContext? ctx)
+    {
+        var contextPath = CurrentThreadContextPath();
+        if (contextPath is null)
+            return false;
+        var current = SidePanelState.ContentPath;
+        if (!SidePanelState.IsVisible || string.IsNullOrEmpty(current) || IsThreadPath(current))
+            return false;
+        if (!string.Equals(current, contextPath, StringComparison.OrdinalIgnoreCase))
+        {
+            SidePanelState.SetTitle(
+                MeshWeaver.AI.NavigationContextProjection.ContextChipLabel(ctx) ?? LastSegmentOf(contextPath));
+            SidePanelState.SetContentPath(contextPath);
+        }
+        return true;
     }
 
     /// <summary>
@@ -546,42 +612,76 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     protected SidePanelPosition SidePanelPositionValue => SidePanelState.Position;
 
     /// <summary>
-    /// Toggles the side panel. When a thread is shown full-screen, navigates to the thread's content
-    /// node and reopens the thread inside the panel; otherwise flips visibility, applying the
-    /// persisted size when opening.
+    /// Toggles the side panel. When a thread is shown in the MAIN view, the thread STAYS in the main
+    /// view and the panel peeks the thread's MAIN (context) node — opening always brings the main path
+    /// (no navigate-away). Otherwise flips visibility normally. Persisted size is applied on open.
     /// </summary>
     /// <returns>A task that completes once panel state and size have been applied.</returns>
     public async Task ToggleSidePanel()
     {
-        var context = _currentNavContext;
+        var contextPath = CurrentThreadContextPath();
 
-        // Check if viewing a thread full-screen by checking the node's NodeType
-        if (context?.Node != null && ThreadNodeType.IsThreadNodeType(context.Node.NodeType))
+        // On a thread in the main view → the side panel is a peek of the thread's context node.
+        if (contextPath is not null)
         {
-            var threadPath = context.Namespace;
-            var mainNode = context.Node.MainNode;
-
-            // Navigate to content entity (or home if self-referencing)
-            var navigateTo = mainNode != context.Node.Path ? $"/{mainNode}" : "/";
-            NavigationManager.NavigateTo(navigateTo);
-
-            // Open panel with thread and set title
-            SidePanelState.SetTitle(context.Node.Name ?? "Thread");
-            SidePanelState.OpenWithContent(threadPath);
-            await ApplyPersistedSizeAsync();
-        }
-        else
-        {
-            // Normal toggle
-            SidePanelState.Toggle();
-
             if (SidePanelState.IsVisible)
             {
-                // Apply persisted size when opening
+                SidePanelState.SetVisible(false);
+            }
+            else
+            {
+                // Set the content BEFORE showing so opening always brings the main path.
+                SidePanelState.SetTitle(
+                    MeshWeaver.AI.NavigationContextProjection.ContextChipLabel(_currentNavContext)
+                    ?? LastSegmentOf(contextPath));
+                SidePanelState.OpenWithContent(contextPath);
                 await ApplyPersistedSizeAsync();
             }
+            return;
+        }
+
+        // Not on a thread — normal toggle (new-chat composer / current content).
+        SidePanelState.Toggle();
+        if (SidePanelState.IsVisible)
+        {
+            // Apply persisted size when opening
+            await ApplyPersistedSizeAsync();
         }
     }
+
+    /// <summary>
+    /// When the MAIN view is showing a thread, the path of that thread's MAIN (context) node — the node
+    /// the side panel peeks. Null when not on a thread, or the thread is self-referencing (no distinct
+    /// context). Drives the side-panel-as-context-peek model AND the context-aware toggle icon.
+    /// </summary>
+    private string? CurrentThreadContextPath()
+    {
+        var node = _currentNavContext?.Node;
+        if (node is null || !ThreadNodeType.IsThreadNodeType(node.NodeType))
+            return null;
+        var mainNode = node.MainNode;
+        return !string.IsNullOrEmpty(mainNode)
+               && !string.Equals(mainNode, node.Path, StringComparison.OrdinalIgnoreCase)
+            ? mainNode : null;
+    }
+
+    /// <summary>True when the main view is on a thread with a distinct context node to peek.</summary>
+    protected bool HasThreadContext => CurrentThreadContextPath() is not null;
+
+    /// <summary>Tooltip for the side-panel toggle, matching its context-aware icon.</summary>
+    protected string SidePanelToggleTitle =>
+        IsSidePanelVisible ? "Close side panel"
+        : HasThreadContext ? "Show context"
+        : "Chat";
+
+    private static string LastSegmentOf(string path)
+    {
+        var idx = path.LastIndexOf('/');
+        return idx >= 0 && idx < path.Length - 1 ? path[(idx + 1)..] : path;
+    }
+
+    private static bool IsThreadPath(string path)
+        => path.Contains($"/{ThreadNodeType.ThreadPartition}/", StringComparison.OrdinalIgnoreCase);
 
     private async Task ApplyPersistedSizeAsync()
     {

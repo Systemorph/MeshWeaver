@@ -52,6 +52,117 @@
     flex-direction: column;
 }
 
+/* ─── Hero header (full-page chat) ─────────────────────────────────────
+   Rendered NATIVELY as the first child of the scrollable message list, so it
+   flows ABOVE the conversation (no overlap) and scrolls away with it. Compact /
+   narrow: a top row (starting-point context chip + Mark Done) then a click-to-edit
+   title and a smaller click-to-edit description. `flex: 0 0 auto` so it reserves its
+   own height and is never squeezed into the messages below. Hidden inside the side
+   panel via SidePanel.razor.css (`.thread-full-header { display:none }`). */
+.thread-full-header {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 0 4px 14px 4px;
+    margin-bottom: 12px;
+    border-bottom: 1px solid var(--neutral-stroke-divider-rest, var(--neutral-stroke-rest));
+    min-width: 0;
+}
+
+.thread-full-header-toprow {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-height: 24px;
+}
+
+/* Starting-point context chip — pill on the RIGHT of the top row, clickable to open the
+   full context object the thread was started from. */
+.thread-context-chip {
+    appearance: none;
+    -webkit-appearance: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 60%;
+    padding: 3px 11px 3px 8px;
+    border-radius: 999px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--accent-fill-rest);
+    background: color-mix(in srgb, var(--accent-fill-rest) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-fill-rest) 30%, transparent);
+    transition: background 150ms ease;
+}
+.thread-context-chip:hover {
+    background: color-mix(in srgb, var(--accent-fill-rest) 18%, transparent);
+}
+.thread-context-chip-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+/* Title — nice headline; click-to-edit. The -6px side margins let the hover
+   background bleed slightly past the text without shifting the layout. */
+.thread-header-title {
+    font-size: 1.5rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1.2;
+    color: var(--neutral-foreground-rest);
+    word-break: break-word;
+    border-radius: 6px;
+    padding: 2px 6px;
+    margin: 0 -6px;
+}
+.thread-header-title.editable {
+    cursor: text;
+    transition: background 120ms ease;
+}
+.thread-header-title.editable:hover {
+    background: var(--neutral-fill-stealth-hover);
+}
+.thread-header-title.untitled {
+    color: var(--neutral-foreground-hint);
+    font-style: italic;
+}
+.thread-header-title-input {
+    width: 100%;
+}
+
+/* Description — smaller abstract; click-to-edit. */
+.thread-header-desc {
+    font-size: 0.9rem;
+    line-height: 1.45;
+    color: var(--neutral-foreground-hint);
+    white-space: pre-wrap;
+    word-break: break-word;
+    border-radius: 6px;
+    padding: 2px 6px;
+    margin: 0 -6px;
+}
+.thread-header-desc.editable {
+    cursor: text;
+    transition: background 120ms ease;
+}
+.thread-header-desc.editable:hover {
+    background: var(--neutral-fill-stealth-hover);
+}
+.thread-header-desc.placeholder {
+    font-style: italic;
+    opacity: 0.7;
+}
+.thread-header-desc-input {
+    width: 100%;
+}
+
 /* Loading skeleton lines — shown when a message's satellite cell hasn't
    delivered content yet through the IMeshNodeStreamCache subscription. */
 .thread-msg-skeleton-line {

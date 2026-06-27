@@ -204,6 +204,20 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private readonly CancellationTokenSource? _submissionCts;
     private readonly ChatSubmissionHandler submissionHandler = new();
 
+    // ─── Hero-header inline title/description editing ───
+    // Click-to-edit: the title + description render as plain text; clicking swaps in a Fluent input
+    // bound to a local string, committed (written to the thread node's Name / Description via
+    // stream.Update under the durable circuit user) on Enter/blur, cancelled on Escape. The display
+    // values come from the data-bound ThreadViewModel (Name / Description) — one source of truth.
+    private bool isEditingTitle;
+    private bool isEditingDescription;
+    private string editTitleText = "";
+    private string editDescriptionText = "";
+    private Microsoft.FluentUI.AspNetCore.Components.FluentTextField? _titleEditField;
+    private Microsoft.FluentUI.AspNetCore.Components.FluentTextArea? _descEditField;
+    private bool _focusTitleOnRender;
+    private bool _focusDescOnRender;
+
     // Pending (optimistic) cells — rendered directly as bubbles, not via LayoutAreaView.
     // Output cells are cleared after 3s so LayoutAreaView takes over (grain should be active by then).
     // Input cells stay pending (they're static, LayoutAreaView adds nothing).
@@ -1373,6 +1387,22 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             try { await _pickerWidget.FocusAsync(); }
             catch { /* widget may not be in the DOM yet — harmless */ }
         }
+        // Focus the inner element via the ElementReference (an awaitable ValueTask) rather than the
+        // component's own FocusAsync() — that overload is `async void` (await base.Element.FocusAsync()),
+        // so a post-await JS-interop failure would escape on the circuit's sync context and a surrounding
+        // try could never catch it. Awaiting the ElementReference here keeps the failure catchable.
+        if (_focusTitleOnRender && _titleEditField is not null)
+        {
+            _focusTitleOnRender = false;
+            try { await _titleEditField.Element.FocusAsync(); }
+            catch { /* field may not be focusable yet — harmless */ }
+        }
+        if (_focusDescOnRender && _descEditField is not null)
+        {
+            _focusDescOnRender = false;
+            try { await _descEditField.Element.FocusAsync(); }
+            catch { /* field may not be focusable yet — harmless */ }
+        }
     }
 
     /// <summary>
@@ -1898,6 +1928,116 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     {
         // Navigate to the referenced node
         NavigationManager.NavigateTo($"/{path}");
+    }
+
+    /// <summary>
+    /// Click on a context chip (the hero header's chip + the composer's context chip) — peeks the
+    /// thread's starting-point ("main") node in the SIDE PANEL so the user can see the entire context
+    /// object WITHOUT leaving the conversation. Distinct from <see cref="OnChipClicked"/> (used by plain
+    /// @-reference chips), which navigates the main view.
+    /// </summary>
+    private void OnContextChipClicked(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return;
+        SidePanelState.SetTitle(LastSegment(path));
+        SidePanelState.OpenWithContent(path);
+    }
+
+    // ─── Hero-header: inline title / description editing + Mark Done ───
+
+    /// <summary>Enter title edit mode, seeding the editor with the current name and focusing it.</summary>
+    private void BeginTitleEdit()
+    {
+        if (IsReadOnlyThread || isEditingTitle) return;
+        editTitleText = ThreadViewModel?.Name ?? "";
+        isEditingTitle = true;
+        _focusTitleOnRender = true;
+        StateHasChanged();
+    }
+
+    /// <summary>Enter commits the new title; Escape cancels without writing.</summary>
+    private void OnTitleEditKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") CommitTitleEdit();
+        else if (e.Key == "Escape") CancelTitleEdit();
+    }
+
+    /// <summary>
+    /// Writes the edited title to the thread node's <c>Name</c> (under the durable circuit user), but
+    /// only when it actually changed and is non-empty — an empty title falls back to "Untitled thread"
+    /// in the display rather than blanking the node name. Idempotent: a no-op when nothing changed.
+    /// </summary>
+    private void CommitTitleEdit()
+    {
+        if (!isEditingTitle) return;
+        isEditingTitle = false;
+        var trimmed = editTitleText?.Trim();
+        if (!string.IsNullOrEmpty(trimmed)
+            && !string.Equals(trimmed, ThreadViewModel?.Name, StringComparison.Ordinal)
+            && !string.IsNullOrEmpty(threadPath))
+        {
+            var newName = trimmed;
+            UpdateMeshNodeAsCircuitUser(threadPath, node => node with { Name = newName },
+                ex => SurfaceError(ex, "Saving the title"));
+        }
+        StateHasChanged();
+    }
+
+    private void CancelTitleEdit()
+    {
+        isEditingTitle = false;
+        StateHasChanged();
+    }
+
+    /// <summary>Enter description edit mode, seeding the editor with the current description.</summary>
+    private void BeginDescriptionEdit()
+    {
+        if (IsReadOnlyThread || isEditingDescription) return;
+        editDescriptionText = ThreadViewModel?.Description ?? "";
+        isEditingDescription = true;
+        _focusDescOnRender = true;
+        StateHasChanged();
+    }
+
+    /// <summary>Escape cancels; Enter is left to insert newlines (the abstract is multi-line). Commit on blur.</summary>
+    private void OnDescriptionEditKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape") CancelDescriptionEdit();
+    }
+
+    /// <summary>
+    /// Writes the edited description to the thread node's <c>Description</c>. Unlike the title, an empty
+    /// description is allowed and clears the field (writes null). No-op when unchanged.
+    /// </summary>
+    private void CommitDescriptionEdit()
+    {
+        if (!isEditingDescription) return;
+        isEditingDescription = false;
+        var trimmed = editDescriptionText?.Trim();
+        var normalized = string.IsNullOrEmpty(trimmed) ? null : trimmed;
+        if (!string.Equals(normalized, ThreadViewModel?.Description, StringComparison.Ordinal)
+            && !string.IsNullOrEmpty(threadPath))
+        {
+            UpdateMeshNodeAsCircuitUser(threadPath, node => node with { Description = normalized },
+                ex => SurfaceError(ex, "Saving the description"));
+        }
+        StateHasChanged();
+    }
+
+    private void CancelDescriptionEdit()
+    {
+        isEditingDescription = false;
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Toggles the thread's Done state via the canonical <c>MarkThreadDone</c> hub extension (writes
+    /// <c>RequestedStatus</c>; the owning hub reacts). Hidden while executing / read-only, so no guard race.
+    /// </summary>
+    private void ToggleThreadDone()
+    {
+        if (IsReadOnlyThread || string.IsNullOrEmpty(threadPath)) return;
+        Hub.MarkThreadDone(threadPath, !(ThreadViewModel?.IsDone ?? false));
     }
 
     // --- Side panel title and action handling ---
@@ -2667,24 +2807,6 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         return new LayoutAreaControl(
             threadPath,
             new LayoutAreaReference(ThreadNodeType.HeaderArea))
-            .WithSpinnerType(SpinnerType.None);
-    }
-
-    /// <summary>
-    /// Creates a LayoutAreaControl pointing to the thread's FullHeader layout area
-    /// (the gradient hero: title, context back-link, message-count subtitle, Mark Done).
-    /// Rendered as the first item inside the scrollable message area for the full-page
-    /// view (<see cref="ThreadChatControl.ShowFullHeader"/>) so it scrolls away with the
-    /// conversation. Null when the thread doesn't exist yet. <see cref="SpinnerType.None"/>
-    /// — the header is ancillary and must never block the chat with a skeleton.
-    /// </summary>
-    private LayoutAreaControl? GetFullHeaderCell()
-    {
-        if (string.IsNullOrEmpty(threadPath))
-            return null;
-        return new LayoutAreaControl(
-            threadPath,
-            new LayoutAreaReference(ThreadNodeType.FullHeaderArea))
             .WithSpinnerType(SpinnerType.None);
     }
 

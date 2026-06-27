@@ -21,6 +21,14 @@ public record ThreadViewModel
     public IReadOnlyList<string> Messages { get; init; } = [];
     /// <summary>Full path of the thread node this view binds to.</summary>
     public string? ThreadPath { get; init; }
+
+    /// <summary>The thread's title (<see cref="MeshNode.Name"/>). Rendered as the hero-header
+    /// title; the full-page chat view binds + inline-edits it (writes back to the node's Name).</summary>
+    public string? Name { get; init; }
+
+    /// <summary>The thread's description (<see cref="MeshNode.Description"/>) — shown as the smaller
+    /// abstract under the title and inline-edited the same way.</summary>
+    public string? Description { get; init; }
     /// <summary>Context path used to initialize the agent for this thread.</summary>
     public string? InitialContext { get; init; }
     /// <summary>Human-readable display name for <see cref="InitialContext"/>.</summary>
@@ -34,6 +42,10 @@ public record ThreadViewModel
 
     /// <summary>True while the thread is executing (agent generating response).</summary>
     public bool IsExecuting { get; init; }
+
+    /// <summary>True when the thread's status is <see cref="ThreadExecutionStatus.Done"/> — drives the
+    /// header's Mark Done / Reopen toggle.</summary>
+    public bool IsDone { get; init; }
 
     /// <summary>Current execution activity description.</summary>
     public string? ExecutionStatus { get; init; }
@@ -76,11 +88,14 @@ public record ThreadViewModel
         if (other is null) return false;
         if (ReferenceEquals(this, other)) return true;
         return ThreadPath == other.ThreadPath
+               && Name == other.Name
+               && Description == other.Description
                && InitialContext == other.InitialContext
                && InitialContextDisplayName == other.InitialContextDisplayName
                && IsSubmitting == other.IsSubmitting
                && IsLoading == other.IsLoading
                && IsExecuting == other.IsExecuting
+               && IsDone == other.IsDone
                && ExecutionStatus == other.ExecutionStatus
                && StreamingText == other.StreamingText
                && ExecutionStartedAt == other.ExecutionStartedAt
@@ -96,11 +111,14 @@ public record ThreadViewModel
     {
         var hash = new HashCode();
         hash.Add(ThreadPath);
+        hash.Add(Name);
+        hash.Add(Description);
         hash.Add(InitialContext);
         hash.Add(InitialContextDisplayName);
         hash.Add(IsSubmitting);
         hash.Add(IsLoading);
         hash.Add(IsExecuting);
+        hash.Add(IsDone);
         hash.Add(ExecutionStatus);
         hash.Add(StreamingText);
         hash.Add(ExecutionStartedAt);

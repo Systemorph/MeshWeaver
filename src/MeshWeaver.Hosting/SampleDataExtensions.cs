@@ -36,6 +36,11 @@ public static class SampleDataExtensions
     public static TBuilder AddSystemorph<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
         => builder.IncludePartition("Systemorph");
 
+    /// <summary>Includes the TestSpace sandbox — a tiny space (a few Markdown pages) for exercising
+    /// the chat / thread UX: navigate to it, attach it as context, and start threads against it.</summary>
+    public static TBuilder AddTestSpace<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
+        => builder.IncludePartition("TestSpace");
+
     /// <summary>Includes the MeshWeaver documentation data.</summary>
     public static TBuilder AddMeshWeaverDocs<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
         => builder.IncludePartition("MeshWeaver");
@@ -96,6 +101,7 @@ public static class SampleDataExtensions
             .AddPensionFund()
             .AddCornerstone()
             .AddSystemorph()
+            .AddTestSpace()
             .AddMeshWeaverDocs()
             .AddDoc()
             .AddAdmin()

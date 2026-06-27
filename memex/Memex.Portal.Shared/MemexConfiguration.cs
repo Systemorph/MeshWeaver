@@ -20,6 +20,7 @@ using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Blazor.Portal.Authentication;
 using MeshWeaver.Blazor.Portal.Chat;
 using MeshWeaver.Blazor.Portal.Components;
+using MeshWeaver.Blazor.Portal.Layout;
 using MeshWeaver.Blazor.Radzen;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.ContentCollections.Indexing;
@@ -641,6 +642,12 @@ public static class MemexConfiguration
                         // where the concern is defined shows as its own section. Per-item configurable
                         // (label / icon / order / tooltip / href); register more under the same AI context.
                         .AddNodeMenuItems(NodeMenuItemsExtensions.AiMenuContext,
+                            // "New thread" — opens the chat side panel ready for a brand-new conversation.
+                            // The Area is a sentinel handled imperatively in PortalLayoutBase.HandleMenuItemClick
+                            // (no Href → no navigation): it opens the panel + signals new-thread mode.
+                            new NodeMenuItemDefinition("New thread", PortalLayoutBase.AiNewThreadAction,
+                                Icon: "/static/NodeTypeIcons/chat.svg", Order: 0,
+                                Tooltip: "Start a new conversation in the chat panel"),
                             new NodeMenuItemDefinition("Threads", "AiThreads", Icon: "/static/NodeTypeIcons/chat.svg", Order: 10,
                                 Href: "/search?q=nodeType%3AThread&groupBy=Namespace",
                                 Tooltip: "Conversation threads across every namespace"),

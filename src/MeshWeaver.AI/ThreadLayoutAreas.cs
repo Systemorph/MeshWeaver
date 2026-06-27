@@ -50,7 +50,6 @@ public static class ThreadLayoutAreas
                 .WithView(ThreadNodeType.StreamingArea, StreamingView)
                 .WithView(ThreadNodeType.HistoryArea, HistoryView)
                 .WithView(ThreadNodeType.HeaderArea, HeaderView)
-                .WithView(ThreadNodeType.FullHeaderArea, FullHeaderView)
                 .WithView(ThreadNodeType.ChangesArea, ChangesAreaView)
                 // The thread's own composer selectors — binds Thread.Composer (the composer
                 // copied onto the thread at creation), same wiring as the composer node's area.
@@ -142,10 +141,13 @@ public static class ThreadLayoutAreas
     /// <summary>
     /// Renders the Thread area — the default view for threads.
     /// Emits a ThreadChatControl with data-bound Thread content. The hero header
-    /// (title, context link, modified-nodes summary, Mark Done) is rendered by the
-    /// chat control INSIDE its scrollable message area (see <see cref="FullHeaderView"/>),
-    /// so it scrolls away with the conversation instead of staying pinned at the top —
-    /// hence <c>WithShowFullHeader()</c> rather than a sibling header above the chat.
+    /// (context chip, inline-editable title + description, Mark Done) is rendered
+    /// NATIVELY by the Blazor chat view as the first item INSIDE its scrollable
+    /// message area (gated by <c>WithShowFullHeader()</c>) so it scrolls away with
+    /// the conversation — the title/description bind directly to the data-bound
+    /// <see cref="ThreadViewModel.Name"/> / <see cref="ThreadViewModel.Description"/>
+    /// and write back through the node stream. Hence <c>WithShowFullHeader()</c>
+    /// rather than a sibling header above the chat.
     ///
     /// IMPORTANT: The ThreadChatControl is emitted ONCE. Thread content is pushed
     /// separately via host.UpdateData() and data-bound on the control to avoid
@@ -171,149 +173,6 @@ public static class ThreadLayoutAreas
     }
 
     /// <summary>
-    /// The full-page thread hero header — gradient surface, big glowing chat icon,
-    /// inline-editable title + description, context back-link, live message-count
-    /// subtitle, and Mark Done / Reopen toggle. Rendered by the full-page chat view
-    /// as the FIRST item INSIDE the scrollable message area (gated by
-    /// <see cref="ThreadChatControl.ShowFullHeader"/>) so it scrolls away with the
-    /// conversation rather than being pinned above it. Self-contained: pushes its own
-    /// title / subtitle / contextLink / description data and binds them — same pattern
-    /// as <see cref="HeaderView"/>. The side panel does NOT request this area (its
-    /// title lives in the panel chrome).
-    /// </summary>
-    public static UiControl? FullHeaderView(LayoutAreaHost host, RenderingContext _)
-    {
-        var hubPath = host.Hub.Address.ToString();
-
-        var vmStream = host.Workspace.GetMeshNodeStream().Select(node => BuildThreadViewModel(node, hubPath, host.Hub.JsonSerializerOptions));
-
-        // Push title to data section — data-bound, no observable control rebuild.
-        var titleStream = host.Workspace.GetMeshNodeStream()
-            .Select(GetThreadTitle)
-            .DistinctUntilChanged();
-        host.RegisterForDisposal(titleStream.Subscribe(title => host.UpdateData("title", title)));
-
-        // Push description to data section — read-only viewers see it under the title
-        // (users with Update permission get an inline auto-saving editor instead). Empty
-        // string when unset so the read-only Html view renders nothing.
-        host.RegisterForDisposal(host.Workspace.GetMeshNodeStream()
-            .Select(node => node?.Description ?? string.Empty)
-            .DistinctUntilChanged()
-            .Subscribe(desc => host.UpdateData("description",
-                string.IsNullOrWhiteSpace(desc)
-                    ? string.Empty
-                    : "<div style=\"font-size: 0.92rem; color: var(--neutral-foreground-hint); " +
-                      "margin-top: 2px; line-height: 1.4; white-space: pre-wrap;\">" +
-                      System.Web.HttpUtility.HtmlEncode(desc) + "</div>")));
-
-        // Push context link HTML to data section — pill-shaped breadcrumb chip.
-        host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm =>
-        {
-            if (!string.IsNullOrEmpty(vm.InitialContext))
-            {
-                var displayName = System.Web.HttpUtility.HtmlEncode(vm.InitialContextDisplayName ?? vm.InitialContext);
-                host.UpdateData("contextLink",
-                    "<div style=\"display: block; margin-bottom: 14px;\">" +
-                    $"<a href=\"/{vm.InitialContext}\" " +
-                    "style=\"display: inline-flex; align-items: center; gap: 6px; " +
-                    "padding: 4px 12px 4px 8px; border-radius: 999px; " +
-                    "background: color-mix(in srgb, var(--accent-fill-rest) 10%, transparent); " +
-                    "border: 1px solid color-mix(in srgb, var(--accent-fill-rest) 30%, transparent); " +
-                    "font-size: 0.78rem; font-weight: 500; " +
-                    "color: var(--accent-fill-rest); text-decoration: none; " +
-                    "transition: background 150ms ease, transform 150ms ease;\" " +
-                    "onmouseover=\"this.style.background='color-mix(in srgb, var(--accent-fill-rest) 18%, transparent)'; this.style.transform='translateX(-2px)';\" " +
-                    "onmouseout=\"this.style.background='color-mix(in srgb, var(--accent-fill-rest) 10%, transparent)'; this.style.transform='translateX(0)';\">" +
-                    "<span style=\"font-size: 14px; line-height: 1;\">&larr;</span> " +
-                    $"<span>{displayName}</span></a>" +
-                    "</div>");
-            }
-        }));
-
-        // Push subtitle (message count) to the data section — reactive.
-        host.RegisterForDisposal(vmStream
-            .Select(vm => vm.Messages?.Count ?? 0)
-            .DistinctUntilChanged()
-            .Subscribe(count =>
-            {
-                var label = count switch
-                {
-                    0 => "No messages yet",
-                    1 => "1 message",
-                    _ => $"{count} messages"
-                };
-                host.UpdateData("subtitle",
-                    "<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); " +
-                    "margin-top: 4px; display: inline-flex; align-items: center; gap: 8px;\">" +
-                    "<span style=\"width: 6px; height: 6px; border-radius: 50%; " +
-                    "background: var(--accent-fill-rest); display: inline-block; " +
-                    "box-shadow: 0 0 8px var(--accent-fill-rest); animation: thread-hdr-pulse 2.4s ease-in-out infinite;\"></span>" +
-                    $"<span>{label}</span>" +
-                    "</div>" +
-                    "<style>@keyframes thread-hdr-pulse { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }</style>");
-            }));
-
-        // Hero header: gradient surface, big glowing chat icon, title + live subtitle.
-        return Controls.Stack
-            .WithClass("thread-full-header")
-            .WithWidth("100%")
-            .WithStyle(
-                "padding: 24px 28px 22px 28px; margin-bottom: 20px; " +
-                "border-radius: 14px; gap: 10px; " +
-                "background: linear-gradient(135deg, " +
-                "color-mix(in srgb, var(--accent-fill-rest) 8%, var(--neutral-layer-1)), " +
-                "var(--neutral-layer-1) 70%); " +
-                "border: 1px solid color-mix(in srgb, var(--accent-fill-rest) 18%, var(--neutral-stroke-rest)); " +
-                "box-shadow: 0 6px 24px -8px color-mix(in srgb, var(--accent-fill-rest) 25%, transparent);")
-            .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("contextLink"))))
-            .WithView(Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithStyle("align-items: center; gap: 18px; flex: 1; min-width: 0;")
-                .WithView(Controls.Html(
-                    "<div style=\"position: relative; width: 56px; height: 56px; flex: 0 0 56px; " +
-                    "border-radius: 50%; " +
-                    "background: linear-gradient(135deg, var(--accent-fill-rest), " +
-                    "color-mix(in srgb, var(--accent-fill-rest) 60%, #7c5cd1)); " +
-                    "display: inline-flex; align-items: center; justify-content: center; " +
-                    "box-shadow: 0 8px 20px -4px color-mix(in srgb, var(--accent-fill-rest) 55%, transparent), " +
-                    "inset 0 1px 0 rgba(255,255,255,0.25);\">" +
-                    "<img src=\"/static/NodeTypeIcons/chat.svg\" alt=\"\" " +
-                    "style=\"width: 32px; height: 32px; object-fit: contain; " +
-                    "filter: brightness(0) invert(1) drop-shadow(0 1px 2px rgba(0,0,0,0.25));\" />" +
-                    "</div>"))
-                .WithView(Controls.Stack
-                    .WithStyle("gap: 4px; min-width: 0; flex: 1;")
-                    // Title + description: inline auto-saving editors for users with Update
-                    // permission; read-only display otherwise. Bound DIRECTLY to MeshNode.Name /
-                    // MeshNode.Description (fields-mode node-bound DataContext) — one source of
-                    // truth, no /data replica, no save subscription. See Doc/GUI/DataBinding.
-                    .WithView((h, _) => h.Hub.GetEffectivePermissions(hubPath)
-                        .Select(p => p.HasFlag(Permission.Update))
-                        .DistinctUntilChanged()
-                        .Select(canEdit => (UiControl?)BuildTitleEditor(hubPath, canEdit)))
-                    .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("subtitle")))))
-                // Mark Done / Reopen toggle — reactive. Hidden while the
-                // thread is executing (MarkThreadDone's CAS guard would
-                // refuse anyway, but hiding the button is cleaner UX).
-                .WithView((h, _) => h.Workspace.GetMeshNodeStream()
-                    .Select(node =>
-                    {
-                        var t = node.ContentAs<MeshThread>(h.Hub.JsonSerializerOptions);
-                        if (t is null || t.IsExecuting) return (UiControl?)null;
-                        var isDone = t.Status == ThreadExecutionStatus.Done;
-                        var label = isDone ? "Reopen" : "Mark Done";
-                        var icon = isDone
-                            ? FluentIcons.ArrowUndo(IconSize.Size16)
-                            : FluentIcons.Checkmark(IconSize.Size16);
-                        return (UiControl?)Controls.Button(label)
-                            .WithAppearance(isDone ? Appearance.Neutral : Appearance.Accent)
-                            .WithIconStart(icon)
-                            .WithClickAction(_ =>
-                                h.Hub.MarkThreadDone(hubPath, !isDone));
-                    })));
-    }
-
-    /// <summary>
     /// Builds the <see cref="ThreadViewModel"/> snapshot pushed to the data section
     /// from the thread's own MeshNode. Shared by <see cref="ThreadView"/>,
     /// <see cref="ThreadChatView"/>, and <see cref="FullHeaderView"/>.
@@ -335,9 +194,12 @@ public static class ThreadLayoutAreas
         {
             Messages = threadContent?.Messages ?? [],
             ThreadPath = hubPath,
+            Name = node?.Name,
+            Description = node?.Description,
             InitialContext = contextPath,
             InitialContextDisplayName = contextDisplayName,
             IsExecuting = threadContent?.IsExecuting ?? false,
+            IsDone = threadContent?.Status == ThreadExecutionStatus.Done,
             ExecutionStatus = threadContent?.ExecutionStatus,
             StreamingText = threadContent?.StreamingText,
             StreamingToolCalls = threadContent?.StreamingToolCalls,
@@ -587,53 +449,6 @@ public static class ThreadLayoutAreas
                         "</span>"))))
             .WithView(previewView)
             .WithView(new NavLinkControl("", null, $"/{hubPath}/{ThreadNodeType.ThreadArea}"));
-    }
-
-
-    /// <summary>
-    /// The title + description block in the thread hero header.
-    /// <para>For users with <see cref="Permission.Update"/> both render as inline,
-    /// auto-saving editors bound DIRECTLY to the thread node's <see cref="MeshNode.Name"/>
-    /// and <see cref="MeshNode.Description"/> (fields-mode node-bound DataContext) —
-    /// one source of truth, no <c>/data</c> replica, no save subscription. Editability
-    /// is gated, not just the write: read-only viewers get the gradient HTML title plus
-    /// the description (pushed to the data section), the description hidden when unset.</para>
-    /// </summary>
-    private static UiControl BuildTitleEditor(string nodePath, bool canEdit)
-    {
-        if (!canEdit)
-            return Controls.Stack
-                .WithStyle("gap: 4px; min-width: 0;")
-                .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("title")))
-                    .WithStyle("margin: 0; font-size: 1.85rem; font-weight: 600; " +
-                               "letter-spacing: -0.01em; line-height: 1.15; " +
-                               "background: linear-gradient(135deg, var(--neutral-foreground-rest), " +
-                               "color-mix(in srgb, var(--accent-fill-rest) 80%, var(--neutral-foreground-rest))); " +
-                               "-webkit-background-clip: text; background-clip: text; " +
-                               "-webkit-text-fill-color: transparent; color: transparent;"))
-                .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("description"))));
-
-        var fieldsContext = LayoutAreaReference.GetMeshNodeDataContext(nodePath, bindContent: false);
-
-        var titleField = new TextFieldControl(new JsonPointerReference(nameof(MeshNode.Name)))
-        {
-            Immediate = true,
-            Placeholder = "Untitled thread",
-            DataContext = fieldsContext
-        }.WithStyle("font-size: 1.5rem; font-weight: 600; letter-spacing: -0.01em;")
-         .WithClass("thread-title-field");
-
-        var descriptionField = new TextAreaControl(new JsonPointerReference(nameof(MeshNode.Description)))
-        {
-            Immediate = true,
-            Placeholder = "Add a description…",
-            DataContext = fieldsContext
-        }.WithRows(2).WithClass("thread-description-field");
-
-        return Controls.Stack
-            .WithStyle("gap: 6px; min-width: 0;")
-            .WithView(titleField)
-            .WithView(descriptionField);
     }
 
     /// <summary>

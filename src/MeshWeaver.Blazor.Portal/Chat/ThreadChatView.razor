@@ -53,17 +53,73 @@ else
     @if (!ViewModel.HideEmptyState)
     {
         <div class="thread-chat-messages" @ref="messagesContainer">
-            @* Full-page hero header (title, context link, modified-nodes summary, Mark Done)
-               rendered as the FIRST item INSIDE the scroll so it scrolls away with the
-               conversation instead of being pinned above it. Side panel leaves ShowFullHeader
-               false → only the compact Header area below renders. *@
-            @if (ViewModel.ShowFullHeader)
+            @* Full-page hero header — rendered NATIVELY (not an embedded layout area) as the FIRST
+               item INSIDE the scroll so it scrolls away with the conversation. Compact: a top row with
+               the thread's starting-point context chip (right) + Mark Done, then a click-to-edit title,
+               then a click-to-edit description as a smaller abstract. Side panel leaves ShowFullHeader
+               false (and CSS hides .thread-full-header there) → only the compact Header area renders. *@
+            @if (ViewModel.ShowFullHeader && !string.IsNullOrEmpty(threadPath))
             {
-                var fullHeader = GetFullHeaderCell();
-                if (fullHeader != null)
-                {
-                    <LayoutAreaView @key="@($"fullhdr-{threadPath}")" ViewModel="@fullHeader" Stream="@Stream" Area="@($"fullhdr-{threadPath}")" />
-                }
+                <div class="thread-full-header">
+                    <div class="thread-full-header-toprow">
+                        @{
+                            var hdrCtxPath = ThreadViewModel?.InitialContext;
+                            var hdrCtxName = ThreadViewModel?.InitialContextDisplayName;
+                        }
+                        @if (!string.IsNullOrEmpty(hdrCtxPath))
+                        {
+                            <button type="button" class="thread-context-chip"
+                                    title="@($"Context: {hdrCtxPath} — click to open")"
+                                    @onclick="@(() => OnContextChipClicked(hdrCtxPath))">
+                                <FluentIcon Value="@(new Icons.Regular.Size16.Location())" Color="Color.Accent" />
+                                <span class="thread-context-chip-text">@(hdrCtxName ?? LastSegment(hdrCtxPath))</span>
+                            </button>
+                        }
+                        @if (!IsReadOnlyThread && ThreadViewModel?.IsExecuting != true)
+                        {
+                            var isDone = ThreadViewModel?.IsDone == true;
+                            <FluentButton Appearance="@(isDone ? FluentAppearance.Neutral : FluentAppearance.Accent)"
+                                          IconStart="@(isDone ? (Icon)new Icons.Regular.Size16.ArrowUndo() : new Icons.Regular.Size16.Checkmark())"
+                                          OnClick="ToggleThreadDone">
+                                @(isDone ? "Reopen" : "Mark Done")
+                            </FluentButton>
+                        }
+                    </div>
+
+                    @* Title — nice headline; click to edit (writes the thread node's Name). *@
+                    @if (isEditingTitle)
+                    {
+                        <FluentTextField @ref="_titleEditField" @bind-Value="editTitleText" Immediate="true"
+                                         class="thread-header-title-input" Placeholder="Untitled thread"
+                                         @onkeydown="OnTitleEditKeyDown" @onblur="CommitTitleEdit" />
+                    }
+                    else
+                    {
+                        var hasTitle = !string.IsNullOrWhiteSpace(ThreadViewModel?.Name);
+                        <div class="thread-header-title @(IsReadOnlyThread ? "" : "editable") @(hasTitle ? "" : "untitled")"
+                             @onclick="BeginTitleEdit"
+                             title="@(IsReadOnlyThread ? null : "Click to edit title")">@(hasTitle ? ThreadViewModel!.Name : "Untitled thread")</div>
+                    }
+
+                    @* Description — smaller abstract; click to edit (writes the thread node's Description). *@
+                    @if (isEditingDescription)
+                    {
+                        <FluentTextArea @ref="_descEditField" @bind-Value="editDescriptionText" Immediate="true"
+                                        class="thread-header-desc-input" Rows="2" Placeholder="Add a description…"
+                                        @onkeydown="OnDescriptionEditKeyDown" @onblur="CommitDescriptionEdit" />
+                    }
+                    else if (!string.IsNullOrWhiteSpace(ThreadViewModel?.Description))
+                    {
+                        <div class="thread-header-desc @(IsReadOnlyThread ? "" : "editable")"
+                             @onclick="BeginDescriptionEdit"
+                             title="@(IsReadOnlyThread ? null : "Click to edit description")">@ThreadViewModel!.Description</div>
+                    }
+                    else if (!IsReadOnlyThread)
+                    {
+                        <div class="thread-header-desc editable placeholder"
+                             @onclick="BeginDescriptionEdit" title="Click to add a description">Add a description…</div>
+                    }
+                </div>
             }
             @{
                 var header = GetHeaderCell();
@@ -638,10 +694,12 @@ else
             @if (contextChips.Count > 0)
             {
                 <div class="thread-chat-context" style="flex: 1 1 auto; min-width: 0; overflow: hidden;">
+                    @* Context chip → peek the context object in the side panel (OnContextChipClicked),
+                       NOT navigate away (that's OnChipClicked, used by the @-reference chips above). *@
                     <ReferenceChipCollection
                         Attachments="@contextChips"
                         OnAttachmentRemoved="@OnAttachmentRemoved"
-                        OnChipClick="@OnChipClicked" />
+                        OnChipClick="@OnContextChipClicked" />
                 </div>
             }
             <div class="selector-bar" style="flex: 0 0 auto; margin-left: auto;">
