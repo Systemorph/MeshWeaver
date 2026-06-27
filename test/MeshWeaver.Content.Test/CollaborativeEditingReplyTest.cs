@@ -355,4 +355,72 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
         var stack = control.Should().BeOfType<StackControl>().Subject;
         stack.Areas.Should().NotBeEmpty("Read view should have child areas");
     }
+
+    /// <summary>
+    /// REPRO + pin for creating MeshNode sync streams from a HOSTED hub. A per-node hub (e.g. the
+    /// comment hub nested under a document's layout area) is HOSTED on the Mesh; a sync stream to it
+    /// must route through the hosted hub, never the IMeshNodeStreamCache. Verifies:
+    /// <list type="number">
+    ///   <item>the per-node hub IS hosted and is found by WALKING the parent chain — a single
+    ///     GetHostedHub at a leaf hub misses it; this is exactly the detection the routing decision in
+    ///     <c>GetMeshNodeStream</c> relies on, so if it fails the fix never activates;</item>
+    ///   <item>read + write through <c>GetMeshNodeStream(path)</c> round-trip against that hosted hub.</item>
+    /// </list>
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task GetMeshNodeStream_FromHostedHub_IsHosted_AndRoundTrips()
+    {
+        var commentId = Guid.NewGuid().AsString();
+        var commentPath = $"{DocPath}/{CommentPartition}/{commentId}";
+        var node = new MeshNode(commentId, $"{DocPath}/{CommentPartition}")
+        {
+            Name = "hosted-hub-stream",
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment
+            {
+                Id = commentId,
+                PrimaryNodePath = DocPath,
+                Author = "HostedHubTest",
+                Text = "hello",
+                Status = CommentStatus.Active
+            }
+        };
+        var created = await NodeFactory.CreateNode(node).Should().Emit();
+        try
+        {
+            // Warm the per-node hub so the Mesh actually hosts it.
+            await GetClient().Observe(new PingRequest(), o => o.WithTarget(new Address(commentPath)))
+                .Should().Within(15.Seconds()).Emit();
+
+            // (1) DETECTION — the per-node hub is HOSTED, found by walking the parent chain from the Mesh.
+            IMessageHub? hosted = null;
+            for (var h = Mesh; h is not null; h = h.Configuration.ParentHub)
+                if ((hosted = h.GetHostedHub(new Address(commentPath), HostedHubCreation.Never)) is not null)
+                    break;
+            hosted.Should().NotBeNull(
+                $"the per-node hub for '{commentPath}' must be hosted (else hosted-hub routing never activates)");
+
+            // (2) READ via GetMeshNodeStream from the hosted hub.
+            var read = await Mesh.GetWorkspace().GetMeshNodeStream(commentPath)
+                .Where(n => n?.Content is Comment)
+                .FirstAsync().Timeout(15.Seconds()).ToTask();
+            ((Comment)read.Content!).Text.Should().Be("hello", "the stream reads the hosted hub's node");
+
+            // (3) COHERENCE — an external write is REFLECTED on the hosted-hub stream (it is live-bound
+            // to the hosted hub, not a stale cache mirror). Write via the node-lifecycle API (a proper
+            // request/reply, no orphaned callback) and observe the GetMeshNodeStream handle pick it up.
+            await NodeFactory.UpdateNode(
+                created with { Content = ((Comment)created.Content!) with { Text = "updated" } })
+                .Should().Within(15.Seconds()).Emit();
+            var after = await Mesh.GetWorkspace().GetMeshNodeStream(commentPath)
+                .Where(n => n?.Content is Comment c && c.Text == "updated")
+                .FirstAsync().Timeout(15.Seconds()).ToTask();
+            ((Comment)after.Content!).Text.Should().Be("updated",
+                "the hosted-hub stream reflects writes to the node");
+        }
+        finally
+        {
+            await NodeFactory.DeleteNode(commentPath).Should().Emit();
+        }
+    }
 }

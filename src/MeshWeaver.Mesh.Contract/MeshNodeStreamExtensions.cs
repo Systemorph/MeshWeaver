@@ -1081,18 +1081,14 @@ public static class MeshNodeStreamExtensions
             || string.Equals(path, workspace.Hub.Address.ToString(), StringComparison.Ordinal))
             return new MeshNodeStreamHandle(workspace);
 
-        // 🚨 HOSTED-HUB ROUTING — decided at the very point we would otherwise delegate to the cache.
-        // A layout area's nested sync streams are hosted hubs of that layout area. If the path's hub is
-        // HOSTED here, IMeshNodeStreamCache is the WRONG transport: its shared cross-hub handle does not
-        // respect hosted-hub routing. Instead take the remote/sync path (GetRemoteStream over a
-        // MeshNodeReference — the bypassCache handle): its SubscribeRequest is ROUTED through the
-        // top-most (non-hosted) hub, which then dispatches DOWN to the hosted sub-hub. So the stream's
-        // Owner is the real hub — nested-area renders emit and nested-area ClickedEvents (the per-comment
-        // ↩ reply / ✎ / ✓ / ✗) land on the host that holds the control. HostedHubCreation.Never is a
-        // pure dictionary read; genuinely remote paths (no hosted hub) fall through to the cache as before.
-        if (workspace.Hub.GetHostedHub(new Address(path), HostedHubCreation.Never) is not null)
-            return new MeshNodeStreamHandle(workspace, path, bypassCache: true);
-
+        // NOTE: a hosted-hub fast-path was tried here (route hosted addresses via GetRemoteStream over a
+        // MeshNodeReference — bypassCache — instead of the cache). GetMeshNodeStream_FromHostedHub_…
+        // disproved it: the cache path round-trips read + write coherence for a hosted per-node hub
+        // cleanly, while the raw bypassCache stream leaks the write's DataChangeRequest reply (the cache
+        // owns that mirror lifecycle, the bypass does not). The cache IS the correct transport for a
+        // cross-hub node — hosted or not — so the decision stays cache-only. (The nested-area CLICK bug is
+        // a separate layout-area concern: the ClickedEvent's Area is built root-relative on the client but
+        // stored context-relative on the nested area's host, so GetControl misses — not a stream-routing fix.)
         var cache = workspace.Hub.ServiceProvider.GetService(typeof(IMeshNodeStreamCache))
             as IMeshNodeStreamCache;
         return new MeshNodeStreamHandle(workspace, path, cache);
