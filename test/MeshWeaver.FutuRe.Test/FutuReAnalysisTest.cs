@@ -150,34 +150,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact(Timeout = 60000)]
     public async Task EuropeRe_Overview_ShouldRender()
     {
-        var client = GetClient();
-        var address = new Address("FutuRe/EuropeRe");
-
-        // No ping: the Overview subscription below activates the hub + triggers the
-        // cold LocalAnalysis compile itself; the 50s GetControlStream budget carries
-        // it. The ping was redundant (it just serialized a block beforehand).
-        var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference("Overview");
-
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            address, reference);
-
-        Output.WriteLine("Waiting for EuropeRe Overview control...");
-        // Wait for the FULL render — Overview's CombineLatest emits a placeholder
-        // StackControl with one NamedArea before the per-area children resolve.
-        // Without the .Areas.Count predicate the test races the placeholder on
-        // CI and fast-fails (~400ms) while the full render arrives a beat later.
-        // 50 s: accounts for first-activation compile time on slow CI agents
-        // when LocalAnalysis DLL isn't in the session cache yet.
-        var control = await stream
-            .GetControlStream(reference.Area!)
-            .Should().Within(50.Seconds())
-            .Match(x => x is StackControl s && s.Areas.Count >= 2);
-
-        Output.WriteLine($"Received control: {control?.GetType().Name}");
-        control.Should().NotBeNull("Overview area should render for EuropeRe business unit");
-
-        var stack = control.Should().BeOfType<StackControl>().Subject;
+        var stack = await GetSettledOverview("FutuRe/EuropeRe");
         stack.Areas.Should().HaveCountGreaterThanOrEqualTo(2,
             "BusinessUnit Overview should have H2 title + child areas (not just an error control)");
     }
@@ -189,34 +162,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact(Timeout = 60000)]
     public async Task AmericasIns_Overview_ShouldRender()
     {
-        var client = GetClient();
-        var address = new Address("FutuRe/AmericasIns");
-
-        // No ping: the Overview subscription activates the hub + triggers the cold
-        // compile itself; the 50s GetControlStream budget carries it.
-        var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference("Overview");
-
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            address, reference);
-
-        Output.WriteLine("Waiting for AmericasIns Overview control...");
-        // Wait for the FULL render (Areas.Count >= 2). The CombineLatest in
-        // BusinessUnit Overview emits a placeholder StackControl with one
-        // NamedArea + spinner before the per-area children resolve; without
-        // the .Count predicate the test races the placeholder on CI and
-        // fast-fails while the full render arrives a beat later. Same shape
-        // as EuropeRe_Overview_ShouldRender above. 50 s budget covers the
-        // first-activation compile on slow CI agents.
-        var control = await stream
-            .GetControlStream(reference.Area!)
-            .Should().Within(50.Seconds())
-            .Match(x => x is StackControl s && s.Areas.Count >= 2);
-
-        Output.WriteLine($"Received control: {control?.GetType().Name}");
-        control.Should().NotBeNull("Overview area should render for AmericasIns business unit");
-
-        var stack = control.Should().BeOfType<StackControl>().Subject;
+        var stack = await GetSettledOverview("FutuRe/AmericasIns");
         stack.Areas.Should().HaveCountGreaterThanOrEqualTo(2,
             "BusinessUnit Overview should have H2 title + child areas (not just an error control)");
     }
@@ -228,35 +174,10 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact(Timeout = 60000)]
     public async Task AsiaRe_Overview_ShouldRender()
     {
-        var client = GetClient();
-        var address = new Address("FutuRe/AsiaRe");
-
-        // No ping: the Overview subscription activates the hub + triggers the cold
-        // compile itself; the 100s GetControlStream budget carries it.
-        var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference("Overview");
-
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            address, reference);
-
-        Output.WriteLine("Waiting for AsiaRe Overview control...");
-        // Wait for the FULL render (Areas.Count >= 2) — same pattern as
-        // EuropeRe / AmericasIns above; the placeholder StackControl with
-        // a spinner arrives first and the per-area children land a beat
-        // later. 100 s budget covers the first-activation compile when
-        // AsiaRe is the FIRST FutuRe BU compiled in this fixture (CI runs
-        // tests alphabetically so AmericasIns warms the cache, but the
-        // single-filter local repro and isolated CI shards both hit the
-        // cold compile here and time out at 60 s).
-        var control = await stream
-            .GetControlStream(reference.Area!)
-            .Should().Within(100.Seconds())
-            .Match(x => x is StackControl s && s.Areas.Count >= 2);
-
-        Output.WriteLine($"Received control: {control?.GetType().Name}");
-        control.Should().NotBeNull("Overview area should render for AsiaRe business unit");
-
-        var stack = control.Should().BeOfType<StackControl>().Subject;
+        // 100 s budget: AsiaRe is often the FIRST FutuRe BU compiled in an isolated
+        // shard, so it eats the full cold compile here (the per-[Fact] 60 s method
+        // timeout still bounds a genuinely hung activation).
+        var stack = await GetSettledOverview("FutuRe/AsiaRe", seconds: 100);
         stack.Areas.Should().HaveCountGreaterThanOrEqualTo(2,
             "BusinessUnit Overview should have H2 title + child areas (not just an error control)");
     }
@@ -404,27 +325,11 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact(Timeout = 60000)]
     public async Task EuropeRe_LineOfBusiness_Overview_ShouldRender()
     {
-        var client = GetClient();
-        var address = new Address("FutuRe/EuropeRe/LineOfBusiness/HOUSEHOLD");
-
-        // No ping: the Overview subscription activates the hub + triggers the cold
-        // compile itself; the 50s budget (was 10s + a redundant ping warm) carries it.
-        var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference("Overview");
-
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            address, reference);
-
-        Output.WriteLine("Waiting for Overview control...");
-        var control = await stream
-            .GetControlStream(reference.Area!)
-            .Should().Within(50.Seconds())
-            .Match(x => x is not null);
-
-        Output.WriteLine($"Received control: {control?.GetType().Name}");
-        control.Should().NotBeNull("Overview area should render a control for EuropeRe LineOfBusiness HOUSEHOLD");
-
-        var stack = control.Should().BeOfType<StackControl>().Subject;
+        // Settled-wait centralised in GetSettledOverview: the LineOfBusiness Overview
+        // emits the same transient 1-area placeholder during the cold compile that the
+        // BusinessUnit Overviews do; this test previously inlined `x is not null` and
+        // raced it (found 1 → fail). Wait for the full render, like its siblings.
+        var stack = await GetSettledOverview("FutuRe/EuropeRe/LineOfBusiness/HOUSEHOLD");
         stack.Areas.Should().HaveCountGreaterThanOrEqualTo(2,
             "LineOfBusiness Overview should have H2 title + description (not just an error control)");
     }
@@ -1274,6 +1179,40 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             var buAddress = new Address($"FutuRe/{bu}/Analysis");
             await client.Observe(new PingRequest(), o => o.WithTarget(buAddress)).Should().Emit();
         }
+    }
+
+    /// <summary>
+    /// Waits for a BusinessUnit / LineOfBusiness <c>Overview</c> area to render its
+    /// FULL content — a <see cref="StackControl"/> with the H2 title + at least one
+    /// child area (≥ 2 areas) — and returns it.
+    /// <para>
+    /// Overview's <c>CombineLatest</c> emits a transient PLACEHOLDER StackControl
+    /// (one NamedArea + spinner) BEFORE the cold dynamic-NodeType compile settles and
+    /// the per-area children resolve. Asserting on the first non-null emission races
+    /// that placeholder and fast-fails on CI ("found 1") — the lag we create on a cold
+    /// compile. Centralising the settled-wait HERE absorbs that init lag in one place
+    /// so no Overview test can be written against the placeholder again (the exact
+    /// duplication-slip that flaked <c>EuropeRe_LineOfBusiness_Overview</c>, which
+    /// inlined <c>x is not null</c> while its three siblings waited for the full
+    /// render). The wait is on the genuine settled shape, not a sleep — deterministic.
+    /// </para>
+    /// </summary>
+    private async Task<StackControl> GetSettledOverview(string addressPath, int seconds = 50)
+    {
+        var workspace = GetClient().GetWorkspace();
+        var reference = new LayoutAreaReference("Overview");
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(addressPath), reference);
+
+        Output.WriteLine($"Waiting for settled Overview at {addressPath}...");
+        var control = await stream
+            .GetControlStream(reference.Area!)
+            .Should().Within(seconds.Seconds())
+            .Match(x => x is StackControl s && s.Areas.Count >= 2);
+        Output.WriteLine($"Received settled Overview: {control?.GetType().Name}");
+        return control.Should().BeOfType<StackControl>(
+            "the Overview must render its full StackControl (H2 title + child areas), "
+            + "not the transient placeholder or an error control").Subject;
     }
 
     private async Task<UiControl?> GetControl(
