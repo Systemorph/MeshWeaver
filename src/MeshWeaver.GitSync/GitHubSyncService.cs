@@ -533,15 +533,9 @@ public sealed class GitHubSyncService
                     $"Failed to save GitHub sync config: {resp.Error}")));
     }
 
+    // ContentAs (tolerant): typed → as-is, degraded JsonElement → recovered, otherwise
+    // null and LOGGED LOUD. Replaces a bare `catch { return null; }` that silently
+    // no-op'd GitHub sync on a degraded config node.
     private T? Extract<T>(MeshNode? node) where T : class
-    {
-        if (node?.Content is null) return null;
-        if (node.Content is T typed) return typed;
-        if (node.Content is System.Text.Json.JsonElement je)
-        {
-            try { return System.Text.Json.JsonSerializer.Deserialize<T>(je.GetRawText(), hub.JsonSerializerOptions); }
-            catch { return null; }
-        }
-        return null;
-    }
+        => node.ContentAs<T>(hub.JsonSerializerOptions, logger);
 }

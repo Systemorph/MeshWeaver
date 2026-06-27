@@ -819,7 +819,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// <see cref="IMeshNodeStreamCache.GetStream(string, JsonSerializerOptions)"/>.
     /// </summary>
     public IObservable<MeshNode> GetStream(string path, JsonSerializerOptions options) =>
-        GetStreamRaw(path).Select(node => ConvertContentJsonElementToTyped(node, options));
+        GetStreamRaw(path).Select(node => ConvertContentJsonElementToTyped(node, options, logger));
 
     /// <summary>
     /// Caller-typed write: deserialises the current MeshNode's <c>Content</c>
@@ -836,7 +836,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     {
         Func<MeshNode, MeshNode> wrapped = node =>
         {
-            var typed = ConvertContentJsonElementToTyped(node, options);
+            var typed = ConvertContentJsonElementToTyped(node, options, logger);
             var updated = update(typed);
             return ConvertContentTypedToJsonElement(updated, options);
         };
@@ -880,7 +880,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         return result;
     }
 
-    private static MeshNode ConvertContentJsonElementToTyped(MeshNode node, JsonSerializerOptions options)
+    private static MeshNode ConvertContentJsonElementToTyped(MeshNode node, JsonSerializerOptions options, ILogger logger)
     {
         // Only convert when the cache emitted a raw JsonElement (the cache hub
         // doesn't know domain types, so Content lands here as JsonElement). If
@@ -888,9 +888,34 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // caller already converted), pass through.
         if (node.Content is JsonElement je)
         {
-            return node with { Content = je.Deserialize<object>(options) };
+            var deserialized = je.Deserialize<object>(options);
+            // 🚨 Bad-data tolerance: Deserialize<object> degrades to a JsonElement again
+            // when the caller's TypeRegistry can't resolve the $type discriminator. The
+            // node then crosses the GetStream/GetMeshNodeStream boundary STILL untyped,
+            // so every downstream `Content is X` / `as X` silently fails (renders empty,
+            // reactive waits time out with no visible cause). Surface it LOUDLY here —
+            // the degrade was previously invisible at this seam.
+            if (deserialized is JsonElement)
+            {
+                logger.LogWarning(
+                    "MeshNodeStreamCache.GetStream: Content for {Path} stayed an untyped JsonElement after "
+                    + "deserialization (TypeRegistry lacks the $type discriminator) — downstream "
+                    + "'Content is X'/'as X' consumers will fail (renders empty, reactive waits time out). "
+                    + "Raw: {RawJson}",
+                    node.Path, TruncateRaw(je));
+            }
+            return node with { Content = deserialized };
         }
         return node;
+    }
+
+    // Truncated raw JSON for diagnostics — bad-data warnings include the offending
+    // content so the corrupt row is identifiable in Loki without flooding the log.
+    private const int RawJsonLogMax = 512;
+    private static string TruncateRaw(JsonElement je)
+    {
+        var raw = je.GetRawText();
+        return raw.Length <= RawJsonLogMax ? raw : raw[..RawJsonLogMax] + "… (truncated)";
     }
 
     private static MeshNode ConvertContentTypedToJsonElement(MeshNode node, JsonSerializerOptions options)
@@ -1072,21 +1097,45 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // inert (no Subscribe), so there's no upstream leak.
         return _optionsWrappedQueries.GetOrAdd((id, options), static (_, state) =>
             System.Reactive.Linq.Observable.Select(state.raw, items =>
-                (IEnumerable<MeshNode>)items.Select(node => DeserializeContent(node, state.options)).ToArray()),
-            (raw, options));
+                (IEnumerable<MeshNode>)items.Select(node => DeserializeContent(node, state.options, state.logger)).ToArray()),
+            (raw, options, logger));
     }
 
-    private static MeshNode DeserializeContent(MeshNode node, JsonSerializerOptions options)
+    private static MeshNode DeserializeContent(MeshNode node, JsonSerializerOptions options, ILogger logger)
     {
-        if (node.Content is not System.Text.Json.JsonElement je || je.ValueKind != System.Text.Json.JsonValueKind.Object)
+        if (node.Content is not JsonElement je || je.ValueKind != JsonValueKind.Object)
             return node;
         try
         {
-            var deserialized = System.Text.Json.JsonSerializer.Deserialize<object>(je.GetRawText(), options);
-            return deserialized is null ? node : node with { Content = deserialized };
+            var deserialized = JsonSerializer.Deserialize<object>(je.GetRawText(), options);
+            if (deserialized is null)
+                return node;
+            // 🚨 Bad-data tolerance: Deserialize<object> degrades BACK to a JsonElement when
+            // the caller's TypeRegistry can't resolve the $type — the GetQuery resolution
+            // boundary then hands consumers an untyped JsonElement and every `Content is X`
+            // soft-cast silently fails. Surface it (don't fault the query) so the corrupt row
+            // is visible rather than rendering empty / timing out a reactive wait.
+            if (deserialized is JsonElement)
+            {
+                logger.LogWarning(
+                    "MeshNodeStreamCache.GetQuery: Content for {Path} stayed an untyped JsonElement after "
+                    + "deserialization (TypeRegistry lacks the $type discriminator) — downstream "
+                    + "'Content is X'/'as X' consumers will fail (renders empty). Raw: {RawJson}",
+                    node.Path, TruncateRaw(je));
+                return node;
+            }
+            return node with { Content = deserialized };
         }
-        catch
+        catch (Exception ex)
         {
+            // Was a bare `catch { return node; }` — a swallowed deserialization fault at the
+            // cross-hub GetQuery boundary that left Content an untyped JsonElement with NO
+            // trace. Keep returning the node (a read must not fault the whole query) but make
+            // the fault VISIBLE — this is the secretly-errors-as-a-timeout class.
+            logger.LogWarning(ex,
+                "MeshNodeStreamCache.GetQuery: FAILED to deserialize Content for {Path} — content stays an "
+                + "untyped JsonElement; downstream 'Content is X' will fail (renders empty). Raw: {RawJson}",
+                node.Path, TruncateRaw(je));
             return node;
         }
     }
