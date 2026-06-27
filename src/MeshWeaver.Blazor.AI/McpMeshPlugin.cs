@@ -247,10 +247,14 @@ The leading `@` is required (this is @-reference autocomplete, not free-text sea
 
 Chunking model: each indexed file is split into 1000-char windows with 150-char overlap, numbered by a 0-based chunk_index per file.
 
+Two ways to scope the search:
+  • Anchored (default): pass `scope` as a node path — that path AND each ANCESTOR-prefix collection are searched (good when you don't know exactly which collection holds the content).
+  • Targeted: put `namespace:<node>/<collection>` (and optionally `scope:subtree|exact|ancestorsandself`) directly in the `query` to search ONE named collection. `scope:subtree` (the default when a namespace is given) checks only that collection and anything nested under it; `scope:exact` only the collection itself. Example: `namespace:ACME/content scope:subtree accrued benefit obligation`. The `namespace:` form wins and the `scope` parameter is ignored.
+
 Returns `{count, results:[{documentPath, collectionPath, filePath, chunkIndex, rank, snippet}]}` — `rank` is the 0-based best-first relevance order. When content indexing isn't enabled in this host, returns a `{count:0, message:…}` envelope rather than erroring.")]
     public Task<string> SearchChunks(
-        [Description("Free-text query, matched semantically against indexed chunk text.")] string query,
-        [Description("Node path to anchor the search at — this path AND each ancestor prefix are searched (e.g. '@ACME/Reports'). Required: with no scope there is no collection to search and an empty result with a hint is returned.")] string? scope = null,
+        [Description("Free-text query, matched semantically against indexed chunk text. May also carry `namespace:<node>/<collection>` and `scope:subtree|exact|ancestorsandself` to target one collection.")] string query,
+        [Description("Node path to anchor the search at — this path AND each ancestor prefix are searched (e.g. '@ACME/Reports'). Ignored when the query carries a `namespace:` token. With neither a scope nor a namespace, an empty result with a hint is returned.")] string? scope = null,
         [Description("Maximum number of chunk hits to return (1-200, default 20). Not deduped by file.")] int limit = 20)
     {
         var scopePath = string.IsNullOrWhiteSpace(scope) ? null : MeshOperations.ResolvePath(scope);

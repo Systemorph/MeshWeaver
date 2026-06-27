@@ -80,6 +80,35 @@ public sealed class InMemoryChunkedContentVectorStore : IChunkedContentVectorSto
             return Observable.Return<IReadOnlyList<ContentChunk>>(ranked);
         });
 
+    /// <summary>
+    /// Ranks the chunks of the collection at <paramref name="collectionPathPrefix"/> AND of every
+    /// collection nested under it by cosine similarity, returning the top matches. The subtree match is
+    /// exact-collection OR collection-path that starts with <c>prefix/</c> — the <c>scope:subtree</c>
+    /// resolution.
+    /// </summary>
+    /// <param name="collectionPathPrefix">The collection (and subtree root) to search within.</param>
+    /// <param name="query">The query embedding vector.</param>
+    /// <param name="topK">The maximum number of chunks to return, highest similarity first.</param>
+    /// <returns>A cold observable emitting the ranked chunks (at most <paramref name="topK"/>).</returns>
+    public IObservable<IReadOnlyList<ContentChunk>> SearchSubtree(
+        string collectionPathPrefix, float[] query, int topK) =>
+        Observable.Defer(() =>
+        {
+            var childPrefix = collectionPathPrefix + "/";
+            var ranked = _chunks
+                .Where(kvp => kvp.Key.Collection == collectionPathPrefix
+                              || kvp.Key.Collection.StartsWith(childPrefix, StringComparison.Ordinal))
+                .SelectMany(kvp => kvp.Value)
+                .Where(chunk => chunk.Embedding is { Length: > 0 })
+                .Select(chunk => (chunk, score: CosineSimilarity(query, chunk.Embedding!)))
+                .OrderByDescending(x => x.score)
+                .Take(topK)
+                .Select(x => x.chunk)
+                .ToArray();
+
+            return Observable.Return<IReadOnlyList<ContentChunk>>(ranked);
+        });
+
     /// <summary>Returns a single chunk of a file by its chunk index, or <c>null</c> when not found.</summary>
     /// <param name="collectionPath">The collection the file belongs to.</param>
     /// <param name="filePath">The file's path within the collection.</param>
