@@ -93,23 +93,18 @@ public sealed class UserOnboardingService(
         // identity (Permission.All): the new user / their brand-new partition root don't
         // exist yet, so neither the signed-in admin nor the user-being-onboarded can hold
         // Create on it — the canonical infrastructure-write case (see AccessService.cs).
+        // ATOMIC create-or-update — the owning hub decides create-vs-update by existence, so a re-run or
+        // a CONCURRENT onboarding (e.g. a lagged user-existence check that re-triggers provisioning) is
+        // race-free + idempotent. The old CreateNode().Catch(already-exists → UpdateNode()) split raced:
+        // under concurrency the create's exists-check lagged the in-flight create, the catch fell through
+        // to UpdateNode, which patched a not-yet-materialized node → "NotFound … for patch apply" →
+        // unhandled → error storm → the portal climbed to OutOfMemory and wedged. See /async, CreateOrUpdateNode.
         return Observable.Using(
             () => accessService.ImpersonateAsSystem(),
-            _ => meshService.CreateNode(partitionRootNode)
+            _ => meshService.CreateOrUpdateNode(partitionRootNode)
                 .Do(__ => logger?.LogInformation(
-                    "Onboarding: wrote partition-root User '{Username}' to {Schema}.mesh_nodes",
-                    username, username.ToLowerInvariant()))
-                // Idempotent / self-repairing: a leftover partition-root (a pre-gate
-                // activity-tracking row, or a half-finished prior onboarding) must not
-                // dead-end onboarding with "Node already exists" — fold into an update so
-                // the row is brought to the intended User content and onboarding completes.
-                .Catch<MeshNode, Exception>(ex =>
-                    ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase)
-                        ? meshService.UpdateNode(partitionRootNode)
-                            .Do(__ => logger?.LogInformation(
-                                "Onboarding: partition-root User '{Username}' already existed — repaired via update",
-                                username))
-                        : Observable.Throw<MeshNode>(ex)))
+                    "Onboarding: upserted partition-root User '{Username}' to {Schema}.mesh_nodes",
+                    username, username.ToLowerInvariant())))
             // Best-effort: once the user node exists, generate an inline-SVG avatar in the
             // background (the configurable utility model, via IIconGenerator → NodeInitializer)
             // and stamp it onto the node's Icon — exactly like thread auto-naming runs AFTER a
@@ -173,17 +168,12 @@ public sealed class UserOnboardingService(
         // identity (server-side bootstrap) or only hub identity (interactive onboarding). Same
         // justification + pattern as CreateUser above. PostPipeline fails closed without a
         // context, so this MUST set one explicitly rather than rely on the caller.
+        // ATOMIC create-or-update (see CreateUser): race-free + idempotent. A retried or concurrent
+        // onboarding must not fall into the CreateNode→already-exists→UpdateNode split that patched a
+        // not-yet-materialized _Access node ("NotFound … for patch apply" → storm → OOM wedge).
         return Observable.Using(
             () => accessService.ImpersonateAsSystem(),
-            _ => meshService.CreateNode(assignment)
-                // Idempotent / self-repairing: a leftover _Access from a half-finished prior
-                // onboarding (the user retried) must not dead-end with "Node already exists" —
-                // fold into an update so the grant reaches the intended content and onboarding
-                // completes. Same pattern as CreateUser's partition-root write above.
-                .Catch<MeshNode, Exception>(ex =>
-                    ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase)
-                        ? meshService.UpdateNode(assignment)
-                        : Observable.Throw<MeshNode>(ex))
+            _ => meshService.CreateOrUpdateNode(assignment)
                 .Do(__ => logger?.LogInformation(
                     "Onboarding: granted self-Admin to '{Username}' at {Path}", username, assignment.Path)));
     }
@@ -226,15 +216,10 @@ public sealed class UserOnboardingService(
         // Self-impersonate as System (see GrantSelfAdmin) — the first-user platform-Admin grant
         // is an infrastructure write that must succeed even when no user identity is on the
         // caller (server-side bootstrap) or only a hub identity (interactive onboarding).
+        // ATOMIC create-or-update (see GrantSelfAdmin): race-free + idempotent first-user grant.
         return Observable.Using(
             () => accessService.ImpersonateAsSystem(),
-            _ => meshService.CreateNode(assignment)
-                // Idempotent / self-repairing (see GrantSelfAdmin): a retried first-user
-                // onboarding must not fail because Admin/_Access/{user}_Access already exists.
-                .Catch<MeshNode, Exception>(ex =>
-                    ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase)
-                        ? meshService.UpdateNode(assignment)
-                        : Observable.Throw<MeshNode>(ex))
+            _ => meshService.CreateOrUpdateNode(assignment)
                 .Do(__ => logger?.LogInformation(
                     "Onboarding: granted platform Admin (first user) to '{Username}' on the Admin partition (Admin/_Access, MainNode=\"\")", username)));
     }

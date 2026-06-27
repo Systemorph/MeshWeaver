@@ -4,6 +4,7 @@ using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Mvc;
@@ -17,13 +18,15 @@ public class DevAuthController : ControllerBase
 {
     private readonly IMeshService _meshQuery;
     private readonly UserOnboardingService _onboarding;
+    private readonly IMessageHub _hub;
     private readonly bool _devLoginEnabled;
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-    public DevAuthController(IMeshService meshQuery, UserOnboardingService onboarding, IConfiguration configuration)
+    public DevAuthController(IMeshService meshQuery, UserOnboardingService onboarding, IMessageHub hub, IConfiguration configuration)
     {
         _meshQuery = meshQuery;
         _onboarding = onboarding;
+        _hub = hub;
         // DevLogin is forced OFF in prod (Memex.Portal.Distributed/Program.cs); this gate
         // ensures the self-provisioning below can NEVER auto-create users in production.
         _devLoginEnabled = configuration["Authentication:EnableDevLogin"] == "true";
@@ -35,19 +38,41 @@ public class DevAuthController : ControllerBase
     [HttpPost("signin")]
     public async Task<IActionResult> Login([FromForm] string personId, [FromForm] string? returnUrl)
     {
-        // Resolve the dev user across BOTH user-node shapes (so dev login works on the monolith
-        // AND the distributed portal). The monolith / AddSampleUsers seed the legacy `User/{id}`
-        // node (namespace "User"); the distributed portal's UserOnboardingService writes the
-        // partition-root `{id}` node (namespace "", nodeType "User") and no longer mirrors it under
-        // `User/`. Query nodeType:User and match by id (case-insensitive) or the legacy path.
-        // TODO(persistence-cull): framework boundary — review whether this should
-        // route through UserIdentityCache (sync) instead of awaiting the observable.
-        var change = await _meshQuery
-            .Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:User"))
-            .FirstAsync();
-        var node = change.Items.FirstOrDefault(n =>
-            string.Equals(n.Id, personId, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(n.Path, $"User/{personId}", StringComparison.OrdinalIgnoreCase));
+        // 🚨 Resolve an EXISTING user AUTHORITATIVELY first — read the partition-root User node directly
+        // off its stream, NOT the eventually-consistent `nodeType:User` query. Under concurrent signin
+        // load the one-shot query's first emission is a stale/empty initial snapshot, so it MISSES a
+        // user who actually exists → DevLogin spuriously RE-provisions them → GrantSelfAdmin's _Access
+        // upsert races the owner hub and 500s the signin (CQRS violation; see CqrsAndContentAccess.md +
+        // /async). The single-node stream is write-consistent, so an existing user is found reliably and
+        // never re-provisioned. A genuine miss (timeout) falls through to the legacy query + provision.
+        MeshNode? node = null;
+        try
+        {
+            node = await _hub.GetMeshNodeStream(personId)
+                .Where(n => n is not null
+                    && string.Equals(n.NodeType, "User", StringComparison.OrdinalIgnoreCase)
+                    && n.Content is not null)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(5))
+                .FirstAsync();
+        }
+        catch (TimeoutException)
+        {
+            // Not found at the partition root (or not yet) — fall through to the legacy/monolith shape.
+        }
+
+        // Fallback for the legacy `User/{id}` node shape (monolith / AddSampleUsers) — query nodeType:User
+        // and match by id (case-insensitive) or the legacy path. Only reached when the authoritative read
+        // above did not find a partition-root User node.
+        if (node is null)
+        {
+            var change = await _meshQuery
+                .Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:User"))
+                .FirstAsync();
+            node = change.Items.FirstOrDefault(n =>
+                string.Equals(n.Id, personId, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(n.Path, $"User/{personId}", StringComparison.OrdinalIgnoreCase));
+        }
 
         // DevLogin self-provisions (dev only — gated on EnableDevLogin, forced off in prod).
         // A personId with no User node yet is onboarded on first signin via the SAME reactive
