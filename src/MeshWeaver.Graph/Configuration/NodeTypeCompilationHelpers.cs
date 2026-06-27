@@ -586,15 +586,33 @@ internal static class NodeTypeCompilationHelpers
         // compile watcher's parked short-circuit doesn't refuse the user's explicit rebuild.
         var parkRegistry = hub.ServiceProvider.GetService<NodeTypeCompileParkRegistry>();
 
-        // Process-local memory of the last RequestedReleaseAt we have already
-        // dispatched. The framework's stream emissions can arrive faster than
-        // our own Update can round-trip (especially across the test's remote
-        // UpdateRemote path) so the on-node `LastReleaseRequestHandledAt`
-        // alone isn't enough — every emission in the gap re-fires with the
-        // same trigger. The local timestamp short-circuits the watcher
-        // before it queues a redundant Update. The on-node stamp is still
-        // written for cross-silo / restart consistency.
-        DateTimeOffset? localLastDispatched = null;
+        // 🚨 MONOTONIC high-water mark of the highest RequestedReleaseAt this
+        // process has OBSERVED-and-dispatched (the on-node
+        // LastReleaseRequestHandledAt is the cross-silo / restart equivalent).
+        // It is the FLAP-BACK guard.
+        //
+        // Under load, two concurrent cross-hub RequestedReleaseAt patches can
+        // apply OUT OF ORDER at the owner, so this OWN stream can momentarily
+        // re-emit a node whose RequestedReleaseAt has FLAPPED BACK to an OLDER
+        // value AFTER we already saw the newer one (captured trace:
+        // RRW-FIRED req=665 → the node re-emits reqAt=399). Two failures follow
+        // if we ever trust the live value at dispatch time:
+        //   (a) the Update lambda RE-READING def.RequestedReleaseAt would see 399,
+        //       stamp LastReleaseRequestHandledAt = 399 and SKIP the Pending flip
+        //       (399 <= handled) → the genuine recompile NEVER runs → the test's
+        //       WaitForLatestRelease / Status==Ok times out (the whole flake);
+        //   (b) the flapped-back 399 emission would itself spuriously re-fire.
+        // Fix: gate the outer Where on `req > high-water` (a flapped-back older
+        // value can never re-trigger and can never un-handle one already in
+        // flight), and inside the action CARRY the value the Where OBSERVED into
+        // the Update — never re-read def.RequestedReleaseAt live.
+        //
+        // The companion data-layer guard (DataExtensions.DropStaleMonotonicTriggers)
+        // stops the flap-back at its source; this watcher is correct even without
+        // it. The high-water also short-circuits redundant Updates when the
+        // framework re-emits the same trigger faster than our own Update can
+        // round-trip — the role the former `localLastDispatched` served.
+        DateTimeOffset? dispatchHighWater = null;
 
         // 🚨 Gate on Status being SETTLED (Ok / Error / null) — never fire
         // while a compile is in-flight (Pending or Compiling). If we fired
@@ -612,7 +630,11 @@ internal static class NodeTypeCompilationHelpers
         return ownStream
             .Where(node => node?.Content is NodeTypeDefinition def
                 && def.RequestedReleaseAt is { } req
-                && (localLastDispatched is null || req > localLastDispatched.Value)
+                // Strictly past our process-local high-water — a flapped-back older
+                // value (or a duplicate emission of the same trigger) never matches.
+                && (dispatchHighWater is null || req > dispatchHighWater.Value)
+                // …and strictly past the on-node last-handled stamp (cross-silo /
+                // restart consistency; owner-written via UpdateOwn, so it never flaps).
                 && (def.LastReleaseRequestHandledAt is null
                     || req > def.LastReleaseRequestHandledAt.Value)
                 && def.CompilationStatus is not CompilationStatus.Pending
@@ -620,9 +642,16 @@ internal static class NodeTypeCompilationHelpers
             .Subscribe(
                 node =>
                 {
-                    var triggerAt = (node!.Content as NodeTypeDefinition)?.RequestedReleaseAt;
-                    if (triggerAt is null) return;
-                    localLastDispatched = triggerAt;
+                    // 🚨 The trigger value OBSERVED by the Where for THIS emission.
+                    // Everything below uses this CAPTURED value — never a fresh
+                    // def.RequestedReleaseAt re-read, which can have flapped back to
+                    // an older value by the time the Update lambda runs on the
+                    // action block (see the high-water comment above).
+                    if ((node!.Content as NodeTypeDefinition)?.RequestedReleaseAt
+                        is not { } triggerAt) return;
+                    // Advance the high-water monotonically. The Where already proved
+                    // triggerAt > dispatchHighWater, so this only ever moves forward.
+                    dispatchHighWater = triggerAt;
                     // 🅿️ Deliberate retry → un-park so the explicit rebuild is allowed through
                     // the compile watcher's parked short-circuit (and the attempt budget resets).
                     parkRegistry?.Unpark(hubPath);
@@ -634,16 +663,18 @@ internal static class NodeTypeCompilationHelpers
                     workspace.GetMeshNodeStream().Update(curr =>
                     {
                         if (curr.Content is not NodeTypeDefinition def) return curr;
-                        if (def.RequestedReleaseAt is null) return curr;
+                        // 🚨 Gate on the CARRIED triggerAt, NOT def.RequestedReleaseAt
+                        // (which may have flapped back to an older value). Already
+                        // handled at or beyond this trigger? bail.
                         if (def.LastReleaseRequestHandledAt is { } handled
-                            && def.RequestedReleaseAt.Value <= handled)
+                            && triggerAt <= handled)
                             return curr;
-                        // Double-check inside the Update lambda — OWN's state
-                        // may have transitioned to Compiling between the
-                        // outer Where matching and this lambda running.
-                        // Returning `curr` unchanged here is safe: the
-                        // outer subscription will re-fire on the next
-                        // settled emission and the lambda will retry.
+                        // Double-check status inside the lambda — OWN's state may have
+                        // transitioned to Pending/Compiling between the outer Where
+                        // matching and this lambda running. Returning `curr` unchanged
+                        // is safe: an in-flight compile carries this request to a
+                        // terminal status, and a still-unhandled fresher request
+                        // re-fires on the next settled emission.
                         if (def.CompilationStatus is CompilationStatus.Pending
                                                   or CompilationStatus.Compiling)
                             return curr;
@@ -652,7 +683,14 @@ internal static class NodeTypeCompilationHelpers
                             Content = def with
                             {
                                 CompilationStatus = CompilationStatus.Pending,
-                                LastReleaseRequestHandledAt = def.RequestedReleaseAt
+                                // Stamp the CARRIED trigger value, never the
+                                // (possibly flapped-back) live value, and never
+                                // below the existing stamp — the on-node stamp is
+                                // monotonic too.
+                                LastReleaseRequestHandledAt =
+                                    def.LastReleaseRequestHandledAt is { } h && h > triggerAt
+                                        ? def.LastReleaseRequestHandledAt
+                                        : triggerAt
                             }
                         };
                     }).Subscribe(
@@ -1069,7 +1107,17 @@ internal static class NodeTypeCompilationHelpers
 
                     workspace.GetMeshNodeStream().Update(curr =>
                     {
-                        if (curr.Content is not NodeTypeDefinition def)
+                        // 🚨 Tolerant read — NOT a bare `curr.Content is not NodeTypeDefinition`.
+                        // Under load a concurrent cross-hub patch can leave this node's Content as
+                        // an untyped JsonElement (the TypeRegistry-miss degrade path). The bare
+                        // type test would then return `curr` unchanged and the TERMINAL
+                        // Status=Ok/Error write would SILENTLY NEVER LAND — the NodeType wedges at
+                        // Compiling, WaitForLatestRelease / Status==Ok times out, and every
+                        // instance hub falls back to the default config. ContentAs recovers the
+                        // JsonElement into NodeTypeDefinition (logging loud on a genuine degrade)
+                        // so the terminal status — and the typed write-back below — always lands.
+                        var def = curr.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions, logger);
+                        if (def is null)
                             return curr;
 
                         if (outcome.Error is null && !string.IsNullOrEmpty(outcome.Result?.AssemblyLocation))
