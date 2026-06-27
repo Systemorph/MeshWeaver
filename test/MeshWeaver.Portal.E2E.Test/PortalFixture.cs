@@ -31,6 +31,12 @@ public sealed class PortalFixture : IAsyncLifetime
     /// <summary>The base URL of the portal under test, or null when E2E is not enabled.</summary>
     public string? BaseUrl { get; private set; }
 
+    /// <summary>
+    /// The partition the DevLogin user can WRITE to — their own home (the onboarded id is the
+    /// lower-cased user). Tests seed writable docs here instead of read-only static partitions (Doc).
+    /// </summary>
+    public string UserPartition => User.ToLowerInvariant();
+
     /// <summary>True when a portal + browser are available, i.e. the tests should run.</summary>
     public bool Available => BaseUrl is not null && _browser is not null;
 
