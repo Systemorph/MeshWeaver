@@ -49,6 +49,30 @@ public class PartitionSourceFingerprintTests
     }
 
     [Fact]
+    public void Fingerprint_Changes_WhenOrderChanges()
+    {
+        // The whole point of folding all source props into the token: stamping Order on a node (the
+        // harness-default fix) must change the unversioned fingerprint, so existing deployments re-import
+        // on the next deploy instead of silently keeping the stale (Order-less) import.
+        var before = PartitionSourceFingerprint.Compute(SampleSet(), versioned: false);
+        var withOrder = SampleSet();
+        withOrder[0] = withOrder[0] with { Order = 5 };
+        PartitionSourceFingerprint.Compute(withOrder, versioned: false)
+            .Should().NotBe(before, "stamping Order must change the fingerprint (all source props are captured)");
+    }
+
+    [Fact]
+    public void Fingerprint_Changes_WhenStructuralPropChanges()
+    {
+        // A non-display structural prop (e.g. State) must also be captured.
+        var before = PartitionSourceFingerprint.Compute(SampleSet(), versioned: false);
+        var modified = SampleSet();
+        modified[1] = modified[1] with { State = MeshNodeState.Deleted };
+        PartitionSourceFingerprint.Compute(modified, versioned: false)
+            .Should().NotBe(before, "a structural prop change must change the fingerprint");
+    }
+
+    [Fact]
     public void Fingerprint_Changes_WhenNodeAddedOrRemoved()
     {
         var baseSet = SampleSet();
