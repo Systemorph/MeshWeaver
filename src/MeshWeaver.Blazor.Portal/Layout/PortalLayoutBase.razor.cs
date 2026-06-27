@@ -689,7 +689,9 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
         var context = _currentNavContext;
         var contextPath = context?.PrimaryPath;
-        var contextDisplayName = context?.Node?.Name ?? context?.Node?.Id;
+        // Label the OWNER, never the navigated satellite (a thread "hi"): ContextChipLabel returns null
+        // for a satellite so the chip falls back to the main-node path's last segment, not the thread name.
+        var contextDisplayName = MeshWeaver.AI.NavigationContextProjection.ContextChipLabel(context);
         _cachedContentPath = contentPath;
         _cachedSidePanelControl = new ThreadChatControl()
             .WithThreadPath(contentPath)

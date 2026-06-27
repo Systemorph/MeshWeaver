@@ -204,7 +204,10 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
         var context = _currentNavContext;
         return new ThreadChatControl()
             .WithInitialContext(context?.PrimaryPath ?? string.Empty)
-            .WithInitialContextDisplayName(context?.Node?.Name ?? context?.Node?.Id ?? string.Empty);
+            // Label the OWNER, never the navigated satellite (a thread "hi"): ContextChipLabel returns
+            // null for a satellite so the chip falls back to the main-node path's last segment.
+            .WithInitialContextDisplayName(
+                MeshWeaver.AI.NavigationContextProjection.ContextChipLabel(context) ?? string.Empty);
     }
 
     /// <summary>

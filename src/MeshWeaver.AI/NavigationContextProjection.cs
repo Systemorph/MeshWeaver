@@ -191,6 +191,24 @@ public static class NavigationContextProjection
     }
 
     /// <summary>
+    /// The context-chip LABEL for a LIVE navigation context, when only the navigated node is in hand
+    /// (no separately-loaded main node — the synchronous side-panel/header control builders). The
+    /// navigated node's own name is a valid label ONLY when that node IS the context (not a satellite
+    /// stripped to its owner): a thread "hi" resolves its context to the owner, so labeling the chip
+    /// "hi" is wrong. Returns <see langword="null"/> for the satellite case so callers fall back to the
+    /// main-node PATH (whose last segment is the owner) rather than leaking the satellite's name.
+    /// </summary>
+    public static string? ContextChipLabel(NavigationContext? ctx)
+    {
+        var node = ctx?.Node;
+        if (node is null)
+            return null;
+        if (node.MainNode != node.Path)   // a satellite — its own name is NOT the owner's label
+            return null;
+        return string.IsNullOrEmpty(node.Name) ? node.Id : node.Name;
+    }
+
+    /// <summary>
     /// The display LABEL for a context node: its <see cref="MeshWeaver.Mesh.MeshNode.Name"/>, else its
     /// <see cref="MeshWeaver.Mesh.MeshNode.Id"/>, else the path itself. Used to label the composer's
     /// context chip from the MAIN node — never the navigated satellite, whose name (e.g. a thread

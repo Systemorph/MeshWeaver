@@ -315,6 +315,30 @@ public class NavigationContextProjectionTest
         Assert.False(string.IsNullOrEmpty(NavigationContextProjection.DisplayNameOf(node, "Doc/Page")));
     }
 
+    // ── ContextChipLabel: the header/side-panel chip label from a live nav context ───────────────
+
+    [Fact]
+    public void ContextChipLabel_Satellite_ReturnsNull_NeverTheSatelliteName()
+    {
+        // 🚨 THE header/side-panel "hi" bug: a thread satellite's OWN name ("hi") must NOT label the
+        // context chip — the context resolves to the owner, so the label must too (null → owner path).
+        var node = MeshNode.FromPath("Roland/_Thread/hi") with { Name = "hi", MainNode = "Roland" };
+        Assert.Null(NavigationContextProjection.ContextChipLabel(Nav("Roland/_Thread/hi", node)));
+    }
+
+    [Fact]
+    public void ContextChipLabel_MainNode_ReturnsItsOwnName()
+    {
+        var node = MeshNode.FromPath("Doc/Page") with { Name = "My Page", MainNode = "Doc/Page" };
+        Assert.Equal("My Page", NavigationContextProjection.ContextChipLabel(Nav("Doc/Page", node)));
+    }
+
+    [Fact]
+    public void ContextChipLabel_NoNode_ReturnsNull()
+    {
+        Assert.Null(NavigationContextProjection.ContextChipLabel(Nav("Doc/Page")));
+    }
+
     [Fact]
     public void ServerSideAssembly_MergesMainNodePathReferenceAndNode()
     {
