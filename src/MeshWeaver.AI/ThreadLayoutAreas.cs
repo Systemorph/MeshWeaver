@@ -7,6 +7,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -156,7 +157,7 @@ public static class ThreadLayoutAreas
 
         // OWN MeshNode stream — push ThreadViewModel to data section; contains all
         // thread state for the Blazor view.
-        var vmStream = host.Workspace.GetMeshNodeStream().Select(node => BuildThreadViewModel(node, hubPath));
+        var vmStream = host.Workspace.GetMeshNodeStream().Select(node => BuildThreadViewModel(node, hubPath, host.Hub.JsonSerializerOptions));
         host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));
 
         // Static container — never rebuilt
@@ -184,7 +185,7 @@ public static class ThreadLayoutAreas
     {
         var hubPath = host.Hub.Address.ToString();
 
-        var vmStream = host.Workspace.GetMeshNodeStream().Select(node => BuildThreadViewModel(node, hubPath));
+        var vmStream = host.Workspace.GetMeshNodeStream().Select(node => BuildThreadViewModel(node, hubPath, host.Hub.JsonSerializerOptions));
 
         // Push title to data section — data-bound, no observable control rebuild.
         var titleStream = host.Workspace.GetMeshNodeStream()
@@ -297,7 +298,7 @@ public static class ThreadLayoutAreas
                 .WithView((h, _) => h.Workspace.GetMeshNodeStream()
                     .Select(node =>
                     {
-                        var t = node?.Content as MeshThread;
+                        var t = node.ContentAs<MeshThread>(h.Hub.JsonSerializerOptions);
                         if (t is null || t.IsExecuting) return (UiControl?)null;
                         var isDone = t.Status == ThreadExecutionStatus.Done;
                         var label = isDone ? "Reopen" : "Mark Done";
@@ -317,9 +318,16 @@ public static class ThreadLayoutAreas
     /// from the thread's own MeshNode. Shared by <see cref="ThreadView"/>,
     /// <see cref="ThreadChatView"/>, and <see cref="FullHeaderView"/>.
     /// </summary>
-    private static ThreadViewModel BuildThreadViewModel(MeshNode? node, string hubPath)
+    internal static ThreadViewModel BuildThreadViewModel(MeshNode? node, string hubPath, JsonSerializerOptions options)
     {
-        var threadContent = node?.Content as MeshThread;
+        // 🚨 ContentAs (DESERIALIZE), never `as MeshThread`. The node stream alternates between the
+        // typed MeshThread (the owning hub's own write) and a JsonElement (the cache / cross-hub-sync
+        // / change-feed representation — "content is normally a JsonElement"). `as MeshThread` is NULL
+        // for the JsonElement form, so this produced a DEFAULT viewmodel that ALTERNATED with the real
+        // one → vmStream.DistinctUntilChanged never deduped → UpdateData fired on every emission → the
+        // 931× FullHeader render storm that saturated the circuit and vanished the chat. Deserializing
+        // yields the SAME viewmodel for both representations, so the dedup actually fires.
+        var threadContent = node.ContentAs<MeshThread>(options);
         var contextPath = node?.MainNode != node?.Path ? node?.MainNode : hubPath;
         var contextDisplayName = node?.MainNode != node?.Path
             ? GetContextDisplayName(node!.MainNode) : GetThreadTitle(node);
@@ -349,7 +357,7 @@ public static class ThreadLayoutAreas
         var hubPath = host.Hub.Address.ToString();
         var ownNodeStream = host.Workspace.GetMeshNodeStream();
 
-        var vmStream = ownNodeStream.Select(node => BuildThreadViewModel(node, hubPath));
+        var vmStream = ownNodeStream.Select(node => BuildThreadViewModel(node, hubPath, host.Hub.JsonSerializerOptions));
         host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));
 
         // Push title to data section so the side panel header can read it.
@@ -375,7 +383,7 @@ public static class ThreadLayoutAreas
         return host.Workspace.GetMeshNodeStream()
             .Select(node =>
             {
-                var thread = node?.Content as MeshThread;
+                var thread = node.ContentAs<MeshThread>(host.Hub.JsonSerializerOptions);
                 if (thread == null) return (UiControl?)null;
 
                 // Find which message to show
@@ -410,7 +418,7 @@ public static class ThreadLayoutAreas
         return host.Workspace.GetMeshNodeStream()
             .Select(node =>
             {
-                var thread = node?.Content as MeshThread;
+                var thread = node.ContentAs<MeshThread>(host.Hub.JsonSerializerOptions);
                 return (IsExecuting: thread?.IsExecuting ?? false, thread?.ActiveMessageId);
             })
             .DistinctUntilChanged()
@@ -533,12 +541,12 @@ public static class ThreadLayoutAreas
     {
         var hubPath = host.Hub.Address.ToString();
         return host.Workspace.GetMeshNodeStream()
-            .Select(node => BuildThumbnail(node, hubPath));
+            .Select(node => BuildThumbnail(node, hubPath, host.Hub.JsonSerializerOptions));
     }
 
-    private static UiControl BuildThumbnail(MeshNode? node, string hubPath)
+    private static UiControl BuildThumbnail(MeshNode? node, string hubPath, JsonSerializerOptions options)
     {
-        var thread = node?.Content as MeshThread;
+        var thread = node.ContentAs<MeshThread>(options);
         var cellIds = thread?.Messages ?? ImmutableList<string>.Empty;
         var title = node?.Name ?? "Thread";
         var lastActivity = node?.LastModified.ToString("g") ?? "";
@@ -685,7 +693,7 @@ public static class ThreadLayoutAreas
         var initial = Observable.Return<UiControl?>(BuildHeader(parentLink, ImmutableList<NodeChangeEntry>.Empty, threadPath));
 
         var aggregated = stream
-            .Select(change => (change.Value?.Content as MeshThread)?.Messages ?? ImmutableList<string>.Empty)
+            .Select(change => (change.Value.ContentAs<MeshThread>(host.Hub.JsonSerializerOptions))?.Messages ?? ImmutableList<string>.Empty)
             .Where(ids => ids.Count > 0)
             .Select(ids => (ids, key: string.Join("|", ids)))
             .DistinctUntilChanged(p => p.key)
@@ -711,7 +719,7 @@ public static class ThreadLayoutAreas
             return Observable.Return<UiControl?>(BuildChangesEmpty());
 
         var aggregated = stream
-            .Select(change => (change.Value?.Content as MeshThread)?.Messages ?? ImmutableList<string>.Empty)
+            .Select(change => (change.Value.ContentAs<MeshThread>(host.Hub.JsonSerializerOptions))?.Messages ?? ImmutableList<string>.Empty)
             .DistinctUntilChanged(ids => string.Join("|", ids))
             .Select(ids => ids.IsEmpty
                 ? Observable.Return(ImmutableList<NodeChangeEntry>.Empty)
