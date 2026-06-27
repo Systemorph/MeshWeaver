@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
@@ -43,6 +44,7 @@ public static class RunningActivitiesStripe
     private static IObservable<UiControl?> Render(LayoutAreaHost host, RenderingContext _)
     {
         var ownPath = host.Hub.Address.Path;
+        var options = host.Hub.JsonSerializerOptions;
         var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
         if (meshService is null)
             return Observable.Return<UiControl?>(null);
@@ -63,16 +65,20 @@ public static class RunningActivitiesStripe
                 Limit = 50
             })
             .Select(c => c.Items
-                .Where(node => node.Content is ActivityLog log
+                // ContentAs (deserialize), not `is ActivityLog`: the query stream alternates
+                // typed↔JsonElement frames; `is`/`as` → false/null on the JsonElement frames would
+                // DROP every running activity on those frames, so the projected list flips between
+                // populated and empty → DistinctUntilChanged never settles → the stripe render storm.
+                .Where(node => node.ContentAs<ActivityLog>(options) is { } log
                     && log.Status == ActivityStatus.Running
                     && string.Equals(log.HubPath, ownPath, StringComparison.Ordinal))
                 .ToList())
-            .DistinctUntilChanged(EqualityComparerForActivityIds.Instance)
-            .Select(activities => RenderStripe(activities))
+            .DistinctUntilChanged(new EqualityComparerForActivityIds(options))
+            .Select(activities => RenderStripe(activities, options))
             .Catch<UiControl?, Exception>(_ => Observable.Return<UiControl?>(null));
     }
 
-    private static UiControl? RenderStripe(IReadOnlyList<MeshNode> running)
+    private static UiControl? RenderStripe(IReadOnlyList<MeshNode> running, JsonSerializerOptions options)
     {
         if (running.Count == 0) return null;
 
@@ -85,14 +91,18 @@ public static class RunningActivitiesStripe
 
         foreach (var activity in running)
         {
-            stack = stack.WithView(BuildRow(activity));
+            // ContentAs (deserialize), not a hard `(ActivityLog)` cast: nodes arrive here straight
+            // from the filter above with their original Content, which may still be a JsonElement
+            // frame — a cast would throw, be swallowed by the Catch, and resume the alternation storm.
+            var log = activity.ContentAs<ActivityLog>(options);
+            if (log is null) continue;
+            stack = stack.WithView(BuildRow(activity, log));
         }
         return stack;
     }
 
-    private static UiControl BuildRow(MeshNode activity)
+    private static UiControl BuildRow(MeshNode activity, ActivityLog log)
     {
-        var log = (ActivityLog)activity.Content!;
         var label = $"{System.Net.WebUtility.HtmlEncode(log.Category)} · {log.Messages.Count} msg";
         var elapsed = log.End is null
             ? FormatElapsed(DateTime.UtcNow - log.Start)
@@ -139,9 +149,9 @@ public static class RunningActivitiesStripe
     /// Compares activity-list snapshots by the set of activity IDs + message
     /// counts so the layout only re-renders when something material changed.
     /// </summary>
-    private sealed class EqualityComparerForActivityIds : IEqualityComparer<IReadOnlyList<MeshNode>>
+    private sealed class EqualityComparerForActivityIds(JsonSerializerOptions options)
+        : IEqualityComparer<IReadOnlyList<MeshNode>>
     {
-        public static readonly EqualityComparerForActivityIds Instance = new();
         public bool Equals(IReadOnlyList<MeshNode>? x, IReadOnlyList<MeshNode>? y)
         {
             if (x is null || y is null) return ReferenceEquals(x, y);
@@ -149,8 +159,11 @@ public static class RunningActivitiesStripe
             for (var i = 0; i < x.Count; i++)
             {
                 if (!string.Equals(x[i].Path, y[i].Path, StringComparison.Ordinal)) return false;
-                var lx = (x[i].Content as ActivityLog)?.Messages.Count ?? 0;
-                var ly = (y[i].Content as ActivityLog)?.Messages.Count ?? 0;
+                // ContentAs (deserialize), not `as ActivityLog`: on JsonElement frames `as` → null →
+                // both counts collapse to 0 → the comparer reports "equal" while message counts actually
+                // diverge (or vice-versa), so the stripe both misses real updates AND churns spuriously.
+                var lx = x[i].ContentAs<ActivityLog>(options)?.Messages.Count ?? 0;
+                var ly = y[i].ContentAs<ActivityLog>(options)?.Messages.Count ?? 0;
                 if (lx != ly) return false;
             }
             return true;

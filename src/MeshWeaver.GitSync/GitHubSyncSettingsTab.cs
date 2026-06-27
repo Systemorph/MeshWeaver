@@ -347,12 +347,12 @@ public static class GitHubSyncSettingsTab
 
         // Live Messages + Status, bound to the activity node (re-renders on every progress tick).
         stack = stack.WithView((h, _) => h.Hub.GetWorkspace().GetMeshNodeStream(activityPath)
-            .Select(node => (UiControl?)Controls.Html(ActivityHtml(node?.Content as MeshWeaver.Data.ActivityLog)))
+            .Select(node => (UiControl?)Controls.Html(ActivityHtml(node.ContentAs<MeshWeaver.Data.ActivityLog>(host.Hub.JsonSerializerOptions))))
             .StartWith((UiControl?)Controls.Html("")));
 
         // Cancel — flips RequestedStatus = Cancelled; the runner's watcher trips the command's token.
         stack = stack.WithView((h, _) => h.Hub.GetWorkspace().GetMeshNodeStream(activityPath)
-            .Select(node => (node?.Content as MeshWeaver.Data.ActivityLog)?.Status)
+            .Select(node => node.ContentAs<MeshWeaver.Data.ActivityLog>(host.Hub.JsonSerializerOptions)?.Status)
             .Select(status => (UiControl?)(status == MeshWeaver.Data.ActivityStatus.Running
                 ? Controls.Button("Cancel")
                     .WithAppearance(Appearance.Outline)

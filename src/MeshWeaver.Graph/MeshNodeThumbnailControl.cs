@@ -25,7 +25,11 @@ public record MeshNodeThumbnailControl(
         var title = node?.Name ?? fallbackPath;
         var imageUrl = GetImageUrlForNode(node);
         var nodeType = node?.NodeType;
-        var description = node?.Description ?? (node?.Content as MarkdownContent)?.Abstract;
+        // GetAbstract handles BOTH typed MarkdownContent AND the degraded JsonElement frame —
+        // `as MarkdownContent` → null on JsonElement frames, so the description (and thus the whole
+        // control record) would alternate between Abstract and node.Description across frames →
+        // dedup never fires → thumbnail render storm.
+        var description = node?.Description ?? GetAbstract(node?.Content);
 
         return new MeshNodeThumbnailControl(nodePath, title, description, imageUrl, nodeType);
     }
@@ -94,10 +98,13 @@ public record MeshNodeThumbnailControl(
             }
         }
 
-        // Check MarkdownContent.Thumbnail — resolve relative path to absolute URL
-        if (node.Content is MarkdownContent mc && !string.IsNullOrEmpty(mc.Thumbnail))
+        // Check MarkdownContent.Thumbnail — resolve relative path to absolute URL. GetThumbnail
+        // reads the value from BOTH the typed MarkdownContent AND the degraded JsonElement frame,
+        // so the resolved image URL doesn't alternate (typed → thumbnail vs JsonElement → node.Icon)
+        // across frames and storm the card.
+        var thumbnail = GetThumbnail(node.Content);
+        if (!string.IsNullOrEmpty(thumbnail))
         {
-            var thumbnail = mc.Thumbnail;
             if (thumbnail.StartsWith("/") || thumbnail.StartsWith("http"))
                 return thumbnail;
             var ns = node.Namespace;
@@ -107,6 +114,39 @@ public record MeshNodeThumbnailControl(
 
         // Fall back to node.Icon — resolves content: references, URLs, inline SVG, emojis
         return MeshNodeImageHelper.ResolveNodeIcon(node);
+    }
+
+    /// <summary>
+    /// Reads <see cref="MarkdownContent.Abstract"/> from either a typed instance or a degraded
+    /// <see cref="System.Text.Json.JsonElement"/> frame (cache / cross-hub / change-feed reads). The
+    /// JsonElement branch mirrors the avatar/logo handling above so the projection is frame-stable.
+    /// </summary>
+    private static string? GetAbstract(object? content) => content switch
+    {
+        MarkdownContent mc => mc.Abstract,
+        System.Text.Json.JsonElement je => TryGetJsonString(je, "abstract") ?? TryGetJsonString(je, "Abstract"),
+        _ => null
+    };
+
+    /// <summary>
+    /// Reads <see cref="MarkdownContent.Thumbnail"/> from either a typed instance or a degraded
+    /// <see cref="System.Text.Json.JsonElement"/> frame, so the resolved image URL is frame-stable.
+    /// </summary>
+    private static string? GetThumbnail(object? content) => content switch
+    {
+        MarkdownContent mc => mc.Thumbnail,
+        System.Text.Json.JsonElement je => TryGetJsonString(je, "thumbnail") ?? TryGetJsonString(je, "Thumbnail"),
+        _ => null
+    };
+
+    private static string? TryGetJsonString(System.Text.Json.JsonElement element, string propertyName)
+    {
+        if (element.ValueKind != System.Text.Json.JsonValueKind.Object
+            || !element.TryGetProperty(propertyName, out var prop)
+            || prop.ValueKind != System.Text.Json.JsonValueKind.String)
+            return null;
+        var value = prop.GetString();
+        return string.IsNullOrEmpty(value) ? null : value;
     }
 
     private static string? TryResolveJsonProperty(System.Text.Json.JsonElement element, string propertyName, string nodePath)

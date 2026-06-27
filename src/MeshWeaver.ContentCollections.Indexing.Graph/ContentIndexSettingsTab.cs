@@ -145,12 +145,12 @@ public static class ContentIndexSettingsTab
 
         // Live Messages + Status (re-renders on every progress tick).
         stack = stack.WithView((h, _) => h.Hub.GetWorkspace().GetMeshNodeStream(activityPath)
-            .Select(n => (UiControl?)Controls.Html(ActivityHtml(n?.Content as ActivityLog)))
+            .Select(n => (UiControl?)Controls.Html(ActivityHtml(n.ContentAs<ActivityLog>(host.Hub.JsonSerializerOptions))))
             .StartWith((UiControl?)Controls.Html("")));
 
         // Cancel — flips RequestedStatus = Cancelled; the runner's watcher trips the command's token.
         stack = stack.WithView((h, _) => h.Hub.GetWorkspace().GetMeshNodeStream(activityPath)
-            .Select(n => (n?.Content as ActivityLog)?.Status)
+            .Select(n => n.ContentAs<ActivityLog>(host.Hub.JsonSerializerOptions)?.Status)
             .Select(status => (UiControl?)(status == ActivityStatus.Running
                 ? Controls.Button("Cancel")
                     .WithAppearance(Appearance.Outline)
