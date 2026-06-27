@@ -295,6 +295,10 @@ setup_ollama() {
   fi
   ollama pull qwen3.6
   ollama cp qwen3.6 qwen3.6-code 2>/dev/null || info "model alias qwen3.6-code already exists"
+  # Small CPU-friendly model (~400MB) the e2e portal selects ('qwen-small' — see e2e_deploy), so
+  # a real chat round runs on any host/CI without the 23GB GPU qwen3.6.
+  ollama pull qwen2.5:0.5b
+  ollama cp qwen2.5:0.5b qwen-small 2>/dev/null || info "model alias qwen-small already exists"
   ok "Ollama ready; portal addresses it as http://ollama:11434/v1"
 }
 
@@ -454,6 +458,10 @@ spec:
             - { name: Authentication__EnableDevLogin, value: "true" }
             - { name: Bootstrap__Secret, value: "$E2E_BOOTSTRAP_SECRET" }
             - { name: Portal__InstanceName, value: "E2E" }
+            # Small CPU-friendly model (qwen2.5:0.5b, aliased 'qwen-small') so the e2e portal runs
+            # a real round on any host/CI without the 23GB GPU qwen3.6. Overrides the inherited
+            # OpenAICompatible__Models__0; the Playwright tests select it via E2E_MODEL.
+            - { name: OpenAICompatible__Models__0, value: "qwen-small" }
           readinessProbe:
             httpGet: { path: /healthz, port: 8080 }
             initialDelaySeconds: 10
@@ -577,6 +585,7 @@ cmd_e2e() {
       step "Running Playwright filter '$filter' against https://$E2E_HOST:$E2E_PORT"
       export E2E_USER                                  # already resolved (readonly) — mark for the child
       E2E_BASE_URL="https://$E2E_HOST:$E2E_PORT" \
+      E2E_MODEL="${E2E_MODEL:-Provider/OpenAICompatible/qwen-small}" \
         dotnet test "$repo/test/MeshWeaver.Portal.E2E.Test/MeshWeaver.Portal.E2E.Test.csproj" \
           --filter "FullyQualifiedName~$filter"
       ;;

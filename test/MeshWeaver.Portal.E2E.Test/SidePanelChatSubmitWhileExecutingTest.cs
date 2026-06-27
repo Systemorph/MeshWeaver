@@ -23,10 +23,8 @@ namespace MeshWeaver.Portal.E2E;
 [Collection("portal-e2e")]
 public class SidePanelChatSubmitWhileExecutingTest(PortalFixture fixture)
 {
-    // Seed the per-user composer pinned to the MeshWeaver harness (so check_inbox is in play —
-    // the e2e portal defaults to Copilot, which needs a GitHub connection it doesn't have) and
-    // with ContextPath = "Roland" (the user's writable partition, proven by CompileErrorPageE2ETest)
-    // so the thread anchors at Roland/_Thread/… instead of the system-managed "User" partition.
+    // Create-fallback for a fresh DB; the real harness/model/context is applied by the PATCH below
+    // (a PATCH, not create, so the post-creation seed handler can't reset it).
     private const string ComposerSeedJson = """
         {
           "id": "ThreadComposer",
@@ -34,7 +32,7 @@ public class SidePanelChatSubmitWhileExecutingTest(PortalFixture fixture)
           "name": "Chat Input",
           "nodeType": "ThreadComposer",
           "mainNode": "Roland",
-          "content": { "$type": "ThreadComposer", "harness": "Harness/MeshWeaver", "contextPath": "Roland" }
+          "content": { "$type": "ThreadComposer" }
         }
         """;
 
@@ -47,6 +45,14 @@ public class SidePanelChatSubmitWhileExecutingTest(PortalFixture fixture)
     // wedge (the thing this guards) fails the test instead of hanging forever.
     private static readonly int SettleMs = 180_000;
 
+    // The model node path the composer selects. Configurable via E2E_MODEL so this works on any
+    // env — local (whatever you have in Ollama) or CI (a tiny CPU model). Default is the small
+    // qwen2.5:0.5b (~400 MB) aliased "qwen-small", which runs on a CPU-only CI runner; qwen3.6 is
+    // 23 GB / GPU and is NOT a portable default. The portal must expose this model
+    // (OpenAICompatible__Models); the e2e tooling configures it to match.
+    private static readonly string ModelPath =
+        Environment.GetEnvironmentVariable("E2E_MODEL") ?? "Provider/OpenAICompatible/qwen-small";
+
     [Fact(Timeout = 420_000)]
     public async Task SidePanelChat_SubmitWhileExecuting_QueuesFollowUp_RoundSettles_NoneLost()
     {
@@ -54,21 +60,41 @@ public class SidePanelChatSubmitWhileExecutingTest(PortalFixture fixture)
 
         await using var context = await fixture.NewAuthenticatedContextAsync();
 
-        // Seed the per-user composer pinned to MeshWeaver harness + ContextPath=Roland. It may
-        // already exist (DB persists across portal restarts) with the wrong content, so delete it
-        // first (best-effort) then create it fresh — CreateNodeAsync has no update path.
         var token = await fixture.MintTokenAsync(context);
-        await context.APIRequest.PostAsync($"{fixture.BaseUrl}/api/mesh/delete", new APIRequestContextOptions
+
+        // Ensure the per-user composer exists, then PATCH it onto the MeshWeaver harness + the
+        // configured Ollama model (Harness/ModelName are node PATHS). A PATCH (not create) so the
+        // post-CREATION seed handler doesn't reset it back to empty.
+        try { await fixture.CreateNodeAsync(context, token, ComposerSeedJson); }
+        catch (InvalidOperationException) { /* already exists — fine */ }
+        await context.APIRequest.PostAsync($"{fixture.BaseUrl}/api/mesh/patch", new APIRequestContextOptions
         {
             Headers = new Dictionary<string, string> { ["authorization"] = $"Bearer {token}" },
-            DataObject = new { Path = "Roland/_Thread/ThreadComposer" }
+            DataObject = new
+            {
+                Path = "Roland/_Thread/ThreadComposer",
+                Fields = "{\"content\":{\"$type\":\"ThreadComposer\",\"harness\":\"Harness/MeshWeaver\","
+                       + "\"modelName\":\"" + ModelPath + "\",\"contextPath\":\"Roland\"}}"
+            }
         });
-        try { await fixture.CreateNodeAsync(context, token, ComposerSeedJson); }
-        catch (InvalidOperationException) { /* already seeded — fine */ }
+
+        // Chat from a page in the WRITABLE 'Roland' partition — the /User/Roland home routes
+        // thread-create to the system-managed 'User' partition (PartitionWriteGuard rejects it).
+        // CompileErrorPageE2ETest proves 'Roland' is writable for the DevLogin user.
+        var chatPageId = "e2e-chat-" + Guid.NewGuid().ToString("N")[..8];
+        await fixture.CreateNodeAsync(context, token, $$"""
+            {
+              "id": "{{chatPageId}}",
+              "namespace": "Roland",
+              "name": "E2E Chat Page",
+              "nodeType": "Markdown",
+              "content": { "$type": "MarkdownContent", "content": "# E2E chat page" }
+            }
+            """);
 
         var page = await context.NewPageAsync();
         await page.SetViewportSizeAsync(1400, 950);
-        await page.GotoAsync($"{fixture.BaseUrl}/User/Roland",
+        await page.GotoAsync($"{fixture.BaseUrl}/Roland/{chatPageId}",
             new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle });
 
         // Open the side-panel chat (the layout's "Chat" toggle → ThreadChatView).
