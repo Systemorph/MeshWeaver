@@ -27,7 +27,14 @@ public sealed record StaticRepoImportResult(string Partition, string Fingerprint
 /// </summary>
 public static class StaticRepoImporter
 {
-    private const int BatchSize = 16;
+    /// <summary>
+    /// Max CONCURRENT upserts/prunes per source (the <c>.Merge(BatchSize)</c> bound). Each
+    /// <see cref="CreateOrUpdateNodeRequest"/> is heavyweight — it fans out an inner create + prerender
+    /// + embedding + satellite/access — so a wide fan-out spikes CPU and pressures the import hub's
+    /// action block on boot. Kept deliberately SMALL (≈5 in flight) so the boot import trickles rather
+    /// than floods; sources still run sequentially (<c>.Concat()</c>), so this is the only concurrency.
+    /// </summary>
+    private const int BatchSize = 5;
 
     /// <summary>
     /// Address-type prefix of the dedicated import hub (<c>import/{meshHubId}</c>). Declared
