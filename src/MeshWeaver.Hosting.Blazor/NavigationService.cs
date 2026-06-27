@@ -2,6 +2,7 @@
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Runtime.CompilerServices;
+using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Markdown;
@@ -37,6 +38,16 @@ internal class NavigationService : INavigationService
     // ServiceProvider instead — same instance, just sourced from the right scope.
     private readonly Lazy<IMeshQueryCore> _queryCore;
     private readonly IMessageHub _hub;
+    // Circuit-stable identity holder. Set ONCE from AuthenticationStateProvider on
+    // circuit open by CircuitAccessHandler and never cleared until circuit close — unlike
+    // AccessService.Context/CircuitContext, whose AsyncLocal + persistent fallback are
+    // wiped by CircuitAccessHandler's per-inbound-activity finally (SetCircuitContext(null)).
+    // ResolveCurrentUserId falls back to this so a navigation pushed from a deferred Rx
+    // continuation (chat submit → create → GetMeshNodeStream(...).Subscribe(... NavigateTo))
+    // still sees the authenticated circuit user instead of misreading Anonymous. Same DI
+    // scope as this service (both AddScoped in BlazorHostingExtensions), so it is the
+    // SAME per-circuit instance the circuit handler writes. Null off-circuit (SSR/prerender).
+    private readonly ICircuitContextAccessor? _circuitContextAccessor;
     // Reactive path stream — see <see cref="INavigationService.Path"/>. Never
     // emits null/empty; the first emission lands when ProcessLocationChange or
     // OnLocationChanged read a real URI off NavigationManager. Latecomer
@@ -73,8 +84,9 @@ internal class NavigationService : INavigationService
     public NavigationService(
         NavigationManager navigationManager,
         IPathResolver pathResolver,
-        IMessageHub hub)
-        : this(navigationManager, pathResolver, hub, DefaultRetryDelays)
+        IMessageHub hub,
+        ICircuitContextAccessor circuitContextAccessor)
+        : this(navigationManager, pathResolver, hub, circuitContextAccessor, DefaultRetryDelays)
     {
     }
 
@@ -86,11 +98,13 @@ internal class NavigationService : INavigationService
         NavigationManager navigationManager,
         IPathResolver pathResolver,
         IMessageHub hub,
+        ICircuitContextAccessor circuitContextAccessor,
         int[] retryDelays)
     {
         _navigationManager = navigationManager;
         _pathResolver = pathResolver;
         _hub = hub;
+        _circuitContextAccessor = circuitContextAccessor;
         _queryCore = new Lazy<IMeshQueryCore>(
             () => hub.ServiceProvider.GetRequiredService<IMeshQueryCore>(),
             LazyThreadSafetyMode.ExecutionAndPublication);
@@ -282,7 +296,22 @@ internal class NavigationService : INavigationService
     private string ResolveCurrentUserId()
     {
         var accessService = _hub.ServiceProvider.GetService<AccessService>();
-        var context = accessService?.Context ?? accessService?.CircuitContext;
+        // Prefer the ambient activity/circuit context (set on the inbound-activity thread),
+        // but FALL BACK to the circuit-stable ICircuitContextAccessor.UserContext when the
+        // ambient AsyncLocal/persistent context is null. CircuitAccessHandler clears the
+        // ambient context in its per-inbound-activity finally (SetCircuitContext(null) wipes
+        // BOTH the AsyncLocal and the persistentCircuitContext fallback), so a navigation
+        // pushed from a DEFERRED Rx continuation — e.g. chat submit → StartThread → onCreated
+        // → GetMeshNodeStream(path).Subscribe(... NavigateTo(...)) — reads null here. Without
+        // this fallback the anonymous hard-gate in ProcessResolvedPath force-redirected an
+        // AUTHENTICATED user to /login (full page reload on send). The accessor is set once
+        // from AuthenticationStateProvider on circuit open and not cleared until circuit
+        // close, so it survives the thread hop. A genuinely logged-out circuit's accessor
+        // holds the anonymous VUser (IsVirtual) → still gated. See CircuitContextAccessor,
+        // AccessContextPropagation.md, and the 2026-05-21 identity-loss note.
+        var context = accessService?.Context
+                      ?? accessService?.CircuitContext
+                      ?? _circuitContextAccessor?.UserContext;
         var userId = context?.ObjectId;
         if (string.IsNullOrEmpty(userId) || context?.IsVirtual == true)
             return WellKnownUsers.Anonymous;

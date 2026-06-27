@@ -7,6 +7,7 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
+using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -31,6 +32,9 @@ public class NavigationServiceTest
     private readonly IMessageHub _hub;
     private readonly IServiceProvider _hubServiceProvider;
     private readonly ICreatableTypesProvider _creatableTypesProvider;
+    // Circuit-stable identity holder injected into NavigationService. Default UserContext is
+    // null (off-circuit / not-yet-resolved); tests that need an authenticated circuit set it.
+    private readonly CircuitContextAccessor _circuitContextAccessor = new();
 
     public NavigationServiceTest()
     {
@@ -108,7 +112,7 @@ public class NavigationServiceTest
     }
 
     private NavigationService CreateService() =>
-        new(_navigationManager, _pathResolver, _hub);
+        new(_navigationManager, _pathResolver, _hub, _circuitContextAccessor);
 
     /// <summary>
     /// Capture the latest <see cref="NavigationContext"/> emitted by the reactive
@@ -209,6 +213,77 @@ public class NavigationServiceTest
 
         service.Initialize();
         _navigationManager.SimulateLocationChanged("http://localhost/Public/Welcome/Overview");
+
+        await WaitForRedirect("/login?returnUrl=");
+        _navigationManager.Uri.Should().Contain("/login?returnUrl=");
+    }
+
+    /// <summary>
+    /// Simulates a navigation pushed from a DEFERRED Rx continuation on an AUTHENTICATED
+    /// circuit. By the time the continuation runs, CircuitAccessHandler's per-inbound-activity
+    /// finally has cleared the ambient AccessService context (SetCircuitContext(null) wipes
+    /// the AsyncLocal AND the persistent fallback) — so a fresh AccessService models that
+    /// null-ambient state — while the circuit's stable identity lives on
+    /// <see cref="ICircuitContextAccessor.UserContext"/>.
+    /// </summary>
+    private void MakeAmbientContextClearedButCircuitAuthenticated(string userId)
+    {
+        // Ambient context NULL: a bare AccessService leaves Context, CircuitContext and the
+        // persistent fallback all null — exactly the post-activity-finally state.
+        _hubServiceProvider.GetService(typeof(AccessService)).Returns(new AccessService());
+        // Circuit identity preserved on the circuit-stable accessor.
+        _circuitContextAccessor.SetUserContext(new AccessContext { ObjectId = userId, Name = userId });
+    }
+
+    [Fact]
+    public async Task AuthenticatedCircuit_NavigationFromClearedAmbientContext_DoesNotRedirectToLogin()
+    {
+        // 🚨 Regression (chat "send" = full-page reload): a navigation pushed from a deferred Rx
+        // continuation (chat submit → StartThread → onCreated →
+        // GetMeshNodeStream(path).Subscribe(... NavigateTo)) runs AFTER CircuitAccessHandler's
+        // per-activity finally cleared the ambient AccessService context. ResolveCurrentUserId
+        // then read null → the anonymous hard-gate force-redirected the AUTHENTICATED user to
+        // /login (experienced as a jarring full reload instead of an inline append). The fix
+        // falls back to the circuit-stable ICircuitContextAccessor.UserContext.
+        MakeAmbientContextClearedButCircuitAuthenticated("rbuergi");
+
+        var service = CreateService();
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(
+                new AddressResolution("rbuergi/_Thread/hi-3cb8", null)));
+
+        service.Initialize();
+        _navigationManager.SimulateLocationChanged("http://localhost/rbuergi/_Thread/hi-3cb8");
+
+        // Resolves normally as the authenticated user — NOT bounced to /login.
+        var ctx = await service.NavigationContext.Should().Within(WaitTimeout)
+            .Match(c => c?.Namespace == "rbuergi/_Thread/hi-3cb8");
+        ctx.Should().NotBeNull();
+        _navigationManager.Uri.Should().NotContain("/login");
+    }
+
+    [Fact]
+    public async Task LoggedOutCircuit_ClearedAmbientContext_StillRedirectsToLogin()
+    {
+        // Guard: the fallback must NOT open a read hole for genuinely logged-out visitors. A
+        // logged-out circuit's accessor holds the anonymous VUser (IsVirtual) — the same shape
+        // CircuitAccessHandler.ResolveUserContextAsync stores for an unauthenticated circuit —
+        // so even via the fallback the anonymous gate still engages.
+        _hubServiceProvider.GetService(typeof(AccessService)).Returns(new AccessService());
+        _circuitContextAccessor.SetUserContext(new AccessContext
+        {
+            ObjectId = WellKnownUsers.Anonymous,
+            Name = "Guest",
+            IsVirtual = true
+        });
+
+        var service = CreateService();
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(
+                new AddressResolution("Private/Space", "Overview")));
+
+        service.Initialize();
+        _navigationManager.SimulateLocationChanged("http://localhost/Private/Space/Overview");
 
         await WaitForRedirect("/login?returnUrl=");
         _navigationManager.Uri.Should().Contain("/login?returnUrl=");
@@ -404,7 +479,7 @@ public class NavigationServiceTest
         // never surfaced the "not found" card. Tiny delays via the internal ctor drive
         // the exhaustion path in a few ms.
         var service = new NavigationService(
-            _navigationManager, _pathResolver, _hub, new[] { 5, 5, 5 });
+            _navigationManager, _pathResolver, _hub, _circuitContextAccessor, new[] { 5, 5, 5 });
         _pathResolver.ResolvePath(Arg.Any<string>())
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(null));
         _navigationManager.SetUri("http://localhost/does/not/exist");
@@ -429,7 +504,7 @@ public class NavigationServiceTest
         // fix re-ASKS the resolver across the retry budget, so a path that becomes
         // resolvable on a LATER probe still lands. The negative is never cached.
         var service = new NavigationService(
-            _navigationManager, _pathResolver, _hub, new[] { 5, 5, 5 });
+            _navigationManager, _pathResolver, _hub, _circuitContextAccessor, new[] { 5, 5, 5 });
 
         // First probe: empty (catalog hasn't learned the path yet). Subsequent
         // probes: the node is now present → resolves.

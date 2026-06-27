@@ -7,6 +7,7 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
+using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -37,6 +38,10 @@ public class NavigationProgressTest
     private readonly IMessageHub _hub;
     private readonly IServiceProvider _hubServiceProvider;
     private readonly ICreatableTypesProvider _creatableTypesProvider;
+    // Circuit-stable identity holder injected into NavigationService. Default UserContext is
+    // null; these tests run authenticated via the System AccessService above, so the gate is
+    // cleared before the accessor fallback is consulted.
+    private readonly CircuitContextAccessor _circuitContextAccessor = new();
 
     public NavigationProgressTest()
     {
@@ -84,7 +89,7 @@ public class NavigationProgressTest
     private static readonly TimeSpan WaitTimeout = TimeSpan.FromSeconds(15);
 
     private NavigationService CreateService(int[]? retryDelays = null) =>
-        new(_navigationManager, _pathResolver, _hub, retryDelays ?? FastRetryDelays);
+        new(_navigationManager, _pathResolver, _hub, _circuitContextAccessor, retryDelays ?? FastRetryDelays);
 
     private static List<NavigationStatus> CaptureStatus(NavigationService service)
     {
