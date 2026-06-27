@@ -116,6 +116,29 @@ public static class NavigationContextProjection
     }
 
     /// <summary>
+    /// The chat CONTEXT for the page the user is viewing — what the composer pins as the chat's
+    /// subject. ALWAYS the MAIN NODE (owner) of the current navigation target: a satellite
+    /// (<c>_Thread</c>/<c>_Comment</c>/…) resolves to its owner, and a reserved ROUTE partition
+    /// (<c>login</c>/<c>welcome</c>/<c>chat</c>/…) or no navigation resolves to <see cref="string.Empty"/>
+    /// (no context chip). NEVER the composer node's own MainNode (the user's home partition) — the
+    /// context follows what the user is LOOKING AT, not where the composer lives.
+    /// </summary>
+    public static string ResolveContext(NavigationContext? ctx)
+    {
+        if (ctx is null)
+            return string.Empty;
+
+        // The composer's own route ("chat") is not a context node.
+        if (string.Equals(ctx.Path, "chat", StringComparison.OrdinalIgnoreCase))
+            return string.Empty;
+
+        var mainNode = ResolveMainNode(ctx);
+        return string.IsNullOrEmpty(mainNode) || AgentPickerProjection.IsReservedPartition(mainNode)
+            ? string.Empty
+            : mainNode;
+    }
+
+    /// <summary>
     /// The OWNER (main) node of the current navigation target. Prefers the loaded node's
     /// authoritative <see cref="MeshWeaver.Mesh.MeshNode.MainNode"/>; falls back to stripping
     /// satellite segments off the resolved namespace when the node hasn't loaded yet.

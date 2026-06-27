@@ -180,6 +180,62 @@ public class NavigationContextProjectionTest
         Assert.Equal("8", back.Parameters!["to"]);
     }
 
+    // ── ResolveContext: the composer's chat context = the viewed page's MAIN NODE ──────────────
+    // The composer must pin the OWNER of whatever the user is looking at — never a satellite, never
+    // a reserved route, never the composer node's own home partition.
+
+    [Fact]
+    public void ResolveContext_RegularNode_IsTheNodeItself()
+    {
+        var node = MeshNode.FromPath("Doc/Architecture/Page") with { MainNode = "Doc/Architecture/Page" };
+        Assert.Equal("Doc/Architecture/Page",
+            NavigationContextProjection.ResolveContext(Nav("Doc/Architecture/Page", node)));
+    }
+
+    [Fact]
+    public void ResolveContext_DeepNode_KeepsTheFullPath_NotPartitionRoot()
+    {
+        // Must NOT strip down to the partition root — the context is the actual node viewed.
+        var node = MeshNode.FromPath("rbuergi/Projects/Alpha") with { MainNode = "rbuergi/Projects/Alpha" };
+        Assert.Equal("rbuergi/Projects/Alpha",
+            NavigationContextProjection.ResolveContext(Nav("rbuergi/Projects/Alpha", node)));
+    }
+
+    [Fact]
+    public void ResolveContext_Satellite_ResolvesToOwner()
+    {
+        var node = MeshNode.FromPath("rbuergi/_Thread/hi-3cb8") with { MainNode = "rbuergi" };
+        Assert.Equal("rbuergi",
+            NavigationContextProjection.ResolveContext(Nav("rbuergi/_Thread/hi-3cb8", node)));
+    }
+
+    [Fact]
+    public void ResolveContext_SatelliteNodeNotLoaded_StripsToOwner()
+    {
+        Assert.Equal("rbuergi",
+            NavigationContextProjection.ResolveContext(Nav("rbuergi/_Thread/hi-3cb8", node: null)));
+    }
+
+    [Fact]
+    public void ResolveContext_ReservedRoutePartition_IsEmpty()
+    {
+        Assert.Equal(string.Empty, NavigationContextProjection.ResolveContext(Nav("login")));
+        Assert.Equal(string.Empty, NavigationContextProjection.ResolveContext(Nav("welcome")));
+    }
+
+    [Fact]
+    public void ResolveContext_ChatRoute_IsEmpty()
+    {
+        // The composer's own route is not a context node.
+        Assert.Equal(string.Empty, NavigationContextProjection.ResolveContext(Nav("chat")));
+    }
+
+    [Fact]
+    public void ResolveContext_NullContext_IsEmpty()
+    {
+        Assert.Equal(string.Empty, NavigationContextProjection.ResolveContext(null));
+    }
+
     [Fact]
     public void ServerSideAssembly_MergesMainNodePathReferenceAndNode()
     {
