@@ -854,8 +854,15 @@ public static class EditorExtensions
         if (host.TryMarkEditStateInitialized(editStateId))
             host.UpdateData(editStateId, !isToggleable); // Start in edit mode when not toggleable
 
-        // Get the edit state stream - now it will emit the stored value
+        // Get the edit state stream. StartWith the initial (seeded) value so the field renders
+        // IMMEDIATELY and never stalls "awaiting first data" when the transient /data edit-state
+        // seed hasn't replayed to THIS subscription — which happens on a re-render (the seed is
+        // gated to once-per-session by TryMarkEditStateInitialized above, so the second
+        // GetDataStream subscription gets no replay) and under cross-silo cache timing. Edit-state
+        // is transient VIEW state: the view must DEFAULT and then react to toggles, never block on
+        // the /data seed. Same default-then-react pattern as OverviewLayoutArea.BuildTitle.
         var editStateStream = host.Stream.GetDataStream<bool>(editStateId)
+            .StartWith(!isToggleable) // matches the seed at line above; read-only when toggleable
             .DistinctUntilChanged();
 
         var isEditable = canEdit &&
