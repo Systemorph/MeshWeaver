@@ -292,13 +292,17 @@ public static class UserActivityLayoutAreas
             // 100% width so the tabs + their search grids fill the home page instead of shrinking to
             // content width (the TabsControl had no Width skin before — FluentTabs defaulted to fit).
             .WithSkin(s => s.WithWidth("100%"))
-            // Spaces the user can read. New space → the standard top-level create form (Space's
-            // DefaultNamespace is "" → top-level, the only sanctioned way to make a new partition).
+            // Spaces the user can read — a FULL mesh search control scoped to nodeType:Space: the
+            // search bar is shown and the view-options ("settings") bar is enabled so the user can
+            // group/adjust and reveal the otherwise-hidden search. New space → the standard top-level
+            // create form (Space's DefaultNamespace is "" → top-level, the only sanctioned way to make
+            // a new partition).
             .WithMeshSearch(TabSpaces,
                 nodeType: "Space",
                 query: "is:main sort:LastModified-desc",
+                placeholder: "Search spaces…",
                 configure: s => s
-                    .WithShowSearchBox(false).WithShowEmptyMessage(true)
+                    .WithShowSearchBox(true).WithViewOptions(true).WithShowEmptyMessage(true)
                     .WithRenderMode(MeshSearchRenderMode.Flat)
                     .WithCollapsibleSections(false).WithSectionCounts(false)
                     .WithMaxColumns(4).WithItemLimit(50).WithMaxRows(3).WithReactiveMode(true)
