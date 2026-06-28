@@ -665,6 +665,43 @@ public static class DataExtensions
     }
 
     /// <summary>
+    /// Merges a parsed cross-hub patch onto the LIVE node (<paramref name="currentNode"/>, mutated in
+    /// place). For a MeshNode whose <see cref="PatchDataRequest.BaseValues"/> are carried, this is a
+    /// type-aware THREE-WAY merge (<see cref="Serialization.MeshNodePatchMerge"/>) so a reordered/stale
+    /// patch can never flap a field — string edits merge by splice, conflicting scalars are refused.
+    /// Without base values (legacy / one-off senders) it falls back to the
+    /// <see cref="DropStaleMonotonicTriggers"/> guard + plain <see cref="MergePatchRecursive"/>.
+    /// </summary>
+    private static void ApplyMeshNodeMerge(
+        System.Text.Json.Nodes.JsonObject currentNode,
+        System.Text.Json.Nodes.JsonObject patchNode,
+        bool isMeshNode,
+        PatchDataRequest message,
+        System.Text.Json.JsonSerializerOptions jsonOpts,
+        ILogger? logger,
+        string hubPath)
+    {
+        if (isMeshNode)
+        {
+            var baseText = message.BaseValues?.Content;
+            if (!string.IsNullOrEmpty(baseText)
+                && System.Text.Json.Nodes.JsonNode.Parse(baseText)
+                    is System.Text.Json.Nodes.JsonObject baseValues)
+            {
+                Serialization.MeshNodePatchMerge.Apply(currentNode, patchNode, baseValues,
+                    onRefuse: key => logger?.LogWarning(
+                        "[MergeGuard] {HubPath}: refused stale/reordered cross-hub write to '{Key}' "
+                        + "(changed since the writer's base) — kept the newer live value.", hubPath, key));
+                return;
+            }
+            // No base carried (MCP one-off / legacy sender): keep the monotonic-trigger guard so a bare
+            // RequestedReleaseAt patch still can't flap, then merge last-write-wins.
+            DropStaleMonotonicTriggers(currentNode, patchNode, jsonOpts, logger, hubPath);
+        }
+        MergePatchRecursive(currentNode, patchNode);
+    }
+
+    /// <summary>
     /// 🚨 Out-of-order / stale cross-hub patch guard for MeshNode MONOTONIC control fields.
     /// Applied to the parsed patch (against the LIVE node) BEFORE <see cref="MergePatchRecursive"/>.
     ///
@@ -776,16 +813,15 @@ public static class DataExtensions
                     var patchNode = System.Text.Json.Nodes.JsonNode.Parse(patchText) as System.Text.Json.Nodes.JsonObject
                         ?? throw new InvalidOperationException("Patch must be a JSON object");
 
-                    // 🚨 Stale/reordered monotonic-trigger guard (MeshNode only). See
-                    // DropStaleMonotonicTriggers — drops a RequestedReleaseAt patch that would move
-                    // the live trigger backward, so an out-of-order cross-hub write can't flap it.
-                    if (typeof(T).FullName == "MeshWeaver.Mesh.MeshNode")
-                        DropStaleMonotonicTriggers(currentNode, patchNode, jsonOpts,
-                            hub.ServiceProvider.GetService<ILoggerFactory>()
-                                ?.CreateLogger("MeshWeaver.Data.MergeGuard"),
-                            hubPath);
-
-                    MergePatchRecursive(currentNode, patchNode);
+                    // 🚨 Three-way merge for a cross-hub MeshNode patch (base values carried on the
+                    // request) so a reordered/stale write can't flap a field; falls back to the
+                    // monotonic-trigger guard + last-write-wins when no base is carried.
+                    ApplyMeshNodeMerge(currentNode, patchNode,
+                        typeof(T).FullName == "MeshWeaver.Mesh.MeshNode",
+                        request.Message, jsonOpts,
+                        hub.ServiceProvider.GetService<ILoggerFactory>()
+                            ?.CreateLogger("MeshWeaver.Data.MergeGuard"),
+                        hubPath);
 
                     // 🚨 The OWNER mints the fresh monotonic Version on apply.
                     // Per the owned-stream contract — SynchronizationStream
@@ -1026,11 +1062,11 @@ public static class DataExtensions
                     var patchNode = System.Text.Json.Nodes.JsonNode.Parse(patchText)
                         as System.Text.Json.Nodes.JsonObject
                         ?? throw new InvalidOperationException("Patch must be a JSON object");
-                    // 🚨 Stale/reordered monotonic-trigger guard. This is the MeshNode-only path,
-                    // so apply unconditionally — drops a RequestedReleaseAt patch that would move
-                    // the live trigger backward (out-of-order cross-hub write) so it can't flap.
-                    DropStaleMonotonicTriggers(currentNode, patchNode, jsonOpts, mergeGuardLogger, hubPath);
-                    MergePatchRecursive(currentNode, patchNode);
+                    // 🚨 Three-way merge (MeshNode-only path) — base values carried on the request let a
+                    // reordered/stale cross-hub patch merge instead of flapping; falls back to the
+                    // monotonic-trigger guard + last-write-wins when no base is carried.
+                    ApplyMeshNodeMerge(currentNode, patchNode, isMeshNode: true,
+                        request.Message, jsonOpts, mergeGuardLogger, hubPath);
                     // The OWNER mints the monotonic Version on apply (same rule as the deferred path).
                     currentNode[versionKey] = version;
                     var merged = System.Text.Json.JsonSerializer

@@ -836,9 +836,19 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             // flow). The captured value reflects the caller's
                             // identity at the moment Update was invoked, which is
                             // what we want stamped on the outbound patch.
+                            // Carry the writer's BASE value at exactly the changed leaves so the OWNER can
+                            // THREE-WAY merge a reordered/stale patch (string edits splice-merge, conflicting
+                            // scalars are refused) instead of blindly flapping a field — see MeshNodePatchMerge.
+                            var baseValues = MeshNodePatchMerge.ExtractBaseValues(currentNode, patch);
+
                             var capturedContext = capturedContextAtEntry;
                             var delivery = _workspace.Hub.Post(
-                                new PatchDataRequest(new MeshNodeReference(), new RawJson(patchJson)),
+                                new PatchDataRequest(new MeshNodeReference(), new RawJson(patchJson))
+                                {
+                                    BaseValues = baseValues is null
+                                        ? null
+                                        : new RawJson(baseValues.ToJsonString(jsonOpts))
+                                },
                                 o =>
                                 {
                                     o = o.WithTarget(new Address(_path!));

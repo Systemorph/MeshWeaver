@@ -19,6 +19,16 @@ public record PatchDataRequest(WorkspaceReference Reference, RawJson Patch)
 {
     /// <summary>Identifier of the actor performing the change, if known.</summary>
     public string? ChangedBy { get; init; }
+
+    /// <summary>
+    /// The writer's BASE value at exactly the leaves <see cref="Patch"/> changes (same nested shape),
+    /// i.e. the old value the diff was computed against. Lets the owner THREE-WAY merge a reordered/stale
+    /// cross-hub patch instead of blindly applying last-write-wins: a field unchanged since this base
+    /// applies as-is, a string changed on both sides merges by splice, a scalar changed on both sides is
+    /// refused (keeping the newer live value). <c>null</c> ⇒ the legacy last-write-wins merge.
+    /// See <c>MeshNodePatchMerge</c>.
+    /// </summary>
+    public RawJson? BaseValues { get; init; }
 }
 
 /// <summary>
