@@ -162,8 +162,8 @@ public static class ThreadInput
             updated => logger?.LogInformation(
                 "[AppendUserInput] ON_NEXT for {ThreadPath} msgId={MsgId} — userIds={UserIds} pending={Pending}",
                 threadPath, msgId,
-                (updated.Content as MeshThread)?.UserMessageIds.Count ?? -1,
-                (updated.Content as MeshThread)?.PendingUserMessages.Count ?? -1),
+                updated.ContentAs<MeshThread>(workspace.Hub.JsonSerializerOptions)?.UserMessageIds.Count ?? -1,
+                updated.ContentAs<MeshThread>(workspace.Hub.JsonSerializerOptions)?.PendingUserMessages.Count ?? -1),
             ex => logger?.LogWarning(ex,
                 "[AppendUserInput] UpdateMeshNode FAILED for thread {ThreadPath} message {MessageId}",
                 threadPath, msgId));

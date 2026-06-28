@@ -264,12 +264,12 @@ public partial class CollaborativeMarkdownView
             {
                 var withMarker = list
                     .Where(n => n.Content is TrackedChange c && !string.IsNullOrEmpty(c.MarkerId))
-                    .DistinctBy(n => ((TrackedChange)n.Content!).MarkerId!);
+                    .DistinctBy(n => n.ContentAs<TrackedChange>(Hub.JsonSerializerOptions)!.MarkerId!);
                 changeNodes = withMarker.ToDictionary(
-                    n => ((TrackedChange)n.Content!).MarkerId!,
-                    n => (TrackedChange)n.Content!);
+                    n => n.ContentAs<TrackedChange>(Hub.JsonSerializerOptions)!.MarkerId!,
+                    n => n.ContentAs<TrackedChange>(Hub.JsonSerializerOptions)!);
                 changePaths = withMarker.ToDictionary(
-                    n => ((TrackedChange)n.Content!).MarkerId!,
+                    n => n.ContentAs<TrackedChange>(Hub.JsonSerializerOptions)!.MarkerId!,
                     n => n.Path);
                 // Tracked changes are overlaid as a diff view from these satellites — re-derive.
                 ProcessContent();
@@ -313,12 +313,12 @@ public partial class CollaborativeMarkdownView
             {
                 var withMarker = list
                     .Where(n => n.Content is Comment c && !string.IsNullOrEmpty(c.MarkerId))
-                    .DistinctBy(n => ((Comment)n.Content!).MarkerId!);
+                    .DistinctBy(n => n.ContentAs<Comment>(Hub.JsonSerializerOptions)!.MarkerId!);
                 commentNodes = withMarker.ToDictionary(
-                    n => ((Comment)n.Content!).MarkerId!,
-                    n => (Comment)n.Content!);
+                    n => n.ContentAs<Comment>(Hub.JsonSerializerOptions)!.MarkerId!,
+                    n => n.ContentAs<Comment>(Hub.JsonSerializerOptions)!);
                 commentPaths = withMarker.ToDictionary(
-                    n => ((Comment)n.Content!).MarkerId!,
+                    n => n.ContentAs<Comment>(Hub.JsonSerializerOptions)!.MarkerId!,
                     n => n.Path);
                 // Comments are overlaid onto the rendered document from these satellites, so a change
                 // in the set must re-derive the inline highlights, not just the sidebar status.

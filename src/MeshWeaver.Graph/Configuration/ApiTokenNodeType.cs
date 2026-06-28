@@ -117,7 +117,7 @@ public static class ApiTokenNodeType
                     return Observable.Empty<Unit>();
                 }
 
-                var index = node.Content as ApiTokenIndex ?? ExtractApiTokenIndex(node, hub.JsonSerializerOptions);
+                var index = node.ContentAs<ApiTokenIndex>(hub.JsonSerializerOptions) ?? ExtractApiTokenIndex(node, hub.JsonSerializerOptions);
 
                 IObservable<MeshNode?> tokenNodeObs;
                 if (index != null)
@@ -146,7 +146,7 @@ public static class ApiTokenNodeType
 
                 return tokenNodeObs.Select(tokenNode =>
                 {
-                    var apiToken = tokenNode?.Content as ApiToken ?? ExtractApiToken(tokenNode, hub.JsonSerializerOptions);
+                    var apiToken = tokenNode.ContentAs<ApiToken>(hub.JsonSerializerOptions) ?? ExtractApiToken(tokenNode, hub.JsonSerializerOptions);
 
                     if (apiToken == null)
                     {

@@ -635,7 +635,7 @@ public static class ThreadLayoutAreas
                         resp =>
                         {
                             var msg = resp.Message is GetDataResponse gdr
-                                ? (gdr.Data as MeshNode)?.Content as ThreadMessage
+                                ? (gdr.Data as MeshNode)?.ContentAs<ThreadMessage>(hub.JsonSerializerOptions)
                                 : null;
                             subject.OnNext(msg?.UpdatedNodes ?? ImmutableList<NodeChangeEntry>.Empty);
                             subject.OnCompleted();

@@ -31,7 +31,7 @@
         <div class="notification-list">
             @foreach (var node in notifications)
             {
-                var notif = node.Content as Notification;
+                var notif = node.ContentAs<Notification>(Hub.JsonSerializerOptions);
                 if (notif == null) continue;
                 var isRead = notif.IsRead;
                 var targetPath = !string.IsNullOrEmpty(notif.TargetNodePath)

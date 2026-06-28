@@ -236,7 +236,7 @@ internal static class NodeTypeCompileActivityHandler
                 // see the same set. For each path, GetMeshNodeStream
                 // returns the OWNING per-node hub's stream — authoritative
                 // content, no index lag.
-                var pendingDef = pendingNode.Content as NodeTypeDefinition;
+                var pendingDef = pendingNode.ContentAs<NodeTypeDefinition>(activityHub.JsonSerializerOptions);
                 IObservable<IReadOnlyList<MeshNode>?> sourcesObservable;
                 if (pendingDef?.CurrentSourceVersions is { Count: > 0 } versions)
                 {
@@ -475,11 +475,11 @@ internal static class NodeTypeCompileActivityHandler
                 result => logger?.LogInformation(
                     "[NTCA] WriteToParent {Transition} for {ParentPath} completed — status={Status} coll={Coll} path={Path} isDirty={IsDirty} compiledSourcesCount={Count}",
                     transitionTag, parentPathForLog,
-                    (result?.Content as NodeTypeDefinition)?.CompilationStatus,
-                    (result?.Content as NodeTypeDefinition)?.LatestAssemblyCollection,
-                    (result?.Content as NodeTypeDefinition)?.LatestAssemblyPath,
-                    (result?.Content as NodeTypeDefinition)?.IsDirty,
-                    (result?.Content as NodeTypeDefinition)?.CompiledSources?.Count ?? 0),
+                    result.ContentAs<NodeTypeDefinition>(options)?.CompilationStatus,
+                    result.ContentAs<NodeTypeDefinition>(options)?.LatestAssemblyCollection,
+                    result.ContentAs<NodeTypeDefinition>(options)?.LatestAssemblyPath,
+                    result.ContentAs<NodeTypeDefinition>(options)?.IsDirty,
+                    result.ContentAs<NodeTypeDefinition>(options)?.CompiledSources?.Count ?? 0),
                 ex => logger?.LogWarning(ex,
                     "[NTCA] failed to write {Transition} state to parent {ParentPath}",
                     transitionTag, parentPathForLog));

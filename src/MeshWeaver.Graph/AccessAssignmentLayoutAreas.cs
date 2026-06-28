@@ -147,7 +147,7 @@ public static class AccessAssignmentLayoutAreas
         stack = stack.WithView(MeshNodeLayoutAreas.BuildHeader(host, node, canEdit));
 
         var assignment = node?.Content == null ? null
-            : (node.Content as AccessAssignment ?? AccessControlLayoutArea.DeserializeAssignment(node));
+            : (node.ContentAs<AccessAssignment>(host.Hub.JsonSerializerOptions) ?? AccessControlLayoutArea.DeserializeAssignment(node));
         if (assignment == null)
             return stack;
 

@@ -284,7 +284,7 @@ public class MeshOperations
             .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
             .SelectMany(node =>
             {
-                var compileError = (node?.Content as Graph.Configuration.NodeTypeDefinition)?.CompilationError;
+                var compileError = node.ContentAs<Graph.Configuration.NodeTypeDefinition>(hub.JsonSerializerOptions)?.CompilationError;
                 if (string.IsNullOrEmpty(compileError))
                     return Observable.Return($"Not found: {resolvedPath}");
 
@@ -1941,7 +1941,7 @@ public class MeshOperations
                     .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
                     .Select(typeNode =>
                     {
-                        var def = typeNode?.Content as Graph.Configuration.NodeTypeDefinition;
+                        var def = typeNode.ContentAs<Graph.Configuration.NodeTypeDefinition>(hub.JsonSerializerOptions);
                         if (def is not null)
                             return FormatDiagnosticsFromDef(def, nodeTypePath);
                         // Degraded JsonElement content: format from the tolerant readers so a

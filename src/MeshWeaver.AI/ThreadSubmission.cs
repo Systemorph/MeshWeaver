@@ -342,7 +342,7 @@ internal static class ThreadSubmissionServer
                     using var dispatchScope = MeshWeaver.Mesh.Security.AccessContextScope.FromNode(triggerNode, accessService, logger);
                     workspace.GetMeshNodeStream().Update(node =>
                     {
-                        var t = node.Content as MeshThread;
+                        var t = node.ContentAs<MeshThread>(threadHub.JsonSerializerOptions);
                         if (t is null
                             || t.Status is not (ThreadExecutionStatus.Idle or ThreadExecutionStatus.Cancelled)
                             || t.PendingUserMessages.IsEmpty)
@@ -542,7 +542,7 @@ internal static class ThreadSubmissionServer
         IMessageHub hub, MeshNode threadNode, ILogger<AgentChatClient>? logger,
         Action? onFailure = null)
     {
-        var thread = threadNode.Content as MeshThread;
+        var thread = threadNode.ContentAs<MeshThread>(hub.JsonSerializerOptions);
         if (thread is null)
         {
             logger?.LogWarning(

@@ -327,7 +327,7 @@ internal static class ThreadExecution
             .Subscribe(node =>
         {
             if (node is null) return;
-            var createdBy = (node.Content as MeshThread)?.CreatedBy;
+            var createdBy = node.ContentAs<MeshThread>(hub.JsonSerializerOptions)?.CreatedBy;
             if (string.IsNullOrEmpty(createdBy))
                 createdBy = node.CreatedBy;
             if (string.IsNullOrEmpty(createdBy))
@@ -1536,7 +1536,7 @@ internal static class ThreadExecution
                 // there is no window; disposed with the round in the finally below. cts.Cancel() is
                 // idempotent, so this is a robust complement to the watcher's sub-thread propagation.
                 var cancelOnRequestSub = parentHub.GetWorkspace().GetMeshNodeStream()
-                    .Select(n => (n?.Content as MeshThread)?.RequestedStatus)
+                    .Select(n => n.ContentAs<MeshThread>(parentHub.JsonSerializerOptions)?.RequestedStatus)
                     .Where(rs => rs == ThreadExecutionStatus.Cancelled)
                     .Take(1)
                     .Subscribe(_ =>
@@ -2833,7 +2833,7 @@ internal static class ThreadExecution
                     .Take(1)
                     .Select(nodes => (IReadOnlyList<ThreadMessage>)nodes
                         .Where(n => n != null)
-                        .Select(n => n!.Content as ThreadMessage)
+                        .Select(n => n!.ContentAs<ThreadMessage>(hub.JsonSerializerOptions))
                         .Where(m => m != null && string.Equals(m.Role, "user", StringComparison.OrdinalIgnoreCase))
                         .OrderBy(m => m!.Timestamp)
                         .Cast<ThreadMessage>()

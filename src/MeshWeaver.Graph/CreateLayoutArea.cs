@@ -612,7 +612,7 @@ public static class CreateLayoutArea
         if (!string.IsNullOrEmpty(knownType))
         {
             var typeNode = host.Hub.ServiceProvider.FindStaticNode(knownType);
-            var typeDef = typeNode?.Content as NodeTypeDefinition;
+            var typeDef = typeNode.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions);
 
             // (A type's own create flow — e.g. Thread's chat composer — is handled earlier
             // in Create() via NodeTypeDefinition.BuildCreate; such a type never reaches

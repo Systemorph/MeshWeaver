@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Text.Json;
 using Humanizer;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
@@ -133,7 +134,7 @@ public static class ThreadMessageLayoutAreas
         // empty overview to the user.
         msgLogger?.LogInformation("[MsgLayout] CONTROL_EMIT_ASYNC: hub={Hub}, waiting for first emission", hubPath);
         return syncStream!
-            .Select(change => change.Value?.Content as ThreadMessage)
+            .Select(change => change.Value.ContentAs<ThreadMessage>(host.Hub.JsonSerializerOptions))
             .Where(m => m != null)
             .Take(1)
             .Select(msg => msg!.Type == ThreadMessageType.EditingPrompt
@@ -157,7 +158,7 @@ public static class ThreadMessageLayoutAreas
         var syncStream = host.Workspace.GetStream(new MeshNodeReference());
 
         return syncStream!
-            .Select(change => change.Value?.Content as ThreadMessage)
+            .Select(change => change.Value.ContentAs<ThreadMessage>(host.Hub.JsonSerializerOptions))
             .Where(m => m != null)
             .Take(1)
             .Select(msg =>
@@ -290,7 +291,7 @@ public static class ThreadMessageLayoutAreas
                 if (stream is null) return Observable.Return<UiControl?>(null);
 
                 return stream
-                    .Select(change => change.Value?.Content as ThreadMessage)
+                    .Select(change => change.Value.ContentAs<ThreadMessage>(h.Hub.JsonSerializerOptions))
                     .Where(m => m is not null)
                     .Select(m => (
                         Started: m!.Timestamp,
@@ -480,7 +481,7 @@ public static class ThreadMessageLayoutAreas
     /// </summary>
     private static UiControl BuildMessageView(LayoutAreaHost host, MeshNode? node, string messagePath)
     {
-        var message = node?.Content as ThreadMessage;
+        var message = node.ContentAs<ThreadMessage>(host.Hub.JsonSerializerOptions);
         if (message == null)
         {
             // Node not yet loaded — show loading skeleton as progress indicator
@@ -630,12 +631,12 @@ public static class ThreadMessageLayoutAreas
     public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
         return host.Workspace.GetMeshNodeStream()
-            .Select(node => BuildThumbnail(node));
+            .Select(node => BuildThumbnail(node, host.Hub.JsonSerializerOptions));
     }
 
-    private static UiControl BuildThumbnail(MeshNode? node)
+    private static UiControl BuildThumbnail(MeshNode? node, JsonSerializerOptions options)
     {
-        var message = node?.Content as ThreadMessage;
+        var message = node.ContentAs<ThreadMessage>(options);
         var role = message?.Role ?? "unknown";
         var text = message?.Text ?? "";
         var preview = text.Length > 50 ? text[..47] + "..." : text;

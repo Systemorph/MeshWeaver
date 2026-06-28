@@ -42,7 +42,7 @@ public static class ThreadFlow
     public static IObservable<MeshThread> ObserveThread(
         IMessageHub client, string threadPath) =>
         client.GetWorkspace().GetMeshNodeStream(threadPath)
-            .Select(n => n.Content as MeshThread)
+            .Select(n => n.ContentAs<MeshThread>(client.JsonSerializerOptions))
             .Where(t => t != null)
             .Select(t => t!);
 
@@ -70,7 +70,7 @@ public static class ThreadFlow
         predicate ??= m => !string.IsNullOrEmpty(m.Text);
         timeout ??= TimeSpan.FromSeconds(15);
         return client.GetWorkspace().GetMeshNodeStream($"{threadPath}/{msgId}")
-            .Select(n => n.Content as ThreadMessage)
+            .Select(n => n.ContentAs<ThreadMessage>(client.JsonSerializerOptions))
             .Where(m => m != null && predicate(m))
             .Take(1)
             .Timeout(timeout.Value)

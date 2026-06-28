@@ -126,6 +126,16 @@ public static class AIExtensions
             // resolves — a redeploy/next sync then reads every AI partition's policy correctly. Mirrors
             // MeshNodeExtensions' registration for the Graph/Doc hubs.
             .WithType(typeof(MeshWeaver.Mesh.Security.PartitionAccessPolicy), nameof(MeshWeaver.Mesh.Security.PartitionAccessPolicy))
+            // User + UserActivityRecord: the chat composer reads the caller's user-partition root node
+            // ({user}, NodeType "User") for _userHome + onboarding, and its _UserActivity satellite. The
+            // chat hub's registry is THIS one (AddChatViews → AddAITypes; "registered centrally via
+            // AddAI"), and User lives in Mesh.Contract — NOT registered anywhere via WithType. Without
+            // these, GetMeshNodeStream({user}) "stayed an untyped JsonElement (TypeRegistry lacks the
+            // $type discriminator)" → "renders empty, reactive waits time out": the composer never binds
+            // and the chat window DISAPPEARS on submit (and home areas hang "awaiting first data"). Same
+            // class as PartitionAccessPolicy above. Also added to AddMeshTypes (their core home).
+            .WithType(typeof(MeshWeaver.Mesh.Security.User), nameof(MeshWeaver.Mesh.Security.User))
+            .WithType(typeof(MeshWeaver.Mesh.Activity.UserActivityRecord), nameof(MeshWeaver.Mesh.Activity.UserActivityRecord))
             // MessageViewModel is not registered — handled as JsonElement on the wire.
             // SubmitMessageRequest / SubmitMessageResponse deleted 2026-05-25:
             // the only mutation API is workspace.GetMeshNodeStream(path).Update(...).

@@ -39,7 +39,7 @@ public static class ReleaseLayoutAreas
             {
                 if (node == null)
                     return (UiControl?)Controls.Body("Loading…");
-                var release = node.Content as NodeTypeRelease;
+                var release = node.ContentAs<NodeTypeRelease>(host.Hub.JsonSerializerOptions);
 
                 var stack = Controls.Stack.WithWidth("100%")
                     .WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host)

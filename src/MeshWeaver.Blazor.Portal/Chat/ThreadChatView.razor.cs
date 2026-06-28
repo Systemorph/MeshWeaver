@@ -1806,7 +1806,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             .Subscribe(
                 updated =>
                 {
-                    if ((updated?.Content as MeshWeaver.AI.Thread)?.RequestedStatus is null)
+                    if (updated.ContentAs<MeshWeaver.AI.Thread>(Hub.JsonSerializerOptions)?.RequestedStatus is null)
                     {
                         Logger.LogWarning(
                             "[ThreadChat:{InstanceId}] Cancel stream.Update returned a node WITHOUT RequestedStatus set for {Thread}",

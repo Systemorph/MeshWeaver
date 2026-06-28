@@ -140,7 +140,7 @@ public static class ApprovalLayoutAreas
             var cache = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
             cache.Update(approvalPath, n =>
             {
-                var a = n.Content as Approval ?? approval;
+                var a = n.ContentAs<Approval>(host.Hub.JsonSerializerOptions) ?? approval;
                 return n with
                 {
                     Content = a with

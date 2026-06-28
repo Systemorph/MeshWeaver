@@ -200,7 +200,7 @@
                 // joins the same upstream. See Doc/GUI/ItemTemplateMeshNodeStreamBinding.
                 var cache = Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
                 return cache.GetStream(msg.ActivityPath, Hub.JsonSerializerOptions)
-                    .Select(n => n?.Content as ActivityLog)
+                    .Select(n => n.ContentAs<ActivityLog>(Hub.JsonSerializerOptions))
                     .Where(log => log is not null && log.Status != ActivityStatus.Running)
                     .Take(1)
                     .Select(log => log!);

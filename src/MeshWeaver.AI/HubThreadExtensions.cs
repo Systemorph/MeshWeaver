@@ -121,7 +121,7 @@ public static class HubThreadExtensions
             })
             with { MessageContent = null, Attachments = null, OpenThreadPath = null };
 
-        var baseThread = (threadNode.Content as MeshThread ?? new MeshThread()) with
+        var baseThread = (threadNode.ContentAs<MeshThread>(hub.JsonSerializerOptions) ?? new MeshThread()) with
         {
             Composer = seedComposer
         };
@@ -359,7 +359,7 @@ public static class HubThreadExtensions
 
         hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
         {
-            var t = node.Content as MeshThread;
+            var t = node.ContentAs<MeshThread>(hub.JsonSerializerOptions);
             if (t is null) return node;
 
             var idx = t.Messages.IndexOf(userMessageId);
@@ -419,7 +419,7 @@ public static class HubThreadExtensions
             var cellPath = $"{threadPath}/{userMessageId}";
             hub.GetMeshNodeStream(cellPath).Update(node =>
             {
-                var existing = node.Content as ThreadMessage;
+                var existing = node.ContentAs<ThreadMessage>(hub.JsonSerializerOptions);
                 var nextContent = existing is not null
                     ? existing with { Text = newUserText!, Timestamp = DateTime.UtcNow }
                     : new ThreadMessage
@@ -462,7 +462,7 @@ public static class HubThreadExtensions
             ?.CreateLogger("MeshWeaver.AI.HubThreadExtensions");
         hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
         {
-            var t = node.Content as MeshThread;
+            var t = node.ContentAs<MeshThread>(hub.JsonSerializerOptions);
             if (t is null) return node;
             var idx = t.Messages.IndexOf(atMessageId);
             if (idx < 0) return node; // id not in thread — no-op

@@ -40,19 +40,19 @@ internal static class PartitionSettingsTab
                         return (UiControl?)Controls.Html(
                             "<p style=\"color: var(--neutral-foreground-hint);\">No partitions registered.</p>");
 
-                    return (UiControl?)BuildPartitionsList(nodes);
+                    return (UiControl?)BuildPartitionsList(nodes, host.Hub.JsonSerializerOptions);
                 }));
 
         return stack;
     }
 
-    private static UiControl BuildPartitionsList(List<MeshNode> nodes)
+    private static UiControl BuildPartitionsList(List<MeshNode> nodes, System.Text.Json.JsonSerializerOptions options)
     {
         var container = Controls.Stack.WithWidth("100%").WithStyle("gap: 12px;");
 
         foreach (var node in nodes.OrderBy(n => n.Name))
         {
-            var def = node.Content as PartitionDefinition;
+            var def = node.ContentAs<PartitionDefinition>(options);
 
             var card = Controls.Stack.WithWidth("100%")
                 .WithStyle("padding: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; gap: 8px;");

@@ -226,7 +226,7 @@ public static class CommentsView
             {
                 var commentControls = snapshot
                     .Where(n => n.Content is Comment)
-                    .OrderByDescending(n => ((Comment)n.Content!).CreatedAt)
+                    .OrderByDescending(n => n.ContentAs<Comment>(host.Hub.JsonSerializerOptions)!.CreatedAt)
                     .Select(n => Controls.LayoutArea(n.Path, CommentLayoutAreas.OverviewArea))
                     .ToArray();
                 host.UpdateData(commentsDataId, commentControls);
