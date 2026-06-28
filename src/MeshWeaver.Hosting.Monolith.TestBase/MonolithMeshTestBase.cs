@@ -94,25 +94,21 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// the wrong/empty area" failure: LinkedInProfile ↔ LinkedInTelemetry both use
     /// <c>Systemorph/LinkedInProfile</c>; the victim was whichever ran second).</para>
     /// </summary>
-    private readonly string _assemblyStoreRoot = Path.Combine(
-        Path.GetTempPath(),
-        $"meshweaver-test-assembly-store-{Environment.ProcessId}-{Guid.NewGuid():N}");
+    // Assigned in the constructor — the per-CLASS path needs GetType().Name (the most-derived test
+    // class), which a field initializer can't reference. See _compilationCacheDir.
+    private readonly string _assemblyStoreRoot;
 
     /// <summary>
-    /// Per-test compilation cache directory, isolated under temp + ProcessId +
-    /// Guid. The default <c>CompilationCacheOptions.CacheDirectory = ".mesh-cache"</c>
-    /// resolves relative to the assembly location and is SHARED across every
-    /// test in the testhost — multiple test classes compiling the same NodeType
-    /// name (e.g. "BrokenType", "DynamicType") would race on the same DLL file,
-    /// causing test-N+1 to time out waiting on a lock held by test-N's lingering
-    /// ALC. Symptom: CodeEditRecompileTest + LinkedInTelemetryImportTest
-    /// timeout in full sweeps but pass in isolation. Unique per-test-class path
-    /// eliminates the contention without disabling the cache (compile tests
-    /// that depend on disk-backed DLL loading still work).
+    /// Per-test-CLASS compilation cache directory (ProcessId + test-class name). SHARED across every
+    /// <c>[Fact]</c> of one class, so a NodeType compiled by the first test is a cache HIT for the
+    /// rest (1 compile + N hits — the within-class speedup that the old per-Guid path threw away),
+    /// but ISOLATED across classes, so two classes that reuse a node path/name with different source
+    /// (LinkedInProfile ↔ LinkedInTelemetry, both <c>Systemorph/LinkedInProfile</c>) never serve each
+    /// other's bytes (the cross-class contamination). A cache HIT loads the existing DLL (no
+    /// rewrite), so there is no write-vs-lingering-ALC lock contention either. Assigned in the
+    /// constructor (needs the derived type name).
     /// </summary>
-    private readonly string _compilationCacheDir = Path.Combine(
-        Path.GetTempPath(),
-        $"meshweaver-test-mesh-cache-{Environment.ProcessId}-{Guid.NewGuid():N}");
+    private readonly string _compilationCacheDir;
 
     /// <summary>
     /// Base mesh configuration shared by every test: monolith mesh, in-memory persistence, row-level
@@ -175,6 +171,13 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// <param name="output">xUnit output helper for the running test.</param>
     protected MonolithMeshTestBase(ITestOutputHelper output) : base(output)
     {
+        // Per-test-CLASS cache paths (see _compilationCacheDir): shared across this class's [Fact]s,
+        // isolated across classes. GetType().Name is the most-derived test class (not available in a
+        // field initializer). Must be set BEFORE ConfigureMesh below, which reads both.
+        var classCacheTag = $"{Environment.ProcessId}-{GetType().Name}";
+        _assemblyStoreRoot = Path.Combine(Path.GetTempPath(), $"meshweaver-test-assembly-store-{classCacheTag}");
+        _compilationCacheDir = Path.Combine(Path.GetTempPath(), $"meshweaver-test-mesh-cache-{classCacheTag}");
+
         // In shared-mesh mode, ConfigureMesh runs only on the FIRST instance of
         // this test class — the SP is cached statically and re-used by every
         // subsequent [Fact]. Skip the BuildHub registration on later instances
