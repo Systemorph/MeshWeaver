@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
@@ -71,62 +72,43 @@ public sealed class ClaudeConnectStrategy : IConnectStrategy
     private static string StripAnsi(string s) => AnsiEscape.Replace(s, "");
 
     /// <summary>
-    /// Reassembles a Claude token that <c>claude setup-token</c> printed inside a fixed-width Ink box,
-    /// which wraps the ~100-char token across several rows (~43 chars each). Among the already
-    /// ANSI-stripped <paramref name="lines"/>, stitches the maximal run of CONSECUTIVE box rows whose
-    /// content — box-drawing glyphs and whitespace removed — is pure token characters, anchored at the
-    /// row carrying the <c>sk-ant-</c> prefix, and returns the LONGEST such stitch (the final,
-    /// fully-repainted box). A bottom border / padding / prose row (not pure token chars once cleaned)
-    /// terminates a run, so surrounding UI text is never glued on. Falls back to the longest single-line
-    /// regex match when no multi-row run is found (a token that fit on one line, or a non-boxed/test
-    /// renderer). Returns null when nothing token-shaped is present.
+    /// Streaming reassembler for the token <c>claude setup-token</c> prints inside a fixed-width Ink box
+    /// (the box wraps the ~100-char token across ~43-char rows). Fed each ANSI-stripped stdout line in
+    /// order via <see cref="Feed"/>, it removes box-drawing glyphs + whitespace and stitches CONSECUTIVE
+    /// pure-token-char rows — anchored at the row carrying the <c>sk-ant-</c> prefix — into
+    /// <see cref="Completed"/> the moment the run ends (a border / padding / prose row terminates it, so
+    /// surrounding UI text is never glued on). The whole-box render arrives in one Ink frame, so the
+    /// first completed run is the full token.
+    /// <para><b>Why streaming, not batch:</b> the Ink UI repaints continuously, flooding stdout with
+    /// thousands of frames. Collecting them (<c>ToList</c>) and rescanning (O(n²)) pegged a core for the
+    /// full <c>TokenTimeout</c> — the post-paste wedge. This is O(1) per line and the consumer stops at
+    /// the first <see cref="Completed"/>, so the flood is never collected or rescanned.</para>
     /// </summary>
-    internal static string? ReassembleToken(IList<string> lines, Regex tokenRegex)
+    internal sealed record TokenStitch(string Run, string? Completed)
     {
-        static string Clean(string s)
-        {
-            var sb = new StringBuilder(s.Length);
-            foreach (var ch in s)
-                if (!(ch is >= '─' and <= '╿') && !char.IsWhiteSpace(ch))
-                    sb.Append(ch);
-            return sb.ToString();
-        }
-        static bool IsTokenRun(string s) =>
-            s.Length > 0 && s.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-');
+        internal static readonly TokenStitch Start = new("", null);
 
-        var cleaned = new string[lines.Count];
-        for (var i = 0; i < lines.Count; i++)
-            cleaned[i] = Clean(lines[i]);
-
-        string? best = null;
-        for (var i = 0; i < cleaned.Length; i++)
+        internal TokenStitch Feed(string strippedLine)
         {
-            if (!cleaned[i].StartsWith("sk-ant-", StringComparison.Ordinal))
-                continue;
-            var sb = new StringBuilder(cleaned[i]);
-            for (var j = i + 1;
-                 j < cleaned.Length && IsTokenRun(cleaned[j])
-                     && !cleaned[j].StartsWith("sk-ant-", StringComparison.Ordinal);
-                 j++)
-                sb.Append(cleaned[j]);
-            var candidate = sb.ToString();
-            if (best is null || candidate.Length > best.Length)
-                best = candidate;
+            var cell = CleanRow(strippedLine);
+            var isTokenRow = cell.Length > 0 && cell.All(static c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-');
+            if (isTokenRow)
+                return Run.Length > 0 ? new(Run + cell, null)                                  // extend a run
+                     : cell.StartsWith("sk-ant-", StringComparison.Ordinal) ? new(cell, null)  // start a run
+                     : new("", null);                                                          // unrelated token-ish row
+            // A non-token row terminates a run — surface it as Completed iff it was an sk-ant- token.
+            return Run.StartsWith("sk-ant-", StringComparison.Ordinal) ? new("", Run) : new("", null);
         }
-        if (best is not null)
-            return best;
+    }
 
-        // Fallback: longest single-line regex match (one-line token / non-boxed or test renderer).
-        foreach (var line in lines)
-        {
-            var m = tokenRegex.Match(line);
-            if (!m.Success)
-                continue;
-            var value = (m.Groups.Count > 1 && m.Groups[1].Success ? m.Groups[1].Value : m.Value).Trim();
-            if (best is null || value.Length > best.Length)
-                best = value;
-        }
-        return best;
+    /// <summary>Drops box-drawing glyphs (U+2500..U+257F) and whitespace, leaving a row's bare content.</summary>
+    private static string CleanRow(string s)
+    {
+        var sb = new StringBuilder(s.Length);
+        foreach (var ch in s)
+            if (!(ch is >= '─' and <= '╿') && !char.IsWhiteSpace(ch))
+                sb.Append(ch);
+        return sb.ToString();
     }
 
     /// <summary>
@@ -165,7 +147,11 @@ public sealed class ClaudeConnectStrategy : IConnectStrategy
     public IObservable<ConnectChallenge> StartConnect(ConnectSession session, string ownerPath)
     {
         var options = Options;
-        return processPool.Invoke(ct => SpawnAndScrapeUrlAsync(session, options, ct));
+        // IoPool carries ONLY the spawn (the async leaf) and hands back the shared output buffer; the
+        // URL scrape is then a COMPOSED observable over that buffer — no ToTask, and the pool slot is
+        // freed while we wait for the URL (per /async: the pool carries the leaf, never the wait).
+        return processPool.InvokeBlocking(ct => SpawnProcess(session, options, ct))
+            .SelectMany(buffer => ScrapeUrl(buffer, session, options));
     }
 
     /// <summary>
@@ -178,12 +164,19 @@ public sealed class ClaudeConnectStrategy : IConnectStrategy
     public IObservable<string> CompleteConnect(ConnectSession session, string? pastedCode)
     {
         var options = Options;
-        return processPool.Invoke(ct => SubmitCodeAndCaptureTokenAsync(session, pastedCode, options, ct));
+        var buffer = session.ProviderClient as OutputBuffer
+            ?? throw new InvalidOperationException("Connect session is missing its output buffer.");
+        // IoPool carries ONLY the stdin write (the async leaf); the token scrape is a COMPOSED observable
+        // over the shared buffer — no ToTask, pool slot freed during the (up-to-TokenTimeout) wait.
+        return processPool.Invoke(ct => WritePastedCodeAsync(session, pastedCode, ct))
+            .SelectMany(_ => ScrapeToken(buffer, session, options));
     }
 
-    // ── subprocess boundary (the only place Task lives — per "nothing async ever") ───────────────
+    // ── subprocess boundary: the IoPool carries ONLY the async leaves (spawn, stdin write, file read);
+    //    the URL/token SCRAPES are composed observables over the shared buffer, never a ToTask in a pool
+    //    slot (per /async — a ToTask there parks the worker for the whole wait and can deadlock). ───────
 
-    private async Task<ConnectChallenge> SpawnAndScrapeUrlAsync(
+    private OutputBuffer SpawnProcess(
         ConnectSession session, ClaudeConnectOptions options, CancellationToken ct)
     {
         var configDir = ResolveConfigDir(session, options);
@@ -244,47 +237,39 @@ public sealed class ClaudeConnectStrategy : IConnectStrategy
         process.BeginErrorReadLine();
         session.Process = process;
 
-        var urlRegex = options.CompiledUrl();
-
-        // Reactive scrape: first stripped line whose text matches the URL regex → the challenge,
-        // bounded by UrlTimeout, honouring the pool's CancellationToken. The `await … .ToTask(ct)`
-        // bridge runs INSIDE the Process IoPool worker (not the hub action block) — the one sanctioned
-        // async edge. A completed-without-match feed (process exited) surfaces as "no elements".
-        try
-        {
-            var url = await buffer.Lines
-                .Select(StripAnsi)
-                .Select(line => urlRegex.Match(line))
-                .Where(m => m.Success)
-                .Select(m => (m.Groups.Count > 1 && m.Groups[1].Success ? m.Groups[1].Value : m.Value).Trim())
-                .FirstAsync()
-                .Timeout(options.UrlTimeout)
-                .ToTask(ct)
-                .ConfigureAwait(false);
-            logger?.LogInformation("Claude Connect surfaced auth URL for session {Session}", session.SessionId);
-            return new ConnectChallenge(session.SessionId, ConnectProvider.ClaudeCode, url, UserCode: null, RequiresPastedCode: true);
-        }
-        catch (InvalidOperationException)
-        {
-            // FirstAsync on a completed-without-match feed → the CLI exited before emitting a URL.
-            throw new InvalidOperationException(
-                "claude setup-token exited before emitting an auth URL. On a non-TTY stdout the Ink UI emits nothing — see TODO(claude-pty).");
-        }
-        catch (TimeoutException)
-        {
-            throw new TimeoutException(
-                "Timed out waiting for the Claude auth URL. The CLI needs a real terminal (PTY) — see TODO(claude-pty).");
-        }
+        return buffer;
     }
 
-    private async Task<string> SubmitCodeAndCaptureTokenAsync(
-        ConnectSession session, string? pastedCode, ClaudeConnectOptions options, CancellationToken ct)
+    /// <summary>
+    /// Reactive URL scrape (NO ToTask): the first stripped line matching the URL regex → the challenge,
+    /// bounded by UrlTimeout. A completed-without-match feed (process exited) → "exited before URL";
+    /// timeout → TimeoutException, both with the PTY guidance. Subscribed by the caller off the pool.
+    /// </summary>
+    private IObservable<ConnectChallenge> ScrapeUrl(OutputBuffer buffer, ConnectSession session, ClaudeConnectOptions options)
+    {
+        var urlRegex = options.CompiledUrl();
+        return buffer.Lines
+            .Select(StripAnsi)
+            .Select(line => urlRegex.Match(line))
+            .Where(m => m.Success)
+            .Select(m => (m.Groups.Count > 1 && m.Groups[1].Success ? m.Groups[1].Value : m.Value).Trim())
+            .FirstAsync()
+            .Timeout(options.UrlTimeout)
+            .Select(url =>
+            {
+                logger?.LogInformation("Claude Connect surfaced auth URL for session {Session}", session.SessionId);
+                return new ConnectChallenge(session.SessionId, ConnectProvider.ClaudeCode, url, UserCode: null, RequiresPastedCode: true);
+            })
+            .Catch((Exception ex) => Observable.Throw<ConnectChallenge>(
+                ex is TimeoutException
+                    ? new TimeoutException("Timed out waiting for the Claude auth URL. The CLI needs a real terminal (PTY) — see TODO(claude-pty).")
+                    : new InvalidOperationException("claude setup-token exited before emitting an auth URL. On a non-TTY stdout the Ink UI emits nothing — see TODO(claude-pty).")));
+    }
+
+    private async Task<Unit> WritePastedCodeAsync(ConnectSession session, string? pastedCode, CancellationToken ct)
     {
         var process = session.Process
             ?? throw new InvalidOperationException("No live Claude login process; call StartConnect first.");
-        var buffer = session.ProviderClient as OutputBuffer
-            ?? throw new InvalidOperationException("Connect session is missing its output buffer.");
-
         if (!string.IsNullOrEmpty(pastedCode))
         {
             try
@@ -297,63 +282,49 @@ public sealed class ClaudeConnectStrategy : IConnectStrategy
                 logger?.LogWarning(ex, "Failed to write pasted code to claude stdin");
             }
         }
+        return Unit.Default;
+    }
 
-        var tokenRegex = options.CompiledToken();
+    /// <summary>
+    /// Reactive token scrape (NO ToTask). <c>claude setup-token</c> renders the token inside a
+    /// FIXED-WIDTH Ink box that wraps the ~100-char token across ~43-char rows (PtyColumns=4096 does not
+    /// widen it) and repaints it continuously. <see cref="TokenStitch"/> stitches the wrapped rows back
+    /// together as lines stream, and FirstAsync stops at the FIRST complete token — so the repaint flood
+    /// is never collected or rescanned (the batch-collect version pegged a core: the post-paste wedge).
+    /// On timeout / process-exit / cancel, falls back to the CLI's <c>.credentials.json</c>.
+    /// </summary>
+    private IObservable<string> ScrapeToken(OutputBuffer buffer, ConnectSession session, ClaudeConnectOptions options)
+    {
+        return buffer.Lines
+            .Select(StripAnsi)
+            .Scan(TokenStitch.Start, static (state, line) => state.Feed(line))
+            .Where(state => state.Completed is { Length: > 8 })   // a completed sk-ant- run (not just the prefix)
+            .Select(state => state.Completed!)
+            .FirstAsync()
+            .Timeout(options.TokenTimeout)
+            .Do(token =>
+                // Log the LENGTH (never the value): a real sk-ant-oat01 token is ~100+ chars; ~43 would
+                // mean a wrapped box row was missed. The token is applied via the CLAUDE_CODE_OAUTH_TOKEN
+                // env var (persisted on the ModelProvider node), never written to .credentials.json.
+                logger?.LogInformation("Claude Connect captured token (stdout, {Length} chars) for session {Session}",
+                    token.Length, session.SessionId))
+            .Catch((Exception ex) => ex is TimeoutException or InvalidOperationException or OperationCanceledException
+                ? TokenFromCredentialsFile(session, options)
+                : Observable.Throw<string>(ex));
+    }
 
-        // 1) Prefer a token printed on stdout. `claude setup-token` renders the token inside a
-        //    FIXED-WIDTH Ink box that wraps the ~100-char token across several rows (~43 chars each)
-        //    REGARDLESS of the terminal width (PtyColumns=4096 does not widen it) and repaints the box
-        //    a few times — so the old per-line scrape only ever captured the FIRST fragment, stored a
-        //    truncated token, and the CLI rejected it ("Not logged in"). Instead: collect the
-        //    post-paste lines until a short settle window after the `sk-ant-` prefix first appears
-        //    (covers the repaints), then reassemble the wrapped rows into the full token. The
-        //    `await … .ToTask(ct)` runs INSIDE the Process IoPool worker (the one sanctioned async
-        //    edge), not the hub. Timeout / completed-without-match (process exited) / cancellation all
-        //    fall through to the credentials-file fallback, exactly as the old loop did.
-        string? fromStdout = null;
-        try
-        {
-            var stripped = buffer.Lines.Select(StripAnsi);
-            var collected = await stripped
-                .TakeUntil(stripped
-                    .Where(l => l.Contains("sk-ant-", StringComparison.Ordinal))
-                    .Take(1)
-                    .SelectMany(_ => Observable.Timer(options.TokenSettle)))
-                .ToList()
-                .Timeout(options.TokenTimeout)
-                .ToTask(ct)
-                .ConfigureAwait(false);
-            fromStdout = ReassembleToken(collected, tokenRegex);
-        }
-        catch (Exception ex) when (ex is TimeoutException or InvalidOperationException or OperationCanceledException)
-        {
-            // Timed out, feed completed without a match (process exited), or cancelled — fall through
-            // to the credentials-file fallback below.
-        }
-
-        if (!string.IsNullOrEmpty(fromStdout))
-        {
-            // Log the LENGTH (never the value) so a truncated capture is diagnosable: a real
-            // sk-ant-oat01 token is ~100+ chars; ~43 means the box reassembly missed a row.
-            logger?.LogInformation("Claude Connect captured token (stdout, {Length} chars) for session {Session}",
-                fromStdout!.Length, session.SessionId);
-            // NOTE: do NOT write the captured token to .credentials.json — a `setup-token` token is used
-            // via the CLAUDE_CODE_OAUTH_TOKEN env var, not that file (which is the interactive
-            // `claude login` OAuth-bundle schema). Writing it there made the CLI choke and exit 1. The
-            // token is persisted in the ModelProvider node and re-applied to the env by the harness.
-            return fromStdout;
-        }
-
-        // 2) Fallback: the CLI may have written the token to {ConfigDir}/.credentials.json instead.
+    /// <summary>
+    /// Fallback for the token scrape: the CLI may have written the token to {ConfigDir}/.credentials.json.
+    /// Reads it on the IoPool (sync file leaf); a non-empty token → emit it, otherwise surface the timeout.
+    /// </summary>
+    private IObservable<string> TokenFromCredentialsFile(ConnectSession session, ClaudeConnectOptions options)
+    {
         var configDir = ResolveConfigDir(session, options);
-        var fromFile = TryReadCredentialsToken(configDir);
-        if (!string.IsNullOrEmpty(fromFile))
-        {
-            logger?.LogInformation("Claude Connect captured token (.credentials.json) for session {Session}", session.SessionId);
-            return fromFile!;
-        }
-
-        throw new TimeoutException("Timed out waiting for the Claude token after the code was submitted.");
+        return processPool.InvokeBlocking(_ => TryReadCredentialsToken(configDir))
+            .SelectMany(fromFile => string.IsNullOrEmpty(fromFile)
+                ? Observable.Throw<string>(new TimeoutException("Timed out waiting for the Claude token after the code was submitted."))
+                : Observable.Return(fromFile!).Do(_ =>
+                    logger?.LogInformation("Claude Connect captured token (.credentials.json) for session {Session}", session.SessionId)));
     }
 
     private string? ResolveConfigDir(ConnectSession session, ClaudeConnectOptions options)
@@ -419,7 +390,10 @@ public sealed class ClaudeConnectStrategy : IConnectStrategy
     /// </summary>
     private sealed class OutputBuffer : IDisposable
     {
-        private readonly ReplaySubject<string> subject = new();
+        // BOUNDED replay: the URL/token scans subscribe just after the spawn/paste, so they only need a
+        // small window of lines emitted before they subscribed. Bounding the buffer means the Ink UI's
+        // continuous repaint flood can't grow it without limit once a scan has stopped (FirstAsync).
+        private readonly ReplaySubject<string> subject = new(bufferSize: 512);
 
         /// <summary>The line feed: every stdout/stderr line, replayed to late subscribers.</summary>
         public IObservable<string> Lines => subject;
