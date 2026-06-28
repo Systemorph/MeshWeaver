@@ -21,8 +21,16 @@
    scroll within. Only applies to top-level pages (Top=true) and only once the
    content has loaded, so embedded areas and the loading spinner are untouched.
    Authors who set an explicit height still win: flex-basis:auto reads it, and
-   flex-grow merely lets it reach the bottom. */
-.layout-area-container.top-area.content-loaded > * {
+   flex-grow merely lets it reach the bottom.
+
+   🚨 ::deep is REQUIRED: the single child here is the rendered control's root element,
+   which belongs to a CHILD component (e.g. MarkdownView's <article class="markdown-body">,
+   the start-screen "black frame") and so carries that component's scope attribute, NOT this
+   one's. Without ::deep, Blazor scopes the selector to `> *[b-thiscomponent]`, which never
+   matches the child-component element — the rule silently no-ops and the page background
+   "stops in the middle" (the start-screen full-height regression). ::deep stops scoping for
+   `> *` so it matches the real child regardless of which component rendered it. */
+.layout-area-container.top-area.content-loaded ::deep > * {
     flex: 1 1 auto;
     min-height: 0;
 }
