@@ -1187,6 +1187,15 @@ public static class MeshNodeStreamExtensions
                 observer.OnCompleted();
             }
 
+            // Surface a denial/validation error instead of collapsing it to a null the
+            // caller can't tell apart from "node not found". Mutually exclusive with
+            // EmitOnce via the same `emitted` latch.
+            void EmitError(Exception error)
+            {
+                if (Interlocked.Exchange(ref emitted, 1) != 0) return;
+                observer.OnError(error);
+            }
+
             cts.Token.Register(() => EmitOnce(null));
 
             try
@@ -1215,6 +1224,15 @@ public static class MeshNodeStreamExtensions
                             {
                                 if (d.Message is GetDataResponse resp)
                                 {
+                                    // A null-Data response carrying an Error is a rejection
+                                    // (e.g. RLS read-validator denial posts GetDataResponse
+                                    // { Error = "..." }). Surface it — never swallow an
+                                    // access/validation failure as a silent "not found" null.
+                                    if (resp.Data is null && !string.IsNullOrEmpty(resp.Error))
+                                    {
+                                        EmitError(new UnauthorizedAccessException(resp.Error));
+                                        return;
+                                    }
                                     MeshNode? node = resp.Data as MeshNode;
                                     if (node == null && resp.Data is JsonElement je)
                                         node = je.Deserialize<MeshNode>(hub.JsonSerializerOptions);
@@ -1236,6 +1254,17 @@ public static class MeshNodeStreamExtensions
                         },
                         ex =>
                         {
+                            // Access denial (ErrorType.Unauthorized) is a real error the
+                            // caller — and ultimately the user — must see: surface it.
+                            // Genuine not-found (routing NotFound) stays a null emission,
+                            // the documented contract. Without this, a denied read was
+                            // indistinguishable from a missing node and silently fell back.
+                            if (ex is DeliveryFailureException dfe
+                                && dfe.Failure?.ErrorType == ErrorType.Unauthorized)
+                            {
+                                EmitError(ex);
+                                return;
+                            }
                             var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
                                 ?.CreateLogger("MeshWeaver.Mesh.GetMeshNode");
                             logger?.LogDebug(ex, "GetMeshNode delivery failed for {Path}", path);

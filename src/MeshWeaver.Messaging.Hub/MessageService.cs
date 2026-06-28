@@ -614,6 +614,23 @@ public class MessageService : IMessageService
                         delivery.Message.GetType().Name, delivery.Id, Address);
                     shouldDefer = false;
                 }
+                // A reply to a request THIS hub issued must never be deferred behind the
+                // hub's own init gate: deferring it deadlocks the hub against its own
+                // awaited response (e.g. a data loader that reads a cross-hub node during
+                // DataContextInit — the reply routes back on-target while the gate is still
+                // closed, and the gate can't open until the load, waiting on that reply,
+                // completes). Same rationale as the DeliveryFailure bypass above, for the
+                // SUCCESS reply. Regression coverage: FutuReAnalysisTest's LocalAnalysis
+                // render tests — the loader reads its parent BusinessUnit node during
+                // DataContextInit; before this fix that reply was deferred and every render
+                // ate the GetMeshNode 10s timeout (10s → ~0.5s once the reply isn't deferred).
+                else if (hub is MessageHub concreteHub && concreteHub.IsAwaitedResponse(delivery))
+                {
+                    logger.LogDebug(
+                        "Allowing awaited response {MessageType} (ID: {MessageId}) through gates for hub {Address}",
+                        delivery.Message.GetType().Name, delivery.Id, Address);
+                    shouldDefer = false;
+                }
                 else
                 {
                     lock (gateStateLock)

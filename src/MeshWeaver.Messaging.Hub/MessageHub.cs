@@ -1031,6 +1031,29 @@ public sealed class MessageHub : IMessageHub
         });
     }
 
+    /// <summary>
+    /// True when <paramref name="delivery"/> is a reply correlated (via
+    /// <see cref="PostOptions.RequestId"/>) to a request THIS hub issued and is still
+    /// awaiting — i.e. there is a live <see cref="responseSubjects"/> entry for it.
+    /// <para>
+    /// Used by the init-gate deferral (<c>MessageService</c>) to NEVER defer a reply the
+    /// hub is waiting on behind its own initialization gate. Deferring it deadlocks the
+    /// hub against its own awaited response — e.g. a data loader that reads a cross-hub
+    /// node during <c>DataContextInit</c>: the reply routes back on-target while the gate
+    /// is still closed, gets queued, and the gate can't open until the load (waiting on
+    /// that reply) completes. This generalises the existing <c>DeliveryFailure</c> bypass
+    /// to the SUCCESS reply, which suffers the identical deadlock.
+    /// </para>
+    /// </summary>
+    internal bool IsAwaitedResponse(IMessageDelivery delivery)
+    {
+        if (!delivery.Properties.TryGetValue(PostOptions.RequestId, out var requestId)
+            || requestId?.ToString() is not { Length: > 0 } requestIdString)
+            return false;
+        lock (responseSubjects)
+            return responseSubjects.ContainsKey(requestIdString);
+    }
+
     private IObservable<IMessageDelivery> HandleCallbacks(
         IMessageDelivery delivery,
         CancellationToken cancellationToken
