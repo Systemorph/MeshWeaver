@@ -116,6 +116,16 @@ public static class AIExtensions
             // AiSettings: per-user {user}/_Memex/AiSettings config (enabled harnesses + agent/model
             // picker query templates). Registered mesh-wide so the node serialises across hubs.
             .WithType(typeof(AiSettings), nameof(AiSettings))
+            // PartitionAccessPolicy: the read-only "_Policy" governance node every AI partition carries
+            // (Harness/Agent/Model/Provider/Skill — emitted by BuiltInHarnessProvider / *StaticRepoSource,
+            // synced via StaticRepoImporter). The AI partitions' per-node + querying hubs register ONLY
+            // the AI types above — NOT the Graph registry — so without this their _Policy content
+            // "stayed an untyped JsonElement (TypeRegistry lacks the $type discriminator)": the policy
+            // never materialised, starving the harness/agent/model picker + chat composer of catalog data
+            // ("awaiting first data"). Registered with nameof so the stored "$type":"PartitionAccessPolicy"
+            // resolves — a redeploy/next sync then reads every AI partition's policy correctly. Mirrors
+            // MeshNodeExtensions' registration for the Graph/Doc hubs.
+            .WithType(typeof(MeshWeaver.Mesh.Security.PartitionAccessPolicy), nameof(MeshWeaver.Mesh.Security.PartitionAccessPolicy))
             // MessageViewModel is not registered — handled as JsonElement on the wire.
             // SubmitMessageRequest / SubmitMessageResponse deleted 2026-05-25:
             // the only mutation API is workspace.GetMeshNodeStream(path).Update(...).
