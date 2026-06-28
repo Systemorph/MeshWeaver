@@ -146,4 +146,84 @@ public class MeshNodePatchMergeTest
         Assert.Equal("hello", extracted["Name"]!.GetValue<string>());
         Assert.False(extracted.ContainsKey("Untouched"), "only changed leaves carry a base value");
     }
+
+    // ── Array conflicts: the inbox-drop bug. A cross-hub write of an ARRAY field (the thread inbox
+    //    PendingUserMessages / IngestedMessageIds) against a stale base used to hit the blanket scalar
+    //    REFUSE and silently lose the writer's submission (RapidSubmits_PileUpAndAllIngest /
+    //    OrleansResubmitDeadlock). Arrays now three-way merge by element identity. ──
+
+    private static JsonArray Arr(params JsonNode?[] elems)
+    {
+        var a = new JsonArray();
+        foreach (var e in elems) a.Add(e);
+        return a;
+    }
+
+    private static List<string> Strings(JsonNode? arr)
+    {
+        var list = new List<string>();
+        foreach (var e in (JsonArray)arr!) list.Add(e!.GetValue<string>());
+        return list;
+    }
+
+    [Fact]
+    public void ArrayConflict_WriterAddition_LandsOnDrainedLive()
+    {
+        // The owner DRAINED m1 (live=[]); the writer (a new chat) ADDS m2 against a stale base ([m1]).
+        // The old REFUSE kept live=[] → m2 silently dropped. The merge must land m2, NOT re-add drained m1.
+        var live = Obj(("Pending", Arr()));
+        var @base = Obj(("Pending", Arr("m1")));
+        var patch = Obj(("Pending", Arr("m1", "m2")));
+
+        var refused = Merge(live, patch, @base);
+
+        Assert.DoesNotContain("Pending", refused);
+        Assert.Equal(new[] { "m2" }, Strings(live["Pending"]));
+    }
+
+    [Fact]
+    public void ArrayConflict_ConcurrentAdditions_BothLand()
+    {
+        // Owner appended "b", writer appended "c" off the same base — both additions must survive.
+        var live = Obj(("Ingested", Arr("a", "b")));
+        var @base = Obj(("Ingested", Arr("a")));
+        var patch = Obj(("Ingested", Arr("a", "c")));
+
+        var refused = Merge(live, patch, @base);
+
+        Assert.DoesNotContain("Ingested", refused);
+        Assert.Equal(new[] { "a", "b", "c" }, Strings(live["Ingested"]));
+    }
+
+    [Fact]
+    public void ArrayConflict_WriterRemoval_Applied()
+    {
+        // The writer removed "b" (patch=[a]); the owner hadn't (live=[a,b]). The removal must apply.
+        var live = Obj(("Items", Arr("a", "b")));
+        var @base = Obj(("Items", Arr("a", "b")));
+        var patch = Obj(("Items", Arr("a")));
+
+        var refused = Merge(live, patch, @base);
+
+        Assert.DoesNotContain("Items", refused);
+        Assert.Equal(new[] { "a" }, Strings(live["Items"]));
+    }
+
+    [Fact]
+    public void ArrayConflict_ObjectElements_DrainedThenAppended()
+    {
+        // PendingUserMessages are OBJECTS — identity is whole-element value equality, so a drained element
+        // is not resurrected and the writer's new one lands.
+        static JsonNode M(string id) => new JsonObject { ["id"] = id };
+        var live = Obj(("Pending", Arr()));                 // owner already drained M("m1")
+        var @base = Obj(("Pending", Arr(M("m1"))));
+        var patch = Obj(("Pending", Arr(M("m1"), M("m2"))));
+
+        var refused = Merge(live, patch, @base);
+
+        Assert.DoesNotContain("Pending", refused);
+        var pending = (JsonArray)live["Pending"]!;
+        Assert.Single(pending);
+        Assert.Equal("m2", pending[0]!["id"]!.GetValue<string>());
+    }
 }
