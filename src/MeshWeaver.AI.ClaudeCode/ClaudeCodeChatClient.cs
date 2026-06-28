@@ -200,13 +200,26 @@ public class ClaudeCodeChatClient : IChatClient
             }
             if (mcpInfo != null)
             {
-                claudeOptions.McpServers = new Dictionary<string, McpHttpServerConfig>
+                // 🚨 MUST be Dictionary<string, object> — NOT Dictionary<string, McpHttpServerConfig>.
+                // ClaudeAgentOptions.McpServers is typed `object?`; the SDK (SubprocessCliTransport)
+                // only JSON-serializes it into `--mcp-config` when `McpServers is Dictionary<string,
+                // object>` — otherwise it falls through to `McpServers.ToString()` and passes the literal
+                // type name "System.Collections.Generic.Dictionary`2[...]" as the arg. The CLI then tries
+                // to open a file by that name, fails ("MCP config file not found"), and exits 1
+                // ("Command failed with exit code 1") — blocking EVERY round. The value stays an
+                // McpHttpServerConfig (the SDK serializes it to {"type":"http","url":…,"headers":{…}}).
+                // The value MUST serialize with LOWERCASE keys (type/url/headers) — the claude CLI's
+                // --mcp-config schema is camelCase. The SDK serializes whatever object we put here with
+                // DEFAULT options, and McpHttpServerConfig serializes PascalCase ("Type"/"Url"/"Headers"),
+                // which the CLI silently ignores (the mesh MCP never connects). A plain dictionary with the
+                // exact wire keys avoids the casing trap.
+                claudeOptions.McpServers = new Dictionary<string, object>
                 {
-                    ["meshweaver"] = new McpHttpServerConfig
+                    ["meshweaver"] = new Dictionary<string, object>
                     {
-                        Type = "http",
-                        Url = mcpInfo.McpUrl,
-                        Headers = new Dictionary<string, string>
+                        ["type"] = "http",
+                        ["url"] = mcpInfo.McpUrl,
+                        ["headers"] = new Dictionary<string, string>
                         {
                             ["Authorization"] = $"Bearer {mcpInfo.BearerToken}"
                         }
