@@ -396,4 +396,10 @@ samples/Graph/Data/VUser/
 /samples/Graph/Data/c[1-6].json
 
 # Claude Code per-user local state (settings.local.json, plans/, scheduled_tasks.lock, etc.)
-.claude/
+# — but DO track the shared team skills under .claude/skills/. The debug/ and release/
+# skills also need explicit negations because the generic [Dd]ebug/ / [Rr]elease/
+# build-output ignores above otherwise swallow them.
+.claude/*
+!.claude/skills/
+!.claude/skills/debug/
+!.claude/skills/release/
