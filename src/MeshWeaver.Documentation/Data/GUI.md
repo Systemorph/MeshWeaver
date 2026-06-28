@@ -79,6 +79,7 @@ Browse the full set of controls, layout primitives, and data-binding guides:
 | [Static vs. Dynamic Views](Observables) | When areas re-render and how to control update frequency |
 | [DataGrid](DataGrid) | Tabular data with sorting, filtering, and row actions |
 | [Mesh Search & Catalogs](MeshSearch) | One URL-driven `Search` area per node — group by namespace/type/category, drill down, embed with `@@` |
+| [Configurable Home & Space Pages](ConfigurablePages) | Your home / Space Overview is one editable markdown page that embeds regions with `@@` |
 | [Editor](Editor) | Rich code and text editing controls |
 | [Attributes](Attributes) | Declarative style, visibility, and validation annotations |
 | [Side Panel](SidePanel) | Slide-in panels for detail views and settings |

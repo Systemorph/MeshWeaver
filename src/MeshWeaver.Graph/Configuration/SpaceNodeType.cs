@@ -149,6 +149,7 @@ public static class SpaceNodeType
         (top-right **⋯**) → **Edit**, then write your overview in the **Body** field
         (plain markdown — headings, links, tables, and `@@`-embeds all work). Or simply
         ask the assistant in the chat below to draft it — it writes to the same Body field.
+        See [Configurable Home & Space Pages](/Doc/GUI/ConfigurablePages) for the full guide.
 
         ## Contents
 
