@@ -71,7 +71,7 @@ public sealed class PortalFixture : IAsyncLifetime
             }
         }
 
-        if (!await WaitForPortalAsync(baseUrl, TimeSpan.FromSeconds(_portalProcess is null ? 30 : 180)))
+        if (!await WaitForPortalAsync(baseUrl, TimeSpan.FromSeconds(_portalProcess is null ? 90 : 180)))
         {
             SkipReason = $"E2E portal at {baseUrl} did not become reachable.";
             return;
