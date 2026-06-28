@@ -177,19 +177,19 @@ public static class GlobalSettingsLayoutArea
                         return (UiControl?)Controls.Html(
                             "<p style=\"color: var(--neutral-foreground-hint);\">No data sources registered.</p>");
 
-                    return (UiControl?)BuildDataSourcesList(nodes);
+                    return (UiControl?)BuildDataSourcesList(nodes, host.Hub.JsonSerializerOptions);
                 }));
 
         return stack;
     }
 
-    private static UiControl BuildDataSourcesList(List<MeshNode> nodes)
+    private static UiControl BuildDataSourcesList(List<MeshNode> nodes, System.Text.Json.JsonSerializerOptions options)
     {
         var container = Controls.Stack.WithWidth("100%").WithStyle("gap: 12px;");
 
         foreach (var node in nodes.OrderBy(n => n.Name))
         {
-            var config = node.Content as MeshDataSourceConfiguration;
+            var config = node.ContentAs<MeshDataSourceConfiguration>(options);
             var isEnabled = config?.Enabled ?? true;
             var isSearchable = config?.IncludeInSearch ?? true;
             var isInstalled = !string.IsNullOrEmpty(config?.InstalledTo);

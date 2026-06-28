@@ -494,7 +494,7 @@ public static class CommentLayoutAreas
                 var cache = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
                 cache.Update(ownPath, n =>
                 {
-                    var c = n.Content as Comment ?? comment;
+                    var c = n.ContentAs<Comment>(host.Hub.JsonSerializerOptions) ?? comment;
                     return n with { Content = c with { Status = CommentStatus.Resolved } };
                 }, host.Hub.JsonSerializerOptions).Subscribe(
                     _ => { },

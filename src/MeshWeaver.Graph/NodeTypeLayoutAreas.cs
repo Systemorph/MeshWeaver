@@ -351,7 +351,7 @@ public static class NodeTypeLayoutAreas
                         var (node, sourceGroups, testGroups, nodeTypes, agents) = tuple;
                         if (node == null)
                             return RenderLoading("Loading...");
-                        return BuildSideMenu(hubAddress, node, sourceGroups, testGroups, nodeTypes, agents);
+                        return BuildSideMenu(hubAddress, node, sourceGroups, testGroups, nodeTypes, agents, host.Hub.JsonSerializerOptions);
                     }),
                 skin => skin.WithSize("280px").WithMin("200px").WithMax("480px").WithCollapsible(true)
             )
@@ -382,7 +382,7 @@ public static class NodeTypeLayoutAreas
             {
                 if (node == null)
                     return Observable.Return<IReadOnlyList<(CodeQueryGroup, IReadOnlyList<MeshNode>)>>([]);
-                var def = node.Content as NodeTypeDefinition;
+                var def = node.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions);
                 var groups = tests
                     ? CodeQueryResolver.GroupAll(def?.Tests, CodeQueryResolver.DefaultTests,
                         node.Path, CodeQueryResolver.DefaultTestGroupName)
@@ -449,7 +449,7 @@ public static class NodeTypeLayoutAreas
                 var (node, releases) = tuple;
                 if (node == null)
                     return RenderLoading("Loading...");
-                var typeDef = node.Content as NodeTypeDefinition;
+                var typeDef = node.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions);
 
                 var content = Controls.Stack.WithWidth("100%")
                     .WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host, typeDef)
@@ -472,7 +472,7 @@ public static class NodeTypeLayoutAreas
                 content = content.WithView(BuildQueriesSection("Test queries",
                     CodeQueryResolver.GroupAll(typeDef?.Tests, CodeQueryResolver.DefaultTests,
                         node.Path, CodeQueryResolver.DefaultTestGroupName)));
-                content = content.WithView(BuildLatestReleasesSection(hubAddress, releases));
+                content = content.WithView(BuildLatestReleasesSection(hubAddress, releases, host.Hub.JsonSerializerOptions));
 
                 return (UiControl?)content;
             });
@@ -552,14 +552,14 @@ public static class NodeTypeLayoutAreas
     /// <summary>
     /// The latest three releases (newest first) with a link to the full Releases area.
     /// </summary>
-    private static UiControl BuildLatestReleasesSection(object hubAddress, IReadOnlyList<MeshNode> releaseNodes)
+    private static UiControl BuildLatestReleasesSection(object hubAddress, IReadOnlyList<MeshNode> releaseNodes, System.Text.Json.JsonSerializerOptions options)
     {
         var releasesHref = new LayoutAreaReference(ReleasesArea).ToHref(hubAddress);
         var section = Controls.Stack.WithWidth("100%")
             .WithView(BuildSectionHeader("Latest releases", releasesHref, "All releases"));
 
         var latest = releaseNodes
-            .Select(n => (Node: n, Release: n.Content as NodeTypeRelease))
+            .Select(n => (Node: n, Release: n.ContentAs<NodeTypeRelease>(options)))
             .OrderByDescending(t => t.Release?.CreatedAt ?? t.Node.CreatedDate)
             .Take(3)
             .ToList();
@@ -640,9 +640,10 @@ public static class NodeTypeLayoutAreas
         IReadOnlyList<(CodeQueryGroup Group, IReadOnlyList<MeshNode> Nodes)> sourceGroups,
         IReadOnlyList<(CodeQueryGroup Group, IReadOnlyList<MeshNode> Nodes)> testGroups,
         IReadOnlyList<MeshNode> nodeTypes,
-        IReadOnlyList<MeshNode> agents)
+        IReadOnlyList<MeshNode> agents,
+        System.Text.Json.JsonSerializerOptions options)
     {
-        var content = node.Content as NodeTypeDefinition;
+        var content = node.ContentAs<NodeTypeDefinition>(options);
         // Scrolling comes from `.shell-splitter .navmenu` in standard-page-layout.css —
         // NavMenuView ignores inline Style on its root. Collapse/expand is the splitter
         // pane's affordance (chevrons on the bar), not the NavMenu hamburger.
@@ -948,7 +949,7 @@ public static class NodeTypeLayoutAreas
     private static UiControl BuildReleasesPane(LayoutAreaHost host, MeshNode node, IReadOnlyList<MeshNode> releaseNodes)
     {
         var hubPath = host.Hub.Address.ToString();
-        var def = node.Content as NodeTypeDefinition;
+        var def = node.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions);
 
         var stack = Controls.Stack
             .WithWidth("100%")
@@ -961,7 +962,7 @@ public static class NodeTypeLayoutAreas
             .WithView(Controls.H2("Releases").WithStyle("margin: 0;"));
 
         var statusStream = host.Workspace.GetMeshNodeStream()
-            .Select(n => (n?.Content as NodeTypeDefinition)?.CompilationStatus)
+            .Select(n => n.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions)?.CompilationStatus)
             .DistinctUntilChanged();
         var statusBadge = (LayoutAreaHost h, RenderingContext rc) => statusStream.Select(status =>
             (UiControl)Controls.Body(status switch
@@ -1018,7 +1019,7 @@ public static class NodeTypeLayoutAreas
                 .WithStyle("color: var(--neutral-foreground-hint); font-size: 0.9rem; font-style: italic;"));
 
         var ordered = releaseNodes
-            .Select(n => (Node: n, Release: n.Content as NodeTypeRelease))
+            .Select(n => (Node: n, Release: n.ContentAs<NodeTypeRelease>(host.Hub.JsonSerializerOptions)))
             .OrderByDescending(t => t.Release?.CreatedAt ?? t.Node.CreatedDate)
             .ToList();
 
@@ -1103,7 +1104,7 @@ public static class NodeTypeLayoutAreas
     /// </summary>
     private static UiControl BuildConfigurationPane(LayoutAreaHost host, object hubAddress, MeshNode node)
     {
-        var definition = node.Content as NodeTypeDefinition;
+        var definition = node.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions);
         var editHref = new LayoutAreaReference(HubConfigEditArea).ToHref(hubAddress);
         var nodeId = hubAddress is Address addr ? addr.Segments.LastOrDefault() : (hubAddress.ToString() ?? "Unknown").Split('/').LastOrDefault() ?? "Unknown";
 
@@ -1125,7 +1126,7 @@ public static class NodeTypeLayoutAreas
             ?? Observable.Return(new QueryResultChange<MeshNode>());
         var isUpToDate = host.Workspace.GetMeshNodeStream()
             .CombineLatest(sourcesObs, (ownNode, sources) =>
-                MeshDataSourceExtensions.IsSourcesUpToDate(ownNode?.Content as NodeTypeDefinition, sources.Items))
+                MeshDataSourceExtensions.IsSourcesUpToDate(ownNode.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions), sources.Items))
             .DistinctUntilChanged();
 
         var releaseButton = (LayoutAreaHost h, RenderingContext rc) => isUpToDate
@@ -1176,7 +1177,7 @@ public static class NodeTypeLayoutAreas
         // compile is in its lifecycle. Live observable — re-emits on every
         // status transition the watcher writes back.
         var statusStream = host.Workspace.GetMeshNodeStream()
-            .Select(n => (n?.Content as NodeTypeDefinition)?.CompilationStatus)
+            .Select(n => n.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions)?.CompilationStatus)
             .DistinctUntilChanged();
         var statusBadge = (LayoutAreaHost h, RenderingContext rc) => statusStream.Select(status =>
             (UiControl)Controls.Body(status switch
@@ -1208,7 +1209,7 @@ public static class NodeTypeLayoutAreas
         // progress" UI requirement.
         var compileLogPanel = (LayoutAreaHost h, RenderingContext rc) =>
             host.Workspace.GetMeshNodeStream()
-                .Select(n => n?.Content as NodeTypeDefinition)
+                .Select(n => n.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions))
                 .Where(d => d is not null)
                 .Select(d => BuildCompileLogPanel(d!));
         stack = stack.WithView(compileLogPanel, "CompileLogPanel");
@@ -1353,7 +1354,7 @@ public static class NodeTypeLayoutAreas
 
     private static UiControl BuildHubConfigViewContent(LayoutAreaHost host, MeshNode node)
     {
-        var content = node.Content as NodeTypeDefinition;
+        var content = node.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions);
         var hubAddress = host.Hub.Address;
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
 
@@ -1422,7 +1423,7 @@ public static class NodeTypeLayoutAreas
 
     private static UiControl BuildHubConfigEditContent(LayoutAreaHost host, MeshNode node, string allCodeForAutocomplete)
     {
-        var content = node.Content as NodeTypeDefinition;
+        var content = node.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions);
         var hubAddress = host.Hub.Address;
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
         // ID comes from hub address, not from content

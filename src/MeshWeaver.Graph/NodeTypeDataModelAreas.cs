@@ -160,7 +160,7 @@ internal static class NodeTypeDataModelAreas
             .Where(n => n is not null)
             .DistinctUntilChanged(n =>
             {
-                var def = n!.Content as NodeTypeDefinition;
+                var def = n.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
                 return (def?.LatestAssemblyCollection, def?.LatestAssemblyPath, def?.LastCompiledVersion);
             })
             .Select(node => ResolveInstanceHubConfig(hub, node!)
@@ -187,7 +187,7 @@ internal static class NodeTypeDataModelAreas
     private static IObservable<Func<MessageHubConfiguration, MessageHubConfiguration>?> ResolveInstanceHubConfig(
         IMessageHub hub, MeshNode node)
     {
-        var def = node.Content as NodeTypeDefinition;
+        var def = node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
         var compilationService = hub.ServiceProvider.GetService<IMeshNodeCompilationService>();
 
         if (def != null

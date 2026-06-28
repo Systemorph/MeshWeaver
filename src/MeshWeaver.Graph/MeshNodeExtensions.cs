@@ -87,7 +87,7 @@ public static class MeshNodeExtensions
         where TContent : class
         => workspace.GetMeshNodeStream(nodePath).Update(node =>
         {
-            var content = node.Content as TContent;
+            var content = node.ContentAs<TContent>(workspace.Hub.JsonSerializerOptions);
             return content != null ? update(node, content) : node;
         });
 
@@ -202,7 +202,7 @@ public static class MeshNodeExtensions
                 string.Equals(n.NodeType, "UserActivity", StringComparison.OrdinalIgnoreCase)))
             .SelectMany(existing =>
             {
-                var existingRecord = existing?.Content as UserActivityRecord;
+                var existingRecord = existing.ContentAs<UserActivityRecord>(hub.JsonSerializerOptions);
                 var record = new UserActivityRecord
                 {
                     Id = encodedPath,
@@ -235,7 +235,7 @@ public static class MeshNodeExtensions
                 // pre-Update probe read. Carry the live version; the owner mints the fresh one.
                 MeshNode FoldOntoLive(MeshNode live)
                 {
-                    var liveRec = live.Content as UserActivityRecord;
+                    var liveRec = live.ContentAs<UserActivityRecord>(hub.JsonSerializerOptions);
                     return live with
                     {
                         NodeType = "UserActivity",

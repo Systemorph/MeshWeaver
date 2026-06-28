@@ -308,9 +308,9 @@ internal static class NodeTypeEnrichmentHelpers
                 "[COMPILE-TRACE] Slow-path typeStream emission for {NodeType} (instance={InstancePath}): HubConfig={HasHub} Status={Status} Coll={Coll} Path={Path}",
                 nodeType, node.Path,
                 typeNode?.HubConfiguration is not null,
-                (typeNode?.Content as NodeTypeDefinition)?.CompilationStatus,
-                (typeNode?.Content as NodeTypeDefinition)?.LatestAssemblyCollection ?? "(null)",
-                (typeNode?.Content as NodeTypeDefinition)?.LatestAssemblyPath ?? "(null)"))
+                typeNode.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions)?.CompilationStatus,
+                typeNode.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions)?.LatestAssemblyCollection ?? "(null)",
+                typeNode.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions)?.LatestAssemblyPath ?? "(null)"))
             // 🚨 Never SNAP an in-flight compile. A dynamic NodeType mid-recompile
             // (Pending/Compiling) still carries its PREVIOUS HubConfiguration + the
             // OLD LatestAssemblyPath, so the "has a usable config" clause below would
@@ -393,7 +393,7 @@ internal static class NodeTypeEnrichmentHelpers
         ILogger? logger,
         int recompileAttempts = 0)
     {
-        var def = typeNode.Content as NodeTypeDefinition;
+        var def = typeNode.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions);
         // DIAGNOSTIC: trace what activation reads
         logger?.LogInformation(
             "[ENRICH-DIAG] node={InstancePath} nodeType={NodeType} typeNode.HubConfiguration={HasHubConfig} def.Status={Status} def.LatestAssemblyCollection={Coll} def.LatestAssemblyPath={Path} def.RequestedRelease={Pin} def.LatestRelease={Latest}",

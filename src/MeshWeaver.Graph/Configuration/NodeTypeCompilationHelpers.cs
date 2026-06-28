@@ -647,7 +647,7 @@ internal static class NodeTypeCompilationHelpers
                     // def.RequestedReleaseAt re-read, which can have flapped back to
                     // an older value by the time the Update lambda runs on the
                     // action block (see the high-water comment above).
-                    if ((node!.Content as NodeTypeDefinition)?.RequestedReleaseAt
+                    if (node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.RequestedReleaseAt
                         is not { } triggerAt) return;
                     // Advance the high-water monotonically. The Where already proved
                     // triggerAt > dispatchHighWater, so this only ever moves forward.
@@ -658,8 +658,8 @@ internal static class NodeTypeCompilationHelpers
                     logger?.LogInformation(
                         "[ReleaseRequestWatcher] {HubPath}: handling RequestedReleaseAt={Req} (force={Force}, lastHandled={Handled})",
                         hubPath, triggerAt,
-                        (node!.Content as NodeTypeDefinition)?.RequestedReleaseForce,
-                        (node!.Content as NodeTypeDefinition)?.LastReleaseRequestHandledAt);
+                        node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.RequestedReleaseForce,
+                        node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.LastReleaseRequestHandledAt);
                     workspace.GetMeshNodeStream().Update(curr =>
                     {
                         if (curr.Content is not NodeTypeDefinition def) return curr;
@@ -1063,7 +1063,7 @@ internal static class NodeTypeCompilationHelpers
                                 ?? (outcome.Result?.Log?.Errors() is { Count: > 0 } perr
                                     ? string.Join("; ", perr.Select(m => m.Message))
                                     : "Compilation produced no assembly");
-                            var requestedBy = (outcome.PendingNode.Content as NodeTypeDefinition)?.RequestedReleaseBy;
+                            var requestedBy = outcome.PendingNode.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.RequestedReleaseBy;
                             parkRegistry.OnCompileFailed(
                                 hub, hubPath, parkError, deterministic, requestedBy, logger);
                         }

@@ -211,7 +211,7 @@ public static class ApprovalsView
             {
                 var controls = list
                     .Where(n => n.Content is Approval)
-                    .OrderByDescending(n => ((Approval)n.Content!).CreatedAt)
+                    .OrderByDescending(n => n.ContentAs<Approval>(host.Hub.JsonSerializerOptions)!.CreatedAt)
                     .Select(n => Controls.LayoutArea(n.Path, ApprovalLayoutAreas.ThumbnailArea))
                     .ToArray();
                 host.UpdateData(approvalsDataId, controls);

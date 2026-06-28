@@ -295,7 +295,7 @@ internal class MeshNodeCompilationService(
         else
         {
             resolveDef = hub.GetMeshNode(node.NodeType, TimeSpan.FromSeconds(15))
-                .Select(typeNode => typeNode?.Content as NodeTypeDefinition);
+                .Select(typeNode => typeNode.ContentAs<NodeTypeDefinition>(JsonOptions));
             selfPath = node.NodeType;
         }
 
@@ -766,7 +766,7 @@ internal class MeshNodeCompilationService(
             // its source set so the snapshot reflects the same storage enumeration
             // the cache check uses. Compose via SelectMany so the observable chain
             // stays reactive (no Task bridges, no .Result deadlocks).
-            var ntDef = node.Content as NodeTypeDefinition;
+            var ntDef = node.ContentAs<NodeTypeDefinition>(JsonOptions);
             var selfPath = ntDef != null ? node.Path : node.NodeType ?? node.Path;
             return DiscoverSourceVersionSnapshot(ntDef, selfPath ?? "", sourcesOverride)
                 // 🚨 Assembly load + GetTypes() + MeshNodeProviderAttribute reflection +
@@ -914,11 +914,11 @@ internal class MeshNodeCompilationService(
         if (string.IsNullOrEmpty(node.NodeType))
             return Observable.Return<CompilationInputs?>(null);
 
-        NodeTypeDefinition? selfDef = node.Content as NodeTypeDefinition;
+        NodeTypeDefinition? selfDef = node.ContentAs<NodeTypeDefinition>(JsonOptions);
         IObservable<NodeTypeDefinition?> resolveDef = selfDef != null
             ? Observable.Return<NodeTypeDefinition?>(selfDef)
             : hub.GetMeshNode(node.NodeType, TimeSpan.FromSeconds(15))
-                .Select(typeNode => typeNode?.Content as NodeTypeDefinition);
+                .Select(typeNode => typeNode.ContentAs<NodeTypeDefinition>(JsonOptions));
         string selfPath = selfDef != null ? node.Path : node.NodeType;
 
         return resolveDef.SelectMany(ntDef =>

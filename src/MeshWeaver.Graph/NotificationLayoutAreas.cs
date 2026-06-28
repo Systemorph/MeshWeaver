@@ -98,7 +98,7 @@ public static class NotificationLayoutAreas
                     var cache = ctx.Host.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
                     cache.Update(notificationPath, n =>
                     {
-                        var current = n.Content as Notification ?? notification;
+                        var current = n.ContentAs<Notification>(ctx.Host.Hub.JsonSerializerOptions) ?? notification;
                         return n with { Content = current with { IsRead = !current.IsRead } };
                     }, ctx.Host.Hub.JsonSerializerOptions).Subscribe(
                         _ => { },

@@ -73,7 +73,7 @@ public static class GroupLayoutAreas
             var groupName = node?.Name ?? hubPath;
             stack = stack.WithView(Controls.H2(groupName));
 
-            var accessObject = node?.Content as AccessObject
+            var accessObject = node.ContentAs<AccessObject>(host.Hub.JsonSerializerOptions)
                 ?? (node?.Content is System.Text.Json.JsonElement je
                     ? System.Text.Json.JsonSerializer.Deserialize<AccessObject>(je.GetRawText())
                     : null);

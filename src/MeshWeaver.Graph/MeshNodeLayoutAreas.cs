@@ -749,7 +749,7 @@ public static class MeshNodeLayoutAreas
             if (isNodeTypeMode && node != null)
             {
                 var nodeTypePath = node.Path;
-                var nodeTypeDefinition = node.Content as NodeTypeDefinition;
+                var nodeTypeDefinition = node.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions);
 
                 // Build query. If DefaultNamespace is set, scope to that namespace
                 // and filter by this NodeType (canonical group case — instances

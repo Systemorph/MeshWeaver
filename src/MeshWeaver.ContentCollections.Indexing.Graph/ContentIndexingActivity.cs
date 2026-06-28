@@ -120,7 +120,7 @@ internal static class ContentIndexingActivity
                     // Cancel watcher: RequestedStatus = Cancelled trips the command's token (Activity
                     // Control Plane). Subscribed for the life of the run; disposed on completion.
                     var cancelWatch = workspace.GetMeshNodeStream(activityPath)
-                        .Select(n => (n?.Content as ActivityLog)?.RequestedStatus)
+                        .Select(n => n.ContentAs<ActivityLog>(hub.JsonSerializerOptions)?.RequestedStatus)
                         .Where(s => s == ActivityStatus.Cancelled)
                         .Take(1)
                         .Subscribe(_ =>

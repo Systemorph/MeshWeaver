@@ -72,7 +72,7 @@ public static class CodeLayoutAreas
     private static UiControl BuildContent(LayoutAreaHost host, MeshNode? node, Permission callerPermissions = Permission.All)
     {
         var hubAddress = host.Hub.Address;
-        var codeConfig = node?.Content as CodeConfiguration;
+        var codeConfig = node.ContentAs<CodeConfiguration>(host.Hub.JsonSerializerOptions);
         var stack = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host));
 
         var title = node?.Name ?? node?.Id ?? "Code";

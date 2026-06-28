@@ -79,7 +79,7 @@ public static class ActivityControlPlaneExtensions
         // Doc/Architecture/ActivityControlPlane.md → "Recovery on activation".
         return SubscribeWithReEstablish(
             () => workspace.GetMeshNodeStream()
-                .Select(node => (node?.Content as ActivityLog)?.RequestedStatus)
+                .Select(node => node.ContentAs<ActivityLog>(hub.JsonSerializerOptions)?.RequestedStatus)
                 .DistinctUntilChanged(),
             onRequestedStatus,
             hub.Address,

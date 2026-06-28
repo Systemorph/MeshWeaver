@@ -450,7 +450,7 @@ public static class MeshDataSourceExtensions
             // Pending was observed). Reading from the live workspace stream
             // here would race the watcher's already-applied
             // Status=Compiling write.
-            var notes = (pendingNode.Content as NodeTypeDefinition)?.ReleaseNotes;
+            var notes = pendingNode.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.ReleaseNotes;
 
             // Auto-stamp version: {yyyyMMddHHmmss}-{8charContentHash}. Sortable
             // chronologically + unique per content. Hash from the cross-silo
@@ -482,7 +482,7 @@ public static class MeshDataSourceExtensions
             if (result.CompiledSources is { Count: > 0 } compiledSources)
             {
                 var testQueries = CodeQueryResolver.ExpandAll(
-                        (pendingNode.Content as NodeTypeDefinition)?.Tests,
+                        pendingNode.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.Tests,
                         CodeQueryResolver.DefaultTests, nodeTypePath)
                     .ToList();
                 testVersions = compiledSources
@@ -540,7 +540,7 @@ public static class MeshDataSourceExtensions
             // release is attributable to its author (owner = caller). When no user requested it
             // (the System-driven Doc-release seed, or the first-build kickoff), RequestedReleaseBy
             // is null and the create falls through under the ambient System scope.
-            var requestedBy = (pendingNode.Content as NodeTypeDefinition)?.RequestedReleaseBy;
+            var requestedBy = pendingNode.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.RequestedReleaseBy;
             var accessService = hub.ServiceProvider.GetService<AccessService>();
             var userScope = !string.IsNullOrEmpty(requestedBy) && accessService is not null
                 ? accessService.SwitchAccessContext(new AccessContext
@@ -896,7 +896,7 @@ public static class MeshDataSourceExtensions
             .Take(1)
             .Subscribe(ownNode =>
             {
-                var def = ownNode?.Content as NodeTypeDefinition;
+                var def = ownNode.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
                 if (def is null)
                 {
                     hub.Post(new CreateReleaseResponse(false, Error: "Hub is not a NodeType"),
@@ -1065,7 +1065,7 @@ public static class MeshDataSourceExtensions
 
                 foreach (var testNode in testNodes)
                 {
-                    var code = (CodeConfiguration)testNode.Content!;
+                    var code = testNode.ContentAs<CodeConfiguration>(hub.JsonSerializerOptions)!;
                     var submissionId = Guid.NewGuid().ToString("N");
                     var activityNamespace = $"{partitionRoot}/_Activity";
                     var activityPath = $"{activityNamespace}/{submissionId}";

@@ -80,7 +80,7 @@ internal sealed class CreatableTypesProvider(
         var parentDefObs = ResolveParentNodeTypeDefinition(currentType);
 
         var typesObs = typeNodesObs.CombineLatest(parentDefObs, (typeNodes, parentDef) =>
-            BuildInfos(typeNodes, meshConfiguration, hub.ServiceProvider, currentType, parentDef));
+            BuildInfos(typeNodes, meshConfiguration, hub.ServiceProvider, currentType, parentDef, hub.JsonSerializerOptions));
 
         // Outer security gate: only apply Create-permission filter for a
         // specific parent path. Root listing (nodePath == "") is global
@@ -195,7 +195,7 @@ internal sealed class CreatableTypesProvider(
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(10))
             .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
-            .Select(n => n?.Content as NodeTypeDefinition);
+            .Select(n => n.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions));
     }
 
     private static IReadOnlyList<CreatableTypeInfo> BuildInfos(
@@ -203,7 +203,8 @@ internal sealed class CreatableTypesProvider(
         MeshConfiguration meshConfiguration,
         IServiceProvider serviceProvider,
         string? currentType,
-        NodeTypeDefinition? parentDef)
+        NodeTypeDefinition? parentDef,
+        System.Text.Json.JsonSerializerOptions options)
     {
         var added = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var result = new List<CreatableTypeInfo>();
@@ -222,7 +223,7 @@ internal sealed class CreatableTypesProvider(
         {
             if (!Allowed(typeNode.Path)) continue;
             if (!added.Add(typeNode.Path)) continue;
-            result.Add(BuildInfoFromMeshNode(typeNode));
+            result.Add(BuildInfoFromMeshNode(typeNode, options));
         }
 
         // 2. Static IStaticNodeProvider-registered NodeType MeshNodes that aren't
@@ -235,7 +236,7 @@ internal sealed class CreatableTypesProvider(
                 continue;
             if (!Allowed(typeNode.Path)) continue;
             if (!added.Add(typeNode.Path)) continue;
-            result.Add(BuildInfoFromMeshNode(typeNode));
+            result.Add(BuildInfoFromMeshNode(typeNode, options));
         }
 
         // 3. JSON-based CreatableTypes from the parent's NodeType definition —
@@ -250,7 +251,7 @@ internal sealed class CreatableTypesProvider(
                 foreach (var typePath in parentDef.CreatableTypes)
                 {
                     if (!added.Add(typePath)) continue;
-                    var info = BuildInfoFromConfig(typePath, serviceProvider);
+                    var info = BuildInfoFromConfig(typePath, serviceProvider, options);
                     if (info is not null) result.Add(info);
                 }
             }
@@ -262,7 +263,7 @@ internal sealed class CreatableTypesProvider(
             foreach (var typePath in meshConfiguration.GlobalCreatableTypes)
             {
                 if (!added.Add(typePath)) continue;
-                var info = BuildInfoFromConfig(typePath, serviceProvider);
+                var info = BuildInfoFromConfig(typePath, serviceProvider, options);
                 if (info is not null) result.Add(info);
             }
         }
@@ -273,9 +274,9 @@ internal sealed class CreatableTypesProvider(
         return result.OrderBy(x => x.Order).ToList();
     }
 
-    private static CreatableTypeInfo BuildInfoFromMeshNode(MeshNode node)
+    private static CreatableTypeInfo BuildInfoFromMeshNode(MeshNode node, System.Text.Json.JsonSerializerOptions options)
     {
-        var def = node.Content as NodeTypeDefinition;
+        var def = node.ContentAs<NodeTypeDefinition>(options);
         var icon = def?.Emoji ?? node.Icon;
         return new CreatableTypeInfo(
             NodeTypePath: node.Path,
@@ -286,11 +287,11 @@ internal sealed class CreatableTypesProvider(
     }
 
     private static CreatableTypeInfo? BuildInfoFromConfig(
-        string typePath, IServiceProvider serviceProvider)
+        string typePath, IServiceProvider serviceProvider, System.Text.Json.JsonSerializerOptions options)
     {
         var node = serviceProvider.FindStaticNode(typePath);
         if (node is not null)
-            return BuildInfoFromMeshNode(node);
+            return BuildInfoFromMeshNode(node, options);
         return new CreatableTypeInfo(
             NodeTypePath: typePath,
             DisplayName: GetLastSegment(typePath),

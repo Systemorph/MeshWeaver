@@ -31,6 +31,15 @@ public static class MeshExtensions
         config.TypeRegistry.WithType(typeof(PingResponse), nameof(PingResponse));
         config.TypeRegistry.WithType(typeof(MeshNode), nameof(MeshNode));
         config.TypeRegistry.WithType(typeof(MeshNodeState), nameof(MeshNodeState));
+        // Core identity/activity node-content types live in THIS assembly but were never registered
+        // anywhere, so any hub reading a {user} root node ("User") or its _UserActivity satellite
+        // ("UserActivityRecord") got an untyped JsonElement ("TypeRegistry lacks the $type
+        // discriminator") → "renders empty, reactive waits time out" — the chat-window-disappears /
+        // home-areas-hang-on-"awaiting first data" class of bug. Register them in the core registry
+        // every host applies. (PartitionAccessPolicy is already registered via AddGraph; the AI
+        // partition hubs additionally get all three via AddAITypes.)
+        config.TypeRegistry.WithType(typeof(MeshWeaver.Mesh.Security.User), nameof(MeshWeaver.Mesh.Security.User));
+        config.TypeRegistry.WithType(typeof(MeshWeaver.Mesh.Activity.UserActivityRecord), nameof(MeshWeaver.Mesh.Activity.UserActivityRecord));
         config.TypeRegistry.WithType(typeof(CreateNodeRequest), nameof(CreateNodeRequest));
         config.TypeRegistry.WithType(typeof(CreateNodeResponse), nameof(CreateNodeResponse));
         config.TypeRegistry.WithType(typeof(NodeCreationRejectionReason), nameof(NodeCreationRejectionReason));

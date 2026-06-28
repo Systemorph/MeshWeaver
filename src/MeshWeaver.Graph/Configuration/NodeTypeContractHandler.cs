@@ -272,7 +272,7 @@ internal static class NodeTypeContractHandler
             .Timeout(TimeSpan.FromSeconds(15))
             .Select(activityNode =>
             {
-                var activityLog = activityNode!.Content as ActivityLog;
+                var activityLog = activityNode.ContentAs<ActivityLog>(hub.JsonSerializerOptions);
                 var enriched = activityLog is null
                     ? result
                     : result with { Log = activityLog };
