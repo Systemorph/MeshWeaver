@@ -40,6 +40,17 @@ internal sealed class ChatCompletionOrchestrator(
     // Score boost so Source A's local items always beat remote ones.
     private const int LocalProviderBoost = 200;
 
+    // Unified @-ranking (user spec 2026-06-28: "occurrence in path must weigh the most, title second"):
+    // the blended sources (A current-node providers, B local subtree, C broadening) all emit under one
+    // category band so the per-item AutocompleteRelevance.Score (path > title > relevance, 0..9990) is the
+    // SOLE sort key the chat pipeline ranks on — see AutocompleteRelevance + ThreadChatView's sort key
+    // (9999 - min(categoryPriority + Priority, 9999)). The relevance tier is the lowest-order tiebreaker,
+    // and keeps "local first" (point 1): A/B outrank C only when path+title tiers tie.
+    private const int BlendedBatchPriority = 0;
+    private const int LocalProviderRelevanceRank = 8;  // Source A — providers on the current node hub
+    private const int SubtreeRelevanceRankTop = 9;     // Source B — top vector/subtree hit (decreases by rank)
+    private const int BroadeningRelevanceRank = 2;     // Source C — cross-namespace broadening
+
     // Once primary sources (A+B) yield this many items, broadening is skipped.
     private const int BroadeningThreshold = 10;
 
@@ -209,7 +220,8 @@ internal sealed class ChatCompletionOrchestrator(
                     {
                         var boosted = item with
                         {
-                            Priority = item.Priority + LocalProviderBoost,
+                            Priority = AutocompleteRelevance.Score(
+                                reference, item.Path, item.Label, LocalProviderRelevanceRank),
                             InsertText = EnsureAbsoluteInsertText(item.InsertText, currentNamespace)
                         };
                         var key = boosted.Path ?? boosted.InsertText;
@@ -223,7 +235,7 @@ internal sealed class ChatCompletionOrchestrator(
                 return (IReadOnlyList<AutocompleteItem>)items;
             })
             .Where(items => items.Count > 0)
-            .Select(items => new CompletionBatch("Nearby", AutocompleteRequestPriority, items))
+            .Select(items => new CompletionBatch("Nearby", BlendedBatchPriority, items))
             .Catch<CompletionBatch, Exception>(ex =>
             {
                 logger?.LogWarning(ex, "[ChatComplete] AutocompleteRequest producer failed");
@@ -255,18 +267,22 @@ internal sealed class ChatCompletionOrchestrator(
             .Take(1)
             .SelectMany(c => c.Items.ToObservable())
             .Where(node => !string.IsNullOrEmpty(node.Path) && seenPaths.TryAdd(node.Path!, 0))
-            .Select(node => new AutocompleteItem(
+            // Results arrive in vector/subtree-relevance order; the position feeds the lowest-order
+            // relevance tier so the (path > title > vector) ranking honours the index too.
+            .Select((node, index) => new AutocompleteItem(
                 Label: node.Name ?? node.Id,
                 InsertText: $"@/{node.Path}",
                 Description: node.NodeType,
                 Category: "Subtree",
-                Priority: SubtreeQueryPriority,
+                Priority: AutocompleteRelevance.Score(
+                    reference, node.Path, node.Name ?? node.Id,
+                    Math.Max(0, SubtreeRelevanceRankTop - index)),
                 Kind: AutocompleteKind.File,
                 Icon: node.Icon,
                 Path: node.Path))
             .ToArray()
             .Where(items => items.Length > 0)
-            .Select(items => new CompletionBatch("Subtree", SubtreeQueryPriority, items))
+            .Select(items => new CompletionBatch("Subtree", BlendedBatchPriority, items))
             .Timeout(ProducerInactivityTimeout)
             .Catch<CompletionBatch, Exception>(ex =>
             {
@@ -296,10 +312,18 @@ internal sealed class ChatCompletionOrchestrator(
                 partition, searchText, AutocompleteMode.RelevanceFirst, 20, currentNamespace)
             .Select(snapshot => snapshot
                 .Where(s => seenPaths.TryAdd(s.Path, 0))
-                .Select(s => SuggestionToItem(s, PartitionSearchPriority, "Partition"))
+                .Select(s =>
+                {
+                    var item = SuggestionToItem(s, PartitionSearchPriority, "Partition");
+                    return item with
+                    {
+                        Priority = AutocompleteRelevance.Score(
+                            reference, item.Path, item.Label, BroadeningRelevanceRank)
+                    };
+                })
                 .ToArray())
             .Where(items => items.Length > 0)
-            .Select(items => new CompletionBatch("Partition", PartitionSearchPriority, items))
+            .Select(items => new CompletionBatch("Partition", BlendedBatchPriority, items))
             .Timeout(ProducerInactivityTimeout)
             .Catch<CompletionBatch, Exception>(ex =>
             {
