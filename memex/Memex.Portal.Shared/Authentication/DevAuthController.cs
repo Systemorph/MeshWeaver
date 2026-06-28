@@ -54,23 +54,25 @@ public class DevAuthController : ControllerBase
         // existing user pre-auth is legitimate auth infrastructure, so impersonate System (same as
         // ProvisionDevUser's grants). Observable.Using captures System at SUBSCRIBE and disposes it when
         // the read completes — the sanctioned reactive impersonation (ApiTokenService / DeviceOnboarding).
-        MeshNode? node = null;
-        try
-        {
-            node = await Observable.Using(
-                    () => _accessService.ImpersonateAsSystem(),
-                    _ => _hub.GetMeshNodeStream(personId)
-                        .Where(n => n is not null
-                            && string.Equals(n.NodeType, "User", StringComparison.OrdinalIgnoreCase)
-                            && n.Content is not null)
-                        .Take(1)
-                        .Timeout(TimeSpan.FromSeconds(5)))
-                .FirstAsync();
-        }
-        catch (TimeoutException)
-        {
-            // Not found at the partition root (or not yet) — fall through to the legacy/monolith shape.
-        }
+        // Read the partition-root User node as System (pre-auth, private node). A brand-new user has
+        // none, so routing the read to '{personId}' surfaces "No node found" (a DeliveryFailureException)
+        // through the Rx OnError channel — NOT as a throw a try/catch around the await would see. Handle it
+        // REACTIVELY: a .Catch that maps the not-found (and the 5s timeout miss) to NO emission, so
+        // FirstOrDefaultAsync yields null and we fall through to the fallback query + DevLogin
+        // self-provisioning. Any OTHER error is rethrown (never silently swallowed).
+        var node = await Observable.Using(
+                () => _accessService.ImpersonateAsSystem(),
+                _ => _hub.GetMeshNodeStream(personId)
+                    .Where(n => n is not null
+                        && string.Equals(n.NodeType, "User", StringComparison.OrdinalIgnoreCase)
+                        && n.Content is not null)
+                    .Take(1)
+                    .Timeout(TimeSpan.FromSeconds(5)))
+            .Catch((Exception ex) =>
+                ex is TimeoutException || ex.GetType().Name == "DeliveryFailureException"
+                    ? Observable.Empty<MeshNode>()
+                    : Observable.Throw<MeshNode>(ex))
+            .FirstOrDefaultAsync();
 
         // Fallback for the legacy `User/{id}` node shape (monolith / AddSampleUsers) — query nodeType:User
         // and match by id (case-insensitive) or the legacy path. Only reached when the authoritative read
