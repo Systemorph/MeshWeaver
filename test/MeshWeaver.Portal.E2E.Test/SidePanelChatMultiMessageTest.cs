@@ -40,6 +40,11 @@ public class SidePanelChatMultiMessageTest(PortalFixture fixture)
     // A real LLM round can take a while; this only bounds the wait for the assistant's reply.
     private static readonly int RoundMs = 120_000;
 
+    // The model node path the composer selects (configurable via E2E_MODEL to match the portal),
+    // applied by the PATCH below alongside the MeshWeaver harness.
+    private static readonly string ModelPath =
+        Environment.GetEnvironmentVariable("E2E_MODEL") ?? "Provider/OpenAICompatible/qwen-small";
+
     [Fact(Timeout = 360_000)]
     public async Task SidePanelChat_MeshWeaverHarness_SendsMultipleMessages_EachEmitsOnReceive()
     {
@@ -48,10 +53,25 @@ public class SidePanelChatMultiMessageTest(PortalFixture fixture)
         await using var context = await fixture.NewAuthenticatedContextAsync();
 
         // Seed the per-user composer so the side-panel chat has a harness/model selection
-        // (a fresh monolith has none — same seed HomeComposerVerifyTest uses).
+        // (a fresh monolith has none — same seed HomeComposerVerifyTest uses), then PATCH it onto
+        // the MeshWeaver harness + model. A PATCH (not create) because the composer node PERSISTS
+        // across tests in the [Collection("portal-e2e")] run — a prior ClaudeCode-harness test
+        // (ClaudeCodeHarnessExecutesTest) leaves it on ClaudeCode, so the create-or-noop seed alone
+        // inherits that stale harness and the default-harness assertion below fails. The PATCH makes
+        // this test deterministic regardless of run order (same pattern as SidePanelChatSubmitWhileExecutingTest).
         var token = await fixture.MintTokenAsync(context);
         try { await fixture.CreateNodeAsync(context, token, ComposerSeedJson); }
         catch (InvalidOperationException) { /* already seeded — fine */ }
+        await context.APIRequest.PostAsync($"{fixture.BaseUrl}/api/mesh/patch", new APIRequestContextOptions
+        {
+            Headers = new Dictionary<string, string> { ["authorization"] = $"Bearer {token}" },
+            DataObject = new
+            {
+                Path = "Roland/_Thread/ThreadComposer",
+                Fields = "{\"content\":{\"$type\":\"ThreadComposer\",\"harness\":\"Harness/MeshWeaver\","
+                       + "\"modelName\":\"" + ModelPath + "\",\"contextPath\":\"Roland\"}}"
+            }
+        });
 
         var page = await context.NewPageAsync();
         await page.SetViewportSizeAsync(1400, 950);

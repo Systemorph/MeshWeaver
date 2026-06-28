@@ -5,7 +5,7 @@ namespace MeshWeaver.Portal.E2E;
 
 /// <summary>
 /// Visual verification that the home / activity-dashboard chat composer renders full width — i.e. the
-/// <c>FluentTextArea</c> fills its container after the TextAreaView + composer width fixes.
+/// embedded ThreadChatControl's Monaco editor fills its container.
 /// </summary>
 [Collection("portal-e2e")]
 public class HomeComposerVerifyTest(PortalFixture fixture)
@@ -43,8 +43,8 @@ public class HomeComposerVerifyTest(PortalFixture fixture)
         await page.GotoAsync($"{fixture.BaseUrl}/User/Roland",
             new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle });
 
-        // The composer's message editor (a FluentTextArea) is the last text area on the page.
-        var textarea = page.Locator("fluent-text-area, textarea").Last;
+        // The composer's message editor (the embedded ThreadChatControl's Monaco editor) is the last editor on the page.
+        var textarea = page.Locator(".monaco-editor").Last;
         await textarea.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 90_000 });
         await page.ScreenshotAsync(new PageScreenshotOptions { Path = "/tmp/home-page.png", FullPage = true });
 
