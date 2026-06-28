@@ -174,8 +174,8 @@ public static class ThreadLayoutAreas
 
     /// <summary>
     /// Builds the <see cref="ThreadViewModel"/> snapshot pushed to the data section
-    /// from the thread's own MeshNode. Shared by <see cref="ThreadView"/>,
-    /// <see cref="ThreadChatView"/>, and <see cref="FullHeaderView"/>.
+    /// from the thread's own MeshNode. Shared by <see cref="ThreadView"/> and
+    /// <see cref="ThreadChatView"/> (the latter in its <c>WithShowFullHeader()</c> mode).
     /// </summary>
     internal static ThreadViewModel BuildThreadViewModel(MeshNode? node, string hubPath, JsonSerializerOptions options)
     {

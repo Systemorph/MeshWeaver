@@ -81,7 +81,7 @@ public class BlazorAutocompleteService(
     /// <summary>
     /// Subscribes <paramref name="source"/> with the durable circuit user re-established on the HUB
     /// <see cref="AccessService"/> (the same singleton the mesh query's RLS reads). The identity is
-    /// switched at SUBSCRIBE and held for the whole subscription via <see cref="Observable.Using"/>, so
+    /// switched at SUBSCRIBE and held for the whole subscription via <see cref="Observable.Using{TResult,TResource}(System.Func{TResource},System.Func{TResource,System.IObservable{TResult}})"/>, so
     /// every IIoPool / synced-query hop the query fans out across carries it. Mirrors
     /// <c>BlazorView.RunUnderCircuitUser</c> for the shared (non-component) autocomplete service.
     /// </summary>

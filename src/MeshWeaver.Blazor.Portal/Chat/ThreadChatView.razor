@@ -595,7 +595,9 @@ else
                     @* Claude Code and GitHub Copilot run the user's OWN CLI subscription — there is no mesh
                        agent to pick, and the model is the CLI's OWN (probed from its init/hello message),
                        NOT the user's mesh Model-partition selection. Claude Code adds reasoning effort. *@
-                    var harnessRt = harnessRuntimes.GetValueOrDefault(harnessId);
+                    @* harnessId is non-null here: this branch is gated by isClaudeCode || isCopilot,
+                       which are false when harnessId is null (string.Equals(null, "ClaudeCode") == false). *@
+                    var harnessRt = harnessRuntimes.GetValueOrDefault(harnessId!);
                     <span class="thread-chat-status-item" title="Model (reported by @harnessId)">✦ @(string.IsNullOrEmpty(harnessRt?.Model) ? "…" : harnessRt!.Model)</span>
                     @if (isClaudeCode)
                     {

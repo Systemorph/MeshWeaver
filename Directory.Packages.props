@@ -62,6 +62,13 @@
     <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client.Core" Version="10.0.7" />
     <PackageVersion Include="Microsoft.Bcl.AsyncInterfaces" Version="10.0.7" />
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.0" />
+    <!-- Pin the patched native SQLite engine: Microsoft.Data.Sqlite 10.0.0 pulls
+         SQLitePCLRaw.lib.e_sqlite3 2.1.11 transitively, which bundles a SQLite engine with the
+         high-severity vuln GHSA-2m69-gcr7-jv3q (NU1903). The native engine package is versioned to
+         track the bundled SQLite version, so 3.50.3 is the patched engine (SQLite >= 3.50, past the
+         vulnerable range). The provider P/Invokes the engine by ABI-stable export name, so the 3.50.3
+         native lib drops in under the 2.1.x managed layer. Pinned explicitly in the Sqlite projects. -->
+    <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.50.3" />
     <PackageVersion Include="Microsoft.Build.Framework" Version="17.11.4" />
     <PackageVersion Include="Microsoft.Build.Utilities.Core" Version="17.11.4" />
     <PackageVersion Include="Microsoft.DiaSymReader.PortablePdb" Version="1.6.0">

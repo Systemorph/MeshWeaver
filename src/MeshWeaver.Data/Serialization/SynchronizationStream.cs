@@ -165,7 +165,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     /// The real-user <see cref="AccessContext"/> captured ONCE on the thread that
     /// CONSTRUCTS (or first subscribes to) this stream — the circuit / SubscribeRequest
     /// handler thread, where <see cref="AccessService.Context"/> still identifies the
-    /// subscribing user. <see cref="Update"/> RESTORES it when the LIVE AsyncLocal context
+    /// subscribing user. <see cref="Update(System.Func{TStream,MeshWeaver.Data.ChangeItem{TStream}},System.Action{System.Exception})"/> RESTORES it when the LIVE AsyncLocal context
     /// has gone null — a deferred / continuation write (a layout-area render emission, a
     /// watcher tick, an agent streaming hop). Without it those writes posted a NULL
     /// AccessContext, which the never-null PostPipeline guard fails closed: the systemic

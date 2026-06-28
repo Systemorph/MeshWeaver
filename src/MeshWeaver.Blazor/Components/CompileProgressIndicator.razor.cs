@@ -97,7 +97,8 @@ public partial class CompileProgressIndicator : IDisposable
                             && d.CompilationStatus == CompilationStatus.Compiling)
                         ?? snapshot.FirstOrDefault(n => n.ContentAs<NodeTypeDefinition>(Hub.JsonSerializerOptions) is { } d
                             && d.CompilationStatus == CompilationStatus.Error);
-                    return node.ContentAs<NodeTypeDefinition>(Hub.JsonSerializerOptions) is { } def
+                    return node is not null
+                           && node.ContentAs<NodeTypeDefinition>(Hub.JsonSerializerOptions) is { } def
                         ? new CompileState(node.Path, def.CompilationStatus,
                             def.LastCompilationActivityPath, def.CompilationError)
                         : new CompileState(null, null, null, null);

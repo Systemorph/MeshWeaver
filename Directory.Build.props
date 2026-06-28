@@ -29,11 +29,17 @@
     <WarningsNotAsErrors>NU1901;NU1902;NU1903;NU1904;$(WarningsNotAsErrors)</WarningsNotAsErrors>
 
     <!-- Generate XML doc files for all assemblies (IntelliSense + NuGet). The doc-completeness
-         warning family (CS1591 missing member doc, CS1573 missing param, CS1574 unresolved cref,
-         CS1570 malformed XML, CS1712 missing typeparam) is suppressed centrally so enabling
-         doc-gen does NOT cascade thousands of warnings — docs are filled opportunistically, not
-         enforced wholesale. There is no TreatWarningsAsErrors, so this never breaks the build. -->
+         warning family (CS1591 missing member doc, CS1573 missing param, CS1712 missing typeparam)
+         is suppressed centrally (NoWarn above) so enabling doc-gen does NOT cascade thousands of
+         warnings — docs are filled opportunistically, not enforced wholesale. Doc-QUALITY warnings
+         (CS1574 unresolved cref, CS0419 ambiguous cref, CS1570 malformed XML) are real bugs and are
+         FIXED, not suppressed — they fail the gate below. -->
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- Release-governance gate A2: every CODE warning is an error (the merge-gate precondition).
+         Dependency-vulnerability advisories (NU1901..NU1904) stay warnings via WarningsNotAsErrors
+         above so a newly-disclosed transitive CVE doesn't fail every unrelated PR; the doc-
+         completeness family stays suppressed via NoWarn. Everything else must be clean. -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <DefineConstants Condition=" '$(CIRun)' == 'true' ">$(DefineConstants);CIRun</DefineConstants>
     <!-- Suppress FluentAssertions license warning for open source project -->
     <FLUENTASSERTIONS_SUPPRESS_WARNING>true</FLUENTASSERTIONS_SUPPRESS_WARNING>

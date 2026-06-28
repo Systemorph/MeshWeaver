@@ -33,7 +33,7 @@ public sealed record NavigationReference
 /// context. When the user starts a chat while viewing another thread or an activity, the chat's
 /// context must be that satellite's owner, not the satellite itself.</para>
 ///
-/// <para>Captures the full navigation reference: the owner address, the layout <see cref="Area"/>,
+/// <para>Captures the full navigation reference: the owner address, the layout <see cref="NavigationReference.Area"/>,
 /// and the optional query parameters as key/value pairs (<see cref="NavigationContext.Args"/>).
 /// This is a REFERENCE — the agent loads node CONTENT on demand via its <c>Get</c> tool. We never
 /// inline content (token cost, staleness, and the &gt;30 s eager-load hang that removed the old
