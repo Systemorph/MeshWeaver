@@ -36,17 +36,26 @@ public class UserActivityHomeOverrideTest
     }
 
     [Fact]
-    public void OwnerHome_WelcomeTemplate_EmbedsRegions_PinnedThenThreads()
+    public void OwnerHome_WelcomeTemplate_EmbedsRegions_ComposerOnTop_TextAtBottom()
     {
         var md = UserActivityLayoutAreas.UserWelcomeMarkdown("Roland");
 
+        md.Should().Contain("@@(\"area/Composer\")");
         md.Should().Contain("@@(\"area/Pinned\")");
         md.Should().Contain("@@(\"area/Threads\")");
         md.Should().Contain("@@(\"area/Catalog\")");
-        md.Should().Contain("@@(\"area/Composer\")");
-        // Ordering requirement: pinned first, then open threads.
-        md.IndexOf("area/Pinned", StringComparison.Ordinal)
-            .Should().BeLessThan(md.IndexOf("area/Threads", StringComparison.Ordinal));
+
+        var composer = md.IndexOf("area/Composer", StringComparison.Ordinal);
+        var pinned = md.IndexOf("area/Pinned", StringComparison.Ordinal);
+        var threads = md.IndexOf("area/Threads", StringComparison.Ordinal);
+        var configurable = md.IndexOf("configurable", StringComparison.Ordinal);
+
+        // Chat composer on top — before every region.
+        composer.Should().BeLessThan(pinned, "the chat composer must be at the top of the home page");
+        // Regions keep pinned-then-threads order.
+        pinned.Should().BeLessThan(threads);
+        // The configurable welcome note sits at the BOTTOM — after the regions.
+        configurable.Should().BeGreaterThan(threads, "the configurable text must be at the bottom of the page");
     }
 
     [Fact]
