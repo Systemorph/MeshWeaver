@@ -151,7 +151,7 @@ catalog; move it to reposition it. Embed it with:
 
 In an **authored body**, use the **absolute** form (leading `/` + full Space path): it
 resolves regardless of render context because it carries its own address. The default
-welcome page (shared by every Space) uses the relative `@@("area:Search")`, which
+welcome page (shared by every Space) uses the relative `@@("area/Search")`, which
 resolves against the Space's own path at render time. `@@` (double-at) renders the area
 inline; a single `@` would render a hyperlink instead. The `Search` area defaults to the
 namespace tree; tune it with `?groupBy=type|category|namespace|flat` and `?subtree=true`

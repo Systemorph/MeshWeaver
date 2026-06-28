@@ -262,7 +262,7 @@ public class MarkdownViewLogicTest
     }
 
     // ---------- @@ area-embed resolution (the Space-welcome catalog) ----------
-    // A relative @@("area:Search") resolves ONLY when the renderer has a node path; without
+    // A relative @@("area/Search") resolves ONLY when the renderer has a node path; without
     // it the layout-area div has no address and renders dead. That's why MarkdownControl.NodePath
     // exists and SpaceLayoutAreas sets it on the Space body (the body's stream owner is not a
     // reliable node-path source). The absolute @@/{path}/area/Search resolves either way.
@@ -270,7 +270,7 @@ public class MarkdownViewLogicTest
     [Fact]
     public void Render_RelativeAreaEmbed_ResolvesAgainstNodePath()
     {
-        var html = MarkdownViewLogic.Render("@@(\"area:Search\")", null, "Acme").Html;
+        var html = MarkdownViewLogic.Render("@@(\"area/Search\")", null, "Acme").Html;
         html.Should().Contain("data-address='Acme'",
             "a relative @@ embed must resolve to an addressed layout area when a node path is supplied");
         html.Should().Contain("data-area='Search'");
@@ -281,7 +281,7 @@ public class MarkdownViewLogicTest
     {
         // The bug: no context → no address → a dead layout-area div. This is exactly what the
         // Space welcome produced before NodePath was threaded through.
-        var html = MarkdownViewLogic.Render("@@(\"area:Search\")", null, null).Html;
+        var html = MarkdownViewLogic.Render("@@(\"area/Search\")", null, null).Html;
         html.Should().NotContain("data-address=",
             "without a node path the relative embed cannot resolve to an address");
     }

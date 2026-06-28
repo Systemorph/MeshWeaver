@@ -24,7 +24,7 @@ public record User : AccessObject
     /// <summary>
     /// Long-form markdown body for the owner's home page — the SINGLE editable page, 1:1 with
     /// <c>Space.Body</c>. Empty/whitespace (the default) → the welcome template is shown, which embeds
-    /// the home regions via <c>@@("area:…")</c> (Pinned, Catalog, Search, Composer). Set it to author
+    /// the home regions via <c>@@("area/…")</c> (Pinned, Catalog, Search, Composer). Set it to author
     /// the page yourself: keep, drop, reorder, or retune those embeds and add any markdown around them.
     /// Edits go to this one field (the assistant writes here too) — there is no per-segment override.
     /// </summary>

@@ -9,7 +9,7 @@ namespace MeshWeaver.Portal.E2E;
 /// node's <c>Body</c>, defaulting to a welcome template. This pins what that default renders end-to-end:
 /// <list type="bullet">
 ///   <item>the <b>welcome banner</b> with the small "it's configurable" note linking to the guide;</item>
-///   <item>the <b>catalog tabs</b> (embedded via <c>@@("area:Catalog")</c>) filling the width — the
+///   <item>the <b>catalog tabs</b> (embedded via <c>@@("area/Catalog")</c>) filling the width — the
 ///     <c>TabsControl</c> 100%-width fix.</item>
 /// </list>
 /// </summary>
@@ -36,7 +36,7 @@ public class HomePageRegionsTest(PortalFixture fixture)
         (await page.Locator("a[href*='ConfigurablePages']").CountAsync()).Should().BeGreaterThan(0,
             "the welcome note must link to Doc/GUI/ConfigurablePages");
 
-        // (b) The catalog — a fluent-tabs embedded via @@("area:Catalog") — must fill the home width.
+        // (b) The catalog — a fluent-tabs embedded via @@("area/Catalog") — must fill the home width.
         var tabs = page.Locator("fluent-tabs").First;
         await tabs.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 60_000 });
         await page.ScreenshotAsync(new PageScreenshotOptions { Path = "/tmp/home-regions.png", FullPage = true });

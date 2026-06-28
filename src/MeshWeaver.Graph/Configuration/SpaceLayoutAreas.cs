@@ -195,7 +195,7 @@ public static class SpaceLayoutAreas
             shell = shell.WithView(BuildSystemorphHighlights(spacePath));
 
         // No hardcoded navigation/catalog section. The space body (BuildBodyContent above) owns the
-        // catalog: the standard WelcomeMarkdown template embeds it INLINE via @@("area:Search"), and
+        // catalog: the standard WelcomeMarkdown template embeds it INLINE via @@("area/Search"), and
         // an author can move/tune/remove it in the editable Body like any other content. A fixed
         // BuildNavigation section here double-rendered the catalog for any body that embedded it.
         return shell;
@@ -315,10 +315,10 @@ public static class SpaceLayoutAreas
             return new MarkdownControl("") { Html = node.PreRenderedHtml }.WithStyle(bodyStyle);
 
         // 🚨 NodePath is what makes the body's RELATIVE @@-embeds resolve. The default
-        // welcome ships @@("area:Search"); the body MarkdownControl is a CHILD of the Overview
+        // welcome ships @@("area/Search"); the body MarkdownControl is a CHILD of the Overview
         // area, whose stream owner is not a reliable node-path source — so the embed would
         // render an unaddressed (dead) layout-area div without this. Setting NodePath to the
-        // Space path makes @@("area:Search") resolve to {spacePath}/area:Search. Authored
+        // Space path makes @@("area/Search") resolve to {spacePath}/area/Search. Authored
         // bodies may also use the absolute @@/{space}/area/Search, which resolves either way.
         var body = !string.IsNullOrWhiteSpace(space?.Body) ? space!.Body! : SpaceNodeType.WelcomeMarkdown;
         return (Controls.Markdown(body) with { NodePath = spacePath }).WithStyle(bodyStyle);
@@ -327,7 +327,7 @@ public static class SpaceLayoutAreas
     /// <summary>
     /// Dashboard grid mirroring the UserActivity layout but scoped to this space's partition:
     /// Latest Threads, Activity Feed, Recent Updates. The content catalog is NOT
-    /// hard-wired here anymore — it ships as a deletable <c>@@("area:Search")</c>
+    /// hard-wired here anymore — it ships as a deletable <c>@@("area/Search")</c>
     /// section inside the space's markdown body (see
     /// <see cref="SpaceNodeType.WelcomeMarkdown"/>), so each space owner controls
     /// whether and where the catalog appears.

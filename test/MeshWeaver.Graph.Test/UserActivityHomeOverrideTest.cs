@@ -31,7 +31,7 @@ public class UserActivityHomeOverrideTest
 
         home.Should().BeOfType<MarkdownControl>();
         Markdown(home).Should().Contain("Welcome back, Roland");
-        // NodePath must be set so the welcome's relative @@("area:…") embeds resolve to this user hub.
+        // NodePath must be set so the welcome's relative @@("area/…") embeds resolve to this user hub.
         ((MarkdownControl)home).NodePath.Should().Be(NodePath);
     }
 
@@ -40,13 +40,13 @@ public class UserActivityHomeOverrideTest
     {
         var md = UserActivityLayoutAreas.UserWelcomeMarkdown("Roland");
 
-        md.Should().Contain("@@(\"area:Pinned\")");
-        md.Should().Contain("@@(\"area:Threads\")");
-        md.Should().Contain("@@(\"area:Catalog\")");
-        md.Should().Contain("@@(\"area:Composer\")");
+        md.Should().Contain("@@(\"area/Pinned\")");
+        md.Should().Contain("@@(\"area/Threads\")");
+        md.Should().Contain("@@(\"area/Catalog\")");
+        md.Should().Contain("@@(\"area/Composer\")");
         // Ordering requirement: pinned first, then open threads.
-        md.IndexOf("area:Pinned", StringComparison.Ordinal)
-            .Should().BeLessThan(md.IndexOf("area:Threads", StringComparison.Ordinal));
+        md.IndexOf("area/Pinned", StringComparison.Ordinal)
+            .Should().BeLessThan(md.IndexOf("area/Threads", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -62,7 +62,7 @@ public class UserActivityHomeOverrideTest
     [Fact]
     public void OwnerHome_WithBody_RespectsTheOverrideVerbatim()
     {
-        const string custom = "# My page\n\nJust my own words.\n\n@@(\"area:Search\")";
+        const string custom = "# My page\n\nJust my own words.\n\n@@(\"area/Search\")";
         var home = UserActivityLayoutAreas.BuildOwnerHome(NodePath, "Roland", UserNode(new User { Body = custom }), Options);
 
         home.Should().BeOfType<MarkdownControl>();

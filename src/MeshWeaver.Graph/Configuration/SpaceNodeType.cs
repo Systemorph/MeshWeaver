@@ -121,8 +121,8 @@ public static class SpaceNodeType
     /// <para>The mesh catalog is the node's <c>Search</c> area (namespace tree by default;
     /// <c>?groupBy=type|category|flat</c> and <c>?subtree=true</c> tune it — see the
     /// "Mesh Search &amp; Catalogs" doc). It is embedded INLINE in this template via the
-    /// <c>@@("area:Search")</c> operator (a "Contents" section), NOT a hardcoded layout section —
-    /// so an author owns it in the editable Body and can move, tune (<c>@@("area:Search?groupBy=…")</c>),
+    /// <c>@@("area/Search")</c> operator (a "Contents" section), NOT a hardcoded layout section —
+    /// so an author owns it in the editable Body and can move, tune (<c>@@("area/Search?groupBy=…")</c>),
     /// or remove it like any other content.</para>
     /// </summary>
     public const string WelcomeMarkdown = """
@@ -153,7 +153,7 @@ public static class SpaceNodeType
 
         ## Contents
 
-        @@("area:Search")
+        @@("area/Search")
         """;
 
     /// <summary>
