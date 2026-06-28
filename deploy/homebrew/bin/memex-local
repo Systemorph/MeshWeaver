@@ -258,10 +258,19 @@ setup_tls() {
 helm_deploy() {
   local chart; chart="$(resolve_chart)"
   step "helm upgrade --install $RELEASE (chart=$chart) (§4)"
+  # --force-conflicts: helm 4 uses server-side apply. This tool ALSO touches some managed
+  # objects with kubectl (apply_logging's `set env`; ad-hoc debug `kubectl patch`es), which
+  # creates foreign field-managers (e.g. `kubectl-patch`). Without this flag a later
+  # `helm upgrade` dies with "Apply failed with conflicts: conflicts with kubectl-..." and
+  # wedges the release in STATUS=failed (this is exactly what stuck memex.localhost at
+  # revision 7). Forcing conflicts makes helm the authoritative owner of the fields it sets —
+  # the chart stays the source of truth — which both heals an already-wedged release and
+  # prevents the wedge from recurring.
   helm upgrade --install "$RELEASE" "$chart" \
     -f "$chart/values.yaml" \
     -f "$OVERLAY" \
-    -n "$NAMESPACE" --create-namespace
+    -n "$NAMESPACE" --create-namespace \
+    --force-conflicts
 }
 
 # ---------------------------------------------------------------------------
@@ -724,7 +733,11 @@ cmd_logs() {
   local target="deploy/memex-portal-deployment" follow="-f" tail="200"
   while [ $# -gt 0 ]; do
     case "$1" in
-      --migration) target="deploy/memex-migration-deployment" ;;
+      --migration)
+        # Migration is a run-once Job (memex-migration-<revision>), not a Deployment.
+        target="$(kubectl get jobs -n "$NAMESPACE" -l app.kubernetes.io/component=memex-migration --sort-by=.metadata.creationTimestamp -o name 2>/dev/null | tail -1)"
+        [ -n "$target" ] || die "no migration Job found (TTL-cleaned 600s after completion — re-run 'memex-local update' for a fresh one)"
+        ;;
       --postgres)  target="statefulset/memex-postgres-statefulset" ;;
       --no-follow) follow="" ;;
       --tail) shift; tail="${1:?--tail needs a value}" ;;
@@ -750,18 +763,41 @@ cmd_update() {
   done
   preflight
   colima_running || die "Colima is not running — run 'memex-local up' first"
+  ensure_overlay                                 # reuse the existing overlay/secrets (idempotent)
 
   step "Rolling memex to a newer image ($image_source)"
   case "$image_source" in
-    build) image_build_local ;;                  # §3 Option B
-    acr)
-      image_pull_acr "$acr_tag"                  # §3 Option A
-      # For an ACR tag, point the deployments at it directly (the chart's default
-      # image is the ghcr name; ACR pull retags onto it, so a rollout suffices).
-      ;;
+    build) image_build_local ;;                  # §3 Option B — builds portal AND migration
+    acr)   image_pull_acr "$acr_tag" ;;          # §3 Option A — retags onto the chart's image names
   esac
-  step "Rolling out portal + migration (§3/§4)"
-  kubectl rollout restart deploy/memex-portal-deployment deploy/memex-migration-deployment -n "$NAMESPACE"
+
+  # Migration runs on EVERY update. The Job is named memex-migration-<.Release.Revision>
+  # (templates/memex-migration/job.yaml), so `helm upgrade` bumps the revision → a FRESH Job
+  # is created and runs to completion, applying any new schema migration. The migration image
+  # was just (re)built above and is pulled IfNotPresent from the local store. helm sees no
+  # change to the portal's :latest tag, so it does NOT restart the portal — that is forced
+  # separately below. (There is no memex-migration *Deployment* — it was converted to a
+  # run-once Job in dd49cd1bf; rolling a Deployment here is what used to break `update`.)
+  helm_deploy                                     # §4 — bumps revision → fresh migration Job
+
+  step "Waiting for the migration Job to finish (§4)"
+  local mig_job
+  mig_job="$(kubectl get jobs -n "$NAMESPACE" \
+    -l app.kubernetes.io/component=memex-migration \
+    --sort-by=.metadata.creationTimestamp -o name 2>/dev/null | tail -1)"
+  if [ -n "$mig_job" ]; then
+    if kubectl wait --for=condition=complete "$mig_job" -n "$NAMESPACE" --timeout=300s 2>/dev/null; then
+      ok "migration completed ($mig_job)"
+    else
+      warn "migration Job did not complete in 300s — recent logs follow; the portal roll continues:"
+      kubectl logs "$mig_job" -n "$NAMESPACE" --tail=40 2>/dev/null || true
+    fi
+  else
+    warn "no migration Job found after helm upgrade — skipping wait"
+  fi
+
+  step "Forcing a fresh portal pod (:latest tag unchanged → rollout restart picks up the rebuilt image)"
+  kubectl rollout restart deploy/memex-portal-deployment -n "$NAMESPACE"
   apply_logging
   kubectl rollout status deploy/memex-portal-deployment -n "$NAMESPACE" --timeout=300s
   info "A rollout invalidates the old port-forward binding — refreshing it (§8/§14)"
