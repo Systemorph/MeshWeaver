@@ -57,6 +57,14 @@ public record ThreadComposer
         Layout = MeshNodePickerLayout.Thin, Open = MeshNodePickerOpenDirection.Up, DefaultToFirst = true)]
     public string? ModelName { get; init; }
 
+    /// <summary>
+    /// Reasoning effort for harnesses that expose it (the Claude Code CLI: <c>default</c> · <c>low</c> ·
+    /// <c>medium</c> · <c>high</c> · <c>max</c>). Surfaced in the per-harness status bar and forwarded to
+    /// the CLI; ignored by harnesses that don't support it.
+    /// </summary>
+    [Description("Effort")]
+    public string? Effort { get; init; }
+
     /// <summary>Paths attached as @-references / context chips on the next message.</summary>
     [Editable(false)]
     public ImmutableList<string>? Attachments { get; init; }
@@ -102,6 +110,7 @@ public record ThreadComposer
                && Harness == other.Harness
                && AgentName == other.AgentName
                && ModelName == other.ModelName
+               && Effort == other.Effort
                && ContextPath == other.ContextPath
                && ContextReference == other.ContextReference
                && OpenThreadPath == other.OpenThreadPath
@@ -116,6 +125,7 @@ public record ThreadComposer
         hash.Add(Harness);
         hash.Add(AgentName);
         hash.Add(ModelName);
+        hash.Add(Effort);
         hash.Add(ContextPath);
         hash.Add(ContextReference);
         hash.Add(OpenThreadPath);

@@ -582,21 +582,39 @@ else
            /model slash-commands — this row only displays. *@
         @if (!string.IsNullOrEmpty(boundHarness) || !string.IsNullOrEmpty(boundModelPath) || !string.IsNullOrEmpty(boundAgentPath))
         {
+            var harnessId = LastSegment(boundHarness);
+            var isClaudeCode = string.Equals(harnessId, "ClaudeCode", StringComparison.OrdinalIgnoreCase);
+            var isCopilot = string.Equals(harnessId, "Copilot", StringComparison.OrdinalIgnoreCase);
             <div class="thread-chat-status-row">
                 @if (!string.IsNullOrEmpty(boundHarness))
                 {
-                    <span class="thread-chat-status-item" title="Harness (/harness to change)">⬡ @LastSegment(boundHarness)</span>
+                    <span class="thread-chat-status-item" title="Harness (/harness to change)">⬡ @harnessId</span>
                 }
-                @if (!string.IsNullOrEmpty(boundAgentPath))
+                @if (isClaudeCode || isCopilot)
                 {
-                    <span class="thread-chat-status-item" title="Agent (/agent to change)">🤖 @LastSegment(boundAgentPath)</span>
+                    @* Claude Code and GitHub Copilot run the user's OWN CLI subscription — there is no mesh
+                       agent to pick, and the model is the CLI's OWN (probed from its init/hello message),
+                       NOT the user's mesh Model-partition selection. Claude Code adds reasoning effort. *@
+                    var harnessRt = harnessRuntimes.GetValueOrDefault(harnessId);
+                    <span class="thread-chat-status-item" title="Model (reported by @harnessId)">✦ @(string.IsNullOrEmpty(harnessRt?.Model) ? "…" : harnessRt!.Model)</span>
+                    @if (isClaudeCode)
+                    {
+                        <span class="thread-chat-status-item" title="Reasoning effort (from settings.json)">⚡ @(string.IsNullOrEmpty(harnessRt?.Effort) ? "…" : harnessRt!.Effort)</span>
+                    }
                 }
-                @if (!string.IsNullOrEmpty(boundModelPath))
+                else
                 {
-                    <span class="thread-chat-status-item" title="Model (/model to change)">✦ @LastSegment(boundModelPath)</span>
+                    @if (!string.IsNullOrEmpty(boundAgentPath))
+                    {
+                        <span class="thread-chat-status-item" title="Agent (/agent to change)">🤖 @LastSegment(boundAgentPath)</span>
+                    }
+                    @if (!string.IsNullOrEmpty(boundModelPath))
+                    {
+                        <span class="thread-chat-status-item" title="Model (/model to change)">✦ @LastSegment(boundModelPath)</span>
+                    }
                 }
                 @* The token chip renders its own leading separator only when it has usage data,
-                   so it sits inline after the model chip on this same row (no dangling "·"). *@
+                   so it sits inline after the model/effort chip on this same row (no dangling "·"). *@
                 <ThreadTokenChip ThreadPath="@threadPath" />
             </div>
         }

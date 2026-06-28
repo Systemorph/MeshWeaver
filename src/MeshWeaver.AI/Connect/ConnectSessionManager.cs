@@ -151,6 +151,29 @@ public sealed class ConnectSessionManager : IDisposable
     public IObservable<ConnectStatus> SubmitCode(string ownerPath, ConnectProvider provider, string pastedCode)
         => CompleteInternal(ownerPath, provider, pastedCode);
 
+    /// <summary>
+    /// Stores a token the user obtained OUT OF BAND — they ran <c>claude setup-token</c> themselves and
+    /// pasted the result — directly, with NO CLI spawn and NO scrape. This is the reliable path for
+    /// Claude Code: <c>claude setup-token</c> MASKS the token in its own stdout (shows <c>****…</c> + "c
+    /// to copy"), so a server-side scrape can never see it. No live session is required.
+    /// </summary>
+    public IObservable<ConnectStatus> SubmitToken(string ownerPath, ConnectProvider provider, string token)
+    {
+        var sink = hub.ServiceProvider.GetService<IConnectTokenSink>();
+        if (sink is null)
+            return Observable.Return<ConnectStatus>(new ConnectStatus.Error("No token sink registered."));
+        var trimmed = token?.Trim() ?? "";
+        if (string.IsNullOrEmpty(trimmed))
+            return Observable.Return<ConnectStatus>(new ConnectStatus.Error("Paste the token from `claude setup-token`."));
+        return sink.StoreToken(ownerPath, ProviderName(provider), trimmed)
+            .Select(stored => (ConnectStatus)new ConnectStatus.Connected(stored.ProviderNodePath, stored.KeyFingerprint))
+            .Catch<ConnectStatus, Exception>(ex =>
+            {
+                logger?.LogWarning(ex, "SubmitToken failed for {Owner}/{Provider}", ownerPath, provider);
+                return Observable.Return<ConnectStatus>(new ConnectStatus.Error(ex.Message));
+            });
+    }
+
     /// <summary>Cancel / disconnect a live session (Disconnect button, or auth-error reset).</summary>
     public void Cancel(string ownerPath, ConnectProvider provider) => CancelInternal(ownerPath, provider);
 

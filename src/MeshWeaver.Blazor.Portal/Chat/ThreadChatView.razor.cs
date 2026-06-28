@@ -295,6 +295,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private string? boundHarness;
     private string? boundAgentPath;
     private string? boundModelPath;
+    private string? boundEffort;
+    // Actual runtime each subscription-CLI harness reports (model from its init/hello probe, effort from
+    // its settings.json), keyed by harness id — shown in the status bar instead of the mesh model
+    // selection. Populated by the probes in OnInitialized.
+    private readonly Dictionary<string, MeshWeaver.AI.HarnessRuntime> harnessRuntimes = new();
+    private readonly List<IDisposable> harnessRuntimeSubs = [];
     private IDisposable? composerSubscription;
     private IDisposable? composerDefaultsSubscription;
     private IDisposable? modelsSubscription;
@@ -460,6 +466,24 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         // pick up a one-shot pending draft. Harmless in every other case (no-op when there's no draft).
         SeedPendingDraftIfAny();
 
+        // Probe each subscription-CLI harness (Claude Code / Copilot) for the ACTUAL model it runs — read
+        // from the CLI's init/hello message, cached. The status bar shows this, NOT the user's mesh model
+        // selection (the Model partition is MeshWeaver-only). Cheap: cached + replayed across all views.
+        foreach (var probe in Hub.ServiceProvider.GetServices<MeshWeaver.AI.IHarnessRuntimeInfo>())
+        {
+            var harnessId = probe.HarnessId;
+            // null config dir → the harness's default ({HOME}/.claude), which is what the CLI uses when
+            // ConfigDirRoot is unset; the probe reads effortLevel from there.
+            harnessRuntimeSubs.Add(probe.Get(userConfigDir: null).Subscribe(
+                rt => InvokeAsync(() =>
+                {
+                    if (_isDisposed) return;
+                    harnessRuntimes[harnessId] = rt;
+                    StateHasChanged();
+                }),
+                ex => Logger.LogDebug(ex, "Harness runtime probe failed for {Harness}", harnessId)));
+        }
+
         Logger.LogDebug("[ThreadChat:{InstanceId}] OnInitialized completed", _instanceId);
     }
 
@@ -504,7 +528,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     {
         composerSubscription?.Dispose();
         composerDefaultsSubscription?.Dispose();
-        boundHarness = boundAgentPath = boundModelPath = null;
+        boundHarness = boundAgentPath = boundModelPath = boundEffort = null;
         if (string.IsNullOrEmpty(_templatePath))
             return;
         var path = _templatePath;
@@ -617,6 +641,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     boundHarness = c!.Harness;
                     boundAgentPath = c.AgentName;
                     boundModelPath = c.ModelName;
+                    boundEffort = c.Effort;
                     StateHasChanged();
                 }),
                 ex => SurfaceError(ex, "Loading the composer"));
@@ -3088,6 +3113,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             _navContextSubscription?.Dispose();
             composerSubscription?.Dispose();
             composerDefaultsSubscription?.Dispose();
+            foreach (var sub in harnessRuntimeSubs) sub.Dispose();
+            harnessRuntimeSubs.Clear();
             agentSubscription?.Dispose();
             modelsSubscription?.Dispose();
             submissionHandler.Dispose();

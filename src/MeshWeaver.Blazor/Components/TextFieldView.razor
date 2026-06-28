@@ -36,6 +36,8 @@
     {
         base.BindData();
 
-        DataBind(ViewModel.Autocomplete, x => x.Autocomplete, defaultValue:"Off");
+        // Lowercase "off" — the HTML autocomplete keyword browsers honour (capital "Off" is ignored by
+        // some, re-enabling autofill/suggestion popups over the field).
+        DataBind(ViewModel.Autocomplete, x => x.Autocomplete, defaultValue:"off");
     }
 }

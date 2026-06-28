@@ -111,3 +111,32 @@ public sealed record HarnessExecutionContext(
     IMessageHub Hub,
     AgentConfiguration? Agent,
     string? ModelName);
+
+/// <summary>
+/// A harness's ACTUAL runtime, as the harness itself reports it (e.g. the model + native slash-commands
+/// + skills a CLI prints in its <c>init</c>/hello message when it starts). The status bar shows this for
+/// subscription-CLI harnesses (Claude Code, Copilot) — their model is NOT the user's mesh
+/// <c>nodeType:LanguageModel</c> selection (that Model partition is MeshWeaver-only). Registered per
+/// harness as <c>IHarnessRuntimeInfo</c> (enumerable); harnesses whose model IS the mesh selection
+/// register none. Implementations cache the probe (it spawns the CLI once).
+/// </summary>
+public interface IHarnessRuntimeInfo
+{
+    /// <summary>Harness id this describes — matches <see cref="Harness.Id"/> / <see cref="ThreadComposer.Harness"/>.</summary>
+    string HarnessId { get; }
+
+    /// <summary>
+    /// The harness's runtime: the model + native commands/skills (probed once from the CLI init, cached)
+    /// plus the effort level read from <paramref name="userConfigDir"/>'s <c>settings.json</c> (the CLI
+    /// keeps it there as <c>effortLevel</c> — it is NOT in the init message). Cold/replayed — subscribe.
+    /// </summary>
+    /// <param name="userConfigDir">The user's per-harness CLI config dir, or null for the default.</param>
+    IObservable<HarnessRuntime> Get(string? userConfigDir);
+}
+
+/// <summary>What a harness reports about itself: the model + effort it runs + its native commands/skills.</summary>
+public sealed record HarnessRuntime(string? Model, string? Effort, IReadOnlyList<string> SlashCommands, IReadOnlyList<string> Skills)
+{
+    /// <summary>Nothing known (probe failed / not applicable).</summary>
+    public static readonly HarnessRuntime Empty = new(null, null, [], []);
+}

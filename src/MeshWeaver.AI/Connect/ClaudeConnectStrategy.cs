@@ -72,44 +72,52 @@ public sealed class ClaudeConnectStrategy : IConnectStrategy
     private static string StripAnsi(string s) => AnsiEscape.Replace(s, "");
 
     /// <summary>
-    /// Streaming reassembler for the token <c>claude setup-token</c> prints inside a fixed-width Ink box
-    /// (the box wraps the ~100-char token across ~43-char rows). Fed each ANSI-stripped stdout line in
-    /// order via <see cref="Feed"/>, it removes box-drawing glyphs + whitespace and stitches CONSECUTIVE
-    /// pure-token-char rows — anchored at the row carrying the <c>sk-ant-</c> prefix — into
-    /// <see cref="Completed"/> the moment the run ends (a border / padding / prose row terminates it, so
-    /// surrounding UI text is never glued on). The whole-box render arrives in one Ink frame, so the
-    /// first completed run is the full token.
-    /// <para><b>Why streaming, not batch:</b> the Ink UI repaints continuously, flooding stdout with
-    /// thousands of frames. Collecting them (<c>ToList</c>) and rescanning (O(n²)) pegged a core for the
-    /// full <c>TokenTimeout</c> — the post-paste wedge. This is O(1) per line and the consumer stops at
-    /// the first <see cref="Completed"/>, so the flood is never collected or rescanned.</para>
+    /// Reassembles the token <c>claude setup-token</c> prints inside a fixed-width Ink box (it wraps the
+    /// ~100-char token across ~43-char rows). Given the ANSI-stripped <paramref name="lines"/> of a short
+    /// post-token time window, single-pass O(n): each row is cleaned of box-drawing glyphs / pipes /
+    /// whitespace, a run is (re)anchored wherever <c>sk-ant-</c> appears and extended by following
+    /// pure-token-char rows, and a row that is neither closes the run. Returns the LONGEST run seen (the
+    /// fully-rendered box; partial repaint frames are shorter). NOT terminator-dependent — a window that
+    /// never produces a closing row still yields its longest run — so it cannot hang.
     /// </summary>
-    internal sealed record TokenStitch(string Run, string? Completed)
+    internal static string? ReassembleToken(IList<string> lines)
     {
-        internal static readonly TokenStitch Start = new("", null);
+        static bool IsTokenRow(string s) =>
+            s.Length > 0 && s.All(static c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-');
 
-        internal TokenStitch Feed(string strippedLine)
+        string? best = null;
+        string? run = null;
+        foreach (var line in lines)
         {
-            var cell = CleanRow(strippedLine);
-            var isTokenRow = cell.Length > 0 && cell.All(static c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-');
-            if (isTokenRow)
-                return Run.Length > 0 ? new(Run + cell, null)                                  // extend a run
-                     : cell.StartsWith("sk-ant-", StringComparison.Ordinal) ? new(cell, null)  // start a run
-                     : new("", null);                                                          // unrelated token-ish row
-            // A non-token row terminates a run — surface it as Completed iff it was an sk-ant- token.
-            return Run.StartsWith("sk-ant-", StringComparison.Ordinal) ? new("", Run) : new("", null);
+            var cell = CleanRow(line);
+            var skIdx = cell.IndexOf("sk-ant-", StringComparison.Ordinal);
+            if (skIdx >= 0)
+                run = cell[skIdx..];                       // (re)anchor a run at the sk-ant- prefix
+            else if (run is not null && IsTokenRow(cell))
+                run += cell;                               // a wrapped continuation row
+            else
+            {
+                if (run is { Length: > 0 } && (best is null || run.Length > best.Length)) best = run;
+                run = null;                                // a non-token row closes the run
+            }
         }
+        if (run is { Length: > 0 } && (best is null || run.Length > best.Length)) best = run;
+        return best;
     }
 
-    /// <summary>Drops box-drawing glyphs (U+2500..U+257F) and whitespace, leaving a row's bare content.</summary>
+    /// <summary>Drops box-drawing glyphs (U+2500..U+257F), ASCII box pipes, and whitespace.</summary>
     private static string CleanRow(string s)
     {
         var sb = new StringBuilder(s.Length);
         foreach (var ch in s)
-            if (!(ch is >= '─' and <= '╿') && !char.IsWhiteSpace(ch))
+            if (!(ch is >= '─' and <= '╿') && ch != '|' && !char.IsWhiteSpace(ch))
                 sb.Append(ch);
         return sb.ToString();
     }
+
+    private static readonly Regex TokenLike = new(@"[A-Za-z0-9_\-]{16,}", RegexOptions.Compiled);
+    /// <summary>Redacts token-shaped runs to <c>&lt;TOK:len&gt;</c> so the box STRUCTURE is loggable without the value.</summary>
+    private static string RedactToken(string line) => TokenLike.Replace(line, m => $"<TOK:{m.Length}>");
 
     /// <summary>
     /// Logged-in ⇔ a non-empty <c>{userConfigDir}/.credentials.json</c> (where the CLI persists its
@@ -288,18 +296,33 @@ public sealed class ClaudeConnectStrategy : IConnectStrategy
     /// <summary>
     /// Reactive token scrape (NO ToTask). <c>claude setup-token</c> renders the token inside a
     /// FIXED-WIDTH Ink box that wraps the ~100-char token across ~43-char rows (PtyColumns=4096 does not
-    /// widen it) and repaints it continuously. <see cref="TokenStitch"/> stitches the wrapped rows back
-    /// together as lines stream, and FirstAsync stops at the FIRST complete token — so the repaint flood
-    /// is never collected or rescanned (the batch-collect version pegged a core: the post-paste wedge).
-    /// On timeout / process-exit / cancel, falls back to the CLI's <c>.credentials.json</c>.
+    /// widen it). Once the <c>sk-ant-</c> prefix appears, collect a short BOUNDED time window
+    /// (<see cref="ClaudeConnectOptions.TokenSettle"/> — the box renders in one frame) and reassemble the
+    /// wrapped rows. Time-bounded (not terminator-bounded) so it cannot hang waiting for a closing row,
+    /// and FirstAsync takes the first window so the continuous repaint flood is never collected
+    /// open-endedly. On timeout / process-exit / cancel, falls back to the CLI's <c>.credentials.json</c>.
     /// </summary>
     private IObservable<string> ScrapeToken(OutputBuffer buffer, ConnectSession session, ClaudeConnectOptions options)
     {
         return buffer.Lines
             .Select(StripAnsi)
-            .Scan(TokenStitch.Start, static (state, line) => state.Feed(line))
-            .Where(state => state.Completed is { Length: > 8 })   // a completed sk-ant- run (not just the prefix)
-            .Select(state => state.Completed!)
+            // DIAGNOSTIC (token-redacted, UNCONDITIONAL): log every non-empty line so the box STRUCTURE
+            // is visible even when no single line carries a contiguous "sk-ant-" (the Ink rendering can
+            // split the prefix). Remove once the real box format is known.
+            .Do(line => { if (line.Length > 0) logger?.LogInformation("Claude Connect raw: {Line}", RedactToken(line)); })
+            // Trigger the window on ANY token-shaped run (>=16 chars), not only a contiguous sk-ant-
+            // prefix — the prefix may be split across the box rendering.
+            .SkipWhile(line => !TokenLike.IsMatch(line))
+            .Buffer(options.TokenSettle)
+            .Where(window => window.Count > 0)
+            .Select(window =>
+            {
+                logger?.LogInformation("Claude Connect token window ({Count} lines): {Box}",
+                    window.Count, string.Join(" ⏎ ", window.Select(RedactToken)));
+                return ReassembleToken(window);
+            })
+            .Where(token => token is { Length: > 8 })
+            .Select(token => token!)
             .FirstAsync()
             .Timeout(options.TokenTimeout)
             .Do(token =>

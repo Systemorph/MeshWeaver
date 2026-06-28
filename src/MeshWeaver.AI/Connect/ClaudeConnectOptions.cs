@@ -65,8 +65,17 @@ public sealed class ClaudeConnectOptions
     /// <summary>How long to wait for the URL line before failing the StartConnect emission.</summary>
     public TimeSpan UrlTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
-    /// <summary>How long to wait for the token line after the code is pasted.</summary>
-    public TimeSpan TokenTimeout { get; set; } = TimeSpan.FromMinutes(2);
+    /// <summary>How long to wait for the token line after the code is pasted. The CLI prints the token
+    /// within a few seconds of the exchange, so this is short — a longer wait just strands the UI.</summary>
+    public TimeSpan TokenTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Once the token's <c>sk-ant-</c> prefix appears, the BOUNDED time-window over which the wrapped
+    /// Ink-box rows are collected before reassembly. Time-bounded (not terminator-bounded) so the box
+    /// is captured whether or not its bottom border is recognised, and the continuous repaint flood is
+    /// never collected open-endedly. The box renders in one frame, so this is short.
+    /// </summary>
+    public TimeSpan TokenSettle { get; set; } = TimeSpan.FromMilliseconds(700);
 
     internal Regex CompiledUrl() => new(UrlPattern, RegexOptions.Compiled | RegexOptions.CultureInvariant);
     internal Regex CompiledToken() => new(TokenPattern, RegexOptions.Compiled | RegexOptions.CultureInvariant);

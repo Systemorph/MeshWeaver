@@ -188,14 +188,13 @@ public class ConnectStrategyTest : AITestBase
         loggedIn.Should().BeFalse();
     }
 
-    // ── token reassembly (the "token truncated to 43 chars" + post-paste wedge prod bugs) ───────────
+    // ── token reassembly (the "truncated to 43 chars" + post-paste wedge/hang prod bugs) ────────────
     // `claude setup-token` prints the token inside a FIXED-WIDTH Ink box that wraps the ~100-char token
-    // across ~43-char rows regardless of terminal width (PtyColumns=4096 does NOT widen it). The old
-    // per-line scrape captured only the first ~43-char fragment → truncated token → CLI "Not logged in";
-    // the first batch-collect fix then pegged a core on the Ink repaint flood (the post-paste wedge).
-    // TokenStitch stitches the wrapped rows back together as lines STREAM and completes at the first whole
-    // token (FirstAsync stops there) — O(1) per line, no flood collected. Pure → verifiable without a real
-    // `claude`/OAuth.
+    // across ~43-char rows (PtyColumns=4096 does NOT widen it). The old per-line scrape captured only the
+    // first ~43-char fragment → truncated token → CLI "Not logged in". ReassembleToken reassembles the
+    // wrapped rows of a short post-token window — single-pass O(n), longest sk-ant- run, and NOT
+    // terminator-dependent (a window with no closing row still yields its longest run → cannot hang).
+    // Pure → verifiable without a real `claude`/OAuth.
 
     private static List<string> ChunkEvery(string s, int n)
     {
@@ -205,64 +204,66 @@ public class ConnectStrategyTest : AITestBase
         return list;
     }
 
-    /// <summary>Drives the streaming stitch exactly as the strategy's reactive Scan + FirstAsync does.</summary>
-    private static string? RunStitch(IEnumerable<string> lines)
-    {
-        var state = ClaudeConnectStrategy.TokenStitch.Start;
-        foreach (var line in lines)
-        {
-            state = state.Feed(line);
-            if (state.Completed is { Length: > 8 })
-                return state.Completed;
-        }
-        return null;
-    }
-
     [Fact]
-    public void TokenStitch_StitchesFixedWidthBoxWrappedToken()
+    public void ReassembleToken_StitchesFixedWidthBoxWrappedToken()
     {
-        // A realistic ~113-char token, wrapped across 43-char box rows in ONE Ink frame (the whole box
-        // renders at once), with box borders + surrounding prose — exactly the shape that truncated to
-        // 43 chars in prod.
         var full = "sk-ant-oat01-" + new string('A', 33) + new string('B', 43) + new string('C', 24);
         var rows = ChunkEvery(full, 43);
-
-        var lines = new List<string>
-        {
-            "Welcome to Claude Code v2.1.195",
-            "╭───────────────────────────────────────────────╮",
-        };
+        var lines = new List<string> { "Welcome to Claude Code v2.1.195", "╭──────────────────╮" };
         foreach (var r in rows)
             lines.Add("│ " + r.PadRight(43) + " │");
-        lines.Add("╰───────────────────────────────────────────────╯");
+        lines.Add("╰──────────────────╯");
         lines.Add("Paste code here if prompted >");
 
-        RunStitch(lines).Should().Be(full, "the wrapped box rows must stitch back into the complete token");
+        ClaudeConnectStrategy.ReassembleToken(lines).Should().Be(full);
     }
 
     [Fact]
-    public void TokenStitch_ReturnsWholeToken_WhenNotBoxWrapped()
+    public void ReassembleToken_StitchesEvenWithoutClosingRow()
     {
-        // Non-boxed / one-line renderer (e.g. the fake CLI): the token is on a single line.
-        var full = "sk-ant-oat01-" + new string('X', 90);
-        RunStitch(new List<string> { "Browser didn't open?", full, "Done." }).Should().Be(full);
+        // No bottom border / closing row (the case that HUNG the terminator-based version): the window
+        // simply ends on the last token row. The longest run is still the full token.
+        var full = "sk-ant-oat01-" + new string('A', 60);
+        var lines = ChunkEvery(full, 43).Select(r => "│ " + r.PadRight(43) + " │").ToList();
+        ClaudeConnectStrategy.ReassembleToken(lines).Should().Be(full);
     }
 
     [Fact]
-    public void TokenStitch_DoesNotGlueProseOntoToken()
+    public void ReassembleToken_HandlesAsciiPipeBorders()
     {
-        // A prose row (punctuation/space → not pure token chars once cleaned) terminates the run, so it
-        // is never glued onto the token.
-        var full = "sk-ant-oat01-" + new string('Z', 60);
+        // ASCII '|' borders (not Unicode box-drawing) must also be stripped.
+        var full = "sk-ant-oat01-" + new string('Q', 50);
         var rows = ChunkEvery(full, 43);
-        RunStitch(new List<string> { "│ " + rows[0] + " │", "│ " + rows[1].PadRight(43) + " │", "Welcome back!" })
+        var lines = new List<string> { "+--------+" };
+        foreach (var r in rows)
+            lines.Add("| " + r + " |");
+        lines.Add("+--------+");
+
+        ClaudeConnectStrategy.ReassembleToken(lines).Should().Be(full);
+    }
+
+    [Fact]
+    public void ReassembleToken_ReturnsWholeToken_WhenNotBoxWrapped()
+    {
+        var full = "sk-ant-oat01-" + new string('X', 90);
+        ClaudeConnectStrategy.ReassembleToken(new List<string> { "Browser didn't open?", full, "Done." })
             .Should().Be(full);
     }
 
     [Fact]
-    public void TokenStitch_ReturnsNull_WhenNoTokenPresent()
+    public void ReassembleToken_DoesNotGlueProseOntoToken()
     {
-        RunStitch(new List<string> { "no token here", "just prose." }).Should().BeNull();
+        var full = "sk-ant-oat01-" + new string('Z', 60);
+        var rows = ChunkEvery(full, 43);
+        ClaudeConnectStrategy.ReassembleToken(
+                new List<string> { "│ " + rows[0] + " │", "│ " + rows[1].PadRight(43) + " │", "Welcome back!" })
+            .Should().Be(full);
+    }
+
+    [Fact]
+    public void ReassembleToken_ReturnsNull_WhenNoTokenPresent()
+    {
+        ClaudeConnectStrategy.ReassembleToken(new List<string> { "no token here", "just prose." }).Should().BeNull();
     }
 
     [Fact]

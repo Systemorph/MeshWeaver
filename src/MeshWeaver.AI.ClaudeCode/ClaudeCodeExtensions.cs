@@ -32,6 +32,7 @@ public static class ClaudeCodeExtensions
     public static IServiceCollection AddClaudeCode(this IServiceCollection services)
     {
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHarness, ClaudeCodeHarness>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHarnessRuntimeInfo, ClaudeCodeRuntimeProbe>());
         return services;
     }
 
@@ -45,6 +46,7 @@ public static class ClaudeCodeExtensions
     {
         services.Configure(configure);
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHarness, ClaudeCodeHarness>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHarnessRuntimeInfo, ClaudeCodeRuntimeProbe>());
         return services;
     }
 }
