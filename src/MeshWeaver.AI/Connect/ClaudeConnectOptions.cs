@@ -68,6 +68,15 @@ public sealed class ClaudeConnectOptions
     /// <summary>How long to wait for the token line after the code is pasted.</summary>
     public TimeSpan TokenTimeout { get; set; } = TimeSpan.FromMinutes(2);
 
+    /// <summary>
+    /// After the token's <c>sk-ant-</c> prefix first appears on stdout, how long to keep collecting
+    /// output before reassembling it. <c>claude setup-token</c> prints the token inside a
+    /// fixed-width Ink box that wraps the ~100-char token across several rows and repaints it a few
+    /// times; this settle window lets the full, final box be captured before stitching the rows back
+    /// together. Tests set this small.
+    /// </summary>
+    public TimeSpan TokenSettle { get; set; } = TimeSpan.FromSeconds(2);
+
     internal Regex CompiledUrl() => new(UrlPattern, RegexOptions.Compiled | RegexOptions.CultureInvariant);
     internal Regex CompiledToken() => new(TokenPattern, RegexOptions.Compiled | RegexOptions.CultureInvariant);
 }

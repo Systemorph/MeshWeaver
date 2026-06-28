@@ -188,6 +188,79 @@ public class ConnectStrategyTest : AITestBase
         loggedIn.Should().BeFalse();
     }
 
+    // ── token reassembly (the "token truncated to 43 chars" prod bug) ──────────────────────────────
+    // `claude setup-token` prints the token inside a FIXED-WIDTH Ink box that wraps the ~100-char
+    // token across ~43-char rows regardless of terminal width (PtyColumns=4096 does NOT widen it), and
+    // repaints the box a few times. The old per-line scrape captured only the first ~43-char fragment,
+    // stored a truncated token, and the CLI rejected it ("Not logged in"). ReassembleToken stitches the
+    // wrapped rows back into the full token. Pure function → verifiable without a real `claude`/OAuth.
+
+    private static List<string> ChunkEvery(string s, int n)
+    {
+        var list = new List<string>();
+        for (var i = 0; i < s.Length; i += n)
+            list.Add(s.Substring(i, Math.Min(n, s.Length - i)));
+        return list;
+    }
+
+    [Fact]
+    public void ReassembleToken_StitchesFixedWidthBoxWrappedToken()
+    {
+        // A realistic ~113-char token, wrapped across 43-char box rows, with an early partial repaint
+        // frame, a full repaint frame, box borders, and surrounding prose — exactly the shape that
+        // truncated to 43 chars in prod.
+        var full = "sk-ant-oat01-" + new string('A', 33) + new string('B', 43) + new string('C', 24);
+        var rows = ChunkEvery(full, 43);
+        var tokenRegex = new ClaudeConnectOptions().CompiledToken();
+
+        var lines = new List<string>
+        {
+            "Welcome to Claude Code v2.1.195",
+            "╭───────────────────────────────────────────────╮",
+            "│ " + rows[0] + " │",                                   // early partial frame (1 row)
+            "╰───────────────────────────────────────────────╯",
+            "╭───────────────────────────────────────────────╮",
+        };
+        foreach (var r in rows)
+            lines.Add("│ " + r.PadRight(43) + " │");                 // final full frame (all rows)
+        lines.Add("╰───────────────────────────────────────────────╯");
+        lines.Add("Paste code here if prompted >");
+
+        ClaudeConnectStrategy.ReassembleToken(lines, tokenRegex)
+            .Should().Be(full, "the wrapped box rows must stitch back into the complete token");
+    }
+
+    [Fact]
+    public void ReassembleToken_ReturnsWholeToken_WhenNotBoxWrapped()
+    {
+        // Non-boxed / one-line renderer (e.g. the fake CLI): the token is on a single line.
+        var tokenRegex = new ClaudeConnectOptions().CompiledToken();
+        var full = "sk-ant-oat01-" + new string('X', 90);
+        var lines = new List<string> { "Browser didn't open?", full, "Done." };
+
+        ClaudeConnectStrategy.ReassembleToken(lines, tokenRegex).Should().Be(full);
+    }
+
+    [Fact]
+    public void ReassembleToken_DoesNotGlueProseOntoToken()
+    {
+        // Prose rows (with spaces/punctuation) must never be appended to the token.
+        var tokenRegex = new ClaudeConnectOptions().CompiledToken();
+        var full = "sk-ant-oat01-" + new string('Z', 60);
+        var rows = ChunkEvery(full, 43);
+        var lines = new List<string> { "│ " + rows[0] + " │", "│ " + rows[1].PadRight(43) + " │", "Welcome back!" };
+
+        ClaudeConnectStrategy.ReassembleToken(lines, tokenRegex).Should().Be(full);
+    }
+
+    [Fact]
+    public void ReassembleToken_ReturnsNull_WhenNoTokenPresent()
+    {
+        var tokenRegex = new ClaudeConnectOptions().CompiledToken();
+        ClaudeConnectStrategy.ReassembleToken(new List<string> { "no token here", "just prose." }, tokenRegex)
+            .Should().BeNull();
+    }
+
     [Fact]
     public async Task RealClaudeSetupToken_Gated_BehindEnvFlag()
     {

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using MeshWeaver.Mesh.Threading;
@@ -68,6 +69,65 @@ public sealed class ClaudeConnectStrategy : IConnectStrategy
     // URL/token regexes see clean text (an escape sequence is non-whitespace and would corrupt \S+).
     private static readonly Regex AnsiEscape = new(@"\x1B\[[0-9;?]*[ -/]*[@-~]", RegexOptions.Compiled);
     private static string StripAnsi(string s) => AnsiEscape.Replace(s, "");
+
+    /// <summary>
+    /// Reassembles a Claude token that <c>claude setup-token</c> printed inside a fixed-width Ink box,
+    /// which wraps the ~100-char token across several rows (~43 chars each). Among the already
+    /// ANSI-stripped <paramref name="lines"/>, stitches the maximal run of CONSECUTIVE box rows whose
+    /// content — box-drawing glyphs and whitespace removed — is pure token characters, anchored at the
+    /// row carrying the <c>sk-ant-</c> prefix, and returns the LONGEST such stitch (the final,
+    /// fully-repainted box). A bottom border / padding / prose row (not pure token chars once cleaned)
+    /// terminates a run, so surrounding UI text is never glued on. Falls back to the longest single-line
+    /// regex match when no multi-row run is found (a token that fit on one line, or a non-boxed/test
+    /// renderer). Returns null when nothing token-shaped is present.
+    /// </summary>
+    internal static string? ReassembleToken(IList<string> lines, Regex tokenRegex)
+    {
+        static string Clean(string s)
+        {
+            var sb = new StringBuilder(s.Length);
+            foreach (var ch in s)
+                if (!(ch is >= '─' and <= '╿') && !char.IsWhiteSpace(ch))
+                    sb.Append(ch);
+            return sb.ToString();
+        }
+        static bool IsTokenRun(string s) =>
+            s.Length > 0 && s.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-');
+
+        var cleaned = new string[lines.Count];
+        for (var i = 0; i < lines.Count; i++)
+            cleaned[i] = Clean(lines[i]);
+
+        string? best = null;
+        for (var i = 0; i < cleaned.Length; i++)
+        {
+            if (!cleaned[i].StartsWith("sk-ant-", StringComparison.Ordinal))
+                continue;
+            var sb = new StringBuilder(cleaned[i]);
+            for (var j = i + 1;
+                 j < cleaned.Length && IsTokenRun(cleaned[j])
+                     && !cleaned[j].StartsWith("sk-ant-", StringComparison.Ordinal);
+                 j++)
+                sb.Append(cleaned[j]);
+            var candidate = sb.ToString();
+            if (best is null || candidate.Length > best.Length)
+                best = candidate;
+        }
+        if (best is not null)
+            return best;
+
+        // Fallback: longest single-line regex match (one-line token / non-boxed or test renderer).
+        foreach (var line in lines)
+        {
+            var m = tokenRegex.Match(line);
+            if (!m.Success)
+                continue;
+            var value = (m.Groups.Count > 1 && m.Groups[1].Success ? m.Groups[1].Value : m.Value).Trim();
+            if (best is null || value.Length > best.Length)
+                best = value;
+        }
+        return best;
+    }
 
     /// <summary>
     /// Logged-in ⇔ a non-empty <c>{userConfigDir}/.credentials.json</c> (where the CLI persists its
@@ -240,23 +300,30 @@ public sealed class ClaudeConnectStrategy : IConnectStrategy
 
         var tokenRegex = options.CompiledToken();
 
-        // 1) Prefer a token printed on stdout. Reactive scan of the same observable line feed —
-        //    first stripped line matching the token regex, bounded by TokenTimeout. The `await …
-        //    .ToTask(ct)` runs INSIDE the Process IoPool worker (the one sanctioned async edge), not
-        //    the hub. Timeout / completed-without-match (process exited) / cancellation all fall
-        //    through to the credentials-file fallback, exactly as the old loop did.
+        // 1) Prefer a token printed on stdout. `claude setup-token` renders the token inside a
+        //    FIXED-WIDTH Ink box that wraps the ~100-char token across several rows (~43 chars each)
+        //    REGARDLESS of the terminal width (PtyColumns=4096 does not widen it) and repaints the box
+        //    a few times — so the old per-line scrape only ever captured the FIRST fragment, stored a
+        //    truncated token, and the CLI rejected it ("Not logged in"). Instead: collect the
+        //    post-paste lines until a short settle window after the `sk-ant-` prefix first appears
+        //    (covers the repaints), then reassemble the wrapped rows into the full token. The
+        //    `await … .ToTask(ct)` runs INSIDE the Process IoPool worker (the one sanctioned async
+        //    edge), not the hub. Timeout / completed-without-match (process exited) / cancellation all
+        //    fall through to the credentials-file fallback, exactly as the old loop did.
         string? fromStdout = null;
         try
         {
-            fromStdout = await buffer.Lines
-                .Select(StripAnsi)
-                .Select(line => tokenRegex.Match(line))
-                .Where(m => m.Success)
-                .Select(m => (m.Groups.Count > 1 && m.Groups[1].Success ? m.Groups[1].Value : m.Value).Trim())
-                .FirstAsync()
+            var stripped = buffer.Lines.Select(StripAnsi);
+            var collected = await stripped
+                .TakeUntil(stripped
+                    .Where(l => l.Contains("sk-ant-", StringComparison.Ordinal))
+                    .Take(1)
+                    .SelectMany(_ => Observable.Timer(options.TokenSettle)))
+                .ToList()
                 .Timeout(options.TokenTimeout)
                 .ToTask(ct)
                 .ConfigureAwait(false);
+            fromStdout = ReassembleToken(collected, tokenRegex);
         }
         catch (Exception ex) when (ex is TimeoutException or InvalidOperationException or OperationCanceledException)
         {
@@ -266,7 +333,10 @@ public sealed class ClaudeConnectStrategy : IConnectStrategy
 
         if (!string.IsNullOrEmpty(fromStdout))
         {
-            logger?.LogInformation("Claude Connect captured token (stdout) for session {Session}", session.SessionId);
+            // Log the LENGTH (never the value) so a truncated capture is diagnosable: a real
+            // sk-ant-oat01 token is ~100+ chars; ~43 means the box reassembly missed a row.
+            logger?.LogInformation("Claude Connect captured token (stdout, {Length} chars) for session {Session}",
+                fromStdout!.Length, session.SessionId);
             // NOTE: do NOT write the captured token to .credentials.json — a `setup-token` token is used
             // via the CLAUDE_CODE_OAUTH_TOKEN env var, not that file (which is the interactive
             // `claude login` OAuth-bundle schema). Writing it there made the CLI choke and exit 1. The
