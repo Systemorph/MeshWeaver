@@ -177,6 +177,45 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     internal Task EnsureSchemaForPartitionAsync(PartitionDefinition def, CancellationToken ct)
         => EnsureSchemaAsync(def, ct);
 
+    /// <summary>
+    /// Runs idempotent provisioning DDL with a bounded retry on Postgres' TRANSIENT
+    /// concurrent-DDL catalog errors. Two sessions provisioning partitions at the same time race
+    /// shared catalog rows (pg_extension via <c>CREATE EXTENSION</c>, pg_namespace via
+    /// <c>CREATE SCHEMA</c>) and the loser gets <c>XX000 "tuple concurrently updated"</c> or a
+    /// deadlock — NOT a real failure: on retry it observes the winner's committed row and succeeds.
+    /// Without this the loser's provisioning was swallowed ("skipping") upstream and the partition
+    /// stayed unprovisioned → downstream 500s (e.g. DevLogin reading the User node in an
+    /// unprovisioned <c>auth</c> schema). The race fires on every multi-replica / rolling-deploy
+    /// start, not just under tests.
+    /// </summary>
+    private static async Task ExecuteDdlWithRetryAsync(
+        Func<CancellationToken, Task> ddl, CancellationToken ct, ILogger? logger = null)
+    {
+        const int maxAttempts = 6;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                await ddl(ct).ConfigureAwait(false);
+                return;
+            }
+            catch (PostgresException ex) when (IsTransientDdlRace(ex) && attempt < maxAttempts)
+            {
+                logger?.LogDebug(ex,
+                    "PostgreSqlPartitionStorageProvider: transient concurrent-DDL error ({SqlState}: {Message}) on attempt {Attempt}/{Max}; retrying",
+                    ex.SqlState, ex.MessageText, attempt, maxAttempts);
+                await Task.Delay(TimeSpan.FromMilliseconds(50 * attempt), ct).ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>Postgres errors meaning "another session is concurrently running the same idempotent
+    /// DDL" — transient and safe to retry (the retry observes the committed result).</summary>
+    private static bool IsTransientDdlRace(PostgresException ex) =>
+        ex.MessageText.Contains("tuple concurrently updated", StringComparison.OrdinalIgnoreCase)
+        || ex.SqlState == PostgresErrorCodes.DeadlockDetected
+        || ex.SqlState == PostgresErrorCodes.SerializationFailure;
+
     private async Task<PartitionDefinition> EnsureSchemaAsync(
         PartitionDefinition def, CancellationToken ct)
     {
@@ -192,11 +231,12 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
         // rebuild functions + notify/mirror/history triggers — byte-faithful to the C#
         // GetVersionedPartitionDdl/GetSatelliteTableScript bodies the proc embeds.
         // The base data source has UseVector() so the proc's vector(dim) columns resolve.
-        await using (var cmd = _baseDataSource.CreateCommand("SELECT public.ensure_partition_schema(@partition)"))
+        await ExecuteDdlWithRetryAsync(async attemptCt =>
         {
+            await using var cmd = _baseDataSource.CreateCommand("SELECT public.ensure_partition_schema(@partition)");
             cmd.Parameters.AddWithValue("partition", schema);
-            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-        }
+            await cmd.ExecuteNonQueryAsync(attemptCt).ConfigureAwait(false);
+        }, ct, _logger).ConfigureAwait(false);
 
         // Non-standard satellite tables: the proc only provisions the standard set
         // (PartitionDefinition.StandardTableMappings). If this def carries a bespoke
