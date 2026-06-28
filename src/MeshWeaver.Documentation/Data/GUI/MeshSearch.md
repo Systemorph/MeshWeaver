@@ -21,7 +21,7 @@ tune it with query parameters.
 |---|---|
 | `‹node›/Search` | This node's content catalog (its direct children), as a lazy **namespace tree** |
 | `@@/‹node›/area/Search` | The same catalog, embedded inline in any Markdown body |
-| `@@("area:Search")` | The catalog of the **current** node (relative self-reference) |
+| `@@("area/Search")` | The catalog of the **current** node (relative self-reference) |
 
 For a `NodeType` node the area instead lists the **instances** of that type; for any other node it
 lists the node's own children.
@@ -132,11 +132,11 @@ Markdown body (a Space body, a Markdown node, an agent definition):
 ```markdown
 ## Everything in this space
 
-@@("area:Search")
+@@("area/Search")
 ```
 
 The `@@` double-at prefix renders the area **inline**; a single `@` would render a link instead.
-Absolute (`@@/ACME/area/Search`) and relative (`@@("area:Search")`) forms both work — see the
+Absolute (`@@/ACME/area/Search`) and relative (`@@("area/Search")`) forms both work — see the
 embed syntax in [Layout Areas](../LayoutAreas).
 
 ---

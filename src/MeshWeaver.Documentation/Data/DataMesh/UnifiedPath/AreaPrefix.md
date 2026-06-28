@@ -47,7 +47,7 @@ The `area/` prefix (or its shorthand) embeds a rendered layout area from any mes
 @@{address}/{areaName}          (shorthand — preferred)
 ```
 
-> **Backward compatibility:** The legacy colon syntax (`area:AreaName`) is still accepted.
+> **Deprecated:** The legacy colon syntax (`area:AreaName`) is deprecated — use the slash form `area/AreaName` (or the shorthand). The colon form does not resolve when an embed is re-resolved by path, so prefer the slash form everywhere.
 
 A single `@` (no doubling) produces a **navigation hyperlink** to the node instead of embedding it — see [Hyperlinks to Areas](#hyperlinks-to-areas) below.
 

@@ -72,7 +72,7 @@ public class SpaceResolveSpaceTest
     // The body markdown is a child of the Overview area; its stream owner is not a reliable
     // node-path source, so a relative @@-embed in an authored body would render an unaddressed
     // (dead) layout area. BuildBodyContent must stamp NodePath = the Space path so MarkdownView
-    // resolves the embed. (The default welcome no longer ships @@("area:Search") — the catalog is
+    // resolves the embed. (The default welcome no longer ships @@("area/Search") — the catalog is
     // a fixed section via BuildNavigation — but NodePath is still stamped for authored bodies.)
 
     [Fact]
@@ -89,7 +89,7 @@ public class SpaceResolveSpaceTest
     [Fact]
     public void BuildBodyContent_AuthoredBody_CarriesSpacePathAsNodePath()
     {
-        var space = new Space { Name = "Acme", Body = "# Hi\n\n@@(\"area:Search\")" };
+        var space = new Space { Name = "Acme", Body = "# Hi\n\n@@(\"area/Search\")" };
         var control = SpaceLayoutAreas.BuildBodyContent(space, Node(space), spacePath: "Acme");
 
         var md = Assert.IsType<MarkdownControl>(control);

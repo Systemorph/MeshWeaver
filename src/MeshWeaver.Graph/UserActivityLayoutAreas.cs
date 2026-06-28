@@ -22,18 +22,18 @@ public static class UserActivityLayoutAreas
     public const string ActivityArea = "Activity";
 
     // Home regions. The owner home is a SINGLE editable markdown page (User.Body, 1:1 with Space.Body)
-    // that embeds regions with @@("area:<Name>"). Areas are registered with the standard fluent layout
+    // that embeds regions with @@("area/<Name>"). Areas are registered with the standard fluent layout
     // builder below, which is flexible enough to embed ANY view — the Body can @@-embed any area or
     // node. Only genuinely USER-SPECIFIC regions are registered here; GENERIC areas (e.g. the node
     // "Search" catalog from MeshNodeLayoutAreas.AddDefaultLayoutAreas) are reused as-is — a Body can
-    // @@("area:Search") without us re-declaring it.
-    /// <summary>Area name for the pinned-items region embedded via <c>@@("area:Pinned")</c>.</summary>
+    // @@("area/Search") without us re-declaring it.
+    /// <summary>Area name for the pinned-items region embedded via <c>@@("area/Pinned")</c>.</summary>
     public const string PinnedArea = "Pinned";
-    /// <summary>Area name for the open-threads region embedded via <c>@@("area:Threads")</c>.</summary>
+    /// <summary>Area name for the open-threads region embedded via <c>@@("area/Threads")</c>.</summary>
     public const string ThreadsArea = "Threads";
-    /// <summary>Area name for the catalog region embedded via <c>@@("area:Catalog")</c>.</summary>
+    /// <summary>Area name for the catalog region embedded via <c>@@("area/Catalog")</c>.</summary>
     public const string CatalogArea = "Catalog";
-    /// <summary>Area name for the chat composer region embedded via <c>@@("area:Composer")</c>.</summary>
+    /// <summary>Area name for the chat composer region embedded via <c>@@("area/Composer")</c>.</summary>
     public const string ComposerArea = "Composer";
 
     /// <summary>Link to the doc page that explains the configurable Body-page + <c>@@</c>-region model.</summary>
@@ -51,7 +51,7 @@ public static class UserActivityLayoutAreas
 
     /// <summary>
     /// Adds the Activity view (the owner home / visitor profile) to the User node's layout, plus the
-    /// user-specific home regions the owner page embeds with <c>@@("area:…")</c> (Pinned, Threads,
+    /// user-specific home regions the owner page embeds with <c>@@("area/…")</c> (Pinned, Threads,
     /// Catalog, Composer). This is the standard fluent layout builder — flexible enough to embed any
     /// view — and registering the regions as real areas is what lets the home be ONE editable markdown
     /// page, exactly the Space Overview model. Generic areas (e.g. <c>Search</c>) come from
@@ -190,7 +190,7 @@ public static class UserActivityLayoutAreas
     /// The owner's home page — ONE editable markdown page, 1:1 with the Space Overview body
     /// (<c>SpaceLayoutAreas.BuildBodyContent</c>): render the user's <see cref="User.Body"/> when set,
     /// else the <see cref="UserWelcomeMarkdown"/> template. <see cref="MarkdownControl.NodePath"/> is
-    /// the user hub path so the page's relative <c>@@("area:…")</c> embeds resolve to this hub's
+    /// the user hub path so the page's relative <c>@@("area/…")</c> embeds resolve to this hub's
     /// region areas (Pinned / Threads / Catalog / Composer). There is no bespoke control stack and no
     /// per-segment override — the page IS the override surface. Kept <c>internal</c> so the
     /// default-vs-override behaviour is unit-testable without standing up a hub.
@@ -206,8 +206,8 @@ public static class UserActivityLayoutAreas
     /// <summary>
     /// The default home page shown until the owner authors their own <see cref="User.Body"/> — a short
     /// welcome, a small "it's configurable" note linking to the config guide, and the home regions
-    /// embedded as <c>@@("area:…")</c> blocks (the same mechanism as the Space welcome's
-    /// <c>@@("area:Search")</c>). This is the single source of truth for "the default", shared by the
+    /// embedded as <c>@@("area/…")</c> blocks (the same mechanism as the Space welcome's
+    /// <c>@@("area/Search")</c>). This is the single source of truth for "the default", shared by the
     /// render path and the unit tests.
     /// </summary>
     internal static string UserWelcomeMarkdown(string ownerName) =>
@@ -217,17 +217,17 @@ public static class UserActivityLayoutAreas
         _This home is yours to shape — [it's fully configurable]({{ConfigGuideLink}}). Tell the
         assistant in the chat below what you'd like to see, or edit this page's **Body** directly._
 
-        @@("area:Pinned")
+        @@("area/Pinned")
 
-        @@("area:Threads")
+        @@("area/Threads")
 
-        @@("area:Catalog")
+        @@("area/Catalog")
 
-        @@("area:Composer")
+        @@("area/Composer")
         """;
 
     // ── Home region areas ────────────────────────────────────────────────────────────────────────
-    // Each is embedded by the home page via @@("area:<Name>"). They are registered on the User hub in
+    // Each is embedded by the home page via @@("area/<Name>"). They are registered on the User hub in
     // AddUserActivityLayoutAreas. A null control collapses the region (e.g. Pinned with no pins).
 
     /// <summary>The pinned-items region — reacts to the owner node so pins appear/disappear live.</summary>

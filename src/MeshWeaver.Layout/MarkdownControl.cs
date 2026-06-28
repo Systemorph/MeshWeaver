@@ -17,7 +17,7 @@ public record MarkdownControl(object Markdown)
 
     /// <summary>
     /// Node path used to resolve RELATIVE <c>@@</c> area/content embeds in the markdown
-    /// (e.g. <c>@@("area:Search")</c> → <c>{NodePath}/area:Search</c>). When unset,
+    /// (e.g. <c>@@("area/Search")</c> → <c>{NodePath}/area/Search</c>). When unset,
     /// <c>MarkdownView</c> falls back to the bound stream's owner. Set it when the markdown
     /// is a child control whose stream owner may not be the authoring node — e.g. a Space's
     /// body markdown rendered inside the Overview area, where relying on the stream owner is
