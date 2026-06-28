@@ -355,15 +355,26 @@ jobs:
         done
         if [ "$any" = "0" ]; then
           echo "_No failed tests in trx for shard ${{ matrix.shard }} (a hang/crash would show below)._" >> "$GITHUB_STEP_SUMMARY"
+        else
+          # 🚨 GATE (TRX-based, reporter-independent): fail the shard on any test
+          # failure recorded in the trx. The Publish step below is a best-effort
+          # reporter whose GitHub-API call can be rate-limited (429 when 4 shards
+          # publish concurrently); a throttled reporter must NEVER be the pass/fail
+          # gate. This trx grep + the hang-dump check below own the gate now.
+          echo "::error::Shard ${{ matrix.shard }}: failing tests in trx — failing the shard."
+          exit 1
         fi
     - name: Publish Test Results (this shard)
       uses: EnricoMi/publish-unit-test-result-action@v2.12.0
       if: always()
+      # Best-effort reporter ONLY — the TRX-summarize step above is the gate.
+      # action_fail removed + continue-on-error so a GitHub-API 429 (concurrent
+      # shard publishes) can't fail the build; test failures fail via the trx gate.
+      continue-on-error: true
       with:
         # Per-shard check so the 4 matrix legs don't clobber each other's
         # check-run; distinct from the collector's "Test Results" check.
         check_name: "Test Results (shard ${{ matrix.shard }})"
-        action_fail: true
         files: |
           test/**/*.trx
     - name: Fail on hang / aborted test run (this shard)
@@ -424,14 +435,23 @@ jobs:
         if [ "$any" = "0" ]; then
           echo "_No failed tests in trx (a hang/crash would show below)._" >> "$GITHUB_STEP_SUMMARY"
           echo "No failed tests found in trx across all shards."
+        else
+          # 🚨 GATE (TRX-based, reporter-independent): the consolidated run pass/fail
+          # gate. Fail on any test failure across shards, independent of the Publish
+          # step's GitHub-API health (429-immune). Hangs are gated by the dump check.
+          echo "::error::Failing tests in trx across shards — failing the run."
+          exit 1
         fi
     - name: Publish Test Results
       uses: EnricoMi/publish-unit-test-result-action@v2.12.0
       if: always()
+      # Best-effort reporter ONLY (reporting, not gating) — the TRX-summarize step
+      # above is the gate. action_fail removed + continue-on-error so a throttled
+      # GitHub-API publish (429) can't fail the run; failures fail via the trx gate.
+      continue-on-error: true
       with:
-        # One consolidated check across all shards — the single pass/fail gate.
+        # One consolidated check across all shards (reporting only now).
         check_name: "Test Results"
-        action_fail: true
         files: |
           all-results/**/*.trx
     - name: Fail on hang / aborted test run
