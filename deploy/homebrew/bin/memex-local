@@ -236,7 +236,16 @@ image_build_local() {                                  # §3 Option B
   dotnet publish "$repo/memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj" \
     -c Release -t:PublishContainer -p:ContainerRepository=memex-portal-ai-local \
     -p:ContainerBaseImage="$PORTAL_BASE_REF"
+  # Fail LOUD if the publish lost the co-hosted CLIs (e.g. the ContainerBaseImage didn't layer in
+  # because the local registry was empty). A CLI-less portal silently ships a broken Claude Code /
+  # Copilot harness: /login's `claude setup-token` hits "claude: not found" and exits → the portal
+  # reports "claude setup-token exited before emitting an auth URL". Catch it here, never at runtime.
+  if ! docker run --rm --entrypoint sh memex-portal-ai-local:latest \
+        -c 'command -v claude >/dev/null && command -v node >/dev/null' 2>/dev/null; then
+    die "Portal image is MISSING the claude/node CLIs — the CLI base ($PORTAL_BASE_REF) didn't layer in. Rerun with 'e2e up --rebuild-base' (or check the $PORTAL_BASE_REGISTRY registry holds the base)."
+  fi
   docker tag memex-portal-ai-local:latest "$PORTAL_IMAGE"
+  ok "Portal image verified: claude + node CLIs are baked in"
   step "Building migration image (§3 Option B)"
   dotnet publish "$repo/memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj" \
     -c Release -t:PublishContainer -p:ContainerRepository=memex-migration-local
@@ -630,7 +639,17 @@ cmd_e2e() {
     test)
       local repo filter="${1:-HomeChatExecuteTest}"
       repo="$(resolve_repo)" || die "e2e test needs the repo — set MEMEX_REPO to your MeshWeaver checkout"
-      [ -f "$E2E_PF_PIDFILE" ] || { warn "port-forward not running — starting it"; e2e_forward_start; }
+      # A stale pidfile LIES when the background forward process has died (it's a plain bg pid,
+      # not durable launchd) — so ALWAYS (re)start it (e2e_forward_start is idempotent), then WAIT
+      # until the portal actually answers 200. Otherwise PortalFixture's reachability probe hits a
+      # connection-refused on :$E2E_PORT and the WHOLE suite Skips (the ChatDelegationTest skip).
+      e2e_forward_start
+      step "Waiting for https://$E2E_HOST:$E2E_PORT to answer before launching the test"
+      local i=0
+      until [ "$(curl -k -sS -o /dev/null -w '%{http_code}' "https://$E2E_HOST:$E2E_PORT/" 2>/dev/null || echo 000)" = "200" ]; do
+        i=$((i+1)); [ "$i" -gt 60 ] && { warn "e2e portal still not 200 after 60s — the run may Skip"; break; }
+        sleep 1
+      done
       step "Running Playwright filter '$filter' against https://$E2E_HOST:$E2E_PORT"
       export E2E_USER                                  # already resolved (readonly) — mark for the child
       E2E_BASE_URL="https://$E2E_HOST:$E2E_PORT" \
