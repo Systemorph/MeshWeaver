@@ -18,26 +18,52 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class UserActivityLayoutAreas
 {
-    /// <summary>Area name for the Activity layout area.</summary>
+    /// <summary>Area name for the Activity layout area — the owner's home page (or visitor profile).</summary>
     public const string ActivityArea = "Activity";
+
+    // Home regions. The owner home is a SINGLE editable markdown page (User.Body, 1:1 with Space.Body)
+    // that embeds regions with @@("area:<Name>"). Areas are registered with the standard fluent layout
+    // builder below, which is flexible enough to embed ANY view — the Body can @@-embed any area or
+    // node. Only genuinely USER-SPECIFIC regions are registered here; GENERIC areas (e.g. the node
+    // "Search" catalog from MeshNodeLayoutAreas.AddDefaultLayoutAreas) are reused as-is — a Body can
+    // @@("area:Search") without us re-declaring it.
+    /// <summary>Area name for the pinned-items region embedded via <c>@@("area:Pinned")</c>.</summary>
+    public const string PinnedArea = "Pinned";
+    /// <summary>Area name for the open-threads region embedded via <c>@@("area:Threads")</c>.</summary>
+    public const string ThreadsArea = "Threads";
+    /// <summary>Area name for the catalog region embedded via <c>@@("area:Catalog")</c>.</summary>
+    public const string CatalogArea = "Catalog";
+    /// <summary>Area name for the chat composer region embedded via <c>@@("area:Composer")</c>.</summary>
+    public const string ComposerArea = "Composer";
+
+    /// <summary>Link to the doc page that explains the configurable Body-page + <c>@@</c>-region model.</summary>
+    internal const string ConfigGuideLink = "/Doc/GUI/ConfigurablePages";
 
     private const string ThinScrollbar = "scrollbar-width: thin; scrollbar-color: rgba(128,128,128,0.3) transparent;";
 
-    // Catalog tab labels. Each maps to a labelled MeshSearch in the fluent catalog (see
-    // BuildCatalog); the declaration order there is the tab order. Threads first → it is the
-    // default (first) tab shown on load. Pinned is NOT a tab; it has its own always-visible band
-    // above the tabs (see BuildOwnerDashboard).
-    private const string TabThreads = "Threads";
+    // Catalog tab labels. Each maps to a labelled MeshSearch in the fluent catalog (see BuildCatalog);
+    // the declaration order there is the tab order. Open threads are NOT a tab here — they have their
+    // own region above the catalog (see ThreadsAreaView); the catalog is the broader "browse" surface.
     private const string TabSpaces = "Spaces";
     private const string TabMyItems = "My Items";
     private const string TabLastRead = "Last Read";
     private const string TabLastEdited = "Last Edited";
 
     /// <summary>
-    /// Adds the Activity view to the User node's layout.
+    /// Adds the Activity view (the owner home / visitor profile) to the User node's layout, plus the
+    /// user-specific home regions the owner page embeds with <c>@@("area:…")</c> (Pinned, Threads,
+    /// Catalog, Composer). This is the standard fluent layout builder — flexible enough to embed any
+    /// view — and registering the regions as real areas is what lets the home be ONE editable markdown
+    /// page, exactly the Space Overview model. Generic areas (e.g. <c>Search</c>) come from
+    /// <c>AddDefaultLayoutAreas</c> and are reused, not re-declared here.
     /// </summary>
     public static MessageHubConfiguration AddUserActivityLayoutAreas(this MessageHubConfiguration configuration)
-        => configuration.AddLayout(layout => layout.WithView(ActivityArea, Activity));
+        => configuration.AddLayout(layout => layout
+            .WithView(ActivityArea, Activity)
+            .WithView(PinnedArea, PinnedAreaView)
+            .WithView(ThreadsArea, ThreadsAreaView)
+            .WithView(CatalogArea, CatalogAreaView)
+            .WithView(ComposerArea, ComposerAreaView));
 
     /// <summary>
     /// Renders the user's page. Shows a personal dashboard to the owner,
@@ -96,7 +122,7 @@ public static class UserActivityLayoutAreas
                 var ownerName = ownerNode?.Name ?? nodeOwnerId;
 
                 if (isOwner)
-                    return (UiControl?)BuildOwnerDashboard(host, nodePath, ownerName, nodeOwnerId, ownerNode);
+                    return (UiControl?)BuildOwnerHome(nodePath, ownerName, ownerNode, host.Hub.JsonSerializerOptions);
                 else
                     return (UiControl?)BuildVisitorProfile(nodePath, ownerName, ownerNode);
             })
@@ -129,7 +155,7 @@ public static class UserActivityLayoutAreas
     /// <summary>
     /// True when the viewer's <see cref="AccessContext"/> represents the same
     /// principal as the per-user partition key <paramref name="nodeOwnerId"/>
-    /// — the rule that gates <see cref="BuildOwnerDashboard"/> vs
+    /// — the rule that gates <see cref="BuildOwnerHome"/> vs
     /// <see cref="BuildVisitorProfile"/>. Accepts either:
     /// <list type="bullet">
     ///   <item><see cref="AccessContext.ObjectId"/> equal to the partition key
@@ -157,61 +183,105 @@ public static class UserActivityLayoutAreas
         return false;
     }
 
+    /// <summary>Owner id from a user hub path (<c>"User/Alice" → "Alice"</c>, else the path verbatim).</summary>
+    private static string OwnerIdOf(string nodePath) => nodePath.StartsWith("User/") ? nodePath[5..] : nodePath;
+
     /// <summary>
-    /// Personal dashboard shown to the node owner — a DECLARATIVE vertical stack of framework
-    /// controls (so it renders identically in the Blazor portal AND the native MAUI view pack):
-    /// (a) a Markdown welcome banner, (b) the always-visible Pinned band, (c) the fluent catalog
-    /// (a skinned <see cref="TabsControl"/> of labelled <see cref="MeshSearchControl"/>s — Threads /
-    /// Spaces / My Items / Last Read / Last Edited, Threads first), and (d) the chat composer pinned
-    /// at the bottom. No <c>Controls.Html</c>, no CSS-flex height hacks, and no host-data tab-toggle
-    /// state — the TabsControl owns tab switching.
+    /// The owner's home page — ONE editable markdown page, 1:1 with the Space Overview body
+    /// (<c>SpaceLayoutAreas.BuildBodyContent</c>): render the user's <see cref="User.Body"/> when set,
+    /// else the <see cref="UserWelcomeMarkdown"/> template. <see cref="MarkdownControl.NodePath"/> is
+    /// the user hub path so the page's relative <c>@@("area:…")</c> embeds resolve to this hub's
+    /// region areas (Pinned / Threads / Catalog / Composer). There is no bespoke control stack and no
+    /// per-segment override — the page IS the override surface. Kept <c>internal</c> so the
+    /// default-vs-override behaviour is unit-testable without standing up a hub.
     /// </summary>
-    private static UiControl BuildOwnerDashboard(LayoutAreaHost host, string nodePath, string ownerName, string nodeOwnerId, MeshNode? ownerNode)
+    internal static UiControl BuildOwnerHome(string nodePath, string ownerName, MeshNode? ownerNode, JsonSerializerOptions options)
     {
-        // Plain vertical stack with a gap — no flex/height CSS the native pack can't honor.
-        var dashboard = Controls.Stack
-            .WithWidth("100%")
-            .WithVerticalGap(16);
-
-        // (a) Welcome banner — Markdown, NOT a hand-built HTML string.
-        dashboard = dashboard.WithView(Controls.Markdown(
-            $"### Welcome back, {ownerName}\n\n" +
-            "_This home is configurable — just tell the agent what you'd like to see here._\n\n" +
-            "Search supports the full [query syntax](/Doc/DataMesh/QuerySyntax)."));
-
-        // (b) Pinned band — its own always-visible section above the tabs (when the owner has pins).
-        var pinned = BuildPinnedItems(ownerNode, host.Hub.JsonSerializerOptions);
-        if (pinned != null)
-            dashboard = dashboard.WithView(pinned);
-
-        // (c) The fluent catalog — the declarative TabsControl + MeshSearches.
-        dashboard = dashboard.WithView(BuildCatalog(nodePath, nodeOwnerId));
-
-        // (c2) Search area — a full, always-visible search box over the owner's OWN items, shown right
-        // under the catalog (My Items). This lives in the LIVE dashboard template, so an un-customized
-        // home always serves the latest version of it; a future per-user override (the Space.Body
-        // pattern) would replace this whole dashboard, in which case it is no longer served.
-        dashboard = dashboard
-            .WithView(Controls.Markdown("### Search my items"))
-            .WithView(Controls.MeshSearch
-                .WithHiddenQuery($"namespace:{nodeOwnerId} is:main context:search sort:LastModified-desc")
-                .WithPlaceholder("Search your items…")
-                .WithRenderMode(MeshSearchRenderMode.Grouped)
-                .WithSectionCounts(true)
-                .WithMaxColumns(4)
-                .WithItemLimit(50)
-                .WithReactiveMode(true));
-
-        // (d) Chat composer pinned at the bottom — the per-user {owner}/Chat node's "Overview" area,
-        // which returns the SAME ThreadChatControl the side panel mounts for a new chat (Monaco editor,
-        // harness/agent/model selectors, attachments, Send) so the home composer is 1:1 the side-panel
-        // composer. Sending with no thread yet starts one (ThreadChatView → StartThread). Declared by
-        // PATH + area name because MeshWeaver.Graph cannot reference MeshWeaver.AI, which owns the Chat
-        // node type; the node is ensure-created in Activity above so this area always resolves.
-        dashboard = dashboard.WithView(Controls.LayoutArea(ChatPath(nodeOwnerId), ChatOverviewArea));
-
-        return dashboard;
+        // ContentAs (not `as User`): the owner-node stream alternates typed↔JsonElement↔null frames.
+        var body = ownerNode.ContentAs<User>(options)?.Body;
+        var markdown = string.IsNullOrWhiteSpace(body) ? UserWelcomeMarkdown(ownerName) : body!;
+        return Controls.Markdown(markdown) with { NodePath = nodePath };
     }
+
+    /// <summary>
+    /// The default home page shown until the owner authors their own <see cref="User.Body"/> — a short
+    /// welcome, a small "it's configurable" note linking to the config guide, and the home regions
+    /// embedded as <c>@@("area:…")</c> blocks (the same mechanism as the Space welcome's
+    /// <c>@@("area:Search")</c>). This is the single source of truth for "the default", shared by the
+    /// render path and the unit tests.
+    /// </summary>
+    internal static string UserWelcomeMarkdown(string ownerName) =>
+        $$"""
+        ### Welcome back, {{ownerName}}
+
+        _This home is yours to shape — [it's fully configurable]({{ConfigGuideLink}}). Tell the
+        assistant in the chat below what you'd like to see, or edit this page's **Body** directly._
+
+        @@("area:Pinned")
+
+        @@("area:Threads")
+
+        @@("area:Catalog")
+
+        @@("area:Composer")
+        """;
+
+    // ── Home region areas ────────────────────────────────────────────────────────────────────────
+    // Each is embedded by the home page via @@("area:<Name>"). They are registered on the User hub in
+    // AddUserActivityLayoutAreas. A null control collapses the region (e.g. Pinned with no pins).
+
+    /// <summary>The pinned-items region — reacts to the owner node so pins appear/disappear live.</summary>
+    internal static IObservable<UiControl?> PinnedAreaView(LayoutAreaHost host, RenderingContext _)
+    {
+        var options = host.Hub.JsonSerializerOptions;
+        var syncStream = host.Workspace.GetStream(new MeshNodeReference());
+        return syncStream!.Select(change => BuildPinnedItems(change.Value.ContentAs<User>(options)));
+    }
+
+    /// <summary>The open-threads region — the owner's own threads that aren't Done yet, newest first.</summary>
+    internal static IObservable<UiControl?> ThreadsAreaView(LayoutAreaHost host, RenderingContext _)
+    {
+        var nodePath = host.Hub.Address.ToString();
+        return Observable.Return<UiControl?>(BuildOpenThreads(nodePath, OwnerIdOf(nodePath)));
+    }
+
+    /// <summary>The catalog region — the declarative TabsControl + MeshSearches.</summary>
+    internal static IObservable<UiControl?> CatalogAreaView(LayoutAreaHost host, RenderingContext _)
+    {
+        var nodePath = host.Hub.Address.ToString();
+        return Observable.Return<UiControl?>(BuildCatalog(nodePath, OwnerIdOf(nodePath)));
+    }
+
+    /// <summary>
+    /// The chat composer region — the per-user <c>{owner}/Chat</c> node's "Overview" area, the SAME
+    /// ThreadChatControl the side panel mounts for a new chat (Monaco editor, harness/agent/model
+    /// selectors, attachments, Send). Declared by PATH + area name because MeshWeaver.Graph cannot
+    /// reference MeshWeaver.AI (AI references Graph); the node is ensure-created in <see cref="Activity"/>
+    /// so this embedded area always resolves.
+    /// </summary>
+    internal static IObservable<UiControl?> ComposerAreaView(LayoutAreaHost host, RenderingContext _)
+        => Observable.Return<UiControl?>(Controls.LayoutArea(ChatPath(OwnerIdOf(host.Hub.Address.ToString())), ChatOverviewArea));
+
+    /// <summary>
+    /// The owner's OPEN threads — their own partition only (<c>{owner}/*_Thread</c>, no cross-partition
+    /// fan-out), excluding finished ones (<c>-content.status:Done</c>), newest first; "New thread"
+    /// creates under the user node. Mirrors what used to be the catalog's first tab, promoted to its own
+    /// region so active conversations sit right at the top of the home.
+    /// </summary>
+    private static UiControl BuildOpenThreads(string nodePath, string nodeOwnerId) =>
+        Controls.MeshSearch
+            .WithTitle("Open threads")
+            .WithHiddenQuery($"namespace:{nodeOwnerId}/*_Thread nodeType:Thread -content.status:Done sort:LastModified-desc")
+            .WithShowSearchBox(false)
+            .WithShowEmptyMessage(true)
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithItemLimit(50)
+            .WithMaxRows(2)
+            .WithMaxColumns(4)
+            .WithReactiveMode(true)
+            with { CreateNodeType = "Thread", CreateNamespace = nodePath };
 
     /// <summary>
     /// The fluent catalog: a skinned <see cref="TabsControl"/> whose tabs are labelled
@@ -220,20 +290,11 @@ public static class UserActivityLayoutAreas
     /// <c>Build*</c> helpers — now folded into the declarative builder. The TabsControl owns tab
     /// switching, so there is no host-data tab-state and no CSS-flex toggling.
     /// </summary>
-    private static UiControl BuildCatalog(string nodePath, string nodeOwnerId)
+    internal static UiControl BuildCatalog(string nodePath, string nodeOwnerId)
         => Controls.Tabs
-            // Threads — the viewer's OWN partition only ({owner}/*_Thread → no cross-partition
-            // fan-out that can wedge the portal). -content.status:Done hides finished threads.
-            .WithMeshSearch(TabThreads,
-                @namespace: $"{nodeOwnerId}/*_Thread",
-                nodeType: "Thread",
-                query: "-content.status:Done sort:LastModified-desc",
-                createNodeType: "Thread",
-                createNamespace: nodePath,
-                configure: s => s
-                    .WithRenderMode(MeshSearchRenderMode.Flat)
-                    .WithCollapsibleSections(false).WithSectionCounts(false)
-                    .WithItemLimit(50).WithMaxRows(2).WithMaxColumns(4).WithReactiveMode(true))
+            // 100% width so the tabs + their search grids fill the home page instead of shrinking to
+            // content width (the TabsControl had no Width skin before — FluentTabs defaulted to fit).
+            .WithSkin(s => s.WithWidth("100%"))
             // Spaces the user can read. New space → the standard top-level create form (Space's
             // DefaultNamespace is "" → top-level, the only sanctioned way to make a new partition).
             .WithMeshSearch(TabSpaces,
@@ -390,13 +451,14 @@ public static class UserActivityLayoutAreas
     /// Pinned items — compact cards of everything in the owner's <see cref="User.PinnedPaths"/>.
     /// Each card is rendered via <see cref="PinLayoutArea.PinnedThumbnailArea"/>, which overlays
     /// an unpin icon so owners can remove items inline. Returns <c>null</c> when nothing is pinned.
+    /// <para>Takes the already-deserialized <see cref="User"/> (the caller reads it via
+    /// <c>ContentAs&lt;User&gt;</c>, never <c>as User</c> — the owner-node stream alternates
+    /// typed↔JsonElement frames, and <c>as</c> → null on JsonElement frames flips the band in/out,
+    /// the render storm that vanished the home on chat launch).</para>
     /// </summary>
-    private static UiControl? BuildPinnedItems(MeshNode? ownerNode, JsonSerializerOptions options)
+    internal static UiControl? BuildPinnedItems(User? user)
     {
-        // ContentAs (deserialize), not `as User`: the owner-node stream alternates typed↔JsonElement,
-        // and `as` → null on the JsonElement frames makes the pinned band flip in/out → the
-        // PinnedThumbnail/Activity render storm that vanished the home dashboard on chat launch.
-        var pinnedPaths = ownerNode.ContentAs<User>(options)?.PinnedPaths;
+        var pinnedPaths = user?.PinnedPaths;
         if (pinnedPaths == null || pinnedPaths.Count == 0)
             return null;
 

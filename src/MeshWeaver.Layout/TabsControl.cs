@@ -38,6 +38,13 @@ public record TabsSkin : Skin<TabsSkin>
     public object? Height { get; set; }
 
     /// <summary>
+    /// Gets or sets the width of the tabs (e.g. <c>"100%"</c>). Mirrors
+    /// <see cref="LayoutStackSkin.Width"/>; without it a <see cref="TabsControl"/> shrinks
+    /// to its content width instead of filling its container.
+    /// </summary>
+    public object? Width { get; set; }
+
+    /// <summary>
     /// Sets the ID of the active tab.
     /// </summary>
     /// <param name="activeTabId">The ID of the active tab to set.</param>
@@ -60,6 +67,14 @@ public record TabsSkin : Skin<TabsSkin>
     /// <returns>A new instance of <see cref="TabsSkin"/> with the specified height.</returns>
     public TabsSkin WithHeight(object height)
         => this with { Height = height };
+
+    /// <summary>
+    /// Sets the width of the tabs (e.g. <c>"100%"</c>).
+    /// </summary>
+    /// <param name="width">The width to set.</param>
+    /// <returns>A new instance of <see cref="TabsSkin"/> with the specified width.</returns>
+    public TabsSkin WithWidth(object width)
+        => this with { Width = width };
 }
 
 /// <summary>
