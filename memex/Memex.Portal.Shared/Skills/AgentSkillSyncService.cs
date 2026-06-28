@@ -1,3 +1,12 @@
+using System.Reactive.Linq;
+using System.Text;
+using System.Text.Json;
+using MeshWeaver.AI;
+using MeshWeaver.Blazor.Infrastructure;
+using MeshWeaver.Graph;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Threading;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -18,57 +27,105 @@ public sealed class AgentSkillSyncOptions
 }
 
 /// <summary>
-/// Writes the shared on-disk <b>workspace</b> base instructions (<c>AGENTS.md</c>) the co-hosted CLI
-/// harnesses (Claude Code, GitHub Copilot) read on startup.
+/// Writes the shared on-disk <b>workspace</b> instructions (<c>AGENTS.md</c>) the co-hosted CLI harnesses
+/// (Claude Code, GitHub Copilot) read on startup: the base "the mesh is your workspace via the
+/// <c>meshweaver</c> MCP server" guidance PLUS a <b>listing</b> of the platform skill catalog.
 ///
-/// <para><b>Skills are NOT materialised to disk.</b> They are mesh nodes (<c>nodeType:Skill</c>) and are
-/// read from the database <b>on demand</b> — the native MeshWeaver agent loads a skill by path
-/// (<c>load_skill</c>), and the CLI harnesses discover + read them through the <c>meshweaver</c> MCP
-/// server (<c>search nodeType:Skill</c> → <c>get</c>). This avoids duplicating skill docs onto disk and
-/// re-feeding the same content; <c>AGENTS.md</c> only tells the agent how to find them. Agents are not
-/// synced either — agents are system prompts.</para>
+/// <para><b>Skill bodies are NOT materialised to disk.</b> Skills are mesh nodes (<c>nodeType:Skill</c>);
+/// their <c>Instructions</c> (the SKILL.md body) are read <b>on demand</b> — the CLI harnesses
+/// <c>get</c> a skill by path through the MCP server when a request matches it. What <c>AGENTS.md</c>
+/// carries is only the <b>catalog</b> (name + one-line description + load path) of the up-front-advertised
+/// instruction skills (<see cref="SkillDefinition.AutoMount"/>), so the harness knows what exists without
+/// having to blindly <c>search</c> first — the progressive-disclosure contract the <c>AutoMount</c> flag
+/// already documents. Per-user and per-space skills are NOT listed (the file is shared across all
+/// sessions); those stay discoverable via <c>search nodeType:Skill</c>.</para>
 ///
-/// <para>One-shot at <see cref="IHostApplicationLifetime.ApplicationStarted"/> — <c>AGENTS.md</c> is
-/// static content, so there is no mesh query, no live subscription, and no reconcile loop.</para>
+/// <para><b>Live</b>, not one-shot: the platform skill catalog (the PublicRead <c>Skill</c> namespace) is
+/// observed with a synced query, so <c>AGENTS.md</c> is re-rendered whenever a skill node is added /
+/// changed / removed. The background subscription carries no <see cref="MeshWeaver.Mesh.Security.AccessContext"/>,
+/// so the synced query short-circuits to the System-loaded snapshot (no per-user RLS filter) and sees every
+/// platform skill. The (small, infrequent) file write runs on the <see cref="IoPoolNames.FileSystem"/> I/O
+/// pool so the synced-query emission thread never blocks on disk.</para>
 /// </summary>
 public sealed class AgentSkillSyncService(
     IHostApplicationLifetime lifetime,
     IOptions<AgentSkillSyncOptions> options,
-    ILogger<AgentSkillSyncService>? logger = null) : IHostedService
+    IServiceProvider serviceProvider,
+    ILogger<AgentSkillSyncService>? logger = null) : IHostedService, IDisposable
 {
+    /// <summary>Synced-query id for the platform skill catalog (its own cache entry; never the picker's).</summary>
+    private const string CatalogQueryId = "CliSkillCatalog";
+
+    private IDisposable? subscription;
+
     public Task StartAsync(CancellationToken cancellationToken)
     {
         var dir = options.Value?.Directory;
         if (string.IsNullOrWhiteSpace(dir))
         {
-            logger?.LogInformation("AgentSkillSync: no Skills:Directory configured — base-instructions write disabled.");
+            logger?.LogInformation("AgentSkillSync: no Skills:Directory configured — workspace write disabled.");
             return Task.CompletedTask;
         }
-        lifetime.ApplicationStarted.Register(() => WriteWorkspace(dir!));
+        lifetime.ApplicationStarted.Register(() => Start(dir!));
         return Task.CompletedTask;
     }
 
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        subscription?.Dispose();
+        subscription = null;
+        return Task.CompletedTask;
+    }
 
-    private void WriteWorkspace(string workspace)
+    public void Dispose() => subscription?.Dispose();
+
+    private void Start(string workspace)
     {
         try
         {
             Directory.CreateDirectory(workspace);
-            WriteBaseInstructions(workspace, logger);
-            logger?.LogInformation(
-                "AgentSkillSync: wrote AGENTS.md → {Workspace} (skills are read from the mesh on demand)", workspace);
+            // Write the base instructions immediately so AGENTS.md exists for any session that starts
+            // before the skill catalog converges; the live subscription below upgrades it with the catalog.
+            WriteIfChanged(Path.Combine(workspace, "AGENTS.md"), BaseInstructions());
         }
         catch (Exception ex)
         {
             logger?.LogWarning(ex, "AgentSkillSync: failed to write base instructions");
+            return;
         }
+
+        var hub = serviceProvider.GetService<PortalApplication>()?.Hub;
+        if (hub is null)
+        {
+            logger?.LogInformation(
+                "AgentSkillSync: no portal hub — wrote base instructions only (skills discoverable via MCP search).");
+            return;
+        }
+
+        var agentsPath = Path.Combine(workspace, "AGENTS.md");
+        var filePool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
+                       ?? IoPool.Unbounded;
+        // Platform skills only (userPath/contextPath null) — the shared file can't carry per-user skills.
+        var queries = SkillNodeType.SkillQueries(contextPath: null, userPath: null);
+
+        subscription = hub.GetQuery(CatalogQueryId, queries)
+            .Select(snapshot => ComposeWorkspaceInstructions(snapshot, hub.JsonSerializerOptions))
+            .DistinctUntilChanged()
+            .SelectMany(content => filePool.InvokeBlocking(_ => WriteIfChanged(agentsPath, content)))
+            .Subscribe(
+                wrote =>
+                {
+                    if (wrote)
+                        logger?.LogInformation("AgentSkillSync: re-rendered AGENTS.md skill catalog → {Path}", agentsPath);
+                },
+                ex => logger?.LogWarning(ex, "AgentSkillSync: skill-catalog sync faulted for {Path}", agentsPath));
     }
 
     /// <summary>
-    /// The static base instructions both CLIs read (<c>AGENTS.md</c> content): the mesh is reachable
-    /// through the <c>meshweaver</c> MCP server, everything is vector-indexed (use <c>search</c>), and
-    /// skills are found via <c>search nodeType:Skill</c> and read on demand. Public for unit testing.
+    /// The base instructions both CLIs read: the mesh is reachable through the <c>meshweaver</c> MCP
+    /// server, everything is vector-indexed (use <c>search</c>), and skills are found via
+    /// <c>search nodeType:Skill</c> and read on demand. The platform skill <b>catalog</b> is appended by
+    /// <see cref="ComposeWorkspaceInstructions"/>. Public for unit testing.
     /// </summary>
     public static string BaseInstructions() =>
         "# MeshWeaver workspace\n\n" +
@@ -83,20 +140,75 @@ public sealed class AgentSkillSyncService(
         "skill with `get` when a request matches it. Read each skill's doc only once; if you have already " +
         "read it, do not re-read it.\n";
 
-    private static void WriteBaseInstructions(string workspace, ILogger? logger)
+    /// <summary>
+    /// Composes the full <c>AGENTS.md</c> content: <see cref="BaseInstructions"/> plus the rendered
+    /// platform skill catalog (when there is one). Static + pure for unit testing.
+    /// </summary>
+    /// <param name="skillNodes">The synced <c>nodeType:Skill</c> snapshot from the platform <c>Skill</c> namespace.</param>
+    /// <param name="jsonOptions">The caller hub's serializer options, used to type each node's <see cref="SkillDefinition"/> content.</param>
+    public static string ComposeWorkspaceInstructions(
+        IEnumerable<MeshNode> skillNodes, JsonSerializerOptions jsonOptions)
     {
-        // ONE file, AGENTS.md: the cross-tool instructions file Claude Code (project scope) AND GitHub
-        // Copilot (cwd) both read — no CLAUDE.md duplicate. Idempotent (rewrites only on change).
-        try
+        var catalog = RenderSkillCatalog(SkillNodeType.ProjectSkills(skillNodes, jsonOptions));
+        return string.IsNullOrEmpty(catalog)
+            ? BaseInstructions()
+            : BaseInstructions() + "\n" + catalog;
+    }
+
+    /// <summary>
+    /// Renders the catalog of <b>advertised instruction</b> skills (a <see cref="SkillDefinition.AutoMount"/>
+    /// skill with a non-empty <see cref="SkillDefinition.Instructions"/> body) as a markdown list of
+    /// name — description — load path. Behaviour-only skills (<c>/agent</c>, <c>/model</c> — a
+    /// <see cref="SkillAction"/> with no body) are MeshWeaver-chat UI and irrelevant to a CLI harness;
+    /// <c>AutoMount = false</c> skills exist but are loaded on demand only. Returns <c>""</c> when none
+    /// qualify (so the caller appends nothing). Static + pure for unit testing.
+    /// </summary>
+    public static string RenderSkillCatalog(IReadOnlyList<SkillInfo> skills)
+    {
+        var advertised = skills
+            .Where(s => s.Definition.AutoMount && !string.IsNullOrWhiteSpace(s.Definition.Instructions))
+            .OrderBy(s => s.Id, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (advertised.Count == 0)
+            return string.Empty;
+
+        var sb = new StringBuilder();
+        sb.Append("## Skills available in this mesh\n\n");
+        sb.Append("These platform skills (`nodeType:Skill` nodes) are advertised to you up-front. Each is a " +
+                  "reusable how-to. When a request matches one, read its FULL instructions ONCE with the " +
+                  "`meshweaver` MCP `get` tool, then follow them — do not re-read a skill you have already " +
+                  "read. (Per-user and per-space skills are not listed here; find those with " +
+                  "`search nodeType:Skill`.)\n\n");
+        foreach (var s in advertised)
         {
-            var content = BaseInstructions();
-            var path = Path.Combine(workspace, "AGENTS.md");
-            if (!File.Exists(path) || File.ReadAllText(path) != content)
-                File.WriteAllText(path, content);
+            var name = string.IsNullOrWhiteSpace(s.Name) ? $"/{s.Id}" : s.Name!.Trim();
+            sb.Append("- **").Append(name).Append("**");
+            var desc = Collapse(s.Description);
+            if (desc.Length > 0)
+                sb.Append(" — ").Append(desc);
+            if (!string.IsNullOrWhiteSpace(s.Path))
+                sb.Append("  · read: `get ").Append(s.Path).Append('`');
+            sb.Append('\n');
         }
-        catch (Exception ex)
-        {
-            logger?.LogDebug(ex, "AgentSkillSync: write AGENTS.md failed");
-        }
+        return sb.ToString();
+    }
+
+    /// <summary>Collapses CR/LF/tabs/runs-of-spaces in a description to a single-line snippet.</summary>
+    private static string Collapse(string? text)
+        => string.IsNullOrWhiteSpace(text)
+            ? string.Empty
+            : string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+    /// <summary>
+    /// Writes <paramref name="content"/> to <paramref name="path"/> only when it differs from what is
+    /// already there. Returns <c>true</c> if a write happened. ONE file, <c>AGENTS.md</c> — the cross-tool
+    /// instructions file Claude Code (project scope) AND GitHub Copilot (cwd) both read.
+    /// </summary>
+    private static bool WriteIfChanged(string path, string content)
+    {
+        if (File.Exists(path) && File.ReadAllText(path) == content)
+            return false;
+        File.WriteAllText(path, content);
+        return true;
     }
 }

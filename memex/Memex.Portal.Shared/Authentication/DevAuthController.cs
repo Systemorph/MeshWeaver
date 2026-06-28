@@ -19,14 +19,16 @@ public class DevAuthController : ControllerBase
     private readonly IMeshService _meshQuery;
     private readonly UserOnboardingService _onboarding;
     private readonly IMessageHub _hub;
+    private readonly AccessService _accessService;
     private readonly bool _devLoginEnabled;
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-    public DevAuthController(IMeshService meshQuery, UserOnboardingService onboarding, IMessageHub hub, IConfiguration configuration)
+    public DevAuthController(IMeshService meshQuery, UserOnboardingService onboarding, IMessageHub hub, AccessService accessService, IConfiguration configuration)
     {
         _meshQuery = meshQuery;
         _onboarding = onboarding;
         _hub = hub;
+        _accessService = accessService;
         // DevLogin is forced OFF in prod (Memex.Portal.Distributed/Program.cs); this gate
         // ensures the self-provisioning below can NEVER auto-create users in production.
         _devLoginEnabled = configuration["Authentication:EnableDevLogin"] == "true";
@@ -45,15 +47,24 @@ public class DevAuthController : ControllerBase
         // upsert races the owner hub and 500s the signin (CQRS violation; see CqrsAndContentAccess.md +
         // /async). The single-node stream is write-consistent, so an existing user is found reliably and
         // never re-provisioned. A genuine miss (timeout) falls through to the legacy query + provision.
+        // 🚨 Pre-auth read: there is NO caller identity on the signin request yet, so this read runs as
+        // Anonymous — and a user's partition-root node is private (NOT PublicRead). An EXISTING user
+        // (e.g. a reused dev DB) therefore throws UnauthorizedAccessException ("Anonymous lacks Read on
+        // '{personId}'"), which — uncaught — 500s the signin and blocks onboarding entirely. Resolving an
+        // existing user pre-auth is legitimate auth infrastructure, so impersonate System (same as
+        // ProvisionDevUser's grants). Observable.Using captures System at SUBSCRIBE and disposes it when
+        // the read completes — the sanctioned reactive impersonation (ApiTokenService / DeviceOnboarding).
         MeshNode? node = null;
         try
         {
-            node = await _hub.GetMeshNodeStream(personId)
-                .Where(n => n is not null
-                    && string.Equals(n.NodeType, "User", StringComparison.OrdinalIgnoreCase)
-                    && n.Content is not null)
-                .Take(1)
-                .Timeout(TimeSpan.FromSeconds(5))
+            node = await Observable.Using(
+                    () => _accessService.ImpersonateAsSystem(),
+                    _ => _hub.GetMeshNodeStream(personId)
+                        .Where(n => n is not null
+                            && string.Equals(n.NodeType, "User", StringComparison.OrdinalIgnoreCase)
+                            && n.Content is not null)
+                        .Take(1)
+                        .Timeout(TimeSpan.FromSeconds(5)))
                 .FirstAsync();
         }
         catch (TimeoutException)
@@ -66,8 +77,11 @@ public class DevAuthController : ControllerBase
         // above did not find a partition-root User node.
         if (node is null)
         {
-            var change = await _meshQuery
-                .Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:User"))
+            // Same pre-auth rationale: under Anonymous the nodeType:User query is RLS-filtered to nothing
+            // (private user partitions), so an existing user is MISSED → spurious re-provision. Read as System.
+            var change = await Observable.Using(
+                    () => _accessService.ImpersonateAsSystem(),
+                    _ => _meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:User")))
                 .FirstAsync();
             node = change.Items.FirstOrDefault(n =>
                 string.Equals(n.Id, personId, StringComparison.OrdinalIgnoreCase)

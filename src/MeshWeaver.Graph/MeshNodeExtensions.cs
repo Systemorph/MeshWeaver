@@ -364,6 +364,13 @@ public static class MeshNodeExtensions
         typeRegistry.WithType(typeof(Comment), nameof(Comment));
         typeRegistry.WithType(typeof(MarkdownContent), nameof(MarkdownContent));
         typeRegistry.WithType(typeof(AccessAssignment), nameof(AccessAssignment));
+        // PartitionAccessPolicy is a sibling security content type to AccessAssignment and MUST register
+        // its $type here too. Without it, a `_Policy` node read across a hub boundary (the GetQuery /
+        // MeshNodeStreamCache deserialization path) degrades to an untyped JsonElement, every
+        // `Content is PartitionAccessPolicy` soft-cast fails, and the partition's PublicRead policy is
+        // silently NOT applied — so PublicRead partitions (Skill, Harness, Provider) read as empty/denied
+        // (skills + harnesses "not found"). Registering the discriminator makes the policy type-resolve.
+        typeRegistry.WithType(typeof(PartitionAccessPolicy), nameof(PartitionAccessPolicy));
         typeRegistry.WithType(typeof(RoleAssignment), nameof(RoleAssignment));
         typeRegistry.WithType(typeof(Role), nameof(Role));
         typeRegistry.WithType(typeof(AccessObject), nameof(AccessObject));
