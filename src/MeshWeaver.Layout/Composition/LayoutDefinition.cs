@@ -149,12 +149,43 @@ public record LayoutDefinition(IMessageHub Hub)
         // node hub, and an unknown area would render only the menu, leave /areas/{area} empty, and the
         // client's control stream for {area} would never emit → the view spins on "Building layout…"
         // forever → resubscribe/re-render storm → circuit wedge (the 2026-06-28 home/side-panel wedge,
-        // pinned by OrleansUnresolvableAreaNoWedgeTest). Detect the genuinely-unrendered area from the
-        // produced store and surface the SAME visible NotFound placeholder, fast.
-        return composed.Select(result =>
-            string.IsNullOrEmpty(context.Area) || StoreHasArea(result.Store, context.Area)
-                ? result
-                : AppendNotFound(result, host, context));
+        // pinned by OrleansUnresolvableAreaNoWedgeTest).
+        //
+        // Surface the NotFound placeholder as a TERMINAL FALLBACK — never per-frame: pass every produced
+        // frame through unchanged, and inject the placeholder ONLY when the render stream COMPLETES
+        // without ever having produced the requested area. Completion is the structural signal that "no
+        // more content is coming": a genuinely-unrendered area is rendered by the synchronous menu alone
+        // (`Observable.Return`, which completes) → placeholder, fast. A LIVE renderer that never completes
+        // (e.g. a kernel cell whose `/areas/{id}` is filled only once a script has actually run — the
+        // area stream is hot) keeps the area legitimately PENDING; its real content flows through when it
+        // arrives. Appending the placeholder per-frame instead clobbered every async area with a transient
+        // "**Area not found**" on its first empty frame — the regression that made every kernel cell emit
+        // the placeholder before its result (MonolithKernelTest / InteractiveMarkdownExecutionTest).
+        if (string.IsNullOrEmpty(context.Area))
+            return composed;
+
+        return Observable.Create<EntityStoreAndUpdates>(observer =>
+        {
+            var areaProduced = false;
+            EntityStoreAndUpdates? last = null;
+            return composed.Subscribe(
+                result =>
+                {
+                    last = result;
+                    if (StoreHasArea(result.Store, context.Area))
+                        areaProduced = true;
+                    observer.OnNext(result);
+                },
+                observer.OnError,
+                () =>
+                {
+                    if (!areaProduced)
+                        observer.OnNext(last is null
+                            ? NotFound(host, context, store)
+                            : AppendNotFound(last, host, context));
+                    observer.OnCompleted();
+                });
+        });
     }
 
     /// <summary>True when the produced store carries a control at <c>/areas/{area}</c>.</summary>

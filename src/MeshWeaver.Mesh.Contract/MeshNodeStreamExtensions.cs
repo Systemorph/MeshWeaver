@@ -1224,13 +1224,22 @@ public static class MeshNodeStreamExtensions
                             {
                                 if (d.Message is GetDataResponse resp)
                                 {
-                                    // A null-Data response carrying an Error is a rejection
-                                    // (e.g. RLS read-validator denial posts GetDataResponse
-                                    // { Error = "..." }). Surface it — never swallow an
-                                    // access/validation failure as a silent "not found" null.
+                                    // A null-Data response carrying an Error is an application-level
+                                    // read-validator verdict (INodeValidator → GetDataResponse{Error},
+                                    // e.g. NodeHidden / a policy filter — see
+                                    // MeshDataSource.AddReadValidatorPipeline). The documented contract is
+                                    // that such a filtered node is INVISIBLE to the reader → resolve to
+                                    // null (indistinguishable from "not found", which is the point of
+                                    // hiding). A *genuine* access denial is enforced at the delivery layer
+                                    // (AccessControlPipeline → DeliveryFailure{ErrorType.Unauthorized}) and
+                                    // surfaces via the OnError branch below — it never arrives as a
+                                    // GetDataResponse{Error}. Log the verdict so it isn't entirely silent.
                                     if (resp.Data is null && !string.IsNullOrEmpty(resp.Error))
                                     {
-                                        EmitError(new UnauthorizedAccessException(resp.Error));
+                                        hub.ServiceProvider.GetService<ILoggerFactory>()
+                                            ?.CreateLogger("MeshWeaver.Mesh.GetMeshNode")
+                                            ?.LogDebug("GetMeshNode read-validator filtered {Path}: {Error}", path, resp.Error);
+                                        EmitOnce(null);
                                         return;
                                     }
                                     MeshNode? node = resp.Data as MeshNode;
