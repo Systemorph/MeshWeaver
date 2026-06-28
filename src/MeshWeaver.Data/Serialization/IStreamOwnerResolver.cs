@@ -5,7 +5,7 @@ namespace MeshWeaver.Data.Serialization;
 /// <summary>
 /// Resolves the OWNER <see cref="AccessContext"/> of a synchronization stream's content from the
 /// stream's CURRENT value — the MeshNode-aware bridge that lets
-/// <see cref="SynchronizationStream{TStream}.Update"/> inject the node OWNER as a last-resort identity
+/// <see cref="SynchronizationStream{TStream}.Update(System.Func{TStream,MeshWeaver.Data.ChangeItem{TStream}},System.Action{System.Exception})"/> inject the node OWNER as a last-resort identity
 /// when neither a live AsyncLocal context nor a captured creation context survives.
 ///
 /// <para>This closes the cold-start FIRST-write race: a freshly-activated owner hub establishes its

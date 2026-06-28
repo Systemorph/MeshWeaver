@@ -78,12 +78,11 @@ jobs:
       run: dotnet restore
     - name: Build
       # Merge precondition (a): build green with warnings-as-errors (ReleaseStrategy.md → "Merge
-      # preconditions"). Flip this on by appending `-warnaserror` once the pre-existing compiler-warning
-      # burn-down is done — the codebase currently emits ~130 warnings (mostly broken XML-doc crefs
-      # CS1574/CS0419, platform-compat CA1416, a few CS4014/nullable), so enabling it now would red-CI
-      # every PR. The gate is intentionally staged, NOT abandoned. NuGet restore advisories (NU19xx
-      # vulnerabilities) are handled in the separate restore step and via dependency overrides, not here.
-      run: dotnet build --no-restore -c Release -p:CIRun=true
+      # preconditions"). The compiler-warning burn-down (release-governance step A2) is DONE and
+      # TreatWarningsAsErrors=true is set centrally in Directory.Build.props; -warnaserror here makes
+      # the gate explicit at the CI build step. NuGet restore advisories (NU19xx vulnerabilities) stay
+      # warnings (WarningsNotAsErrors in Directory.Build.props) — handled via dependency overrides.
+      run: dotnet build --no-restore -c Release -p:CIRun=true -warnaserror
     # Node Source can pull MeshWeaver libraries in via a version-LESS `#r "nuget:MeshWeaver.X"`
     # (e.g. the BusinessRules scope generator the PensionFund sample uses). Tests resolve those
     # from the mesh-local feed (nuget.config → dist/packages), which is git-ignored — so the

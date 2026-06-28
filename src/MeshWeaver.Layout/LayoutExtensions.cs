@@ -216,8 +216,7 @@ public static class LayoutExtensions
     /// pointer directly to <typeparamref name="T"/> — the way a renderer reads a sidecar control slot
     /// such as <c>$Menu:{context}</c> (a <c>MenuControl</c>) or <c>$Dialog</c> (a <c>DialogControl</c>),
     /// instead of the polymorphic <see cref="UiControl"/> base. Yields <c>null</c> while the slot is
-    /// absent. Re-emits on every (re-)snapshot, like <see cref="GetControlStream"/>.
-    /// absent. Re-emits on every (re-)snapshot, like <see cref="GetControlStream(MeshWeaver.Data.ISynchronizationStream{System.Text.Json.JsonElement}, string)"/>.
+    /// absent. Re-emits on every (re-)snapshot, like <see cref="GetControlStream(MeshWeaver.Data.ISynchronizationStream{System.Text.Json.JsonElement},string)"/>.
     /// </summary>
     public static IObservable<T?> GetControlStream<T>(
         this ISynchronizationStream<JsonElement> synchronizationItems,

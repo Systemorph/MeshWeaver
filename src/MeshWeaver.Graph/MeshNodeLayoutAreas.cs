@@ -919,7 +919,7 @@ public static class MeshNodeLayoutAreas
 
     /// <summary>
     /// Builds the node-content catalog (the shared body of the <see cref="Search"/> instance view and
-    /// the legacy <see cref="Children"/> area): a <see cref="MeshSearchControl"/> over
+    /// the legacy <c>Children</c> area): a <see cref="MeshSearchControl"/> over
     /// <c>namespace:{nodePath} scope:subtree</c> (the whole descendant subtree, the default) — or
     /// just <c>namespace:{nodePath}</c> (direct children) when <c>?subtree=false</c> — excluding
     /// NodeType definitions. Every display knob comes from <paramref name="o"/> (see

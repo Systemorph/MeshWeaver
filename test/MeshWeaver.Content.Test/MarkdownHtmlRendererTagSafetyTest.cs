@@ -35,6 +35,10 @@ public class MarkdownHtmlRendererTagSafetyTest
 
         renderer.RenderHtml(builder, html);
 
+        // BL0006: the RenderTree frame types are "not for use outside Blazor", but inspecting the
+        // emitted frames is exactly how this test pins the tag-name invariant — there is no public
+        // API to read the produced tag names. Intentional, test-only.
+#pragma warning disable BL0006
         var frames = builder.GetFrames();
         for (var i = 0; i < frames.Count; i++)
         {
@@ -49,5 +53,6 @@ public class MarkdownHtmlRendererTagSafetyTest
                 $"every element tag reaching the Blazor client must be a legal createElement() name " +
                 $"(got '{name}' from html '{html}') — a malformed name crashes the render batch and kills the circuit");
         }
+#pragma warning restore BL0006
     }
 }

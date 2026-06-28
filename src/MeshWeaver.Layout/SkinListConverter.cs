@@ -25,7 +25,7 @@ public class SkinListConverter : JsonConverter<ImmutableList<Skin>>
     // Parameterless constructor for use with JsonConverterAttribute
     /// <summary>
     /// Parameterless constructor for use as a <c>[JsonConverter]</c> attribute; type registry will be unavailable.
-    /// Skin types that are not resolvable via <see cref="Type.GetType"/> will be skipped.
+    /// Skin types that are not resolvable via <see cref="Type.GetType(string)"/> will be skipped.
     /// </summary>
     public SkinListConverter()
     {
