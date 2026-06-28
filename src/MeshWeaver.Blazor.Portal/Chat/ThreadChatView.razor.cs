@@ -1870,6 +1870,16 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (string.IsNullOrEmpty(path))
             return;
 
+        // 🚨 A slash-command completion (/login, /logout, /harness, /agent, /model, …) is NOT a node
+        // reference. Its Path defaults to its Label ("/login") because command items carry no node path
+        // (AutocompleteToCompletion: Path = item.Path ?? item.Label). Accepting it must ONLY leave the
+        // inserted "/word " text in the editor to be SUBMITTED as a command — it must NEVER be added as
+        // an attachment and resolved as a node path: RequestDisplayName("/login") routes to address
+        // 'login' (no such node) → an un-awaited DeliveryFailure → the "No node found at 'login'" modal,
+        // the recurring "harness selection / login is broken" report. Node paths never start with '/'.
+        if (path.StartsWith('/'))
+            return;
+
         // Check if this path matches a known agent — select it instead of adding a chip
         if (_agentsByPath.TryGetValue(path, out var agentInfo))
         {

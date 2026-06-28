@@ -209,9 +209,10 @@ public static class MemexConfiguration
                 config.SkillsDirectory = skillsDir;
             });
 
-        // Reactive agent/skill→file sync: materialises the platform nodeType:Agent + nodeType:Skill
-        // nodes as CLI skills (+ AGENTS.md) on the shared volume and keeps them in sync as nodes change
-        // (observable query). Started at startup, runs for the process lifetime.
+        // Reactive skill→file sync: writes AGENTS.md (the base "mesh-is-via-MCP" instructions + a LISTING
+        // of the platform nodeType:Skill catalog — name, description, load path) to the shared volume and
+        // keeps it in sync as skill nodes change (observable query). Skill BODIES are never written to
+        // disk — the harness reads each on demand via the meshweaver MCP `get`. Runs for the process lifetime.
         if ((features.Ai.Clis.ClaudeCode || features.Ai.Clis.Copilot) && !string.IsNullOrWhiteSpace(skillsDir))
         {
             services.Configure<Skills.AgentSkillSyncOptions>(o => o.Directory = skillsDir);

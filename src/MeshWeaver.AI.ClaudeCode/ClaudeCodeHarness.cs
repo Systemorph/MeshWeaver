@@ -89,9 +89,11 @@ public sealed class ClaudeCodeHarness(IOptions<ClaudeCodeConfiguration> options)
         var mcp = hub.ServiceProvider.GetService<IMcpBackConnection>();
         var clientLogger = hub.ServiceProvider.GetService<ILogger<ClaudeCodeChatClient>>();
 
-        // Note: the MeshWeaver agents are materialised as Claude Code skills by the reactive
-        // AgentSkillSyncService (shared dir), which the client LINKS into this user's config dir +
-        // enables the "user" setting source. No per-spawn skill writing here.
+        // Note: the shared workspace dir (configuration.SkillsDirectory) holds the AGENTS.md the reactive
+        // AgentSkillSyncService maintains — base "mesh-via-MCP" instructions plus the platform skill
+        // CATALOG (name + description + load path). The client points the session Cwd there + loads
+        // PROJECT scope so the CLI reads it; skill BODIES are fetched on demand via the meshweaver MCP
+        // `get`, never materialised to disk. No per-spawn skill writing here.
         return new ClaudeCodeChatClient(
             configuration, modelName: null, clientLogger, configDir, token,
             mcp, userId, accessCtx?.Name, accessCtx?.Email);

@@ -169,11 +169,13 @@ public class ClaudeCodeChatClient : IChatClient
 
         var claudeOptions = new ClaudeAgentOptions { Env = env };
 
-        // The shared, sync-maintained WORKSPACE ({SkillsDirectory}) holds .claude/skills/<slug>/SKILL.md
-        // (the MeshWeaver agents + skills) plus a base AGENTS.md (read by Claude Code AND Copilot — no
-        // CLAUDE.md duplicate) telling the agent the mesh is reachable via the meshweaver MCP server.
-        // Point the session's Cwd at it and load PROJECT scope so the CLI discovers those; USER scope
-        // keeps the per-user config/creds. The sync service (AgentSkillSyncService) is the single writer.
+        // The shared, sync-maintained WORKSPACE ({SkillsDirectory}) holds ONE AGENTS.md (read by Claude
+        // Code AND Copilot — no CLAUDE.md duplicate): the base "the mesh is reachable via the meshweaver
+        // MCP server" instructions PLUS a listing of the platform skill catalog (name + description +
+        // load path). Skill BODIES are NOT materialised to disk — the CLI fetches each on demand via the
+        // meshweaver MCP `get`. Point the session's Cwd at the workspace and load PROJECT scope so the CLI
+        // reads AGENTS.md; USER scope keeps the per-user config/creds. The sync service
+        // (AgentSkillSyncService) is the single writer.
         if (!string.IsNullOrEmpty(configuration.SkillsDirectory))
         {
             claudeOptions.Cwd = configuration.SkillsDirectory;
