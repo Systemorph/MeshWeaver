@@ -117,49 +117,84 @@ public record LayoutDefinition(IMessageHub Hub)
         var applicable = rendererList.ToImmutable();
 
         if (applicable.Count == 0)
-            // No renderer for this area — surface a visible placeholder.
+            // No renderer for this area at all — surface a visible placeholder.
             return Observable.Return(NotFound(host, context, store));
 
-        // Single renderer (the overwhelmingly common case: one named area, or one
-        // predicate match) — render directly onto the base store. Each emission is the
-        // renderer's own EntityStoreAndUpdates, which the init subscription sets as
-        // Current. A synchronous control emits once; a live generator re-emits.
+        // Compose the applicable renderers. ONE in the common case (a single named area, or a single
+        // predicate match); SEQUENTIALLY when several apply (a named area PLUS the predicate menu, or
+        // two WithNavMenu registrations) — each renders onto the store the PREVIOUS renderer produced,
+        // not against the bare base — because a renderer can read what an earlier one wrote (two
+        // WithNavMenu calls accumulate their links onto the same NavMenuControl; the second reads the
+        // first's control from the store). SelectMany re-runs the downstream when any upstream re-emits
+        // (a live renderer — e.g. the permission-reactive menu — re-emitting re-threads the chain).
+        IObservable<EntityStoreAndUpdates> composed;
         if (applicable.Count == 1)
-            return applicable[0].Invoke(host, context, store);
+            composed = applicable[0].Invoke(host, context, store);
+        else
+        {
+            var seed = Observable.Return(new EntityStoreAndUpdates(store, [], host.Stream.StreamId));
+            composed = applicable.Aggregate(seed, (accObservable, renderer) =>
+                accObservable.SelectMany(acc =>
+                    renderer.Invoke(host, context, acc.Store)
+                        .Select(slice => new EntityStoreAndUpdates(
+                            slice.Store,
+                            acc.Updates.Concat(slice.Updates),
+                            host.Stream.StreamId))));
+        }
 
-        // Multiple renderers (e.g. two WithNavMenu registrations for the same area, or a
-        // named area PLUS the predicate menu renderer). They must compose SEQUENTIALLY —
-        // each renders onto the store the PREVIOUS renderer produced, not against the
-        // bare base — because a renderer can read what an earlier one wrote (two
-        // WithNavMenu calls accumulate their links onto the same NavMenuControl; the
-        // second reads the first's control from the store). We fold the renderers into a
-        // chain where renderer N's input store is renderer N-1's latest output, and
-        // SelectMany re-runs the downstream when any upstream re-emits (a live renderer —
-        // e.g. the permission-reactive menu — re-emitting re-threads the chain). The
-        // running Updates are accumulated alongside the store.
-        var seed = Observable.Return(new EntityStoreAndUpdates(store, [], host.Stream.StreamId));
-        return applicable.Aggregate(seed, (accObservable, renderer) =>
-            accObservable.SelectMany(acc =>
-                renderer.Invoke(host, context, acc.Store)
-                    .Select(slice => new EntityStoreAndUpdates(
-                        slice.Store,
-                        acc.Updates.Concat(slice.Updates),
-                        host.Stream.StreamId))));
+        // 🚨 A control for the REQUESTED area can STILL be absent after every applicable renderer ran.
+        // The node menu is registered as a GLOBAL predicate renderer (`WithRenderer(_ => true, …)` in
+        // NodeMenuItemsExtensions), so it matches EVERY area — `applicable.Count` is >= 1 even for an
+        // area that NOTHING actually renders. The Count==0 branch above therefore never fires on a real
+        // node hub, and an unknown area would render only the menu, leave /areas/{area} empty, and the
+        // client's control stream for {area} would never emit → the view spins on "Building layout…"
+        // forever → resubscribe/re-render storm → circuit wedge (the 2026-06-28 home/side-panel wedge,
+        // pinned by OrleansUnresolvableAreaNoWedgeTest). Detect the genuinely-unrendered area from the
+        // produced store and surface the SAME visible NotFound placeholder, fast.
+        return composed.Select(result =>
+            string.IsNullOrEmpty(context.Area) || StoreHasArea(result.Store, context.Area)
+                ? result
+                : AppendNotFound(result, host, context));
     }
 
-    private EntityStoreAndUpdates NotFound(LayoutAreaHost host, RenderingContext context, EntityStore store)
+    /// <summary>True when the produced store carries a control at <c>/areas/{area}</c>.</summary>
+    private static bool StoreHasArea(EntityStore store, string area) =>
+        store.Collections.GetValueOrDefault(LayoutAreaReference.Areas)?.Instances.ContainsKey(area) == true;
+
+    /// <summary>
+    /// The visible "Area not found" placeholder control — shown instead of an eternal spinner when no
+    /// renderer produced content for the requested area. Lists the hub's named areas to aid diagnosis.
+    /// </summary>
+    private MarkdownControl BuildNotFoundControl(LayoutAreaHost host, object area)
     {
-        // Surface a visible "area not found" placeholder so the client doesn't spin forever
-        // waiting for an Update that no renderer is going to produce.
         var availableAreas = NamedRenderers.Keys.OrderBy(k => k).ToArray();
         var availableLine = availableAreas.Length == 0
             ? "_no named areas registered on this hub_"
             : "Available named areas: " + string.Join(", ", availableAreas.Select(a => $"`{a}`"));
-        var notFound = new MarkdownControl(
-            $"**Area not found**\n\nNo renderer is registered for area `{context.Area}` on hub `{host.Hub.Address}`.\n\n{availableLine}");
+        return new MarkdownControl(
+            $"**Area not found**\n\nNo renderer is registered for area `{area}` on hub `{host.Hub.Address}`.\n\n{availableLine}");
+    }
+
+    private EntityStoreAndUpdates NotFound(LayoutAreaHost host, RenderingContext context, EntityStore store)
+    {
+        var notFound = BuildNotFoundControl(host, context.Area);
         return new EntityStoreAndUpdates(
             store.Update(LayoutAreaReference.Areas, coll => coll.SetItem(context.Area, notFound)),
             [new EntityUpdate(LayoutAreaReference.Areas, context.Area, notFound)],
+            host.Stream.StreamId);
+    }
+
+    /// <summary>
+    /// Appends the NotFound placeholder for the requested area ONTO an already-rendered result
+    /// (preserving the menu and any other sidecar content), for the case where applicable renderers
+    /// ran but none produced the requested area's control.
+    /// </summary>
+    private EntityStoreAndUpdates AppendNotFound(EntityStoreAndUpdates result, LayoutAreaHost host, RenderingContext context)
+    {
+        var notFound = BuildNotFoundControl(host, context.Area);
+        return new EntityStoreAndUpdates(
+            result.Store.Update(LayoutAreaReference.Areas, coll => coll.SetItem(context.Area, notFound)),
+            result.Updates.Append(new EntityUpdate(LayoutAreaReference.Areas, context.Area, notFound)),
             host.Stream.StreamId);
     }
 
