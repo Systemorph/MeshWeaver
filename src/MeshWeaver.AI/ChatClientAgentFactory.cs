@@ -606,7 +606,19 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                     {
                         Logger.LogWarning(ex, "[Delegation:{CallId}] CREATE_FAIL sub={Path}",
                             callId, subThreadPath);
-                        observer.OnNext($"\n[Delegation failed: {ex.Message}]");
+                        // 🚨 Surface the create failure so the parent's tool call resolves IMMEDIATELY
+                        // as an "Error: …" result instead of hanging. Two surfaces for the two waits:
+                        //  • production (delegationEvents+workspace wired): emit a Failed lifecycle
+                        //    event — the wait gates on Dispatched (never emitted on create-fail) and the
+                        //    chunk-aggregate OnCompleted returns EARLY in that path, so without this the
+                        //    delegate_to_agent call never resolves (apparent wedge).
+                        //  • legacy (no delegationEvents): the OnCompleted chunk-aggregate fallback
+                        //    resolves the TCS — prefix "Error:" so ExtractToolResult keys IsSuccess=false.
+                        if (chat is AgentChatClient agentChat)
+                            agentChat.EmitDelegationEvent(
+                                new MeshWeaver.AI.Delegation.DelegationEvent(callId, subThreadPath,
+                                    MeshWeaver.AI.Delegation.DelegationLifecycle.Failed, ex.Message));
+                        observer.OnNext($"Error: delegation to {targetId} failed to start — {ex.Message}");
                         observer.OnCompleted();
                     });
 

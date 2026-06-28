@@ -20,7 +20,8 @@ namespace MeshWeaver.AI.Delegation;
 public sealed record DelegationEvent(
     string CallId,
     string SubThreadPath,
-    DelegationLifecycle Phase);
+    DelegationLifecycle Phase,
+    string? Error = null);
 
 /// <summary>
 /// Lifecycle phase of a single delegation. Monotonic:
@@ -38,4 +39,13 @@ public enum DelegationLifecycle
 
     /// <summary>Sub-thread settled (completed / cancelled / errored / heartbeat-killed).</summary>
     Terminal,
+
+    /// <summary>
+    /// The sub-thread could NOT be created — the create-node failed before any
+    /// <see cref="Dispatched"/>. Carries the failure in <see cref="DelegationEvent.Error"/>.
+    /// The parent resolves the tool call IMMEDIATELY as an <c>"Error: …"</c> result; without
+    /// this phase the production wait (which gates on <see cref="Dispatched"/>) never fires and
+    /// the chunk-aggregate fallback returns early → the <c>delegate_to_agent</c> call hangs.
+    /// </summary>
+    Failed,
 }

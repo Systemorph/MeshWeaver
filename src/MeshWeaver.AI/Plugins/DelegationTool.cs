@@ -205,14 +205,27 @@ public static class DelegationTool
             if (delegationEvents is not null && workspace is not null)
             {
                 delegationEvents
-                    .Where(e => e.Phase == MeshWeaver.AI.Delegation.DelegationLifecycle.Dispatched)
+                    .Where(e => e.Phase == MeshWeaver.AI.Delegation.DelegationLifecycle.Dispatched
+                             || e.Phase == MeshWeaver.AI.Delegation.DelegationLifecycle.Failed)
                     .Take(1)
-                    .Subscribe(dispatched =>
+                    .Subscribe(evt =>
                     {
-                        var subThreadPath = dispatched.SubThreadPath;
+                        // Create-side failure (the sub-thread node could not be created): resolve the
+                        // tool call IMMEDIATELY as an "Error: …" result. Without this branch the wait
+                        // gates on Dispatched (never emitted on create-fail) and the chunk-aggregate
+                        // fallback returns early → the delegate_to_agent call hangs (apparent wedge).
+                        if (evt.Phase == MeshWeaver.AI.Delegation.DelegationLifecycle.Failed)
+                        {
+                            logger?.LogWarning(
+                                "Delegation FAILED to start: callId={CallId} — {Error}", evt.CallId, evt.Error);
+                            tcs.TrySetResult(
+                                $"Error: delegation to {agentName} failed to start — {evt.Error}.");
+                            return;
+                        }
+                        var subThreadPath = evt.SubThreadPath;
                         logger?.LogInformation(
                             "Delegation Dispatched: sub-thread={SubPath}, callId={CallId} — subscribing for Idle",
-                            subThreadPath, dispatched.CallId);
+                            subThreadPath, evt.CallId);
 
                         // Subscribe to the sub-thread node's stream and capture
                         // the Running → terminal transition. We use Scan to
