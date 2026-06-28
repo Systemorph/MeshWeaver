@@ -148,29 +148,77 @@ public static class HubThreadExtensions
             : baseThread; // empty thread — no round
         threadNode = threadNode with { Content = seededThread };
 
-        var delivery = hub.Post(
-            new CreateNodeRequest(threadNode),
-            o => o.WithTarget(new Address(namespacePath)));
+        // Create under the requested namespace. If that partition denies thread creation (the user
+        // lacks Thread permission there — e.g. a read-only Doc/* partition), FALL BACK to the user's
+        // OWN partition ({createdBy}/_Thread/{id}), keeping MainNode = the original namespace so the
+        // thread stays linked to the node the user was viewing and the agent keeps its context.
+        AttemptCreate(namespacePath, threadNode, canFallBack: true);
 
-        if (delivery == null)
+        void AttemptCreate(string targetNamespace, MeshNode node, bool canFallBack)
         {
-            onError?.Invoke("Hub.Post returned null");
-            return;
+            var delivery = hub.Post(
+                new CreateNodeRequest(node),
+                o => o.WithTarget(new Address(targetNamespace)));
+
+            if (delivery == null)
+            {
+                onError?.Invoke("Hub.Post returned null");
+                return;
+            }
+
+            hub.Observe((IMessageDelivery)delivery)
+                .Subscribe(
+                    response =>
+                    {
+                        if (response.Message is CreateNodeResponse { Success: true } cnr)
+                        {
+                            onCreated?.Invoke(cnr.Node ?? node);
+                            return;
+                        }
+                        var err = (response.Message as CreateNodeResponse)?.Error ?? "unknown";
+                        if (canFallBack && TryBuildUserPartitionFallback(targetNamespace, err, out var fb))
+                        {
+                            AttemptCreate(createdBy!, fb!, canFallBack: false);
+                            return;
+                        }
+                        onError?.Invoke($"Thread creation failed: {err}");
+                    },
+                    ex =>
+                    {
+                        if (canFallBack && TryBuildUserPartitionFallback(targetNamespace, ex.Message, out var fb))
+                        {
+                            AttemptCreate(createdBy!, fb!, canFallBack: false);
+                            return;
+                        }
+                        onError?.Invoke($"Thread creation failed: {ex.Message}");
+                    });
         }
 
-        hub.Observe((IMessageDelivery)delivery)
-            .Subscribe(
-                response =>
-                {
-                    if (response.Message is not CreateNodeResponse { Success: true } cnr)
-                    {
-                        var err = (response.Message as CreateNodeResponse)?.Error ?? "unknown";
-                        onError?.Invoke($"Thread creation failed: {err}");
-                        return;
-                    }
-                    onCreated?.Invoke(cnr.Node ?? threadNode);
-                },
-                ex => onError?.Invoke($"Thread creation failed: {ex.Message}"));
+        // True (with the rebuilt node) when the failure is an access denial AND a distinct user
+        // partition is available to retry in. Match on the AccessControlPipeline denial shape
+        // ("Access denied: … lacks <perm> permission on …").
+        bool TryBuildUserPartitionFallback(string targetNamespace, string? error, out MeshNode? fallbackNode)
+        {
+            fallbackNode = null;
+            if (string.IsNullOrEmpty(createdBy)
+                || string.IsNullOrEmpty(error)
+                || !error.Contains("Access denied", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            // Already in the user's own partition → falling back can't help; surface the error.
+            var targetPartition = targetNamespace.Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+            if (string.Equals(targetPartition, createdBy, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            // Re-anchor the SAME thread (id + seeded content) under {createdBy}/_Thread/{id}, but keep
+            // MainNode pointing at the original namespace so thread→source navigation + agent context hold.
+            fallbackNode = ThreadNodeType.BuildThreadNode(createdBy!, userText, createdBy, threadNode.Id) with
+            {
+                MainNode = string.IsNullOrEmpty(mainNode) ? namespacePath : mainNode,
+                Content = seededThread
+            };
+            return true;
+        }
     }
 
     // ═════════════════════════════════════════════════════════════════════
