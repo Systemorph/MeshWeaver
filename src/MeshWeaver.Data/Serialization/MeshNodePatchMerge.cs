@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text.Json.Nodes;
 
 namespace MeshWeaver.Data.Serialization;
@@ -86,9 +87,53 @@ public static class MeshNodePatchMerge
                 continue;
             }
 
-            // Non-string conflict (int/double/bool/enum/date/array/shape change) → REFUSE: keep live.
+            // Array changed on BOTH sides → THREE-WAY MERGE by element identity (do NOT refuse): apply the
+            // writer's delta vs base (its additions + removals) onto the owner's LIVE array. This lands an
+            // intentional cross-hub array overwrite — a chat appended to the thread inbox
+            // (PendingUserMessages), or a resubmit's replaced pending message — WITHOUT re-adding elements
+            // the owner already drained (live is the truth for removals) and WITHOUT dropping the writer's
+            // addition. A stale-base race (the writer's cached base lagged the owner under load) is exactly
+            // the FALSE conflict the old blanket REFUSE turned into a silently-dropped submission
+            // (RapidSubmits_PileUpAndAllIngest / OrleansResubmitDeadlock). Identity = whole-element value
+            // equality (covers string arrays like IngestedMessageIds and object arrays like
+            // PendingUserMessages). Scalars below still REFUSE — the monotonic flap guard is unchanged.
+            if (patchVal is JsonArray patchArr && liveVal is JsonArray liveArr && baseVal is JsonArray baseArr)
+            {
+                live[key] = MergeArray(liveArr, patchArr, baseArr);
+                continue;
+            }
+
+            // Non-string, non-array conflict (int/double/bool/enum/date/shape change) → REFUSE: keep live.
+            // Two concurrent scalar writes aren't mergeable; this is the RequestedReleaseAt-class flap guard.
             onRefuse?.Invoke(key);
         }
+    }
+
+    /// <summary>
+    /// Three-way array merge by whole-element value identity:
+    /// <c>result = live − (base∖patch) + (patch∖base)</c> — keep every LIVE element the writer did NOT
+    /// remove (in live order), then append the writer's additions (in patch order); de-duplicated. Lands
+    /// the writer's intentional additions/removals without re-introducing elements the owner already
+    /// dropped, so a stale-base cross-hub write no longer silently loses an inbox submission.
+    /// </summary>
+    private static JsonArray MergeArray(JsonArray live, JsonArray patch, JsonArray baseArr)
+    {
+        static bool Contains(JsonArray arr, JsonNode? el) => arr.Any(x => JsonNode.DeepEquals(x, el));
+        var result = new JsonArray();
+        foreach (var el in live)
+        {
+            // An element present at base but absent from the writer's patch is a writer REMOVAL.
+            var removedByWriter = Contains(baseArr, el) && !Contains(patch, el);
+            if (!removedByWriter && !Contains(result, el))
+                result.Add(el?.DeepClone());
+        }
+        foreach (var el in patch)
+        {
+            // An element in the writer's patch but absent at base is a writer ADDITION.
+            if (!Contains(baseArr, el) && !Contains(result, el))
+                result.Add(el?.DeepClone());
+        }
+        return result;
     }
 
     /// <summary>
