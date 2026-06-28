@@ -482,6 +482,32 @@ public record ThreadMessage
     public string? CreatedBy { get; init; }
 
     /// <summary>
+    /// The submitter's <see cref="AccessContext.ObjectId"/>, captured at submit time
+    /// (in <c>hub.SubmitMessage</c>/<c>StartThread</c>/<c>SubmitComposer</c>, where the
+    /// handler still carries the live identity) and PERSISTED on the pending user message.
+    ///
+    /// <para><b>Why this exists separately from <see cref="CreatedBy"/>.</b> <see cref="CreatedBy"/>
+    /// is the OPTIONAL <c>createdBy</c> argument the caller may pass — it is frequently null on
+    /// programmatic / test submits. <see cref="SubmitterObjectId"/> is ALWAYS captured from the
+    /// ambient <c>AccessService.Context</c> (or <c>CircuitContext</c>) at the submit boundary, so
+    /// the round's true identity rides on the DATA and survives every later async boundary (the
+    /// submission watcher's <c>.Subscribe</c> continuation + the AI streaming continuations) where
+    /// the AsyncLocal <c>AccessContext</c> is wiped. The round-dispatch watcher reconstructs
+    /// <c>userCtx</c> from this field when the AsyncLocal is gone — so the cross-hub cell/state
+    /// writes never post with a null context and fail closed (the stuck "Generating response…"
+    /// cell / never-settling watcher wedge under CI's 2-core contention).
+    /// See AccessContextPropagation.md.</para>
+    /// </summary>
+    public string? SubmitterObjectId { get; init; }
+
+    /// <summary>
+    /// The submitter's <see cref="AccessContext.Name"/>, captured alongside
+    /// <see cref="SubmitterObjectId"/> at submit time. Used to rebuild the submitter's
+    /// <see cref="AccessContext"/> in the round-dispatch watcher.
+    /// </summary>
+    public string? SubmitterName { get; init; }
+
+    /// <summary>
     /// Completed tool calls from this message's execution.
     /// Populated when execution finishes, used for post-execution inspection.
     /// </summary>

@@ -731,6 +731,22 @@ internal static class ThreadSubmissionServer
                 || string.Equals(id, hub.Address.ToFullString(), StringComparison.Ordinal));
         var userCtx = hubAsUserMatch ? null : (asyncLocalCtx ?? circuitCtx);
 
+        // 🚨 The submission watcher runs on a Throttle/Subscribe continuation where the AsyncLocal
+        // AccessContext is wiped (the hub-as-user case above), so the live context is usually unusable
+        // here. The SUBMITTER captured at submit time RIDES ON THE PENDING MESSAGE
+        // (ThreadMessage.SubmitterObjectId, stamped by hub.SubmitMessage / StartThread / SubmitComposer)
+        // — the authoritative identity that survives every async boundary. Prefer it over the
+        // wrapping-node CreatedBy fallback so the round's cross-hub cell/state writes carry the real
+        // user and never post a null context → fail closed → stuck cell / wedge. See AccessContextPropagation.md.
+        if (userCtx is null)
+        {
+            var submitter = dispatch.UserMessageIds
+                .Select(mid => thread.PendingUserMessages.TryGetValue(mid, out var m) ? m : null)
+                .LastOrDefault(m => !string.IsNullOrEmpty(m?.SubmitterObjectId));
+            if (submitter?.SubmitterObjectId is { } sid)
+                userCtx = new AccessContext { ObjectId = sid, Name = submitter.SubmitterName ?? sid };
+        }
+
         var fellBackToCreatedBy = false;
         // Resolution: thread content's CreatedBy → wrapping node's CreatedBy → null.
         var resolvedCreatedBy = !string.IsNullOrEmpty(thread.CreatedBy)

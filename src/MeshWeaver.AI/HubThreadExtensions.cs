@@ -35,6 +35,36 @@ namespace MeshWeaver.AI;
 public static class HubThreadExtensions
 {
     // ═════════════════════════════════════════════════════════════════════
+    // Submitter identity capture (rides on the data, survives async hops)
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Snapshots the SUBMITTER's live <see cref="AccessContext"/> at the submit boundary — the
+    /// one moment the originating user's identity is reliably on the AsyncLocal
+    /// (<c>AccessService.Context</c>) or the per-circuit fallback (<c>CircuitContext</c>). The
+    /// captured <c>(ObjectId, Name)</c> is stamped onto the pending <see cref="ThreadMessage"/>
+    /// (<see cref="ThreadMessage.SubmitterObjectId"/> / <see cref="ThreadMessage.SubmitterName"/>)
+    /// so the round-dispatch watcher can rebuild the identity AFTER every later async boundary
+    /// (its own <c>.Subscribe</c> continuation + the AI streaming continuations) has wiped the
+    /// AsyncLocal. This is "capture the identity when computing the submit patch" — the data
+    /// carries the truth, not the (by-then-null) AsyncLocal.
+    ///
+    /// <para>Returns <c>(null, null)</c> when no real user identity is live (e.g. a hub-shaped
+    /// principal, or no context at all) — the watcher then falls back to the thread owner derived
+    /// from the node, NEVER hub-self. A hub-shaped principal is explicitly rejected here so it can
+    /// never be persisted as a fake submitter (the <c>CreatedBy=sync/…</c> class of bug).</para>
+    /// </summary>
+    private static (string? ObjectId, string? Name) CaptureSubmitter(this IMessageHub hub)
+    {
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var ctx = accessService?.Context ?? accessService?.CircuitContext;
+        if (ctx is null || string.IsNullOrEmpty(ctx.ObjectId)
+            || AccessService.LooksLikeHubPrincipal(ctx.ObjectId))
+            return (null, null);
+        return (ctx.ObjectId, string.IsNullOrEmpty(ctx.Name) ? ctx.ObjectId : ctx.Name);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
     // Create + submit (new thread)
     // ═════════════════════════════════════════════════════════════════════
 
@@ -105,6 +135,11 @@ public static class HubThreadExtensions
         var hasFirstMessage = !string.IsNullOrWhiteSpace(userText);
         var firstMessageId = Guid.NewGuid().ToString("N")[..8];
 
+        // Capture the submitter's identity NOW — synchronous, live AsyncLocal — and persist it on the
+        // pending message (below) so the round-dispatch watcher can rebuild it AFTER the async boundary
+        // wipes the AsyncLocal. See ThreadMessage.SubmitterObjectId / AccessContextPropagation.md.
+        var (submitterObjectId, submitterName) = hub.CaptureSubmitter();
+
         // 🎯 The thread's COMPOSER is the single source of truth for the round's sticky
         // selection (agent / model / harness / context). Seed it from the supplied composer
         // snapshot when present, else from the explicit agent/model/harness/context params —
@@ -143,7 +178,9 @@ public static class HubThreadExtensions
                         modelName: modelName,
                         contextPath: contextPath,
                         attachments: attachments,
-                        harness: harness))
+                        harness: harness,
+                        submitterObjectId: submitterObjectId,
+                        submitterName: submitterName))
             }
             : baseThread; // empty thread — no round
         threadNode = threadNode with { Content = seededThread };
@@ -269,6 +306,7 @@ public static class HubThreadExtensions
         if (string.IsNullOrWhiteSpace(userText))
             return;
 
+        var (submitterObjectId, submitterName) = hub.CaptureSubmitter();
         var userMessage = ThreadInput.CreateUserMessage(
             userText ?? string.Empty,
             createdBy: createdBy,
@@ -277,7 +315,9 @@ public static class HubThreadExtensions
             modelName: modelName,
             contextPath: contextPath,
             attachments: attachments,
-            harness: harness);
+            harness: harness,
+            submitterObjectId: submitterObjectId,
+            submitterName: submitterName);
         try
         {
             ThreadInput.AppendUserInput(hub.GetWorkspace(), threadPath, userMessage);
@@ -330,6 +370,7 @@ public static class HubThreadExtensions
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.HubThreadExtensions");
         var msgId = Guid.NewGuid().ToString("N")[..8];
+        var (submitterObjectId, submitterName) = hub.CaptureSubmitter();
 
         hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
         {
@@ -351,7 +392,9 @@ public static class HubThreadExtensions
                 modelName: c.ModelName,
                 contextPath: contextPath ?? c.ContextPath,
                 attachments: attachments ?? c.Attachments,
-                harness: c.Harness);
+                harness: c.Harness,
+                submitterObjectId: submitterObjectId,
+                submitterName: submitterName);
 
             return node with
             {

@@ -27,6 +27,13 @@ public static class ThreadInput
     /// <summary>
     /// Pure: builds a user <see cref="ThreadMessage"/> record. No I/O.
     /// </summary>
+    /// <param name="submitterObjectId">The submitter's <see cref="AccessContext.ObjectId"/>,
+    /// captured at the submit boundary (where the live identity is on the AsyncLocal) and
+    /// persisted on the message so the round-dispatch watcher can rebuild the submitter's
+    /// identity AFTER the AsyncLocal is wiped across the async boundary. See
+    /// <see cref="ThreadMessage.SubmitterObjectId"/>.</param>
+    /// <param name="submitterName">The submitter's <see cref="AccessContext.Name"/>, captured
+    /// alongside <paramref name="submitterObjectId"/>.</param>
     public static ThreadMessage CreateUserMessage(
         string text,
         string? createdBy = null,
@@ -35,7 +42,9 @@ public static class ThreadInput
         string? modelName = null,
         string? contextPath = null,
         IReadOnlyList<string>? attachments = null,
-        string? harness = null) =>
+        string? harness = null,
+        string? submitterObjectId = null,
+        string? submitterName = null) =>
         new()
         {
             Role = "user",
@@ -47,6 +56,8 @@ public static class ThreadInput
             Harness = harness,
             ContextPath = contextPath,
             Attachments = attachments,
+            SubmitterObjectId = submitterObjectId,
+            SubmitterName = submitterName,
             Timestamp = DateTime.UtcNow,
             Type = ThreadMessageType.ExecutedInput,
             // User cells don't have a streaming lifecycle — Submitted on creation.
