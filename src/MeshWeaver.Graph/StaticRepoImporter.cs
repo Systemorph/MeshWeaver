@@ -376,9 +376,13 @@ public static class StaticRepoImporter
                         .SelectMany(_ => Run(hub, source, nodes, root, activityPath, fingerprint, logger))
                         .Catch<StaticRepoImportResult, Exception>(ex =>
                         {
-                            logger?.LogInformation(
+                            logger?.LogWarning(ex,
                                 "[StaticRepoImport] {Partition} ({Fingerprint}) import failed: {Message}",
                                 source.Partition, fingerprint, ex.Message);
+                            // Surface to the activity log + a GUI bell notification linking to it —
+                            // a failed boot import must be SEEN, never a silent wedge.
+                            NodeTypeCompilationActivity.MarkFailed(hub, activityPath, ex.Message, logger!);
+                            NotifyStartupFailure(hub, source.Partition, activityPath, ex.Message, logger);
                             return Observable.Return(
                                 new StaticRepoImportResult(source.Partition, fingerprint, "Failed"));
                         });
@@ -632,6 +636,7 @@ public static class StaticRepoImporter
             {
                 NodeTypeCompilationActivity.MarkFailed(hub, activityPath, ex.Message, logger!);
                 logger?.LogWarning(ex, "[StaticRepoImport] {Partition} import failed.", source.Partition);
+                NotifyStartupFailure(hub, source.Partition, activityPath, ex.Message, logger);
                 return Observable.Return(new StaticRepoImportResult(source.Partition, fingerprint, "Failed"));
             });
     }
@@ -846,6 +851,41 @@ public static class StaticRepoImporter
         return access is null
             ? Observable.Defer(write)
             : Observable.Using(() => access.ImpersonateAsSystem(), _ => write());
+    }
+
+    /// <summary>
+    /// Surfaces a boot/startup import failure LOUDLY in the GUI. The activity at
+    /// <paramref name="activityPath"/> already carries <c>Status=Failed</c> + the error
+    /// (<c>MarkFailed</c>); this additionally raises a bell <see cref="NotificationService"/>
+    /// Notification whose <c>TargetNodePath</c> LINKS to that activity log — so a failed boot
+    /// import is something the operator SEES (a notification → click → activity log) instead of a
+    /// silent wedge they must dig pod logs for. Created under System (the boot-import identity) as a
+    /// satellite of the failing partition (the same owner the activity lives under — routed to that
+    /// per-node hub, never the mesh hub). Fire-and-forget: a notification hiccup must never fail the
+    /// import, so the error arm only logs.
+    /// </summary>
+    private static void NotifyStartupFailure(
+        IMessageHub hub, string partition, string activityPath, string error, ILogger? logger)
+    {
+        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService is null)
+            return;
+        AsSystem(hub, () => NotificationService.CreateNotification(
+                meshService,
+                mainNodePath: partition,
+                title: $"Startup import failed: {partition}",
+                message: string.IsNullOrWhiteSpace(error) ? "Import failed during startup." : error,
+                type: NotificationType.General,
+                targetNodePath: activityPath,
+                createdBy: "system-security",
+                icon: "ErrorCircle"))
+            .Subscribe(
+                _ => logger?.LogInformation(
+                    "[StaticRepoImport] raised startup-failure notification for {Partition} → {ActivityPath}",
+                    partition, activityPath),
+                ex => logger?.LogWarning(ex,
+                    "[StaticRepoImport] could not raise startup-failure notification for {Partition} (failure already in activity log {ActivityPath})",
+                    partition, activityPath));
     }
 
     private const string ManifestId = "import-manifest";
