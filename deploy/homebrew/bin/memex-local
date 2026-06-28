@@ -42,6 +42,17 @@ readonly COLIMA_MEM="${MEMEX_COLIMA_MEM:-16}"   # VM sizing (§2)
 # local-build and ACR-pull paths retag onto these names so k3s finds them (§3).
 readonly PORTAL_IMAGE="ghcr.io/systemorph/memex-portal-ai:latest"
 readonly MIGRATION_IMAGE="ghcr.io/systemorph/memex-migration:latest"
+# The portal-ai BASE image (ASP.NET runtime + the co-hosted CLIs: Claude Code + GitHub Copilot,
+# npm -g). The local portal image layers the published app ON this base so the CLIs are PACKAGED into
+# the k3s portal exactly like the ACR/AKS image (deploy/base-images/portal-ai/Dockerfile). ACR's base
+# is amd64-only, so a native arm64 build is required locally (§14). Built once, reused IfNotPresent.
+# The .NET SDK container build pulls a base ONLY from a registry (never the local docker daemon), so a
+# tiny build-time-only local registry holds it; localhost is auto-insecure, and the base layers get
+# baked INTO the portal image, so k3s never needs this registry.
+readonly PORTAL_BASE_LOCAL="memex-portal-ai-base:local"
+readonly PORTAL_BASE_REGISTRY="localhost:5055"
+readonly PORTAL_BASE_REF="${PORTAL_BASE_REGISTRY}/memex-portal-ai-base:local"
+readonly PORTAL_BASE_REGISTRY_CONTAINER="memex-registry"
 # ACR source (Option A — §3). Override the tag with `update --acr --tag <tag>`.
 readonly ACR="meshweaver.azurecr.io"
 # Verbose logging for this local install (deployment-config override; never edits
@@ -188,14 +199,43 @@ start_colima() {
 # §3 — Portal image (Option A: ACR pull · Option B: local native build)
 # Default = Option B (build) when a repo is available — the no-cloud-creds path.
 # ---------------------------------------------------------------------------
+# Build the portal-ai BASE image locally (native arm64) — the ASP.NET runtime PLUS the two co-hosted
+# CLIs (Claude Code + GitHub Copilot, via npm -g) that the Claude Code / Copilot harnesses spawn. The
+# local portal image (image_build_local) layers the published app ON this base, so WITHOUT it the local
+# k3s portal has NO `claude`/`copilot` binary and the harnesses fail with "Claude Code not found". ACR's
+# base is amd64-only, so a local arm64 build is required (§14). Reused IfNotPresent; pass --rebuild-base
+# (or edit the base Dockerfile) to force a rebuild.
+base_build_local() {
+  local repo rebuild="${1:-}"
+  repo="$(resolve_repo)" || die "base build needs the repo — set MEMEX_REPO to your MeshWeaver checkout"
+  need docker docker
+  # Build-time-only local registry the .NET SDK pulls the base FROM (it never reads the docker daemon).
+  if ! docker inspect "$PORTAL_BASE_REGISTRY_CONTAINER" >/dev/null 2>&1; then
+    step "Starting build-time local registry ($PORTAL_BASE_REGISTRY) for the portal-ai base"
+    docker run -d --restart=always -p 5055:5000 --name "$PORTAL_BASE_REGISTRY_CONTAINER" registry:2 >/dev/null
+  fi
+  if [ "$rebuild" = "--rebuild-base" ] || ! docker image inspect "$PORTAL_BASE_LOCAL" >/dev/null 2>&1; then
+    step "Building portal-ai BASE (Node 20 + Claude Code + GitHub Copilot CLIs), native arm64"
+    docker build --platform linux/arm64 -t "$PORTAL_BASE_LOCAL" "$repo/deploy/base-images/portal-ai"
+    ok "Base image built: $PORTAL_BASE_LOCAL (bundles the claude + copilot CLIs)"
+  else
+    info "portal-ai base ($PORTAL_BASE_LOCAL) already present — skipping build (claude + copilot bundled). Pass --rebuild-base to force."
+  fi
+  # Publish the base into the local registry so the SDK can use it as ContainerBaseImage (idempotent).
+  docker tag "$PORTAL_BASE_LOCAL" "$PORTAL_BASE_REF"
+  docker push "$PORTAL_BASE_REF" >/dev/null
+}
+
 image_build_local() {                                  # §3 Option B
   local repo
   repo="$(resolve_repo)" || die "local build (Option B) needs the repo — set MEMEX_REPO to your MeshWeaver checkout, or use 'up --from-acr'"
   need dotnet "--cask dotnet-sdk"
   need docker docker
-  step "Building native arm64 portal image into Colima's Docker store (§3 Option B)"
+  base_build_local "${1:-}"                            # ensure the CLI-bearing base exists FIRST
+  step "Building native arm64 portal image (layered on the CLI base) into Colima's Docker store (§3 Option B)"
   dotnet publish "$repo/memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj" \
-    -c Release -t:PublishContainer -p:ContainerRepository=memex-portal-ai-local
+    -c Release -t:PublishContainer -p:ContainerRepository=memex-portal-ai-local \
+    -p:ContainerBaseImage="$PORTAL_BASE_REF"
   docker tag memex-portal-ai-local:latest "$PORTAL_IMAGE"
   step "Building migration image (§3 Option B)"
   dotnet publish "$repo/memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj" \
