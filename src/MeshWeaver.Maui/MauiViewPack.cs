@@ -553,17 +553,25 @@ internal static class MauiHtmlDocument
     /// </summary>
     public static void AutoSizeToContent(WebView web)
     {
-        web.Navigated += async (_, _) =>
-        {
-            try
+        // The rendered content height is ONLY readable via JS (document.body.scrollHeight) — MAUI exposes no
+        // synchronous API for it, so this is the one inherently-async UI edge. It runs on the WebView's own
+        // UI-thread Navigated event (NOT a hub action block or Blazor circuit), so it cannot deadlock the
+        // actor-model scheduler the no-async rule protects. We avoid an `async void` handler (which would
+        // swallow unobserved exceptions) by consuming the Task with ContinueWith + explicit fault surfacing.
+        web.Navigated += (_, _) =>
+            web.EvaluateJavaScriptAsync("document.body.scrollHeight").ContinueWith(t =>
             {
-                var h = await web.EvaluateJavaScriptAsync("document.body.scrollHeight");
-                if (double.TryParse(h, System.Globalization.NumberStyles.Any,
+                if (t.IsFaulted)
+                {
+                    // Best-effort measurement: keep the current height, but surface the failure (don't swallow).
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[MauiHtmlDocument] WebView height measure failed: {t.Exception?.GetBaseException().Message}");
+                    return;
+                }
+                if (double.TryParse(t.Result, System.Globalization.NumberStyles.Any,
                         System.Globalization.CultureInfo.InvariantCulture, out var px) && px > 0)
                     MainThread.BeginInvokeOnMainThread(() => web.HeightRequest = px + 8);
-            }
-            catch { /* keep the current height on a measurement failure */ }
-        };
+            }, TaskScheduler.Default);
     }
 
     // $$"""…""" raw interpolation: single { } are LITERAL CSS braces; {{bodyHtml}} is the one interpolation.
@@ -758,7 +766,7 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
         {
             var input = new Entry { Placeholder = "Add a comment…", FontSize = 12, TextColor = Colors.White };
             var add = new Button { Text = "Comment", FontSize = 11, BackgroundColor = Colors.RoyalBlue, TextColor = Colors.White, CornerRadius = 6, Padding = new Thickness(10, 4) };
-            add.Clicked += (_, _) => { AddComment(input.Text); input.Text = ""; };
+            add.Clicked += (_, _) => AddComment(input);   // AddComment clears the input only on a successful create
             var row = new Grid { ColumnSpacing = 8, ColumnDefinitions = { new ColumnDefinition(GridLength.Star), new ColumnDefinition(GridLength.Auto) } };
             row.Add(input, 0, 0);
             row.Add(add, 1, 0);
@@ -804,6 +812,12 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
         }
     }
 
+    // Surfaces a collaborative write failure (RLS/routing/access) instead of swallowing it — mirrors the
+    // LogWarning-on-update-failure convention the other views use.
+    private void Log(Exception ex, string what) =>
+        Stream?.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Maui.Collaborative")
+            .LogWarning(ex, "Collaborative {What} failed for {Path}", what, Model.NodePath);
+
     // Resolve a comment: flip its Content.Status → Resolved via the canonical external-node stream update.
     private void ResolveComment(string path)
     {
@@ -813,12 +827,14 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
         {
             var c = node.ContentAs<MeshWeaver.Mesh.Comment>(opts);
             return c is null ? node : node with { Content = c with { Status = MeshWeaver.Mesh.CommentStatus.Resolved } };
-        }).Subscribe(_ => { }, _ => { });
+        }).Subscribe(_ => { }, ex => Log(ex, "resolve comment"));
     }
 
-    // Creates a _Comment satellite via the canonical CreateNode (carries the caller's AccessContext).
-    private void AddComment(string? text)
+    // Creates a _Comment satellite via the canonical CreateNode (carries the caller's AccessContext). Clears
+    // the input only on success (so a denied/failed create keeps the user's text); logs the failure.
+    private void AddComment(Entry input)
     {
+        var text = input.Text;
         if (Stream is null || string.IsNullOrWhiteSpace(text) || string.IsNullOrEmpty(Model.NodePath)) return;
         var meshService = Stream.Hub.ServiceProvider.GetService<IMeshService>();
         if (meshService is null) return;
@@ -826,7 +842,9 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
         var id = Guid.NewGuid().ToString("N")[..8];
         var content = new MeshWeaver.Mesh.Comment { Text = text!.Trim(), Author = author, PrimaryNodePath = Model.NodePath };
         var node = new MeshNode(id, $"{Model.NodePath}/_Comment") { NodeType = "Comment", Content = content };
-        meshService.CreateNode(node).Subscribe(_ => { }, _ => { });   // live query re-renders the list
+        meshService.CreateNode(node).Subscribe(
+            _ => MainThread.BeginInvokeOnMainThread(() => input.Text = ""),   // clear on success → keep text on failure
+            ex => Log(ex, "add comment"));                                    // live query re-renders the list
     }
 
     // Pending tracked-changes panel: lists the node's _Tracking satellites (author + original→new) with a
@@ -836,8 +854,9 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
         if (Stream is null || string.IsNullOrEmpty(Model.NodePath)) return;
         var panel = new VerticalStackLayout { Spacing = 6, Margin = new Thickness(0, 8, 0, 0) };
         _root.Children.Add(panel);
+        // Live: re-render on every query emission (accept/reject of a satellite re-fires this) — no Take(1),
+        // which would freeze the panel after the first snapshot.
         var sub = Stream.Hub.GetQuery("changes:" + Model.NodePath, $"namespace:{Model.NodePath}/_Tracking nodeType:TrackedChange")
-            .Take(1)
             .Subscribe(nodes => MainThread.BeginInvokeOnMainThread(() => RenderTrackedChanges(panel, nodes)));
         Disposables.Add(sub);
     }
@@ -845,6 +864,7 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
     private void RenderTrackedChanges(VerticalStackLayout panel, IEnumerable<MeshNode> nodes)
     {
         if (Stream is null) return;
+        panel.Children.Clear();   // rebuild from the current snapshot — never append to a stale list
         var opts = Stream.Hub.JsonSerializerOptions;
         var pending = nodes
             .Select(n => (Node: n, Change: n.ContentAs<MeshWeaver.Mesh.TrackedChange>(opts)))

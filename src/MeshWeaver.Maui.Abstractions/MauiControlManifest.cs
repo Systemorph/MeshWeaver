@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+
 namespace MeshWeaver.Maui.Abstractions;
 
 /// <summary>
@@ -17,7 +19,7 @@ namespace MeshWeaver.Maui.Abstractions;
 public static class MauiControlManifest
 {
     /// <summary>Controls with an explicit native <c>MauiView</c> registered in the view pack.</summary>
-    public static readonly IReadOnlySet<string> SupportedLeafControls = new HashSet<string>(StringComparer.Ordinal)
+    public static readonly IReadOnlySet<string> SupportedLeafControls = new[]
     {
         // Wave 1 leaves
         "LabelControl", "ButtonControl", "HtmlControl", "MarkdownControl", "CollaborativeMarkdownControl",
@@ -47,10 +49,10 @@ public static class MauiControlManifest
         "MeshNodeEditorControl", "MeshNodeRoleEditorControl",
         // Phase 3/4 — operations + file browser + pivot grid
         "NodeImportControl", "NodeExportControl", "ExportDocumentControl", "FileBrowserControl", "PivotGridControl",
-    };
+    }.ToImmutableHashSet(StringComparer.Ordinal);
 
     /// <summary>Concrete controls not yet given a native view — the remaining parity work (Phases 3-5).</summary>
-    public static readonly IReadOnlySet<string> PlannedControls = new HashSet<string>(StringComparer.Ordinal)
+    public static readonly IReadOnlySet<string> PlannedControls = new[]
     {
         // Phase 3 — node management / misc
         // Container controls — rendered by the generic ContainerView fallback (here for documentation).
@@ -58,5 +60,5 @@ public static class MauiControlManifest
         // DataGrid column control (rendered by the grid, not standalone). PropertyColumnControl is
         // generic (PropertyColumnControl<T>) so it isn't a concrete control in the coverage scan.
         "TemplateColumnControl",
-    };
+    }.ToImmutableHashSet(StringComparer.Ordinal);
 }

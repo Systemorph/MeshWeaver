@@ -43,10 +43,12 @@ public class AppLaunchSmokeTest
 
     private static bool AppiumReachable()
     {
+        // APM BeginConnect + WaitOne — a non-Task reachability probe (no blocking Task.Wait → no xUnit1031).
         try
         {
             using var client = new TcpClient();
-            return client.ConnectAsync("127.0.0.1", 4723).Wait(TimeSpan.FromSeconds(1)) && client.Connected;
+            var ar = client.BeginConnect("127.0.0.1", 4723, null, null);
+            return ar.AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(1)) && client.Connected;
         }
         catch { return false; }
     }
