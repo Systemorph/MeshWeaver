@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using NuGet.Versioning;
 
 namespace Memex.Portal.Shared.SelfUpdate;
@@ -15,6 +16,14 @@ namespace Memex.Portal.Shared.SelfUpdate;
 /// </summary>
 public static class VersionSelect
 {
+    // The multi-arch container build publishes, per version, a manifest-list tag (e.g. 3.0.0-ci.43) PLUS
+    // one image per RID (3.0.0-ci.43-linux-x64, 3.0.0-ci.43-linux-arm64). The RID suffix parses as an extra
+    // SemVer pre-release identifier that sorts ABOVE the clean tag (numeric 43 < alphanumeric 43-linux-x64),
+    // so without this filter PickTarget rolls to the x64-only image — wrong arch on an arm64 node, and never
+    // the intended manifest list. Drop RID-suffixed tags; the manifest list is the canonical deploy tag.
+    private static readonly Regex RuntimeIdentifierSuffix =
+        new(@"-(linux|win|osx)-(x64|x86|arm|arm64)$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     /// <summary>
     /// The best tag to roll to under <paramref name="policy"/>, or <c>null</c> when nothing qualifies.
     /// <see cref="UpdatePolicyKind.Continuous"/> considers every parseable tag (incl. build-numbered
@@ -28,6 +37,7 @@ public static class VersionSelect
             return null;
 
         var parsed = tags
+            .Where(t => !RuntimeIdentifierSuffix.IsMatch(t))   // exclude per-RID image tags; keep the manifest list
             .Select(t => (tag: t, ver: NuGetVersion.TryParse(t, out var v) ? v : null))
             .Where(x => x.ver is not null)
             .Select(x => (x.tag, ver: x.ver!));
