@@ -148,6 +148,9 @@ public static class AIExtensions
             // names so it resolves regardless of which $type form arrives (same dual-registration as User).
             .WithType(typeof(ThreadViewModel), typeof(ThreadViewModel).FullName!)
             .WithType(typeof(ThreadViewModel), nameof(ThreadViewModel))
+            // AgentConfiguration content children — serialised inside an Agent node's content.
+            .WithType(typeof(AgentPluginReference), nameof(AgentPluginReference))
+            .WithType(typeof(AgentHandoff), nameof(AgentHandoff))
             // MessageViewModel is not registered — handled as JsonElement on the wire.
             // SubmitMessageRequest / SubmitMessageResponse deleted 2026-05-25:
             // the only mutation API is workspace.GetMeshNodeStream(path).Update(...).

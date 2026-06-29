@@ -363,6 +363,8 @@ public static class MeshNodeExtensions
         typeRegistry.WithType(typeof(CodeConfiguration), nameof(CodeConfiguration));
         typeRegistry.WithType(typeof(Comment), nameof(Comment));
         typeRegistry.WithType(typeof(MarkdownContent), nameof(MarkdownContent));
+        // Backend-computed editable-field metadata sent to the GUI inside the node-content editor control.
+        typeRegistry.WithType(typeof(MeshNodeEditorField), nameof(MeshNodeEditorField));
         // Security content types (AccessAssignment / PartitionAccessPolicy / RoleAssignment / Role).
         // Each MUST register its $type here: without it, the node read across a hub boundary (the
         // GetQuery / MeshNodeStreamCache deserialization path) degrades to an untyped JsonElement,
