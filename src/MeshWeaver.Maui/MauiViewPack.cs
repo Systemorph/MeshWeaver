@@ -855,7 +855,7 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
     }
 
     // Pending tracked-changes panel: lists the node's _Tracking satellites (author + original→new) with a
-    // functional Reject (delete the satellite). Accept (apply NewText to the collaborative doc) is a refinement.
+    // functional Accept (apply the suggested text to the collaborative doc) and Reject (delete the satellite).
     private void AddTrackedChangesPanel()
     {
         if (Stream is null || string.IsNullOrEmpty(Model.NodePath)) return;
@@ -1254,7 +1254,26 @@ public sealed class CatalogView : MauiView<CatalogControl>
 public sealed class MeshNodeCollectionView : MauiView<MeshNodeCollectionControl>
 {
     private VerticalStackLayout _root = null!;
-    protected override View CreateView() => _root = new VerticalStackLayout { Spacing = 4 };
+    private VerticalStackLayout _list = null!;
+    protected override View CreateView()
+    {
+        _list = new VerticalStackLayout { Spacing = 4 };
+        _root = new VerticalStackLayout { Spacing = 6 };
+        if (Model.ShowAdd)
+        {
+            var add = new Button
+            {
+                Text = MarkdownViewLogic.CoerceString(Model.AddPickerLabel)
+                    ?? MarkdownViewLogic.CoerceString(Model.AddDialogTitle) ?? "Add",
+                BackgroundColor = Colors.RoyalBlue, TextColor = Colors.White, CornerRadius = 8,
+                HorizontalOptions = LayoutOptions.Start, Padding = new Thickness(14, 5),
+            };
+            add.Clicked += (_, _) => PostClick();   // server-dispatched add (faithful to Blazor OnAddClick → OnClick)
+            _root.Children.Add(add);
+        }
+        _root.Children.Add(_list);
+        return _root;
+    }
 
     protected override void Bind()
     {
@@ -1267,7 +1286,7 @@ public sealed class MeshNodeCollectionView : MauiView<MeshNodeCollectionControl>
 
     private void Render(IEnumerable<MeshNode> nodes)
     {
-        _root.Children.Clear();
+        _list.Children.Clear();
         var deletable = Model.Deletable;
         foreach (var node in nodes.DistinctBy(n => n.Path))
         {
@@ -1291,7 +1310,7 @@ public sealed class MeshNodeCollectionView : MauiView<MeshNodeCollectionControl>
                     .Subscribe(_ => { }, ex => LogWrite(ex, "delete node", n.Path));
                 row.Children.Add(del);
             }
-            _root.Children.Add(row);
+            _list.Children.Add(row);
         }
     }
 }
@@ -1696,24 +1715,83 @@ public sealed class MeshNodeEditorView : MauiView<MeshNodeEditorControl>
 }
 
 /// <summary>Mesh-node role editor → a role <see cref="Picker"/> (from RoleOptions) + a Deny checkbox, gated
-/// by CanEdit. Native UI for the role assignment; the access-assignment write-back is a later wave.</summary>
+/// by CanEdit. Binds DIRECTLY to the AccessAssignment node (<c>GetMeshNodeStream(NodePath)</c>): reads the
+/// role at <c>RoleIndex</c> and writes each edit back as a read-modify-write that touches ONLY that role —
+/// the canonical pattern, identical to the Blazor MeshNodeRoleEditorView (no /data replica, no save loop).</summary>
 public sealed class MeshNodeRoleEditorView : MauiView<MeshNodeRoleEditorControl>
 {
+    private Picker _picker = null!;
+    private CheckBox _deny = null!;
+    private List<string> _options = new();
+    private bool _suppress;   // suppress the write-back echo during a programmatic load
+
     protected override View CreateView()
     {
-        var picker = new Picker { IsEnabled = Model.CanEdit, TextColor = Colors.White, Title = "Role" };
-        foreach (var r in Model.RoleOptions) picker.Items.Add(r);
-        var deny = new CheckBox { IsEnabled = Model.CanEdit };
+        _picker = new Picker { IsEnabled = Model.CanEdit, TextColor = Colors.White, Title = "Role" };
+        _picker.SelectedIndexChanged += (_, _) =>
+        {
+            if (_suppress || _picker.SelectedIndex < 0 || _picker.SelectedIndex >= _options.Count) return;
+            var role = _options[_picker.SelectedIndex];
+            Persist(r => r with { Role = role });
+        };
+        _deny = new CheckBox { IsEnabled = Model.CanEdit };
+        _deny.CheckedChanged += (_, e) => { if (!_suppress) Persist(r => r with { Denied = e.Value }); };
         return new HorizontalStackLayout
         {
             Spacing = 8,
             Children =
             {
-                picker,
+                _picker,
                 new Label { Text = "Deny", VerticalOptions = LayoutOptions.Center, TextColor = Color.FromArgb("#C0C0C0") },
-                deny,
+                _deny,
             },
         };
+    }
+
+    protected override void Bind()
+    {
+        if (Stream is null || string.IsNullOrEmpty(Model.NodePath)) return;
+        var sub = Stream.Hub.GetMeshNodeStream(Model.NodePath).Where(n => n is not null)
+            .Subscribe(node => MainThread.BeginInvokeOnMainThread(() => Load(node!)));
+        Disposables.Add(sub);
+    }
+
+    // Mirror Blazor's Load: surface the role at RoleIndex (+ ensure its id is a selectable option).
+    private void Load(MeshNode node)
+    {
+        if (Stream is null) return;
+        var assignment = node.ContentAs<MeshWeaver.Mesh.Security.AccessAssignment>(Stream.Hub.JsonSerializerOptions);
+        if (assignment is null || Model.RoleIndex < 0 || Model.RoleIndex >= assignment.Roles.Count) return;
+        var role = assignment.Roles[Model.RoleIndex];
+        var list = Model.RoleOptions.ToList();
+        if (!string.IsNullOrEmpty(role.Role) && !list.Contains(role.Role)) list.Insert(0, role.Role);
+        _options = list;
+        _suppress = true;
+        try
+        {
+            _picker.Items.Clear();
+            foreach (var r in _options) _picker.Items.Add(r);
+            var idx = _options.IndexOf(role.Role);
+            if (idx >= 0) _picker.SelectedIndex = idx;
+            _deny.IsChecked = role.Denied;
+        }
+        finally { _suppress = false; }
+    }
+
+    // Read-modify-write straight to the node: re-read inside the lambda and change ONLY RoleIndex, so
+    // concurrent edits to sibling roles / other fields are never clobbered (matches the Blazor Persist).
+    private void Persist(Func<MeshWeaver.Mesh.Security.RoleAssignment, MeshWeaver.Mesh.Security.RoleAssignment> map)
+    {
+        if (!Model.CanEdit || Stream is null || string.IsNullOrEmpty(Model.NodePath)) return;
+        var opts = Stream.Hub.JsonSerializerOptions;
+        Stream.Hub.GetMeshNodeStream(Model.NodePath).Update(node =>
+        {
+            var assignment = node.ContentAs<MeshWeaver.Mesh.Security.AccessAssignment>(opts);
+            if (assignment is null || Model.RoleIndex < 0 || Model.RoleIndex >= assignment.Roles.Count) return node;
+            var roles = assignment.Roles.ToList();
+            roles[Model.RoleIndex] = map(roles[Model.RoleIndex]);
+            return node with { Content = assignment with { Roles = roles } };
+        }).Subscribe(_ => { }, ex => LogWrite(ex, "persist role", Model.NodePath));
     }
 }
 
@@ -2215,33 +2293,85 @@ public sealed class ExceptionView : MauiView<ExceptionControl>
     }
 }
 
-/// <summary>Combobox → MAUI <see cref="Picker"/> (two-way; native Picker has no free-type filter — a
-/// later Monaco/autocomplete wave can add that).</summary>
+/// <summary>Combobox → a native free-type <see cref="Entry"/> + a filtered suggestion list (parity with the
+/// Blazor editable combobox): type to filter the Options, tap a suggestion to pick its value, or free-type a
+/// value. Two-way bound through the pointer — selecting writes the option's Value, free text writes the text
+/// (or a matching option's Value when the typed text equals an option's display).</summary>
 public sealed class ComboboxView : FormMauiView<ComboboxControl>
 {
-    private Picker _picker = null!;
+    private Entry _entry = null!;
+    private VerticalStackLayout _suggestions = null!;
     private List<(string Text, string? Value)> _options = new();
+    private bool _picking;   // suppress the suggestion list while applying a programmatic pick
+
     protected override View CreateView()
     {
-        _picker = new Picker();
-        _picker.SelectedIndexChanged += (_, _) =>
-        {
-            if (_picker.SelectedIndex >= 0 && _picker.SelectedIndex < _options.Count)
-                Write(Model.Data, _options[_picker.SelectedIndex].Value);
-        };
-        return _picker;
+        _entry = new Entry { TextColor = Colors.White };
+        _entry.TextChanged += (_, e) => { if (!_picking) Filter(e.NewTextValue); };
+        _entry.Completed += (_, _) => CommitFreeText();
+        _entry.Unfocused += (_, _) => CommitFreeText();
+        _suggestions = new VerticalStackLayout { Spacing = 1, IsVisible = false };
+        return new VerticalStackLayout { Spacing = 2, Children = { _entry, _suggestions } };
     }
+
     protected override void Bind()
     {
-        // Free-type filter is still a later wave (native Picker has none); options now at least populate.
         _options = CoerceOptions(Model.Options);
-        _picker.Items.Clear();
-        foreach (var (text, _) in _options) _picker.Items.Add(text);
         BindValue<object>(Model.Data, v =>
         {
-            var idx = _options.FindIndex(o => string.Equals(o.Value, v?.ToString(), StringComparison.Ordinal));
-            if (idx >= 0) _picker.SelectedIndex = idx;
+            var match = _options.FirstOrDefault(o => string.Equals(o.Value, v?.ToString(), StringComparison.Ordinal));
+            _entry.Text = match.Text ?? v?.ToString() ?? "";
         });
+    }
+
+    // Show up to 8 tappable options whose display contains the typed text (case-insensitive); hide when the
+    // text already equals the sole exact match (nothing left to pick).
+    private void Filter(string? text)
+    {
+        _suggestions.Children.Clear();
+        var t = text?.Trim() ?? "";
+        var matches = (string.IsNullOrEmpty(t)
+                ? _options
+                : _options.Where(o => o.Text.Contains(t, StringComparison.OrdinalIgnoreCase)))
+            .Take(8).ToList();
+        if (matches.Count == 0 ||
+            (matches.Count == 1 && string.Equals(matches[0].Text, t, StringComparison.OrdinalIgnoreCase)))
+        {
+            _suggestions.IsVisible = false;
+            return;
+        }
+        foreach (var (display, value) in matches)
+        {
+            var label = new Label
+            {
+                Text = display, TextColor = Colors.White, Padding = new Thickness(8, 6),
+                BackgroundColor = Color.FromArgb("#2A2A2C"),
+            };
+            var tap = new TapGestureRecognizer();
+            tap.Tapped += (_, _) => Pick(display, value);
+            label.GestureRecognizers.Add(tap);
+            _suggestions.Children.Add(label);
+        }
+        _suggestions.IsVisible = true;
+    }
+
+    private void Pick(string display, string? value)
+    {
+        _picking = true;
+        try { _entry.Text = display; } finally { _picking = false; }
+        _suggestions.IsVisible = false;
+        Write<string>(Model.Data, value);
+    }
+
+    // Free-typed value (no suggestion picked): write the matching option's Value if the text equals a display,
+    // else the raw text — editable-combobox semantics.
+    private void CommitFreeText()
+    {
+        _suggestions.IsVisible = false;
+        var text = _entry.Text?.Trim();
+        if (string.IsNullOrEmpty(text)) { Write<string>(Model.Data, null); return; }
+        var match = _options.FirstOrDefault(o => string.Equals(o.Text, text, StringComparison.OrdinalIgnoreCase));
+        Write<string>(Model.Data, match.Text is not null ? match.Value : text);
     }
 }
 
@@ -2629,21 +2759,31 @@ public sealed class MeshSearchView : MauiView<MeshSearchControl>
             _results.Children.Add(Card(node));
     }
 
-    private static View Card(MeshNode node) => new Border
+    // Drill-down: each result card navigates to the node's path via the app navigator (parity with the
+    // Blazor catalog's clickable cards).
+    private View Card(MeshNode node)
     {
-        Padding = 8,
-        StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 6 },
-        Stroke = Colors.Gray,
-        StrokeThickness = 1,
-        Content = new VerticalStackLayout
+        var border = new Border
         {
-            Children =
+            Padding = 8,
+            StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 6 },
+            Stroke = Colors.Gray,
+            StrokeThickness = 1,
+            Content = new VerticalStackLayout
             {
-                new Label { Text = node.Name ?? node.Path, FontAttributes = FontAttributes.Bold },
-                new Label { Text = node.NodeType ?? "", FontSize = 11, TextColor = Colors.Gray },
+                Children =
+                {
+                    new Label { Text = node.Name ?? node.Path, FontAttributes = FontAttributes.Bold },
+                    new Label { Text = node.NodeType ?? "", FontSize = 11, TextColor = Colors.Gray },
+                },
             },
-        },
-    };
+        };
+        var n = node;
+        var tap = new TapGestureRecognizer();
+        tap.Tapped += (_, _) => Stream?.Hub.ServiceProvider.GetService<IMauiNavigator>()?.NavigateTo(n.Path, n.Name);
+        border.GestureRecognizers.Add(tap);
+        return border;
+    }
 
     private void RenderEmptyState()
     {
