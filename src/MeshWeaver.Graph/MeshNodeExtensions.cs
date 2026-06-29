@@ -363,15 +363,25 @@ public static class MeshNodeExtensions
         typeRegistry.WithType(typeof(CodeConfiguration), nameof(CodeConfiguration));
         typeRegistry.WithType(typeof(Comment), nameof(Comment));
         typeRegistry.WithType(typeof(MarkdownContent), nameof(MarkdownContent));
+        // Security content types (AccessAssignment / PartitionAccessPolicy / RoleAssignment / Role).
+        // Each MUST register its $type here: without it, the node read across a hub boundary (the
+        // GetQuery / MeshNodeStreamCache deserialization path) degrades to an untyped JsonElement,
+        // every `Content is X` soft-cast fails, and the grant/policy is silently NOT applied — e.g. a
+        // PublicRead partition (Skill, Harness, Provider) reads as empty/denied ("not found").
+        //
+        // LEGACY READ-COMPAT: a node persisted by a hub that lacked this registration carries a
+        // namespace-qualified FULL-name $type (e.g. "MeshWeaver.Mesh.Security.PartitionAccessPolicy" —
+        // the _Provider/_Policy storm). Register the full name as a READ alias FIRST, then the short
+        // nameof LAST so this hub keeps WRITING the short name (nameByType is last-write-wins) while
+        // resolving BOTH on read. PolymorphicTypeInfoResolver now warns whenever an unregistered type
+        // is serialized, so any NEW full-name node is surfaced at its publishing hub, not silently stored.
+        typeRegistry.WithType(typeof(AccessAssignment), typeof(AccessAssignment).FullName!);
         typeRegistry.WithType(typeof(AccessAssignment), nameof(AccessAssignment));
-        // PartitionAccessPolicy is a sibling security content type to AccessAssignment and MUST register
-        // its $type here too. Without it, a `_Policy` node read across a hub boundary (the GetQuery /
-        // MeshNodeStreamCache deserialization path) degrades to an untyped JsonElement, every
-        // `Content is PartitionAccessPolicy` soft-cast fails, and the partition's PublicRead policy is
-        // silently NOT applied — so PublicRead partitions (Skill, Harness, Provider) read as empty/denied
-        // (skills + harnesses "not found"). Registering the discriminator makes the policy type-resolve.
+        typeRegistry.WithType(typeof(PartitionAccessPolicy), typeof(PartitionAccessPolicy).FullName!);
         typeRegistry.WithType(typeof(PartitionAccessPolicy), nameof(PartitionAccessPolicy));
+        typeRegistry.WithType(typeof(RoleAssignment), typeof(RoleAssignment).FullName!);
         typeRegistry.WithType(typeof(RoleAssignment), nameof(RoleAssignment));
+        typeRegistry.WithType(typeof(Role), typeof(Role).FullName!);
         typeRegistry.WithType(typeof(Role), nameof(Role));
         typeRegistry.WithType(typeof(AccessObject), nameof(AccessObject));
         typeRegistry.WithType(typeof(GetPermissionRequest), nameof(GetPermissionRequest));

@@ -31,6 +31,14 @@ public static class MeshExtensions
         config.TypeRegistry.WithType(typeof(PingResponse), nameof(PingResponse));
         config.TypeRegistry.WithType(typeof(MeshNode), nameof(MeshNode));
         config.TypeRegistry.WithType(typeof(MeshNodeState), nameof(MeshNodeState));
+        // AccessContext rides as a TYPED field on every IMessageDelivery. Unregistered, the
+        // polymorphic resolver stamps it a full-name $type ("MeshWeaver.Messaging.AccessContext") —
+        // harmless for the typed field (it round-trips) but it's ongoing log noise (the
+        // PolymorphicTypeInfoResolver "serializing UNREGISTERED type" warning fires once per hub) and
+        // dirties persisted deliveries. Register it (full-name READ alias FIRST, short name LAST) so
+        // it serialises with a stable short discriminator on every hub that applies AddMeshTypes.
+        config.TypeRegistry.WithType(typeof(MeshWeaver.Messaging.AccessContext), typeof(MeshWeaver.Messaging.AccessContext).FullName!);
+        config.TypeRegistry.WithType(typeof(MeshWeaver.Messaging.AccessContext), nameof(MeshWeaver.Messaging.AccessContext));
         // Core identity/activity node-content types live in THIS assembly but were never registered
         // anywhere, so any hub reading a {user} root node ("User") or its _UserActivity satellite
         // ("UserActivityRecord") got an untyped JsonElement ("TypeRegistry lacks the $type
@@ -38,7 +46,11 @@ public static class MeshExtensions
         // home-areas-hang-on-"awaiting first data" class of bug. Register them in the core registry
         // every host applies. (PartitionAccessPolicy is already registered via AddGraph; the AI
         // partition hubs additionally get all three via AddAITypes.)
+        // Full-name READ alias FIRST (legacy nodes persisted with a full-name $type), short nameof LAST
+        // so this hub keeps WRITING the short name. See WithGraphTypes for the full rationale.
+        config.TypeRegistry.WithType(typeof(MeshWeaver.Mesh.Security.User), typeof(MeshWeaver.Mesh.Security.User).FullName!);
         config.TypeRegistry.WithType(typeof(MeshWeaver.Mesh.Security.User), nameof(MeshWeaver.Mesh.Security.User));
+        config.TypeRegistry.WithType(typeof(MeshWeaver.Mesh.Activity.UserActivityRecord), typeof(MeshWeaver.Mesh.Activity.UserActivityRecord).FullName!);
         config.TypeRegistry.WithType(typeof(MeshWeaver.Mesh.Activity.UserActivityRecord), nameof(MeshWeaver.Mesh.Activity.UserActivityRecord));
         config.TypeRegistry.WithType(typeof(CreateNodeRequest), nameof(CreateNodeRequest));
         config.TypeRegistry.WithType(typeof(CreateNodeResponse), nameof(CreateNodeResponse));

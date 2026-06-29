@@ -177,6 +177,8 @@ public static class MauiProgram
         builder.Services.AddSingleton<DeviceOnboarding>();
         // The single source of truth for "where we are" — drives the content frame AND the top-bar menu.
         builder.Services.AddSingleton<NavigationService>();
+        // Bridges the native view pack's href nav links (NavLinkControl.Url) to the shell navigation above.
+        builder.Services.AddSingleton<MeshWeaver.Maui.IMauiNavigator, MauiNavigator>();
         // Provider-driven app-level menus (Settings ⚙, User 👤) for the portal shell — rendered through the
         // SAME DevExpress popup mechanism as the platform Node/Mesh/AI menus, so the shell hardcodes no menu
         // item list. Adding a menu entry = adding it to a provider here, never editing PortalShellPage.
