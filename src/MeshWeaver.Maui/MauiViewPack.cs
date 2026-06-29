@@ -9,6 +9,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Catalog;
 using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Client;
+using MeshWeaver.Layout.Views;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
@@ -372,6 +373,11 @@ public static class MauiViewPackExtensions
         .Register<MarkdownEditorControl, MarkdownEditorView>()
         .Register<CodeEditorControl, CodeEditorView>()
         .Register<DiffEditorControl, DiffEditorView>()
+        // Phase 3/misc — profile / appearance / item template / layout-area definition.
+        .Register<UserProfileControl, UserProfileView>()
+        .Register<AppearanceControl, AppearanceView>()
+        .Register<ItemTemplateControl, ItemTemplateView>()
+        .Register<LayoutAreaDefinitionControl, LayoutAreaDefinitionView>()
         // Embedded remote area (e.g. the home page's bottom chat composer) → the existing LayoutAreaView.
         .Register<LayoutAreaControl, LayoutAreaControlView>()
         // Wave 2 — nav + badges.
@@ -1283,6 +1289,96 @@ public sealed class DiffEditorView : MauiView<DiffEditorControl>
             Padding = 8, BackgroundColor = Color.FromArgb("#1E1E1E"), StrokeThickness = 0,
             StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 6 },
             Content = new ScrollView { Orientation = ScrollOrientation.Horizontal, Content = stack },
+        };
+    }
+}
+
+/// <summary>User profile → a card: avatar (icon/initials) + display name + email + bio, tappable to the
+/// user node. Native counterpart of the portal's profile card.</summary>
+public sealed class UserProfileView : MauiView<UserProfileControl>
+{
+    protected override View CreateView()
+    {
+        var avatar = MauiImagery.ForSource(string.IsNullOrWhiteSpace(Model.Icon) ? Initials(Model.DisplayName) : Model.Icon, 64);
+        avatar.WidthRequest = 64; avatar.HeightRequest = 64;
+
+        var texts = new VerticalStackLayout { Spacing = 2, VerticalOptions = LayoutOptions.Center };
+        texts.Children.Add(new Label { Text = Model.DisplayName, FontAttributes = FontAttributes.Bold, FontSize = 16, TextColor = Colors.White });
+        if (!string.IsNullOrWhiteSpace(Model.Email)) texts.Children.Add(new Label { Text = Model.Email, FontSize = 12, TextColor = Color.FromArgb("#4ea1ff") });
+        if (!string.IsNullOrWhiteSpace(Model.Bio)) texts.Children.Add(new Label { Text = Model.Bio, FontSize = 12, TextColor = Color.FromArgb("#C0C0C0") });
+
+        var border = new Border
+        {
+            Padding = 14, BackgroundColor = Color.FromArgb("#2A2A2C"), StrokeThickness = 0,
+            StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 12 },
+            Content = new HorizontalStackLayout { Spacing = 14, Children = { avatar, texts } },
+        };
+        if (!string.IsNullOrEmpty(Model.NodePath))
+        {
+            var tap = new TapGestureRecognizer();
+            tap.Tapped += (_, _) => Stream?.Hub.ServiceProvider.GetService<IMauiNavigator>()?.NavigateTo(Model.NodePath, Model.DisplayName);
+            border.GestureRecognizers.Add(tap);
+        }
+        return border;
+    }
+
+    private static string Initials(string? name)
+    {
+        var parts = (name ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) return "?";
+        return parts.Length == 1 ? parts[0][..Math.Min(2, parts[0].Length)].ToUpperInvariant()
+            : (parts[0][..1] + parts[1][..1]).ToUpperInvariant();
+    }
+}
+
+/// <summary>Appearance picker → Light / Dark / System buttons that set the app theme
+/// (<see cref="Application.UserAppTheme"/>). The preset-colour/direction options are a later wave.</summary>
+public sealed class AppearanceView : MauiView<AppearanceControl>
+{
+    protected override View CreateView()
+    {
+        var row = new HorizontalStackLayout
+        {
+            Spacing = 8,
+            Children = { ThemeButton("Light", AppTheme.Light), ThemeButton("Dark", AppTheme.Dark), ThemeButton("System", AppTheme.Unspecified) },
+        };
+        return new VerticalStackLayout
+        {
+            Spacing = 6,
+            Children = { new Label { Text = "Appearance", FontAttributes = FontAttributes.Bold, TextColor = Colors.White }, row },
+        };
+    }
+    private static Button ThemeButton(string text, AppTheme theme)
+    {
+        var b = new Button { Text = text, BackgroundColor = Color.FromArgb("#3A3A3C"), TextColor = Colors.White, CornerRadius = 8 };
+        b.Clicked += (_, _) => { if (Microsoft.Maui.Controls.Application.Current is { } app) app.UserAppTheme = theme; };
+        return b;
+    }
+}
+
+/// <summary>Item template → renders the control's <c>View</c> child area (the per-item template area). True
+/// per-item iteration with item data-contexts is a later wave; this renders the template area natively.</summary>
+public sealed class ItemTemplateView : MauiView<ItemTemplateControl>
+{
+    protected override View CreateView() =>
+        Stream is not null ? (View)Renderer.RenderArea(Stream, "View") : new ContentView();
+}
+
+/// <summary>Layout-area definition → a tappable card with the area's thumbnail (light variant). Links to the
+/// defined area; the title/description overlay is a later wave.</summary>
+public sealed class LayoutAreaDefinitionView : MauiView<LayoutAreaDefinitionControl>
+{
+    protected override View CreateView()
+    {
+        var content = new VerticalStackLayout { Spacing = 6 };
+        if (!string.IsNullOrWhiteSpace(Model.LightThumbnailUrl))
+            content.Children.Add(new Image { Source = Model.LightThumbnailUrl, Aspect = Aspect.AspectFit, HeightRequest = 120 });
+        content.Children.Add(new Label { Text = Model.Definition?.ToString() ?? "Layout area", FontSize = 12, TextColor = Color.FromArgb("#C0C0C0") });
+        return new Border
+        {
+            Padding = 10, BackgroundColor = Color.FromArgb("#2A2A2C"), StrokeThickness = 0,
+            StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 10 },
+            Content = content,
         };
     }
 }

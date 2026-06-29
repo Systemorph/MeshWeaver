@@ -41,6 +41,8 @@ public static class MauiControlManifest
         "RedirectControl", "CodeSampleControl", "DialogControl",
         // Phase 4 — charts (LiveCharts2) + editors (markdown/code/diff)
         "ChartControl", "MarkdownEditorControl", "CodeEditorControl", "DiffEditorControl",
+        // Phase 3/misc — profile / appearance / item template / layout-area definition
+        "UserProfileControl", "AppearanceControl", "ItemTemplateControl", "LayoutAreaDefinitionControl",
     };
 
     /// <summary>Concrete controls not yet given a native view — the remaining parity work (Phases 3-5).</summary>
@@ -48,9 +50,9 @@ public static class MauiControlManifest
     {
         // Phase 3 — node management / misc
         "MeshNodeEditorControl", "MeshNodeRoleEditorControl", "EditFormControl",
-        "EditorControl", "ItemTemplateControl", "AppearanceControl",
-        "UserProfileControl", "FileBrowserControl", "NodeImportControl", "NodeExportControl",
-        "ExportDocumentControl", "LayoutAreaDefinitionControl",
+        "EditorControl",
+        "FileBrowserControl", "NodeImportControl", "NodeExportControl",
+        "ExportDocumentControl",
         // Phase 4 — rich data (OSS libs)
         "PivotGridControl",
         // DataGrid column control (rendered by the grid, not standalone). PropertyColumnControl is
