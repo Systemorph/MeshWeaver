@@ -69,7 +69,7 @@ public static class WorkingTreeTab
             .StartWith(none);
     }
 
-    private static string SpaceRootPath(string? path) =>
+    internal static string SpaceRootPath(string? path) =>
         string.IsNullOrEmpty(path) ? "" : path.Split('/', 2)[0];
 
     internal static UiControl BuildContent(LayoutAreaHost host, StackControl stack, MeshNode? node)
@@ -275,7 +275,7 @@ public static class WorkingTreeTab
     }
 
     /// <summary>Monaco language id from a file extension.</summary>
-    private static string LanguageFor(string path)
+    internal static string LanguageFor(string path)
     {
         var ext = Path.GetExtension(path).ToLowerInvariant();
         return ext switch
@@ -297,7 +297,7 @@ public static class WorkingTreeTab
     }
 
     /// <summary>Parses an <c>owner/repo</c> full name from a GitHub repo URL.</summary>
-    private static string? RepoFullName(string? url)
+    internal static string? RepoFullName(string? url)
     {
         if (string.IsNullOrWhiteSpace(url)) return null;
         var u = url.Trim();
@@ -308,7 +308,7 @@ public static class WorkingTreeTab
         return parts.Length >= 2 ? $"{parts[0]}/{parts[1]}" : null;
     }
 
-    private static string RepoSlug(string repoFullName)
+    internal static string RepoSlug(string repoFullName)
     {
         var slash = repoFullName.LastIndexOf('/');
         return slash >= 0 ? repoFullName[(slash + 1)..] : repoFullName;
