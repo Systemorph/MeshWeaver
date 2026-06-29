@@ -1,0 +1,80 @@
+name: Rebuild portal-ai base image (ACR, multi-arch)
+
+# Operator runbook: (re)bake the ONE hand-authored base image into ACR, MULTI-ARCH.
+#
+#   memex-portal-ai-base = aspnet + node20 + @anthropic-ai/claude-code + @github/copilot
+#
+# Why a dedicated workflow_dispatch (and NOT part of main-cd): the base changes rarely (it is the
+# slow apt + npm layer), so main-cd does NOT rebuild it per merge — main-cd layers the published
+# portal app ON TOP of whatever `memex-portal-ai-base:latest` already sits in ACR. That tag MUST be
+# a multi-arch manifest LIST (linux/amd64 + linux/arm64): the amd64 child feeds the x86 cloud nodes,
+# the arm64 child feeds Apple-silicon local k3s AND is the base layer main-cd's arm64 portal leg
+# pulls. A single-arch base ⇒ main-cd's arm64 publish has no base layer ⇒ it fails. This workflow is
+# how an operator bakes/refreshes that multi-arch base.
+#
+# No local Docker needed: buildx runs on the GitHub runner; setup-qemu-action emulates the arm64
+# RUN steps on the amd64 runner; `buildx --push` writes the manifest list straight to ACR in one shot
+# (@anthropic-ai/claude-code is pure JS / arch-independent; @github/copilot resolves its matching
+# per-platform optional-dep binary inside each platform's emulated build). This mirrors the GHCR base
+# build in release-images.yml — same buildx step, pushed to ACR (meshweaver.azurecr.io) instead.
+#
+# Auth: OIDC federated login (no stored secret). The federated credential is scoped to
+# ref:refs/heads/main, so dispatch this on the `main` ref: `gh workflow run base-image-acr.yml --ref main`.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write   # OIDC federated login to Azure (no stored client secret)
+
+env:
+  ACR: meshweaver.azurecr.io
+
+jobs:
+  base:
+    name: "Build + push multi-arch base to ACR"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      # buildx + QEMU: emulate the linux/arm64 RUN steps (apt/node/npm) of the base Dockerfile on this
+      # amd64 runner; buildx assembles + pushes the manifest list.
+      - name: Set up QEMU (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Ensure Azure CLI
+        # GitHub's ubuntu-latest no longer ships the Azure CLI on PATH for azure/login@v2
+        # ("Unable to locate executable file: az"). Install it if missing (idempotent).
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      # Authenticate the local Docker config to ACR (writes an identity token into ~/.docker/config.json);
+      # buildx reads that config to push to meshweaver.azurecr.io.
+      - name: ACR login
+        run: az acr login --name meshweaver
+
+      # `--push` writes the multi-arch OCI image index (manifest list) directly to ACR. We tag :latest
+      # (what main-cd's ContainerBaseImage references) AND git-<short-sha> (matches the existing ACR tag
+      # convention, for traceability of which commit's Dockerfile baked this base).
+      - name: Build + push portal-ai base image (multi-arch) to ACR
+        run: |
+          set -euo pipefail
+          BASE="$ACR/memex-portal-ai-base"
+          SHORT_SHA="$(git rev-parse --short HEAD)"
+          docker buildx build --platform linux/amd64,linux/arm64 \
+            -t "$BASE:latest" -t "$BASE:git-$SHORT_SHA" \
+            --push deploy/base-images/portal-ai
+
+      - name: Verify multi-arch manifest list in ACR
+        run: |
+          set -euo pipefail
+          echo "Manifests now tagged on memex-portal-ai-base:latest —"
+          az acr manifest list-metadata -r meshweaver -n memex-portal-ai-base \
+            --query "[?contains(tags, 'latest')].{arch: architecture, mediaType: mediaType, digest: digest}" -o table
