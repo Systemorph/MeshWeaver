@@ -630,7 +630,14 @@ public sealed class BadgeView : MauiView<BadgeControl>
 public sealed class NavLinkView : MauiView<NavLinkControl>
 {
     private Button _button = null!;
-    protected override View CreateView() => _button = new Button { HorizontalOptions = LayoutOptions.Start };
+    protected override View CreateView()
+    {
+        _button = new Button { HorizontalOptions = LayoutOptions.Start };
+        // Fires the link's ClickAction via ClickedEvent. (Pure href navigation is a later wave — it
+        // needs a MAUI INavigationService; ClickAction-based nav links work now.)
+        _button.Clicked += (_, _) => PostClick();
+        return _button;
+    }
     protected override void Bind() => Bind<object>(Model.Title, v => _button.Text = v?.ToString() ?? "");
 }
 
@@ -638,7 +645,15 @@ public sealed class NavLinkView : MauiView<NavLinkControl>
 public sealed class MenuItemView : MauiView<MenuItemControl>
 {
     private Label _label = null!;
-    protected override View CreateView() => _label = new Label();
+    protected override View CreateView()
+    {
+        _label = new Label();
+        // Menu items act via their ClickAction — make the label tappable and dispatch it.
+        var tap = new TapGestureRecognizer();
+        tap.Tapped += (_, _) => PostClick();
+        _label.GestureRecognizers.Add(tap);
+        return _label;
+    }
     protected override void Bind() => Bind<object>(Model.Title, v => _label.Text = v?.ToString() ?? "");
 }
 
