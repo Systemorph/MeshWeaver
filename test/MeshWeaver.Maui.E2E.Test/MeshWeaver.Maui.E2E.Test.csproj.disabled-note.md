@@ -12,8 +12,16 @@ npm install -g appium             # Appium server
 appium driver install mac2        # macOS native driver (builds WebDriverAgentMac via Xcode)
 ```
 Then grant **Accessibility** permission: System Settings → Privacy & Security → Accessibility →
-enable your terminal (and, when prompted on first run, `WebDriverAgentRunner` / the Appium helper).
-The `mac2` driver controls the app through macOS accessibility, so this grant is required.
+enable **the terminal app you start `appium` from** (Terminal.app / iTerm), and, when prompted on
+first run, `WebDriverAgentRunner`. The `mac2` driver controls the app through macOS accessibility,
+so this grant is required.
+
+> **Must be run from your own Terminal.** Verified on Xcode 26.5: WebDriverAgentMac *builds* fine,
+> but the first session fails with `Failed to initialize for UI testing … Timed out while enabling
+> automation mode.` That timeout IS the Accessibility gate — the XCUITest runner inherits the TCC
+> identity of the launching terminal, so the grant only takes effect when Appium is launched from a
+> terminal you've added to Accessibility. (An Appium server spawned by another tool/agent can't
+> receive this grant, so run the three steps below yourself.)
 
 ## Run
 ```bash
