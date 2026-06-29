@@ -996,6 +996,10 @@ readonly PORTAL_DEPLOYMENT="memex-portal-deployment"
 # until the schema is current, so this MUST complete before the portal rolls. Returns non-zero on
 # failure/timeout so the tick keeps the portal on its current image and retries next pass.
 _autoroll_migrate() {
+  # Retag the freshly-built local image onto the chart ref the Job references ($MIGRATION_IMAGE) — a bare
+  # `dotnet publish` only writes memex-migration-local:latest, so without this the Job would re-run the OLD
+  # image (IfNotPresent reuses the chart ref from the Docker store).
+  docker tag "$AUTOROLL_MIG_IMAGE" "$MIGRATION_IMAGE" >/dev/null 2>&1 || true
   kubectl -n "$NAMESPACE" delete job "$AUTOROLL_MIG_JOB" --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$NAMESPACE" apply -f - >/dev/null 2>&1 <<YAML || return 1
 apiVersion: batch/v1
@@ -1091,6 +1095,10 @@ PLIST
       if [ "$pcur" != "$plast" ]; then
         printf '%s autoroll: portal image changed (%s -> %s) — rollout restart %s\n' \
           "$(date -u +%FT%TZ)" "${plast:-none}" "$pcur" "$PORTAL_DEPLOYMENT"
+        # Retag the freshly-built local image onto the chart ref the Deployment runs ($PORTAL_IMAGE) so the
+        # restart actually picks up the NEW image — a bare `dotnet publish` only writes the *-local:latest
+        # tag, and the pod runs $PORTAL_IMAGE (IfNotPresent reuses the Docker-store image at that tag).
+        docker tag "$AUTOROLL_IMAGE" "$PORTAL_IMAGE" >/dev/null 2>&1 || true
         kubectl -n "$NAMESPACE" rollout restart "deploy/$PORTAL_DEPLOYMENT" >/dev/null 2>&1 || true
         printf '%s\n' "$pcur" > "$AUTOROLL_STATE"
       fi

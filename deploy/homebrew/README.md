@@ -81,7 +81,10 @@ This installs a launchd agent (`com.memex.local.autoroll`) that, every 30s:
 1. **Pins the portal Deployment to the moving tag** `…/memex-portal-ai:latest`
    (`imagePullPolicy: IfNotPresent` — k3s reuses the Docker-store image, no pull).
 2. Watches the **portal** *and* **migration** `…-local:latest` image digests.
-   When a build changes one:
+   When a build changes one, it first **retags** that fresh `…-local:latest` onto
+   the chart ref the cluster actually runs (`…/memex-portal-ai:latest`,
+   `…/memex-migration:latest`) — so even a bare `dotnet publish` (which only writes
+   `…-local:latest`) goes live — then:
    - **migration first** — re-runs the migration as a one-shot Job against the
      main DB and **waits for it** (the portal's `DbVersionGate` blocks boot until
      the schema is current; if the migration fails it leaves everything on the
@@ -91,7 +94,9 @@ This installs a launchd agent (`com.memex.local.autoroll`) that, every 30s:
 
 So after `autoroll up`, **any rebuild** — `memex-local update`, `memex-local up
 --build`, or a bare `dotnet publish -t:PublishContainer` of the portal/migration
-— auto-deploys within ~30s, with **no manual `kubectl set image`**.
+— auto-deploys within ~30s, with **no manual `kubectl set image`** (the retag in
+step 2 is what makes the bare-`publish` case work — without it the roll would
+re-run the old chart-ref image).
 
 > **Do you need to install anything first?** No. `autoroll` uses **launchd**
 > (built into macOS) plus `docker` + `kubectl`, which are already `memex-local`
