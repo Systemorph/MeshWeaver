@@ -85,6 +85,10 @@ jobs:
           echo "Computed image version: $VERSION (run #$GITHUB_RUN_NUMBER)"
       # OIDC federated login — no client secret stored. Requires a federated credential on the
       # Azure AD app scoped to this repo's main branch (see the README block at the bottom).
+      - name: Ensure Azure CLI
+        # GitHub's ubuntu-latest no longer ships the Azure CLI on PATH for azure/login@v2
+        # ("Unable to locate executable file: az"). Install it if missing (idempotent).
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
@@ -151,6 +155,10 @@ jobs:
     # reviewer / wait-timer protection rule later without touching this file. No rule = auto-deploy.
     environment: ${{ matrix.ns }}
     steps:
+      - name: Ensure Azure CLI
+        # GitHub's ubuntu-latest no longer ships the Azure CLI on PATH for azure/login@v2
+        # ("Unable to locate executable file: az"). Install it if missing (idempotent).
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
