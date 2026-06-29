@@ -1680,18 +1680,9 @@ public sealed class ItemTemplateView : MauiView<ItemTemplateControl>
             .Subscribe(c => MainThread.BeginInvokeOnMainThread(() => { _template = c as UiControl; Rebuild(); }),
                        ex => LogWrite(ex, "item-template control stream"));
         Disposables.Add(tpl);
-        // Item count from the bound data collection (pointer → JSON array, or a literal collection).
-        Bind<object>(Model.Data, v =>
-        {
-            _count = v switch
-            {
-                JsonElement je when je.ValueKind == JsonValueKind.Array => je.GetArrayLength(),
-                System.Collections.ICollection c => c.Count,
-                System.Collections.IEnumerable e => e.Cast<object>().Count(),
-                _ => 0,
-            };
-            Rebuild();
-        });
+        // Item count from the bound data collection (pointer → JSON array, or a literal collection) — the
+        // unit-tested MauiItemTemplateProjection.Count.
+        Bind<object>(Model.Data, v => { _count = MauiItemTemplateProjection.Count(v); Rebuild(); });
     }
 
     // Repeat the template per index, pointing each item's DataContext into the collection — identical path
@@ -1705,7 +1696,7 @@ public sealed class ItemTemplateView : MauiView<ItemTemplateControl>
         var viewArea = $"{Area}/{ItemTemplateControl.ViewArea}";
         for (var i = 0; i < _count; i++)
         {
-            var item = template with { DataContext = $"{Model.DataContext}{Model.Data}/{i}" };
+            var item = template with { DataContext = MauiItemTemplateProjection.ItemPath(Model.DataContext, Model.Data, i) };
             _root.Children.Add(Renderer.RenderControl(item, Stream, viewArea));
         }
     }
@@ -2373,22 +2364,13 @@ public sealed class ComboboxView : FormMauiView<ComboboxControl>
         });
     }
 
-    // Show up to 8 tappable options whose display contains the typed text (case-insensitive); hide when the
-    // text already equals the sole exact match (nothing left to pick).
+    // Show tappable options whose display matches the typed text; the filter + show/hide decision is the
+    // unit-tested MauiComboboxFilter (this method only builds the labels).
     private void Filter(string? text)
     {
         _suggestions.Children.Clear();
-        var t = text?.Trim() ?? "";
-        var matches = (string.IsNullOrEmpty(t)
-                ? _options
-                : _options.Where(o => o.Text.Contains(t, StringComparison.OrdinalIgnoreCase)))
-            .Take(8).ToList();
-        if (matches.Count == 0 ||
-            (matches.Count == 1 && string.Equals(matches[0].Text, t, StringComparison.OrdinalIgnoreCase)))
-        {
-            _suggestions.IsVisible = false;
-            return;
-        }
+        var (matches, showList) = MauiComboboxFilter.Filter(_options, text);
+        if (!showList) { _suggestions.IsVisible = false; return; }
         foreach (var (display, value) in matches)
         {
             var label = new Label
@@ -2412,15 +2394,12 @@ public sealed class ComboboxView : FormMauiView<ComboboxControl>
         Write<string>(Model.Data, value);
     }
 
-    // Free-typed value (no suggestion picked): write the matching option's Value if the text equals a display,
-    // else the raw text — editable-combobox semantics.
+    // Free-typed value (no suggestion picked): the matching option's Value or the raw text — resolved by the
+    // unit-tested MauiComboboxFilter.
     private void CommitFreeText()
     {
         _suggestions.IsVisible = false;
-        var text = _entry.Text?.Trim();
-        if (string.IsNullOrEmpty(text)) { Write<string>(Model.Data, null); return; }
-        var match = _options.FirstOrDefault(o => string.Equals(o.Text, text, StringComparison.OrdinalIgnoreCase));
-        Write<string>(Model.Data, match.Text is not null ? match.Value : text);
+        Write<string>(Model.Data, MauiComboboxFilter.ResolveFreeText(_options, _entry.Text));
     }
 }
 
