@@ -1306,6 +1306,7 @@ public sealed class SearchBoxView : MauiView<SearchBoxControl>
 {
     private Entry _entry = null!;
     private VerticalStackLayout _results = null!;
+    private IDisposable? _searchSub;
 
     protected override View CreateView()
     {
@@ -1337,9 +1338,10 @@ public sealed class SearchBoxView : MauiView<SearchBoxControl>
         if (Stream is null || string.IsNullOrWhiteSpace(text)) return;
         var ns = MarkdownViewLogic.CoerceString(Model.Namespace);
         var query = string.IsNullOrWhiteSpace(ns) ? text!.Trim() : $"namespace:{ns} {text}".Trim();
-        var sub = Stream.Hub.GetQuery("searchbox:" + query, query).Take(1)
+        _searchSub?.Dispose();   // drop the previous in-flight search → results can't render out of order
+        _searchSub = Stream.Hub.GetQuery("searchbox:" + query, query).Take(1)
             .Subscribe(nodes => MainThread.BeginInvokeOnMainThread(() => RenderResults(nodes)));
-        Disposables.Add(sub);
+        Disposables.Add(_searchSub);
     }
 
     private void RenderResults(IEnumerable<MeshNode> nodes)
