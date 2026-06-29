@@ -1026,6 +1026,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     {
                         var path = node.Path;
                         if (string.IsNullOrEmpty(path)) { onError("Thread created with no path"); return; }
+                        // 🎯 Route subsequent sends to SubmitComposer IMMEDIATELY: the thread node now
+                        // exists (CreateNodeResponse succeeded), so message 2+ must drain through the
+                        // existing thread (GetMeshNodeStream(threadPath).Update → PendingUserMessages), NOT
+                        // re-StartThread (which would create a SECOND thread — and on the user home routes
+                        // to the un-writable 'User' partition → denied → the message silently drops, the
+                        // SidePanelChatTenMessagesTest "2nd user bubble never appears" bug). The submit
+                        // decision (line ~998 `if (string.IsNullOrEmpty(threadPath))`) reads this field, so
+                        // it must be set the moment the node exists — NOT gated on the readability wait below.
+                        threadPath = path;
                         // 🚨 Redirect ONLY once the thread node is actually READABLE on its own stream.
                         // Navigating on the bare CreateNode ack races the thread's per-node hub
                         // activation: the target page subscribes to a not-yet-ready node, the render
@@ -2614,6 +2623,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private readonly Dictionary<string, MessageBubbleState> messageStates = new();
     private readonly Dictionary<string, IDisposable> messageSubs = new();
     private readonly HashSet<string> editingMessages = new();
+    /// <summary>Message ids whose tool-calls section is expanded to show the collapsed
+    /// (finished / overflow) entries. Per-message UI toggle — same circuit-scoped HashSet
+    /// idiom as <see cref="editingMessages"/>.</summary>
+    private readonly HashSet<string> expandedToolCalls = new();
     /// <summary>Message ids whose satellite cell did NOT emit within the cache
     /// settle window — surfaced as "Missing message" in the bubble instead of
     /// the loading skeleton. A deleted-by-someone-else or never-materialised
@@ -2958,6 +2971,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private bool IsMissing(string id) => missingMessages.Contains(id);
 
     private bool IsEditing(string id) => editingMessages.Contains(id);
+
+    private bool IsToolCallsExpanded(string id) => expandedToolCalls.Contains(id);
+
+    private void ToggleToolCalls(string id)
+    {
+        if (!expandedToolCalls.Remove(id))
+            expandedToolCalls.Add(id);
+        StateHasChanged();
+    }
 
     private void StartEdit(string id)
     {
