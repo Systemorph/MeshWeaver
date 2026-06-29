@@ -353,6 +353,9 @@ public static class MauiViewPackExtensions
         .Register<MeshSearchControl, MeshSearchView>()
         // Node-bound editor: edits a node's content directly via GetMeshNodeStream(path).Update(...).
         .Register<MeshNodeContentEditorControl, MeshNodeContentEditorView>()
+        // Phase 3 — node display cards (tappable → navigate via IMauiNavigator).
+        .Register<MeshNodeCardControl, MeshNodeCardView>()
+        .Register<MeshNodeThumbnailControl, MeshNodeThumbnailView>()
         // Embedded remote area (e.g. the home page's bottom chat composer) → the existing LayoutAreaView.
         .Register<LayoutAreaControl, LayoutAreaControlView>()
         // Wave 2 — nav + badges.
@@ -725,11 +728,22 @@ public sealed class IconView : MauiView<IconControl>
     private readonly ContentView _host = new();
     protected override View CreateView() => _host;
     protected override void Bind() =>
-        Bind<object>(Model.Data, v => _host.Content = Build((MarkdownViewLogic.CoerceString(v) ?? "").Trim()));
+        Bind<object>(Model.Data, v => _host.Content = MauiImagery.ForSource(MarkdownViewLogic.CoerceString(v), Size));
+}
 
-    private static View Build(string icon)
+/// <summary>
+/// Renders an icon/image value — raw <c>&lt;svg&gt;</c> markup, an image URL / data-URI, or a glyph /
+/// emoji / initials — as a native view sized to <c>size</c>: SVG markup (or an <c>.svg</c>/<c>data:image/svg</c>
+/// source) in a tiny transparent <see cref="WebView"/> (not-a-BlazorWebView → AspNetCore-free), raster
+/// URLs/data-URIs in a native <see cref="Image"/>, everything else a <see cref="Label"/>. Shared by the icon
+/// + node-card/thumbnail views. SVGs using <c>currentColor</c> inherit the dark shell's light foreground.
+/// </summary>
+internal static class MauiImagery
+{
+    public static View ForSource(string? value, double size)
     {
-        if (string.IsNullOrEmpty(icon)) return new ContentView();
+        var icon = (value ?? "").Trim();
+        if (string.IsNullOrEmpty(icon)) return new ContentView { WidthRequest = size, HeightRequest = size };
 
         var isSvg = icon.Contains("<svg", StringComparison.OrdinalIgnoreCase)
                     || icon.StartsWith("data:image/svg", StringComparison.OrdinalIgnoreCase)
@@ -738,32 +752,147 @@ public sealed class IconView : MauiView<IconControl>
         if (isSvg)
             return new WebView
             {
-                WidthRequest = Size, HeightRequest = Size, BackgroundColor = Colors.Transparent,
-                Source = new HtmlWebViewSource { Html = SvgHtml(icon) },
+                WidthRequest = size, HeightRequest = size, BackgroundColor = Colors.Transparent,
+                Source = new HtmlWebViewSource { Html = SvgHtml(icon, (int)size) },
             };
 
         // Raster image (png/jpg/…) by URL or data-URI → native Image.
         if (icon.StartsWith("http", StringComparison.OrdinalIgnoreCase)
             || icon.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
             || icon.StartsWith("/", StringComparison.Ordinal))
-            return new Image { Source = icon, WidthRequest = Size, HeightRequest = Size, Aspect = Aspect.AspectFit };
+            return new Image { Source = icon, WidthRequest = size, HeightRequest = size, Aspect = Aspect.AspectFit };
 
-        // Glyph / emoji / (Fluent) icon name — no native icon set, so show as text (unchanged behaviour).
-        return new Label { Text = icon, FontSize = 16, VerticalOptions = LayoutOptions.Center };
+        // Glyph / emoji / initials — no native icon set, so show as centred text.
+        return new Label
+        {
+            Text = icon, FontSize = size * 0.8, TextColor = Colors.White,
+            HorizontalTextAlignment = TextAlignment.Center, VerticalTextAlignment = TextAlignment.Center,
+        };
     }
 
     // $$"""…""" raw interpolation: single { } are LITERAL CSS braces; {{…}} are interpolations.
-    private static string SvgHtml(string icon)
+    private static string SvgHtml(string icon, int px)
     {
         var body = icon.Contains("<svg", StringComparison.OrdinalIgnoreCase)
             ? icon
-            : $"<img src=\"{icon}\" style=\"width:{Size}px;height:{Size}px\"/>";
+            : $"<img src=\"{icon}\" style=\"width:{px}px;height:{px}px\"/>";
         return $$"""
             <!DOCTYPE html><html><head><meta charset="utf-8">
             <style>html,body{margin:0;padding:0;background:transparent;overflow:hidden;color:#e0e0e0}
-            svg{width:{{Size}}px;height:{{Size}}px;display:block;fill:currentColor}
+            svg{width:{{px}}px;height:{{px}}px;display:block;fill:currentColor}
             img{display:block}</style></head><body>{{body}}</body></html>
             """;
+    }
+}
+
+/// <summary>
+/// A mesh-node card → a tappable native card (image/emoji + title + truncated description) that navigates
+/// to the node via <see cref="IMauiNavigator"/> — the AspNetCore-free counterpart of Blazor's
+/// MeshNodeCardView. When <see cref="MeshNodeCardControl.ItemArea"/> is set, the card body renders that
+/// area instead (custom card content).
+/// </summary>
+public sealed class MeshNodeCardView : MauiView<MeshNodeCardControl>
+{
+    protected override View CreateView()
+    {
+        View body;
+        if (!string.IsNullOrEmpty(Model.ItemArea) && Stream is not null)
+            body = Renderer.RenderArea(Stream, Model.ItemArea!);
+        else
+        {
+            var stack = new VerticalStackLayout { Spacing = 6 };
+            if (!string.IsNullOrWhiteSpace(Model.ImageUrl))
+                stack.Children.Add(MauiImagery.ForSource(Model.ImageUrl, 48));
+            stack.Children.Add(new Label { Text = Model.Title ?? "", FontAttributes = FontAttributes.Bold, TextColor = Colors.White });
+            if (!string.IsNullOrWhiteSpace(Model.Description))
+                stack.Children.Add(new Label
+                {
+                    Text = Model.Description, FontSize = 12, TextColor = Color.FromArgb("#C0C0C0"),
+                    MaxLines = 3, LineBreakMode = LineBreakMode.TailTruncation,
+                });
+            body = stack;
+        }
+        return MakeCard(body, AsBool(Model.DisableNavigation, false) ? null : Model.NodePath, Model.Title);
+    }
+
+    // A rounded dark card; tappable → navigate to nodePath (when non-null) via IMauiNavigator.
+    internal View MakeCard(View content, string? nodePath, string? title)
+    {
+        var border = new Border
+        {
+            Padding = 12,
+            BackgroundColor = Color.FromArgb("#2A2A2C"),
+            StrokeThickness = 0,
+            StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 10 },
+            Content = content,
+        };
+        if (!string.IsNullOrEmpty(nodePath))
+        {
+            var tap = new TapGestureRecognizer();
+            tap.Tapped += (_, _) => Stream?.Hub.ServiceProvider.GetService<IMauiNavigator>()?.NavigateTo(nodePath, title);
+            border.GestureRecognizers.Add(tap);
+        }
+        return border;
+    }
+
+    private static bool AsBool(object? v, bool dflt) => v switch
+    {
+        null => dflt,
+        bool b => b,
+        JsonElement je when je.ValueKind == JsonValueKind.True => true,
+        JsonElement je when je.ValueKind == JsonValueKind.False => false,
+        _ => bool.TryParse(v.ToString(), out var p) ? p : dflt,
+    };
+}
+
+/// <summary>
+/// A mesh-node thumbnail → a tappable horizontal card: 48px avatar (image/emoji/initials) + title +
+/// 2-line description, navigating to the node. Native counterpart of Blazor's MeshNodeThumbnailView.
+/// </summary>
+public sealed class MeshNodeThumbnailView : MauiView<MeshNodeThumbnailControl>
+{
+    protected override View CreateView()
+    {
+        var avatar = MauiImagery.ForSource(
+            string.IsNullOrWhiteSpace(Model.ImageUrl) ? Initials(Model.Title) : Model.ImageUrl, 48);
+        avatar.WidthRequest = 48; avatar.HeightRequest = 48;
+
+        var texts = new VerticalStackLayout { Spacing = 2, VerticalOptions = LayoutOptions.Center };
+        texts.Children.Add(new Label { Text = Model.Title ?? "", FontAttributes = FontAttributes.Bold, TextColor = Colors.White });
+        if (!string.IsNullOrWhiteSpace(Model.Description))
+            texts.Children.Add(new Label
+            {
+                Text = Model.Description, FontSize = 12, TextColor = Color.FromArgb("#C0C0C0"),
+                MaxLines = 2, LineBreakMode = LineBreakMode.TailTruncation,
+            });
+        if (!string.IsNullOrWhiteSpace(Model.NodeType))
+            texts.Children.Add(new Label { Text = Model.NodeType, FontSize = 10, TextColor = Color.FromArgb("#9A9A9A") });
+
+        var border = new Border
+        {
+            Padding = 10, MinimumWidthRequest = 320,
+            BackgroundColor = Color.FromArgb("#2A2A2C"),
+            StrokeThickness = 0,
+            StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 10 },
+            Content = new HorizontalStackLayout { Spacing = 12, Children = { avatar, texts } },
+        };
+        if (!string.IsNullOrEmpty(Model.NodePath))
+        {
+            var tap = new TapGestureRecognizer();
+            tap.Tapped += (_, _) => Stream?.Hub.ServiceProvider.GetService<IMauiNavigator>()?.NavigateTo(Model.NodePath, Model.Title);
+            border.GestureRecognizers.Add(tap);
+        }
+        return border;
+    }
+
+    // Up to two leading letters of the title — the placeholder avatar when no image is set.
+    private static string Initials(string? title)
+    {
+        var parts = (title ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) return "?";
+        return parts.Length == 1
+            ? parts[0][..Math.Min(2, parts[0].Length)].ToUpperInvariant()
+            : (parts[0][..1] + parts[1][..1]).ToUpperInvariant();
     }
 }
 
