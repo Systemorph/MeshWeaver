@@ -721,26 +721,40 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
                     Colors.OrangeRed)));
     }
 
-    // Read-only comments panel: lists the node's _Comment satellites (author + quoted text + body). Comment
-    // authoring (anchor to a selection, reply, resolve) + tracked-changes accept/reject are refinements.
+    // Comments panel: a LIVE list of the node's _Comment satellites (author + quoted text + body) plus, when
+    // CanComment, an add box that creates a comment via the canonical CreateNode — the live query then
+    // re-renders. Anchoring a comment to a text selection (HighlightedText) is a refinement.
     private void AddCommentsPanel()
     {
         if (Stream is null || string.IsNullOrEmpty(Model.NodePath)) return;
-        var panel = new VerticalStackLayout { Spacing = 6, Margin = new Thickness(0, 12, 0, 0) };
+        var list = new VerticalStackLayout { Spacing = 6 };
+        var panel = new VerticalStackLayout { Spacing = 6, Margin = new Thickness(0, 12, 0, 0), Children = { list } };
+
+        if (Model.CanComment)
+        {
+            var input = new Entry { Placeholder = "Add a comment…", FontSize = 12, TextColor = Colors.White };
+            var add = new Button { Text = "Comment", FontSize = 11, BackgroundColor = Colors.RoyalBlue, TextColor = Colors.White, CornerRadius = 6, Padding = new Thickness(10, 4) };
+            add.Clicked += (_, _) => { AddComment(input.Text); input.Text = ""; };
+            var row = new Grid { ColumnSpacing = 8, ColumnDefinitions = { new ColumnDefinition(GridLength.Star), new ColumnDefinition(GridLength.Auto) } };
+            row.Add(input, 0, 0);
+            row.Add(add, 1, 0);
+            panel.Children.Add(row);
+        }
+
         _root.Children.Add(panel);
         var sub = Stream.Hub.GetQuery("comments:" + Model.NodePath, $"namespace:{Model.NodePath}/_Comment nodeType:Comment")
-            .Take(1)
-            .Subscribe(nodes => MainThread.BeginInvokeOnMainThread(() => RenderComments(panel, nodes)));
+            .Subscribe(nodes => MainThread.BeginInvokeOnMainThread(() => RenderComments(list, nodes)));
         Disposables.Add(sub);
     }
 
-    private void RenderComments(VerticalStackLayout panel, IEnumerable<MeshNode> nodes)
+    private void RenderComments(VerticalStackLayout list, IEnumerable<MeshNode> nodes)
     {
         if (Stream is null) return;
+        list.Children.Clear();
         var opts = Stream.Hub.JsonSerializerOptions;
         var comments = nodes.Select(n => n.ContentAs<MeshWeaver.Mesh.Comment>(opts)).Where(c => c is not null).Select(c => c!).ToList();
         if (comments.Count == 0) return;
-        panel.Children.Add(new Label { Text = $"Comments ({comments.Count})", FontAttributes = FontAttributes.Bold, FontSize = 13, TextColor = Colors.White });
+        list.Children.Add(new Label { Text = $"Comments ({comments.Count})", FontAttributes = FontAttributes.Bold, FontSize = 13, TextColor = Colors.White });
         foreach (var c in comments)
         {
             var box = new VerticalStackLayout { Spacing = 2 };
@@ -748,12 +762,25 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
             if (!string.IsNullOrWhiteSpace(c.HighlightedText))
                 box.Children.Add(new Label { Text = "“" + c.HighlightedText + "”", FontSize = 11, FontAttributes = FontAttributes.Italic, TextColor = Color.FromArgb("#9A9A9A") });
             box.Children.Add(new Label { Text = c.Text, FontSize = 12, TextColor = Colors.White, LineBreakMode = LineBreakMode.WordWrap });
-            panel.Children.Add(new Border
+            list.Children.Add(new Border
             {
                 Padding = 8, BackgroundColor = Color.FromArgb("#2A2A2C"), StrokeThickness = 0,
                 StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 8 }, Content = box,
             });
         }
+    }
+
+    // Creates a _Comment satellite via the canonical CreateNode (carries the caller's AccessContext).
+    private void AddComment(string? text)
+    {
+        if (Stream is null || string.IsNullOrWhiteSpace(text) || string.IsNullOrEmpty(Model.NodePath)) return;
+        var meshService = Stream.Hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService is null) return;
+        var author = Stream.Hub.ServiceProvider.GetService<AccessService>()?.Context?.Name ?? "You";
+        var id = Guid.NewGuid().ToString("N")[..8];
+        var content = new MeshWeaver.Mesh.Comment { Text = text!.Trim(), Author = author, PrimaryNodePath = Model.NodePath };
+        var node = new MeshNode(id, $"{Model.NodePath}/_Comment") { NodeType = "Comment", Content = content };
+        meshService.CreateNode(node).Subscribe(_ => { }, _ => { });   // live query re-renders the list
     }
 
     // Pending tracked-changes panel: lists the node's _Tracking satellites (author + original→new) with a
