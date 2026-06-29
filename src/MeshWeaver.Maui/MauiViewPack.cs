@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.AI;
 using MeshWeaver.Data;
+using MeshWeaver.GoogleMaps;
 using MeshWeaver.Graph;
 using MeshWeaver.Maui.Abstractions;
 using MeshWeaver.Layout;
@@ -370,6 +371,8 @@ public static class MauiViewPackExtensions
         .Register<DialogControl, DialogView>()
         // Phase 4 — charts via LiveCharts2 (OSS/MIT).
         .Register<ChartControl, ChartView>()
+        // Phase 5 — native map (MAUI Map / MapKit).
+        .Register<GoogleMapControl, GoogleMapView>()
         // Phase 4 — editors (markdown / code / diff) — native Editor-based.
         .Register<MarkdownEditorControl, MarkdownEditorView>()
         .Register<CodeEditorControl, CodeEditorView>()
@@ -1592,6 +1595,36 @@ public sealed class PivotGridView : MauiView<PivotGridControl>
         StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 8 },
         Content = new Label { Text = "Pivot grid", FontAttributes = FontAttributes.Bold, TextColor = Color.FromArgb("#C0C0C0") },
     };
+}
+
+/// <summary>Map → a native MAUI <see cref="Microsoft.Maui.Controls.Maps.Map"/> (MapKit on maccatalyst/iOS —
+/// no Google API key): centers + zooms from <c>Options.Center</c>/<c>Zoom</c> and drops a pin per marker.
+/// The AspNetCore-free counterpart of the portal's Google Maps JS embed.</summary>
+public sealed class GoogleMapView : MauiView<GoogleMapControl>
+{
+    protected override View CreateView()
+    {
+        var map = new Microsoft.Maui.Controls.Maps.Map { HeightRequest = 300 };
+
+        var center = Model.Options?.Center;
+        if (center is not null)
+        {
+            var loc = new Microsoft.Maui.Devices.Sensors.Location(Convert.ToDouble(center.Lat), Convert.ToDouble(center.Lng));
+            var zoom = Model.Options?.Zoom ?? 15;
+            // Higher zoom → smaller visible radius (rough Web-Mercator-ish mapping).
+            var km = Math.Max(0.2, 40000.0 / Math.Pow(2, zoom));
+            map.MoveToRegion(Microsoft.Maui.Maps.MapSpan.FromCenterAndRadius(loc, Microsoft.Maui.Maps.Distance.FromKilometers(km)));
+        }
+
+        if (Model.Markers is not null)
+            foreach (var m in Model.Markers)
+                map.Pins.Add(new Microsoft.Maui.Controls.Maps.Pin
+                {
+                    Location = new Microsoft.Maui.Devices.Sensors.Location(Convert.ToDouble(m.Position.Lat), Convert.ToDouble(m.Position.Lng)),
+                    Label = m.Title ?? "Marker",
+                });
+        return map;
+    }
 }
 
 /// <summary>Tabular data → a header + rows (read-only this wave; sorting/virtualization later).</summary>

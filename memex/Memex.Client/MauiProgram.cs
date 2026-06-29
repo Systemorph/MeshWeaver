@@ -63,6 +63,8 @@ public static class MauiProgram
             .UseMauiApp<App>()
             // LiveCharts2 (MIT, SkiaSharp) — inits the chart engine for the native ChartView (ChartControl).
             .UseLiveCharts()
+            // MAUI Maps (MapKit on maccatalyst/iOS) — for the native GoogleMapView (GoogleMapControl).
+            .UseMauiMaps()
             .ConfigureFonts(fonts =>
             {
                 fonts.AddFont("OpenSans-Regular.ttf", "OpenSansRegular");

@@ -46,6 +46,13 @@
         <!-- MAUI-FREE pure logic (option coercion / href / chat-JSON projection) — the SINGLE source the
              native views call into, so it can be unit-tested from a plain net10.0 project. -->
         <ProjectReference Include="..\MeshWeaver.Maui.Abstractions\MeshWeaver.Maui.Abstractions.csproj" />
+        <!-- GoogleMapControl model (AspNetCore-free — refs only Layout) for the native map view. -->
+        <ProjectReference Include="..\MeshWeaver.GoogleMaps\MeshWeaver.GoogleMaps.csproj" />
+    </ItemGroup>
+
+    <!-- Native maps: MAUI Map (MapKit on maccatalyst/iOS — no Google API key). Inline version (CPM off). -->
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Maui.Controls.Maps" Version="10.0.20" />
     </ItemGroup>
 
     <!-- Open-source (MIT) UI libs for the native view pack. Inline versions: this project opts out of
