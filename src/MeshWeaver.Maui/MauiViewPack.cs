@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
@@ -386,7 +387,8 @@ public static class MauiViewPackExtensions
         .Register<BadgeControl, BadgeView>()
         .Register<NavLinkControl, NavLinkView>()
         .Register<MenuItemControl, MenuItemView>()
-        // Phase 2 — agent-backed chat: a single thread message bubble (streaming text + exec status).
+        // Phase 2 — agent-backed chat: the thread chat (message list + composer) + its message bubble.
+        .Register<ThreadChatControl, ThreadChatView>()
         .Register<ThreadMessageBubbleControl, ThreadMessageBubbleView>();
 }
 
@@ -1547,6 +1549,8 @@ public sealed class MeshSearchView : MauiView<MeshSearchControl>
 /// </summary>
 public sealed class ThreadMessageBubbleView : MauiView<ThreadMessageBubbleControl>
 {
+    private Border _border = null!;
+    private Label _author = null!;
     private Label _body = null!;
     private ActivityIndicator _spinner = null!;
     private Label _status = null!;
@@ -1555,55 +1559,259 @@ public sealed class ThreadMessageBubbleView : MauiView<ThreadMessageBubbleContro
 
     protected override View CreateView()
     {
-        var isUser = string.Equals(Model.Role, "user", StringComparison.OrdinalIgnoreCase);
-
-        var author = new Label
-        {
-            Text = string.IsNullOrWhiteSpace(Model.AuthorName) ? (isUser ? "You" : "Assistant") : Model.AuthorName,
-            FontSize = 11, FontAttributes = FontAttributes.Bold,
-            TextColor = isUser ? Colors.White : Color.FromArgb("#C0C0C0"),
-        };
+        _author = new Label { FontSize = 11, FontAttributes = FontAttributes.Bold };
         _body = new Label { TextColor = Colors.White, LineBreakMode = LineBreakMode.WordWrap };
-
         _spinner = new ActivityIndicator { IsVisible = false, IsRunning = false, Color = Colors.White, HeightRequest = 14, WidthRequest = 14 };
         _status = new Label { FontSize = 11, TextColor = Color.FromArgb("#C0C0C0") };
         _statusRow = new HorizontalStackLayout { Spacing = 6, IsVisible = false, Children = { _spinner, _status } };
+        _footer = new Label { FontSize = 10, TextColor = Color.FromArgb("#9A9A9A"), IsVisible = false };
 
-        _footer = new Label { FontSize = 10, TextColor = Color.FromArgb("#9A9A9A") };
-
-        var content = new VerticalStackLayout { Spacing = 4, Children = { author, _body, _statusRow, _footer } };
-
-        return new Border
+        var content = new VerticalStackLayout { Spacing = 4, Children = { _author, _body, _statusRow, _footer } };
+        _border = new Border
         {
             Padding = new Thickness(10, 6),
-            Margin = new Thickness(isUser ? 40 : 0, 2, isUser ? 0 : 40, 2),
-            HorizontalOptions = isUser ? LayoutOptions.End : LayoutOptions.Start,
-            BackgroundColor = isUser ? Colors.RoyalBlue : Color.FromArgb("#3A3A3C"),
             StrokeThickness = 0,
             StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 12 },
             Content = content,
         };
+        ApplyRole(Model.Role, Model.AuthorName);   // initial; refined from the node in path-bound mode
+        return _border;
     }
 
     protected override void Bind()
     {
-        Bind<string>(Model.Text, v => _body.Text = v ?? "");
-        Bind<bool>(Model.IsExecuting, executing =>
+        // Dominant mode: a path-bound bubble subscribes to the message node and renders Role/Text/status
+        // live as the agent streams (Status flips Streaming→Completed). Legacy callers pass Text/IsExecuting
+        // pointers + a literal Role instead.
+        if (!string.IsNullOrEmpty(Model.NodePath) && Stream is not null)
         {
-            _statusRow.IsVisible = executing;
-            _spinner.IsVisible = executing;
-            _spinner.IsRunning = executing;
-        }, defaultValue: false);
+            var sub = Stream.Hub.GetMeshNodeStream(Model.NodePath)
+                .Where(n => n is not null)
+                .Subscribe(node => MainThread.BeginInvokeOnMainThread(() => ApplyNode(node!)));
+            Disposables.Add(sub);
+            return;
+        }
+
+        Bind<string>(Model.Text, v => _body.Text = v ?? "");
+        Bind<bool>(Model.IsExecuting, SetExecuting, defaultValue: false);
         Bind<string>(Model.ExecutionStatus, v => _status.Text = v ?? "");
-        _footer.Text = BuildFooter();
-        _footer.IsVisible = !string.IsNullOrEmpty(_footer.Text);
+        SetFooter(Model.ModelName, Model.Timestamp);
     }
 
-    private string BuildFooter()
+    // Apply the live message-node content (path-bound mode).
+    private void ApplyNode(MeshNode node)
+    {
+        var obj = ToJsonObject(node.Content);
+        if (obj is null) return;
+        var role = Str(obj, "role") ?? "assistant";
+        var author = Str(obj, "authorName") ?? Str(obj, "agentName");
+        ApplyRole(role, author);
+        _body.Text = Str(obj, "text") ?? "";
+        var streaming = string.Equals(Str(obj, "status"), "Streaming", StringComparison.OrdinalIgnoreCase);
+        SetExecuting(streaming);
+        DateTime? ts = obj["timestamp"] is JsonValue tv && tv.TryGetValue<DateTime>(out var t) ? t : null;
+        SetFooter(Str(obj, "modelName"), ts);
+    }
+
+    private void ApplyRole(string? role, string? authorName)
+    {
+        var isUser = string.Equals(role, "user", StringComparison.OrdinalIgnoreCase);
+        _border.HorizontalOptions = isUser ? LayoutOptions.End : LayoutOptions.Start;
+        _border.Margin = new Thickness(isUser ? 40 : 0, 2, isUser ? 0 : 40, 2);
+        _border.BackgroundColor = isUser ? Colors.RoyalBlue : Color.FromArgb("#3A3A3C");
+        _author.TextColor = isUser ? Colors.White : Color.FromArgb("#C0C0C0");
+        _author.Text = string.IsNullOrWhiteSpace(authorName) ? (isUser ? "You" : "Assistant") : authorName;
+    }
+
+    private void SetExecuting(bool executing)
+    {
+        _statusRow.IsVisible = executing;
+        _spinner.IsVisible = executing;
+        _spinner.IsRunning = executing;
+    }
+
+    private void SetFooter(string? model, DateTime? ts)
     {
         var parts = new List<string>();
-        if (!string.IsNullOrWhiteSpace(Model.ModelName)) parts.Add(Model.ModelName!);
-        if (Model.Timestamp is { } ts) parts.Add(ts.ToLocalTime().ToString("t"));
-        return string.Join(" · ", parts);
+        if (!string.IsNullOrWhiteSpace(model)) parts.Add(model!);
+        if (ts is { } t) parts.Add(t.ToLocalTime().ToString("t"));
+        _footer.Text = string.Join(" · ", parts);
+        _footer.IsVisible = parts.Count > 0;
+    }
+
+    private static string? Str(JsonObject obj, string key) =>
+        obj[key] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
+
+    private JsonObject? ToJsonObject(object? content)
+    {
+        if (content is null || Stream is null) return null;
+        try
+        {
+            return content is JsonElement je
+                ? JsonNode.Parse(je.GetRawText()) as JsonObject
+                : JsonSerializer.SerializeToNode(content, Stream.Hub.JsonSerializerOptions) as JsonObject;
+        }
+        catch { return null; }
+    }
+}
+
+/// <summary>
+/// The agent-backed chat thread → native — the AspNetCore-free counterpart of Blazor's ThreadChat view.
+/// Binds the data-bound <see cref="ThreadChatControl.ThreadViewModel"/> (or a direct
+/// <see cref="ThreadChatControl.ThreadPath"/>), renders one path-bound <see cref="ThreadMessageBubbleView"/>
+/// per message (each self-updates as the agent streams), shows queued (pending) user messages immediately,
+/// and submits new messages through the canonical <c>hub.SubmitMessage(threadPath, text)</c>
+/// (HubThreadExtensions) — no bespoke request type. The message list rebuilds only when the set of message
+/// IDs / pending texts changes, so streaming-text updates ride each bubble's own node subscription.
+/// </summary>
+public sealed class ThreadChatView : MauiView<ThreadChatControl>
+{
+    private ScrollView _scroll = null!;
+    private VerticalStackLayout _messages = null!;
+    private Editor _composer = null!;
+    private Button _send = null!;
+    private Label _status = null!;
+    private string? _threadPath;
+    private List<string> _renderedKeys = new();   // ids + ("pending:" + text), to skip redundant rebuilds
+
+    protected override View CreateView()
+    {
+        _messages = new VerticalStackLayout { Spacing = 8 };
+        _scroll = new ScrollView { Content = _messages, VerticalOptions = LayoutOptions.Fill };
+        _status = new Label { FontSize = 11, TextColor = Colors.Gray, IsVisible = false };
+
+        _composer = new Editor
+        {
+            Placeholder = "Message…", FontSize = 15, TextColor = Colors.White,
+            AutoSize = EditorAutoSizeOption.TextChanges, MinimumHeightRequest = 64,
+        };
+        _send = new Button { Text = "Send", BackgroundColor = Colors.RoyalBlue, TextColor = Colors.White, CornerRadius = 8 };
+        _send.Clicked += (_, _) => Submit();
+        var composerRow = new VerticalStackLayout
+        {
+            Spacing = 6,
+            Children = { _composer, new HorizontalStackLayout { HorizontalOptions = LayoutOptions.End, Children = { _send } } },
+        };
+
+        var grid = new Grid
+        {
+            RowSpacing = 8, Padding = 8,
+            RowDefinitions = { new(GridLength.Star), new(GridLength.Auto), new(GridLength.Auto) },
+        };
+        grid.Add(_scroll, 0, 0);
+        grid.Add(_status, 0, 1);
+        grid.Add(composerRow, 0, 2);
+        return grid;
+    }
+
+    protected override void Bind()
+    {
+        // Direct-path mode (side panel/dashboard): read the thread node itself.
+        if (!string.IsNullOrEmpty(Model.ThreadPath) && Model.ThreadViewModel is null && Stream is not null)
+        {
+            _threadPath = Model.ThreadPath;
+            var sub = Stream.Hub.GetMeshNodeStream(Model.ThreadPath)
+                .Where(n => n is not null)
+                .Subscribe(node => MainThread.BeginInvokeOnMainThread(() => ApplyThreadNode(node!)));
+            Disposables.Add(sub);
+            return;
+        }
+        // Data-bound view-model mode (the layout-area thread view): the area pushes a ThreadViewModel snapshot.
+        Bind<object>(Model.ThreadViewModel, vm =>
+        {
+            if (vm is JsonElement je) ApplyViewModel(je);
+        });
+    }
+
+    private void ApplyViewModel(JsonElement vm)
+    {
+        var threadPath = StrProp(vm, "threadPath") ?? _threadPath;
+        var ids = StrArray(vm, "messages");
+        var pending = StrArray(vm, "pendingMessageTexts");
+        var executing = BoolProp(vm, "isExecuting");
+        var status = StrProp(vm, "executionStatus");
+        RenderState(threadPath, ids, pending, executing, status);
+    }
+
+    private void ApplyThreadNode(MeshNode node)
+    {
+        var obj = ToJsonObject(node.Content);
+        var ids = obj?["messages"] is JsonArray arr
+            ? arr.Select(e => e?.GetValue<string>()).Where(s => s is not null).Select(s => s!).ToList()
+            : new List<string>();
+        var executing = obj?["isExecuting"] is JsonValue ev && ev.TryGetValue<bool>(out var b) && b;
+        var status = obj?["executionStatus"] is JsonValue sv && sv.TryGetValue<string>(out var s) ? s : null;
+        RenderState(_threadPath ?? node.Path, ids, new List<string>(), executing, status);
+    }
+
+    private void RenderState(string? threadPath, List<string> ids, List<string> pending, bool executing, string? status)
+    {
+        _threadPath = threadPath;
+        // Rebuild the list only when the set of bubbles changes — streaming text rides each bubble's own sub.
+        var keys = ids.Concat(pending.Select(p => "pending:" + p)).ToList();
+        if (!keys.SequenceEqual(_renderedKeys))
+        {
+            _renderedKeys = keys;
+            _messages.Children.Clear();
+            if (!string.IsNullOrEmpty(threadPath) && Stream is not null)
+                foreach (var id in ids)
+                {
+                    var bubble = new ThreadMessageBubbleControl().WithNodePath($"{threadPath}/{id}").WithThreadPath(threadPath);
+                    _messages.Children.Add(Renderer.RenderControl(bubble, Stream, Area));
+                }
+            foreach (var text in pending)
+                _messages.Children.Add(PendingBubble(text));
+            MainThread.BeginInvokeOnMainThread(() => _scroll.ScrollToAsync(_messages, ScrollToPosition.End, animated: false));
+        }
+        _status.Text = status ?? "";
+        _status.IsVisible = executing && !string.IsNullOrEmpty(status);
+    }
+
+    private static View PendingBubble(string text) => new Border
+    {
+        Padding = new Thickness(10, 6),
+        Margin = new Thickness(40, 2, 0, 2),
+        HorizontalOptions = LayoutOptions.End,
+        BackgroundColor = Color.FromArgb("#2A4A8C"),  // dimmer blue → "queued"
+        StrokeThickness = 0,
+        StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 12 },
+        Content = new Label { Text = text, TextColor = Colors.White, LineBreakMode = LineBreakMode.WordWrap },
+    };
+
+    private void Submit()
+    {
+        var text = _composer.Text?.Trim();
+        if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(_threadPath) || Stream is null) return;
+        // Canonical submission surface — writes the thread node via GetMeshNodeStream(path).Update(...).
+        Stream.Hub.SubmitMessage(_threadPath, text);
+        _composer.Text = "";
+    }
+
+    private JsonObject? ToJsonObject(object? content)
+    {
+        if (content is null || Stream is null) return null;
+        try
+        {
+            return content is JsonElement je
+                ? JsonNode.Parse(je.GetRawText()) as JsonObject
+                : JsonSerializer.SerializeToNode(content, Stream.Hub.JsonSerializerOptions) as JsonObject;
+        }
+        catch { return null; }
+    }
+
+    private static string? StrProp(JsonElement e, string name) =>
+        e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String
+            ? p.GetString() : null;
+
+    private static bool BoolProp(JsonElement e, string name) =>
+        e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.True;
+
+    private static List<string> StrArray(JsonElement e, string name)
+    {
+        var list = new List<string>();
+        if (e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var arr) && arr.ValueKind == JsonValueKind.Array)
+            foreach (var item in arr.EnumerateArray())
+                if (item.ValueKind == JsonValueKind.String) list.Add(item.GetString()!);
+        return list;
     }
 }

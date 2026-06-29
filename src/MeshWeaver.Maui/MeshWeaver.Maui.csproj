@@ -38,6 +38,11 @@
              (Markdig + Data.Contract + Kernel + Mesh.Contract) — NO Microsoft.AspNetCore.App, so the
              maccatalyst/iOS build stays AspNetCore-free. -->
         <ProjectReference Include="..\MeshWeaver.Markdown\MeshWeaver.Markdown.csproj" />
+        <!-- Agent-backed chat: the canonical thread submission surface (HubThreadExtensions —
+             StartThread / SubmitMessage / ResubmitMessage / MarkThreadDone) the native ThreadChatView
+             drives. MeshWeaver.AI is AspNetCore-free (framework deps only) and already in the maccatalyst
+             closure via Memex.Client, so referencing it keeps the build AspNetCore-free. -->
+        <ProjectReference Include="..\MeshWeaver.AI\MeshWeaver.AI.csproj" />
     </ItemGroup>
 
 </Project>
