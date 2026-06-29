@@ -104,43 +104,46 @@ jobs:
       # rebuilt by the release path / runbook §1, NOT on every main merge.
       # CIRun=true → continuous version 3.0.0-ci.<build> baked in; image tagged <sha> + moving `main`.
       #
-      # MULTI-ARCH: we drop `-r linux-x64` and instead set RuntimeIdentifiers + ContainerRuntimeIdentifiers
-      # to "linux-x64;linux-arm64". With no single RID set, the SDK (>= 8.0.405; we're on .NET 10)
+      # MULTI-ARCH: we drop `-r linux-x64` and instead set ContainerRuntimeIdentifiers to
+      # "linux-x64;linux-arm64". With no single RID set, the SDK (>= 8.0.405; we're on .NET 10)
       # publishes per-RID and combines the results into an OCI Image Index (manifest list) — so one tag
       # serves both x86 cloud nodes AND Apple-silicon (arm64) local k3s, which can then pull-and-self-
       # update natively from ACR instead of hand-building locally. ContainerRuntimeIdentifiers MUST be a
-      # subset of RuntimeIdentifiers (we set them equal). No Docker is needed: pushing the index straight
-      # to a remote registry (ContainerRegistry set) is fully Docker-free.
+      # subset of RuntimeIdentifiers — that subset requirement is why <RuntimeIdentifiers>linux-x64;linux-arm64
+      # </RuntimeIdentifiers> is declared INSIDE Memex.Portal.Distributed.csproj (project-local), NOT as a
+      # global `-p:RuntimeIdentifiers` here: a global `-p:` propagates to every ProjectReference and makes
+      # ~6 referenced libraries fail `NETSDK1083: RuntimeIdentifier 'linux-x64;linux-arm64' is not recognized`.
+      # No Docker is needed: pushing the index straight to a remote registry (ContainerRegistry set) is Docker-free.
       # 🚨 PREREQUISITE: memex-portal-ai-base:latest in ACR must itself be MULTI-ARCH, else the arm64 leg
       # has no base layer and this step fails. base-image-acr.yml (workflow_dispatch) builds it multi-arch
       # (buildx → ACR); operators doing the first multi-arch roll run that once (see LocalColimaMac.md).
-      # 🚨 The ;-separated property LISTS are %3B-escaped, NOT raw `;`: a raw `;` in a `-p:Foo=a;b` arg is
-      # parsed by MSBuild's command-line property splitter as the START OF A NEW PROPERTY (`b`), which it
-      # then rejects — `MSBUILD : error MSB1006: Property is not valid. Switch: linux-arm64`. `%3B` is the
-      # MSBuild escape for a literal semicolon inside a value. Applies to RuntimeIdentifiers,
-      # ContainerRuntimeIdentifiers AND ContainerImageTags (every `-p:` whose value is a `;`-list).
+      # 🚨 List-valued `-p:` props are wrapped '"a;b"' — single-quoted DOUBLE-quotes around a REAL `;`, NOT
+      # `%3B`. `%3B` is an MSBuild-ESCAPED (literal) semicolon, so `-p:ContainerRuntimeIdentifiers=a%3Bb` is a
+      # SINGLE RID value "a;b" that NEVER splits into a list — the SDK then builds ONE image with the bogus RID
+      # "linux-x64;linux-arm64" and fails (OutputPath MSB4115 / NETSDK1083). The '"…"' form (the SDK's own
+      # documented Bash escaping) keeps the value one CLI switch while letting MSBuild split the real `;` into a
+      # 2-item list. Applies to ContainerRuntimeIdentifiers AND ContainerImageTags (every `-p:` whose value is a `;`-list).
       - name: Build + push portal-ai
         run: >
           dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
-          -p:RuntimeIdentifiers="linux-x64%3Blinux-arm64"
-          -p:ContainerRuntimeIdentifiers="linux-x64%3Blinux-arm64"
+          -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
           -p:CIRun=true
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=memex-portal-ai
-          -p:ContainerImageTags="${{ steps.vars.outputs.version }}%3B${{ steps.vars.outputs.sha }}%3Bmain"
+          -p:ContainerImageTags='"${{ steps.vars.outputs.version }};${{ steps.vars.outputs.sha }};main"'
           -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:latest
       # migration — lean image on the standard (already multi-arch) aspnet base; same multi-arch publish.
+      # <RuntimeIdentifiers> lives in Memex.Database.Migration.csproj (project-local, same reason as above).
       - name: Build + push migration
         run: >
           dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
-          -p:RuntimeIdentifiers="linux-x64%3Blinux-arm64"
-          -p:ContainerRuntimeIdentifiers="linux-x64%3Blinux-arm64"
+          -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
           -p:CIRun=true
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=memex-migration
-          -p:ContainerImageTags="${{ steps.vars.outputs.version }}%3B${{ steps.vars.outputs.sha }}%3Bmain"
+          -p:ContainerImageTags='"${{ steps.vars.outputs.version }};${{ steps.vars.outputs.sha }};main"'
 
   # ───────────────────────────────── DEPLOY ──────────────────────────────────
   # One leg per environment (namespace) on the shared private cluster. Each leg points the
