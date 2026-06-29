@@ -1,5 +1,6 @@
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
@@ -190,6 +191,26 @@ public abstract class MauiView : IDisposable
             try { setter((T?)Convert.ChangeType(value, typeof(T))); } catch { setter(defaultValue); }
     }
 
+    /// <summary>
+    /// Dispatches a click for this control's area as a <see cref="ClickedEvent"/> to the stream owner —
+    /// the server-side <c>ClickAction</c> delegate does NOT serialize to the client, so a click is a
+    /// message that the layout area receives and turns into the action. Mirrors <c>BlazorView.OnClick</c>,
+    /// incl. stamping the (device-)user <see cref="AccessContext"/> so the owning hub's access gate doesn't
+    /// deny the downstream write. Shared by Button / NavLink / MenuItem / any clickable container.
+    /// </summary>
+    protected void PostClick(object? payload = null)
+    {
+        if (Stream is null) return;
+        var access = Stream.Hub.ServiceProvider.GetService<AccessService>();
+        var ctx = access?.Context ?? access?.CircuitContext;
+        var evt = payload is null
+            ? new ClickedEvent(Area, Stream.StreamId)
+            : new ClickedEvent(Area, Stream.StreamId) { Payload = payload };
+        Stream.Hub.Post(evt, o => ctx is not null
+            ? o.WithTarget(Stream.Owner).WithAccessContext(ctx)
+            : o.WithTarget(Stream.Owner));
+    }
+
     public void Dispose()
     {
         foreach (var d in Disposables) d.Dispose();
@@ -223,6 +244,44 @@ public abstract class FormMauiView<TControl> : MauiView<TControl> where TControl
         if (boundValue is JsonPointerReference reference && Stream is not null)
             Stream.UpdatePointer(value, Control.DataContext, reference);
     }
+
+    /// <summary>
+    /// Coerces a list control's Options into (display text, value-string) pairs the native picker/list
+    /// can show + select. Handles both a typed <see cref="Option"/> list AND — the case the old code
+    /// missed — a <see cref="JsonElement"/> array (Options arrive serialized after the layout-stream
+    /// round-trip, so <c>as IEnumerable&lt;Option&gt;</c> was null → no options rendered). Value is the
+    /// item's string form (selection-match + write-back); covers the common string/enum-valued option.
+    /// </summary>
+    protected static List<(string Text, string? Value)> CoerceOptions(object? options)
+    {
+        var result = new List<(string Text, string? Value)>();
+        switch (options)
+        {
+            case IEnumerable<Option> typed:
+                foreach (var o in typed) result.Add((o.Text, o.GetItem()?.ToString()));
+                break;
+            case JsonElement { ValueKind: JsonValueKind.Array } arr:
+                foreach (var el in arr.EnumerateArray())
+                {
+                    var text = el.TryGetProperty("text", out var t) && t.ValueKind == JsonValueKind.String
+                        ? t.GetString() ?? ""
+                        : el.ToString();
+                    var val = el.TryGetProperty("item", out var it) ? JsonScalar(it)
+                        : el.TryGetProperty("itemString", out var its) ? its.GetString()
+                        : text;
+                    result.Add((text, val));
+                }
+                break;
+        }
+        return result;
+    }
+
+    private static string? JsonScalar(JsonElement e) => e.ValueKind switch
+    {
+        JsonValueKind.String => e.GetString(),
+        JsonValueKind.Null => null,
+        _ => e.GetRawText()
+    };
 }
 
 /// <summary>
@@ -303,8 +362,14 @@ public static class MauiViewPackExtensions
         // Wave 2 — details forms: number / date / combobox / listbox.
         .Register<NumberFieldControl, NumberFieldView>()
         .Register<DateTimeControl, DateTimeView>()
+        .Register<DateControl, DateView>()
         .Register<ComboboxControl, ComboboxView>()
         .Register<ListboxControl, ListboxView>()
+        .Register<RadioGroupControl, RadioGroupView>()
+        // Wave 2 — simple leaves: slider (range), spacer (flex gap), exception (error caption).
+        .Register<SliderControl, SliderView>()
+        .Register<SpacerControl, SpacerView>()
+        .Register<ExceptionControl, ExceptionView>()
         // Tabular data.
         .Register<DataGridControl, DataGridView>()
         // Wave 2 — layout: a real grid + tabs (other containers fall back to ContainerView).
@@ -313,12 +378,16 @@ public static class MauiViewPackExtensions
         // Wave 2 — query-driven: mesh node picker + catalog search.
         .Register<MeshNodePickerControl, MeshNodePickerView>()
         .Register<MeshSearchControl, MeshSearchView>()
+        // Node-bound editor: edits a node's content directly via GetMeshNodeStream(path).Update(...).
+        .Register<MeshNodeContentEditorControl, MeshNodeContentEditorView>()
         // Embedded remote area (e.g. the home page's bottom chat composer) → the existing LayoutAreaView.
         .Register<LayoutAreaControl, LayoutAreaControlView>()
         // Wave 2 — nav + badges.
         .Register<BadgeControl, BadgeView>()
         .Register<NavLinkControl, NavLinkView>()
-        .Register<MenuItemControl, MenuItemView>();
+        .Register<MenuItemControl, MenuItemView>()
+        // Phase 2 — agent-backed chat: a single thread message bubble (streaming text + exec status).
+        .Register<ThreadMessageBubbleControl, ThreadMessageBubbleView>();
 }
 
 // ---- Wave 1 control views -------------------------------------------------------------------------
@@ -366,8 +435,18 @@ public sealed class LabelView : MauiView<LabelControl>
 public sealed class ButtonView : MauiView<ButtonControl>
 {
     private Button _button = null!;
-    protected override View CreateView() => _button = new Button();
-    protected override void Bind() => Bind<object>(Model.Data, v => _button.Text = v?.ToString() ?? "");
+    protected override View CreateView()
+    {
+        _button = new Button();
+        // A click dispatches the control's server-side ClickAction via a ClickedEvent (see PostClick).
+        _button.Clicked += (_, _) => PostClick();
+        return _button;
+    }
+    protected override void Bind()
+    {
+        Bind<object>(Model.Data, v => _button.Text = v?.ToString() ?? "");
+        Bind<bool>(Model.Disabled, d => _button.IsEnabled = !d, defaultValue: false);
+    }
 }
 
 /// <summary>
@@ -596,19 +675,46 @@ public sealed class BadgeView : MauiView<BadgeControl>
     protected override void Bind() => Bind<object>(Model.Data, v => _label.Text = v?.ToString() ?? "");
 }
 
-/// <summary>Navigation link → a MAUI <see cref="Button"/> (title; href navigation is a later wave).</summary>
+/// <summary>Navigation link → a MAUI <see cref="Button"/>. A link with a <c>Url</c> navigates the shell via
+/// <see cref="IMauiNavigator"/> (the href path); links without a Url fall back to their server
+/// <c>ClickAction</c> (a <see cref="MauiView.PostClick"/> <c>ClickedEvent</c>).</summary>
 public sealed class NavLinkView : MauiView<NavLinkControl>
 {
     private Button _button = null!;
-    protected override View CreateView() => _button = new Button { HorizontalOptions = LayoutOptions.Start };
-    protected override void Bind() => Bind<object>(Model.Title, v => _button.Text = v?.ToString() ?? "");
+    private string? _href;
+    protected override View CreateView()
+    {
+        _button = new Button { HorizontalOptions = LayoutOptions.Start };
+        _button.Clicked += (_, _) =>
+        {
+            var nav = !string.IsNullOrWhiteSpace(_href)
+                ? Stream?.Hub.ServiceProvider.GetService<IMauiNavigator>()
+                : null;
+            if (nav is not null) nav.NavigateTo(_href!, _button.Text);
+            else PostClick(); // ClickAction-based link (or no navigator registered).
+        };
+        return _button;
+    }
+    protected override void Bind()
+    {
+        Bind<object>(Model.Title, v => _button.Text = v?.ToString() ?? "");
+        Bind<object>(Model.Url, v => _href = v?.ToString());
+    }
 }
 
 /// <summary>Menu item → a MAUI <see cref="Label"/> (title).</summary>
 public sealed class MenuItemView : MauiView<MenuItemControl>
 {
     private Label _label = null!;
-    protected override View CreateView() => _label = new Label();
+    protected override View CreateView()
+    {
+        _label = new Label();
+        // Menu items act via their ClickAction — make the label tappable and dispatch it.
+        var tap = new TapGestureRecognizer();
+        tap.Tapped += (_, _) => PostClick();
+        _label.GestureRecognizers.Add(tap);
+        return _label;
+    }
     protected override void Bind() => Bind<object>(Model.Title, v => _label.Text = v?.ToString() ?? "");
 }
 
@@ -758,26 +864,31 @@ public sealed class CheckBoxView : FormMauiView<CheckBoxControl>
 public sealed class SelectView : FormMauiView<SelectControl>
 {
     private Picker _picker = null!;
-    private List<Option> _options = new();
+    private List<(string Text, string? Value)> _options = new();
 
     protected override View CreateView()
     {
         _picker = new Picker();
-        _options = (Model.Options as IEnumerable<Option>)?.ToList() ?? new();
-        foreach (var o in _options) _picker.Items.Add(o.Text);
         _picker.SelectedIndexChanged += (_, _) =>
         {
             if (_picker.SelectedIndex >= 0 && _picker.SelectedIndex < _options.Count)
-                Write(Model.Data, _options[_picker.SelectedIndex].GetItem());
+                Write(Model.Data, _options[_picker.SelectedIndex].Value);
         };
         return _picker;
     }
 
-    protected override void Bind() => BindValue<object>(Model.Data, v =>
+    protected override void Bind()
     {
-        var idx = _options.FindIndex(o => Equals(o.GetItem()?.ToString(), v?.ToString()));
-        if (idx >= 0) _picker.SelectedIndex = idx;
-    });
+        // Options now coerce from the JsonElement round-trip too (were silently empty before).
+        _options = CoerceOptions(Model.Options);
+        _picker.Items.Clear();
+        foreach (var (text, _) in _options) _picker.Items.Add(text);
+        BindValue<object>(Model.Data, v =>
+        {
+            var idx = _options.FindIndex(o => string.Equals(o.Value, v?.ToString(), StringComparison.Ordinal));
+            if (idx >= 0) _picker.SelectedIndex = idx;
+        });
+    }
 }
 
 /// <summary>Boolean toggle → MAUI <see cref="Switch"/> (two-way).</summary>
@@ -850,53 +961,153 @@ public sealed class DateTimeView : FormMauiView<DateTimeControl>
     });
 }
 
+/// <summary>Date-only field → MAUI <see cref="DatePicker"/> (two-way). Sibling of <see cref="DateTimeView"/>
+/// for the framework's <see cref="DateControl"/> (date without a time component).</summary>
+public sealed class DateView : FormMauiView<DateControl>
+{
+    private DatePicker _picker = null!;
+    protected override View CreateView()
+    {
+        _picker = new DatePicker();
+        _picker.DateSelected += (_, e) => Write<object>(Model.Data, e.NewDate);
+        return _picker;
+    }
+    protected override void Bind() => BindValue<object>(Model.Data, v =>
+    {
+        if (v is DateTime d) _picker.Date = d;
+        else if (v is DateTimeOffset dto) _picker.Date = dto.DateTime;
+        else if (v is string s && DateTime.TryParse(s, out var p)) _picker.Date = p;
+    });
+}
+
+/// <summary>Single-choice radio group → a vertical stack of MAUI <see cref="RadioButton"/>s sharing a group
+/// (two-way). Mirrors <see cref="SelectView"/> but presents the options inline instead of in a dropdown.</summary>
+public sealed class RadioGroupView : FormMauiView<RadioGroupControl>
+{
+    private VerticalStackLayout _stack = null!;
+    private List<(string Text, string? Value)> _options = new();
+    private readonly List<RadioButton> _buttons = new();
+    // A stable group name keeps the radios mutually exclusive (MAUI scopes selection by GroupName).
+    private readonly string _group = "rg-" + Guid.NewGuid().ToString("N");
+
+    protected override View CreateView() => _stack = new VerticalStackLayout { Spacing = 4 };
+
+    protected override void Bind()
+    {
+        _options = CoerceOptions(Model.Options);
+        _stack.Children.Clear();
+        _buttons.Clear();
+        foreach (var (text, value) in _options)
+        {
+            var rb = new RadioButton { Content = text, GroupName = _group, Value = value };
+            rb.CheckedChanged += (_, e) => { if (e.Value) Write(Model.Data, value); };
+            _buttons.Add(rb);
+            _stack.Children.Add(rb);
+        }
+        BindValue<object>(Model.Data, v =>
+        {
+            var idx = _options.FindIndex(o => string.Equals(o.Value, v?.ToString(), StringComparison.Ordinal));
+            for (var i = 0; i < _buttons.Count; i++) _buttons[i].IsChecked = i == idx;
+        });
+    }
+}
+
+/// <summary>Numeric slider → MAUI <see cref="Slider"/> over [Min, Max]. The framework
+/// <see cref="SliderControl"/> carries no data pointer (Min/Max/Step only), so this renders the range
+/// visually — read-only, matching the control's shape (Blazor has no slider component at all).</summary>
+public sealed class SliderView : MauiView<SliderControl>
+{
+    protected override View CreateView() => new Slider
+    {
+        Minimum = Model.Min,
+        Maximum = Math.Max(Model.Max, Model.Min + 1),
+    };
+}
+
+/// <summary>Spacer → a transparent, flexible <see cref="BoxView"/> that absorbs free space in its parent
+/// stack/grid (the layout-skin spacer).</summary>
+public sealed class SpacerView : MauiView<SpacerControl>
+{
+    protected override View CreateView() => new BoxView
+    {
+        Color = Colors.Transparent,
+        HorizontalOptions = LayoutOptions.Fill,
+        VerticalOptions = LayoutOptions.Fill,
+    };
+}
+
+/// <summary>Exception message → a red caption with the message and (when present) type + stack trace,
+/// the native counterpart of Blazor's error message bar.</summary>
+public sealed class ExceptionView : MauiView<ExceptionControl>
+{
+    protected override View CreateView()
+    {
+        var stack = new VerticalStackLayout { Spacing = 2, Padding = new Thickness(8) };
+        stack.Children.Add(new Label { Text = Model.Message, TextColor = Colors.OrangeRed, FontAttributes = FontAttributes.Bold });
+        if (!string.IsNullOrWhiteSpace(Model.Type))
+            stack.Children.Add(new Label { Text = Model.Type, TextColor = Colors.OrangeRed, FontSize = 11 });
+        if (!string.IsNullOrWhiteSpace(Model.StackTrace))
+            stack.Children.Add(new Label { Text = Model.StackTrace, TextColor = Colors.Gray, FontSize = 10 });
+        return stack;
+    }
+}
+
 /// <summary>Combobox → MAUI <see cref="Picker"/> (two-way; native Picker has no free-type filter — a
 /// later Monaco/autocomplete wave can add that).</summary>
 public sealed class ComboboxView : FormMauiView<ComboboxControl>
 {
     private Picker _picker = null!;
-    private List<Option> _options = new();
+    private List<(string Text, string? Value)> _options = new();
     protected override View CreateView()
     {
         _picker = new Picker();
-        _options = (Model.Options as IEnumerable<Option>)?.ToList() ?? new();
-        foreach (var o in _options) _picker.Items.Add(o.Text);
         _picker.SelectedIndexChanged += (_, _) =>
         {
             if (_picker.SelectedIndex >= 0 && _picker.SelectedIndex < _options.Count)
-                Write(Model.Data, _options[_picker.SelectedIndex].GetItem());
+                Write(Model.Data, _options[_picker.SelectedIndex].Value);
         };
         return _picker;
     }
-    protected override void Bind() => BindValue<object>(Model.Data, v =>
+    protected override void Bind()
     {
-        var idx = _options.FindIndex(o => Equals(o.GetItem()?.ToString(), v?.ToString()));
-        if (idx >= 0) _picker.SelectedIndex = idx;
-    });
+        // Free-type filter is still a later wave (native Picker has none); options now at least populate.
+        _options = CoerceOptions(Model.Options);
+        _picker.Items.Clear();
+        foreach (var (text, _) in _options) _picker.Items.Add(text);
+        BindValue<object>(Model.Data, v =>
+        {
+            var idx = _options.FindIndex(o => string.Equals(o.Value, v?.ToString(), StringComparison.Ordinal));
+            if (idx >= 0) _picker.SelectedIndex = idx;
+        });
+    }
 }
 
 /// <summary>Listbox → MAUI <see cref="Picker"/> (two-way single-select this wave).</summary>
 public sealed class ListboxView : FormMauiView<ListboxControl>
 {
     private Picker _picker = null!;
-    private List<Option> _options = new();
+    private List<(string Text, string? Value)> _options = new();
     protected override View CreateView()
     {
         _picker = new Picker();
-        _options = (Model.Options as IEnumerable<Option>)?.ToList() ?? new();
-        foreach (var o in _options) _picker.Items.Add(o.Text);
         _picker.SelectedIndexChanged += (_, _) =>
         {
             if (_picker.SelectedIndex >= 0 && _picker.SelectedIndex < _options.Count)
-                Write(Model.Data, _options[_picker.SelectedIndex].GetItem());
+                Write(Model.Data, _options[_picker.SelectedIndex].Value);
         };
         return _picker;
     }
-    protected override void Bind() => BindValue<object>(Model.Data, v =>
+    protected override void Bind()
     {
-        var idx = _options.FindIndex(o => Equals(o.GetItem()?.ToString(), v?.ToString()));
-        if (idx >= 0) _picker.SelectedIndex = idx;
-    });
+        _options = CoerceOptions(Model.Options);
+        _picker.Items.Clear();
+        foreach (var (text, _) in _options) _picker.Items.Add(text);
+        BindValue<object>(Model.Data, v =>
+        {
+            var idx = _options.FindIndex(o => string.Equals(o.Value, v?.ToString(), StringComparison.Ordinal));
+            if (idx >= 0) _picker.SelectedIndex = idx;
+        });
+    }
 }
 
 /// <summary>Layout grid → a wrapping MAUI <see cref="FlexLayout"/> of its child areas (a real flowing grid
@@ -996,6 +1207,143 @@ public sealed class LayoutAreaControlView : MauiView<LayoutAreaControl>
         return address.Equals(workspace.Hub.Address)
             ? new LayoutAreaView(workspace, Model.Reference, Renderer)
             : new LayoutAreaView(workspace, address, Model.Reference, Renderer);
+    }
+}
+
+// ---- Wave 2 control views: node-bound editor --------------------------------------------------------
+
+/// <summary>
+/// Native, cache-bound editor for a mesh node's content — the AspNetCore-free counterpart of Blazor's
+/// <c>MeshNodeContentEditorView</c>. Binds DIRECTLY to the node stream (<c>Hub.GetMeshNodeStream(NodePath)</c>):
+/// reads stay live with the node and every field edit writes back through <c>GetMeshNodeStream(NodePath)
+/// .Update(...)</c> as a per-field read-modify-write patch. ONE source of truth (the node stream) — NO
+/// <c>/data</c> replica, NO debounced save loop (the forbidden replicate-then-save antipattern). The fields
+/// are declared on the control (reflected on the backend), so the view needs no client type registry.
+/// </summary>
+public sealed class MeshNodeContentEditorView : MauiView<MeshNodeContentEditorControl>
+{
+    private VerticalStackLayout _root = null!;
+    private string _path = "";
+    private bool _canEdit = true;
+    private bool _suppress;          // true while loading echoed node state → don't re-persist
+    private string? _focusedKey;     // the field the user is actively typing → don't clobber it
+    // One loader per field key: applies the latest node content to that field's native control.
+    private readonly Dictionary<string, Action<MeshNode>> _loaders = new();
+
+    protected override View CreateView()
+    {
+        _path = Model.NodePath ?? "";
+        _canEdit = Model.CanEdit;
+        _root = new VerticalStackLayout { Spacing = 8 };
+        foreach (var f in Model.Fields)
+            _root.Children.Add(BuildField(f));
+        return _root;
+    }
+
+    protected override void Bind()
+    {
+        if (Stream is null || string.IsNullOrEmpty(_path)) return;
+        // Bind to the node stream — reads stay live; reuse the shared cache handle.
+        var sub = Stream.Hub.GetMeshNodeStream(_path)
+            .Where(n => n is not null)
+            .Subscribe(node => MainThread.BeginInvokeOnMainThread(() =>
+            {
+                _suppress = true;
+                try { foreach (var load in _loaders.Values) load(node!); }
+                finally { _suppress = false; }
+            }));
+        Disposables.Add(sub);
+    }
+
+    private View BuildField(MeshNodeEditorField f)
+    {
+        var label = new Label { Text = f.Label, FontSize = 12, TextColor = Colors.Gray };
+        View input;
+        switch (f.Kind)
+        {
+            case MeshNodeEditorFieldKind.Bool:
+            {
+                var cb = new CheckBox { IsEnabled = _canEdit };
+                cb.CheckedChanged += (_, e) => { if (!_suppress) Persist(f.Key, JsonValue.Create(e.Value)); };
+                _loaders[f.Key] = node =>
+                {
+                    var v = FieldValue(node, f.Key);
+                    cb.IsChecked = v is JsonValue jb && jb.TryGetValue<bool>(out var b) && b;
+                };
+                input = cb;
+                break;
+            }
+            case MeshNodeEditorFieldKind.Enum:
+            {
+                var picker = new Picker { IsEnabled = _canEdit };
+                foreach (var o in f.Options) picker.Items.Add(o);
+                picker.SelectedIndexChanged += (_, _) =>
+                {
+                    if (_suppress) return;
+                    var val = picker.SelectedIndex >= 0 ? f.Options[picker.SelectedIndex] : null;
+                    Persist(f.Key, val is null ? null : JsonValue.Create(val));
+                };
+                _loaders[f.Key] = node =>
+                {
+                    var v = FieldValue(node, f.Key)?.ToString();
+                    picker.SelectedIndex = v is null ? -1 : f.Options.IndexOf(v);
+                };
+                input = picker;
+                break;
+            }
+            default: // Text
+            {
+                var entry = new Entry { IsEnabled = _canEdit };
+                entry.Focused += (_, _) => _focusedKey = f.Key;
+                entry.Unfocused += (_, _) => { if (_focusedKey == f.Key) _focusedKey = null; };
+                entry.TextChanged += (_, e) =>
+                {
+                    if (!_suppress)
+                        Persist(f.Key, string.IsNullOrEmpty(e.NewTextValue) ? null : JsonValue.Create(e.NewTextValue));
+                };
+                _loaders[f.Key] = node =>
+                {
+                    if (f.Key == _focusedKey) return; // don't clobber the active edit with an echo
+                    var v = FieldValue(node, f.Key);
+                    entry.Text = v is JsonValue js ? js.ToString() : v?.ToString() ?? "";
+                };
+                input = entry;
+                break;
+            }
+        }
+        return new VerticalStackLayout { Spacing = 2, Children = { label, input } };
+    }
+
+    private JsonNode? FieldValue(MeshNode node, string key) => ToJsonObject(node.Content)?[key];
+
+    /// <summary>Per-field read-modify-write straight to the node via the cache: re-read the latest content
+    /// inside the lambda and set ONLY this field, so concurrent writers / hidden fields aren't clobbered.</summary>
+    private void Persist(string key, JsonNode? value)
+    {
+        if (!_canEdit || Stream is null || string.IsNullOrEmpty(_path)) return;
+        var opts = Stream.Hub.JsonSerializerOptions;
+        var logger = Stream.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<MeshNodeContentEditorView>();
+        Stream.Hub.GetMeshNodeStream(_path)
+            .Update(node =>
+            {
+                var obj = ToJsonObject(node.Content) ?? new JsonObject();
+                obj[key] = value is null ? null : JsonNode.Parse(value.ToJsonString());
+                return node with { Content = JsonSerializer.SerializeToElement<object>(obj, opts) };
+            })
+            .Subscribe(_ => { }, ex => logger?.LogWarning(ex,
+                "MeshNodeContentEditor: persist failed for {Path} field {Key}", _path, key));
+    }
+
+    private JsonObject? ToJsonObject(object? content)
+    {
+        if (content is null) return null;
+        try
+        {
+            return content is JsonElement je
+                ? JsonNode.Parse(je.GetRawText()) as JsonObject
+                : JsonSerializer.SerializeToNode(content, Stream!.Hub.JsonSerializerOptions) as JsonObject;
+        }
+        catch { return null; }
     }
 }
 
@@ -1185,4 +1533,77 @@ public sealed class MeshSearchView : MauiView<MeshSearchControl>
         JsonElement je when je.ValueKind == JsonValueKind.False => false,
         _ => bool.TryParse(value.ToString(), out var p) ? p : defaultValue,
     };
+}
+
+// ---- Chat: agent-backed thread message bubble ----------------------------------------------------
+
+/// <summary>
+/// A single thread message as a native chat bubble — the AspNetCore-free counterpart of Blazor's
+/// <c>ThreadMessageBubbleView</c>. Role drives alignment + colour (user → right/blue, assistant → left/grey);
+/// the body <c>Text</c> is data-bound (a <see cref="JsonPointerReference"/>) so it refines in place while the
+/// agent streams. While executing it shows a spinner + the live <c>ExecutionStatus</c>; a footer chips the
+/// author, model, and timestamp. (Tool-call chips + markdown body + edit/resubmit are later refinements;
+/// this renders the conversation natively, which the agent chat needs first.)
+/// </summary>
+public sealed class ThreadMessageBubbleView : MauiView<ThreadMessageBubbleControl>
+{
+    private Label _body = null!;
+    private ActivityIndicator _spinner = null!;
+    private Label _status = null!;
+    private Label _footer = null!;
+    private HorizontalStackLayout _statusRow = null!;
+
+    protected override View CreateView()
+    {
+        var isUser = string.Equals(Model.Role, "user", StringComparison.OrdinalIgnoreCase);
+
+        var author = new Label
+        {
+            Text = string.IsNullOrWhiteSpace(Model.AuthorName) ? (isUser ? "You" : "Assistant") : Model.AuthorName,
+            FontSize = 11, FontAttributes = FontAttributes.Bold,
+            TextColor = isUser ? Colors.White : Color.FromArgb("#C0C0C0"),
+        };
+        _body = new Label { TextColor = Colors.White, LineBreakMode = LineBreakMode.WordWrap };
+
+        _spinner = new ActivityIndicator { IsVisible = false, IsRunning = false, Color = Colors.White, HeightRequest = 14, WidthRequest = 14 };
+        _status = new Label { FontSize = 11, TextColor = Color.FromArgb("#C0C0C0") };
+        _statusRow = new HorizontalStackLayout { Spacing = 6, IsVisible = false, Children = { _spinner, _status } };
+
+        _footer = new Label { FontSize = 10, TextColor = Color.FromArgb("#9A9A9A") };
+
+        var content = new VerticalStackLayout { Spacing = 4, Children = { author, _body, _statusRow, _footer } };
+
+        return new Border
+        {
+            Padding = new Thickness(10, 6),
+            Margin = new Thickness(isUser ? 40 : 0, 2, isUser ? 0 : 40, 2),
+            HorizontalOptions = isUser ? LayoutOptions.End : LayoutOptions.Start,
+            BackgroundColor = isUser ? Colors.RoyalBlue : Color.FromArgb("#3A3A3C"),
+            StrokeThickness = 0,
+            StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 12 },
+            Content = content,
+        };
+    }
+
+    protected override void Bind()
+    {
+        Bind<string>(Model.Text, v => _body.Text = v ?? "");
+        Bind<bool>(Model.IsExecuting, executing =>
+        {
+            _statusRow.IsVisible = executing;
+            _spinner.IsVisible = executing;
+            _spinner.IsRunning = executing;
+        }, defaultValue: false);
+        Bind<string>(Model.ExecutionStatus, v => _status.Text = v ?? "");
+        _footer.Text = BuildFooter();
+        _footer.IsVisible = !string.IsNullOrEmpty(_footer.Text);
+    }
+
+    private string BuildFooter()
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(Model.ModelName)) parts.Add(Model.ModelName!);
+        if (Model.Timestamp is { } ts) parts.Add(ts.ToLocalTime().ToString("t"));
+        return string.Join(" · ", parts);
+    }
 }

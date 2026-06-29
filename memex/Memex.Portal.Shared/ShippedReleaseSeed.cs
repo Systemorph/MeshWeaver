@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Reflection;
@@ -10,6 +11,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -316,20 +318,35 @@ public static class ShippedReleaseSeed
 /// </summary>
 public sealed class ShippedReleaseSeedHostedService(
     IMessageHub hub,
+    IConfiguration configuration,
     ILogger<ShippedReleaseSeedHostedService>? logger = null) : IHostedService
 {
     private IDisposable? _subscription;
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
+        // Boot pre-seed = the shipped sample/framework partitions PLUS any extra partitions a deployment
+        // opts into via config (ShippedRelease:ExtraPreseedPartitions). User/Space partitions are NOT
+        // shipped (they're user-Released), but a deployment can pre-build a heavily-used runtime Space at
+        // boot so its NodeType/dashboard views don't render empty during the cold compile-on-first-access
+        // window after a pod restart. Set PER-DEPLOYMENT (e.g. atioz: AgenticPension) — never hardcode a
+        // customer's space name into framework source. Pre-build is async (never blocks host startup).
+        var extra = configuration.GetSection("ShippedRelease:ExtraPreseedPartitions").Get<string[]>()
+            ?? [];
+        var partitions = ShippedReleaseSeed.ShippedPartitions
+            .Concat(extra)
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
         logger?.LogInformation(
             "[PlatformStartup] version={Version}; pre-building shipped code-NodeType releases as System for "
-            + "{Partitions} and recording the boot activity under {VersionNode}.",
+            + "{Partitions}{Extra} and recording the boot activity under {VersionNode}.",
             ShippedReleaseSeed.InstalledPlatformVersion,
-            string.Join(", ", ShippedReleaseSeed.ShippedPartitions),
+            string.Join(", ", partitions),
+            extra.Length > 0 ? $" (incl. config extras: {string.Join(", ", extra)})" : "",
             ShippedReleaseSeed.PlatformVersionNodePath);
         _subscription = ShippedReleaseSeed
-            .RunPlatformStartup(hub, ShippedReleaseSeed.ShippedPartitions, logger)
+            .RunPlatformStartup(hub, partitions, logger)
             .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default)
             .Subscribe(
                 _ => { },

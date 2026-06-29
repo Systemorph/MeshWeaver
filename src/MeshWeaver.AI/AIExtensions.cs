@@ -125,6 +125,9 @@ public static class AIExtensions
             // ("awaiting first data"). Registered with nameof so the stored "$type":"PartitionAccessPolicy"
             // resolves — a redeploy/next sync then reads every AI partition's policy correctly. Mirrors
             // MeshNodeExtensions' registration for the Graph/Doc hubs.
+            // Full-name READ alias FIRST (legacy data persisted with a full-name $type), short nameof
+            // LAST so this hub keeps WRITING the short name. See WithGraphTypes for the full rationale.
+            .WithType(typeof(MeshWeaver.Mesh.Security.PartitionAccessPolicy), typeof(MeshWeaver.Mesh.Security.PartitionAccessPolicy).FullName!)
             .WithType(typeof(MeshWeaver.Mesh.Security.PartitionAccessPolicy), nameof(MeshWeaver.Mesh.Security.PartitionAccessPolicy))
             // User + UserActivityRecord: the chat composer reads the caller's user-partition root node
             // ({user}, NodeType "User") for _userHome + onboarding, and its _UserActivity satellite. The
@@ -134,7 +137,9 @@ public static class AIExtensions
             // $type discriminator)" → "renders empty, reactive waits time out": the composer never binds
             // and the chat window DISAPPEARS on submit (and home areas hang "awaiting first data"). Same
             // class as PartitionAccessPolicy above. Also added to AddMeshTypes (their core home).
+            .WithType(typeof(MeshWeaver.Mesh.Security.User), typeof(MeshWeaver.Mesh.Security.User).FullName!)
             .WithType(typeof(MeshWeaver.Mesh.Security.User), nameof(MeshWeaver.Mesh.Security.User))
+            .WithType(typeof(MeshWeaver.Mesh.Activity.UserActivityRecord), typeof(MeshWeaver.Mesh.Activity.UserActivityRecord).FullName!)
             .WithType(typeof(MeshWeaver.Mesh.Activity.UserActivityRecord), nameof(MeshWeaver.Mesh.Activity.UserActivityRecord))
             // MessageViewModel is not registered — handled as JsonElement on the wire.
             // SubmitMessageRequest / SubmitMessageResponse deleted 2026-05-25:
