@@ -190,6 +190,26 @@ public abstract class MauiView : IDisposable
             try { setter((T?)Convert.ChangeType(value, typeof(T))); } catch { setter(defaultValue); }
     }
 
+    /// <summary>
+    /// Dispatches a click for this control's area as a <see cref="ClickedEvent"/> to the stream owner —
+    /// the server-side <c>ClickAction</c> delegate does NOT serialize to the client, so a click is a
+    /// message that the layout area receives and turns into the action. Mirrors <c>BlazorView.OnClick</c>,
+    /// incl. stamping the (device-)user <see cref="AccessContext"/> so the owning hub's access gate doesn't
+    /// deny the downstream write. Shared by Button / NavLink / MenuItem / any clickable container.
+    /// </summary>
+    protected void PostClick(object? payload = null)
+    {
+        if (Stream is null) return;
+        var access = Stream.Hub.ServiceProvider.GetService<AccessService>();
+        var ctx = access?.Context ?? access?.CircuitContext;
+        var evt = payload is null
+            ? new ClickedEvent(Area, Stream.StreamId)
+            : new ClickedEvent(Area, Stream.StreamId) { Payload = payload };
+        Stream.Hub.Post(evt, o => ctx is not null
+            ? o.WithTarget(Stream.Owner).WithAccessContext(ctx)
+            : o.WithTarget(Stream.Owner));
+    }
+
     public void Dispose()
     {
         foreach (var d in Disposables) d.Dispose();
@@ -366,8 +386,18 @@ public sealed class LabelView : MauiView<LabelControl>
 public sealed class ButtonView : MauiView<ButtonControl>
 {
     private Button _button = null!;
-    protected override View CreateView() => _button = new Button();
-    protected override void Bind() => Bind<object>(Model.Data, v => _button.Text = v?.ToString() ?? "");
+    protected override View CreateView()
+    {
+        _button = new Button();
+        // A click dispatches the control's server-side ClickAction via a ClickedEvent (see PostClick).
+        _button.Clicked += (_, _) => PostClick();
+        return _button;
+    }
+    protected override void Bind()
+    {
+        Bind<object>(Model.Data, v => _button.Text = v?.ToString() ?? "");
+        Bind<bool>(Model.Disabled, d => _button.IsEnabled = !d, defaultValue: false);
+    }
 }
 
 /// <summary>
