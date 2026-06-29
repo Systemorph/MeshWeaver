@@ -34,15 +34,14 @@ public static class MauiControlManifest
         "LayoutAreaControl", "BadgeControl", "NavLinkControl", "MenuItemControl",
         // Agent-backed chat
         "ThreadChatControl", "ThreadMessageBubbleControl",
-        // Phase 3 — node display cards
-        "MeshNodeCardControl", "MeshNodeThumbnailControl",
+        // Phase 3 — node display cards + grouped catalog + query-driven collection
+        "MeshNodeCardControl", "MeshNodeThumbnailControl", "CatalogControl", "MeshNodeCollectionControl",
     };
 
     /// <summary>Concrete controls not yet given a native view — the remaining parity work (Phases 3-5).</summary>
     public static readonly IReadOnlySet<string> PlannedControls = new HashSet<string>(StringComparer.Ordinal)
     {
-        // Phase 3 — catalogs / node management / misc
-        "CatalogControl", "MeshNodeCollectionControl",
+        // Phase 3 — node management / misc
         "MeshNodeEditorControl", "MeshNodeRoleEditorControl", "DialogControl", "EditFormControl",
         "EditorControl", "ItemTemplateControl", "SearchBoxControl", "RedirectControl", "AppearanceControl",
         "UserProfileControl", "FileBrowserControl", "NodeImportControl", "NodeExportControl",

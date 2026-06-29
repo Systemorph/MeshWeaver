@@ -6,6 +6,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Maui.Abstractions;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Catalog;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Markdown;
@@ -356,6 +357,9 @@ public static class MauiViewPackExtensions
         // Phase 3 — node display cards (tappable → navigate via IMauiNavigator).
         .Register<MeshNodeCardControl, MeshNodeCardView>()
         .Register<MeshNodeThumbnailControl, MeshNodeThumbnailView>()
+        // Phase 3 — grouped catalog + query-driven node collection.
+        .Register<CatalogControl, CatalogView>()
+        .Register<MeshNodeCollectionControl, MeshNodeCollectionView>()
         // Embedded remote area (e.g. the home page's bottom chat composer) → the existing LayoutAreaView.
         .Register<LayoutAreaControl, LayoutAreaControlView>()
         // Wave 2 — nav + badges.
@@ -893,6 +897,107 @@ public sealed class MeshNodeThumbnailView : MauiView<MeshNodeThumbnailControl>
         return parts.Length == 1
             ? parts[0][..Math.Min(2, parts[0].Length)].ToUpperInvariant()
             : (parts[0][..1] + parts[1][..1]).ToUpperInvariant();
+    }
+}
+
+/// <summary>
+/// A grouped catalog → native: each <see cref="CatalogGroup"/> renders a (tappable, collapsible) section
+/// header (emoji + label + count) over a wrapping grid of the group's item controls (typically
+/// <see cref="MeshNodeCardControl"/>, rendered via the registry). The AspNetCore-free counterpart of
+/// Blazor's catalog grid; sections collapse by toggling the grid's visibility (no extra dependency).
+/// </summary>
+public sealed class CatalogView : MauiView<CatalogControl>
+{
+    protected override View CreateView()
+    {
+        var root = new VerticalStackLayout { Spacing = Model.SectionGap };
+        foreach (var group in Model.Groups.OrderBy(g => g.Order))
+        {
+            var count = group.TotalCount > 0 ? group.TotalCount : group.Items.Count;
+            var headerText = (string.IsNullOrEmpty(group.Emoji) ? "" : group.Emoji + "  ") + group.Label
+                + (Model.ShowCounts ? $"   ({count})" : "");
+            var header = new Label { Text = headerText, FontAttributes = FontAttributes.Bold, FontSize = 16, TextColor = Colors.White };
+
+            // Fully-qualified: MeshWeaver.Layout also defines FlexWrap/FlexDirection (the framework skin enums).
+            var grid = new FlexLayout
+            {
+                Wrap = Microsoft.Maui.Layouts.FlexWrap.Wrap,
+                Direction = Microsoft.Maui.Layouts.FlexDirection.Row,
+            };
+            if (Stream is not null)
+                foreach (var item in group.Items)
+                {
+                    // Each item control (e.g. a node card) gets a fixed tile so the row wraps into columns.
+                    var tile = new ContentView
+                    {
+                        WidthRequest = 280, HeightRequest = Model.CardHeight,
+                        Margin = new Thickness(Model.Spacing * 2),
+                        Content = Renderer.RenderControl(item, Stream, Area),
+                    };
+                    grid.Children.Add(tile);
+                }
+
+            if (Model.CollapsibleSections)
+            {
+                grid.IsVisible = group.IsExpanded;
+                var tap = new TapGestureRecognizer();
+                tap.Tapped += (_, _) => grid.IsVisible = !grid.IsVisible;
+                header.GestureRecognizers.Add(tap);
+            }
+            root.Children.Add(new VerticalStackLayout { Spacing = 8, Children = { header, grid } });
+        }
+        return root;
+    }
+}
+
+/// <summary>
+/// A query-driven mesh-node collection → a live list of node rows (name + type), each tappable to navigate
+/// via <see cref="IMauiNavigator"/>, with an optional per-row delete (when <c>Deletable</c>). Reuses the
+/// shared synced query (<c>hub.GetQuery</c>) — the same path the picker/search views use; the list refreshes
+/// as the query results change. (The add-dialog from <c>ShowAdd</c> is a later wave.)
+/// </summary>
+public sealed class MeshNodeCollectionView : MauiView<MeshNodeCollectionControl>
+{
+    private VerticalStackLayout _root = null!;
+    protected override View CreateView() => _root = new VerticalStackLayout { Spacing = 4 };
+
+    protected override void Bind()
+    {
+        if (Stream is null) return;
+        var queries = Model.Queries is { Length: > 0 } q ? q : new[] { "" };
+        var sub = Stream.Hub.GetQuery("collection:" + string.Join("|", queries), queries)
+            .Subscribe(nodes => MainThread.BeginInvokeOnMainThread(() => Render(nodes)));
+        Disposables.Add(sub);
+    }
+
+    private void Render(IEnumerable<MeshNode> nodes)
+    {
+        _root.Children.Clear();
+        var deletable = Model.Deletable;
+        foreach (var node in nodes.DistinctBy(n => n.Path))
+        {
+            var n = node;
+            var name = new Label
+            {
+                Text = n.Name ?? n.Path, TextColor = Colors.White,
+                VerticalOptions = LayoutOptions.Center, HorizontalOptions = LayoutOptions.StartAndExpand,
+            };
+            var tap = new TapGestureRecognizer();
+            tap.Tapped += (_, _) => Stream?.Hub.ServiceProvider.GetService<IMauiNavigator>()?.NavigateTo(n.Path, n.Name);
+            name.GestureRecognizers.Add(tap);
+
+            var row = new HorizontalStackLayout { Spacing = 8, Children = { name } };
+            if (!string.IsNullOrWhiteSpace(n.NodeType))
+                row.Children.Add(new Label { Text = n.NodeType, FontSize = 10, TextColor = Color.FromArgb("#9A9A9A"), VerticalOptions = LayoutOptions.Center });
+            if (deletable)
+            {
+                var del = new Button { Text = "🗑", BackgroundColor = Colors.Transparent, Padding = 0 };
+                del.Clicked += (_, _) => Stream?.Hub.ServiceProvider.GetService<IMeshService>()?.DeleteNode(n.Path)
+                    .Subscribe(_ => { }, _ => { });
+                row.Children.Add(del);
+            }
+            _root.Children.Add(row);
+        }
     }
 }
 
