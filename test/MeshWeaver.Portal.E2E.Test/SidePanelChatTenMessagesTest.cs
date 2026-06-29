@@ -93,27 +93,33 @@ public class SidePanelChatTenMessagesTest(PortalFixture fixture)
         for (var i = 0; i < MessageCount; i++)
         {
             // Re-resolve the Monaco editor each turn (the side panel rebinds to the freshly-created thread
-            // after the first message). Force the click past Playwright's "stable" actionability check —
-            // Monaco re-lays-out continuously, which is cosmetic; the keyboard typing below lands in the
-            // focused editor regardless, and the assertions below prove the message actually went through.
+            // after the first message). Escape closes any open suggest widget, select-all+backspace clears
+            // any residual text, then type. Force the click past Playwright's "stable" actionability check —
+            // Monaco re-lays-out continuously, which is cosmetic; the keyboard typing lands in the focused
+            // editor regardless (mirrors the robust pattern in ChatRepeatedlyNoVanishTest).
             var editor = page.Locator(".thread-chat-footer .monaco-editor").Last;
+            await page.Keyboard.PressAsync("Escape");
             await editor.ClickAsync(new LocatorClickOptions { Force = true });
+            await page.Keyboard.PressAsync("ControlOrMeta+A");
+            await page.Keyboard.PressAsync("Backspace");
             await page.Keyboard.TypeAsync($"This is message number {i + 1}. Reply with only the digit {i + 1}.");
 
             var send = page.Locator(".thread-chat-footer .selector-bar fluent-button").Last;
             await send.ClickAsync(new LocatorClickOptions { Timeout = 30_000 });
 
-            // (a) The user's bubble appears promptly.
-            await userBubbles.Nth(i).WaitForAsync(
-                new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = PromptBubbleMs });
+            // (a) The user's bubble landed — poll the COUNT (>= i+1), robust to bubbles re-keying on the
+            //     thread rebind (a specific .Nth(i) wait is brittle across re-renders).
+            (await PollAsync(async () => await userBubbles.CountAsync() >= i + 1, TimeSpan.FromSeconds(15)))
+                .Should().BeTrue($"the user bubble for message {i + 1} must appear (saw {await userBubbles.CountAsync()})");
 
             // No submit error surfaced.
             (await page.Locator(".thread-chat-status-msg.error").CountAsync())
                 .Should().Be(0, $"sending message {i + 1} must not surface an error");
 
-            // (b) The assistant reply for this round, then (c) the round settles so the next Send re-enables.
-            await assistantBubbles.Nth(i).WaitForAsync(
-                new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = RoundMs });
+            // (b) The assistant reply for this round (count >= i+1), then (c) the round settles so the next
+            //     Send re-enables.
+            (await PollAsync(async () => await assistantBubbles.CountAsync() >= i + 1, RoundDuration))
+                .Should().BeTrue($"round {i + 1} must produce an assistant reply (saw {await assistantBubbles.CountAsync()})");
             await execBar.WaitForAsync(
                 new LocatorWaitForOptions { State = WaitForSelectorState.Detached, Timeout = RoundMs });
 
@@ -134,5 +140,19 @@ public class SidePanelChatTenMessagesTest(PortalFixture fixture)
             $"every one of {MessageCount} rounds must produce an assistant reply");
 
         await page.ScreenshotAsync(new PageScreenshotOptions { Path = "/tmp/side-panel-ten-messages.png", FullPage = true });
+    }
+
+    // A real LLM round can take a while; poll the assistant-bubble count up to this bound.
+    private static readonly TimeSpan RoundDuration = TimeSpan.FromMilliseconds(RoundMs);
+
+    private static async Task<bool> PollAsync(Func<Task<bool>> predicate, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (await predicate()) return true;
+            await Task.Delay(300);
+        }
+        return false;
     }
 }
