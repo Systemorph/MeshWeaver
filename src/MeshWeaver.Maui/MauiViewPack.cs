@@ -385,7 +385,9 @@ public static class MauiViewPackExtensions
         // Wave 2 — nav + badges.
         .Register<BadgeControl, BadgeView>()
         .Register<NavLinkControl, NavLinkView>()
-        .Register<MenuItemControl, MenuItemView>();
+        .Register<MenuItemControl, MenuItemView>()
+        // Phase 2 — agent-backed chat: a single thread message bubble (streaming text + exec status).
+        .Register<ThreadMessageBubbleControl, ThreadMessageBubbleView>();
 }
 
 // ---- Wave 1 control views -------------------------------------------------------------------------
@@ -1531,4 +1533,77 @@ public sealed class MeshSearchView : MauiView<MeshSearchControl>
         JsonElement je when je.ValueKind == JsonValueKind.False => false,
         _ => bool.TryParse(value.ToString(), out var p) ? p : defaultValue,
     };
+}
+
+// ---- Chat: agent-backed thread message bubble ----------------------------------------------------
+
+/// <summary>
+/// A single thread message as a native chat bubble — the AspNetCore-free counterpart of Blazor's
+/// <c>ThreadMessageBubbleView</c>. Role drives alignment + colour (user → right/blue, assistant → left/grey);
+/// the body <c>Text</c> is data-bound (a <see cref="JsonPointerReference"/>) so it refines in place while the
+/// agent streams. While executing it shows a spinner + the live <c>ExecutionStatus</c>; a footer chips the
+/// author, model, and timestamp. (Tool-call chips + markdown body + edit/resubmit are later refinements;
+/// this renders the conversation natively, which the agent chat needs first.)
+/// </summary>
+public sealed class ThreadMessageBubbleView : MauiView<ThreadMessageBubbleControl>
+{
+    private Label _body = null!;
+    private ActivityIndicator _spinner = null!;
+    private Label _status = null!;
+    private Label _footer = null!;
+    private HorizontalStackLayout _statusRow = null!;
+
+    protected override View CreateView()
+    {
+        var isUser = string.Equals(Model.Role, "user", StringComparison.OrdinalIgnoreCase);
+
+        var author = new Label
+        {
+            Text = string.IsNullOrWhiteSpace(Model.AuthorName) ? (isUser ? "You" : "Assistant") : Model.AuthorName,
+            FontSize = 11, FontAttributes = FontAttributes.Bold,
+            TextColor = isUser ? Colors.White : Color.FromArgb("#C0C0C0"),
+        };
+        _body = new Label { TextColor = Colors.White, LineBreakMode = LineBreakMode.WordWrap };
+
+        _spinner = new ActivityIndicator { IsVisible = false, IsRunning = false, Color = Colors.White, HeightRequest = 14, WidthRequest = 14 };
+        _status = new Label { FontSize = 11, TextColor = Color.FromArgb("#C0C0C0") };
+        _statusRow = new HorizontalStackLayout { Spacing = 6, IsVisible = false, Children = { _spinner, _status } };
+
+        _footer = new Label { FontSize = 10, TextColor = Color.FromArgb("#9A9A9A") };
+
+        var content = new VerticalStackLayout { Spacing = 4, Children = { author, _body, _statusRow, _footer } };
+
+        return new Border
+        {
+            Padding = new Thickness(10, 6),
+            Margin = new Thickness(isUser ? 40 : 0, 2, isUser ? 0 : 40, 2),
+            HorizontalOptions = isUser ? LayoutOptions.End : LayoutOptions.Start,
+            BackgroundColor = isUser ? Colors.RoyalBlue : Color.FromArgb("#3A3A3C"),
+            StrokeThickness = 0,
+            StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 12 },
+            Content = content,
+        };
+    }
+
+    protected override void Bind()
+    {
+        Bind<string>(Model.Text, v => _body.Text = v ?? "");
+        Bind<bool>(Model.IsExecuting, executing =>
+        {
+            _statusRow.IsVisible = executing;
+            _spinner.IsVisible = executing;
+            _spinner.IsRunning = executing;
+        }, defaultValue: false);
+        Bind<string>(Model.ExecutionStatus, v => _status.Text = v ?? "");
+        _footer.Text = BuildFooter();
+        _footer.IsVisible = !string.IsNullOrEmpty(_footer.Text);
+    }
+
+    private string BuildFooter()
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(Model.ModelName)) parts.Add(Model.ModelName!);
+        if (Model.Timestamp is { } ts) parts.Add(ts.ToLocalTime().ToString("t"));
+        return string.Join(" · ", parts);
+    }
 }
