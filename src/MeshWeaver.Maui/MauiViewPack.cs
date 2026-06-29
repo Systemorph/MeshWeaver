@@ -406,10 +406,18 @@ public sealed class ContainerView : MauiView
 {
     protected override View CreateView()
     {
-        // Honor StackControl orientation — a horizontal Stack (e.g. a tab bar / button row) must lay its
-        // children left-to-right, not stacked vertically. Default + non-Stack containers stay vertical.
+        // Splitter → child areas as panes in a Grid (columns for a horizontal split, rows for vertical).
+        if (Control is SplitterControl splitter && Stream is not null && Control is IContainerControl sc)
+            return BuildSplitter(splitter, sc);
+
+        // Orientation: a horizontal Stack / a Toolbar (default horizontal) lays children left-to-right.
         var skin = Control is StackControl stack ? stack.Skin : null;
-        var horizontal = IsHorizontal(skin);
+        var horizontal = Control switch
+        {
+            StackControl s => IsHorizontalOrientation(s.Skin?.Orientation, false),
+            ToolbarControl t => IsHorizontalOrientation(t.Skin?.Orientation, true),
+            _ => false,
+        };
         var spacing = Gap(skin, horizontal) ?? 8;   // honour the skin's gap; default 8 when unset
         Microsoft.Maui.Controls.Layout layout = horizontal
             ? new HorizontalStackLayout { Spacing = spacing }
@@ -419,19 +427,35 @@ public sealed class ContainerView : MauiView
                 layout.Children.Add(Renderer.RenderArea(Stream, named.Area.ToString()!));
 
         // A CardSkin wraps the container in a bordered card (no-op when absent → default unchanged).
-        if (Control.Skins.OfType<CardSkin>().Any())
-            return new Border
-            {
-                Padding = 12, BackgroundColor = Color.FromArgb("#2A2A2C"), StrokeThickness = 0,
-                StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 10 },
-                Content = layout,
-            };
-        return layout;
+        return Control.Skins.OfType<CardSkin>().Any() ? Card(layout) : layout;
     }
 
+    private View BuildSplitter(SplitterControl splitter, IContainerControl container)
+    {
+        var horizontal = IsHorizontalOrientation(splitter.Skin?.Orientation, true);
+        var grid = new Grid { ColumnSpacing = 6, RowSpacing = 6 };
+        var areas = container.Areas.ToList();
+        for (var i = 0; i < areas.Count; i++)
+            if (horizontal) grid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Star));
+            else grid.RowDefinitions.Add(new RowDefinition(GridLength.Star));
+        for (var i = 0; i < areas.Count; i++)
+        {
+            var v = Renderer.RenderArea(Stream!, areas[i].Area.ToString()!);
+            if (horizontal) grid.Add(v, i, 0); else grid.Add(v, 0, i);
+        }
+        return grid;
+    }
+
+    private static View Card(View content) => new Border
+    {
+        Padding = 12, BackgroundColor = Color.FromArgb("#2A2A2C"), StrokeThickness = 0,
+        StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 10 },
+        Content = content,
+    };
+
     // Orientation rides the skin as object? (an enum at author time, a JSON string after stream round-trip).
-    private static bool IsHorizontal(LayoutStackSkin? skin) =>
-        skin?.Orientation?.ToString()?.Contains("Horizontal", StringComparison.OrdinalIgnoreCase) == true;
+    private static bool IsHorizontalOrientation(object? orientation, bool dflt) =>
+        orientation?.ToString() is { } s ? s.Contains("Horizontal", StringComparison.OrdinalIgnoreCase) : dflt;
 
     // The skin's HorizontalGap/VerticalGap (an int, a double, or a CSS-ish "8px" string) → a spacing value.
     private static double? Gap(LayoutStackSkin? skin, bool horizontal)
