@@ -462,24 +462,53 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
 
     #region 2. Local First
 
+    /// <summary>
+    /// Blended @-ranking (commit b36661860): local sources — Source A ("Nearby", relevance rank 8)
+    /// and Source B ("Subtree", rank 9) — carry a higher relevance rank than cross-partition
+    /// broadening (Source C, "Partition", rank 2). All three emit under one uniform category band, so
+    /// "local first" is the per-item <see cref="AutocompleteRelevance"/> relevance tiebreaker: when a
+    /// broadening batch is produced, its items rank at or below the local items by item Priority.
+    /// <para>This asserts that item-level contract on the FULL awaited result — no race gate. (Was a
+    /// stale assertion that the Nearby BATCH outranked the Partition batch by CategoryPriority — false
+    /// under the blend's uniform band, and gated on the racy arrival of ≥2 batches, so it fired only
+    /// when broadening happened to run on CI and then failed "0 > 0".)</para>
+    /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task LocalFirst_NearbyBatchHigherPriorityThanGlobal()
+    public async Task LocalFirst_LocalItemsOutrankBroadeningItems()
     {
         var batches = await Orchestrator
             .GetCompletions("@", "ACME/ProductLaunch")
             .ToList().Should().Within(30.Seconds()).Emit();
 
-        Output.WriteLine($"Batches by priority:");
         foreach (var batch in batches.OrderByDescending(b => b.CategoryPriority))
             Output.WriteLine($"  [{batch.CategoryPriority}] {batch.Category}: {batch.Items.Count} items");
 
-        if (batches.Count >= 2)
-        {
-            var maxPriority = batches.Max(b => b.CategoryPriority);
-            var minPriority = batches.Min(b => b.CategoryPriority);
-            maxPriority.Should().BeGreaterThan(minPriority,
-                "local batches should have higher priority than remote");
-        }
+        // Group each item by the source that produced it (the batch category):
+        // Source A "Nearby" + Source B "Subtree" are local; Source C "Partition" is broadening.
+        var perItem = batches
+            .SelectMany(b => b.Items.Select(i => (i.Priority, Source: b.Category)))
+            .ToList();
+
+        perItem.Should().Contain(x => x.Source is "Nearby" or "Subtree",
+            "@ from a node context always yields local (Nearby/Subtree) suggestions");
+
+        // DefaultIfEmpty keeps the assertion gate-free: when broadening did not run there is no
+        // Partition item and the inequality holds trivially (int.MinValue ≤ localMin); when it DID run
+        // (the CI condition) the local-first ordering is genuinely enforced. No silent skip.
+        var localMin = perItem
+            .Where(x => x.Source is "Nearby" or "Subtree")
+            .Select(x => x.Priority)
+            .DefaultIfEmpty(int.MaxValue)
+            .Min();
+        var broadeningMax = perItem
+            .Where(x => x.Source == "Partition")
+            .Select(x => x.Priority)
+            .DefaultIfEmpty(int.MinValue)
+            .Max();
+
+        broadeningMax.Should().BeLessThanOrEqualTo(localMin,
+            "blended @-ranking ranks local items (Nearby/Subtree, higher relevance rank) at or above "
+            + "cross-partition broadening items (Partition) by the per-item AutocompleteRelevance score");
     }
 
     [Fact(Timeout = 30000)]
@@ -690,24 +719,29 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
         }
     }
 
+    /// <summary>
+    /// Blended @-ranking (commit b36661860): Sources A ("Nearby"), B ("Subtree") and C ("Partition"/
+    /// broadening) all emit under ONE uniform category band (<c>BlendedBatchPriority = 0</c>), so the
+    /// SOLE ranking key is the per-item <see cref="AutocompleteRelevance"/> score (path &gt; title &gt;
+    /// relevance). This pins that batch-level contract deterministically — every CurrentNodeAndGlobal
+    /// batch carries the same band regardless of how many producers emit. (Was a stale assertion that
+    /// distinct batches had distinct CategoryPriority, gated on the racy arrival of ≥2 blended-0
+    /// batches, so it failed "0 &gt; 0" whenever broadening happened to race in on CI.)
+    /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task ScoreOrdering_BatchesOrderedByPriority()
+    public async Task ScoreOrdering_AllBlendedBatchesShareUniformBand()
     {
         var batches = await Orchestrator
             .GetCompletions("@", "ACME/ProductLaunch")
             .ToList().Should().Within(30.Seconds()).Emit();
 
-        if (batches.Count >= 2)
-        {
-            // Batches arrive in any order (async), but CategoryPriority indicates intended sort
-            var sorted = batches.OrderByDescending(b => b.CategoryPriority).ToList();
-            Output.WriteLine("Batch priority order:");
-            foreach (var b in sorted)
-                Output.WriteLine($"  [{b.CategoryPriority}] {b.Category}");
+        foreach (var b in batches)
+            Output.WriteLine($"  [{b.CategoryPriority}] {b.Category}: {b.Items.Count} items");
 
-            sorted[0].CategoryPriority.Should().BeGreaterThan(sorted[^1].CategoryPriority,
-                "highest priority batch should outrank lowest");
-        }
+        batches.Should().NotBeEmpty("@ from a node context yields at least the Nearby batch");
+        batches.Should().OnlyContain(b => b.CategoryPriority == 0,
+            "the blended @-design emits every source (Nearby/Subtree/Partition) under one uniform "
+            + "category band so the per-item AutocompleteRelevance score is the sole ranking key");
     }
 
     #endregion
