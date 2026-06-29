@@ -361,8 +361,14 @@ public static class MauiViewPackExtensions
         // Wave 2 — details forms: number / date / combobox / listbox.
         .Register<NumberFieldControl, NumberFieldView>()
         .Register<DateTimeControl, DateTimeView>()
+        .Register<DateControl, DateView>()
         .Register<ComboboxControl, ComboboxView>()
         .Register<ListboxControl, ListboxView>()
+        .Register<RadioGroupControl, RadioGroupView>()
+        // Wave 2 — simple leaves: slider (range), spacer (flex gap), exception (error caption).
+        .Register<SliderControl, SliderView>()
+        .Register<SpacerControl, SpacerView>()
+        .Register<ExceptionControl, ExceptionView>()
         // Tabular data.
         .Register<DataGridControl, DataGridView>()
         // Wave 2 — layout: a real grid + tabs (other containers fall back to ContainerView).
@@ -664,19 +670,31 @@ public sealed class BadgeView : MauiView<BadgeControl>
     protected override void Bind() => Bind<object>(Model.Data, v => _label.Text = v?.ToString() ?? "");
 }
 
-/// <summary>Navigation link → a MAUI <see cref="Button"/> (title; href navigation is a later wave).</summary>
+/// <summary>Navigation link → a MAUI <see cref="Button"/>. A link with a <c>Url</c> navigates the shell via
+/// <see cref="IMauiNavigator"/> (the href path); links without a Url fall back to their server
+/// <c>ClickAction</c> (a <see cref="MauiView.PostClick"/> <c>ClickedEvent</c>).</summary>
 public sealed class NavLinkView : MauiView<NavLinkControl>
 {
     private Button _button = null!;
+    private string? _href;
     protected override View CreateView()
     {
         _button = new Button { HorizontalOptions = LayoutOptions.Start };
-        // Fires the link's ClickAction via ClickedEvent. (Pure href navigation is a later wave — it
-        // needs a MAUI INavigationService; ClickAction-based nav links work now.)
-        _button.Clicked += (_, _) => PostClick();
+        _button.Clicked += (_, _) =>
+        {
+            var nav = !string.IsNullOrWhiteSpace(_href)
+                ? Stream?.Hub.ServiceProvider.GetService<IMauiNavigator>()
+                : null;
+            if (nav is not null) nav.NavigateTo(_href!, _button.Text);
+            else PostClick(); // ClickAction-based link (or no navigator registered).
+        };
         return _button;
     }
-    protected override void Bind() => Bind<object>(Model.Title, v => _button.Text = v?.ToString() ?? "");
+    protected override void Bind()
+    {
+        Bind<object>(Model.Title, v => _button.Text = v?.ToString() ?? "");
+        Bind<object>(Model.Url, v => _href = v?.ToString());
+    }
 }
 
 /// <summary>Menu item → a MAUI <see cref="Label"/> (title).</summary>
@@ -936,6 +954,97 @@ public sealed class DateTimeView : FormMauiView<DateTimeControl>
         else if (v is DateTimeOffset dto) _picker.Date = dto.DateTime;
         else if (v is string s && DateTime.TryParse(s, out var p)) _picker.Date = p;
     });
+}
+
+/// <summary>Date-only field → MAUI <see cref="DatePicker"/> (two-way). Sibling of <see cref="DateTimeView"/>
+/// for the framework's <see cref="DateControl"/> (date without a time component).</summary>
+public sealed class DateView : FormMauiView<DateControl>
+{
+    private DatePicker _picker = null!;
+    protected override View CreateView()
+    {
+        _picker = new DatePicker();
+        _picker.DateSelected += (_, e) => Write<object>(Model.Data, e.NewDate);
+        return _picker;
+    }
+    protected override void Bind() => BindValue<object>(Model.Data, v =>
+    {
+        if (v is DateTime d) _picker.Date = d;
+        else if (v is DateTimeOffset dto) _picker.Date = dto.DateTime;
+        else if (v is string s && DateTime.TryParse(s, out var p)) _picker.Date = p;
+    });
+}
+
+/// <summary>Single-choice radio group → a vertical stack of MAUI <see cref="RadioButton"/>s sharing a group
+/// (two-way). Mirrors <see cref="SelectView"/> but presents the options inline instead of in a dropdown.</summary>
+public sealed class RadioGroupView : FormMauiView<RadioGroupControl>
+{
+    private VerticalStackLayout _stack = null!;
+    private List<(string Text, string? Value)> _options = new();
+    private readonly List<RadioButton> _buttons = new();
+    // A stable group name keeps the radios mutually exclusive (MAUI scopes selection by GroupName).
+    private readonly string _group = "rg-" + Guid.NewGuid().ToString("N");
+
+    protected override View CreateView() => _stack = new VerticalStackLayout { Spacing = 4 };
+
+    protected override void Bind()
+    {
+        _options = CoerceOptions(Model.Options);
+        _stack.Children.Clear();
+        _buttons.Clear();
+        foreach (var (text, value) in _options)
+        {
+            var rb = new RadioButton { Content = text, GroupName = _group, Value = value };
+            rb.CheckedChanged += (_, e) => { if (e.Value) Write(Model.Data, value); };
+            _buttons.Add(rb);
+            _stack.Children.Add(rb);
+        }
+        BindValue<object>(Model.Data, v =>
+        {
+            var idx = _options.FindIndex(o => string.Equals(o.Value, v?.ToString(), StringComparison.Ordinal));
+            for (var i = 0; i < _buttons.Count; i++) _buttons[i].IsChecked = i == idx;
+        });
+    }
+}
+
+/// <summary>Numeric slider → MAUI <see cref="Slider"/> over [Min, Max]. The framework
+/// <see cref="SliderControl"/> carries no data pointer (Min/Max/Step only), so this renders the range
+/// visually — read-only, matching the control's shape (Blazor has no slider component at all).</summary>
+public sealed class SliderView : MauiView<SliderControl>
+{
+    protected override View CreateView() => new Slider
+    {
+        Minimum = Model.Min,
+        Maximum = Math.Max(Model.Max, Model.Min + 1),
+    };
+}
+
+/// <summary>Spacer → a transparent, flexible <see cref="BoxView"/> that absorbs free space in its parent
+/// stack/grid (the layout-skin spacer).</summary>
+public sealed class SpacerView : MauiView<SpacerControl>
+{
+    protected override View CreateView() => new BoxView
+    {
+        Color = Colors.Transparent,
+        HorizontalOptions = LayoutOptions.Fill,
+        VerticalOptions = LayoutOptions.Fill,
+    };
+}
+
+/// <summary>Exception message → a red caption with the message and (when present) type + stack trace,
+/// the native counterpart of Blazor's error message bar.</summary>
+public sealed class ExceptionView : MauiView<ExceptionControl>
+{
+    protected override View CreateView()
+    {
+        var stack = new VerticalStackLayout { Spacing = 2, Padding = new Thickness(8) };
+        stack.Children.Add(new Label { Text = Model.Message, TextColor = Colors.OrangeRed, FontAttributes = FontAttributes.Bold });
+        if (!string.IsNullOrWhiteSpace(Model.Type))
+            stack.Children.Add(new Label { Text = Model.Type, TextColor = Colors.OrangeRed, FontSize = 11 });
+        if (!string.IsNullOrWhiteSpace(Model.StackTrace))
+            stack.Children.Add(new Label { Text = Model.StackTrace, TextColor = Colors.Gray, FontSize = 10 });
+        return stack;
+    }
 }
 
 /// <summary>Combobox → MAUI <see cref="Picker"/> (two-way; native Picker has no free-type filter — a
